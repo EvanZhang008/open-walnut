@@ -221,7 +221,7 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       res.json(result)
     } catch (err) {
       if (err instanceof tm.ActiveChildrenError) {
-        sendError(res, 409, 'conflict', err.message, { active_children: err.activeCount })
+        sendError(res, 409, 'conflict', err.message, { active_children: err.activeChildren, active_count: err.activeCount })
         return
       }
       if (sendTaskManagerError(res, err)) return

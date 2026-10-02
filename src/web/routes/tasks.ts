@@ -1390,7 +1390,7 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       return
     }
     if (err instanceof ActiveChildrenError) {
-      res.status(409).json({ error: err.message, active_children: err.activeCount })
+      res.status(409).json({ error: err.message, active_children: err.activeChildren, active_count: err.activeCount })
       return
     }
     if (err instanceof CircularDependencyError) {
@@ -1411,7 +1411,7 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
     res.json(result)
   } catch (err) {
     if (err instanceof ActiveChildrenError) {
-      res.status(409).json({ error: err.message, active_children: err.activeCount })
+      res.status(409).json({ error: err.message, active_children: err.activeChildren, active_count: err.activeCount })
       return
     }
     next(err)
@@ -1471,7 +1471,7 @@ tasksRouter.post('/:id/toggle-complete', async (req: Request, res: Response, nex
     res.json(result)
   } catch (err) {
     if (err instanceof ActiveChildrenError) {
-      res.status(409).json({ error: err.message, active_children: err.activeCount })
+      res.status(409).json({ error: err.message, active_children: err.activeChildren, active_count: err.activeCount })
       return
     }
     next(err)

@@ -22,6 +22,7 @@
 
 import { log } from '../../logging/index.js';
 import { cutEnd } from '../text-cut.js';
+import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import {
   buildRequestNotification,
   clipNoticeMessage,
@@ -49,6 +50,27 @@ type TranscriptRow = { role: string; text: string; kind?: string; detail?: strin
 /** One tool call as a notice lists it; the row's own one-line summary, bounded. */
 const ACTION_LINE_MAX = 200;
 
+/** Who started a turn, read from the user row that opened it (subtask notices name it). */
+export type TurnStarter = 'the user' | 'your message' | 'another task' | 'a trigger' | 'a Walnut notice';
+
+/**
+ * Who started the turn that `userRow` opened. A Walnut envelope names its
+ * speaker (another task's note, a trigger, a Walnut notice); plain text is the
+ * human's own words. `parentTaskId` tells the parent's own note apart from any
+ * other task's.
+ */
+export function turnStarterOf(userRow: TranscriptRow | undefined, parentTaskId?: string): TurnStarter {
+  if (!userRow) return 'the user';
+  const envelope = parseWalnutMessage(userRow.text);
+  if (!envelope) return 'the user';
+  if (envelope.kind === 'trigger') return 'a trigger';
+  if (envelope.kind === 'notification') return 'a Walnut notice';
+  if (envelope.kind === 'peer-note' || envelope.kind === 'reply') {
+    return parentTaskId && envelope.attrs['from-task'] === parentTaskId ? 'your message' : 'another task';
+  }
+  return 'the user';
+}
+
 /**
  * What the target last said and did, from its transcript rows. Its last turn
  * (the rows after the last real user message) speaks first: that turn's last
@@ -60,6 +82,13 @@ const ACTION_LINE_MAX = 200;
  * of an earlier turn.
  */
 export function lastWordsOf(messages: ReadonlyArray<TranscriptRow> | undefined): NoticeLastMessage | undefined {
+  return lastTurnOf(messages)?.words;
+}
+
+/** The last turn of a transcript: what it said and did ({@link lastWordsOf}), and the user row that opened it. */
+export function lastTurnOf(
+  messages: ReadonlyArray<TranscriptRow> | undefined,
+): { words: NoticeLastMessage | undefined; openedBy: TranscriptRow | undefined } | undefined {
   if (!messages?.length) return undefined;
   const said = (m: TranscriptRow) => m.role === 'assistant' && !m.kind && m.text.trim();
   let start = messages.length;
@@ -68,6 +97,16 @@ export function lastWordsOf(messages: ReadonlyArray<TranscriptRow> | undefined):
     if (m.role === 'user' && !INTERRUPT_MARKER.test(m.text.trim())) break;
     start--;
   }
+  const openedBy = start > 0 ? messages[start - 1] : undefined;
+  const words = lastWordsOfTurn(messages, start, said);
+  return { words, openedBy };
+}
+
+function lastWordsOfTurn(
+  messages: ReadonlyArray<TranscriptRow>,
+  start: number,
+  said: (m: TranscriptRow) => string | false,
+): NoticeLastMessage | undefined {
   const turn = messages.slice(start);
   let lastSaid = turn.length - 1;
   while (lastSaid >= 0 && !said(turn[lastSaid])) lastSaid--;
@@ -90,6 +129,8 @@ export interface FallbackContext {
   phase?: string;
   /** The target's final text for the turn that just ended, when the caller has it. */
   lastMessage?: string;
+  /** The target's last words, already read by the caller (one transcript read serves every notice of an edge). */
+  lastWords?: NoticeLastMessage;
 }
 
 /**
@@ -98,6 +139,13 @@ export interface FallbackContext {
  * remote host can be slow or gone; then the cached projection. Never throws.
  */
 export async function readLastWords(sessionId: string | undefined): Promise<NoticeLastMessage | undefined> {
+  return (await readLastTurn(sessionId))?.words;
+}
+
+/** {@link readLastWords} plus who opened that last turn ({@link turnStarterOf} reads the row). */
+export async function readLastTurn(
+  sessionId: string | undefined,
+): Promise<{ words: NoticeLastMessage | undefined; openedBy: TranscriptRow | undefined } | undefined> {
   if (!sessionId) return undefined;
   const projection = await import('../session-projection.js');
   try {
@@ -106,11 +154,11 @@ export async function readLastWords(sessionId: string | undefined): Promise<Noti
       projection.buildSessionTranscript(sessionId),
       new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), LAST_MESSAGE_READ_MS); timer.unref?.(); }),
     ]).finally(() => clearTimeout(timer));
-    const found = lastWordsOf(live?.messages);
-    if (found) return found;
+    const found = lastTurnOf(live?.messages);
+    if (found?.words) return found;
   } catch { /* fall through to the cache */ }
   try {
-    return lastWordsOf((await projection.readSessionTranscript(sessionId))?.messages);
+    return lastTurnOf((await projection.readSessionTranscript(sessionId))?.messages);
   } catch {
     return undefined;
   }
@@ -159,6 +207,7 @@ export async function notifyRequesterFallback(
     }
     // So is the quote: the turn's own result when the edge carried it, else the transcript.
     const lastMessage = (context.lastMessage ? clipNoticeMessage(context.lastMessage) : undefined)
+      ?? context.lastWords
       ?? await readLastWords(targetSessionId);
 
     const text = buildRequestNotification(settled, outcome, {

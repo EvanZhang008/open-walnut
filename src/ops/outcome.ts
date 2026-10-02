@@ -39,6 +39,11 @@ export const REPLY_ARRIVES_HINT =
   'Its reply arrives in your session on its own; do not poll. '
   + 'Only if you cannot continue without it: walnut wait <task-id | rq-id>.'
 
+/** What a parent hears about a subtask it started, beyond the reply (sessions/subtask-notices.ts). */
+export const SUBTASK_WATCH_HINT =
+  'A subtask of yours also tells you, through Walnut, whenever it stops, completes, errors or waits on the user, '
+  + 'so there is nothing to check on.'
+
 /**
  * Attach outcome/next to a result object. Both are plain strings so they render
  * identically in JSON (CLI), MCP content, and the gateway relay.

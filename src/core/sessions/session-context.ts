@@ -79,7 +79,10 @@ export async function buildSessionContext(
         if (parent) {
           taskLine += `Your task is a subtask of "${parent.title}" (id ${parent.id}). A message `
             + 'ending in "Reply when done" comes from that task\'s session, and the reply it '
-            + 'names is how your result gets back to it.\n\n'
+            + 'names is how your result gets back to it. Walnut tells that task on its own '
+            + 'whenever you stop, complete your task, hit an error or wait on the user, so you '
+            + 'need not report progress: reply to its request with your result, and complete '
+            + 'your task when the work is done.\n\n'
         }
       }
       const { isAskTask } = await import('./caller-placement.js')

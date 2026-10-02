@@ -50,6 +50,28 @@ export interface EnvelopeTarget {
   lastMessage?: EnvelopeLastMessage;
 }
 
+/** What a subtask's turn end tells its parent (subtask-notices.ts); rides the `outcome` attribute. */
+export type SubtaskNoticeKind = 'completed' | 'error' | 'stopped' | 'blocked' | 'waiting';
+
+/** Who started the subtask's last turn, as the parent is told. */
+export type TurnStarter = 'the user' | 'your message' | 'another task' | 'a trigger' | 'a Walnut notice';
+
+export interface SubtaskNoticeInput {
+  child: { title?: string; sessionId?: string; taskId: string };
+  kind: SubtaskNoticeKind;
+  lastMessage?: EnvelopeLastMessage;
+  /** Who started the child's last turn (a `stopped` notice names it). */
+  startedBy?: TurnStarter;
+  /** The error text (an `error` notice). */
+  error?: string;
+  /** The tool whose prompt the child waits on (a `blocked` notice). */
+  blockedOn?: string;
+  /** ISO time the child's WAITING ends on its own (a `waiting` notice). */
+  waitUntil?: string;
+  /** The child answered a request of the parent's a moment ago: no quote, say so. */
+  repliedRecently?: boolean;
+}
+
 export type EnvelopeAttrs = Partial<Record<string, string | undefined>>;
 
 export interface EnvelopeKit {
@@ -70,6 +92,7 @@ export interface EnvelopeKit {
   ): string;
   clipNoticeMessage(text: string): EnvelopeLastMessage | undefined;
   buildRequestNotification(request: EnvelopeRequest, outcome: EnvelopeOutcome, target: EnvelopeTarget): string;
+  buildSubtaskNotification(input: SubtaskNoticeInput): string;
 }
 
 export function createEnvelopeKit(): EnvelopeKit {
@@ -293,6 +316,64 @@ export function createEnvelopeKit(): EnvelopeKit {
     });
   }
 
+  /**
+   * What a PARENT reads when one of its subtasks stops, completes, errors, gets
+   * blocked or parks itself (core/sessions/subtask-notices.ts). A status notice,
+   * never a request: nothing waits on an answer, and the child hears nothing back.
+   */
+  function buildSubtaskNotification(input: SubtaskNoticeInput): string {
+    const { child, kind } = input;
+    const title = sessionHandle(child.title, undefined) || 'untitled';
+    const who = `Your subtask "${title}" (${child.taskId})`;
+    const said = Boolean(input.lastMessage?.text.trim());
+    const did = Boolean(input.lastMessage?.actions?.length);
+    const last = !input.repliedRecently && (said || did) ? input.lastMessage : undefined;
+    // No quote and no recent reply: the transcript read timed out (a loaded
+    // host, 2026-10-01) or found no words. Say so, and point at the record.
+    const pointer = !last ? (input.repliedRecently ? '' : ' Its last message could not be read in time (or it wrote none).')
+      : said && did ? ' Its last message and the actions after it are quoted below.'
+      : said ? ' Its last message is quoted below.'
+      : ' It wrote no message; its last actions are listed below.';
+    const replied = input.repliedRecently ? ' Its reply to your request already reached you.' : '';
+    const error = (input.error ?? '').replace(/\s+/g, ' ').trim();
+    const errorText = error.length > 500 ? `${error.slice(0, cutEnd(error, 499))}…` : error;
+    const lead =
+      kind === 'completed' ? `${who} completed its task.${replied}${pointer}`
+      : kind === 'error' ? `${who} ended its turn with an ERROR${errorText ? `: ${errorText}` : ''}. The work likely did not finish.${pointer}`
+        + ' If this is its second failure with the same error, stop retrying and tell the user.'
+      : kind === 'blocked' ? `${who} is WAITING ON THE USER: a ${input.blockedOn || 'tool'} prompt (permission or question). `
+        + 'You cannot answer it for them, and a message to it now would auto-deny the prompt. '
+        + `Tell the user if it matters, or carry on.${pointer}`
+      : kind === 'waiting' ? `${who} set itself to WAITING (parked until ${input.waitUntil ? `${input.waitUntil} or until ` : ''}something happens on it).${pointer}`
+      : `${who} stopped without completing its task; its last turn was started by ${input.startedBy ?? 'the user'}. It is waiting for input.${replied}${pointer}`;
+    const next = [
+      `  walnut tools call task_get '{"id":"${child.taskId}"}'          # its task state`,
+      // The record is worth reading unless its reply already carried the content.
+      ...(last || kind === 'completed' || !input.repliedRecently
+        ? [`  walnut tools call task_history '{"id":"${child.taskId}"}'   # read the full record`]
+        : []),
+      ...(kind !== 'blocked' && kind !== 'completed'
+        ? [`  walnut tools call task_send '{"to":"${child.taskId}","text":"..."}'  # continue it`]
+        : []),
+    ];
+    return buildWalnutMessage({
+      kind: 'notification',
+      attrs: {
+        from: 'Walnut',
+        about: sessionHandle(child.title, child.sessionId),
+        'about-session': child.sessionId,
+        'about-task': child.taskId,
+        outcome: kind,
+        note: NOTE_NOTIFICATION,
+      },
+      body: [
+        `${lead} A status notice, not a request: nothing waits on an answer.`,
+        ...(last ? [quoteLastMessage(last, 'completed')] : []),
+        `Next:\n${next.join('\n')}`,
+      ].join('\n\n'),
+    });
+  }
+
   return {
     ATTR_ORDER,
     NOTICE_LAST_MESSAGE_MAX,
@@ -307,5 +388,6 @@ export function createEnvelopeKit(): EnvelopeKit {
     buildReplyDeliveryText,
     clipNoticeMessage,
     buildRequestNotification,
+    buildSubtaskNotification,
   };
 }

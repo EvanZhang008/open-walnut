@@ -4808,15 +4808,22 @@ export class ActiveSessionError extends Error {
 export class ActiveChildrenError extends Error {
   public readonly childTitles: string[];
   public readonly activeCount: number;
-  constructor(taskTitle: string, activeChildren: { title: string }[]) {
+  /** The open subtasks (at most 8), so a session reading the error can act on each by id. */
+  public readonly activeChildren: { id: string; title: string; phase: TaskPhase }[];
+  constructor(taskTitle: string, activeChildren: { id: string; title: string; phase: TaskPhase }[]) {
     const count = activeChildren.length;
-    const titles = activeChildren.slice(0, 5).map((t) => t.title);
+    const shown = activeChildren.slice(0, 8).map((t) => ({ id: t.id, title: t.title, phase: t.phase }));
+    const listed = shown.map((t) => `"${t.title}" (${t.id}, ${t.phase})`).join('; ');
+    const more = count > shown.length ? `; and ${count - shown.length} more` : '';
     super(
-      `Cannot complete task "${taskTitle}": ${count} child task(s) are still active (${titles.join(', ')}). Complete or delete them first.`,
+      `Cannot complete task "${taskTitle}": ${count} child task(s) are still active: ${listed}${more}. `
+      + 'Finish them first (task_get reads one, task_send continues it, task_complete closes one you have checked), '
+      + 'or leave this task open while they run.',
     );
     this.name = 'ActiveChildrenError';
-    this.childTitles = titles;
+    this.childTitles = shown.map((t) => t.title);
     this.activeCount = count;
+    this.activeChildren = shown;
   }
 }
 

@@ -2187,6 +2187,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
       buildReplyDeliveryText, buildReplyTrailer, buildRequestNotification,
     } = await import('../../../src/core/session-requests.js')
     const { buildTriggerMessage } = await import('../../../src/core/routines/trigger-envelope.js')
+    const { buildSubtaskNoticeText } = await import('../../../src/core/sessions/subtask-notices.js')
     const peerSender = {
       title: ENVELOPE_PEER_TITLE,
       shortId: 'pw-envel',
@@ -2251,6 +2252,15 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
         { atMs: sessionFixtureNow - 100_000, items: [{ id: 'c1', author: 'reviewer' }, { id: 'c2' }], input: 'two threads' },
         'Read each new comment and answer it. ENVELOPE_TRIGGER_BODY',
       ),
+      // ⑦ a subtask status notice: no request behind it (sessions/subtask-notices.ts),
+      //   the peer is this session's subtask that stopped after the user talked to it.
+      buildSubtaskNoticeText({
+        parentTaskId: 'pw-task-provenance',
+        child: { id: 'pw-task-001', title: ENVELOPE_PEER_TITLE, sessionId: 'pw-envelope-peer-session' },
+        kind: 'stopped',
+        startedBy: 'the user',
+        lastWords: { text: 'Footer added; CI is still red. ENVELOPE_SUBTASK_QUOTE' },
+      }),
     ]
     // Claude Code's OWN cross-session delivery (CLI 2.1.258 SendMessage), captured
     // verbatim: the CLI writes it as an injected user line (`isMeta`, `userType:

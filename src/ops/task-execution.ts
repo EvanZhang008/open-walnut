@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js'
 import { engineCaps } from '../core/agents/engine-registry.js'
 import type { WalnutOp } from './registry.js'
-import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js'
+import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withOutcome } from './outcome.js'
 
 type Call = Parameters<NonNullable<WalnutOp['handler']>>[1]
 
@@ -65,7 +65,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
     state === 'running' ? `Task ${started.taskId} started.`
       : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`,
     typeof started.requestId === 'string'
-      ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT}`
+      ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,
   )
 }

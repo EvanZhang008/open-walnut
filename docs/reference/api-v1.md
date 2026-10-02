@@ -854,8 +854,10 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   remaining `pin_order`s) and AWAITS the external-sync push, so a
   plugin-backed task that failed to reach its remote store answers an error
   instead of a silent `200`. `409 conflict` + `active_children` when the task
-  still has non-COMPLETE children. Added for the CLI's `open-walnut done`,
-  which has always had these semantics.
+  still has non-COMPLETE children: since 2026-10-01 a list of up to 8
+  `{ id, title, phase }` rows (it was a count; `active_count` keeps the number),
+  and the message names each one, so a session can act on them by id. Added
+  for the CLI's `open-walnut done`, which has always had these semantics.
 - `POST /api/v1/tasks/:id/start` (additive, 2026-08) body
   `{ "message"?, "cwd"?, "host"?, "model"?, "mode"?, "engine"?,
   "expect_reply"?: bool, "reply_timeout"?: number }` →

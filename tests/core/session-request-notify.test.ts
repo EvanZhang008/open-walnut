@@ -38,12 +38,15 @@ const enqueueMessage = vi.fn();
 vi.mock('../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: (...args: unknown[]) => sendMessageToSession(...args),
   enqueueMessage: (...args: unknown[]) => enqueueMessage(...args),
+  editMessage: async () => false,
   getQueue: async () => [],
 }));
 
 const listTasksByIds = vi.fn();
+const getTask = vi.fn();
 vi.mock('../../src/core/task-manager.js', () => ({
   listTasksByIds: (...args: unknown[]) => listTasksByIds(...args),
+  getTask: (...args: unknown[]) => getTask(...args),
 }));
 
 // The notice quotes the target's last message from its transcript.
@@ -85,6 +88,7 @@ import { sessionRequestWatchHook } from '../../src/core/session-hooks/builtins.j
 import type { HookContext, SessionHookContext } from '../../src/core/session-hooks/types.js';
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import type { SessionRecord } from '../../src/core/types.js';
+import { flushSubtaskNotices } from '../../src/core/sessions/subtask-notices.js';
 
 const ASKER = 'sess-asker-1';
 const TARGET = 'sess-target-1';
@@ -174,6 +178,7 @@ beforeEach(() => {
   sendMessageToSession.mockReset();
   enqueueMessage.mockReset();
   listTasksByIds.mockReset();
+  getTask.mockReset();
   notifySpy.mockReset();
 
   getSessionByClaudeId.mockImplementation(async (sid: string) =>
@@ -184,6 +189,7 @@ beforeEach(() => {
   sendMessageToSession.mockResolvedValue({ id: 'qm-notify' });
   enqueueMessage.mockResolvedValue({ id: 'qm-parked' });
   listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration' }]);
+  getTask.mockRejectedValue(new Error('no such task'));
   buildSessionTranscript.mockReset();
   readSessionTranscript.mockReset();
   buildSessionTranscript.mockResolvedValue(transcriptOf());
@@ -469,6 +475,181 @@ describe('sessionRequestWatchHook — outcome selection at the turn-end edge', (
 });
 
 
+
+describe('sessionRequestWatchHook — the parent hears about its subtask by state', () => {
+  const PARENT = 'sess-parent-1';
+  const child = { id: 'task-77', title: 'Run the migration', parent_task_id: 'task-parent', phase: 'IN_PROGRESS' };
+  const parentTask = { id: 'task-parent', title: 'Ship the release', phase: 'IN_PROGRESS' };
+
+  async function fire(payload = phasePayload()): Promise<void> {
+    await sessionRequestWatchHook.handler!(payload);
+    await flushSubtaskNotices();
+  }
+
+  /** The envelopes the parent's session received, parsed. */
+  function parentNotices(): Array<{ attrs: Record<string, string>; body: string }> {
+    return sendMessageToSession.mock.calls
+      .filter(([sid]) => sid === PARENT)
+      .map(([, text]) => parseWalnutMessage(text as string)!);
+  }
+
+  beforeEach(() => {
+    sessions = [
+      rec(ASKER, { title: 'Asker', taskId: 'task-asker' }),
+      rec(TARGET, { title: 'Target', taskId: 'task-77' }),
+      rec(PARENT, { title: 'Ship the release', taskId: 'task-parent' }),
+    ];
+    listTasksByIds.mockResolvedValue([child]);
+    getTask.mockImplementation(async (id: string) => {
+      if (id === parentTask.id) return parentTask;
+      throw new Error('no such task');
+    });
+    buildSessionTranscript.mockResolvedValue(transcriptOf(
+      { role: 'user', text: 'add the footer too' },
+      'Footer added; the tests still fail on CI.',
+    ));
+  });
+
+  it('a turn end with no request pending: the parent gets a stopped notice naming the user as the starter, with the quote', async () => {
+    await fire();
+
+    expect(notifySpy).not.toHaveBeenCalled();
+    const [n, ...rest] = parentNotices();
+    expect(rest).toHaveLength(0);
+    expect(n.attrs).toMatchObject({ outcome: 'stopped', 'about-task': 'task-77', 'about-session': TARGET });
+    expect(n.attrs.request).toBeUndefined();
+    expect(n.body).toContain('its last turn was started by the user');
+    expect(n.body).toContain('Footer added; the tests still fail on CI.');
+    const [, , opts] = sendMessageToSession.mock.calls[0] as [string, string, { source: string; messageId?: string }];
+    expect(opts.source).toBe('walnut-notify');
+    expect(opts.messageId).toBe('sn-task-77-stopped');
+  });
+
+  it('the parent is among the askers: the fallback notice speaks, no second voice', async () => {
+    const rq = await arm({ fromSessionId: PARENT });
+    await fire();
+
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0][0]).toMatchObject({ id: rq.id });
+    const notices = parentNotices();
+    expect(notices).toHaveLength(1);
+    expect(notices[0].attrs.request).toBe(rq.id);
+  });
+
+  it('another asker holds a request: it gets the fallback, the parent gets the subtask notice, one transcript read', async () => {
+    await arm();
+    await fire();
+
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(buildSessionTranscript).toHaveBeenCalledTimes(1);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    const sids = sendMessageToSession.mock.calls.map(([sid]) => sid).sort();
+    expect(sids).toEqual([PARENT, ASKER].sort());
+    expect(parentNotices()[0].attrs.outcome).toBe('stopped');
+  });
+
+  it('the child answered its parent a moment ago: no stopped notice; its completion then carries no quote', async () => {
+    const rq = await arm({ fromSessionId: PARENT });
+    await settleReplied(rq.id);
+    await fire();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+
+    await fire(phasePayload({ newPhase: 'COMPLETE' }));
+    const [n] = parentNotices();
+    expect(n.attrs.outcome).toBe('completed');
+    expect(n.body).toContain('Its reply to your request already reached you.');
+    expect(n.body).not.toContain('Footer added');
+  });
+
+  it('a turn started by the parent\'s own note is named as such', async () => {
+    const { buildWalnutMessage } = await import('../../src/core/peers/walnut-message-tag.js');
+    buildSessionTranscript.mockResolvedValue(transcriptOf(
+      { role: 'user', text: buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Ship [x]', 'from-task': 'task-parent' }, body: 'now the footer' }) },
+      'Done with the footer.',
+    ));
+    await fire();
+    expect(parentNotices()[0].body).toContain('its last turn was started by your message');
+  });
+
+  it('COMPLETE: a completed notice with the quote; blocked and waiting edges name theirs', async () => {
+    await fire(phasePayload({ newPhase: 'COMPLETE' }));
+    expect(parentNotices()[0].attrs.outcome).toBe('completed');
+    expect(parentNotices()[0].body).toContain('completed its task. Its last message is quoted below.');
+
+    sendMessageToSession.mockClear();
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET
+      ? rec(TARGET, { title: 'Target', taskId: 'task-77', pendingPermission: { requestId: 'p-1', toolName: 'AskUserQuestion', receivedAt: NOW } })
+      : s);
+    await fire();
+    expect(parentNotices()[0].attrs.outcome).toBe('blocked');
+    expect(parentNotices()[0].body).toContain('a AskUserQuestion prompt');
+
+    sendMessageToSession.mockClear();
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET ? rec(TARGET, { title: 'Target', taskId: 'task-77' }) : s);
+    listTasksByIds.mockResolvedValue([{ ...child, phase: 'WAITING', wait_until: '2026-10-02T09:00:00.000Z' }]);
+    await fire(phasePayload({ newPhase: 'WAITING' }));
+    expect(parentNotices()[0].attrs.outcome).toBe('waiting');
+    expect(parentNotices()[0].body).toContain('parked until 2026-10-02T09:00:00.000Z');
+  });
+
+  it('a COMPLETE set from outside the session (board, API) names no session: the child\'s own session is found and quoted', async () => {
+    // 2026-10-01 live run: POST /tasks/:id/complete fired the edge with no sessionId
+    // and `task.session_id` unset, so the completed notice quoted nothing and
+    // carried no about-session.
+    await fire(phasePayload({ newPhase: 'COMPLETE', sessionId: undefined }));
+    const [n] = parentNotices();
+    expect(n.attrs).toMatchObject({ outcome: 'completed', 'about-session': TARGET });
+    expect(n.body).toContain('Footer added; the tests still fail on CI.');
+    expect(buildSessionTranscript).toHaveBeenCalledWith(TARGET);
+  });
+
+  it('a session in error at the edge: an error notice with the error text; a closed task stays completed', async () => {
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET
+      ? rec(TARGET, { title: 'Target', taskId: 'task-77', process_status: 'error', errorMessage: 'API rate limit' })
+      : s);
+    await fire();
+    const [n] = parentNotices();
+    expect(n.attrs.outcome).toBe('error');
+    expect(n.body).toContain('ended its turn with an ERROR: API rate limit');
+    expect(n.body).toContain('second failure with the same error');
+
+    // The task was closed before the turn died: COMPLETE is the state the parent needs.
+    sendMessageToSession.mockClear();
+    listTasksByIds.mockResolvedValue([{ ...child, phase: 'COMPLETE' }]);
+    await fire(turnPayload({ error: 'API rate limit' }));
+    expect(parentNotices()[0].attrs.outcome).toBe('completed');
+  });
+
+  it('a COMPLETE parent, a parent with no session, and a task with no parent all hear nothing', async () => {
+    getTask.mockImplementation(async () => ({ ...parentTask, phase: 'COMPLETE' }));
+    await fire();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // Decided before the transcript read: nobody pays for a quote nobody reads.
+    expect(buildSessionTranscript).not.toHaveBeenCalled();
+
+    getTask.mockImplementation(async () => parentTask);
+    sessions = sessions.filter((s) => s.claudeSessionId !== PARENT);
+    await fire();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+
+    sessions.push(rec(PARENT, { title: 'Ship the release', taskId: 'task-parent' }));
+    listTasksByIds.mockResolvedValue([{ ...child, parent_task_id: undefined }]);
+    await fire();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('only the direct parent hears: the grandparent gets nothing', async () => {
+    sessions.push(rec('sess-grand', { title: 'Grand', taskId: 'task-grand' }));
+    getTask.mockImplementation(async (id: string) => {
+      if (id === parentTask.id) return { ...parentTask, parent_task_id: 'task-grand' };
+      if (id === 'task-grand') return { id: 'task-grand', title: 'Grand', phase: 'IN_PROGRESS' };
+      throw new Error('no such task');
+    });
+    await fire();
+    expect(sendMessageToSession.mock.calls.map(([sid]) => sid)).toEqual([PARENT]);
+  });
+});
+
 describe('notifyRequesterFallback — the notice quotes the target\'s last message', () => {
   it('quotes the last assistant text of the transcript, skipping tool and thinking rows', async () => {
     const rq = await arm();
@@ -522,7 +703,10 @@ describe('notifyRequesterFallback — the notice quotes the target\'s last messa
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const pending = notifyRequesterFallback(rq, 'completed');
-      for (let i = 0; i < 200 && buildSessionTranscript.mock.calls.length === 0; i++) {
+      // The settle and the address lookups before the read are real file I/O: wait
+      // for the read by the clock, not by a tick count (200 ticks lost under load).
+      const spinUntil = Date.now() + 15_000;
+      while (buildSessionTranscript.mock.calls.length === 0 && Date.now() < spinUntil) {
         await new Promise((resolve) => setImmediate(resolve));
       }
       expect(buildSessionTranscript).toHaveBeenCalled();

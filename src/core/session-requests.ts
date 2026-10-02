@@ -239,6 +239,26 @@ export async function pendingRequestsFromSession(sessionId: string): Promise<Ses
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/**
+ * Did the task `toTaskId` answer a request from one of `fromSessionIds` within
+ * the last `windowMs`? The subtask watch asks this so a child that just replied
+ * to its parent is not reported "stopped" a moment later: the reply was the
+ * update.
+ */
+export async function repliedRecently(
+  fromSessionIds: Iterable<string>,
+  toTaskId: string,
+  windowMs: number,
+  now = Date.now(),
+): Promise<boolean> {
+  const askers = new Set(fromSessionIds);
+  if (askers.size === 0 || !toTaskId) return false;
+  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
+  return (store.requests ?? []).some((r) =>
+    r.status === 'replied' && r.toTaskId === toTaskId && askers.has(r.fromSessionId)
+    && !!r.settledAt && now - Date.parse(r.settledAt) <= windowMs);
+}
+
 /** Every pending request (the host copy's query: rows whose two parties share a host). */
 export async function listPendingRequests(): Promise<SessionRequest[]> {
   const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);

@@ -126,7 +126,9 @@ describe('active children guard — routes', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/child task/);
-    expect(res.body.active_children).toBe(1);
+    // The open subtasks themselves (a session acts on them by id), plus the count.
+    expect(res.body.active_count).toBe(1);
+    expect(res.body.active_children).toEqual([expect.objectContaining({ title: 'Child', phase: 'TODO' })]);
   });
 
   it('POST complete returns 409 when parent has active children', async () => {

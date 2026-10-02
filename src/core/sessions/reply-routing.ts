@@ -48,12 +48,12 @@ export interface ReplyDestination {
   reason?: ReplyRerouteReason;
 }
 
-function isLive(s: SessionRecord): boolean {
+export function isLive(s: SessionRecord): boolean {
   return LIVE_STATUSES.has(s.process_status);
 }
 
 /** Deliverable at all: a real session row a person could be reading. */
-function addressable(
+export function addressable(
   s: SessionRecord,
   isListableSession: (r: SessionRecord) => boolean,
 ): boolean {
@@ -61,7 +61,7 @@ function addressable(
 }
 
 /** Newest-active first, and a LIVE row always beats a terminal one. */
-function bestFirst(a: SessionRecord, b: SessionRecord): number {
+export function bestFirst(a: SessionRecord, b: SessionRecord): number {
   if (isLive(a) !== isLive(b)) return isLive(a) ? -1 : 1;
   return (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
 }

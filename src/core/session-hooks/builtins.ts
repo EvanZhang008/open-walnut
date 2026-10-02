@@ -12,7 +12,8 @@ import { log } from '../../logging/index.js';
 import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.js';
 import { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } from '../ui-language.js';
 import { cutEnd } from '../text-cut.js';
-import type { SessionRecord } from '../types.js';
+import type { SessionRecord, Task } from '../types.js';
+import type { SubtaskNoticeKind } from '../sessions/subtask-notices.js';
 import type {
   SessionHookDefinition,
   OnTurnCompletePayload,
@@ -1818,11 +1819,19 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
  *
  * Exactly-once lives in the request row's atomic settle (notifyRequesterFallback);
  * a reply racing either edge wins the settle and this hook stays silent.
+ *
+ * The same edges feed the SUBTASK notice (sessions/subtask-notices.ts): a task
+ * with a parent tells that parent it stopped, completed, errored, got blocked or
+ * parked itself, whether or not anyone held a request to it. One voice per
+ * edge: when the parent is among the askers the fallback notice speaks for it
+ * and no subtask notice goes out; a child that answered its parent a moment ago
+ * is not reported "stopped" (the reply was the update), and its completion then
+ * carries no quote. The child's transcript is read ONCE for both notices.
  */
 export const sessionRequestWatchHook: SessionHookDefinition = {
   id: 'session-request-watch',
   name: 'Session Request Watch',
-  description: 'Notifies the asking session when a session that owes a reply ends its turn or closes its task without replying.',
+  description: 'Notifies the asking session when a session that owes a reply ends its turn or closes its task without replying, and a parent task when its subtask stops, completes, errors, gets blocked or parks itself.',
   hooks: ['onTaskPhaseChanged', 'onTurnComplete', 'onTurnError'],
   priority: 60,
   source: 'builtin',
@@ -1838,11 +1847,12 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     const ctx = payload as unknown as TaskHookContext;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const { pendingRequestsForTarget } = await import('../session-requests.js');
-    const sessionId = ctx.sessionId ?? ctx.task?.session_id ?? undefined;
+    let sessionId = ctx.sessionId ?? ctx.task?.session_id ?? undefined;
     let taskId: string | undefined = ctx.taskId;
+    let task: Task | undefined = isPhaseEdge ? ctx.task : undefined;
     let phase: string | undefined = isPhaseEdge ? ctx.newPhase : undefined;
     let lastMessage: string | undefined;
-    const record = sessionId ? await getSessionByClaudeId(sessionId).catch(() => undefined) : undefined;
+    let record = sessionId ? await getSessionByClaudeId(sessionId).catch(() => undefined) : undefined;
 
     if (!isPhaseEdge) {
       // A turn edge speaks only for a CLOSED task: a live one gets its
@@ -1850,15 +1860,32 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       taskId ??= record?.taskId;
       if (!taskId) return;
       const { listTasksByIds } = await import('../task-manager.js');
-      phase = (await listTasksByIds([taskId]).catch(() => []))[0]?.phase;
+      task = (await listTasksByIds([taskId]).catch(() => []))[0];
+      phase = task?.phase;
       if (phase !== 'COMPLETE') return;
       lastMessage = (payload as unknown as Partial<OnTurnCompletePayload>).result || undefined;
-    } else if (phase === 'COMPLETE' && record?.process_status === 'running') {
+    }
+    if (!task && taskId) {
+      const { listTasksByIds } = await import('../task-manager.js');
+      task = (await listTasksByIds([taskId]).catch(() => []))[0];
+    }
+    // A phase edge set from outside the session (the board, the API, a parent's
+    // task_complete) names no session, and `task.session_id` is not kept for a
+    // started task: the tracker holds its sessions. Without this the completed
+    // notice quoted nothing (2026-10-01 live run).
+    if (!sessionId && task) {
+      const { getSessionsForTask } = await import('../session-tracker.js');
+      const { bestFirst } = await import('../sessions/reply-routing.js');
+      sessionId = (await getSessionsForTask(task.id).catch(() => [])).sort(bestFirst)[0]?.claudeSessionId;
+      record = sessionId ? await getSessionByClaudeId(sessionId).catch(() => undefined) : undefined;
+    }
+    if (isPhaseEdge && phase === 'COMPLETE' && record?.process_status === 'running') {
       return; // mid-turn: its turn end notifies, with the final text
     }
 
     const pending = await pendingRequestsForTarget({ sessionId, taskId });
-    if (pending.length === 0) return;
+    const parentTaskId = task?.parent_task_id ?? undefined;
+    if (pending.length === 0 && !parentTaskId) return;
 
     // Outcome from the target session's live state — eventSource strings are
     // caller tags, not triggers, so the record is the honest signal.
@@ -1867,10 +1894,54 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     else if (record?.pendingPermission) outcome = 'awaiting_human';
     else if (record?.process_status === 'error') outcome = 'error';
 
-    const { notifyRequesterFallback } = await import('../sessions/session-request-notify.js');
-    for (const request of pending) {
-      await notifyRequesterFallback(request, outcome, { phase, lastMessage });
+    // Whether the parent hears about this edge, decided BEFORE the transcript
+    // read (up to LAST_MESSAGE_READ_MS): the parent's own sessions as askers are
+    // answered by the fallback notice; a parent that answered lately needs no
+    // "stopped"; a COMPLETE parent, or one with no session, hears nothing.
+    let subtask: { kind: SubtaskNoticeKind; answeredLately: boolean } | undefined;
+    if (parentTaskId && task) {
+      const { getSessionsForTask } = await import('../session-tracker.js');
+      const parentSids = new Set((await getSessionsForTask(parentTaskId).catch(() => [])).map((s) => s.claudeSessionId));
+      const kind: SubtaskNoticeKind =
+        phase === 'COMPLETE' ? 'completed'
+          : outcome === 'error' ? 'error'
+            : outcome === 'awaiting_human' ? 'blocked'
+              : phase === 'WAITING' ? 'waiting'
+                : 'stopped';
+      const { repliedRecently } = await import('../session-requests.js');
+      const notices = await import('../sessions/subtask-notices.js');
+      const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
+      const parentHears = !pending.some((r) => parentSids.has(r.fromSessionId))
+        && !(kind === 'stopped' && answeredLately)
+        && await notices.parentCanHear(parentTaskId);
+      if (parentHears) subtask = { kind, answeredLately };
     }
+    if (pending.length === 0 && !subtask) return;
+
+    // One transcript read serves every notice of this edge.
+    const notify = await import('../sessions/session-request-notify.js');
+    const lastTurn = lastMessage ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
+    for (const request of pending) {
+      await notify.notifyRequesterFallback(request, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
+    }
+    if (!subtask || !parentTaskId || !task) return;
+
+    const { clipNoticeMessage } = await import('../session-requests.js');
+    const { queueSubtaskNotice } = await import('../sessions/subtask-notices.js');
+    const errorText = 'error' in payload && !isPhaseEdge
+      ? String((payload as { error?: unknown }).error ?? '')
+      : record?.errorMessage;
+    await queueSubtaskNotice({
+      parentTaskId,
+      child: { id: task.id, title: task.title, sessionId: sessionId ?? record?.claudeSessionId },
+      kind: subtask.kind,
+      lastWords: lastMessage ? clipNoticeMessage(lastMessage) : lastTurn?.words,
+      startedBy: notify.turnStarterOf(lastTurn?.openedBy, parentTaskId),
+      error: subtask.kind === 'error' ? errorText : undefined,
+      blockedOn: subtask.kind === 'blocked' ? record?.pendingPermission?.toolName : undefined,
+      waitUntil: subtask.kind === 'waiting' ? task.wait_until ?? undefined : undefined,
+      repliedRecently: subtask.answeredLately,
+    });
   },
 };
 

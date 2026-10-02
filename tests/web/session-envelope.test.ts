@@ -26,6 +26,7 @@ import {
   sessionHandle,
 } from '../../src/core/peers/walnut-message-tag';
 import { buildScheduledSessionMessage, buildTriggerMessage } from '../../src/core/routines/trigger-envelope';
+import { createEnvelopeKit } from '../../src/core/peers/envelope-kit';
 import {
   parseSessionEnvelopes,
   parseNoticeQuote,
@@ -251,6 +252,43 @@ describe('v2 notification', () => {
       expect(env.followUp).toBeUndefined();
     });
   }
+
+  it('a subtask status notice (no request) is one card: status line, quote sections, Next as the chip, no body', () => {
+    const kit = createEnvelopeKit();
+    const text = kit.buildSubtaskNotification({
+      child: { title: 'Build the page', sessionId: SENDER_SID, taskId: 'task-child1' },
+      kind: 'stopped',
+      startedBy: 'the user',
+      lastMessage: { text: 'Footer added; CI still red.', actions: ['Bash: npm test'] },
+    });
+    const env = onlyEnvelope(text);
+    expect(env.kind).toBe('notification');
+    expect(env.requestId).toBeUndefined();
+    expect(env.peer.taskId).toBe('task-child1');
+    expect(env.peer.sessionId).toBe(SENDER_SID);
+    expect(env.statusLine).toBe('Your subtask "Build the page" (task-child1) stopped without completing its task; '
+      + 'its last turn was started by the user. It is waiting for input. Its last message and the actions after it are quoted below. '
+      + 'A status notice, not a request: nothing waits on an answer.');
+    expect(env.quote).toEqual([
+      { label: 'Its last message', kind: 'message', text: 'Footer added; CI still red.' },
+      { label: 'Its actions after that message', kind: 'actions', text: 'Bash: npm test' },
+    ]);
+    expect(env.followUp).toBe(`walnut tools call task_get '{"id":"task-child1"}'`);
+    expect(env.body).toBeUndefined();
+  });
+
+  it('a burst of subtask notices is several cards in one message', () => {
+    const kit = createEnvelopeKit();
+    const text = [
+      kit.buildSubtaskNotification({ child: { title: 'A', taskId: 'task-a' }, kind: 'completed', lastMessage: { text: 'done' } }),
+      kit.buildSubtaskNotification({ child: { title: 'B', taskId: 'task-b' }, kind: 'blocked', blockedOn: 'Bash' }),
+    ].join('\n\n');
+    const segments = parseSessionEnvelopes(text)!;
+    expect(isEnvelopeOnly(segments)).toBe(true);
+    const cards = segments.filter((s) => s.kind === 'envelope').map((s) => (s as { envelope: SessionEnvelope }).envelope);
+    expect(cards.map((c) => c.peer.taskId)).toEqual(['task-a', 'task-b']);
+    expect(cards[1].statusLine).toContain('is WAITING ON THE USER: a Bash prompt');
+  });
 });
 
 describe('parseNoticeQuote', () => {

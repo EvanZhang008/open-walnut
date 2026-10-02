@@ -137,12 +137,12 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   const title = await peerTitle(page)
   expect(title.length).toBeGreaterThan(80) // the whole point of the fixture
 
-  // Seven envelopes → seven cards: four peer notes (v2 named, v2 anonymous, one
-  // legacy prose, one Claude Code native), one reply, one notification, one
-  // trigger fire. None rendered as a raw bubble.
+  // Eight envelopes → eight cards: four peer notes (v2 named, v2 anonymous, one
+  // legacy prose, one Claude Code native), one reply, two notifications (a request
+  // fallback and a subtask status notice), one trigger fire. None rendered as a raw bubble.
   await expect(card(panel, 'peer-note')).toHaveCount(4)
   await expect(card(panel, 'reply')).toHaveCount(1)
-  await expect(card(panel, 'notification')).toHaveCount(1)
+  await expect(card(panel, 'notification')).toHaveCount(2)
 
   const peerNote = v2PeerNote(panel)
   await expect(peerNote).toHaveAttribute('data-envelope-source', 'walnut')
@@ -164,7 +164,8 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
     .toHaveText('Good, and thanks for flagging both blockers')
   await expect(reply.locator('.provenance-body')).toContainText('ENVELOPE_REPLY_BODY')
 
-  const notice = card(panel, 'notification')
+  const notice = card(panel, 'notification').filter({ hasText: 'WITHOUT an explicit reply' })
+  await expect(notice).toHaveCount(1)
   await expect(notice.locator('.provenance-label')).toHaveText('Walnut notification')
   await expect(notice.locator('.provenance-status')).toHaveText('It marked its task COMPLETE WITHOUT an explicit reply '
     + 'to your request. Its last message and the actions after it are quoted below.')
@@ -186,6 +187,20 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 0.5)
   await expect(longRow).toHaveAttribute('title', /run the long verification suite$/)
 
+  // A subtask's status notice has no request behind it: the same card, the status
+  // line says what happened and who started the turn, the child's words are the
+  // one quote, and the child's session resolves to its full title and a chip.
+  const subtask = card(panel, 'notification').filter({ hasText: 'Your subtask' })
+  await expect(subtask).toHaveCount(1)
+  await expect(subtask.locator('.provenance-label')).toHaveText('Walnut notification')
+  await expect(subtask.locator('.provenance-title')).toHaveText(title)
+  await expect(subtask.locator('.provenance-status')).toContainText('stopped without completing its task; '
+    + 'its last turn was started by the user. It is waiting for input. Its last message is quoted below.')
+  await expect(subtask.locator('.provenance-quote')).toHaveCount(1)
+  await expect(subtask.locator('.provenance-quote .provenance-body')).toContainText('ENVELOPE_SUBTASK_QUOTE')
+  await expect(subtask.locator('a.provenance-chip-session')).toHaveCount(1)
+  expect(await subtask.innerText()).not.toContain('<walnut-message')
+
   // A walnut-trigger fire comes from a routine, not a session: the card names the
   // routine, shows the daemon's "fired …, N new items" line, keeps the delivery
   // (prompt + items JSON + input) as the body, and offers no session chip.
@@ -205,6 +220,7 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/cards-all-shapes.png` })
   await shotCard(page, panel, fire, `${SCREENSHOT_DIR}/card-trigger-fire.png`)
   await shotCard(page, panel, notice, `${SCREENSHOT_DIR}/card-notification-quote.png`)
+  await shotCard(page, panel, subtask, `${SCREENSHOT_DIR}/card-subtask-notice.png`)
 })
 
 test('the short id resolves to a chip that opens that session; the task is a pill', async ({ page }) => {

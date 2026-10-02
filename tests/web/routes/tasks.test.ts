@@ -689,6 +689,28 @@ describe('POST /api/tasks/:id/complete', () => {
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe('done');
   });
+
+  it('refuses a parent with open subtasks, naming each by id so a session can act on them', async () => {
+    const { task: parent } = await addTask({ title: 'Ship the release' });
+    const { task: a } = await addTask({ title: 'Build the page', parent_task_id: parent.id });
+    const { task: b } = await addTask({ title: 'Wire the API 测试', parent_task_id: parent.id });
+    const { task: done } = await addTask({ title: 'Already done', parent_task_id: parent.id });
+    await request(createApp()).post(`/api/tasks/${done.id}/complete`);
+
+    const res = await request(createApp()).post(`/api/tasks/${parent.id}/complete`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.active_count).toBe(2);
+    expect(res.body.active_children).toEqual(expect.arrayContaining([
+      { id: a.id, title: 'Build the page', phase: 'TODO' },
+      { id: b.id, title: 'Wire the API 测试', phase: 'TODO' },
+    ]));
+    expect(res.body.active_children).toHaveLength(2);
+    expect(res.body.error).toContain('2 child task(s) are still active');
+    expect(res.body.error).toContain(`"Build the page" (${a.id}, TODO)`);
+    expect(res.body.error).toContain('task_send continues it');
+    expect(res.body.error).not.toContain(done.id);
+  });
 });
 
 describe('POST /api/tasks/:id/notes', () => {
