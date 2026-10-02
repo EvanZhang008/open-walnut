@@ -25,6 +25,9 @@ import {
 
 export type { TagDisplay, TagDisplayRule, TagLinkRule } from './tag-display-rules.js'
 
+/** A rule or link the caller got wrong: the message says how (an HTTP 400, never a 500). */
+export class TagRuleInputError extends Error {}
+
 /** pluginId → pattern → the display its latest call set (the token says which call). */
 const pluginDefaults = new Map<string, Map<string, { display: TagDisplay; token: symbol }>>()
 /** pluginId → pattern → the link template its latest call set. */
@@ -38,14 +41,14 @@ function announce(source: string): void {
 /** A pattern in stored form, or an error a caller can show. */
 export function checkTagPattern(raw: unknown): string {
   const pattern = normalizeTagPattern(raw)
-  if (!pattern) throw new Error('A tag rule names one tag, or a key as "<key>:*".')
-  if (isMachineTagPattern(pattern)) throw new Error('walnut: tags are Walnut\'s own types (they have pills of their own) and never show as tags.')
+  if (!pattern) throw new TagRuleInputError('A tag rule names one tag, or a key as "<key>:*".')
+  if (isMachineTagPattern(pattern)) throw new TagRuleInputError('walnut: tags are Walnut\'s own types (they have pills of their own) and never show as tags.')
   return pattern
 }
 
 function checkDisplay(raw: unknown): TagDisplay {
   if (isTagDisplay(raw)) return raw
-  throw new Error('display must be "shown", "value" or "hidden".')
+  throw new TagRuleInputError('display must be "shown", "value" or "hidden".')
 }
 
 /** A plugin's default for a pattern; the returned function takes it back. The user's own rule
@@ -75,7 +78,7 @@ export function setPluginTagDisplay(pluginId: string, rawPattern: unknown, rawDi
 
 function checkLink(raw: unknown, allowEmpty: boolean): string {
   const link = normalizeTagLink(raw)
-  if (link === null || (link === '' && !allowEmpty)) throw new Error('A tag link is an http(s) URL with {value} where the tag\'s value goes, like https://tracker.example.com/{value}.')
+  if (link === null || (link === '' && !allowEmpty)) throw new TagRuleInputError('A tag link is an http(s) URL with {value} where the tag\'s value goes, like https://tracker.example.com/{value}.')
   return link
 }
 
@@ -189,6 +192,30 @@ export function setUserTagLink(rawPattern: unknown, rawLink: unknown): Promise<T
   })
   userQueue = run.catch(() => undefined)
   return run
+}
+
+export interface TagDisplayState {
+  rules: TagDisplayRule[]
+  links: TagLinkRule[]
+}
+
+/** The rules and links in force: what GET /api/v1/tasks/meta/tag-display answers. */
+export async function readTagDisplayState(): Promise<TagDisplayState> {
+  return { rules: await listTagDisplayRules(), links: await listTagLinkRules() }
+}
+
+/**
+ * One change by the user, as PUT /api/v1/tasks/meta/tag-display takes it: `{ pattern, display }`
+ * and/or `{ pattern, link }` (null removes the user's rule). A bad display is refused before a
+ * link in the same body is written. Answers the state now in force.
+ */
+export async function applyUserTagChange(raw: unknown): Promise<TagDisplayState> {
+  const body = (raw && typeof raw === 'object' ? raw : {}) as { pattern?: unknown; display?: unknown; link?: unknown }
+  const withDisplay = !('link' in body) || 'display' in body
+  if (withDisplay && body.display !== null) checkDisplay(body.display)
+  if ('link' in body) await setUserTagLink(body.pattern, body.link)
+  if (withDisplay) await setUserTagDisplay(body.pattern, body.display)
+  return readTagDisplayState()
 }
 
 /** Test seam: forget every plugin default (module state outlives a test). */

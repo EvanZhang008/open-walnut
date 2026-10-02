@@ -276,3 +276,42 @@
   display: none !important;
   opacity: 0;
 }
+
+/* ── Tags rows: the display switch + its link button; the link editor's field + buttons ── */
+.tags-settings-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tags-settings-link-controls {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tags-settings-link-controls > .settings-input {
+  flex: 1 1 260px;
+  width: 380px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+
+@container sgroup (max-width: 599px) {
+  .tags-settings-link-controls {
+    justify-content: flex-start;
+  }
+
+  .tags-settings-link-controls > .settings-input {
+    flex-basis: 100%;
+    width: 100%;
+  }
+}
+
+.tags-settings-link-row > .settings-row-actions {
+  flex: 1 1 auto;
+}

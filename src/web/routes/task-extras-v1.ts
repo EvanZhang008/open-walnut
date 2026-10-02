@@ -36,6 +36,11 @@ import { PIN_TIER_POLICY, RETIRED_PIN_TIERS } from '../../core/types.js'
 
 export const taskExtrasV1Router = Router()
 
+/** The box-level relay id (the action names no session). */
+const SERVER_RELAY_SID = '__server__'
+/** A phone reads the rules at launch: a slow bridge must not hold its pills for 30s. */
+const TAG_DISPLAY_RELAY_TIMEOUT_MS = 8_000
+
 /** Registry writes have no replica→primary write-back — refuse loudly on cloud. */
 function replicaRefused(res: Response, what: string): boolean {
   if (!CLOUD_MODE) return false
@@ -83,10 +88,24 @@ taskExtrasV1Router.get('/tasks/meta/tags', async (_req: Request, res: Response, 
 // Walnut's own rule, the user's, plugin defaults and Walnut's defaults. Clients compile them once and filter
 // the pills they draw; `task:tag-display-changed` says when to read them again.
 // `links` (additive, 2026-10): what a tag's pill opens, the user's then plugin defaults.
+// REPLICA: the user's rules live in the primary's config.yaml and plugin defaults in its memory,
+// so it asks the primary (`server.tag-display`); when the Mac cannot be reached it answers its
+// own (Walnut's rules only) rather than an error, because the pills still need some answer.
 taskExtrasV1Router.get('/tasks/meta/tag-display', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { listTagDisplayRules, listTagLinkRules } = await import('../../core/tag-display.js')
-    res.json({ rules: await listTagDisplayRules(), links: await listTagLinkRules() })
+    if (CLOUD_MODE) {
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      const outcome = await callPrimaryControl('server.tag-display', SERVER_RELAY_SID, {}, TAG_DISPLAY_RELAY_TIMEOUT_MS)
+      if (outcome.ok && Array.isArray(outcome.result.rules)) {
+        res.json({ rules: outcome.result.rules, links: Array.isArray(outcome.result.links) ? outcome.result.links : [] })
+        return
+      }
+      log.web.warn('v1 tag-display: primary unavailable, answering the replica\'s own rules', {
+        failure: outcome.ok ? 'malformed' : outcome.failure.kind,
+      })
+    }
+    const { readTagDisplayState } = await import('../../core/tag-display.js')
+    res.json(await readTagDisplayState())
   } catch (err) {
     next(err)
   }
@@ -95,28 +114,21 @@ taskExtrasV1Router.get('/tasks/meta/tag-display', async (_req: Request, res: Res
 // PUT /api/v1/tasks/meta/tag-display { pattern, display: 'shown' | 'value' | 'hidden' | null }:
 // the user's rule for one tag or `<key>:*` (null removes it). `{ pattern, link }` instead sets
 // the user's link (a template with {value}, '' for none, null removes it). Answers the rules
-// and links in force. Primary only: the rules live in the primary's config.yaml.
+// and links in force. The rules live in the primary's config.yaml: a REPLICA relays the change.
 taskExtrasV1Router.put('/tasks/meta/tag-display', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (replicaRefused(res, 'Changing which tags show')) return
-    const body = (req.body ?? {}) as { pattern?: unknown; display?: unknown; link?: unknown }
-    const { setUserTagDisplay, setUserTagLink, listTagDisplayRules, listTagLinkRules } = await import('../../core/tag-display.js')
-    const { isTagDisplay } = await import('../../core/tag-display-rules.js')
-    const withDisplay = !('link' in body) || 'display' in body
-    // Both in one body: a bad display is refused before the link is written.
-    if (withDisplay && body.display !== null && !isTagDisplay(body.display)) {
-      sendError(res, 400, 'bad_request', 'display must be "shown", "value" or "hidden".')
+    if (CLOUD_MODE) {
+      const { relayControlAction } = await import('./v1-control-relay.js')
+      await relayControlAction(res, 'server.tag-display.set', SERVER_RELAY_SID, (req.body ?? {}) as Record<string, unknown>, 200)
       return
     }
+    const { applyUserTagChange, TagRuleInputError } = await import('../../core/tag-display.js')
     try {
-      if ('link' in body) await setUserTagLink(body.pattern, body.link)
-      if (withDisplay) await setUserTagDisplay(body.pattern, body.display)
+      res.json(await applyUserTagChange(req.body))
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (/tag rule names|display must be|never show as tags|tag link is/.test(msg)) { sendError(res, 400, 'bad_request', msg); return }
+      if (err instanceof TagRuleInputError) { sendError(res, 400, 'bad_request', err.message); return }
       throw err
     }
-    res.json({ rules: await listTagDisplayRules(), links: await listTagLinkRules() })
   } catch (err) {
     next(err)
   }

@@ -1838,18 +1838,24 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   its tracker, so the pill opens the ticket in a new tab (the Mac app hands it to the
   default browser) instead of opening the row. The user's link wins over a plugin's, the
   exact tag over its key, and the user's empty link `""` takes a plugin's away. A client
-  that ignores `links` draws plain pills.
+  that ignores `links` draws plain pills. The user sets links in Settings, Tasks, Tags;
+  the iOS app draws the same pills (value only, hidden, linked) from this list.
   - `GET /api/v1/tasks/meta/tag-display` → `200 { "rules": [ { pattern, display:
     'shown'|'value'|'hidden', source: 'builtin'|'user'|'plugin'|'default', pluginId?,
     pluginName? } ], "links": [ { pattern, link, source: 'user'|'plugin', pluginId?,
-    pluginName? } ] }`. Reads work on both boxes. `links` is absent on an older server.
+    pluginName? } ] }`. `links` is absent on an older server. A REPLICA asks the primary
+    (control action `server.tag-display`, 8s budget), because the user's rules live in the
+    primary's config and plugin defaults in its memory; when the Mac cannot be reached, or
+    predates the action, it answers its own list (Walnut's rules only), never an error.
   - `PUT /api/v1/tasks/meta/tag-display` body `{ "pattern", "display": 'shown' | 'value' |
     'hidden' | null }` sets (or, with `null`, removes) the user's rule for one tag or
     `<key>:*`; `{ "pattern", "link": "<template>" | "" | null }` sets the user's link the
     same way (both in one body set both). Answers `{ rules, links }`. A machine-tag pattern,
     a malformed one, or a link that is not an http(s) URL naming `{value}` →
-    `400 bad_request`, and nothing is written. **`501 not_supported_cloud` on a REPLICA**:
-    the rules live in the primary's config.
+    `400 bad_request`, and nothing is written. A REPLICA relays the change to the primary
+    (`server.tag-display.set`, the primary's answer and errors verbatim); with the Mac out
+    of reach it answers `503 bridge_offline` and keeps nothing (until 2026-10 it answered
+    `501 not_supported_cloud`).
 - Virtual task groups — **all writes answer `501 not_supported_cloud` on a
   REPLICA** (`group_id` and the group registry are not in the outbox update
   whitelist, so replica-local writes would silently revert; an honest error

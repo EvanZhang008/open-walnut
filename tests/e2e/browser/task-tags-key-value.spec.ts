@@ -288,3 +288,92 @@ test('a linked tag opens its URL in a new tab, never the row or the detail under
   await detail.locator('.todo-detail-meta').screenshot({ path: `${SHOT_DIR}/${test.info().project.name}-linked-detail.png` })
   expect(errors).toEqual([])
 })
+
+test('Settings, Tags: a key gets a link, one tag turns it off and back on, and the pills follow', async ({ page, browserName }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  // A key per engine: the chromium and webkit projects share one board.
+  const key = `tkl-${browserName}`
+  const origin = 'https://links.example.test'
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const project = `Tag link settings ${stamp}`
+  litter.projects.push(project)
+  const id = await createTask(`Link settings ${stamp}`, { project, tags: [`${key}:A-1`, `${key}:B 2`] })
+  // An exact rule gives `B 2` a row of its own (the switch the user would flip first).
+  await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${key}:B 2`, display: 'shown' })
+  try {
+    await page.setContent(`<a href="${test.info().project.use.baseURL}/settings#tags">Open Tags</a>`)
+    await page.getByRole('link', { name: 'Open Tags' }).click()
+    const keyRow = page.locator(`[data-tag-pattern="${key}:*"]`)
+    await expect(keyRow).toBeVisible({ timeout: 30_000 })
+    await keyRow.scrollIntoViewIfNeeded()
+    const addLink = page.getByTestId(`tag-link-edit-${key}:*`)
+    await expect(addLink).toHaveText('Add link')
+    await addLink.click()
+    const editor = page.getByTestId(`tag-link-editor-${key}:*`)
+    const input = editor.getByTestId('tag-link-input')
+    await expect(input).toBeFocused()
+
+    // Not a template: refused in place, nothing written.
+    let writes = 0
+    page.on('request', (req) => { if (req.method() === 'PUT' && req.url().includes('/tag-display')) writes++ })
+    await input.fill('https://links.example.test/no-slot')
+    await editor.getByTestId('tag-link-save').click()
+    await expect(page.locator('.settings-row-error').filter({ hasText: 'with {value} where' })).toBeVisible()
+    expect(writes).toBe(0)
+
+    // A template: the preview names a real tag, Enter saves, the row says where it opens.
+    await input.fill(`${origin}/browse/{value}`)
+    await expect(editor.locator('.settings-row-help')).toHaveText(`${key}:A-1 opens ${origin}/browse/A-1`)
+    await input.press('Enter')
+    await expect(editor).toHaveCount(0)
+    expect(writes).toBe(1)
+    await expect(keyRow.locator('.settings-row-help')).toContainText('Opens links.example.test.')
+    await expect(addLink).toHaveText('Edit link')
+
+    // The tag with a row of its own inherits the key's link; "No link" turns it off for that tag.
+    const exactRow = page.locator(`[data-tag-pattern="${key}:B 2"]`)
+    await expect(exactRow.locator('.settings-row-help')).toContainText('Opens links.example.test.')
+    await page.getByTestId(`tag-link-edit-${key}:B 2`).click()
+    const exactEditor = page.getByTestId(`tag-link-editor-${key}:B 2`)
+    await expect(exactEditor.getByTestId('tag-link-input')).toHaveValue(`${origin}/browse/{value}`)
+    await expect(exactEditor.getByTestId('tag-link-clear')).toHaveText('No link')
+    await exactEditor.getByTestId('tag-link-clear').click()
+    await expect(exactEditor).toHaveCount(0)
+    await expect(exactRow.locator('.settings-row-help')).toContainText(`No link: you turned your ${key}: link off.`)
+    await expect(page.getByTestId(`tag-link-edit-${key}:B 2`)).toHaveText('Add link')
+    await fs.mkdir(SHOT_DIR, { recursive: true })
+    await page.locator('[data-testid="tags-settings"]').screenshot({ path: `${SHOT_DIR}/${test.info().project.name}-settings-links.png` })
+
+    const stored = await api<{ links: Array<{ pattern: string; link: string; source: string }> }>('/api/v1/tasks/meta/tag-display', 'GET')
+    expect(stored.links).toContainEqual({ pattern: `${key}:*`, link: `${origin}/browse/{value}`, source: 'user' })
+    expect(stored.links).toContainEqual({ pattern: `${key}:B 2`, link: '', source: 'user' })
+
+    // Home: A-1 opens the page (its value encoded), B 2 is an ordinary pill.
+    await openHome(page)
+    await expect(row(page, id).locator(`a.tag-chip[data-tag="${key}:A-1"]`)).toHaveAttribute('href', `${origin}/browse/A-1`, { timeout: 15_000 })
+    await expect(row(page, id).locator(`span.tag-chip[data-tag="${key}:B 2"]`)).toBeVisible()
+
+    // Back in Settings, "Use your … link" undoes the turn-off: B 2 links again, encoded.
+    await page.setContent(`<a href="${test.info().project.use.baseURL}/settings#tags">Open Tags</a>`)
+    await page.getByRole('link', { name: 'Open Tags' }).click()
+    await expect(exactRow).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId(`tag-link-edit-${key}:B 2`).click()
+    await expect(exactEditor.getByTestId('tag-link-clear')).toHaveText(`Use your ${key}: link`)
+    await exactEditor.getByTestId('tag-link-clear').click()
+    await expect(exactRow.locator('.settings-row-help')).toContainText('Opens links.example.test.')
+    // Escape closes an editor without a write.
+    await page.getByTestId(`tag-link-edit-${key}:*`).click()
+    const before = writes
+    await page.getByTestId(`tag-link-editor-${key}:*`).getByTestId('tag-link-input').press('Escape')
+    await expect(page.getByTestId(`tag-link-editor-${key}:*`)).toHaveCount(0)
+    expect(writes).toBe(before)
+    await openHome(page)
+    await expect(row(page, id).locator(`a.tag-chip[data-tag="${key}:B 2"]`)).toHaveAttribute('href', `${origin}/browse/B%202`, { timeout: 15_000 })
+    expect(errors).toEqual([])
+  } finally {
+    await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${key}:*`, link: null }).catch(() => undefined)
+    await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${key}:B 2`, link: null }).catch(() => undefined)
+    await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${key}:B 2`, display: null }).catch(() => undefined)
+  }
+})

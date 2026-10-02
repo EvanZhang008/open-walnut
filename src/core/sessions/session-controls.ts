@@ -762,6 +762,9 @@ export type SessionControlAction =
   // ask stamps, activity stamp and session ids, so only the primary can compute
   // the list the Mac's drawer shows.
   | 'server.asks'
+  // Tag display rules and links (GET/PUT /api/v1/tasks/meta/tag-display): the user's live in
+  // the primary's config.yaml and plugin defaults in its memory, so a replica asks here.
+  | 'server.tag-display' | 'server.tag-display.set'
   // Wave 2 box-level family: routines CRUD/control (single-writer: the
   // PRIMARY's cron engine owns cron-jobs.json — replicas never write it
   // locally, avoiding the dual-engine blind-write storms), the launcher's
@@ -1166,6 +1169,22 @@ export async function handleSessionControlRelay(
         // computation the primary's own GET /api/v1/asks runs.
         const { parseAsksQuery, computeAgentAsks } = await import('../../web/routes/asks-v1.js');
         result = await computeAgentAsks(parseAsksQuery(p)) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.tag-display': {
+        const { readTagDisplayState } = await import('../tag-display.js');
+        result = await readTagDisplayState() as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.tag-display.set': {
+        // Same function and the same 400s as the primary's own PUT route.
+        const { applyUserTagChange, TagRuleInputError } = await import('../tag-display.js');
+        try {
+          result = await applyUserTagChange(p) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof TagRuleInputError) throw new SessionControlError(err.message, 400);
+          throw err;
+        }
         break;
       }
       // ── Wave 2 box-level family: routines (PRIMARY's engine is the single writer) ──

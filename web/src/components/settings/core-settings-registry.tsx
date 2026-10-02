@@ -142,8 +142,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'tags', label: 'Tags', title: 'Tags', group: 'configure', navHidden: true,
     icon: 'checklist', tint: '#AF52DE',
-    description: 'How tags show on tasks.',
-    keywords: ['tags', 'tag', 'hide tag', 'show tag', 'tag value', 'key', 'namespace', 'pill'],
+    description: 'How tags show on tasks, and what they open.',
+    keywords: ['tags', 'tag', 'hide tag', 'show tag', 'tag value', 'key', 'namespace', 'pill', 'tag link', 'link', 'url'],
     render: () => <TagsSection />,
   },
   {

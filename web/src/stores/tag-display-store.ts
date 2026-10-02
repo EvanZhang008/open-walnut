@@ -140,6 +140,26 @@ export async function setTagDisplay(pattern: string, display: TagDisplay | null)
   }
 }
 
+/**
+ * The user's link for a tag or `<namespace>:*`: a template with `{value}`, `''` for no link
+ * (over a plugin's), or null to remove the user's rule. Optimistic like setTagDisplay.
+ */
+export async function setTagLink(pattern: string, link: string | null): Promise<void> {
+  generation++;
+  const before = snapshot.links;
+  const rules = snapshot.rules;
+  const others = before.filter((rule) => !(rule.source === 'user' && rule.pattern === pattern));
+  publish(rules, link === null ? others : [{ pattern, link, source: 'user' }, ...others], snapshot.loaded);
+  const mine = generation;
+  try {
+    const res = await apiPut<{ rules: TagDisplayRule[]; links?: TagLinkRule[] }>(PATH, { pattern, link });
+    if (mine === generation && Array.isArray(res?.rules)) publish(res.rules, Array.isArray(res.links) ? res.links : snapshot.links, true);
+  } catch (err) {
+    if (mine === generation) publish(rules, before, snapshot.loaded);
+    throw err;
+  }
+}
+
 /** Test seam: forget the page's copy. */
 export function _resetTagDisplayStoreForTesting(): void {
   snapshot = snapshotOf([...BUILTIN_TAG_DISPLAY_RULES, ...DEFAULT_TAG_DISPLAY_RULES], [], false);
