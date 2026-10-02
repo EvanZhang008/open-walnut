@@ -35,7 +35,7 @@ interface BoardBody {
   marks?: Record<string, { state?: string; note?: string }>
   projects?: Record<string, { title?: string; status?: string; tasks?: string[]; status_by?: string }>
   checks?: Record<string, { hash?: string; read?: boolean; changed?: boolean }>
-  choices?: Record<string, { option?: string; label?: string }>
+  choices?: Record<string, { option?: string; label?: string; text?: string }>
   reminders?: Record<string, { at?: string; fired_at?: string }>
   refs?: Array<{ id: string; title?: string; phase?: string }>
 }
@@ -98,6 +98,17 @@ function dueReminders(b: BoardBody, nowMs: number): string[] {
     .map(([id]) => id);
 }
 
+/** Enough of the user's own words on a choice to know it has them; the whole text is under `choices`. */
+const CHOICE_WORDS_SHOWN = 120;
+
+/** `deploy-when "Run it now", in their words: "only after the backup…"`, or the words alone. */
+function choiceLine(id: string, c: { option?: string; label?: string; text?: string }): string {
+  const text = c.text?.replace(/\s+/g, ' ').trim() ?? '';
+  const words = text ? `"${text.length > CHOICE_WORDS_SHOWN ? `${text.slice(0, CHOICE_WORDS_SHOWN)}…` : text}"` : '';
+  if (!c.option) return `${id} in their own words: ${words}`;
+  return `${id} "${c.label ?? c.option}"${words ? `, in their words: ${words}` : ''}`;
+}
+
 /**
  * The user's side of the board in a few sentences: projects by status, read
  * ticks, answered choices with their labels, reminders. Empty parts are left out.
@@ -121,7 +132,7 @@ function itemsSummary(b: BoardBody, nowMs: number): string {
   }
   const answered = Object.entries(b.choices ?? {});
   if (answered.length) {
-    out.push(`${plural(answered.length, 'choice')} answered: ${capped(answered.map(([id, c]) => `${id} "${c.label ?? c.option ?? ''}"`))}.`);
+    out.push(`${plural(answered.length, 'choice')} answered: ${capped(answered.map(([id, c]) => choiceLine(id, c)))}.`);
   }
   const reminders = Object.entries(b.reminders ?? {});
   if (reminders.length) {
@@ -147,7 +158,8 @@ defineOp({
     'Read your team\'s Board (or the one of the task you name): its html, every chat thread with the user\'s ' +
     'messages and yours, the user\'s notes (under `marks`), the board\'s projects and their status (with who ' +
     'set it: status_by "human" is the user\'s pick), which points ' +
-    'the user ticked read (and which changed since), the user\'s answers to choices, reminders, and the live ' +
+    'the user ticked read (and which changed since), the user\'s answers to choices (an option, their own words ' +
+    'under `text`, or both), reminders, and the live ' +
     'state of each task the board names. Read it before every edit. No board yet means a leader has not made ' +
     'one: the walnut-board skill says how.',
   input: { task: TASK_ARG },

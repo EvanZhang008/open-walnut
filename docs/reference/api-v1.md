@@ -939,16 +939,23 @@ itself). The `board_*` ops default to the caller's team board.
   with whitespace runs collapsed), so an edit of the point brings it back unread.
   At 2000 ticks, ticks on points no longer on the page are dropped first. Emits
   kind `check`.
-- `PUT /api/v1/tasks/:id/board/choices/:choice { "option" }` → `200 { "choice",
-  "delivery" }`. Humans only. `options="key:Label,key:Label"` on the
+- `PUT /api/v1/tasks/:id/board/choices/:choice { "option"?, "text"? }` → `200 {
+  "choice", "delivery" }`. Humans only. An answer is an option, the user's own
+  words (`text`, trimmed, up to 8 KiB like a thread message, else `413
+  answer_too_long`), or both; at least one field is required (`400
+  bad_request`). Each field given replaces that part and keeps the other, `""`
+  takes that part back, and an answer left with neither is cleared. The stored
+  `choice` is `{ option, label?, at, text?, text_at? }`, `option: ""` when the
+  user answered in words alone. `options="key:Label,key:Label"` on the
   `<walnut-choice>` element (the format of walnut-project's `labels`); an option
   not among them → `400 bad_option { options }`; a choice id not on the page →
-  `404 choice_not_found`. A new answer is delivered to the board task's session
-  like a human thread message (`delivery` as for a thread post); the same option
-  again → `delivery: { state: "skipped", reason: "unchanged" }` (no second
-  delivery); `option: ""` clears → `{ "choice": null, "delivery": { state:
-  "skipped", reason: "cleared" } }`. Answering clears a DUE reminder on that
-  choice in the same write. Emits kind `choice`.
+  `404 choice_not_found`. A changed answer is delivered to the board task's
+  session like a human thread message, ONE message with the choice id, the pick
+  (or "picking no option") and the words quoted (`delivery` as for a thread
+  post); the same answer again → `delivery: { state: "skipped", reason:
+  "unchanged" }` (no second delivery); clearing → `{ "choice": null, "delivery":
+  { state: "skipped", reason: "cleared" } }`. Answering clears a DUE reminder on
+  that choice in the same write. Emits kind `choice`.
 - `PUT /api/v1/tasks/:id/board/reminders/:target { "at": ISO-8601 | null,
   "note"? }` → `200 { "reminder" }`. Any team member. One reminder per target (a
   `<walnut-choice>` or `<walnut-thread>` id; otherwise `404 target_not_found`);

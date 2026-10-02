@@ -180,6 +180,24 @@ describe('board ops', () => {
     expect(got.choices).toMatchObject({ when: { label: 'Run it now' } })
   })
 
+  it('board_get names the user\'s own words on a choice beside the pick, or alone; the payload keeps them whole', async () => {
+    const long = `Only after the backup, ${'and the on-call knows '.repeat(10)}then go.`
+    const r = run('board_get', server({
+      get: {
+        ...BOARD,
+        choices: {
+          when: { option: 'now', label: 'Run it now', text: 'Tell the on-call\nfirst.' },
+          venue: { option: '', text: long },
+        },
+      },
+    }))
+    const got = await r.speak({ task: 'lead01' })
+    expect(got.outcome).toContain(' 2 choices answered: when "Run it now", in their words: "Tell the on-call first."; venue in their own words: "')
+    expect(got.outcome).toContain(`${long.slice(0, 120)}…"`)
+    expect(got.outcome).not.toContain('then go.')
+    expect(got.choices).toMatchObject({ venue: { option: '', text: long } })
+  })
+
   it('board_project_set PUTs only the fields given and names status and task count; a removed one says so', async () => {
     const r = run('board_project_set', server())
     const got = await r.speak({ id: 'cause a', status: 'wip', tasks: ['w1', 'w2', 'w3'] })

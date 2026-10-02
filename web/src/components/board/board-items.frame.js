@@ -446,7 +446,8 @@
     }
   }
 
-  // ── <walnut-choice id options recommended? title? task?>: numbered options; the pick goes to the leader ──
+  // ── <walnut-choice id options recommended? title? task?>: numbered options, or the user's
+  // own words (the host's docked composer, as a thread's Reply… is); the answer goes to the leader ──
   class WalnutChoice extends kit.Base {
     static get observedAttributes() { return ['title', 'options', 'recommended', 'task']; }
     attributeChangedCallback(name, oldValue, value) {
@@ -470,12 +471,22 @@
       this.wnOpts = document.createElement('div');
       this.wnOpts.className = 'wn-choice-opts';
       this.wnOpts.setAttribute('role', 'group');
+      // The user's own words: what they wrote, and the field that docks the composer for more.
+      this.wnWords = document.createElement('div');
+      this.wnWords.className = 'wn-choice-words';
+      this.wnWords.hidden = true;
+      this.wnOwn = document.createElement('div');
+      this.wnOwn.className = 'wn-composer wn-choice-own';
+      this.wnOwn.innerHTML = '<button type="button" class="wn-reply" aria-pressed="false">Answer in your own words…</button>';
+      this.wnOwnBtn = this.wnOwn.firstChild;
       this.wnFoot = document.createElement('div');
       this.wnFoot.className = 'wn-choice-foot';
       this.wnFoot.innerHTML = '<span class="wn-choice-status" aria-live="polite"></span>';
-      [this.wnHead, this.wnOpts, this.wnFoot].forEach(function (el) { el.setAttribute('data-wn-ui', ''); });
+      [this.wnHead, this.wnOpts, this.wnWords, this.wnOwn, this.wnFoot].forEach(function (el) { el.setAttribute('data-wn-ui', ''); });
       this.insertBefore(this.wnHead, this.firstChild);
       this.appendChild(this.wnOpts);
+      this.appendChild(this.wnWords);
+      this.appendChild(this.wnOwn);
       this.appendChild(this.wnFoot);
       this.wnStatusEl = this.wnFoot.firstChild;
       if (kit.Remind) {
@@ -488,6 +499,19 @@
         if (!b || !self.wnOpts.contains(b)) return;
         e.preventDefault();
         if (trusted(e)) self.wnPick(b.getAttribute('data-option') || '');
+      });
+      // Only a trusted click or focus docks the composer (an author script cannot answer for the user).
+      this.wnOwnBtn.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) self.wnCompose(); });
+      this.wnOwnBtn.addEventListener('focus', function (e) { if (trusted(e)) self.wnCompose(); });
+    }
+    /** "Answer in your own words…": the host docks its composer for this choice (a click and its focus count once). */
+    wnCompose() {
+      var now = Date.now();
+      if (!this.wnId || (this.wnComposeAt && now - this.wnComposeAt < 400)) return;
+      this.wnComposeAt = now;
+      kit.send({
+        t: 'wn-board:compose', choice: this.wnId,
+        title: this.getAttribute('data-title') || this.wnId, task: this.getAttribute('task') || '',
       });
     }
     wnPick(value) {
@@ -544,16 +568,32 @@
         if (again && document.activeElement !== again) again.focus();
       }
 
+      // The user's own words, beside the pick or instead of it.
+      var words = answer && answer.text ? String(answer.text) : '';
+      kit.setHtml(this.wnWords, words
+        ? '<div class="wn-msg-meta"><span class="wn-who">You wrote</span>'
+          + (answer.text_at ? '<span class="wn-when">' + esc(kit.when(answer.text_at)) + '</span>' : '')
+          + '</div><div class="wn-text">' + kit.richText(words) + '</div>'
+        : '');
+      if (this.wnWords.hidden !== !words) this.wnWords.hidden = !words;
+      var composing = !!id && kit.flags.composingChoice === id;
+      var ownText = composing ? 'Answering in the box below' : words ? 'Change your words…' : 'Answer in your own words…';
+      if (this.wnOwnBtn.textContent !== ownText) this.wnOwnBtn.textContent = ownText;
+      this.wnOwnBtn.setAttribute('aria-pressed', composing ? 'true' : 'false');
+      this.wnOwnBtn.classList.toggle('wn-on', composing);
+      this.wnOwnBtn.disabled = !kit.flags.hasData;
+
       // An answer the options no longer list still says what it was.
       var listed = options.filter(function (o) { return o.key === chosen; })[0];
       var status = this.wnStatus || (chosen
         ? (listed ? 'Answered' : 'You chose "' + (answer.label || chosen) + '"') + (answer.at ? ' ' + kit.when(answer.at) : '')
-        : '');
+        : words ? 'Answered in your own words' : '');
       if (this.wnStatusEl.textContent !== status) this.wnStatusEl.textContent = status;
       this.wnStatusEl.classList.toggle('wn-failed', this.wnFailed);
 
-      // Answered: here, and on every element the author linked to it (an overview row drops out by CSS).
-      var answered = !!chosen;
+      // Answered (a pick or the user's words): here, and on every element the author
+      // linked to it (an overview row drops out by CSS).
+      var answered = !!chosen || !!words;
       if (this.hasAttribute('data-answered') !== answered) this.toggleAttribute('data-answered', answered);
       var linked = id ? document.querySelectorAll('[data-choice="' + cssId(id) + '"]') : [];
       for (var i = 0; i < linked.length; i++) {
@@ -562,6 +602,18 @@
       if (this.wnRemind) this.wnRemind.render();
     }
   }
+
+  // The user's words on a choice were saved through the docked composer: how far they went.
+  kit.onHost['wn-board:choice-words'] = function (d) {
+    var id = String(d.id || '');
+    var delivered = d.delivery && (d.delivery.state === 'queued' || d.delivery.state === 'deferred');
+    var all = id ? document.querySelectorAll('walnut-choice[id="' + cssId(id) + '"]') : [];
+    for (var i = 0; i < all.length; i++) {
+      all[i].wnStatus = delivered ? 'Sent to the leader' : 'Saved. The leader sees it on the board.';
+      all[i].wnFailed = false;
+    }
+    kit.renderAll();
+  };
 
   customElements.define('walnut-mark', WalnutMark);
   customElements.define('walnut-project', WalnutProject);

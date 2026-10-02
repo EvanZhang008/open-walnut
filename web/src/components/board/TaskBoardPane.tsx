@@ -141,7 +141,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const toFrame = useCallback((msg: FrameMsg) => {
     frameRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
-  const { saveMark, saveProject, saveCheck, saveChoice, saveReminder, keepNoteDraft, noteDrafts } = useBoardItemSaves(
+  const { saveMark, saveProject, saveCheck, saveChoice, saveChoiceText, saveReminder, keepNoteDraft, noteDrafts } = useBoardItemSaves(
     ownerId, ownerRef, toFrame, { mergeMark, mergeProject, mergeCheck, mergeChoice, mergeReminder },
   );
   const frameData = () => ({
@@ -150,6 +150,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     checks: payload?.checks ?? {}, choices: payload?.choices ?? {}, reminders: payload?.reminders ?? {},
     section_seen: { ...(payload?.section_seen ?? {}), ...pendingSeen.current },
     composing: reply?.target.thread ?? '',
+    composing_choice: reply?.target.choice ?? '',
   });
   const latest = useRef(frameData());
   latest.current = frameData();
@@ -159,7 +160,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   }, [toFrame, noteDrafts]);
   useEffect(() => { postData(); }, [
     refs, payload?.threads, payload?.marks, payload?.projects, payload?.checks, payload?.choices, payload?.reminders,
-    payload?.section_seen, seen, ownerId, reply?.target.thread, postData,
+    payload?.section_seen, seen, ownerId, reply?.target.thread, reply?.target.choice, postData,
   ]);
 
   const openTask = useCallback((rawId: string) => {
@@ -204,11 +205,17 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     }
   }, [toFrame, mergeMessage]);
 
-  /** A thread's "Reply…" in the frame: dock the composer for it (again: focus it). */
-  const openReply = useCallback((thread: string, title: string, task: string) => {
+  /**
+   * A thread's "Reply…" in the frame, or a choice's "Answer in your own words…":
+   * dock the composer for it (again: focus it). A choice's box starts from the words it has.
+   */
+  const openReply = useCallback((thread: string, title: string, task: string, choice = '') => {
     const about = task ? refs[task]?.title || storeById?.get(task)?.title || '' : '';
-    log.info('board', 'reply box opened', { taskId: ownerRef.current, thread });
-    setReply((cur) => ({ target: { thread, title, aboutTitle: about || undefined }, nonce: (cur?.nonce ?? 0) + 1 }));
+    log.info('board', 'reply box opened', { taskId: ownerRef.current, thread, choiceId: choice });
+    const target: BoardReplyTarget = choice
+      ? { thread: '', choice, text: latest.current.choices[choice]?.text, title, aboutTitle: about || undefined }
+      : { thread, title, aboutTitle: about || undefined };
+    setReply((cur) => ({ target, nonce: (cur?.nonce ?? 0) + 1 }));
   }, [refs, storeById]);
 
   const deleteThreadMessage = useCallback((reqId: string, thread: string, messageId: string) => {
@@ -310,6 +317,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         return;
       case 'wn-board:compose':
         if (str('thread')) openReply(str('thread'), str('title'), str('task'));
+        else if (str('choice')) openReply('', str('title'), str('task'), str('choice'));
         return;
       default:
     }
@@ -393,6 +401,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
           target={reply.target}
           focusNonce={reply.nonce}
           onSend={sendFromDock}
+          onAnswer={saveChoiceText}
           onClose={() => setReply(null)}
         />
       )}

@@ -12,7 +12,7 @@
  *   PUT    /tasks/:id/board/projects/:project { title?, status?, tasks?, delete?, override_user? }
  *                                                → { project | null, delivery? (a human's new status) }
  *   PUT    /tasks/:id/board/checks/:check    { read, hash? }         → { check | null, hash } (humans only)
- *   PUT    /tasks/:id/board/choices/:choice  { option }              → { choice | null, delivery } (humans only)
+ *   PUT    /tasks/:id/board/choices/:choice  { option?, text? }      → { choice | null, delivery } (humans only)
  *   PUT    /tasks/:id/board/reminders/:target { at | null, note? }   → { reminder | null }
  *   PUT    /tasks/:id/board/seen/:section    { hash }                → { seen | null } (humans only)
  *   DELETE /tasks/:id/board                  → 204 (humans only)
@@ -377,9 +377,13 @@ boardV1Router.put('/tasks/:id/board/checks/:check', route(async (req, res) => {
 boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => {
   const task = await prepareHumanWrite(req, 'answers a choice')
   const b = body(req)
-  if (typeof b.option !== 'string') throw new RouteError(400, 'bad_request', '`option` must be a string ("" clears)')
+  // An option, the user's own words, or both: each one given replaces that part ("" takes it back).
+  const { option, text } = b
+  if (option !== undefined && typeof option !== 'string') throw new RouteError(400, 'bad_request', '`option` must be a string ("" clears)')
+  if (text !== undefined && typeof text !== 'string') throw new RouteError(400, 'bad_request', '`text` must be a string ("" clears)')
+  if (option === undefined && text === undefined) throw new RouteError(400, 'bad_request', 'Give `option`, `text` or both')
   const choiceId = param(req.params.choice)
-  const result = await setBoardChoice(task.id, choiceId, { option: b.option })
+  const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined })
   let delivery: BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' }
   if (!result.choice) delivery = { state: 'skipped', reason: 'cleared' }
   else if (!result.changed) delivery = { state: 'skipped', reason: 'unchanged' }
@@ -388,7 +392,9 @@ boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => 
     const text = await buildChoicePrompt(board?.html ?? '', choiceId, result.choice)
     delivery = await deliverBoardText(task.id, text, { choice: choiceId, option: result.choice.option })
   }
-  log.web.info('board choice answered', { taskId: task.id, choice: choiceId, option: result.choice?.option ?? '', delivery: delivery.state })
+  log.web.info('board choice answered', {
+    taskId: task.id, choice: choiceId, option: result.choice?.option ?? '', textChars: result.choice?.text?.length ?? 0, delivery: delivery.state,
+  })
   res.json({ choice: result.choice, delivery })
 }))
 

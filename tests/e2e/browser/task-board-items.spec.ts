@@ -27,6 +27,10 @@
  *         older page is dropped by the note's save.
  *      6b. a note typed while its save fails survives the leader's board edit (a new
  *         document), is saved by the next one, and closing the Board saves it too.
+ *   B2. A choice takes the user's own words, with the same docked composer: alone
+ *      they answer it (the overview row and the strip follow), the leader hears them
+ *      quoted with "no option"; "Change your words…" starts from them; a pick later
+ *      keeps them, and the leader hears both in one message.
  *   C. A worker's Board tab shows its leader's board, and a post from there lands
  *      on the leader's board.
  *
@@ -571,6 +575,86 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await page.unroute('**/board/marks/**')
   await frame.locator('body').evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-B6-board.png` })
+  expect(pageErrors).toEqual([])
+})
+
+test('a choice takes the user\'s own words, alone or beside a pick', async ({ page }) => {
+  test.setTimeout(300_000)
+  const engine = test.info().project.name
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message))
+  const project = `${engine}-items ${stamp}`
+  const { id: leader, sid } = await taskWithSession(`${engine}-items-words-leader ${stamp}`, { project }, 'Words leader ready')
+  const workerTitle = `${engine}-items-words-worker ${stamp}`
+  const worker = await createTask(workerTitle, { project, pinned: false, parent_task_id: leader })
+  await api('PUT', `/api/v1/tasks/${leader}/board`, { html: itemsBoard(engine, stamp, worker) })
+
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page)
+  const { pane, frame } = await openBoardTab(page, leader, sid)
+  const box = (f: string) => frame.locator(`.wn-box[data-f="${f}"] b`)
+  const choice = frame.locator('walnut-choice[id="deploy-when"]')
+  const own = choice.locator('.wn-choice-own .wn-reply')
+  const words = choice.locator('.wn-choice-words')
+  const status = choice.locator('.wn-choice-status')
+  await expect(own).toHaveText('Answer in your own words…', { timeout: 15_000 })
+  await expect(words).toBeHidden()
+  await expect(frame.locator('tr.needs-you')).toBeVisible()
+  await expect(box('decide')).toHaveText('1')
+
+  // ── The words alone: the same docked composer as a thread's, mic included ──
+  await own.click()
+  const dock = pane.getByTestId('board-reply-dock')
+  await expect(dock).toHaveAttribute('data-choice', 'deploy-when')
+  await expect(dock.getByTestId('board-reply-title')).toHaveText(`Answer When to ship the fix in your own words about ${workerTitle}`)
+  await expect(dock.locator('.mic-btn-wrapper button')).toBeVisible()
+  await expect(own).toHaveText('Answering in the box below')
+  await expect(own).toHaveAttribute('aria-pressed', 'true')
+  const input = dock.locator('.chat-input-textarea')
+  await expect(input).toBeFocused()
+  const mine = `Neither yet: wait for the backup ${stamp}, then run it.`
+  await input.fill(mine)
+  await page.screenshot({ path: `${SHOT_DIR}/${engine}-B2-words-dock.png` })
+  await input.press('Enter')
+  await expect(dock).toHaveCount(0) // an answer is one message: the box is done
+  await expect(words.locator('.wn-text')).toHaveText(mine, { timeout: 15_000 })
+  await expect(words.locator('.wn-who')).toHaveText('You wrote')
+  await expect(status).toHaveText(/^(Sent to the leader|Saved\. The leader sees it on the board\.)$/)
+  await expect(choice).toHaveAttribute('data-answered', '')
+  await expect(choice.locator('.wn-choice-opt[aria-pressed="true"]')).toHaveCount(0)
+  await expect(frame.locator('tr.needs-you')).toBeHidden()
+  await expect(box('decide')).toHaveText('0')
+  await expect(own).toHaveText('Change your words…')
+  await expect.poll(async () => (await getBoard(leader)).choices['deploy-when'], { timeout: 10_000 })
+    .toMatchObject({ option: '', text: mine })
+  const wordsLine = 'On your Board the user answered for "When to ship the fix" (choice deploy-when'
+  await expect.poll(() => historyText(sid), { timeout: 30_000 }).toContain(wordsLine)
+  expect(await historyText(sid)).toContain(mine)
+  await choice.scrollIntoViewIfNeeded()
+  await choice.screenshot({ path: `${SHOT_DIR}/${engine}-B2-words-answer.png` })
+
+  // ── "Change your words…" starts from them; Escape leaves them as they were ──
+  await own.click()
+  await expect(dock.locator('.chat-input-textarea')).toHaveValue(mine)
+  await dock.locator('.chat-input-textarea').press('Escape')
+  await expect(dock).toHaveCount(0)
+  await expect(words.locator('.wn-text')).toHaveText(mine)
+
+  // ── A pick later keeps the words; the leader hears both, once ──
+  await choice.locator('.wn-choice-opt').nth(1).click()
+  await expect(choice.locator('.wn-choice-opt').nth(1)).toHaveAttribute('aria-pressed', 'true')
+  await expect(status).toHaveText(/^(Sent to the leader|Saved\. The leader sees it on the board\.)$/, { timeout: 15_000 })
+  await expect(words.locator('.wn-text')).toHaveText(mine)
+  await expect.poll(async () => (await getBoard(leader)).choices['deploy-when'], { timeout: 10_000 })
+    .toMatchObject({ option: 'now', text: mine })
+  const pickLine = 'On your Board the user chose option 2 "Run it now" (recommended was 1 "Wait for the deploy window")'
+  await expect.poll(() => historyText(sid), { timeout: 30_000 }).toContain(pickLine)
+  expect(await historyText(sid)).toContain('and wrote in their own words:')
+  expect(occurrences(await historyText(sid), wordsLine)).toBe(1)
+  await choice.screenshot({ path: `${SHOT_DIR}/${engine}-B2-words-and-pick.png` })
+
   expect(pageErrors).toEqual([])
 })
 

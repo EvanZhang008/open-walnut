@@ -19,6 +19,7 @@
 
 import {
   BOARD_PROJECT_STATUSES,
+  BOARD_CHOICE_TEXT_MAX_BYTES,
   BOARD_NOTE_MAX_BYTES,
   BoardError,
   bytes,
@@ -235,20 +236,37 @@ export function boardCheckStates(board: Pick<BoardFile, 'html' | 'checks'>): Rec
 
 export interface ChoiceResult {
   choice: BoardChoice | null;
-  /** False for the same option again or clearing nothing: no delivery is due. */
+  /** False for the same answer again or clearing nothing: no delivery is due. */
   changed: boolean;
   spec: BoardChoiceSpec;
 }
 
 /**
- * Store the user's answer. The option must be one of the element's options
- * (checked against the html in the lock). Answering clears a reminder that came
- * due on this choice, in the same write. `option: ""` clears the answer.
+ * The user's answer to a `<walnut-choice>`: an option, their own words, or both.
+ * Each field given replaces that part and keeps the other (`option: ""` takes the
+ * pick back, `text: ""` the words); an answer with neither is cleared. Text alone
+ * is an answer. Answering clears a due reminder on the choice.
  */
-export async function setBoardChoice(taskId: string, id: string, input: { option: string }): Promise<ChoiceResult> {
+export async function setBoardChoice(
+  taskId: string,
+  id: string,
+  input: { option?: string; text?: string },
+): Promise<ChoiceResult> {
   checkItemId(id, 'choice');
-  if (typeof input.option !== 'string') throw new BoardError('bad_request', 400, undefined, '`option` must be a string');
-  const option = input.option.trim();
+  if (input.option !== undefined && typeof input.option !== 'string') {
+    throw new BoardError('bad_request', 400, undefined, '`option` must be a string');
+  }
+  if (input.text !== undefined && typeof input.text !== 'string') {
+    throw new BoardError('bad_request', 400, undefined, '`text` must be a string');
+  }
+  if (input.option === undefined && input.text === undefined) {
+    throw new BoardError('bad_request', 400, undefined, 'Give `option`, `text` or both');
+  }
+  const option = input.option?.trim();
+  const text = input.text?.trim();
+  if (text !== undefined && bytes(text) > BOARD_CHOICE_TEXT_MAX_BYTES) {
+    throw new BoardError('answer_too_long', 413, { max: BOARD_CHOICE_TEXT_MAX_BYTES });
+  }
   let out: ChoiceResult | undefined;
   let clearedReminder = false;
   const next = await updateBoard(taskId, (raw) => {
@@ -257,22 +275,31 @@ export async function setBoardChoice(taskId: string, id: string, input: { option
     const spec = own(specs, id);
     if (!spec) throw new BoardError('choice_not_found', 404, { choice: id });
     const prev = own(current.choices, id);
-    if (!option) {
+    const picked = option ? spec.options.find((o) => o.value === option) : undefined;
+    if (option && !picked) {
+      throw new BoardError('bad_option', 400, { choice: id, option, options: spec.options.map((o) => o.value) });
+    }
+    const now = new Date().toISOString();
+    const nextOption = option ?? prev?.option ?? '';
+    const nextText = text ?? prev?.text ?? '';
+    if (!nextOption && !nextText) {
       out = { choice: null, changed: !!prev, spec };
       return { ...current, choices: withoutKey(current.choices, id) };
-    }
-    const picked = spec.options.find((o) => o.value === option);
-    if (!picked) {
-      throw new BoardError('bad_option', 400, { choice: id, option, options: spec.options.map((o) => o.value) });
     }
     const due = own(current.reminders, id);
     clearedReminder = !!due && reminderIsDue(due);
     const reminders = clearedReminder ? withoutKey(current.reminders, id) : current.reminders;
-    if (prev?.option === option) {
+    if (prev && (prev.option ?? '') === nextOption && (prev.text ?? '') === nextText) {
       out = { choice: prev, changed: false, spec };
       return { ...current, reminders };
     }
-    const choice: BoardChoice = { option, label: picked.label, at: new Date().toISOString() };
+    const choice: BoardChoice = nextOption === (prev?.option ?? '') && prev
+      ? { option: prev.option, ...(prev.label ? { label: prev.label } : {}), at: prev.at }
+      : { option: nextOption, ...(picked ? { label: picked.label } : {}), at: now };
+    if (nextText) {
+      choice.text = nextText;
+      choice.text_at = nextText === prev?.text && prev.text_at ? prev.text_at : now;
+    }
     const choices = makeRoom(current.choices, id, specs, BOARD_MAX_CHOICES, 'answered choices');
     out = { choice, changed: true, spec };
     return { ...current, choices: { ...choices, [id]: choice }, reminders };

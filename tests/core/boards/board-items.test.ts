@@ -17,6 +17,7 @@ import {
   BoardError,
   _boardFilePath,
   getBoard,
+  BOARD_MESSAGE_MAX_BYTES,
   postBoardMessage,
   setBoardHtml,
   type BoardFile,
@@ -327,6 +328,54 @@ describe('choices', () => {
     await setBoardReminder(T, 'when', { at: new Date(now + HOUR).toISOString() }, { by: 'human' })
     await setBoardChoice(T, 'when', { option: 'wait' })
     expect((await getBoard(T))!.reminders).toHaveProperty('when')
+  })
+
+  it('the user\'s own words alone answer a choice, trimmed, with no option', async () => {
+    const out = await setBoardChoice(T, 'when', { text: '  Only after the backup finishes.\n' })
+    expect(out.changed).toBe(true)
+    expect(out.choice).toMatchObject({ option: '', text: 'Only after the backup finishes.' })
+    expect(out.choice!.label).toBeUndefined()
+    expect(out.choice!.text_at).toEqual(out.choice!.at)
+    expect((await getBoard(T))!.choices.when).toEqual(out.choice)
+    events = []
+    expect(await setBoardChoice(T, 'when', { text: 'Only after the backup finishes.' })).toMatchObject({ changed: false })
+    expect(events).toEqual([])
+  })
+
+  it('a pick and words live side by side: each write replaces its part and keeps the other', async () => {
+    const picked = await setBoardChoice(T, 'when', { option: 'now' })
+    const worded = await setBoardChoice(T, 'when', { text: 'But tell the on-call first.' })
+    expect(worded.choice).toMatchObject({ option: 'now', label: 'Run it now', at: picked.choice!.at, text: 'But tell the on-call first.' })
+    // Another pick keeps the words; the same pick again is no change at all.
+    const repicked = await setBoardChoice(T, 'when', { option: 'wait' })
+    expect(repicked.choice).toMatchObject({ option: 'wait', label: 'Wait for the deploy', text: 'But tell the on-call first.', text_at: worded.choice!.text_at })
+    expect((await setBoardChoice(T, 'when', { option: 'wait' })).changed).toBe(false)
+    // Both at once, in one write.
+    const both = await setBoardChoice(T, 'when', { option: 'now', text: 'Changed my mind.' })
+    expect(both.choice).toMatchObject({ option: 'now', text: 'Changed my mind.' })
+    // Taking the pick back leaves the words as the answer; taking the words back too clears it.
+    expect((await setBoardChoice(T, 'when', { option: '' })).choice).toMatchObject({ option: '', text: 'Changed my mind.' })
+    expect(await setBoardChoice(T, 'when', { text: '' })).toMatchObject({ changed: true, choice: null })
+    expect((await getBoard(T))!.choices).toEqual({})
+  })
+
+  it('words: a string up to the size of a thread message; a bad option still fails with words beside it', async () => {
+    expect(await boardError(() => setBoardChoice(T, 'when', { text: 'x'.repeat(BOARD_MESSAGE_MAX_BYTES + 1) })))
+      .toMatchObject({ code: 'answer_too_long', statusCode: 413 })
+    expect(await boardError(() => setBoardChoice(T, 'when', {}))).toMatchObject({ code: 'bad_request', statusCode: 400 })
+    expect(await boardError(() => setBoardChoice(T, 'when', { text: 7 as unknown as string }))).toMatchObject({ code: 'bad_request' })
+    expect(await boardError(() => setBoardChoice(T, 'when', { option: 'later', text: 'Hm.' }))).toMatchObject({ code: 'bad_option' })
+    expect((await getBoard(T))!.choices).toEqual({})
+    // CJK and emoji count as UTF-8 bytes, like a thread message.
+    const words = '\u5148\u5907\u4efd\u518d\u4e0a\u7ebf \ud83d\ude80'
+    expect((await setBoardChoice(T, 'when', { text: words })).choice).toMatchObject({ text: words })
+  })
+
+  it('words answer a choice in the reminder sense too: a due reminder on it is cleared', async () => {
+    const now = Date.now()
+    await setBoardReminder(T, 'when', { at: new Date(now - 1_000).toISOString() }, { by: 'human', nowMs: now - 2_000 })
+    await setBoardChoice(T, 'when', { text: 'Wait until Monday.' })
+    expect((await getBoard(T))!.reminders).toEqual({})
   })
 })
 

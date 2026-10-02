@@ -53,25 +53,33 @@ export function buildBoardThreadPrompt(heading: string, thread: string, text: st
 /**
  * `On your Board the user chose option 2 "Run it now" (recommended was 1 "Wait
  * for the deploy") for "Deploy timing" (choice deploy-when, about task …)`, the
- * label quoted, and the next step.
+ * label quoted, the user's own words quoted below it when they wrote any (or
+ * instead of it: "answered in their own words, picking no option"), and the next step.
  */
 export async function buildChoicePrompt(html: string, choiceId: string, choice: BoardChoice): Promise<string> {
   const spec = own(choiceSpecs(html), choiceId);
   const options = spec?.options ?? [];
-  const index = options.findIndex((o) => o.value === choice.option);
-  const label = choice.label ?? options[index]?.label ?? choice.option;
-  const num = index >= 0 ? String(index + 1) : choice.option;
-  const picked = `option ${num} "${label}"`;
-  let recommended = '';
-  if (spec?.recommended) {
-    const r = options.findIndex((o) => o.value === spec.recommended);
-    recommended = spec.recommended === choice.option
-      ? ' (the recommended one)'
-      : ` (recommended was ${r + 1} "${options[r].label}")`;
-  }
   const what = spec?.title ? ` for "${spec.title}"` : '';
   const where = `(choice ${choiceId}${await aboutTask(spec?.task)})`;
-  return `On your Board the user chose ${picked}${recommended}${what} ${where}:\n\n${quote(`${num}. ${label}`)}\n\n`
+  const words = choice.text ? choice.text : '';
+  let head: string;
+  if (choice.option) {
+    const index = options.findIndex((o) => o.value === choice.option);
+    const label = choice.label ?? options[index]?.label ?? choice.option;
+    const num = index >= 0 ? String(index + 1) : choice.option;
+    let recommended = '';
+    if (spec?.recommended) {
+      const r = options.findIndex((o) => o.value === spec.recommended);
+      recommended = spec.recommended === choice.option
+        ? ' (the recommended one)'
+        : ` (recommended was ${r + 1} "${options[r].label}")`;
+    }
+    head = `On your Board the user chose option ${num} "${label}"${recommended}${what} ${where}:\n\n${quote(`${num}. ${label}`)}\n\n`
+      + (words ? `and wrote in their own words:\n\n${quote(words)}\n\n` : '');
+  } else {
+    head = `On your Board the user answered${what} ${where} in their own words, picking no option:\n\n${quote(words)}\n\n`;
+  }
+  return head
     + 'Act on that answer now, then update that section with board_edit (and its project with board_project_set if the status changed). '
     + `If you need to tell the user something about it, post in that section's thread with ${op('board_post', { thread: '...', text: '...' })}; `
     + `board_get shows every answer. ${NOT_AN_ORDER}`;

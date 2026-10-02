@@ -9,7 +9,7 @@
  * The frame has an opaque origin (sandbox="allow-scripts", no allow-same-origin),
  * so everything goes through postMessage: the host posts `wn-board:data` (refs,
  * threads, marks, seen, projects, checks, choices, reminders,
- * section_seen, composing, note_drafts) and acks; the frame posts requests up. This part owns the state,
+ * section_seen, composing, composing_choice, note_drafts) and acks; the frame posts requests up. This part owns the state,
  * the bridge, links, scroll, the project statuses and the shared helpers, and
  * hands them to the other parts as `window.__wnBoardKit` (the last part takes it
  * off window before any author script runs).
@@ -33,8 +33,9 @@
     // Notes the user typed and Walnut has not saved yet, kept by the host across a new document.
     note_drafts: {},
   };
-  // composing: the thread the host's docked composer replies in ('' = none).
-  var flags = { hasData: false, filter: '', composing: '' };
+  // composing: the thread the host's docked composer replies in ('' = none);
+  // composingChoice: the choice it answers in the user's own words.
+  var flags = { hasData: false, filter: '', composing: '', composingChoice: '' };
   // Other host messages (the docked composer's sending / sent / send-failed), by type.
   var onHost = {};
   var live = new Set();
@@ -167,7 +168,8 @@
     return out;
   }
 
-  function choiceAnswered(id) { var c = id ? state.choices[id] : null; return !!(c && c.option); }
+  /** An option picked, or the user's own words: either one answers a choice. */
+  function choiceAnswered(id) { var c = id ? state.choices[id] : null; return !!(c && (c.option || c.text)); }
   /**
    * A section's status for counting and filtering. One that "needs you" only
    * for choices the user has answered (`data-choice="id"` on it, or every
@@ -359,6 +361,7 @@
       state.section_seen = obj(d.section_seen);
       state.note_drafts = obj(d.note_drafts);
       flags.composing = typeof d.composing === 'string' ? d.composing : '';
+      flags.composingChoice = typeof d.composing_choice === 'string' ? d.composing_choice : '';
       flags.hasData = true;
       applyProjects();
       scheduleDue();

@@ -220,6 +220,16 @@ walnut-check[data-read]:hover { opacity: 1; }
   background: rgba(21,128,61,.13); color: var(--wn-done, #15803d);
 }
 .wn-choice-opt.wn-on .wn-choice-rec { background: rgba(255,255,255,.25); color: inherit; }
+/* The user's own words on a choice: their message bubble, as in a thread. */
+.wn-choice-words { margin-top: 8px; }
+.wn-choice-words[hidden] { display: none; }
+.wn-choice-words .wn-msg-meta { padding: 0 2px 2px; }
+.wn-choice-words .wn-text {
+  border-radius: 16px; border-bottom-right-radius: 5px;
+  background: var(--wn-accent-bg, var(--wn-accent, #007aff)); color: var(--wn-accent-fg, #fff);
+}
+.wn-choice-own { margin-top: 6px; }
+.wn-choice-own .wn-reply[disabled] { cursor: default; opacity: .5; }
 .wn-choice-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; font-size: .85em; }
 .wn-choice-status { opacity: .75; }
 .wn-choice-status.wn-failed { opacity: 1; }

@@ -62,9 +62,13 @@ export interface BoardCheck {
 
 /** The user's answer to a `<walnut-choice>`. */
 export interface BoardChoice {
+  /** The option picked; '' when the user answered in their own words alone. */
   option: string;
   label?: string;
   at: string;
+  /** The user's own words, beside a pick or instead of one. */
+  text?: string;
+  text_at?: string;
 }
 
 /** A "remind me" on a choice or a thread; `fired_at` once Walnut told the leader. */

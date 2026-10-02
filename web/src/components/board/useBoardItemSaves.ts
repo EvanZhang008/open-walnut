@@ -127,6 +127,34 @@ export function useBoardItemSaves(
     }).catch((err: unknown) => fail(boardTask, reqId, 'choice save', { choiceId }, err));
   }, [ownerRef, toFrame, mergeChoice, fail]);
 
+  /**
+   * The user's own words on a choice (the docked composer's Send): saved beside the
+   * pick, delivered with it in one message. Resolves to null when saved, else the
+   * reason (the composer keeps the text). The frame hears how far it went.
+   */
+  const saveChoiceText = useCallback(async (choiceId: string, text: string): Promise<string | null> => {
+    const boardTask = ownerRef.current;
+    log.info('board', 'choice words saving', { taskId: boardTask, choiceId, chars: text.length });
+    try {
+      const res = await apiPut<{ choice: BoardChoice | null; delivery?: Delivery }>(
+        `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { text },
+      );
+      log.info('board', 'choice words saved', {
+        taskId: boardTask, choiceId, option: res.choice?.option ?? '', chars: res.choice?.text?.length ?? 0,
+        delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
+      });
+      if (ownerRef.current === boardTask) {
+        mergeChoice(choiceId, res.choice ?? null);
+        toFrame({ t: 'wn-board:choice-words', id: choiceId, delivery: res.delivery ?? null });
+      }
+      return null;
+    } catch (err) {
+      const message = boardErrorMessage(err);
+      log.error('board', 'choice words save failed', { taskId: boardTask, choiceId, error: message });
+      return message;
+    }
+  }, [ownerRef, toFrame, mergeChoice]);
+
   /** A reminder on a choice or a thread (`at` null clears it). */
   const saveReminder = useCallback((reqId: string, target: string, at: string | null) => {
     const boardTask = ownerRef.current;
@@ -140,5 +168,5 @@ export function useBoardItemSaves(
       }).catch((err: unknown) => fail(boardTask, reqId, 'reminder save', { target }, err));
   }, [ownerRef, toFrame, mergeReminder, fail]);
 
-  return { saveMark, saveProject, saveCheck, saveChoice, saveReminder, keepNoteDraft, noteDrafts };
+  return { saveMark, saveProject, saveCheck, saveChoice, saveChoiceText, saveReminder, keepNoteDraft, noteDrafts };
 }

@@ -42,6 +42,8 @@ export {
 export const BOARD_HTML_MAX_BYTES = 1024 * 1024;
 export const BOARD_MESSAGE_MAX_BYTES = 8 * 1024;
 export const BOARD_NOTE_MAX_BYTES = 4 * 1024;
+/** A choice answered in the user's own words: the same room as a thread message. */
+export const BOARD_CHOICE_TEXT_MAX_BYTES = BOARD_MESSAGE_MAX_BYTES;
 export const BOARD_STATE_MAX_CHARS = 64;
 /** A task id is a file name here: no separators, no leading dot. */
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -92,9 +94,13 @@ export interface BoardCheck {
 
 /** The user's answer to a `<walnut-choice>`. */
 export interface BoardChoice {
+  /** The option picked; '' when the user answered in their own words alone. */
   option: string;
   label?: string;
   at: string;
+  /** The user's own words, beside a pick or instead of one. */
+  text?: string;
+  text_at?: string;
 }
 
 /** "Remind me later" on a choice or a thread (one per target). The clock is board-reminders.ts. */
@@ -151,6 +157,7 @@ const DEFAULT_MESSAGES: Record<string, string> = {
   board_too_large: `Board html is larger than ${BOARD_HTML_MAX_BYTES} bytes`,
   message_too_long: `Message text is longer than ${BOARD_MESSAGE_MAX_BYTES} bytes`,
   note_too_long: `Mark note is longer than ${BOARD_NOTE_MAX_BYTES} bytes`,
+  answer_too_long: `A choice's written answer is longer than ${BOARD_CHOICE_TEXT_MAX_BYTES} bytes`,
   board_version_conflict: 'The board changed since that version: re-read it and retry',
   board_edit_not_found: 'An edit\'s `old` text does not occur in the board',
   board_edit_not_unique: 'An edit\'s `old` text occurs more than once in the board',
