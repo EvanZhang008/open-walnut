@@ -246,12 +246,12 @@ describe('release.yml', () => {
 
   it('runs on release tags, two schedules and by hand, each job on its own', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
-    expect(doc.on.schedule).toEqual([{ cron: '17 5,17 * * *' }, { cron: '47 16 * * 2' }])
+    expect(doc.on.schedule).toEqual([{ cron: '17 */6 * * *' }, { cron: '7 19 * * *' }])
     const dispatch = doc.on.workflow_dispatch as { inputs: Record<string, { options?: string[]; default?: unknown }> }
     expect(dispatch.inputs.channel).toMatchObject({ options: ['nightly', 'stable'], default: 'nightly' })
-    expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17 5,17 * * *'")
+    expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17 */6 * * *'")
     expect(doc.jobs.nightly!.if).toContain("inputs.channel != 'stable'")
-    expect(doc.jobs['promote-plan']!.if).toContain("github.event.schedule == '47 16 * * 2'")
+    expect(doc.jobs['promote-plan']!.if).toContain("github.event.schedule == '7 19 * * *'")
     expect(doc.jobs['promote-plan']!.if).toContain("inputs.channel == 'stable'")
     // Every schedule a job compares against is one the workflow has.
     const crons = (doc.on.schedule as Array<{ cron: string }>).map((s) => s.cron)
@@ -303,7 +303,21 @@ describe('release.yml', () => {
     expect(publish.run!.indexOf('export WALNUT_LATEST_STABLE')).toBeLessThan(publish.run!.indexOf('node scripts/nightly-version.mjs'))
   })
 
-  it('the weekly stable installs the soaked nightly on fresh Linux and macOS before publishing it', () => {
+  it('each channel has its own queue and a running publisher is never cancelled', () => {
+    const c = (doc as unknown as { concurrency: { group: string; 'cancel-in-progress': boolean } }).concurrency
+    expect(c['cancel-in-progress']).toBe(false)
+    expect(c.group).toContain("&& 'stable' || 'nightly'")
+    expect(c.group).toContain("github.event.schedule == '7 19 * * *'")
+    expect(c.group).toContain("inputs.channel == 'stable'")
+    expect(c.group).toContain("startsWith(github.ref, 'refs/tags/')")
+  })
+
+  it('every release job has a time limit, so a hung run cannot hold the release queue', () => {
+    const jobs = doc.jobs as Record<string, { 'timeout-minutes'?: number }>
+    for (const [name, job] of Object.entries(jobs)) expect(job['timeout-minutes'], name).toBeGreaterThan(0)
+  })
+
+  it('the daily stable installs the soaked nightly on fresh Linux and macOS before publishing it', () => {
     const jobs = doc.jobs as Record<string, { needs?: string | string[]; if?: string; strategy?: { matrix: { os: string[] } }; steps: Array<{ run?: string; name?: string; uses?: string; with?: Record<string, string>; env?: Record<string, string> }> }>
     expect(runs('promote-plan')).toContain('node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"')
     expect(jobs['promote-smoke']!.needs).toBe('promote-plan')
@@ -334,5 +348,49 @@ describe('release.yml', () => {
   it('package.json exposes the release command', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as { scripts: Record<string, string> }
     expect(pkg.scripts.release).toBe('node scripts/release.mjs')
+  })
+})
+
+describe('ci.yml', () => {
+  const text = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/ci.yml'), 'utf8')
+  const doc = parseYaml(text) as {
+    jobs: Record<string, { needs?: string | string[]; strategy?: { matrix: Record<string, unknown> }; steps: Array<{ run?: string; name?: string; 'continue-on-error'?: boolean }> }>
+  }
+  const runs = (job: string) => doc.jobs[job]!.steps.map((s) => s.run ?? '').join('\n')
+  const gate = doc.jobs['ci-ok']!
+
+  it('CI OK, the check both channels publish by, waits on the rehearsal and the slow tier', () => {
+    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'test', 'test-heavy', 'onboarding', 'remote-host', 'rehearsal']))
+    // Informational jobs stay out of the gate.
+    expect(gate.needs).not.toContain('test-report')
+    expect(gate.needs).not.toContain('browser')
+    const check = gate.steps.map((s) => s.run ?? '').join('\n')
+    for (const job of gate.needs as string[]) expect(check, job).toContain(`needs.${job}.result`)
+  })
+
+  it('the rehearsal packs this commit and installs it with npm 12 on Linux and macOS', () => {
+    expect(doc.jobs.rehearsal!.strategy!.matrix.os).toEqual(['ubuntu-latest', 'macos-latest'])
+    const steps = doc.jobs.rehearsal!.steps.map((s) => s.run ?? '')
+    const pack = steps.findIndex((r) => r.includes('scripts/release-rehearsal/pack.mjs') && r.includes('--rehearsal'))
+    const npm12 = steps.findIndex((r) => r.includes('npm install -g npm@12'))
+    const rehearse = steps.findIndex((r) => r.includes('scripts/release-rehearsal/run.mjs'))
+    expect(pack).toBeGreaterThan(-1)
+    expect(npm12).toBeGreaterThan(pack)
+    expect(rehearse).toBeGreaterThan(npm12)
+    expect(steps[rehearse]).toContain('--field latest')
+    expect(doc.jobs.rehearsal!.steps.some((s) => s['continue-on-error'])).toBe(false)
+  })
+
+  it('the slow tier blocks, with retries for runner flakes; e2e records its baseline', () => {
+    expect(runs('test-heavy')).toContain('npm run test:slow -- --maxWorkers=1 --retry=2')
+    expect(doc.jobs['test-heavy']!.steps.some((s) => s['continue-on-error'])).toBe(false)
+    expect(text).toContain('node scripts/test-baseline.mjs record --maxWorkers=1 --retry=2')
+    expect(text).toContain('name: known-failures-${{ matrix.tier }}')
+  })
+
+  it('the browser suite runs in shards and reports through the tested summary script', () => {
+    expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual([1, 2, 3, 4])
+    expect(runs('browser')).toContain('npx playwright test --project=chromium --shard=${{ matrix.shard }}/4')
+    expect(runs('browser')).toContain('node scripts/playwright-summary.mjs')
   })
 })

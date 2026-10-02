@@ -2,15 +2,15 @@ name: Release
 
 # Two channels, one workflow (docs/reference/releasing.md):
 #
-#   stable   automatic, weekly (jobs `promote-*`): the newest nightly that has been
-#            out 48 hours, when it carries something new and installs and starts on
-#            fresh Linux and macOS runners, becomes the next minor (any feat) or
-#            patch (fix/perf, or a CHANGELOG entry). Published as dist-tag `latest`,
+#   stable   automatic, daily (jobs `promote-*`): the newest nightly that has been
+#            out 24 hours, when it carries something new and installs and starts on
+#            fresh Linux and macOS runners, becomes the next patch (pre-1.0; a
+#            breaking change makes the next minor). Published as dist-tag `latest`,
 #            tagged `vX.Y.Z`, a GitHub Release with its notes, then a
 #            `release: X.Y.Z` commit on main rolls CHANGELOG and package.json
 #            (scripts/stable-promote.mjs). By hand, a `vX.Y.Z` tag cut with
 #            `npm run release -- patch|minor|major` publishes through job `stable`.
-#   nightly  on a schedule (and by hand): the newest commit on main that CI
+#   nightly  every six hours (and by hand): the newest commit on main that CI
 #            passed, when it is not the last nightly already. Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, then the
 #            `nightly` tag moves to it. Nothing is committed: the version lives in
@@ -35,8 +35,8 @@ on:
   schedule:
     # Off the hour (GitHub drops exact-hour crons under load). The two strings are
     # what the jobs below compare github.event.schedule against: keep them in step.
-    - cron: '17 5,17 * * *'   # nightly, twice a day
-    - cron: '47 16 * * 2'     # stable promotion, Tuesdays
+    - cron: '17 */6 * * *'    # nightly, every six hours
+    - cron: '7 19 * * *'      # stable promotion, daily (once the 18:17 nightly is a day old)
   workflow_dispatch:
     inputs:
       channel:
@@ -49,8 +49,11 @@ on:
         type: boolean
         default: false
 
+# One queue per channel: a nightly never waits behind a stable release (or the
+# reverse), and a running publisher is never cancelled. Inside a channel a newer
+# pending run replaces an older pending one, which is what a nightly wants.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ (github.event.schedule == '7 19 * * *' || inputs.channel == 'stable' || startsWith(github.ref, 'refs/tags/')) && 'stable' || 'nightly' }}
   cancel-in-progress: false
 
 permissions:
@@ -63,6 +66,7 @@ jobs:
     name: Publish stable (${{ github.ref_name }})
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
@@ -104,8 +108,9 @@ jobs:
 
   nightly:
     name: Publish nightly from main
-    if: (github.event_name == 'schedule' && github.event.schedule == '17 5,17 * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
+    if: (github.event_name == 'schedule' && github.event.schedule == '17 */6 * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
@@ -186,8 +191,9 @@ jobs:
   # ships that a fresh install could not start.
   promote-plan:
     name: Pick the nightly to promote
-    if: (github.event_name == 'schedule' && github.event.schedule == '47 16 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
+    if: (github.event_name == 'schedule' && github.event.schedule == '7 19 * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       publish: ${{ steps.plan.outputs.publish }}
       sha: ${{ steps.plan.outputs.sha }}
@@ -201,7 +207,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: The nightly that has been out 48 hours, if it carries something new
+      - name: The nightly that has been out 24 hours, if it carries something new
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -218,6 +224,7 @@ jobs:
     needs: promote-plan
     if: needs.promote-plan.outputs.publish == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -269,6 +276,7 @@ jobs:
     needs: [promote-plan, promote-smoke]
     if: needs.promote-plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:

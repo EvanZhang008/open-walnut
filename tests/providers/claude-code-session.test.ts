@@ -292,7 +292,13 @@ interface CollectedEvents {
  * All session events route to '*' (broadcast).
  * Subscribing as 'main-ai' captures every event exactly once.
  */
-function collectEvents(): CollectedEvents {
+/**
+ * Every session event on the bus, or only one task's when `taskId` is given. A
+ * runner that detaches (destroy()) leaves its CLI running under the daemon by
+ * design, and the next runner relays that CLI's result, so a test that asserts
+ * on "the" result must name its task.
+ */
+function collectEvents(taskId?: string): CollectedEvents {
   const collected: CollectedEvents = {
     results: [],
     errors: [],
@@ -303,6 +309,8 @@ function collectEvents(): CollectedEvents {
   };
 
   bus.subscribe('main-ai', (event: BusEvent) => {
+    const eventTask = (event.data as { taskId?: unknown } | undefined)?.taskId
+    if (taskId && eventTask !== undefined && eventTask !== taskId) return
     switch (event.name) {
       case EventNames.SESSION_RESULT:
         collected.results.push(event);
@@ -378,7 +386,7 @@ function waitForN(
 
 describe('ClaudeCodeSession', () => {
   it('spawns mock CLI detached and parses session ID from init event', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-1');
     const session = useDaemon(new ClaudeCodeSession('task-1', 'test-project', MOCK_CLI));
 
     expect(session.active).toBe(false);
@@ -409,7 +417,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('creates output file in streams directory', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-file');
     const session = useDaemon(new ClaudeCodeSession('task-file', 'proj', MOCK_CLI));
     session.send('file test');
 
@@ -430,7 +438,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('stores PID of spawned process', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-pid');
     const session = useDaemon(new ClaudeCodeSession('task-pid', 'proj', MOCK_CLI));
     session.send('pid test');
 
@@ -484,7 +492,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('emits SESSION_ERROR when CLI exits with non-zero code', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-exit-err');
     const session = useDaemon(new ClaudeCodeSession('task-exit-err', 'proj', MOCK_CLI));
     session.send('error'); // Mock exits code 1 for "error"
 
@@ -493,7 +501,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('handles CLI outputting invalid JSONL gracefully (skips bad lines)', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-parse-err');
     const session = useDaemon(new ClaudeCodeSession('task-parse-err', 'proj', MOCK_CLI));
     session.send('parse-error'); // Mock outputs invalid JSON
 
@@ -526,7 +534,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('handles resume with --resume flag', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-resume');
     const session = useDaemon(new ClaudeCodeSession('task-resume', 'proj', MOCK_CLI));
     session.send('continue working', undefined, 'existing-session-123');
 
@@ -538,7 +546,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('mode "plan" passes --permission-mode plan to CLI', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-plan');
     const session = useDaemon(new ClaudeCodeSession('task-plan', 'proj', MOCK_CLI));
     session.send('plan mode test', undefined, undefined, 'plan');
 
@@ -549,7 +557,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('mode "bypass" passes --permission-mode bypassPermissions to CLI', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-bypass');
     const session = useDaemon(new ClaudeCodeSession('task-bypass', 'proj', MOCK_CLI));
     session.send('bypass mode test', undefined, undefined, 'bypass');
 
@@ -560,7 +568,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('no mode defaults to bypassPermissions', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-default');
     const session = useDaemon(new ClaudeCodeSession('task-default', 'proj', MOCK_CLI));
     session.send('default mode test');
 
@@ -573,7 +581,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('send() with cwd passes working directory to spawned process', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-cwd');
     const session = useDaemon(new ClaudeCodeSession('task-cwd', 'proj', MOCK_CLI));
     // Use tmpBase as cwd — it's a real directory that exists
     session.send('cwd test', tmpBase);
@@ -589,7 +597,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('send() without cwd defaults to process.cwd()', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-no-cwd');
     const session = useDaemon(new ClaudeCodeSession('task-no-cwd', 'proj', MOCK_CLI));
     session.send('no cwd test');
 
@@ -602,7 +610,7 @@ describe('ClaudeCodeSession', () => {
   });
 
   it('stdin is closed — session completes without stdin input', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-stdin');
     const session = useDaemon(new ClaudeCodeSession('task-stdin', 'proj', MOCK_CLI));
     session.send('stdin test');
 
@@ -785,7 +793,7 @@ describe('SessionRunner', () => {
   });
 
   it('handles session:start and spawns a session', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('runner-task-1');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'runner-task-1',
@@ -811,7 +819,7 @@ describe('SessionRunner', () => {
   });
 
   it('kills existing session when starting new one for same task', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('replace-task');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'replace-task',
@@ -854,7 +862,7 @@ describe('SessionRunner', () => {
   });
 
   it('passes mode through to ClaudeCodeSession when starting session', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('mode-task');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'mode-task',
@@ -870,7 +878,7 @@ describe('SessionRunner', () => {
   });
 
   it('passes bypass mode through to ClaudeCodeSession', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('bypass-task');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'bypass-task',
@@ -886,7 +894,7 @@ describe('SessionRunner', () => {
   });
 
   it('no mode in session:start defaults to bypassPermissions', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('no-mode-task');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'no-mode-task',
@@ -919,14 +927,17 @@ describe('SessionRunner', () => {
   });
 
   it('destroy() detaches sessions and unsubscribes', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('destroy-task');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'destroy-task',
       message: 'work',
     }, ['session-runner'], { source: 'test' });
 
-    await new Promise((r) => setTimeout(r, 100));
+    // Registration is async (it waits on the daemon); a fixed 100ms sleep lost the
+    // race under CI load, and the session it never destroyed then answered into the
+    // next test's listener (2026-10-02, "expected 'destroy-task' to be 'e2e-task-001'").
+    await vi.waitFor(() => expect(runner.getByTaskId('destroy-task')).toBeDefined(), { timeout: 10_000 });
 
     const session = runner.getByTaskId('destroy-task');
     expect(session).toBeDefined();
@@ -937,14 +948,17 @@ describe('SessionRunner', () => {
   });
 
   it('destroyAndKill() kills sessions and unsubscribes', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('kill-task');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'kill-task',
       message: 'work',
     }, ['session-runner'], { source: 'test' });
 
-    await new Promise((r) => setTimeout(r, 100));
+    // Registration is async (it waits on the daemon); a fixed 100ms sleep lost the
+    // race under CI load, and the session it never destroyed then answered into the
+    // next test's listener (2026-10-02, "expected 'destroy-task' to be 'e2e-task-001'").
+    await vi.waitFor(() => expect(runner.getByTaskId('kill-task')).toBeDefined(), { timeout: 10_000 });
 
     const session = runner.getByTaskId('kill-task');
     expect(session).toBeDefined();
@@ -996,7 +1010,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('full flow: session:start → process runs → session:result', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
@@ -1026,7 +1040,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('persists SessionRecord to tracker after result', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
@@ -1034,14 +1048,17 @@ describe('End-to-end session flow', () => {
       project: 'Walnut',
     }, ['session-runner'], { source: 'test' });
 
-    await waitForResult(collected);
+    const result = await waitForResult(collected);
+    const resultSid = (result.data as { sessionId?: string }).sessionId;
 
     // Give fire-and-forget persistence (dynamic import + file write) time to complete
     await new Promise((r) => setTimeout(r, 500));
 
     const { listSessions } = await import('../../src/core/session-tracker.js');
     const sessions = await listSessions();
-    const ours = sessions.find((s) => s.taskId === 'e2e-task-001');
+    // THIS turn's record: earlier tests in this block start sessions for the same
+    // task, and the one afterEach killed is persisted as an error.
+    const ours = sessions.find((s) => s.taskId === 'e2e-task-001' && (!resultSid || s.claudeSessionId === resultSid));
     expect(ours).toBeDefined();
     expect(ours!.project).toBe('Walnut');
     expect(ours!.claudeSessionId).toBeTruthy();
@@ -1081,7 +1098,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('session:start with cwd persists working directory to session record', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
@@ -1104,7 +1121,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('links session to task after result', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     // The exec slot is occupied DURING the session and released when it ends, so
     // watch the live link event rather than only the end state. `linkSessionSlot`
@@ -1154,7 +1171,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('session:result carries all fields needed by frontend', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
@@ -1177,7 +1194,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('event destinations are correctly routed', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
@@ -1196,7 +1213,7 @@ describe('End-to-end session flow', () => {
   });
 
   it('session:result carries result text in data payload', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('e2e-task-001');
 
     bus.emit(EventNames.SESSION_START, {
       taskId: 'e2e-task-001',
@@ -1220,7 +1237,7 @@ describe('End-to-end session flow', () => {
 
 describe('Streaming events (stream-json)', () => {
   it('emits session:text-delta for text content blocks', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-stream');
     const session = useDaemon(new ClaudeCodeSession('task-stream', 'proj', MOCK_CLI));
     session.send('hello streaming');
 
@@ -1234,7 +1251,7 @@ describe('Streaming events (stream-json)', () => {
   });
 
   it('emits session:tool-use and session:tool-result for tool calls', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-tool');
     const session = useDaemon(new ClaudeCodeSession('task-tool', 'proj', MOCK_CLI));
     session.send('tool-test');
 
@@ -1260,7 +1277,7 @@ describe('Streaming events (stream-json)', () => {
   });
 
   it('session ID is available from init event before text deltas', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-init');
     const session = useDaemon(new ClaudeCodeSession('task-init', 'proj', MOCK_CLI));
     session.send('init test');
 
@@ -1273,7 +1290,7 @@ describe('Streaming events (stream-json)', () => {
   });
 
   it('text deltas are accumulated into the final result', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-accum');
     const session = useDaemon(new ClaudeCodeSession('task-accum', 'proj', MOCK_CLI));
     session.send('accumulation test');
 
@@ -1287,7 +1304,7 @@ describe('Streaming events (stream-json)', () => {
   });
 
   it('streaming events are broadcast to all subscribers', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-broadcast');
     const session = useDaemon(new ClaudeCodeSession('task-broadcast', 'proj', MOCK_CLI));
     session.send('broadcast test');
 
@@ -1304,7 +1321,7 @@ describe('Streaming events (stream-json)', () => {
 
 describe('appendSystemPrompt parameter', () => {
   it('passes --append-system-prompt flag to CLI', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-sysprompt');
     const session = useDaemon(new ClaudeCodeSession('task-sysprompt', 'proj', MOCK_CLI));
     session.send('hello', undefined, undefined, undefined, undefined, 'You are a helpful bot');
 
@@ -1314,7 +1331,7 @@ describe('appendSystemPrompt parameter', () => {
   });
 
   it('omits flag when appendSystemPrompt is undefined', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-no-sysprompt');
     const session = useDaemon(new ClaudeCodeSession('task-no-sysprompt', 'proj', MOCK_CLI));
     session.send('hello');
 
@@ -1324,7 +1341,7 @@ describe('appendSystemPrompt parameter', () => {
   });
 
   it('works combined with permission mode', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-combo');
     const session = useDaemon(new ClaudeCodeSession('task-combo', 'proj', MOCK_CLI));
     session.send('combo test', undefined, undefined, 'plan', undefined, 'You are a planner');
 
@@ -1335,7 +1352,7 @@ describe('appendSystemPrompt parameter', () => {
   });
 
   it('message is always last arg regardless of flags', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-order');
     const session = useDaemon(new ClaudeCodeSession('task-order', 'proj', MOCK_CLI));
     session.send('order test', undefined, undefined, 'bypass', undefined, 'System context here');
 
@@ -1372,7 +1389,7 @@ describe('SessionRunner context enrichment', () => {
       }),
     );
 
-    const collected = collectEvents();
+    const collected = collectEvents('ctx-runner-1');
     const runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
 
@@ -1403,7 +1420,7 @@ describe('SessionRunner context enrichment', () => {
       daemon._wsUrl = daemonUrl();
       return sharedDaemon.port;
     });
-    const collected = collectEvents();
+    const collected = collectEvents('daemon-late-task');
     const runner = new SessionRunner(MOCK_CLI); // no _testDaemonUrl: the real lookup path
     runner.init();
     try {
@@ -1423,7 +1440,7 @@ describe('SessionRunner context enrichment', () => {
   });
 
   it('session starts even if the task does not exist (hint still injected)', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('nonexistent-task');
     const runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
 
@@ -1716,7 +1733,7 @@ describe('shellQuote', () => {
 
 describe('ClaudeCodeSession SSH host', () => {
   it('stores host key when provided to send()', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-ssh-host');
     const session = useDaemon(new ClaudeCodeSession('task-ssh-host', 'proj', MOCK_CLI));
 
     // send() with host but no sshTarget will just store the host key
@@ -1728,7 +1745,7 @@ describe('ClaudeCodeSession SSH host', () => {
   });
 
   it('host is null when not provided to send()', async () => {
-    const collected = collectEvents();
+    const collected = collectEvents('task-no-host');
     const session = useDaemon(new ClaudeCodeSession('task-no-host', 'proj', MOCK_CLI));
     session.send('test');
 
@@ -1788,7 +1805,7 @@ describe('Category C: Streaming event dedup regression', () => {
 
   it('C4: 4x tool_use replay → exactly 1 tool use event', async () => {
     process.env.MOCK_REPLAY_COUNT = '4';
-    const collected = collectEvents();
+    const collected = collectEvents('task-replay-tool');
     const session = useReplayDaemon(new ClaudeCodeSession('task-replay-tool', 'proj', MOCK_REPLAY_CLI));
     session.send('tool-test');
 
@@ -1800,7 +1817,7 @@ describe('Category C: Streaming event dedup regression', () => {
 
   it('C5: 4x mixed content → textDeltas=2 (pre-tool + post-tool), toolUses=1', async () => {
     process.env.MOCK_REPLAY_COUNT = '4';
-    const collected = collectEvents();
+    const collected = collectEvents('task-replay-mixed');
     const session = useReplayDaemon(new ClaudeCodeSession('task-replay-mixed', 'proj', MOCK_REPLAY_CLI));
     session.send('tool-test');
 
@@ -1813,7 +1830,7 @@ describe('Category C: Streaming event dedup regression', () => {
 
   it('C6: different texts in same message are NOT deduped', async () => {
     process.env.MOCK_REPLAY_COUNT = '2';
-    const collected = collectEvents();
+    const collected = collectEvents('task-replay-twotexts');
     const session = useReplayDaemon(new ClaudeCodeSession('task-replay-twotexts', 'proj', MOCK_REPLAY_CLI));
     session.send('two-texts');
 
@@ -1827,7 +1844,7 @@ describe('Category C: Streaming event dedup regression', () => {
 
   it('C7: fullText does not contain repeated content after 4x replay', async () => {
     process.env.MOCK_REPLAY_COUNT = '4';
-    const collected = collectEvents();
+    const collected = collectEvents('task-replay-fulltext');
     const session = useReplayDaemon(new ClaudeCodeSession('task-replay-fulltext', 'proj', MOCK_REPLAY_CLI));
     session.send('Hello');
 
@@ -2171,7 +2188,7 @@ describe('ClaudeCodeSession.applyEffort', () => {
 
   it('sends an apply_flag_settings control_request carrying the effort level', async () => {
     const { session, writes } = makeSessionWithStubTransport();
-    void session.applyEffort('low');
+    session.applyEffort('low').catch(() => { /* no ack ever comes: the stub transport never answers */ });
     await new Promise((r) => setTimeout(r, 5));
 
     expect(writes.length).toBe(1);
@@ -2185,7 +2202,7 @@ describe('ClaudeCodeSession.applyEffort', () => {
 
   it('reflects the new effort immediately (for the badge / persistence) before the ack', () => {
     const { session } = makeSessionWithStubTransport();
-    void session.applyEffort('medium');
+    session.applyEffort('medium').catch(() => { /* no ack ever comes: the stub transport never answers */ });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((session as any)._effort).toBe('medium');
   });
@@ -2249,7 +2266,7 @@ describe('ClaudeCodeSession.applyModel', () => {
 
   it('sends an apply_flag_settings control_request carrying the CLI model value', async () => {
     const { session, writes } = makeSessionWithStubTransport();
-    void session.applyModel('sonnet[1m]');
+    session.applyModel('sonnet[1m]').catch(() => { /* no ack ever comes: the stub transport never answers */ });
     await new Promise((r) => setTimeout(r, 5));
 
     expect(writes.length).toBe(1);
@@ -2262,7 +2279,7 @@ describe('ClaudeCodeSession.applyModel', () => {
 
   it('reflects the new cliModel immediately (for resume persistence) before the ack', () => {
     const { session } = makeSessionWithStubTransport();
-    void session.applyModel('haiku');
+    session.applyModel('haiku').catch(() => { /* no ack ever comes: the stub transport never answers */ });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((session as any)._cliModel).toBe('haiku');
   });

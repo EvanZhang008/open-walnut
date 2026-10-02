@@ -7,8 +7,8 @@ an install finds out and updates.
 
 | Channel | npm dist-tag | What it is | How it is cut |
 |---|---|---|---|
-| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, weekly: the newest nightly that has been out 48 hours. By hand: `npm run release -- patch\|minor\|major` |
-| nightly | `nightly` | The newest commit on `main` that CI passed | GitHub Actions, twice a day, when that commit is not the last nightly already |
+| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, daily: the newest nightly that has been out 24 hours. By hand: `npm run release -- patch\|minor\|major` |
+| nightly | `nightly` | The newest commit on `main` that CI passed | GitHub Actions, every six hours, when that commit is not the last nightly already |
 
 `npm install -g open-walnut` gives the stable channel. `npm install -g open-walnut@nightly`
 switches an install to nightly; the installed version (`X.Y.Z-nightly.YYYYMMDD.N`) is how
@@ -17,18 +17,21 @@ is installed again. Pre-1.0, a minor bump may carry breaking changes (see CHANGE
 
 ## Automatic stable releases
 
-Nobody has to cut a stable release. Every Tuesday at 16:47 UTC, jobs `promote-*` of the
-same workflow promote a nightly that users on the nightly channel have run for two days:
+Nobody has to cut a stable release. Every day at 19:07 UTC, jobs `promote-*` of the same
+workflow promote a nightly that users on the nightly channel have run for a day:
 
 1. **Plan** (`scripts/stable-promote.mjs plan`). The candidate is the newest nightly
-   published at least 48 hours ago; the registry records each version's commit as
+   published at least 24 hours ago; the registry records each version's commit as
    `gitHead`. The job does nothing, and says why in its log, when there is no such nightly,
    when it is the code `latest` already ships, when it does not descend from that release,
-   when CI did not pass on it, or when nothing since the last release is something a user
-   would notice. That last test reads the commit subjects (Conventional Commits): any `feat`
-   makes the next minor, any `fix` or `perf` the next patch, and a written entry under
-   `## [Unreleased]` also counts as a patch. `docs`, `test`, `chore` and the like alone
-   release nothing. Pre-1.0 nothing is ever a major.
+   when CI did not pass on it (CI includes the release rehearsal below), or when nothing
+   since the last release is something a user would notice. That last test reads the
+   commits (Conventional Commits): a `feat`, `fix` or `perf`, or a written entry under
+   `## [Unreleased]`, releases; `docs`, `test`, `chore`, `ci` and the like alone release
+   nothing. The version follows release-please's pre-1.0 rules: a breaking change (`feat!:`,
+   or a `BREAKING CHANGE:` footer) makes the next minor and anything else the next patch,
+   so a release a day does not run the minor number up. From 1.0 on: breaking major, `feat`
+   minor, `fix`/`perf` patch.
 2. **Smoke** (Linux and macOS, in parallel). Each runner installs that exact nightly from
    npm the way the updater does (npm 12, the same `--allow-scripts` list), starts it on a
    fresh HOME and requires `/api/system/health` to answer. Every npm install updates itself
@@ -53,9 +56,51 @@ Tag and commit are pushed with the job's own token, which starts no workflow, so
 cannot publish a second time through job `stable` and the release commit gets no CI run of
 its own (it changes only the version files and CHANGELOG).
 
-To promote now instead of waiting for Tuesday: Actions, Release, Run workflow, channel
+To promote now instead of waiting for the schedule: Actions, Release, Run workflow, channel
 `stable` (the same plan and smoke run). To pause automatic releases, disable the Release
 workflow's schedule or the workflow itself in the Actions tab; nightlies stop with it.
+
+## What CI proves before anything ships
+
+Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK` needs:
+
+| Job | What it proves |
+|---|---|
+| Lint & build | `tsc`, the full build, the plugin packages |
+| Test (quick), Test (frontend) | ~300 pure-logic files and the web suites; quick is judged against its recorded baseline |
+| Test (slow) | ~1,000 tests that start real daemons, servers, git and the local embedder; must pass (`--retry=2` absorbs a runner hiccup, three failures in a row is a failure) |
+| Fresh machine (Linux, macOS) | the README's two install routes on a machine without Bun or Claude Code |
+| Remote host | Walnut provisions a clean Linux dev box over real ssh and starts a session there |
+| Release rehearsal (Linux, macOS) | the package this commit would publish, end to end (next section) |
+
+Two more suites run on every push and report without blocking until they have a recorded
+baseline: the e2e tier (real servers with a mock CLI; each run uploads its failures as the
+`known-failures-e2e` artifact, the baseline that will let new failures block) and the
+Playwright browser suite (four shards, summary per shard in the run page).
+
+### The release rehearsal
+
+`scripts/release-rehearsal/` installs the package exactly as a user does, on a machine that
+has never run Walnut, without publishing anything. `pack.mjs --rehearsal` builds this commit
+as the next patch ("current") and as a lower prerelease of the same code ("older"), each its
+own build because the version is baked into the bundles. `run.mjs` then runs, each in its
+own npm prefix, HOME, data dir and daemon dir, with a mock `claude`
+(`tests/providers/mock-claude.mjs`) on PATH:
+
+| Scenario | Pass means |
+|---|---|
+| install | `npm install -g` with npm 12 and the updater's `--allow-scripts` list works, and `--version` names it |
+| serve | `open-walnut web` answers health, the SPA and `/api/v1/status`, and finds `claude` |
+| session | a session started through `POST /api/v1/sessions` answers, then answers a second message sent to the live CLI |
+| restart | after a server restart the history is intact and a third message is answered |
+| update | "older", started, updates itself to "current" before it serves |
+| field | the version on npm today, started, updates itself to "current": the update every existing install will take |
+
+The two update scenarios use `registry.mjs`, a local registry that serves the chosen
+tarballs under chosen dist-tags and passes every other package through to npm, with
+`WALNUT_UPDATE_REGISTRY_URL` and `npm_config_registry` pointing at it. Locally, run
+`pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
+outside CI), then `node scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
 
 ## Cutting a stable release by hand
 
@@ -92,7 +137,7 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 
 ## Nightlies
 
-Job `nightly` of the same workflow runs on a schedule (`17 5,17 * * *` UTC) and by hand
+Job `nightly` of the same workflow runs every six hours (`17 */6 * * *` UTC) and by hand
 (`workflow_dispatch`, with a `force` input for a republish). It asks for the newest commit
 on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
 when there is none among the last 30 runs, when that commit is already the `nightly` tag,

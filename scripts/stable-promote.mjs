@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Automatic stable releases: once a week the Release workflow promotes the newest
- * nightly that has been out for two days to `latest` (docs/reference/releasing.md).
+ * Automatic stable releases: every day the Release workflow promotes the newest
+ * nightly that has been out for a day to `latest` (docs/reference/releasing.md).
  *
  *   plan   decide whether there is anything to release, and as which version.
  *          Prints `key=value` lines for $GITHUB_OUTPUT and writes the notes file.
@@ -11,11 +11,15 @@
  *
  * What gets released is a commit, not "whatever main is now": the newest nightly
  * at least SOAK_HOURS old (the registry records each version's commit as gitHead).
- * It must descend from the last stable, have passed CI, and carry something a user
- * would notice: a `feat` commit makes the next minor, a `fix`/`perf` commit or a
- * hand-written CHANGELOG entry the next patch. Pre-1.0 nothing is ever a major.
- * Before publishing, the workflow installs that nightly from npm on fresh Linux and
- * macOS runners the way the updater does and requires it to serve.
+ * It must descend from the last stable, have passed CI (whose release rehearsal
+ * installed, served and updated that very commit's package), and carry something
+ * a user would notice: a feat, fix or perf commit, or a hand-written CHANGELOG
+ * entry. Versions follow release-please's pre-1.0 rules (bump-minor-pre-major,
+ * bump-patch-for-minor-pre-major): before 1.0 a breaking change makes the next
+ * minor and anything else the next patch, so a daily release does not run the
+ * minor number up; from 1.0 on, breaking is major, feat minor, fix/perf patch.
+ * Before publishing, the workflow installs that nightly from npm on fresh Linux
+ * and macOS runners the way the updater does and requires it to serve.
  * The notes are the Unreleased section as it stood at that commit; when nobody
  * wrote one they are the feat/fix commit subjects.
  */
@@ -28,7 +32,7 @@ import { nextVersion, setManifestVersion } from './release.mjs'
 import { releaseNotes } from './release-notes.mjs'
 
 export const PACKAGE = 'open-walnut'
-export const SOAK_HOURS = 48
+export const SOAK_HOURS = 24
 
 /** The newest nightly published at least `soakHours` before `now`, with the commit it was built from. */
 export function soakedNightly(packument, now, soakHours = SOAK_HOURS) {
@@ -43,28 +47,42 @@ export function soakedNightly(packument, now, soakHours = SOAK_HOURS) {
   return best && { version: best.version, sha: best.sha, publishedAt: new Date(best.at).toISOString() }
 }
 
-const CONVENTIONAL = /^(\w+)(?:\([^)]*\))?!?:\s*(.+)$/
+const CONVENTIONAL = /^(\w+)(?:\([^)]*\))?(!?):\s*(.+)$/
+const BREAKING_FOOTER = /^BREAKING[ -]CHANGE:/m
 
-/** 'minor' for any feat, 'patch' for any fix/perf, null when the commits change nothing a user sees. */
-export function bumpFor(subjects) {
-  let bump = null
-  for (const subject of subjects) {
-    const type = CONVENTIONAL.exec(subject)?.[1]
-    if (type === 'feat') return 'minor'
-    if (type === 'fix' || type === 'perf') bump = 'patch'
+/** A commit as `{ subject, body }` (a bare string is a subject with no body). */
+function parseCommit(commit) {
+  const { subject, body = '' } = typeof commit === 'string' ? { subject: commit } : commit
+  const m = CONVENTIONAL.exec(subject.trim())
+  return { type: m?.[1] ?? null, description: m?.[3] ?? null, breaking: m?.[2] === '!' || BREAKING_FOOTER.test(body) }
+}
+
+/** 'major' | 'minor' | 'patch' for these commits on top of `current`, null when nothing a user sees changed. */
+export function bumpFor(commits, current = '0.0.0') {
+  const preMajor = /^0\./.test(current)
+  let breaking = false
+  let feat = false
+  let fix = false
+  for (const c of commits.map(parseCommit)) {
+    breaking ||= c.breaking
+    feat ||= c.type === 'feat'
+    fix ||= c.type === 'fix' || c.type === 'perf'
   }
-  return bump
+  if (breaking) return preMajor ? 'minor' : 'major'
+  if (feat) return preMajor ? 'patch' : 'minor'
+  if (fix) return 'patch'
+  return null
 }
 
 /** Notes from the commits themselves, for a release nobody wrote CHANGELOG entries for. */
-export function generatedNotes(subjects) {
+export function generatedNotes(commits) {
   const added = []
   const fixed = []
-  for (const subject of subjects) {
-    const m = CONVENTIONAL.exec(subject)
-    const entry = m && `- ${m[2].charAt(0).toUpperCase()}${m[2].slice(1)}`
-    if (m?.[1] === 'feat') added.push(entry)
-    else if (m?.[1] === 'fix' || m?.[1] === 'perf') fixed.push(entry)
+  for (const c of commits.map(parseCommit)) {
+    if (!c.description) continue
+    const entry = `- ${c.description.charAt(0).toUpperCase()}${c.description.slice(1)}`
+    if (c.type === 'feat') added.push(entry)
+    else if (c.type === 'fix' || c.type === 'perf') fixed.push(entry)
   }
   const parts = []
   if (added.length) parts.push(`### Added\n\n${added.join('\n')}`)
@@ -73,7 +91,7 @@ export function generatedNotes(subjects) {
 }
 
 /** Everything the plan needs, gathered by the caller (the CLI asks git, npm and GitHub). */
-export function planRelease({ packument, now, soakHours = SOAK_HOURS, lastStableSha, isAncestor, subjectsSince, changelogAt, ciVerdict }) {
+export function planRelease({ packument, now, soakHours = SOAK_HOURS, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict }) {
   const latest = packument['dist-tags']?.latest
   if (!latest) return { publish: false, reason: 'npm has no latest release to promote from' }
   const candidate = soakedNightly(packument, now, soakHours)
@@ -81,13 +99,13 @@ export function planRelease({ packument, now, soakHours = SOAK_HOURS, lastStable
   if (!lastStableSha) return { publish: false, reason: `cannot find the commit of ${latest}` }
   if (candidate.sha === lastStableSha) return { publish: false, reason: `${candidate.version} is the code ${latest} already ships` }
   if (!isAncestor(lastStableSha, candidate.sha)) return { publish: false, reason: `${candidate.sha.slice(0, 8)} does not descend from ${latest}` }
-  const subjects = subjectsSince(lastStableSha, candidate.sha)
+  const commits = commitsSince(lastStableSha, candidate.sha)
   const written = releaseNotes(changelogAt(candidate.sha), 'Unreleased')
-  const bump = bumpFor(subjects) ?? (written ? 'patch' : null)
-  if (!bump) return { publish: false, reason: `nothing a user would notice since ${latest} (${subjects.length} commits)` }
+  const bump = bumpFor(commits, latest) ?? (written ? 'patch' : null)
+  if (!bump) return { publish: false, reason: `nothing a user would notice since ${latest} (${commits.length} commits)` }
   const verdict = ciVerdict(candidate.sha)
   if (verdict !== 'green') return { publish: false, reason: `CI on ${candidate.sha.slice(0, 8)} is ${verdict}` }
-  const notes = written ?? generatedNotes(subjects)
+  const notes = written ?? generatedNotes(commits)
   return { publish: true, sha: candidate.sha, version: nextVersion(latest, bump), bump, from: latest, nightly: candidate.version, notes, written: Boolean(written) }
 }
 
@@ -167,7 +185,9 @@ async function main() {
       soakHours: arg('soak-hours') ? Number(arg('soak-hours')) : SOAK_HOURS,
       lastStableSha,
       isAncestor: (a, b) => { try { git(root, ['merge-base', '--is-ancestor', a, b]); return true } catch { return false } },
-      subjectsSince: (a, b) => { const out = git(root, ['log', '--no-merges', '--format=%s', `${a}..${b}`]); return out ? out.split('\n') : [] },
+      commitsSince: (a, b) => git(root, ['log', '--no-merges', '--format=%s%x1f%b%x1e', `${a}..${b}`])
+        .split('\x1e').map((r) => r.trim()).filter(Boolean)
+        .map((r) => { const [subject, body = ''] = r.split('\x1f'); return { subject, body } }),
       changelogAt: (sha) => git(root, ['show', `${sha}:CHANGELOG.md`]),
       ciVerdict: (sha) => commitVerdict(sha).verdict,
     })

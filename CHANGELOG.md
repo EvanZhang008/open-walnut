@@ -8,11 +8,17 @@ breaking changes).
 
 ### Changed
 
-- **Stable releases are automatic.** Every Tuesday the newest nightly that has been out for
-  two days becomes the next stable release when it carries a feature or a fix and installs
-  and starts on fresh Linux and macOS machines. A feature makes the next minor version, a fix
-  the next patch, and the notes come from this file (or the commit titles when nobody wrote
-  any). `npm run release` still cuts one by hand.
+- **Stable releases are automatic and daily.** Every day the newest nightly that has been out
+  for a day becomes the next stable release when it carries a feature or a fix and installs
+  and starts on fresh Linux and macOS machines. Before 1.0 each release is the next patch (a
+  breaking change makes the next minor), and the notes come from this file (or the commit
+  titles when nobody wrote any). Nightlies now publish every six hours instead of twice a
+  day. `npm run release` still cuts one by hand.
+- **Every push rehearses the release.** CI installs the package that commit would publish
+  the way a user does, on Linux and macOS, serves it, runs a session against a mock Claude
+  Code across a restart, and checks that both an older build and the version on npm today
+  update themselves to it. The slow test tier (about 1,000 tests with real daemons and
+  servers) now blocks too, and the e2e and browser suites run on every push.
 
 ### Fixed
 

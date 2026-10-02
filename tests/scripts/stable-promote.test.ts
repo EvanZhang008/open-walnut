@@ -1,5 +1,5 @@
 /**
- * scripts/stable-promote.mjs: which soaked nightly the weekly job promotes, as
+ * scripts/stable-promote.mjs: which soaked nightly the daily job promotes, as
  * which version, with which notes, and how main's CHANGELOG is rolled afterwards.
  */
 import { execFileSync } from 'node:child_process'
@@ -40,7 +40,7 @@ function deps(over: Partial<Parameters<typeof planRelease>[0]> = {}) {
     now: NOW,
     lastStableSha: 'stable0',
     isAncestor: () => true,
-    subjectsSince: () => ['fix(release): published builds are no longer stamped dirty', 'docs: a note'],
+    commitsSince: () => ['fix(release): published builds are no longer stamped dirty', 'docs: a note'],
     changelogAt: () => EMPTY_UNRELEASED,
     ciVerdict: () => 'green',
     ...over,
@@ -53,19 +53,37 @@ describe('soakedNightly', () => {
     expect(soakedNightly(REGISTRY, NOW)).toEqual({ version: '0.6.1-nightly.20261004.8', sha: 'cand', publishedAt: ago(59) })
     expect(soakedNightly(REGISTRY, NOW, 20)?.sha).toBe('fresh')
     expect(soakedNightly(REGISTRY, NOW, 100)).toBeNull()
+    // The default soak is a day.
+    expect(soakedNightly(packument('0.6.0', [['0.6.1-nightly.20261005.11', 'day', 25]]), NOW)?.sha).toBe('day')
+    expect(soakedNightly(packument('0.6.0', [['0.6.1-nightly.20261005.12', 'young', 23]]), NOW)).toBeNull()
     // A stable release is never a candidate, however old.
     expect(soakedNightly(packument('0.6.0', [['0.6.0', 'stable0', 500]]), NOW)).toBeNull()
   })
 })
 
 describe('bumpFor', () => {
-  it('a feat is the next minor, a fix or perf the next patch, anything else nothing', () => {
-    expect(bumpFor(['docs: x', 'feat(tasks): y', 'fix: z'])).toBe('minor')
-    expect(bumpFor(['feat!: breaking'])).toBe('minor')
-    expect(bumpFor(['fix(sessions): y', 'test: z'])).toBe('patch')
-    expect(bumpFor(['perf: faster'])).toBe('patch')
-    expect(bumpFor(['docs: x', 'test(a): b', 'chore: c', 'release: 0.6.0', 'Merge branch x'])).toBeNull()
-    expect(bumpFor([])).toBeNull()
+  it('before 1.0, a breaking change is the next minor and any feat, fix or perf the next patch', () => {
+    expect(bumpFor(['docs: x', 'feat(tasks): y', 'fix: z'], '0.6.0')).toBe('patch')
+    expect(bumpFor(['feat: a'], '0.6.0')).toBe('patch')
+    expect(bumpFor(['fix(sessions): y', 'test: z'], '0.6.0')).toBe('patch')
+    expect(bumpFor(['perf: faster'], '0.6.0')).toBe('patch')
+    expect(bumpFor(['feat!: breaking'], '0.6.0')).toBe('minor')
+    expect(bumpFor(['refactor(api)!: drop v0 routes'], '0.6.0')).toBe('minor')
+    expect(bumpFor([{ subject: 'feat: x', body: 'Why.\n\nBREAKING CHANGE: the old flag is gone' }], '0.6.0')).toBe('minor')
+    expect(bumpFor([{ subject: 'chore: x', body: 'BREAKING-CHANGE: y' }], '0.6.0')).toBe('minor')
+    // "breaking" in prose is not a footer.
+    expect(bumpFor([{ subject: 'fix: x', body: 'not a BREAKING CHANGE: really' }], '0.6.0')).toBe('patch')
+  })
+
+  it('from 1.0, breaking is major, feat minor, fix or perf patch', () => {
+    expect(bumpFor(['feat!: x'], '1.2.3')).toBe('major')
+    expect(bumpFor(['feat: x', 'fix: y'], '1.2.3')).toBe('minor')
+    expect(bumpFor(['fix: y'], '1.2.3')).toBe('patch')
+  })
+
+  it('commits a user never sees release nothing', () => {
+    expect(bumpFor(['docs: x', 'test(a): b', 'chore: c', 'ci: d', 'release: 0.6.0', 'Merge branch x'], '0.6.0')).toBeNull()
+    expect(bumpFor([], '0.6.0')).toBeNull()
   })
 })
 
@@ -82,23 +100,28 @@ describe('generatedNotes', () => {
 describe('planRelease', () => {
   it('promotes the soaked nightly as a patch for fixes, with notes from the commits when nobody wrote any', () => {
     const ciVerdict = vi.fn(() => 'green')
-    const subjectsSince = vi.fn(() => ['fix(release): published builds are no longer stamped dirty', 'docs: a note'])
-    const plan = planRelease(deps({ ciVerdict, subjectsSince }))
+    const commitsSince = vi.fn(() => ['fix(release): published builds are no longer stamped dirty', 'docs: a note'])
+    const plan = planRelease(deps({ ciVerdict, commitsSince }))
     expect(plan).toEqual({
       publish: true, sha: 'cand', version: '0.6.1', bump: 'patch', from: '0.6.0', nightly: '0.6.1-nightly.20261004.8',
       notes: '### Fixed\n\n- Published builds are no longer stamped dirty', written: false,
     })
-    expect(subjectsSince).toHaveBeenCalledWith('stable0', 'cand')
+    expect(commitsSince).toHaveBeenCalledWith('stable0', 'cand')
     expect(ciVerdict).toHaveBeenCalledWith('cand')
   })
 
-  it('a feat makes the next minor, and a written Unreleased section is the notes', () => {
-    const plan = planRelease(deps({ subjectsSince: () => ['feat: a thing', 'fix: b'], changelogAt: () => CHANGELOG_AT_CANDIDATE }))
-    expect(plan).toMatchObject({ publish: true, version: '0.7.0', bump: 'minor', written: true, notes: '### Fixed\n\n- A published build no longer calls itself dirty.' })
+  it('a feat is the next patch before 1.0, and a written Unreleased section is the notes', () => {
+    const plan = planRelease(deps({ commitsSince: () => ['feat: a thing', 'fix: b'], changelogAt: () => CHANGELOG_AT_CANDIDATE }))
+    expect(plan).toMatchObject({ publish: true, version: '0.6.1', bump: 'patch', written: true, notes: '### Fixed\n\n- A published build no longer calls itself dirty.' })
+  })
+
+  it('a breaking change is the next minor before 1.0', () => {
+    const plan = planRelease(deps({ commitsSince: () => [{ subject: 'feat(config)!: rename the data dir', body: '' }] }))
+    expect(plan).toMatchObject({ publish: true, version: '0.7.0', bump: 'minor', notes: '### Added\n\n- Rename the data dir' })
   })
 
   it('a written entry alone is enough for a patch', () => {
-    const plan = planRelease(deps({ subjectsSince: () => ['docs: x', 'test: y'], changelogAt: () => CHANGELOG_AT_CANDIDATE }))
+    const plan = planRelease(deps({ commitsSince: () => ['docs: x', 'test: y'], changelogAt: () => CHANGELOG_AT_CANDIDATE }))
     expect(plan).toMatchObject({ publish: true, version: '0.6.1', bump: 'patch', written: true })
   })
 
@@ -120,7 +143,7 @@ describe('planRelease', () => {
     expect(skip({ lastStableSha: null })).toContain('cannot find the commit of 0.6.0')
     expect(skip({ lastStableSha: 'cand' })).toContain('is the code 0.6.0 already ships')
     expect(skip({ isAncestor: () => false })).toContain('does not descend from 0.6.0')
-    expect(skip({ subjectsSince: () => ['docs: x', 'test: y'] })).toContain('nothing a user would notice since 0.6.0 (2 commits)')
+    expect(skip({ commitsSince: () => ['docs: x', 'test: y'] })).toContain('nothing a user would notice since 0.6.0 (2 commits)')
     // CI is asked last, and only when there is something to release.
     expect(ciVerdict).not.toHaveBeenCalled()
     expect(skip({ ciVerdict: () => 'red' })).toBe('CI on cand is red')
