@@ -86,11 +86,17 @@ show inline after the open ones, other completed hits that show the query fold i
   idle/"finished" auto-fold): close a column, or pick the count. What the strip owes them is
   finding that count: the grow moment raises a `hint` toast ("Opened a 4th panel: all 3 are
   pinned", kind `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "Adjust
-  panels" button deep-links to `/settings#session-panels`, a ROW target (`ROW_TARGETS` in
-  `components/settings/settings-routing.ts`) that opens General, lands the row a third down and
-  pulses it (`settings-anchor-flash-strong`); and the Panels 1-5/Auto row is the FIRST row of
-  the session kebab (`leadingSection` of `TaskQuickActions`, above Task detail), not a line
-  between the view toggles.
+  panels" button opens the picker the user ALREADY HAS beside the strip, the task panel's view
+  menu (the sliders button next to New task), on its Session panels row, pulsing
+  (`revealViewOption('session-panels')` in `components/tasks/view-dropdown-reveal.ts`: a window
+  event the `ViewDropdown` that renders the option answers; it shows a hidden task panel first and
+  waits for the trigger to hold still, `whenSettled`, before placing the menu, because the panel
+  slides open over 250ms). It does NOT send the user to Settings (2026-10-02: "that's ridiculous,
+  it's too far away"); `/settings#session-panels` still works as a typed deep link (`ROW_TARGETS`
+  in `components/settings/settings-routing.ts`, pulses the row with
+  `settings-anchor-flash-strong`). The Panels 1-5/Auto row is also the FIRST row of the session
+  kebab (`leadingSection` of `TaskQuickActions`, above Task detail), not a line between the view
+  toggles.
 - **One browser, one task store.** `TasksContext` (`useTasks`) is the only in-browser truth for
   a task row. A surface that shows a task reads it from there (`useStoreTask(id)`) and writes
   through the store's optimistic mutators (`update` / `setPhase` / `moveTask`), so the board

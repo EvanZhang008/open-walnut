@@ -4,3 +4,13 @@
 .vd-toggle.vd-choice-row { cursor: default; padding-top: 4px; padding-bottom: 4px; }
 .vd-choice-row .vd-seg { width: auto; flex: none; background: var(--bg); }
 .vd-choice-row .vd-seg-btn { flex: none; min-width: 26px; font-variant-numeric: tabular-nums; }
+
+/* A `view-dropdown:reveal` landing (view-dropdown-reveal.ts): the group the user was sent to pulses
+   twice so the eye finds it among the other rows. Same beat as the Settings deep-link flash. */
+.vd-field.vd-field-flash { animation: vd-field-flash 3000ms ease-out; border-radius: 8px; padding: 4px 6px; margin: -4px -6px; }
+@keyframes vd-field-flash {
+  0%, 20% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 0 1px var(--accent); }
+  40% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 3px transparent, 0 0 0 1px transparent; }
+  60% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 0 1px var(--accent); }
+  100% { background-color: transparent; box-shadow: 0 0 0 3px transparent, 0 0 0 1px transparent; }
+}

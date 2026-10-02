@@ -17,6 +17,7 @@ import { useDragGesture } from '@/hooks/useDragGesture';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
+import { revealViewOption } from '@/components/tasks/view-dropdown-reveal';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
@@ -1514,7 +1515,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     setSessionColumns(next);
     // The strip just grew past the user's count (every panel was pinned, so the
-    // open took the lock grant): say so, and put the setting one click away. The
+    // open took the lock grant): say so, and put the count picker one click away,
+    // the one in the task panel's view menu beside New task, right next to the
+    // strip it governs (not Settings: 2026-10-02, "that's too far away"). The
     // one-in-one-out reuse of that slot is not growth and stays quiet.
     const count = triageOpenRef.current ? maxPanelsRef.current - 1 : maxPanelsRef.current;
     const realBefore = realColumnCount(current);
@@ -1527,10 +1530,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         body: `Pinned panels keep their place, so the strip grew by one. Close any panel to go back to ${count}, or change the count.`,
         dedupKey: 'session-panels-grant',
         persistent: false,
-        action: { label: 'Adjust panels', kind: 'navigate', to: '/settings#session-panels' },
+        action: { label: 'Adjust panels', kind: 'callback' },
+        onAction: () => {
+          // The menu lives in the task panel: bring that panel back if it is hidden
+          // or covered, and come home if the user wandered off while the toast was up.
+          setTodoVisible(true);
+          yieldFullscreen('adjust-panels');
+          if (window.location.pathname !== '/') navigateRef?.current?.('/');
+          revealViewOption('session-panels');
+        },
       });
     }
-  }, [showOperationError, notify]);
+  }, [showOperationError, notify, navigateRef]);
 
   const handleToggleSession = openSessionOrToast;
 

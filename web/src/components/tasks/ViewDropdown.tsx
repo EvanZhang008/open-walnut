@@ -32,6 +32,9 @@ import { createPortal } from 'react-dom';
 import { ICON_SLIDERS } from '../common/Icons';
 import '@/styles/view-menu-choices.css';
 import { INBOX_TAB } from './task-tabs';
+import {
+  VIEW_DROPDOWN_REVEAL_EVENT, VIEW_OPTION_FLASH_MS, whenSettled, type ViewDropdownRevealDetail,
+} from './view-dropdown-reveal';
 import { log } from '@/utils/log';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import {
@@ -295,10 +298,14 @@ export function ViewDropdown({
     const onScrollOrResize = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(place); };
     window.addEventListener('resize', onScrollOrResize);
     window.addEventListener('scroll', onScrollOrResize, true);
+    // The host can move without a resize: the task panel slides open over 250ms when a
+    // reveal brings it back, and the toolbar reflows as it widens. Follow the last frame.
+    document.addEventListener('transitionend', onScrollOrResize, true);
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onScrollOrResize);
       window.removeEventListener('scroll', onScrollOrResize, true);
+      document.removeEventListener('transitionend', onScrollOrResize, true);
     };
   }, [open]);
 
@@ -337,12 +344,49 @@ export function ViewDropdown({
   // home = Quick filters, /tasks = Status). Focus is handled by autoFocus on the
   // search input — this effect can run before the portal mounts (pos is set
   // in a layout effect), so a ref .focus() here would race the mount.
+  // An open asked for by `view-dropdown:reveal` lands on the View section instead.
+  const [flashOption, setFlashOption] = useState<string | null>(null);
+  const revealRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open) return;
     setSearch('');
-    setSection(null);
+    setSection(revealRef.current ? 'view' : null);
     setCursor(0);
   }, [open]);
+
+  // "Show me that control" (view-dropdown-reveal.ts): open on the View section with the
+  // named option pulsing. Only the instance that renders the option answers, so the
+  // /tasks page's menu (no view groups) stays shut. The open waits for the trigger to
+  // hold still: the task panel may be sliding open at this very moment. Subscribed
+  // once, reading the groups through a ref: the host rebuilds `viewGroups` on every
+  // render, and an effect keyed on it would re-run mid-wait and cancel the open.
+  const viewGroupsRef = useRef(viewGroups);
+  viewGroupsRef.current = viewGroups;
+  useEffect(() => {
+    let cancel: (() => void) | null = null;
+    const handler = (e: Event) => {
+      const option = (e as CustomEvent<ViewDropdownRevealDetail>).detail?.option;
+      if (!option || !viewGroupsRef.current?.some((g) => g.options.some((o) => o.key === option))) return;
+      const el = containerRef.current;
+      if (!el) return;
+      cancel?.();
+      cancel = whenSettled(el, () => {
+        cancel = null;
+        revealRef.current = option;
+        setFlashOption(option);
+        setOpen(true);
+        setSection('view');
+      });
+    };
+    window.addEventListener(VIEW_DROPDOWN_REVEAL_EVENT, handler);
+    return () => { cancel?.(); window.removeEventListener(VIEW_DROPDOWN_REVEAL_EVENT, handler); };
+  }, []);
+  useEffect(() => {
+    if (!open) { revealRef.current = null; setFlashOption(null); return; }
+    if (!flashOption) return;
+    const t = setTimeout(() => setFlashOption(null), VIEW_OPTION_FLASH_MS);
+    return () => clearTimeout(t);
+  }, [open, flashOption]);
 
   const patchQuery = (patch: Partial<TaskQueryFilterState>) => {
     if (!query || !onQueryChange) return;
@@ -512,7 +556,7 @@ export function ViewDropdown({
               ) : (
                 <SectionDetail
                   id={activeSection?.id ?? ''}
-                  viewGroups={viewGroups}
+                  viewGroups={viewGroups} flashOption={flashOption}
                   catChips={catChips} activeProject={activeProject} onProjectChange={onProjectChange}
                   phaseFilter={phaseFilter} onPhaseFilterChange={onPhaseFilterChange}
                   dateFilter={dateFilter} onDateFilterChange={onDateFilterChange}
@@ -559,6 +603,8 @@ export function ViewDropdown({
 function SectionDetail(props: {
   id: string;
   viewGroups?: ViewOptionGroup[];
+  /** Option key whose group pulses (a `view-dropdown:reveal` landing). */
+  flashOption?: string | null;
   catChips: { id: string; label: string; count?: number }[];
   activeProject?: string;
   onProjectChange?: (p: string) => void;
@@ -576,7 +622,15 @@ function SectionDetail(props: {
     return (
       <div className="vd-grid">
         {props.viewGroups?.map((group) => (
-          <div key={group.label} className="vd-field vd-span2" data-view-group={group.label}>
+          <div
+            key={group.label}
+            className={`vd-field vd-span2${group.options.some((o) => o.key === props.flashOption) ? ' vd-field-flash' : ''}`}
+            data-view-group={group.label}
+            // The pulse must be seen: a long View section may have scrolled it away.
+            ref={group.options.some((o) => o.key === props.flashOption)
+              ? (el) => el?.scrollIntoView({ block: 'nearest' })
+              : undefined}
+          >
             <span className="vd-label">{group.label}</span>
             <div className="vd-cats">
               {group.options.map((o) => o.choices ? (

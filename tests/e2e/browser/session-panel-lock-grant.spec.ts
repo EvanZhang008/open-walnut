@@ -10,10 +10,15 @@
  * reuses it, one in one out), unlocking closes nothing, and closing any column
  * puts the strip back under the user's count, where the normal eviction resumes.
  *
+ * The grant also tells the user, once, with a hint toast whose "Adjust panels" opens
+ * the panel-count picker the user already has: the task panel's view menu (the
+ * sliders button beside New task), landed on the View section with the Session
+ * panels row pulsing (web/src/components/tasks/view-dropdown-reveal.ts).
+ *
  * Driven through the real controls: the header lock buttons, the session finder
- * (⌘⇧O, the one gesture that opens a session by name), the header ×. Columns are
- * seeded through sessionStorage and the count through the Settings UI, the same
- * kit the draft specs use (./draft-helpers).
+ * (⌘⇧O, the one gesture that opens a session by name), the header ×, the toast
+ * button, the view menu. Columns are seeded through sessionStorage and the count
+ * through the Settings UI, the same kit the draft specs use (./draft-helpers).
  */
 
 import { test, expect, type Page } from '@playwright/test'
@@ -111,8 +116,30 @@ test('three pinned panels: the next session opens a 4th column, the slot is shar
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-back-to-three.png`, fullPage: false })
 })
 
-test('"Adjust panels" on the hint lands on Settings with the panel count highlighted', async ({ page }) => {
-  await page.setViewportSize({ width: 2400, height: 1000 })
+/** The task panel's view menu (the sliders button beside New task) and its Session panels row. */
+const viewMenu = (page: Page) => page.locator('.vd-panel')
+const panelsGroup = (page: Page) => viewMenu(page).locator('[data-view-group="Session panels"]')
+const panelsSeg = (page: Page) => panelsGroup(page).locator('.vd-seg[aria-label="Side by side"]')
+
+/**
+ * The menu sits under its own trigger (the sliders button), not at a spot measured while the
+ * task panel was still sliding open: top within a few px below the trigger, and overlapping it
+ * horizontally (the panel-left placement runs from the task panel's edge across the trigger).
+ */
+async function expectMenuUnderTrigger(page: Page): Promise<void> {
+  const trigger = await page.locator('.todo-panel .vd-trigger[aria-label="View options"]').boundingBox()
+  const menu = await viewMenu(page).boundingBox()
+  expect(trigger).not.toBeNull()
+  expect(menu).not.toBeNull()
+  expect(trigger!.width).toBeGreaterThan(0)
+  expect(menu!.y).toBeGreaterThanOrEqual(trigger!.y + trigger!.height)
+  expect(menu!.y).toBeLessThan(trigger!.y + trigger!.height + 12)
+  expect(menu!.x).toBeLessThanOrEqual(trigger!.x)
+  expect(menu!.x + menu!.width).toBeGreaterThan(trigger!.x)
+}
+
+/** Pin all three seeded columns, open a 4th through the finder, return the hint toast. */
+async function growToFour(page: Page) {
   await setPanelMode(page, '3')
   await seedColumns(page, SIDS)
   await loadHome(page)
@@ -124,25 +151,59 @@ test('"Adjust panels" on the hint lands on Settings with the panel count highlig
   await openViaFinder(page, SERVICE.query, SERVICE.id)
   const hint = page.locator('.notification-toast', { hasText: 'Opened a 4th panel' })
   await expect(hint).toBeVisible()
+  return hint
+}
 
-  // The button is the whole point: no hunting through Settings for the row.
+test('"Adjust panels" on the hint opens the view menu beside New task on the pulsing Session panels row', async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  const hint = await growToFour(page)
+  await expect(viewMenu(page)).toHaveCount(0)
+
+  // The button is the whole point: the picker is the one the user already has, right
+  // next to the strip, not a Settings page (2026-10-02: "that's too far away").
   await hint.locator('.notification-toast-action', { hasText: 'Adjust panels' }).click()
-  await expect(page).toHaveURL(/\/settings#session-panels$/)
-  const picker = page.locator('#settings-session-panels')
-  await expect(picker).toBeVisible({ timeout: 20_000 })
-  await expect(picker).toBeInViewport()
-  // The row pulses so the eye lands on it (the deep-link flash, 3s).
-  const row = page.getByTestId('settings-session-panels-row')
-  await expect(row).toHaveClass(/settings-anchor-flash-strong/, { timeout: 5_000 })
-  await expect(picker.locator('.settings-segment[aria-checked="true"]')).toHaveText(['3'])
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/05-settings-highlight.png`, fullPage: false })
+  await expect(viewMenu(page)).toBeVisible({ timeout: 10_000 })
+  // Still on the home page (the columns ride in the query string), not on Settings.
+  expect(new URL(page.url()).pathname).toBe('/')
+  await expect(viewMenu(page).locator('.vd-rail-btn[data-rail-section="view"]')).toHaveAttribute('aria-current', 'true')
+  await expect(panelsGroup(page)).toBeVisible()
+  await expect(panelsGroup(page)).toBeInViewport()
+  // The row pulses so the eye lands on it (3s).
+  await expect(panelsGroup(page)).toHaveClass(/vd-field-flash/)
+  await expect(panelsSeg(page).locator('[aria-pressed="true"]')).toHaveText(['3'])
+  // The menu sits under its own trigger (the sliders button), not at a stale spot.
+  await expectMenuUnderTrigger(page)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/05-view-menu-highlight.png`, fullPage: false })
 
   // Picking 4 here is the "keep it" path; the strip then holds 4 by the setting, not the grant.
-  await picker.locator('.settings-segment').filter({ hasText: /^4$/ }).click()
+  await panelsSeg(page).locator('.vd-seg-btn', { hasText: /^4$/ }).click()
+  await expect(panelsSeg(page).locator('[aria-pressed="true"]')).toHaveText(['4'], { timeout: 20_000 })
   await expect.poll(async () => (await (await page.request.get('/api/config')).json())?.config?.ui?.session_panels, { timeout: 20_000 }).toBe('4')
-  await page.locator('.sidebar a[href="/"]').first().click()
-  await expect(homeColumns(page)).toHaveCount(4, { timeout: 20_000 })
+  await expect(homeColumns(page)).toHaveCount(4)
   await expect(lockedButtons(page)).toHaveCount(3)
+  // Escape closes the menu and the flash goes with it; the next plain open is an ordinary one.
+  await page.keyboard.press('Escape')
+  await expect(viewMenu(page)).toHaveCount(0)
+  await page.locator('.todo-panel .vd-trigger[aria-label="View options"]').click()
+  await expect(viewMenu(page)).toBeVisible()
+  await expect(panelsGroup(page)).not.toHaveClass(/vd-field-flash/)
+  await page.keyboard.press('Escape')
+})
+
+test('"Adjust panels" brings a hidden task panel back and still lands on the row', async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  const hint = await growToFour(page)
+  // Hide the task panel the way a user does, through its own header control.
+  await page.locator('.todo-panel .todo-panel-hide').click()
+  await expect(page.locator('.main-page-todo')).toHaveClass(/collapsed/)
+
+  await hint.locator('.notification-toast-action', { hasText: 'Adjust panels' }).click()
+  await expect(page.locator('.main-page-todo')).not.toHaveClass(/collapsed/)
+  // The menu waits for the panel's slide to finish, then opens under the trigger.
+  await expect(viewMenu(page)).toBeVisible({ timeout: 10_000 })
+  await expect(panelsGroup(page)).toHaveClass(/vd-field-flash/)
+  await expectMenuUnderTrigger(page)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/06-hidden-panel-reopened.png`, fullPage: false })
 })
 
 test('a granted 4th column survives a reload with its three pins', async ({ page }) => {
