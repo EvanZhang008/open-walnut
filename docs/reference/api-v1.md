@@ -1782,14 +1782,23 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   and read it again on open; the web console also hears `task:tag-display-changed` on its
   socket (not on the v1 SSE feed). A client that knows only `shown` and `hidden` should
   draw `value` as `shown`.
+- Tag links (additive, 2026-10): a tag or a key may also be a link, an http(s) URL with
+  `{value}` where the tag's value goes (URL-encoded): a ticket plugin links `ticket:*` to
+  its tracker, so the pill opens the ticket in a new tab (the Mac app hands it to the
+  default browser) instead of opening the row. The user's link wins over a plugin's, the
+  exact tag over its key, and the user's empty link `""` takes a plugin's away. A client
+  that ignores `links` draws plain pills.
   - `GET /api/v1/tasks/meta/tag-display` → `200 { "rules": [ { pattern, display:
     'shown'|'value'|'hidden', source: 'builtin'|'user'|'plugin'|'default', pluginId?,
-    pluginName? } ] }`. Reads work on both boxes.
+    pluginName? } ], "links": [ { pattern, link, source: 'user'|'plugin', pluginId?,
+    pluginName? } ] }`. Reads work on both boxes. `links` is absent on an older server.
   - `PUT /api/v1/tasks/meta/tag-display` body `{ "pattern", "display": 'shown' | 'value' |
     'hidden' | null }` sets (or, with `null`, removes) the user's rule for one tag or
-    `<key>:*` and answers `{ rules }`. A machine-tag pattern or a malformed one →
-    `400 bad_request`. **`501 not_supported_cloud` on a REPLICA**: the rules live in the
-    primary's config.
+    `<key>:*`; `{ "pattern", "link": "<template>" | "" | null }` sets the user's link the
+    same way (both in one body set both). Answers `{ rules, links }`. A machine-tag pattern,
+    a malformed one, or a link that is not an http(s) URL naming `{value}` →
+    `400 bad_request`, and nothing is written. **`501 not_supported_cloud` on a REPLICA**:
+    the rules live in the primary's config.
 - Virtual task groups — **all writes answer `501 not_supported_cloud` on a
   REPLICA** (`group_id` and the group registry are not in the outbox update
   whitelist, so replica-local writes would silently revert; an honest error

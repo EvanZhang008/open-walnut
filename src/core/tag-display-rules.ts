@@ -20,6 +20,10 @@
  *   4. Walnut's defaults: a label reads as its value (`urgent`, not `label:urgent`), and the
  *      task's own dates (`created:`, `updated:`) stay hidden. A user or plugin rule overrides.
  *   5. Everything else shows whole.
+ *
+ * A tag may also be a link (TagLinkRule): a URL with `{value}` where the tag's value goes, set
+ * per tag or per key by a plugin (a ticket plugin links `ticket:*` to its tracker) or by the
+ * user, whose rule wins; the user's empty link takes a plugin's away. The pill opens it.
  */
 
 import { LABEL_KEY, isTagKey, normalizeTag } from './tag-model.js'
@@ -34,6 +38,17 @@ export interface TagDisplayRule {
   display: TagDisplay
   source: 'builtin' | 'default' | 'user' | 'plugin'
   /** For a plugin default: which plugin set it, and its display name. */
+  pluginId?: string
+  pluginName?: string
+}
+
+export interface TagLinkRule {
+  /** An exact tag, or `<key>:*`. */
+  pattern: string
+  /** An http(s) URL with `{value}` where the tag's value goes (URL-encoded). The user's `''`
+   *  means no link, over a plugin's. */
+  link: string
+  source: 'user' | 'plugin'
   pluginId?: string
   pluginName?: string
 }
@@ -98,6 +113,29 @@ export function normalizeTagPattern(raw: unknown): string | null {
   return normalizeTag(pattern, { derived: true }) ?? null
 }
 
+const MAX_LINK_LENGTH = 500
+const VALUE_SLOT = '{value}'
+
+/** A link template in stored form, or null when it is not one: an http(s) URL that names
+ *  `{value}`, or `''` (no link). */
+export function normalizeTagLink(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const link = raw.trim()
+  if (link === '') return ''
+  if (link.length > MAX_LINK_LENGTH || /[\s\u0000-\u001f\u007f]/.test(link) || !link.includes(VALUE_SLOT)) return null
+  try {
+    const url = new URL(link.split(VALUE_SLOT).join('v'))
+    return url.protocol === 'https:' || url.protocol === 'http:' ? link : null
+  } catch {
+    return null
+  }
+}
+
+/** The URL a tag's pill opens under a template: its value, URL-encoded, in every `{value}`. */
+export function tagHref(template: string, tag: string): string | undefined {
+  return template ? template.split(VALUE_SLOT).join(encodeURIComponent(tagValue(tag))) : undefined
+}
+
 /** True for a pattern no rule may change: Walnut's machine tags. */
 export function isMachineTagPattern(pattern: string): boolean {
   const namespace = patternNamespace(pattern) ?? tagNamespace(pattern)
@@ -112,6 +150,10 @@ export interface CompiledTagDisplay {
   valueOnly(tag: string): boolean
   /** The rule that decided, or undefined when none did (the tag shows whole by default). */
   ruleFor(tag: string): TagDisplayRule | undefined
+  /** The URL the tag's pill opens, or undefined (no link rule, or the user's empty one). */
+  linkFor(tag: string): string | undefined
+  /** The link rule that decided, the user's empty one included. */
+  linkRuleFor(tag: string): TagLinkRule | undefined
 }
 
 interface Layer { exact: Map<string, TagDisplayRule>; namespace: Map<string, TagDisplayRule> }
@@ -130,9 +172,36 @@ function place(layer: Layer, rule: TagDisplayRule, pattern: string, quieterWins:
 const defaultLayer = emptyLayer()
 for (const rule of DEFAULT_TAG_DISPLAY_RULES) place(defaultLayer, rule, rule.pattern, false)
 
+interface LinkLayer { exact: Map<string, TagLinkRule>; namespace: Map<string, TagLinkRule> }
+
 /** Index a rule list once, so a board of rows asks per tag in constant time. Walnut's own
  *  rules apply whether or not the list carries them (an older server's list does not). */
-export function compileTagDisplay(rules: readonly TagDisplayRule[]): CompiledTagDisplay {
+export function compileTagDisplay(rules: readonly TagDisplayRule[], links: readonly TagLinkRule[] = []): CompiledTagDisplay {
+  const userLinks: LinkLayer = { exact: new Map(), namespace: new Map() }
+  const pluginLinks: LinkLayer = { exact: new Map(), namespace: new Map() }
+  for (const rule of links) {
+    if (rule.source !== 'user' && rule.source !== 'plugin') continue
+    const pattern = normalizeTagPattern(rule.pattern)
+    const link = normalizeTagLink(rule.link)
+    if (!pattern || isMachineTagPattern(pattern) || link === null || (link === '' && rule.source !== 'user')) continue
+    const layer = rule.source === 'user' ? userLinks : pluginLinks
+    const namespace = patternNamespace(pattern)
+    const map = namespace ? layer.namespace : layer.exact
+    const key = namespace ?? pattern
+    // The user's last rule for a pattern wins; between plugins, the first one set stays.
+    if (rule.source === 'plugin' && map.has(key)) continue
+    map.set(key, { ...rule, pattern, link })
+  }
+  const linkRuleFor = (tag: string): TagLinkRule | undefined => {
+    const namespace = tagNamespace(tag)
+    if (namespace === MACHINE_TAG_NAMESPACE) return undefined
+    for (const layer of [userLinks, pluginLinks]) {
+      const found = layer.exact.get(tag) ?? (namespace ? layer.namespace.get(namespace) : undefined)
+      if (found) return found
+    }
+    return undefined
+  }
+
   const user = emptyLayer()
   const plugin = emptyLayer()
   for (const rule of rules) {
@@ -158,6 +227,11 @@ export function compileTagDisplay(rules: readonly TagDisplayRule[]): CompiledTag
     shown: (tag) => display(tag) !== 'hidden',
     valueOnly: (tag) => display(tag) === 'value',
     ruleFor,
+    linkFor: (tag) => {
+      const rule = linkRuleFor(tag)
+      return rule ? tagHref(rule.link, tag) : undefined
+    },
+    linkRuleFor,
   }
 }
 

@@ -151,16 +151,17 @@ export function TagEditor({ tags, onAdd, onRemove, derived = [], placeholder = '
     <div className="tag-editor" data-testid="tag-editor">
       <div className="tag-editor-chips">
         {visible.map(tag => (
-          <TagChip key={tag} tag={tag} valueOnly={compiled.valueOnly(tag)} onRemove={() => onRemove(tag)} />
+          <TagChip key={tag} tag={tag} valueOnly={compiled.valueOnly(tag)} href={compiled.linkFor(tag)} onRemove={() => onRemove(tag)} />
         ))}
         {shownDerived.map(tag => (
-          <TagChip key={tag} tag={tag} valueOnly={compiled.valueOnly(tag)} />
+          <TagChip key={tag} tag={tag} valueOnly={compiled.valueOnly(tag)} href={compiled.linkFor(tag)} />
         ))}
         {showHidden && hidden.map(tag => (
           <TagChip
             key={tag}
             tag={tag}
             hiddenOnTasks
+            href={compiled.linkFor(tag)}
             onRemove={derived.includes(tag) ? undefined : () => onRemove(tag)}
           />
         ))}

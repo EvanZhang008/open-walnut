@@ -157,3 +157,29 @@ describe('focus tier CRUD', () => {
     expect(builtin.body.error.message).toContain('Built-in')
   })
 })
+
+describe('tag display: links (additive, 2026-10)', () => {
+  it('PUT { pattern, link } sets the user\'s link, GET lists it, null removes it, a bad one is a 400', async () => {
+    const app = createApp()
+    const set = await request(app).put('/api/v1/tasks/meta/tag-display').send({ pattern: 'tkt:*', link: 'https://tracker.example.com/{value}' })
+    expect(set.status).toBe(200)
+    expect(set.body.links).toContainEqual({ pattern: 'tkt:*', link: 'https://tracker.example.com/{value}', source: 'user' })
+    // Setting a link leaves the display rules alone.
+    expect(set.body.rules.some((rule: { source: string }) => rule.source === 'user')).toBe(false)
+
+    const listed = await request(app).get('/api/v1/tasks/meta/tag-display')
+    expect(listed.body.links).toContainEqual(expect.objectContaining({ pattern: 'tkt:*', source: 'user' }))
+
+    const bad = await request(app).put('/api/v1/tasks/meta/tag-display').send({ pattern: 'tkt:*', link: 'javascript:{value}' })
+    expect(bad.status).toBe(400)
+    expect(bad.body.error.message).toMatch(/tag link is an http\(s\) URL/)
+    // A bad display in the same body is refused before the link is written.
+    const both = await request(app).put('/api/v1/tasks/meta/tag-display').send({ pattern: 'other:*', link: 'https://x.example.com/{value}', display: 'maybe' })
+    expect(both.status).toBe(400)
+    expect((await request(app).get('/api/v1/tasks/meta/tag-display')).body.links.some((rule: { pattern: string }) => rule.pattern === 'other:*')).toBe(false)
+
+    const removed = await request(app).put('/api/v1/tasks/meta/tag-display').send({ pattern: 'tkt:*', link: null })
+    expect(removed.status).toBe(200)
+    expect(removed.body.links.some((rule: { pattern: string }) => rule.pattern === 'tkt:*')).toBe(false)
+  })
+})

@@ -7,7 +7,9 @@
  *   - the detail pane edits tags: text without a key is refused with a hint, a key:value
  *     tag is added and removed, Backspace never removes a hidden tag, and the task's own
  *     dates (`created:` / `updated:`) are listed with the hidden tags, read-only;
- *   - the search box finds a task by `created:<day>`.
+ *   - the search box finds a task by `created:<day>`;
+ *   - a key with a link rule makes its pill a link: it opens the tag's URL in a new tab, never
+ *     the row (or the detail) under it.
  *
  * The rules here name keys of this spec's own (`tkt`, `tkt-id`): the chromium and webkit
  * projects share one fixture board, and a rule on a real key would change another spec's
@@ -69,9 +71,12 @@ async function openHome(page: Page) {
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 }
 
+const LINK_ORIGIN = 'https://tickets.example.test'
+
 test.beforeAll(async () => {
   await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: 'tkt:*', display: 'value' })
   await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: 'tkt-id:*', display: 'hidden' })
+  await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: 'tkt:*', link: `${LINK_ORIGIN}/{value}` })
 })
 
 test.beforeEach(async ({ page }) => {
@@ -103,9 +108,10 @@ test('a value key reads as its id on every row, and the session header shows the
     const chips = row(page, id).locator('[data-testid="task-tag-pills"] > .tag-chip')
     await expect(row(page, id)).toBeVisible({ timeout: 15_000 })
     expect(await chipTexts(chips)).toEqual([text, id === ids.p ? 'sev:3' : 'sev:2'])
-    // No prefix element at all, whatever the width; the tooltip names the whole tag.
+    // No prefix element at all, whatever the width; the tooltip names the whole tag (and,
+    // the key being linked, where it goes).
     await expect(chips.first().locator('.tag-chip-prefix')).toHaveCount(0)
-    await expect(chips.first()).toHaveAttribute('title', `tkt:${text}`)
+    await expect(chips.first()).toHaveAttribute('title', `tkt:${text} (opens tickets.example.test)`)
   }
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await row(page, ids.v).locator('xpath=..').screenshot({ path: `${SHOT_DIR}/${browserName}-rows.png` })
@@ -231,4 +237,54 @@ test('the search box finds a task by its creation day, and the API filter does t
   await expect(row(page, id)).toBeVisible({ timeout: 15_000 })
   await search.fill('created:1999-01-01')
   await expect(row(page, id)).toHaveCount(0)
+})
+
+test('a linked tag opens its URL in a new tab, never the row or the detail under it', async ({ page, context }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  // The tracker is not reached: the new tab gets a stand-in page.
+  await context.route(`${LINK_ORIGIN}/**`, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>ticket</title>ok' }))
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const project = `Tag links ${stamp}`
+  litter.projects.push(project)
+  const id = await createTask(`Linked ticket run ${stamp}`, { project, tags: ['tkt:V2391099522', 'sev:2'] })
+
+  await openHome(page)
+  const chip = row(page, id).locator('a.tag-chip[data-tag="tkt:V2391099522"]')
+  await expect(chip).toBeVisible({ timeout: 15_000 })
+  await expect(chip).toHaveAttribute('href', `${LINK_ORIGIN}/V2391099522`)
+  await expect(chip).toHaveAttribute('target', '_blank')
+  await expect(chip).toHaveAttribute('rel', /noopener/)
+  expect(await chipTexts(chip)).toEqual(['V2391099522'])
+  // sev has no link rule: an ordinary pill.
+  await expect(row(page, id).locator('span.tag-chip[data-tag="sev:2"]')).toBeVisible()
+
+  const columnsBefore = await page.locator('.main-page-session-column').count()
+  const [tab] = await Promise.all([page.waitForEvent('popup'), chip.click()])
+  await tab.waitForLoadState()
+  expect(tab.url()).toBe(`${LINK_ORIGIN}/V2391099522`)
+  await tab.close()
+  // The click was the link's: no detail opened, no session column added, still on Home.
+  await expect(page.locator('.todo-detail-pane')).toHaveCount(0)
+  expect(await page.locator('.main-page-session-column').count()).toBe(columnsBefore)
+
+  // In the detail's tag editor the chip links too, beside its remove button, and the detail
+  // stays open.
+  await row(page, id).getByRole('button', { name: 'More actions' }).click()
+  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  const detail = page.locator('.todo-detail-pane').filter({ hasText: `Linked ticket run ${stamp}` })
+  await expect(detail).toBeVisible()
+  const editorChip = detail.locator('[data-testid="tag-editor"] .tag-chip[data-tag="tkt:V2391099522"]')
+  await expect(editorChip.locator('.tag-chip-remove')).toHaveCount(1)
+  const editorLink = editorChip.locator('a.tag-chip-link')
+  await expect(editorLink).toHaveAttribute('href', `${LINK_ORIGIN}/V2391099522`)
+  const [tab2] = await Promise.all([page.waitForEvent('popup'), editorLink.click()])
+  await tab2.waitForLoadState()
+  expect(tab2.url()).toBe(`${LINK_ORIGIN}/V2391099522`)
+  await tab2.close()
+  await expect(detail).toBeVisible()
+  expect(await storedTags(id)).toEqual(['tkt:V2391099522', 'sev:2'])
+  await fs.mkdir(SHOT_DIR, { recursive: true })
+  await detail.locator('.todo-detail-meta').screenshot({ path: `${SHOT_DIR}/${test.info().project.name}-linked-detail.png` })
+  expect(errors).toEqual([])
 })

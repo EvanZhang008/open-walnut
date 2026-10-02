@@ -9,14 +9,17 @@ import {
   DEFAULT_TAG_DISPLAY_RULES,
   compileTagDisplay,
   isMachineTagPattern,
+  normalizeTagLink,
   normalizeTagPattern,
   patternForTag,
   patternNamespace,
   shownTags,
+  tagHref,
   tagNamespace,
   tagValue,
   type TagDisplay,
   type TagDisplayRule,
+  type TagLinkRule,
 } from '../../src/core/tag-display-rules.js';
 
 const rule = (pattern: string, display: TagDisplay, source: TagDisplayRule['source'], pluginId?: string): TagDisplayRule =>
@@ -158,5 +161,61 @@ describe('compileTagDisplay', () => {
     const compiled = compileTagDisplay([rule('ticket-id:*', 'hidden', 'plugin', 'ticket-runs')]);
     expect(shownTags(['ticket:P1', 'ticket-id:uuid', 'severity:2', 'walnut:external-sessions'], compiled)).toEqual(['ticket:P1', 'severity:2']);
     expect(shownTags(undefined, compiled)).toEqual([]);
+  });
+});
+
+describe('tag links', () => {
+  const link = (pattern: string, template: string, source: TagLinkRule['source'], pluginId?: string): TagLinkRule =>
+    ({ pattern, link: template, source, ...(pluginId ? { pluginId } : {}) });
+
+  it('accepts an http(s) template that names {value}, and an empty one', () => {
+    expect(normalizeTagLink(' https://tracker.example.com/{value} ')).toBe('https://tracker.example.com/{value}');
+    expect(normalizeTagLink('http://localhost:8800/t/{value}?ref=walnut')).toBe('http://localhost:8800/t/{value}?ref=walnut');
+    expect(normalizeTagLink('')).toBe('');
+    for (const bad of ['javascript:alert({value})', 'https://tracker.example.com/', 'data:text/html,{value}', 'tracker/{value}',
+      'https://a b/{value}', `https://x.example.com/${'a'.repeat(600)}{value}`, 42, null]) {
+      expect(normalizeTagLink(bad), String(bad)).toBeNull();
+    }
+  });
+
+  it('puts the value in, URL-encoded, in every slot', () => {
+    expect(tagHref('https://tracker.example.com/{value}', 'ticket:V1234567890')).toBe('https://tracker.example.com/V1234567890');
+    expect(tagHref('https://x.example.com/?q={value}&again={value}', 'label:a b/c')).toBe('https://x.example.com/?q=a%20b%2Fc&again=a%20b%2Fc');
+    expect(tagHref('', 'ticket:V1')).toBeUndefined();
+  });
+
+  it('resolves the user over a plugin, the exact tag over its key, and the user\'s empty link takes one away', () => {
+    const compiled = compileTagDisplay([], [
+      link('ticket:*', 'https://plugin.example.com/{value}', 'plugin', 'ticket-runs'),
+      link('ticket:*', 'https://second.example.com/{value}', 'plugin', 'other'),
+      link('ticket:V2', 'https://user.example.com/{value}', 'user'),
+      link('docs:*', 'https://docs.example.com/{value}', 'plugin', 'ticket-runs'),
+      link('docs:*', '', 'user'),
+    ]);
+    expect(compiled.linkFor('ticket:V1')).toBe('https://plugin.example.com/V1');
+    expect(compiled.linkFor('ticket:V2')).toBe('https://user.example.com/V2');
+    expect(compiled.linkRuleFor('ticket:V1')?.pluginId).toBe('ticket-runs');
+    expect(compiled.linkFor('docs:readme')).toBeUndefined();
+    expect(compiled.linkRuleFor('docs:readme')?.source).toBe('user');
+    expect(compiled.linkFor('sev:2')).toBeUndefined();
+  });
+
+  it('ignores a malformed link, a plugin\'s empty one, and any link on a machine tag', () => {
+    const compiled = compileTagDisplay([], [
+      link('ticket:*', 'javascript:{value}', 'plugin', 'p'),
+      link('sev:*', '', 'plugin', 'p'),
+      link('walnut:*', 'https://x.example.com/{value}', 'user'),
+      { pattern: 'x:*', link: 'https://x.example.com/{value}', source: 'builtin' as 'user' },
+    ]);
+    expect(compiled.linkFor('ticket:V1')).toBeUndefined();
+    expect(compiled.linkRuleFor('sev:2')).toBeUndefined();
+    expect(compiled.linkFor('walnut:external-sessions')).toBeUndefined();
+    expect(compiled.linkFor('x:1')).toBeUndefined();
+  });
+
+  it('leaves the display alone, and an older caller with no links compiles as before', () => {
+    const compiled = compileTagDisplay([rule('ticket:*', 'value', 'plugin', 'ticket-runs')], [link('ticket:*', 'https://t.example.com/{value}', 'plugin', 'ticket-runs')]);
+    expect(compiled.display('ticket:V1')).toBe('value');
+    expect(compileTagDisplay([rule('ticket:*', 'value', 'plugin', 'ticket-runs')]).linkFor('ticket:V1')).toBeUndefined();
   });
 });

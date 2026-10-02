@@ -21,22 +21,26 @@ import {
   type CompiledTagDisplay,
   type TagDisplay,
   type TagDisplayRule,
+  type TagLinkRule,
 } from '../../../src/core/tag-display-rules';
 
-export type { TagDisplay, TagDisplayRule } from '../../../src/core/tag-display-rules';
+export type { TagDisplay, TagDisplayRule, TagLinkRule } from '../../../src/core/tag-display-rules';
 
 const STORAGE_KEY = 'walnut:tag-display.v1';
+const LINKS_STORAGE_KEY = 'walnut:tag-links.v1';
 const PATH = '/api/v1/tasks/meta/tag-display';
 
 interface Snapshot {
   rules: readonly TagDisplayRule[];
+  /** What a tag's pill opens (an older server sends none). */
+  links: readonly TagLinkRule[];
   compiled: CompiledTagDisplay;
   /** True once the server answered in this page. */
   loaded: boolean;
 }
 
-function snapshotOf(rules: readonly TagDisplayRule[], loaded: boolean): Snapshot {
-  return { rules, compiled: compileTagDisplay(rules), loaded };
+function snapshotOf(rules: readonly TagDisplayRule[], links: readonly TagLinkRule[], loaded: boolean): Snapshot {
+  return { rules, links, compiled: compileTagDisplay(rules, links), loaded };
 }
 
 function readStored(): readonly TagDisplayRule[] {
@@ -47,7 +51,15 @@ function readStored(): readonly TagDisplayRule[] {
   return [...BUILTIN_TAG_DISPLAY_RULES, ...DEFAULT_TAG_DISPLAY_RULES];
 }
 
-let snapshot: Snapshot = snapshotOf(readStored(), false);
+function readStoredLinks(): readonly TagLinkRule[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LINKS_STORAGE_KEY) ?? 'null') as unknown;
+    if (Array.isArray(parsed)) return parsed as TagLinkRule[];
+  } catch { /* storage unavailable or malformed: no links until the read answers */ }
+  return [];
+}
+
+let snapshot: Snapshot = snapshotOf(readStored(), readStoredLinks(), false);
 const listeners = new Set<() => void>();
 let wired = false;
 let inflight: Promise<void> | null = null;
@@ -56,9 +68,12 @@ let stale = false;
 // Bumped by every write, so a read that started before it cannot put the old rules back.
 let generation = 0;
 
-function publish(rules: readonly TagDisplayRule[], loaded: boolean): void {
-  snapshot = snapshotOf(rules, loaded);
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(rules)); } catch { /* the page still has them */ }
+function publish(rules: readonly TagDisplayRule[], links: readonly TagLinkRule[], loaded: boolean): void {
+  snapshot = snapshotOf(rules, links, loaded);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rules));
+    localStorage.setItem(LINKS_STORAGE_KEY, JSON.stringify(links));
+  } catch { /* the page still has them */ }
   for (const listener of listeners) listener();
 }
 
@@ -69,9 +84,9 @@ export function loadTagDisplay(): Promise<void> {
   }
   stale = false;
   const started = generation;
-  inflight = apiGet<{ rules: TagDisplayRule[] }>(PATH)
+  inflight = apiGet<{ rules: TagDisplayRule[]; links?: TagLinkRule[] }>(PATH)
     .then((res) => {
-      if (started === generation && Array.isArray(res?.rules)) publish(res.rules, true);
+      if (started === generation && Array.isArray(res?.rules)) publish(res.rules, Array.isArray(res.links) ? res.links : [], true);
     })
     .catch((err: unknown) => {
       // Keep the last known rules: a hidden tag must not reappear because one read failed.
@@ -113,20 +128,21 @@ export async function setTagDisplay(pattern: string, display: TagDisplay | null)
   generation++;
   const before = snapshot.rules;
   const others = before.filter((rule) => !(rule.source === 'user' && rule.pattern === pattern));
-  publish(display === null ? others : [...others, { pattern, display, source: 'user' }], snapshot.loaded);
+  const links = snapshot.links;
+  publish(display === null ? others : [...others, { pattern, display, source: 'user' }], links, snapshot.loaded);
   const mine = generation;
   try {
-    const res = await apiPut<{ rules: TagDisplayRule[] }>(PATH, { pattern, display });
-    if (mine === generation && Array.isArray(res?.rules)) publish(res.rules, true);
+    const res = await apiPut<{ rules: TagDisplayRule[]; links?: TagLinkRule[] }>(PATH, { pattern, display });
+    if (mine === generation && Array.isArray(res?.rules)) publish(res.rules, Array.isArray(res.links) ? res.links : links, true);
   } catch (err) {
-    if (mine === generation) publish(before, snapshot.loaded);
+    if (mine === generation) publish(before, links, snapshot.loaded);
     throw err;
   }
 }
 
 /** Test seam: forget the page's copy. */
 export function _resetTagDisplayStoreForTesting(): void {
-  snapshot = snapshotOf([...BUILTIN_TAG_DISPLAY_RULES, ...DEFAULT_TAG_DISPLAY_RULES], false);
+  snapshot = snapshotOf([...BUILTIN_TAG_DISPLAY_RULES, ...DEFAULT_TAG_DISPLAY_RULES], [], false);
   generation = 0;
   inflight = null;
   stale = false;

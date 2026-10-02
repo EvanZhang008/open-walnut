@@ -41,7 +41,7 @@ export function TaskTagPills({ tags, task, max = 2, className }: { tags?: readon
     <span className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
       {shown.slice(0, max).map((tag) => {
         const text = pillText(tag, compiled);
-        return <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} whole={text.length <= WHOLE_TAG_MAX} />;
+        return <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} whole={text.length <= WHOLE_TAG_MAX} href={compiled.linkFor(tag)} />;
       })}
       {rest.length > 0 && (
         <span className="tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled)).join(', ')}>+{rest.length}</span>

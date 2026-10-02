@@ -305,7 +305,7 @@ function TagsCell({ colId, task }: { colId: string; task: Task }) {
     <span data-col={colId} className="tp-cell-tags" title={shown.join(', ')}>
       {shown.length === 0
         ? <span className="tp-cell-empty">–</span>
-        : shown.map((tag) => <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} />)}
+        : shown.map((tag) => <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} href={compiled.linkFor(tag)} />)}
     </span>
   );
 }

@@ -96,6 +96,10 @@ export function buildTagRows(counts: ReadonlyArray<{ tag: string; count: number 
     Number(b.namespace) - Number(a.namespace) || b.uses - a.uses || a.label.localeCompare(b.label));
 }
 
+function hostOf(href: string): string {
+  try { return new URL(href).host; } catch { return href; }
+}
+
 export function TagsSection() {
   const { rules, compiled } = useTagDisplay();
   const [counts, setCounts] = useState<Array<{ tag: string; count: number }> | null>(null);
@@ -139,13 +143,19 @@ export function TagsSection() {
         ? `${plural(row.tags, 'tag')}, on ${plural(row.uses, 'task')}`
         : plural(row.uses, 'task');
     const rule = compiled.ruleFor(row.probe);
-    if (rule?.source === 'user') return `${size}. Your choice.`;
+    // What the pill opens (a link rule), e.g. "Opens tracker.example.com (Virtual Teammate)."
+    const link = compiled.linkRuleFor(row.probe);
+    const href = link?.link ? compiled.linkFor(row.probe) : undefined;
+    const opens = href
+      ? ` Opens ${hostOf(href)}${link?.source === 'plugin' ? ` (${link.pluginName ?? link.pluginId ?? 'a plugin'})` : ''}.`
+      : '';
+    if (rule?.source === 'user') return `${size}. Your choice.${opens}`;
     if (rule?.source === 'plugin') {
       const who = rule.pluginName ?? rule.pluginId ?? 'a plugin';
-      return `${size}. ${DISPLAY_WORD[rule.display]} by ${who}.`;
+      return `${size}. ${DISPLAY_WORD[rule.display]} by ${who}.${opens}`;
     }
-    if (rule?.source === 'default') return `${size}. ${DISPLAY_WORD[rule.display]} by Walnut.`;
-    return `${size}.`;
+    if (rule?.source === 'default') return `${size}. ${DISPLAY_WORD[rule.display]} by Walnut.${opens}`;
+    return `${size}.${opens}`;
   };
 
   return (

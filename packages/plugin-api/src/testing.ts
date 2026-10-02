@@ -111,6 +111,8 @@ export interface FakeWalnutResult {
   importLifecycleProjects: string[]
   /** The plugin's live tag display defaults (`tags.setDefaultDisplay`), by pattern. */
   tagDisplayDefaults: Map<string, 'shown' | 'value' | 'hidden'>
+  /** The plugin's live tag links (`tags.setDefaultLink`), by pattern. */
+  tagLinkDefaults: Map<string, string>
   /** The board's pin groups, seeded ones and those the plugin ensured, in order. */
   pinGroups: Array<{ id: string; label: string }>
 }
@@ -134,6 +136,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
   const importLifecycleProjects: string[] = []
   const tagDisplayDefaults = new Map<string, 'shown' | 'value' | 'hidden'>()
+  const tagLinkDefaults = new Map<string, string>()
   const pinGroups: Array<{ id: string; label: string }> = (options.pinGroups ?? []).map((group) => ({ ...group }))
   const knownTiers = new Set(['focus', 'satellite', 'backlog', 'wait', ...(options.customTiers ?? []), ...pinGroups.map((group) => group.id)])
   let nextGroup = 1
@@ -477,6 +480,15 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
           ...[...tagDisplayDefaults].map(([pattern, display]) => ({ pattern, display, source: 'plugin' as const, pluginId: options.pluginId ?? 'test-plugin' })),
         ]
       },
+      setDefaultLink(pattern, link) {
+        if (!pattern?.trim() || pattern.startsWith('walnut:')) throw new Error(`Not a tag rule: "${pattern}"`)
+        if (typeof link !== 'string' || !/^https?:\/\/\S+$/.test(link) || !link.includes('{value}')) throw new Error('A tag link is an http(s) URL with {value} where the tag\'s value goes.')
+        tagLinkDefaults.set(pattern, link)
+        return disposable(() => { if (tagLinkDefaults.get(pattern) === link) tagLinkDefaults.delete(pattern) })
+      },
+      async linkRules() {
+        return [...tagLinkDefaults].map(([pattern, link]) => ({ pattern, link, source: 'plugin' as const, pluginId: options.pluginId ?? 'test-plugin' }))
+      },
     },
     config: {
       async get() { return structuredClone(config) as any },
@@ -671,5 +683,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, importRun, importLifecycleProjects, tagDisplayDefaults, pinGroups }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups }
 }

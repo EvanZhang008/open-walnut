@@ -1,7 +1,8 @@
 /**
  * The tag display rules (tag-display-rules.ts) as the server holds them: the user's rules in
- * config.yaml (`tag_display`, a map of pattern to shown/value/hidden), and plugin defaults in
- * memory for as long as the plugin that set them is running.
+ * config.yaml (`tag_display`, a map of pattern to shown/value/hidden; `tag_links`, a map of
+ * pattern to a link template), and plugin defaults in memory for as long as the plugin that set
+ * them is running.
  *
  * A change is announced as `task:tag-display-changed` (never CONFIG_CHANGED, which also reloads
  * every plugin's settings and rechecks the heartbeat: a plugin declaring its defaults at start
@@ -15,15 +16,19 @@ import {
   DEFAULT_TAG_DISPLAY_RULES,
   isMachineTagPattern,
   isTagDisplay,
+  normalizeTagLink,
   normalizeTagPattern,
   type TagDisplay,
   type TagDisplayRule,
+  type TagLinkRule,
 } from './tag-display-rules.js'
 
-export type { TagDisplay, TagDisplayRule } from './tag-display-rules.js'
+export type { TagDisplay, TagDisplayRule, TagLinkRule } from './tag-display-rules.js'
 
 /** pluginId → pattern → the display its latest call set (the token says which call). */
 const pluginDefaults = new Map<string, Map<string, { display: TagDisplay; token: symbol }>>()
+/** pluginId → pattern → the link template its latest call set. */
+const pluginLinks = new Map<string, Map<string, { link: string; token: symbol }>>()
 const pluginNames = new Map<string, string>()
 
 function announce(source: string): void {
@@ -66,6 +71,59 @@ export function setPluginTagDisplay(pluginId: string, rawPattern: unknown, rawDi
     if (current.size === 0) pluginDefaults.delete(pluginId)
     announce(`plugin/${pluginId}`)
   }
+}
+
+function checkLink(raw: unknown, allowEmpty: boolean): string {
+  const link = normalizeTagLink(raw)
+  if (link === null || (link === '' && !allowEmpty)) throw new Error('A tag link is an http(s) URL with {value} where the tag\'s value goes, like https://tracker.example.com/{value}.')
+  return link
+}
+
+/** A plugin's link for a pattern (`{value}` = the tag's value); the returned function takes it
+ *  back. The user's own link for the same pattern always wins. */
+export function setPluginTagLink(pluginId: string, rawPattern: unknown, rawLink: unknown, pluginName?: string): () => void {
+  const pattern = checkTagPattern(rawPattern)
+  const link = checkLink(rawLink, false)
+  if (pluginName) pluginNames.set(pluginId, pluginName)
+  const own = pluginLinks.get(pluginId) ?? new Map<string, { link: string; token: symbol }>()
+  pluginLinks.set(pluginId, own)
+  const changed = own.get(pattern)?.link !== link
+  const token = Symbol(pattern)
+  own.set(pattern, { link, token })
+  if (changed) announce(`plugin/${pluginId}`)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const current = pluginLinks.get(pluginId)
+    if (current?.get(pattern)?.token !== token) return
+    current.delete(pattern)
+    if (current.size === 0) pluginLinks.delete(pluginId)
+    announce(`plugin/${pluginId}`)
+  }
+}
+
+function userLinks(raw: unknown): TagLinkRule[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  const rules: TagLinkRule[] = []
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const pattern = normalizeTagPattern(key)
+    const link = normalizeTagLink(value)
+    if (!pattern || isMachineTagPattern(pattern) || link === null) continue
+    rules.push({ pattern, link, source: 'user' })
+  }
+  return rules
+}
+
+/** Every link in force: the user's, then plugin defaults. */
+export async function listTagLinkRules(): Promise<TagLinkRule[]> {
+  const config = await getConfig()
+  const plugins: TagLinkRule[] = []
+  for (const [pluginId, links] of pluginLinks) {
+    const pluginName = pluginNames.get(pluginId)
+    for (const [pattern, { link }] of links) plugins.push({ pattern, link, source: 'plugin', pluginId, ...(pluginName ? { pluginName } : {}) })
+  }
+  return [...userLinks(config.tag_links), ...plugins]
 }
 
 function userRules(raw: unknown): TagDisplayRule[] {
@@ -113,9 +171,30 @@ export function setUserTagDisplay(rawPattern: unknown, rawDisplay: unknown): Pro
   return run
 }
 
+/** Set the user's link for a pattern: a template, `''` for no link (over a plugin's), or `null`
+ *  to remove the user's rule. Answers the links now in force. */
+export function setUserTagLink(rawPattern: unknown, rawLink: unknown): Promise<TagLinkRule[]> {
+  const pattern = checkTagPattern(rawPattern)
+  const link = rawLink === null ? null : checkLink(rawLink, true)
+  const run = userQueue.then(async () => {
+    const config = await getConfig()
+    const current = Object.fromEntries(userLinks(config.tag_links).map((rule) => [rule.pattern, rule.link]))
+    if ((current[pattern] ?? null) !== link) {
+      if (link === null) delete current[pattern]
+      else current[pattern] = link
+      await updateConfig({ tag_links: current })
+      announce('user')
+    }
+    return listTagLinkRules()
+  })
+  userQueue = run.catch(() => undefined)
+  return run
+}
+
 /** Test seam: forget every plugin default (module state outlives a test). */
 export function _resetTagDisplayForTesting(): void {
   pluginDefaults.clear()
+  pluginLinks.clear()
   pluginNames.clear()
   userQueue = Promise.resolve()
 }

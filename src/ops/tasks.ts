@@ -738,7 +738,8 @@ defineOp({
     '(walnut:* machine tags never show), user, plugin (with pluginId), or default (Walnut\'s: labels read as their ' +
     'value, created:/updated: dates hidden). The user\'s rule beats a plugin\'s, a plugin\'s beats Walnut\'s default; ' +
     'an exact tag beats its key; a tag no rule names shows whole. Display only: hidden tags are still searched, ' +
-    'filtered (task_list tag) and editable.',
+    'filtered (task_list tag) and editable. `links` says what a tag\'s pill opens: a URL with {value} where the ' +
+    'tag\'s value goes, from the user (an empty link means none) or a plugin (e.g. a ticket key to its tracker).',
   input: {},
   bind: { method: 'GET', path: TAG_DISPLAY_PATH },
   tags: { readonly: true, remote: 'allow' },
@@ -750,11 +751,13 @@ defineOp({
   description:
     'Set the user\'s rule for one tag or a key (`<key>:*`): shown (whole tag), value (only the text after ' +
     'the key, e.g. a ticket id without `ticket:`) or hidden on task pills. display null removes the user\'s ' +
-    'rule, so a plugin default (or Walnut\'s) applies again. walnut:* is fixed. Returns every rule now in ' +
-    'force. Display only: nothing is removed from any task.',
+    'rule, so a plugin default (or Walnut\'s) applies again. walnut:* is fixed. With link instead (or as well), ' +
+    'sets what the pill opens: an http(s) URL with {value} where the tag\'s value goes, "" for no link, null to ' +
+    'remove your link. Returns every rule and link now in force. Display only: nothing is removed from any task.',
   input: {
     pattern: z.string().min(1).describe('One tag (e.g. "label:urgent") or a key as "<key>:*" (e.g. "ticket-id:*")'),
-    display: z.enum(['shown', 'value', 'hidden']).nullable().describe('shown | value | hidden, or null to remove your rule'),
+    display: z.enum(['shown', 'value', 'hidden']).nullable().optional().describe('shown | value | hidden, or null to remove your rule'),
+    link: z.string().nullable().optional().describe('URL template with {value}, e.g. "https://tracker.example.com/{value}"; "" = no link; null removes your link'),
   },
   bind: { method: 'PUT', path: TAG_DISPLAY_PATH },
   tags: { readonly: false, remote: 'deny' },

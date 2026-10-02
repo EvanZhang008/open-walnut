@@ -204,7 +204,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
           {userTags.length > 0 && (
             <span className="task-card-tags">
               {userTags.slice(0, 2).map(tag => (
-                <TagChip key={tag} tag={tag} inline valueOnly={tagDisplay.valueOnly(tag)} />
+                <TagChip key={tag} tag={tag} inline valueOnly={tagDisplay.valueOnly(tag)} href={tagDisplay.linkFor(tag)} />
               ))}
               {userTags.length > 2 && (
                 <span className="tag-chip tag-chip-overflow">+{userTags.length - 2}</span>

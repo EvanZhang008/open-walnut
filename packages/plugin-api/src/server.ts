@@ -283,6 +283,23 @@ export interface TagService {
   setDefaultDisplay(pattern: string, display: TagDisplay): Disposable
   /** Every rule in force: Walnut's, the user's, and plugin defaults. */
   displayRules(): Promise<TagDisplayRule[]>
+  /** What a pill of your own tags opens, for one tag or `<key>:*`: an http(s) URL with `{value}`
+   *  where the tag's value goes (URL-encoded), like `https://tracker.example.com/{value}` for
+   *  `ticket:*`. The user's link for the same tags wins (their empty link means none). Absent on
+   *  a Walnut older than 2026-10: check it exists before calling. Released when your plugin stops. */
+  setDefaultLink?(pattern: string, link: string): Disposable
+  /** Every link in force: the user's, then plugin defaults. */
+  linkRules?(): Promise<TagLinkRule[]>
+}
+
+export interface TagLinkRule {
+  /** One tag, or `<key>:*`. */
+  pattern: string
+  /** A URL with `{value}`; the user's `''` means no link. */
+  link: string
+  source: 'user' | 'plugin'
+  pluginId?: string
+  pluginName?: string
 }
 
 export interface ConfigService {

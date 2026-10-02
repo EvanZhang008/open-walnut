@@ -19,8 +19,11 @@ import { bus, EventNames } from '../../src/core/event-bus.js';
 import {
   _resetTagDisplayForTesting,
   listTagDisplayRules,
+  listTagLinkRules,
   setPluginTagDisplay,
+  setPluginTagLink,
   setUserTagDisplay,
+  setUserTagLink,
 } from '../../src/core/tag-display.js';
 
 const announced: string[] = [];
@@ -105,5 +108,35 @@ describe('user rules', () => {
     await setUserTagDisplay('ticket:*', 'shown');
     expect(mocks.state.stored.tag_display).toEqual({ 'ticket:*': 'shown' });
     expect(() => setUserTagDisplay('ticket:*', 'maybe')).toThrow(/"shown", "value" or "hidden"/);
+  });
+});
+
+describe('tag links', () => {
+  it('lists a plugin link while it is set, after the user\'s, and takes it back on release', async () => {
+    const release = setPluginTagLink('ticket-runs', 'ticket:*', 'https://tracker.example.com/{value}', 'Ticket Runs');
+    expect(await listTagLinkRules()).toEqual([{ pattern: 'ticket:*', link: 'https://tracker.example.com/{value}', source: 'plugin', pluginId: 'ticket-runs', pluginName: 'Ticket Runs' }]);
+    await setUserTagLink('ticket:*', '');
+    expect(mocks.state.stored.tag_links).toEqual({ 'ticket:*': '' });
+    expect((await listTagLinkRules()).map((rule) => `${rule.source}:${rule.link}`)).toEqual(['user:', 'plugin:https://tracker.example.com/{value}']);
+    release();
+    release();
+    expect(await listTagLinkRules()).toEqual([{ pattern: 'ticket:*', link: '', source: 'user' }]);
+    expect(announced).toEqual(['plugin/ticket-runs', 'user', 'plugin/ticket-runs']);
+  });
+
+  it('stores the user\'s link, removes it with null, and refuses a link that is not one', async () => {
+    await setUserTagLink(' docs:* ', 'https://docs.example.com/{value}');
+    await setUserTagLink('docs:*', 'https://docs.example.com/{value}');
+    expect(updateConfig).toHaveBeenCalledTimes(1);
+    await setUserTagLink('docs:*', null);
+    expect(mocks.state.stored.tag_links).toEqual({});
+    expect(() => setUserTagLink('docs:*', 'javascript:{value}')).toThrow(/http\(s\) URL with \{value\}/);
+    expect(() => setPluginTagLink('p', 'docs:*', '')).toThrow(/http\(s\) URL/);
+    expect(() => setPluginTagLink('p', 'walnut:*', 'https://x.example.com/{value}')).toThrow(/never show as tags/);
+  });
+
+  it('keeps only well-formed stored links', async () => {
+    mocks.state.stored = { tag_links: { 'ticket:*': 'https://t.example.com/{value}', 'walnut:*': 'https://x.example.com/{value}', 'bad:*': 'ftp://x/{value}', sev: 7 } };
+    expect(await listTagLinkRules()).toEqual([{ pattern: 'ticket:*', link: 'https://t.example.com/{value}', source: 'user' }]);
   });
 });

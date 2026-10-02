@@ -1347,6 +1347,9 @@ export interface Config {
    *  only: a hidden tag is still searched, filtered and listed in the tag editor. Overrides a
    *  plugin's default and Walnut's for the same tags. */
   tag_display?: Record<string, 'shown' | 'value' | 'hidden'>;
+  /** What a tag's pill opens (core/tag-display-rules.ts): a tag or a key (`ticket:*`) to an
+   *  http(s) URL with `{value}` where the tag's value goes; `''` takes a plugin's link away. */
+  tag_links?: Record<string, string>;
   /** Audio capture configuration (system audio recording) */
   audio?: {
     /** Bundle IDs of apps to exclude from recording (e.g. 'com.spotify.client') */

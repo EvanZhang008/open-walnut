@@ -61,7 +61,7 @@ import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../types.js'
 import { EXTERNAL_IMPORT_EVENT_SOURCE, extendImportLifecycle, externalImportProject, importAutoCompleteAfterDays } from '../sessions/external-session-import.js'
-import { listTagDisplayRules, setPluginTagDisplay } from '../tag-display.js'
+import { listTagDisplayRules, listTagLinkRules, setPluginTagDisplay, setPluginTagLink } from '../tag-display.js'
 import type {
   AdapterCallOptions,
   ModelResult,
@@ -753,6 +753,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       async displayRules() {
         return (await listTagDisplayRules()).map((rule) => ({ ...rule }))
+      },
+      setDefaultLink(pattern: string, link: string) {
+        assertLive('tags.setDefaultLink')
+        return own(toDisposable(setPluginTagLink(pluginId, pattern, link, options.pluginName)))
+      },
+      async linkRules() {
+        return (await listTagLinkRules()).map((rule) => ({ ...rule }))
       },
     },
 

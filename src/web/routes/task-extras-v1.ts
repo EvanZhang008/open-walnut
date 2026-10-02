@@ -81,32 +81,41 @@ taskExtrasV1Router.get('/tasks/meta/tags', async (_req: Request, res: Response, 
 // GET /api/v1/tasks/meta/tag-display — which tags a task shows (core/tag-display-rules.ts):
 // Walnut's own rule, the user's, plugin defaults and Walnut's defaults. Clients compile them once and filter
 // the pills they draw; `task:tag-display-changed` says when to read them again.
+// `links` (additive, 2026-10): what a tag's pill opens, the user's then plugin defaults.
 taskExtrasV1Router.get('/tasks/meta/tag-display', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { listTagDisplayRules } = await import('../../core/tag-display.js')
-    res.json({ rules: await listTagDisplayRules() })
+    const { listTagDisplayRules, listTagLinkRules } = await import('../../core/tag-display.js')
+    res.json({ rules: await listTagDisplayRules(), links: await listTagLinkRules() })
   } catch (err) {
     next(err)
   }
 })
 
 // PUT /api/v1/tasks/meta/tag-display { pattern, display: 'shown' | 'value' | 'hidden' | null }:
-// the user's rule for one tag or `<key>:*` (null removes it). Answers the rules in force.
-// Primary only: the rules live in the primary's config.yaml.
+// the user's rule for one tag or `<key>:*` (null removes it). `{ pattern, link }` instead sets
+// the user's link (a template with {value}, '' for none, null removes it). Answers the rules
+// and links in force. Primary only: the rules live in the primary's config.yaml.
 taskExtrasV1Router.put('/tasks/meta/tag-display', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (replicaRefused(res, 'Changing which tags show')) return
-    const { pattern, display } = (req.body ?? {}) as { pattern?: unknown; display?: unknown }
-    const { setUserTagDisplay } = await import('../../core/tag-display.js')
-    let rules
+    const body = (req.body ?? {}) as { pattern?: unknown; display?: unknown; link?: unknown }
+    const { setUserTagDisplay, setUserTagLink, listTagDisplayRules, listTagLinkRules } = await import('../../core/tag-display.js')
+    const { isTagDisplay } = await import('../../core/tag-display-rules.js')
+    const withDisplay = !('link' in body) || 'display' in body
+    // Both in one body: a bad display is refused before the link is written.
+    if (withDisplay && body.display !== null && !isTagDisplay(body.display)) {
+      sendError(res, 400, 'bad_request', 'display must be "shown", "value" or "hidden".')
+      return
+    }
     try {
-      rules = await setUserTagDisplay(pattern, display)
+      if ('link' in body) await setUserTagLink(body.pattern, body.link)
+      if (withDisplay) await setUserTagDisplay(body.pattern, body.display)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (/tag rule names|display must be|never show as tags/.test(msg)) { sendError(res, 400, 'bad_request', msg); return }
+      if (/tag rule names|display must be|never show as tags|tag link is/.test(msg)) { sendError(res, 400, 'bad_request', msg); return }
       throw err
     }
-    res.json({ rules })
+    res.json({ rules: await listTagDisplayRules(), links: await listTagLinkRules() })
   } catch (err) {
     next(err)
   }

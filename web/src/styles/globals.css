@@ -21141,6 +21141,39 @@ td.usage-share-col {
   text-overflow: ellipsis;
 }
 
+/* A linked tag (a link rule): the pill itself is the link, or holds it beside a remove
+   button. It reads like any pill; the hover underline says it opens something. */
+a.tag-chip,
+.tag-chip-link,
+.tag-chip-link:hover {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+/* The pill's own colour, over the page's `a` and `a:hover`. */
+a.tag-chip,
+a.tag-chip:hover {
+  color: #8944AB;
+}
+:root[data-theme="dark"] a.tag-chip,
+:root[data-theme="dark"] a.tag-chip:hover {
+  color: #BF5AF2;
+}
+.tag-chip-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+a.tag-chip:hover .tag-chip-value,
+.tag-chip-link:hover .tag-chip-value {
+  text-decoration: underline;
+}
+a.tag-chip:focus-visible,
+.tag-chip-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .tag-chip-clickable {
   cursor: pointer;
 }
