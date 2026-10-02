@@ -12,8 +12,10 @@ import {
   HOME_CHAT_VISIBLE_DEFAULT,
   LS_HOME_CHAT_VISIBLE_KEY,
   firstDraftDecisionReady,
+  hasHomeChatChoice,
   readHomeChatVisible,
   shouldAutoOpenFirstDraft,
+  showHomeChatToggle,
   type FirstDraftInput,
 } from '../../web/src/pages/home-panel-flags';
 
@@ -60,6 +62,29 @@ const emptyBoard: FirstDraftInput = {
   chatVisible: false,
   narrowLayout: false,
 };
+
+describe('showHomeChatToggle', () => {
+  it('hides the Ask Walnut toggle on a browser that never opened the chat spot', () => {
+    expect(hasHomeChatChoice(storageWith(null))).toBe(false);
+    expect(showHomeChatToggle(storageWith(null), false)).toBe(false);
+  });
+
+  it('shows it while the spot is open, before anything is stored', () => {
+    expect(showHomeChatToggle(storageWith(null), true)).toBe(true);
+  });
+
+  it('keeps it once the spot was opened or closed on purpose', () => {
+    expect(hasHomeChatChoice(storageWith('true'))).toBe(true);
+    expect(hasHomeChatChoice(storageWith('false'))).toBe(true);
+    expect(showHomeChatToggle(storageWith('false'), false)).toBe(true);
+  });
+
+  it('treats an unknown value, missing storage or a throwing storage as no choice', () => {
+    expect(showHomeChatToggle(storageWith('maybe'), false)).toBe(false);
+    expect(showHomeChatToggle(null, false)).toBe(false);
+    expect(showHomeChatToggle({ getItem: () => { throw new Error('denied'); } }, false)).toBe(false);
+  });
+});
 
 describe('shouldAutoOpenFirstDraft', () => {
   it('opens on a settled, empty board with nothing open', () => {

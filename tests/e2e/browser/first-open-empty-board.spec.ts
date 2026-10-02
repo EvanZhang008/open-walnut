@@ -168,12 +168,14 @@ test('a new install opens on an empty board with one New task draft and no chat'
   await emptyBoardFor(page)
   await openFirstScreen(page, baseURL!)
 
-  // Nothing was chosen yet, so nothing is stored: the hidden chat is the default.
+  // Nothing was chosen yet, so nothing is stored: the hidden chat is the default,
+  // and so is its toggle: no second "Ask Walnut" entry beside New task, in the
+  // sidebar or the Focus Dock, until the spot has been opened once.
   expect(await page.evaluate((key) => localStorage.getItem(key), CHAT_VISIBLE_KEY)).toBeNull()
   await expectChatHidden(page)
-  await expect(sidebarAskWalnut(page)).toBeVisible()
-  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-label', 'Ask Walnut')
-  await expect(sidebarAskWalnut(page)).not.toHaveClass(/active/)
+  await expect(page.locator('.sidebar-home-panels')).toBeVisible()
+  await expect(sidebarAskWalnut(page)).toHaveCount(0)
+  await expect(page.locator('.dock-chat-item')).toHaveCount(0)
 
   // ONE draft column, titled for what it makes, with the caret already in it.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
@@ -278,6 +280,10 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
   await page.waitForTimeout(1_500)
   await expect(drafts(page)).toHaveCount(0)
+  // The spot is open, so its toggle is there to close it with.
+  await expect(sidebarAskWalnut(page)).toBeVisible()
+  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-label', 'Ask Walnut')
+  await expect(sidebarAskWalnut(page)).toHaveClass(/active/)
 
   // Closing it from the sidebar stores the choice, and a reload keeps it closed.
   await sidebarAskWalnut(page).click()
@@ -286,6 +292,10 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await page.reload()
   await expect(emptyBoard(page)).toBeVisible({ timeout: 30_000 })
   await expectChatHidden(page)
+  // A user who closed it knows it exists: the toggle stays, inactive.
+  await expect(sidebarAskWalnut(page)).toBeVisible()
+  await expect(sidebarAskWalnut(page)).not.toHaveClass(/active/)
+  // (The Focus Dock's cell follows the same rule; home-panel-visibility-relaunch covers it.)
   // Hidden again means a new-install screen again: the draft opens.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
 

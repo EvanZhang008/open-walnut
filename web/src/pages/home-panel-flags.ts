@@ -26,6 +26,28 @@ export function readHomeChatVisible(storage: Pick<Storage, 'getItem'> | null | u
   return HOME_CHAT_VISIBLE_DEFAULT;
 }
 
+/** Has this browser ever opened (or then closed) the chat spot? */
+export function hasHomeChatChoice(storage: Pick<Storage, 'getItem'> | null | undefined): boolean {
+  try {
+    const stored = storage?.getItem(LS_HOME_CHAT_VISIBLE_KEY);
+    return stored === 'true' || stored === 'false';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE ASK WALNUT TOGGLE STARTS HIDDEN TOO. The sidebar's "Ask Walnut" button and
+ * the Focus Dock's chat cell show only once the spot is open or was once opened
+ * (user, 2026-10-01: a second Ask Walnut entry beside New task made a new user ask
+ * which one to use). The spot still opens on its own when an ask is located from
+ * the board, and that first open stores the choice, so the toggle appears exactly
+ * when there is something to close and stays for good after that.
+ */
+export function showHomeChatToggle(storage: Pick<Storage, 'getItem'> | null | undefined, chatVisible: boolean): boolean {
+  return chatVisible || hasHomeChatChoice(storage);
+}
+
 /** Everything the first-open decision looks at, read once per render. */
 export interface FirstDraftInput {
   /** MainPage is the route on screen (it stays mounted behind other routes). */

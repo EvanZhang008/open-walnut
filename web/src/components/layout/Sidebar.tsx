@@ -27,7 +27,7 @@ import { useAttentionDots } from '@/hooks/useAttentionDots';
 import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
 import { hostSettingsHref } from '@/utils/host-settings-nav';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
-import { HOME_CHAT_VISIBLE_DEFAULT, readHomeChatVisible } from '@/pages/home-panel-flags';
+import { HOME_CHAT_VISIBLE_DEFAULT, readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import '@/styles/attention-banner.css';
 import '@/styles/bell-dot.css';
 
@@ -99,6 +99,11 @@ export function Sidebar({
   const [chatVisible, setChatVisible] = useState<boolean>(
     () => readHomeChatVisible(localStorage)
   );
+  // The Ask Walnut toggle itself: absent until the chat spot has been opened once
+  // (home-panel-flags.ts). Flips on the first open and never back within a load.
+  const [chatToggleShown, setChatToggleShown] = useState<boolean>(
+    () => showHomeChatToggle(localStorage, readHomeChatVisible(localStorage))
+  );
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => localStorage.getItem(LS_TODO_VISIBLE_KEY) !== 'false'
   );
@@ -111,7 +116,9 @@ export function Sidebar({
 
   useEffect(() => {
     const handleChatVisible = (e: Event) => {
-      setChatVisible((e as CustomEvent).detail?.visible ?? HOME_CHAT_VISIBLE_DEFAULT);
+      const visible = (e as CustomEvent).detail?.visible ?? HOME_CHAT_VISIBLE_DEFAULT;
+      setChatVisible(visible);
+      if (visible) setChatToggleShown(true);
     };
     const handleTodoVisible = (e: Event) => {
       setTodoVisible((e as CustomEvent).detail?.visible ?? true);
@@ -161,15 +168,17 @@ export function Sidebar({
         <TaskPanelIcon />
         <span className="sidebar-label">Task panel</span>
       </button>
-      <button
-        className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
-        onClick={handleToggleChat}
-        aria-label="Ask Walnut"
-        title={collapsed ? 'Ask Walnut' : undefined}
-      >
-        <ChatBubbleIcon />
-        <span className="sidebar-label">Ask Walnut</span>
-      </button>
+      {chatToggleShown && (
+        <button
+          className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
+          onClick={handleToggleChat}
+          aria-label="Ask Walnut"
+          title={collapsed ? 'Ask Walnut' : undefined}
+        >
+          <ChatBubbleIcon />
+          <span className="sidebar-label">Ask Walnut</span>
+        </button>
+      )}
       <button
         className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
         onClick={handleToggleCalendarPanel}

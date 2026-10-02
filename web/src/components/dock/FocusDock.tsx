@@ -11,7 +11,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { ICON_CHAT } from '@/components/common/Icons';
-import { readHomeChatVisible } from '@/pages/home-panel-flags';
+import { readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useDragGesture } from '@/hooks/useDragGesture';
 
@@ -314,6 +314,10 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
   const [chatVisible, setChatVisible] = useState<boolean>(
     () => readHomeChatVisible(localStorage)
   );
+  // The chat cell is absent until the spot has been opened once (home-panel-flags.ts).
+  const [chatCellShown, setChatCellShown] = useState<boolean>(
+    () => showHomeChatToggle(localStorage, readHomeChatVisible(localStorage))
+  );
 
   useEffect(() => {
     const onTask = (e: Event) => {
@@ -324,6 +328,7 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
     const onChatVisibility = (e: Event) => {
       const { visible } = (e as CustomEvent).detail as { visible: boolean };
       setChatVisible(visible);
+      if (visible) setChatCellShown(true);
     };
     window.addEventListener('dock:activate-task', onTask);
     window.addEventListener('dock:activate-chat', onChat);
@@ -377,8 +382,8 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
         <div className="dock-resize-handle" onPointerDown={resizePointerDown} />
       )}
       <div className="dock-content">
-        <ChatDockItem isActive={chatVisible} />
-        {hasPinnedTasks && <div className="dock-divider" />}
+        {chatCellShown && <ChatDockItem isActive={chatVisible} />}
+        {chatCellShown && hasPinnedTasks && <div className="dock-divider" />}
         {pinnedTasks.map((task) => (
           <DockTaskCard
             key={task.id}

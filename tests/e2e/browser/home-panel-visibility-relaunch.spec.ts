@@ -78,8 +78,17 @@ async function expectChatHidden(page: Page): Promise<void> {
   await expect.poll(() => chatSpotWidth(page), { timeout: 15_000, message: 'chat spot still open' }).toBeLessThanOrEqual(1)
   // Hidden means UNMOUNTED, not a zero-width live panel.
   await expect(slot(page)).toHaveCount(0)
-  await expect(sidebarChat(page)).not.toHaveClass(/active/)
-  await expect(dockChat(page)).not.toHaveClass(/dock-chat-active/)
+  // The toggles exist only once the spot was opened once (home-panel-flags.ts);
+  // when they do, they read closed.
+  if (await sidebarChat(page).count()) await expect(sidebarChat(page)).not.toHaveClass(/active/)
+  if (await dockChat(page).count()) await expect(dockChat(page)).not.toHaveClass(/dock-chat-active/)
+}
+
+/** A browser that never opened the chat spot has no toggle for it anywhere. */
+async function expectNoChatToggle(page: Page): Promise<void> {
+  await expect(page.locator('.sidebar-home-panels')).toBeVisible({ timeout: 30_000 })
+  await expect(sidebarChat(page)).toHaveCount(0)
+  await expect(dockChat(page)).toHaveCount(0)
 }
 
 async function expectChatOpen(page: Page): Promise<void> {
@@ -97,7 +106,7 @@ async function boot(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
-  await expect(sidebarChat(page)).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.sidebar-home-panels')).toBeVisible({ timeout: 30_000 })
 }
 
 /**
@@ -126,15 +135,26 @@ async function relaunch(browser: Browser, page: Page): Promise<Page> {
 // ── Scenarios ────────────────────────────────────────────────────────────────
 
 test('the chat starts hidden; opened it survives a relaunch, and closed with its × it stays closed', async ({ browser, page }) => {
-  // A new install: hidden, and nothing stored for it (home-panel-flags.ts).
+  // A new install: hidden, nothing stored for it, and no toggle for it either
+  // (home-panel-flags.ts): the spot first opens from an ask on the board.
   await boot(page)
   await expectChatHidden(page)
+  await expectNoChatToggle(page)
   expect(await stored(page, CHAT_KEY)).toBeNull()
 
-  // Relaunch #1 without a choice: still the default.
+  // Relaunch #1 without a choice: still the default, still no toggle.
   let next = await relaunch(browser, page)
   await expectChatHidden(next)
+  await expectNoChatToggle(next)
   expect(await stored(next, CHAT_KEY)).toBeNull()
+
+  // A browser where the spot was once opened and then closed (the stored 'false'
+  // an ask's Locate and a × leave behind) has the toggle, reading closed.
+  await next.evaluate((key) => localStorage.setItem(key, 'false'), CHAT_KEY)
+  next = await relaunch(browser, next)
+  await expectChatHidden(next)
+  await expect(sidebarChat(next)).toBeVisible()
+  await expect(dockChat(next)).toBeVisible()
 
   // Open it from the sidebar, then relaunch #2: the explicit open is kept.
   await sidebarChat(next).click()
