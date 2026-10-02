@@ -8,8 +8,9 @@
  *   POST   /tasks/:id/board/edits            { edits, version? }     → { board }
  *   POST   /tasks/:id/board/threads/:thread  { text }                → 201 { message, delivery }
  *   DELETE /tasks/:id/board/threads/:thread/messages/:message       → { message } (the removed one)
- *   PUT    /tasks/:id/board/marks/:mark      { state?, note? }       → { mark | null }
- *   PUT    /tasks/:id/board/projects/:project { title?, status?, tasks?, delete? } → { project | null }
+ *   PUT    /tasks/:id/board/marks/:mark      { note?, state? (legacy) } → { mark | null }
+ *   PUT    /tasks/:id/board/projects/:project { title?, status?, tasks?, delete?, override_user? }
+ *                                                → { project | null, delivery? (a human's new status) }
  *   PUT    /tasks/:id/board/checks/:check    { read, hash? }         → { check | null, hash } (humans only)
  *   PUT    /tasks/:id/board/choices/:choice  { option }              → { choice | null, delivery } (humans only)
  *   PUT    /tasks/:id/board/reminders/:target { at | null, note? }   → { reminder | null }
@@ -23,7 +24,10 @@
  * only (it IS the answer). A human may delete any thread message, a session only
  * its own (403 not_author). Read ticks, choices and sections seen are the
  * user's word, so a session gets 403 human_only. A board project is one area
- * of this board (a cause, a ticket), not a Walnut project. A team shares one
+ * of this board (a cause, a ticket), not a Walnut project; the user picks its
+ * status on the page too, that pick is delivered like a choice, and a session's
+ * write that would change it is 409 status_set_by_user unless it passes
+ * `override_user: true`. A team shares one
  * board: `?team=1` and `/owner` answer with the nearest ancestor that has one
  * (else the root of the tree).
  *
@@ -52,7 +56,7 @@ import {
 import {
   BOARD_PROJECT_MAX_TASKS,
   boardCheckStates,
-  setBoardProject,
+  writeBoardProject,
   setBoardCheck,
   setBoardChoice,
   setBoardReminder,
@@ -60,6 +64,7 @@ import {
 } from '../../core/boards/board-items.js'
 import {
   buildChoicePrompt,
+  buildProjectStatusPrompt,
   deliverBoardText,
   threadHeading,
   buildBoardThreadPrompt,
@@ -335,15 +340,29 @@ boardV1Router.put('/tasks/:id/board/projects/:project', route(async (req, res) =
   const b = body(req)
   const title = optionalString(b, 'title')
   const status = optionalString(b, 'status')
-  if (b.delete !== undefined && typeof b.delete !== 'boolean') throw new RouteError(400, 'bad_request', '`delete` must be a boolean')
+  for (const field of ['delete', 'override_user'] as const) {
+    if (b[field] !== undefined && typeof b[field] !== 'boolean') throw new RouteError(400, 'bad_request', `\`${field}\` must be a boolean`)
+  }
   const tasks = await resolveProjectTasks(b.tasks)
-  const project = await setBoardProject(task.id, param(req.params.project), {
+  const projectId = param(req.params.project)
+  const by = writer(caller)
+  const out = await writeBoardProject(task.id, projectId, {
     ...(title !== undefined ? { title } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(tasks !== undefined ? { tasks } : {}),
     ...(b.delete === true ? { delete: true } : {}),
-  }, { by: writer(caller) })
-  res.json({ project })
+  }, { by, overrideUser: b.override_user === true })
+  // The user's pick reaches the board's session like a choice answer; a session's own write is its own news.
+  if (by === 'human' && out.statusChanged && out.project?.status) {
+    const text = buildProjectStatusPrompt(projectId, out.project, out.previous, task.id)
+    const delivery = await deliverBoardText(task.id, text, { project: projectId, status: out.project.status })
+    log.web.info('board project status set by the user', {
+      taskId: task.id, project: projectId, status: out.project.status, was: out.previous?.status ?? '', delivery: delivery.state,
+    })
+    res.json({ project: out.project, delivery })
+    return
+  }
+  res.json({ project: out.project })
 }))
 
 boardV1Router.put('/tasks/:id/board/checks/:check', route(async (req, res) => {

@@ -79,6 +79,9 @@ export interface BoardProject {
   tasks?: string[];
   updated_at: string;
   updated_by: BoardWriter;
+  /** Who last changed the status (the user picks one on the page too), and when. */
+  status_by?: BoardWriter;
+  status_at?: string;
 }
 
 /** The user's read tick on a `<walnut-check>` point: the hash of the version they read. */

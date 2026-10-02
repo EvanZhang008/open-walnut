@@ -454,9 +454,9 @@ describe('round two', () => {
   describe('projects', () => {
     it('the human, the leader and a worker write a project; partial updates keep the rest; tasks resolve to full ids', async () => {
       events = []
-      const made = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { title: 'Cache TTL', status: 'decide' } })
+      const made = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid: crew.sid.boss, body: { title: 'Cache TTL', status: 'decide' } })
       expect(made.status).toBe(200)
-      expect(made.json.project).toMatchObject({ title: 'Cache TTL', status: 'decide', updated_by: 'human' })
+      expect(made.json).toEqual({ project: expect.objectContaining({ title: 'Cache TTL', status: 'decide', updated_by: `task:${crew.boss}` }) })
       const byLeader = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid: crew.sid.boss, body: { status: 'wip' } })
       expect(byLeader.json.project).toMatchObject({ title: 'Cache TTL', status: 'wip', updated_by: `task:${crew.boss}` })
       // A unique prefix is stored as the full id; the list is a full replacement.
@@ -466,15 +466,62 @@ describe('round two', () => {
       expect(byWorker.json.project).toMatchObject({ title: 'Cache TTL', status: 'wip', tasks: [crew.w1, crew.w1a], updated_by: `task:${crew.w1}` })
       const replaced = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { tasks: [crew.w1a] } })
       expect(replaced.json.project.tasks).toEqual([crew.w1a])
-      // status "" clears it.
+      // status "" clears it (a cleared status is nothing to tell the leader).
       const cleared = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { status: '' } })
       expect(cleared.json.project).not.toHaveProperty('status')
+      expect(cleared.json).not.toHaveProperty('delivery')
+      expect(performSessionSendMock).not.toHaveBeenCalled()
       expect(events.map((e) => e.data)).toEqual(Array(5).fill({ taskId: crew.boss, kind: 'project', project: 'cause-a', version: expect.any(Number) }))
 
       const got = await call('GET', boardPath(crew.boss))
       expect(got.json.projects['cause-a']).toMatchObject({ title: 'Cache TTL', tasks: [crew.w1a] })
       // The project's tasks join the refs, so the frame can draw chips for them.
       expect(got.json.refs).toContainEqual({ ref: crew.w1a, id: crew.w1a, title: 'Cache sub-worker', phase: 'TODO', status: 'todo' })
+    })
+
+    it('the user picks a status: stored as theirs, delivered once, and a session replaces it only by saying so', async () => {
+      await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid: crew.sid.boss, body: { title: 'Cache TTL', status: 'wip' } })
+      const picked = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { status: 'wait' } })
+      expect(picked.status).toBe(200)
+      expect(picked.json).toEqual({
+        project: expect.objectContaining({ status: 'wait', status_by: 'human', status_at: expect.any(String) }),
+        delivery: { state: 'queued', sessionId: 'leader-session' },
+      })
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+      const input = performSessionSendMock.mock.calls[0][0] as { to: string; text: string; callerSid?: string; expectReply?: boolean }
+      expect(input).toMatchObject({ to: crew.boss, callerSid: undefined, expectReply: false })
+      expect(input.text).toMatch(/^On your Board the user set project "Cache TTL" \(cause-a\) to wait \(Waiting on others\); it was wip \(In progress\), set by you\. /)
+      expect(input.text).toContain('override_user: true')
+      // The same status again is not news.
+      const again = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { status: 'wait' } })
+      expect(again.json).not.toHaveProperty('delivery')
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+
+      // The leader and a worker cannot move it silently; the answer names the user's pick.
+      for (const sid of [crew.sid.boss, crew.sid.w1]) {
+        const refused = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid, body: { status: 'done' } })
+        expect(refused.status).toBe(409)
+        expect(refused.json).toMatchObject({
+          error: { code: 'status_set_by_user', message: expect.stringContaining('override_user: true') },
+          project: 'cause-a', status: 'wait', status_at: picked.json.project.status_at,
+        })
+      }
+      // Leaving the status alone goes through, and it stays the user's.
+      const titled = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid: crew.sid.boss, body: { title: 'Cache TTL (prod)' } })
+      expect(titled.json.project).toMatchObject({ title: 'Cache TTL (prod)', status: 'wait', status_by: 'human', updated_by: `task:${crew.boss}` })
+      expect((await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid: crew.sid.boss, body: { override_user: 'yes' } })).status).toBe(400)
+      const overridden = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, {
+        sid: crew.sid.boss, body: { status: 'done', override_user: true },
+      })
+      expect(overridden.json).toEqual({ project: expect.objectContaining({ status: 'done', status_by: `task:${crew.boss}` }) })
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1) // a session's own write is not delivered
+
+      // A send that fails still leaves the pick stored.
+      performSessionSendMock.mockRejectedValueOnce(new Error('boom'))
+      const stored = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { status: 'decide' } })
+      expect(stored.json).toMatchObject({ project: { status: 'decide', status_by: 'human' }, delivery: { state: 'stored', reason: 'delivery_failed' } })
+      expect(performSessionSendMock.mock.calls[1][0].text).toMatch(/it was done \(Done\), set by you\./)
+      expect((await getBoard(crew.boss))!.projects['cause-a']).toMatchObject({ status: 'decide', status_by: 'human' })
     })
 
     it('a project with nothing left, or delete: true, is removed', async () => {

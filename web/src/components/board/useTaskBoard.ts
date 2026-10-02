@@ -9,7 +9,7 @@
  * Every load carries a sequence number; a response older than the newest
  * request is dropped, so a slow read can never put back state a newer one (or
  * a local merge) already moved past. A local merge (the user's own post,
- * delete, mark, tick, answer, reminder or seen section) invalidates reads in
+ * delete, note, status pick, tick, answer, reminder or seen section) invalidates reads in
  * flight and schedules a fresh one, so the merged row is never flickered away
  * by a read that started before it existed.
  */
@@ -19,7 +19,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import {
   mergeBoardMessage, type BoardCheck, type BoardChoice, type BoardMark, type BoardMessage, type BoardPayload,
-  type BoardReminder, type BoardSectionSeen,
+  type BoardProject, type BoardReminder, type BoardSectionSeen,
 } from './board-model';
 import { dropDueReminder, recordOf, setEntry } from './board-items-model';
 
@@ -71,6 +71,7 @@ export interface TaskBoardData {
   /** The user's delete, answered by its route: the message leaves (an emptied thread goes too). */
   dropMessage: (thread: string, messageId: string) => void;
   mergeMark: (markId: string, mark: BoardMark | null) => void;
+  mergeProject: (projectId: string, project: BoardProject | null) => void;
   mergeCheck: (checkId: string, check: BoardCheck | null) => void;
   mergeChoice: (choiceId: string, choice: BoardChoice | null) => void;
   mergeReminder: (target: string, reminder: BoardReminder | null) => void;
@@ -159,6 +160,10 @@ export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): 
     merge('after-mark', (p) => ({ ...p, marks: setEntry(p.marks, markId, mark) }));
   }, [merge]);
 
+  const mergeProject = useCallback((projectId: string, project: BoardProject | null) => {
+    merge('after-project', (p) => ({ ...p, projects: setEntry(p.projects, projectId, project) }));
+  }, [merge]);
+
   const mergeCheck = useCallback((checkId: string, check: BoardCheck | null) => {
     merge('after-check', (p) => ({ ...p, checks: setEntry(p.checks, checkId, check) }));
   }, [merge]);
@@ -182,7 +187,7 @@ export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): 
   const reload = useCallback(() => { void load('manual'); }, [load]);
 
   return {
-    payload, loading, error, reload, mergeMessage, dropMessage, mergeMark, mergeCheck, mergeChoice, mergeReminder,
-    mergeSectionSeen,
+    payload, loading, error, reload, mergeMessage, dropMessage, mergeMark, mergeProject, mergeCheck, mergeChoice,
+    mergeReminder, mergeSectionSeen,
   };
 }

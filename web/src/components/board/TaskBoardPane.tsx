@@ -38,13 +38,14 @@ import { BOARD_RUNTIME_CSS } from './board-runtime.css.ts';
 import {
   BOARD_SEEN_PREFIX, advanceSeen, boardWriterLabel, buildFrameRefs, frameRefsEqual, newBoardNonce, parseSeen,
   safeExternalHref, threadAuthorIds, wrapBoardHtml,
-  type BoardCheck, type BoardChoice, type BoardMark, type BoardMessage, type BoardReminder, type BoardSectionSeen,
+  type BoardMessage, type BoardSectionSeen,
   type BoardSeen, type FrameTask, type StoreTaskLike,
 } from './board-model';
 import {
-  boardBarTitle, boardOwnerId, projectTaskIds, changedCheckHash, checkFromRoute, taskLineage,
+  boardBarTitle, boardOwnerId, projectTaskIds, taskLineage,
 } from './board-items-model';
 import { BoardReplyDock, type BoardReplyTarget } from './BoardReplyDock';
+import { useBoardItemSaves } from './useBoardItemSaves';
 import { boardErrorMessage, boardPath, useTaskBoard } from './useTaskBoard';
 import '@/styles/task-board.css';
 
@@ -65,8 +66,6 @@ export const ASK_FOR_BOARD_TEXT = 'Please start a Board for this task: read the 
 const ASKED_MS = 3000;
 /** The frame runtime: the core first (it defines the kit), the message renderer, the elements, the items, then the sections (it hides the kit). */
 const RUNTIME_SRC = `${runtimeCore}\n${runtimeMarkdown}\n${runtimeElements}\n${runtimeItems}\n${runtimeSections}`;
-/** The words the frame shows for a check whose point changed under the click (409 check_changed). */
-const CHECK_CHANGED_TEXT = 'This point changed since you opened it. Read it again.';
 
 function readSeen(taskId: string): BoardSeen {
   try { return parseSeen(window.localStorage.getItem(BOARD_SEEN_PREFIX + taskId)); } catch { return {}; }
@@ -91,8 +90,8 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const lineageKey = taskLineage(taskId, storeById).join('\n');
   const lineage = useMemo(() => lineageKey.split('\n'), [lineageKey]);
   const {
-    payload, loading, error, reload, mergeMessage, dropMessage, mergeMark, mergeCheck, mergeChoice, mergeReminder,
-    mergeSectionSeen,
+    payload, loading, error, reload, mergeMessage, dropMessage, mergeMark, mergeProject, mergeCheck, mergeChoice,
+    mergeReminder, mergeSectionSeen,
   } = useTaskBoard(taskId, lineage);
   const board = payload?.board ?? null;
   // The board's owner: every write, the seen record, the reply drafts and the frame's "Leader" are its.
@@ -142,6 +141,9 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const toFrame = useCallback((msg: FrameMsg) => {
     frameRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
+  const { saveMark, saveProject, saveCheck, saveChoice, saveReminder, keepNoteDraft, noteDrafts } = useBoardItemSaves(
+    ownerId, ownerRef, toFrame, { mergeMark, mergeProject, mergeCheck, mergeChoice, mergeReminder },
+  );
   const frameData = () => ({
     refs, seen,
     threads: payload?.threads ?? {}, marks: payload?.marks ?? {}, projects: payload?.projects ?? {},
@@ -153,8 +155,8 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   latest.current = frameData();
   const postData = useCallback(() => {
     if (!frameReady.current) return;
-    toFrame({ t: 'wn-board:data', boardTaskId: ownerRef.current, ...latest.current });
-  }, [toFrame]);
+    toFrame({ t: 'wn-board:data', boardTaskId: ownerRef.current, ...latest.current, note_drafts: noteDrafts() });
+  }, [toFrame, noteDrafts]);
   useEffect(() => { postData(); }, [
     refs, payload?.threads, payload?.marks, payload?.projects, payload?.checks, payload?.choices, payload?.reminders,
     payload?.section_seen, seen, ownerId, reply?.target.thread, postData,
@@ -230,83 +232,6 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     });
   }, [toFrame, dropMessage]);
 
-  const saveMark = useCallback((reqId: string, markId: string, state: string, note: string) => {
-    const boardTask = ownerRef.current;
-    log.info('board', 'mark saving', { taskId: boardTask, markId, reqId, state });
-    apiPut<{ mark: BoardMark | null }>(`${boardPath(boardTask)}/marks/${encodeURIComponent(markId)}`, { state, note })
-      .then((res) => {
-        log.info('board', 'mark saved', { taskId: boardTask, markId, reqId, state: res.mark?.state ?? '' });
-        if (ownerRef.current !== boardTask) return;
-        toFrame({ t: 'wn-board:ack', reqId, ok: true, mark: res.mark ?? null });
-        mergeMark(markId, res.mark ?? null);
-      }).catch((err: unknown) => {
-        const message = boardErrorMessage(err);
-        log.error('board', 'mark save failed', { taskId: boardTask, markId, reqId, error: message });
-        if (ownerRef.current === boardTask) toFrame({ t: 'wn-board:ack', reqId, ok: false, error: message });
-      });
-  }, [toFrame, mergeMark]);
-
-  /** The user's read tick; a point that changed under the click answers 409 with its new hash. */
-  const saveCheck = useCallback((reqId: string, checkId: string, read: boolean, hash: string) => {
-    const boardTask = ownerRef.current;
-    log.info('board', 'check saving', { taskId: boardTask, checkId, reqId, read });
-    apiPut<{ check: { hash?: string; read_at?: string } | null; hash?: string }>(
-      `${boardPath(boardTask)}/checks/${encodeURIComponent(checkId)}`, read ? { read, hash } : { read },
-    ).then((res) => {
-      const check = checkFromRoute(res, read, hash);
-      log.info('board', 'check saved', { taskId: boardTask, checkId, reqId, read: check.read });
-      if (ownerRef.current !== boardTask) return;
-      toFrame({ t: 'wn-board:ack', reqId, ok: true, check });
-      mergeCheck(checkId, check);
-    }).catch((err: unknown) => {
-      const current = err instanceof ApiError && err.status === 409 ? changedCheckHash(err.body) : null;
-      const message = current ? CHECK_CHANGED_TEXT : boardErrorMessage(err);
-      log.error('board', 'check save failed', { taskId: boardTask, checkId, reqId, error: message, changed: !!current });
-      if (ownerRef.current !== boardTask) return;
-      if (!current) { toFrame({ t: 'wn-board:ack', reqId, ok: false, error: message }); return; }
-      const check: BoardCheck = { hash: current, read: false, changed: true };
-      toFrame({ t: 'wn-board:ack', reqId, ok: false, error: message, check });
-      mergeCheck(checkId, check);
-    });
-  }, [toFrame, mergeCheck]);
-
-  /** The user's answer to a choice: stored, and delivered to the board's session like a thread message. */
-  const saveChoice = useCallback((reqId: string, choiceId: string, option: string) => {
-    const boardTask = ownerRef.current;
-    log.info('board', 'choice saving', { taskId: boardTask, choiceId, reqId, option });
-    apiPut<{ choice: BoardChoice | null; delivery?: { state: string; reason?: string; sessionId?: string } }>(
-      `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { option },
-    ).then((res) => {
-      log.info('board', 'choice saved', {
-        taskId: boardTask, choiceId, reqId, option: res.choice?.option ?? '',
-        delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
-      });
-      if (ownerRef.current !== boardTask) return;
-      toFrame({ t: 'wn-board:ack', reqId, ok: true, choice: res.choice ?? null, delivery: res.delivery ?? null });
-      mergeChoice(choiceId, res.choice ?? null);
-    }).catch((err: unknown) => {
-      const message = boardErrorMessage(err);
-      log.error('board', 'choice save failed', { taskId: boardTask, choiceId, reqId, error: message });
-      if (ownerRef.current === boardTask) toFrame({ t: 'wn-board:ack', reqId, ok: false, error: message });
-    });
-  }, [toFrame, mergeChoice]);
-
-  /** A reminder on a choice or a thread (`at` null clears it). */
-  const saveReminder = useCallback((reqId: string, target: string, at: string | null) => {
-    const boardTask = ownerRef.current;
-    log.info('board', 'reminder saving', { taskId: boardTask, target, reqId, at: at ?? '' });
-    apiPut<{ reminder: BoardReminder | null }>(`${boardPath(boardTask)}/reminders/${encodeURIComponent(target)}`, { at })
-      .then((res) => {
-        log.info('board', 'reminder saved', { taskId: boardTask, target, reqId, at: res.reminder?.at ?? '' });
-        if (ownerRef.current !== boardTask) return;
-        toFrame({ t: 'wn-board:ack', reqId, ok: true, reminder: res.reminder ?? null });
-        mergeReminder(target, res.reminder ?? null);
-      }).catch((err: unknown) => {
-        const message = boardErrorMessage(err);
-        log.error('board', 'reminder save failed', { taskId: boardTask, target, reqId, error: message });
-        if (ownerRef.current === boardTask) toFrame({ t: 'wn-board:ack', reqId, ok: false, error: message });
-      });
-  }, [toFrame, mergeReminder]);
 
   /**
    * What the user last saw of a section (the frame hashes it). A first open
@@ -346,7 +271,13 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         if (str('reqId') && str('thread') && str('id')) deleteThreadMessage(str('reqId'), str('thread'), str('id'));
         return;
       case 'wn-board:mark':
-        if (str('reqId') && str('id')) saveMark(str('reqId'), str('id'), str('state'), str('note'));
+        if (str('reqId') && str('id')) saveMark(str('reqId'), str('id'), str('note'));
+        return;
+      case 'wn-board:note-draft':
+        if (str('id')) keepNoteDraft(str('id'), str('note'));
+        return;
+      case 'wn-board:project':
+        if (str('reqId') && str('id') && str('status')) saveProject(str('reqId'), str('id'), str('status'));
         return;
       case 'wn-board:check':
         if (str('reqId') && str('id') && typeof d.read === 'boolean' && (!d.read || str('hash'))) {

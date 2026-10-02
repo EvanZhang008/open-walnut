@@ -4,7 +4,8 @@
  *
  *   projects    one area of this board (a cause, a ticket; NOT a Walnut project)
  *               and its status (decide / wip / wait / done), owned by Walnut so
- *               the page recolors when the leader changes it;
+ *               the page recolors when the leader or the user changes it (a
+ *               status the user picked is theirs until a session overrides it);
  *   checks      the user's read ticks: the hash of the point they read, so an
  *               edit of the point brings it back unread;
  *   choices     the user's answer to a `<walnut-choice>`;
@@ -77,8 +78,21 @@ export interface ProjectInput {
   delete?: boolean;
 }
 
+/** The words the page shows for each status (the frame's DEFAULT_LABELS). */
+export const BOARD_PROJECT_STATUS_LABELS: Record<BoardProjectStatus, string> = {
+  decide: 'Needs you', wip: 'In progress', wait: 'Waiting on others', done: 'Done',
+};
+
 function isStatus(s: string): s is BoardProjectStatus {
   return (BOARD_PROJECT_STATUSES as readonly string[]).includes(s);
+}
+
+export interface ProjectWrite {
+  project: BoardProject | null;
+  /** The project before this write (null: it did not exist). */
+  previous: BoardProject | null;
+  /** The status itself changed (set, replaced or cleared). */
+  statusChanged: boolean;
 }
 
 /**
@@ -89,8 +103,22 @@ export async function setBoardProject(
   taskId: string,
   id: string,
   input: ProjectInput,
-  opts: { by: BoardWriter },
+  opts: { by: BoardWriter; overrideUser?: boolean },
 ): Promise<BoardProject | null> {
+  return (await writeBoardProject(taskId, id, input, opts)).project;
+}
+
+/**
+ * A status the USER picked stays theirs: a session's write that would change or
+ * remove it is refused (409 status_set_by_user) unless it says so
+ * (`overrideUser`). Title and task changes never touch the status.
+ */
+export async function writeBoardProject(
+  taskId: string,
+  id: string,
+  input: ProjectInput,
+  opts: { by: BoardWriter; overrideUser?: boolean },
+): Promise<ProjectWrite> {
   checkItemId(id, 'project');
   const title = typeof input.title === 'string' ? input.title.trim() : input.title;
   if (typeof title === 'string' && title.length > BOARD_PROJECT_TITLE_MAX) {
@@ -110,26 +138,37 @@ export async function setBoardProject(
     if (tasks.length > BOARD_PROJECT_MAX_TASKS) throw tooMany('tasks in a project', BOARD_PROJECT_MAX_TASKS);
   }
 
-  let result: BoardProject | null = null;
+  let out: ProjectWrite = { project: null, previous: null, statusChanged: false };
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
-    if (input.delete) return { ...current, projects: withoutKey(current.projects, id) };
-    const prev = own(current.projects, id);
-    const project: BoardProject = { ...prev, updated_at: new Date().toISOString(), updated_by: opts.by };
+    const prev = own(current.projects, id) ?? null;
+    const at = new Date().toISOString();
+    const project: BoardProject = { ...prev, updated_at: at, updated_by: opts.by };
     if (title !== undefined) { if (title) project.title = title; else delete project.title; }
     if (status !== undefined) { if (status) project.status = status as BoardProjectStatus; else delete project.status; }
     if (tasks !== undefined) { if (tasks?.length) project.tasks = tasks; else delete project.tasks; }
-    if (!project.title && !project.status && !project.tasks?.length) {
-      return { ...current, projects: withoutKey(current.projects, id) };
+    const removed = !!input.delete || (!project.title && !project.status && !project.tasks?.length);
+    const statusChanged = (removed ? undefined : project.status) !== prev?.status;
+    if (statusChanged && prev?.status && prev.status_by === 'human' && opts.by !== 'human' && !opts.overrideUser) {
+      throw new BoardError('status_set_by_user', 409, { project: id, status: prev.status, status_at: prev.status_at },
+        `The user set project "${id}" to ${prev.status} (${BOARD_PROJECT_STATUS_LABELS[prev.status]})`
+        + `${prev.status_at ? ` at ${prev.status_at}` : ''}. Leave status out to keep their pick, or pass `
+        + 'override_user: true to replace it.');
+    }
+    out = { project: null, previous: prev, statusChanged };
+    if (removed) return { ...current, projects: withoutKey(current.projects, id) };
+    if (statusChanged) {
+      if (project.status) { project.status_by = opts.by; project.status_at = at; }
+      else { delete project.status_by; delete project.status_at; }
     }
     if (!prev && Object.keys(current.projects).length >= BOARD_MAX_PROJECTS) {
       throw tooMany('projects', BOARD_MAX_PROJECTS);
     }
-    result = project;
+    out.project = project;
     return { ...current, projects: { ...current.projects, [id]: project } };
   });
   emitChanged({ taskId, kind: 'project', project: id, version: next.version });
-  return result;
+  return out;
 }
 
 // ── Checks (the user's read ticks) ──

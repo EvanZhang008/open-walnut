@@ -264,17 +264,18 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-3-board.png` })
 
-  // ── 5. A mark: the state saves at once, the note after a pause ──
+  // ── 5. A note for the leader: behind "Add note" until it has text, saved after a pause ──
+  // (no states: a project's status is <walnut-project>'s, tests/e2e/browser/task-board-items.spec.ts)
   const mark = frame.locator('walnut-mark[id="area-a"]')
-  await mark.locator('.wn-mark-state[data-state="revisit"]').click()
-  await expect(mark.locator('.wn-mark-state[data-state="revisit"]')).toHaveAttribute('aria-pressed', 'true')
-  await expect(mark.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
-  // The note sits behind "Note" until it has text.
+  await expect(mark.locator('.wn-mark-state')).toHaveCount(0)
   await expect(mark.locator('.wn-mark-note')).toBeHidden()
+  await expect(mark.locator('.wn-mark-note-toggle')).toHaveText('Add note')
   await mark.locator('.wn-mark-note-toggle').click()
   await mark.locator('.wn-mark-note').fill('Check the rollout tomorrow')
+  await expect(mark.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
   await expect.poll(async () => (await getBoard(leader)).marks['area-a'], { timeout: 10_000 })
-    .toMatchObject({ state: 'revisit', note: 'Check the rollout tomorrow' })
+    .toEqual({ note: 'Check the rollout tomorrow', updated_at: expect.any(String) })
+  await expect(mark.locator('.wn-mark-note-toggle')).toBeHidden()
   stored = await getBoard(leader)
   expect(stored.board?.updated_by).toBe('human')
   await mark.screenshot({ path: `${SHOT_DIR}/${engine}-4-mark.png` })
@@ -315,15 +316,18 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
 
   // ── 5b. A script on the board cannot speak as the user ──
   // The board's html is written by sessions; its scripts run in this frame. A
-  // synthetic click on Reply, a lookup of the runtime's kit and a direct message
-  // to the host all stop short of the reply box, a thread post or a mark.
+  // synthetic click on Reply, a synthetic edit of the note, a lookup of the runtime's
+  // kit and a direct message to the host all stop short of the reply box, a thread
+  // post or a note.
   await dock.getByTestId('board-reply-close').click()
   await expect(dock).toHaveCount(0)
   await frame.locator('body').evaluate(() => {
     const w = window as unknown as { __wnBoardKit?: unknown }
     const thread = document.querySelector('walnut-thread[id="area-a"]')!
     ;(thread.querySelector('.wn-reply') as HTMLButtonElement).click()
-    ;(document.querySelector('walnut-mark[id="area-a"] .wn-mark-state[data-state="reviewed"]') as HTMLButtonElement).click()
+    const note = document.querySelector('walnut-mark[id="area-a"] .wn-mark-note') as HTMLTextAreaElement
+    note.value = 'forged note'
+    note.dispatchEvent(new Event('input', { bubbles: true }))
     if (w.__wnBoardKit) throw new Error('the runtime kit is reachable from the page')
     window.parent.postMessage({ t: 'wn-board:compose', thread: 'area-a', title: 'forged' }, '*')
     window.parent.postMessage({ t: 'wn-board:post', reqId: 'x1', thread: 'area-a', text: 'forged by postMessage' }, '*')
@@ -341,7 +345,7 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await expect(dock).toHaveCount(0)
   stored = await getBoard(leader)
   expect(JSON.stringify(stored.threads)).not.toContain('forged')
-  expect(stored.marks['area-a']).toMatchObject({ state: 'revisit', note: 'Check the rollout tomorrow' })
+  expect(stored.marks['area-a']).toEqual({ note: 'Check the rollout tomorrow', updated_at: expect.any(String) })
   expect(stored.threads['area-a'].map((m) => m.id)).toContain(victim)
   await expect(thread.locator(`.wn-msg[data-id="${victim}"] .wn-del`)).toHaveText('×')
 

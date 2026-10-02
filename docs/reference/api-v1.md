@@ -910,10 +910,19 @@ itself). The `board_*` ops default to the caller's team board.
   thread or message → `404 message_not_found`; no board → `404 no_board`; a
   malformed thread or message id → `400 bad_id`. Emits `board:changed` kind
   `thread`.
-- `PUT /api/v1/tasks/:id/board/marks/:mark { "state"?, "note"? }` → `200 { "mark" }`
-  (both empty removes the mark → `"mark": null`).
+- `PUT /api/v1/tasks/:id/board/marks/:mark { "note"?, "state"? }` → `200 { "mark" }`
+  (both empty removes the mark → `"mark": null`). A mark is the user's note for
+  the leader; `state` is still accepted from older pages, and a write without
+  it drops a stored one (a project's status is the project's, below).
 - `PUT /api/v1/tasks/:id/board/projects/:project { "title"?, "status"?,
-  "tasks"?, "delete"? }` → `200 { "project" }`. Any team member. A partial
+  "tasks"?, "delete"?, "override_user"? }` → `200 { "project", "delivery"? }`.
+  Any team member, and the user (the pill on the page). A project records who
+  last changed its status and when (`status_by`, `status_at`). A status a human
+  set is delivered to the board task's session like a choice answer
+  (`delivery` as for a thread post). A session's write that would change or
+  remove a status a human set answers `409 status_set_by_user { project, status,
+  status_at }` unless it passes `override_user: true`; a write that leaves the
+  status alone (title, tasks, the same status) goes through. A partial
   update: an absent field keeps its value, `""` (or `null`) clears it; `tasks`
   is a full replacement whose entries resolve to full task ids (unknown or
   ambiguous → `400 bad_task { task }`); a bad status → `400 bad_status`; a
@@ -932,7 +941,7 @@ itself). The `board_*` ops default to the caller's team board.
   kind `check`.
 - `PUT /api/v1/tasks/:id/board/choices/:choice { "option" }` → `200 { "choice",
   "delivery" }`. Humans only. `options="key:Label,key:Label"` on the
-  `<walnut-choice>` element (the format of walnut-mark's `states`); an option
+  `<walnut-choice>` element (the format of walnut-project's `labels`); an option
   not among them → `400 bad_option { options }`; a choice id not on the page →
   `404 choice_not_found`. A new answer is delivered to the board task's session
   like a human thread message (`delivery` as for a thread post); the same option

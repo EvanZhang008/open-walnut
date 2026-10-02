@@ -8,9 +8,13 @@
  *      and markdown. "Reply…" docks Walnut's own composer (voice included) under
  *      the frame, and its Send posts to that thread.
  *   B. Projects, checks, choices, reminders and the "updated" dot:
- *      1. board_project_set through the API recolors the section live, the strip
+ *      1. the leader's board_project_set recolors the section live, the strip
  *         counts follow, a cleared status gives the author's back, and
- *         <walnut-project> shows its pill and its tasks as chips;
+ *         <walnut-project> shows its pill and its tasks as chips; the USER picks a
+ *         status on the pill (Escape and a script's click do nothing): the section
+ *         recolors, the strip recounts, the leader hears it once, and the leader's
+ *         next write cannot move it back unless it says so; a project with no
+ *         status at all offers "Set status";
  *      2. a ticked point is read, stays read across a reload of the pane, and an
  *         html edit of its text brings it back unread with "Changed";
  *      3. picking option 2 marks it, answers the overview row and the strip, and
@@ -19,6 +23,10 @@
  *         due is highlighted, counted, delivered to the leader, and a post answers it;
  *      5. an edited section gets a red dot: on screen it is read after 2 s; a closed
  *         <details> keeps it until the user opens it.
+ *      6. the user's note in the overview row: no mark states, and a state left by an
+ *         older page is dropped by the note's save.
+ *      6b. a note typed while its save fails survives the leader's board edit (a new
+ *         document), is saved by the next one, and closing the Board saves it too.
  *   C. A worker's Board tab shows its leader's board, and a post from there lands
  *      on the leader's board.
  *
@@ -77,6 +85,8 @@ interface BoardGet {
   choices: Record<string, { option: string }>
   reminders: Record<string, { at: string; fired_at?: string }>
   section_seen: Record<string, { hash: string }>
+  projects: Record<string, { status?: string; status_by?: string }>
+  marks: Record<string, { state?: string; note?: string }>
 }
 const getBoard = (taskId: string, team = false) => api<BoardGet>('GET', `/api/v1/tasks/${taskId}/board${team ? '?team=1' : ''}`)
 
@@ -147,10 +157,11 @@ function itemsBoard(engine: string, stamp: string, worker: string): string {
 </header>
 <main>
 <table class="overview">
-  <tr><th>Project</th><th>Status</th><th>Next</th><th>Your mark</th></tr>
+  <tr><th>Project</th><th>Status</th><th>Next</th><th>Your note</th></tr>
   <tr><td>Probe timeout</td><td><walnut-project id="probe"></walnut-project></td><td>Fix the probe</td><td><walnut-mark id="probe"></walnut-mark></td></tr>
   <tr class="needs-you" data-choice="deploy-when"><td>Deploy timing</td><td>Needs you</td><td>Pick an option below</td><td></td></tr>
-  <tr class="rollout-row" data-project="rollout"><td>Rollout</td><td><walnut-project id="rollout"></walnut-project></td><td>Wait for the deploy</td><td></td></tr>
+  <tr class="rollout-row" data-project="rollout"><td>Rollout</td><td><walnut-project id="rollout" labels="wip:Rolling out,blocked:Blocked"></walnut-project></td><td>Wait for the deploy</td><td></td></tr>
+  <tr><td>Loose end</td><td><walnut-project id="loose"></walnut-project></td><td>Nobody has looked yet</td><td></td></tr>
 </table>
 <section id="sec-probe" data-project="probe" data-status="decide">
   <h3>Probe timeout</h3>
@@ -307,28 +318,95 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await expect(box('wip')).toHaveText('1')
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages')
 
-  // ── 1. A project status set through the API recolors live; cleared, the author's comes back ──
+  // ── 1. The leader's project status recolors live; cleared, the author's comes back ──
   // Tagged on its overview row too, a project still counts once.
-  await api('PUT', `/api/v1/tasks/${leader}/board/projects/rollout`, { status: 'wip' })
+  const asLeader = { 'x-walnut-caller-sid': sid }
+  await api('PUT', `/api/v1/tasks/${leader}/board/projects/rollout`, { status: 'wip' }, asLeader)
   await expect(frame.locator('tr.rollout-row')).toHaveAttribute('data-status', 'wip', { timeout: 15_000 })
   await expect(box('wip')).toHaveText('1')
   await expect(box('')).toHaveText('2')
-  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: 'wait', tasks: [worker] })
+  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: 'wait', tasks: [worker] }, asLeader)
   await expect(probe).toHaveAttribute('data-status', 'wait', { timeout: 15_000 })
   await expect(box('decide')).toHaveText('0')
   await expect(box('wait')).toHaveText('1')
   await expect(probe).toHaveCSS('border-left-color', 'rgb(217, 119, 6)')
   await expect(probePill).toHaveText('Waiting on others')
-  await expect(probePill).toHaveAttribute('title', /^Set by you/)
+  await expect(probePill).toHaveAttribute('title', /^Set by the leader, .*\. Click to change it\.$/)
   const projChip = frame.locator(`walnut-project[id="probe"] walnut-task[id="${worker}"] .wn-task`)
   await expect(projChip).toHaveAttribute('title', workerTitle)
   await expect(projChip).toHaveAttribute('data-phase', 'TODO')
-  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: '' })
+  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: '' }, asLeader)
   await expect(probe).toHaveAttribute('data-status', 'decide', { timeout: 15_000 })
   await expect(box('decide')).toHaveText('1')
   await expect(probePill).toHaveText('Needs you')
   await expect(projChip).toHaveCount(1) // the tasks stay: a partial update
-  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: 'decide' })
+  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: 'decide' }, asLeader)
+  // The page already said "Needs you": wait for Walnut's copy, whose tip names the leader.
+  await expect(probePill).toHaveAttribute('title', /^Set by the leader, /, { timeout: 15_000 })
+
+  // ── 1b. The user picks a status on the pill ──
+  const pick = frame.locator('walnut-project[id="probe"] .wn-proj-pick')
+  await probePill.click()
+  await expect(probePill).toHaveAttribute('aria-expanded', 'true')
+  await expect(probePill).toBeHidden() // the options take its place: the status shows once, pressed
+  await expect(pick.locator('.wn-proj-opt')).toHaveText(['Needs you', 'In progress', 'Waiting on others', 'Done'])
+  await expect(pick.locator('.wn-proj-opt[aria-pressed="true"]')).toHaveText('Needs you')
+  await expect(pick.locator('.wn-proj-opt[aria-pressed="true"]')).toBeFocused()
+  await frame.locator('table.overview tr', { has: frame.locator('walnut-project[id="probe"]') })
+    .screenshot({ path: `${SHOT_DIR}/${engine}-B1b-status-picker.png` })
+  // Escape closes it and gives the focus back; nothing is written.
+  await page.keyboard.press('Escape')
+  await expect(pick).toHaveCount(0)
+  await expect(probePill).toBeVisible()
+  await expect(probePill).toBeFocused()
+  // A script on the board cannot open it, let alone pick.
+  await frame.locator('body').evaluate(() => (document.querySelector('walnut-project[id="probe"] .wn-proj-pill') as HTMLButtonElement).click())
+  await page.waitForTimeout(500)
+  await expect(pick).toHaveCount(0)
+  expect((await getBoard(leader)).projects.probe).toMatchObject({ status: 'decide', status_by: `task:${leader}` })
+  // The pick: recolored, recounted, stored as the user's, and the leader told once.
+  await probePill.click()
+  await pick.locator('.wn-proj-opt[data-pick="wait"]').click()
+  await expect(pick).toHaveCount(0, { timeout: 15_000 })
+  await expect(probe).toHaveAttribute('data-status', 'wait')
+  await expect(box('decide')).toHaveText('0')
+  await expect(box('wait')).toHaveText('1')
+  await expect(probePill).toHaveText('Waiting on others')
+  await expect(probePill).toHaveAttribute('title', /^Set by you, .*\. Click to change it\.$/)
+  await expect.poll(async () => (await getBoard(leader)).projects.probe, { timeout: 10_000 }).toMatchObject({ status: 'wait', status_by: 'human' })
+  const statusLine = 'On your Board the user set project "probe" to wait (Waiting on others); it was decide (Needs you), set by you.'
+  await expect.poll(() => historyText(sid), { timeout: 30_000 }).toContain(statusLine)
+  // The leader's next write cannot move it back unless it says so.
+  const refused = await fetch(`${API}/api/v1/tasks/${leader}/board/projects/probe`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', ...asLeader }, body: JSON.stringify({ status: 'decide' }),
+  })
+  expect(refused.status).toBe(409)
+  expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('status_set_by_user')
+  await expect(probe).toHaveAttribute('data-status', 'wait')
+  // The same status again is no news.
+  await probePill.click()
+  await pick.locator('.wn-proj-opt[data-pick="wait"]').click()
+  await expect(pick).toHaveCount(0)
+  await page.waitForTimeout(1500)
+  expect(occurrences(await historyText(sid), statusLine)).toBe(1)
+  // A board's labels rename the four statuses; a key Walnut does not know is not offered.
+  const rolloutPill = frame.locator('walnut-project[id="rollout"] .wn-proj-pill')
+  await expect(rolloutPill).toHaveText('Rolling out')
+  await rolloutPill.click()
+  await expect(frame.locator('walnut-project[id="rollout"] .wn-proj-opt')).toHaveText(['Needs you', 'Rolling out', 'Waiting on others', 'Done'])
+  await page.keyboard.press('Escape')
+  await expect(frame.locator('walnut-project[id="rollout"] .wn-proj-pick')).toHaveCount(0)
+  // A project with no status anywhere offers "Set status".
+  const loose = frame.locator('walnut-project[id="loose"] .wn-proj-pill')
+  await expect(loose).toHaveText('Set status')
+  await loose.click()
+  await frame.locator('walnut-project[id="loose"] .wn-proj-opt[data-pick="done"]').click()
+  await expect(loose).toHaveText('Done', { timeout: 15_000 })
+  await expect(loose).toHaveAttribute('data-proj-status', 'done')
+  await expect(box('')).toHaveText('2') // no section carries it, so the strip does not count it
+  // Back to "Needs you", on purpose, for the steps below.
+  await api('PUT', `/api/v1/tasks/${leader}/board/projects/probe`, { status: 'decide', override_user: true }, asLeader)
+  await expect(probe).toHaveAttribute('data-status', 'decide', { timeout: 15_000 })
 
   // ── 2. A point ticked read stays read across a pane reload; an edit of its text brings it back ──
   const point = frame.locator('walnut-check[id="cause-timeout"]')
@@ -446,12 +524,51 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages')
   await expect.poll(async () => (await getBoard(leader)).section_seen.rollout?.hash, { timeout: 10_000 }).not.toBe(before)
 
-  // The board as a whole, with the mark in the overview row. Its column header already
-  // names it, so the mark's own label stays hidden there; the group keeps its aria name.
-  await expect(frame.locator('walnut-mark[id="probe"] .wn-mark-label')).toBeHidden()
-  await expect(frame.locator('walnut-mark[id="probe"] .wn-mark-states')).toHaveAttribute('aria-label', 'Your mark')
-  await frame.locator('walnut-mark[id="probe"] .wn-mark-state[data-state="revisit"]').click()
-  await expect(frame.locator('walnut-mark[id="probe"] .wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+  // ── 6. The board as a whole, with the user's note in the overview row ──
+  // A state an older page left on the mark is not shown, and the note's save drops it.
+  await api('PUT', `/api/v1/tasks/${leader}/board/marks/probe`, { state: 'revisit' })
+  const note = frame.locator('walnut-mark[id="probe"]')
+  await expect(note.locator('.wn-mark-note-toggle')).toHaveText('Add note')
+  await expect(note.locator('.wn-mark-state')).toHaveCount(0)
+  await note.locator('.wn-mark-note-toggle').click()
+  await note.locator('.wn-mark-note').fill('Looks right; ship after the window.')
+  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+  await expect.poll(async () => (await getBoard(leader)).marks.probe, { timeout: 10_000 })
+    .toEqual({ note: 'Looks right; ship after the window.', updated_at: expect.any(String) })
+
+  // ── 6b. A note is not lost when the leader edits the board (a new document) or the Board closes ──
+  // Saves fail while blocked, so only the host's copy of the text can bring it back.
+  let blockMarks = true
+  await page.route('**/board/marks/**', (route) => (blockMarks ? route.abort() : route.continue()))
+  const typed = 'Typed while the leader edits: keep this.'
+  await note.locator('.wn-mark-note').fill(typed)
+  await expect(note.locator('.wn-saved.wn-failed')).toHaveCount(1, { timeout: 10_000 })
+  await api('POST', `/api/v1/tasks/${leader}/board/edits`, { edits: [{ old: 'Fix the probe', new: 'Fix the probe today' }] }, asLeader)
+  await expect(frame.locator('table.overview')).toContainText('Fix the probe today', { timeout: 15_000 })
+  await expect(note.locator('.wn-mark-note')).toHaveValue(typed)
+  // It grows with its text: all of it shows, no inner scroll.
+  expect(await note.locator('.wn-mark-note').evaluate((t) => t.scrollHeight - t.clientHeight)).toBeLessThanOrEqual(1)
+  expect((await getBoard(leader)).marks.probe?.note).toBe('Looks right; ship after the window.')
+  // Saves work again: the next document saves the kept text on its own.
+  blockMarks = false
+  await api('POST', `/api/v1/tasks/${leader}/board/edits`, { edits: [{ old: 'Fix the probe today', new: 'Fix the probe now' }] }, asLeader)
+  await expect(frame.locator('table.overview')).toContainText('Fix the probe now', { timeout: 15_000 })
+  await expect.poll(async () => (await getBoard(leader)).marks.probe?.note, { timeout: 10_000 }).toBe(typed)
+  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/)
+  await expect(note.locator('.wn-mark-note')).toHaveValue(typed)
+  // Closing the Board saves what the page could not.
+  blockMarks = true
+  const lastWords = 'Written just before closing the Board.'
+  await note.locator('.wn-mark-note').fill(lastWords)
+  await expect(note.locator('.wn-saved.wn-failed')).toHaveCount(1, { timeout: 10_000 })
+  blockMarks = false
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
+  await expect(pane).toHaveCount(0)
+  await expect.poll(async () => (await getBoard(leader)).marks.probe?.note, { timeout: 10_000 }).toBe(lastWords)
+  await panel.getByTestId('session-board-chip').click()
+  ;({ pane, frame } = { pane: page.getByTestId('task-board-pane'), frame: page.frameLocator('.task-board-frame') })
+  await expect(frame.locator('walnut-mark[id="probe"] .wn-mark-note')).toHaveValue(lastWords, { timeout: 15_000 })
+  await page.unroute('**/board/marks/**')
   await frame.locator('body').evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-B6-board.png` })
   expect(pageErrors).toEqual([])

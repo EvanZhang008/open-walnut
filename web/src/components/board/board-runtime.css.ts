@@ -2,7 +2,7 @@
  * Default look of the board components (the board-*.frame.js runtime), injected
  * into the frame ahead of the author's own styles so any board can restyle
  * them: the components render into their light DOM with these plain classes
- * (`.wn-mark-state`, `.wn-mark-note`, `.wn-choice-opt`, `.wn-check-box` … are
+ * (`.wn-mark-note`, `.wn-proj-pill`, `.wn-proj-opt`, `.wn-choice-opt`, `.wn-check-box` … are
  * the hooks).
  *
  * Neutral and small on purpose: it inherits the board's font and colour, and
@@ -115,24 +115,19 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 .wn-reply:hover, .wn-reply:focus-visible { opacity: 1; border-color: var(--wn-accent, #007aff); outline: none; }
 .wn-reply.wn-on { opacity: 1; border-color: var(--wn-accent, #007aff); border-style: dashed; cursor: pointer; }
 
-/* ── <walnut-mark>: a compact row of small pills at its own place in the flow ── */
+/* ── <walnut-mark>: the user's note, one small "Add note" button until it has text ── */
 walnut-mark { flex: 1 0 100%; grid-column: 1 / -1; clear: both; }
 .wn-mark { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 6px 0; font-size: .88em; line-height: 1.5; }
-.wn-mark-label { font-weight: 600; opacity: .7; }
-/* In a table cell the column header already says it. */
-td walnut-mark .wn-mark-label { display: none; }
 td .wn-mark { margin: 0; }
-.wn-mark-states { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.wn-mark-state, .wn-mark-note-toggle {
+.wn-mark-note-toggle {
   padding: 0 9px; border: 1px solid rgba(128,128,128,.4); border-color: color-mix(in srgb, currentColor 30%, transparent);
   border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: .95em; line-height: 1.6; cursor: pointer;
+  white-space: nowrap; opacity: .75;
 }
-.wn-mark-state:hover, .wn-mark-note-toggle:hover { border-color: currentColor; }
-.wn-mark-state.wn-on { background: var(--wn-accent, #007aff); border-color: var(--wn-accent, #007aff); color: var(--wn-accent-fg, #fff); }
-.wn-mark-note-toggle { opacity: .75; }
+.wn-mark-note-toggle:hover { border-color: currentColor; opacity: 1; }
 .wn-mark-note-toggle[hidden], .wn-mark-note[hidden] { display: none; }
 .wn-mark-note {
-  flex: 1 1 100%; min-width: 0; min-height: 2em; resize: vertical; box-sizing: border-box;
+  flex: 1 1 100%; min-width: 0; min-height: 2em; max-height: 12em; overflow-y: auto; resize: vertical; box-sizing: border-box;
   padding: 4px 8px; border: 1px solid rgba(128,128,128,.4); border-color: color-mix(in srgb, currentColor 30%, transparent);
   border-radius: 8px; background: transparent; color: inherit; font: inherit;
 }
@@ -156,16 +151,31 @@ td .wn-mark { margin: 0; }
 .wn-unread { cursor: pointer; }
 .wn-unread[data-count]:not([data-count="0"]) .wn-unread-n { color: var(--wn-need, #d93025); font-weight: 600; }
 
-/* ── <walnut-project>: a status pill and the project's tasks ── */
+/* ── <walnut-project>: a status pill the user can click to pick one, and the project's tasks ── */
 .wn-proj { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; vertical-align: middle; }
-.wn-proj-pill {
-  padding: 0 8px; border-radius: 999px; font-size: .82em; font-weight: 600; line-height: 1.65; white-space: nowrap;
+.wn-proj-pill, .wn-proj-opt {
+  padding: 0 8px; border: 1px solid transparent; border-radius: 999px; font: inherit; font-size: .82em; font-weight: 600;
+  line-height: 1.65; white-space: nowrap; cursor: pointer;
   background: rgba(128,128,128,.14); color: var(--wn-todo, #6e6e73);
 }
-.wn-proj-pill[data-proj-status="decide"] { background: rgba(217,48,37,.12); color: var(--wn-need, #d93025); }
-.wn-proj-pill[data-proj-status="wip"] { background: rgba(47,111,235,.12); color: var(--wn-wip, #2f6feb); }
-.wn-proj-pill[data-proj-status="wait"] { background: rgba(217,119,6,.14); color: var(--wn-wait, #b45309); }
-.wn-proj-pill[data-proj-status="done"] { background: rgba(21,128,61,.12); color: var(--wn-done, #15803d); }
+.wn-proj-pill:hover, .wn-proj-pill:focus-visible, .wn-proj-opt:hover, .wn-proj-opt:focus-visible { border-color: currentColor; outline: none; }
+/* Open, the pill gives way to the four options (the current one pressed), so no status shows twice. */
+.wn-proj-pill[hidden] { display: none; }
+.wn-proj-pill.wn-proj-unset { background: transparent; border: 1px dashed rgba(128,128,128,.5); font-weight: 500; }
+:is(.wn-proj-pill, .wn-proj-opt)[data-proj-status="decide"] { background: rgba(217,48,37,.12); color: var(--wn-need, #d93025); }
+:is(.wn-proj-pill, .wn-proj-opt)[data-proj-status="wip"] { background: rgba(47,111,235,.12); color: var(--wn-wip, #2f6feb); }
+:is(.wn-proj-pill, .wn-proj-opt)[data-proj-status="wait"] { background: rgba(217,119,6,.14); color: var(--wn-wait, #b45309); }
+:is(.wn-proj-pill, .wn-proj-opt)[data-proj-status="done"] { background: rgba(21,128,61,.12); color: var(--wn-done, #15803d); }
+/* The picker: every status in its own colour, the current one ringed; it wraps inside a narrow cell. */
+.wn-proj-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.wn-proj-opt { font-weight: 500; }
+.wn-proj-opt.wn-on { border-color: currentColor; font-weight: 600; }
+.wn-proj-opt:disabled, .wn-proj-cancel:disabled { opacity: .5; cursor: default; }
+.wn-proj-cancel {
+  padding: 0 6px; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1.6; opacity: .6; cursor: pointer;
+}
+.wn-proj-cancel:hover { opacity: 1; }
+.wn-proj-error { flex-basis: 100%; font-size: .85em; color: var(--wn-need, #d93025); }
 .wn-proj-tasks { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .wn-proj-tasks .wn-task { font-size: .85em; }
 

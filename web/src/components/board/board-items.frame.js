@@ -5,9 +5,13 @@
  * rules: plain ES2017, loaded as a string, runs only inside the board frame.
  *
  * These are the user talking to the leader, so every write starts from a
- * trusted event and goes up as a request the host acks: `wn-board:check`,
+ * trusted event and goes up as a request the host acks: `wn-board:mark` (a
+ * note), `wn-board:project` (a status the user picks), `wn-board:check`,
  * `wn-board:choice`, `wn-board:remind`. A check's hash is the server's (the
  * frame never hashes a point): "read" means read THIS version of its text.
+ * A note's text also goes up on every keystroke (`wn-board:note-draft`, no
+ * ack): the host keeps it until it is saved, because a board edit replaces this
+ * document, and the next one gets it back in `note_drafts`.
  */
 (function (kit) {
   'use strict';
@@ -16,7 +20,6 @@
   var state = kit.state;
   var esc = kit.esc;
   var HOUR_MS = 3600 * 1000;
-  var DEFAULT_STATES = 'revisit:Revisit,reviewed:Reviewed,waiting:Waiting on others';
 
   function cssId(id) { return window.CSS && CSS.escape ? CSS.escape(id) : String(id).replace(/["\\]/g, '\\$&'); }
   function pad(n) { return n < 10 ? '0' + n : String(n); }
@@ -173,25 +176,21 @@
   });
   kit.Remind = Remind;
 
-  // ── <walnut-mark id states?>: the user's own mark and note, saved in Walnut ──
+  // ── <walnut-mark id>: the user's note for the leader, saved in Walnut ──
+  // (A project's status is <walnut-project>'s: the user picks it there. A `states`
+  // attribute from an older board is ignored.)
   class WalnutMark extends kit.Base {
     get wnId() { return this.getAttribute('id') || ''; }
     wnSetup() {
       var self = this;
-      // Buttons, not a <select>: one click sets a state, and every change comes
-      // from a trusted click or keystroke (a synthetic `change` has no path here).
-      this.wnStates = kit.parsePairs(this.getAttribute('states'), DEFAULT_STATES);
       this.classList.add('wn-mark');
-      // One compact row: the states as small pills, the note behind "Note" until it has text.
-      this.innerHTML = '<span class="wn-mark-label">Your mark</span><span class="wn-mark-states" role="group" aria-label="Your mark"></span>'
-        + '<button type="button" class="wn-mark-note-toggle" aria-expanded="false">Note</button>'
-        + '<span class="wn-saved" aria-live="polite"></span>'
-        + '<textarea class="wn-mark-note" rows="1" placeholder="Note for the leader" aria-label="Note for the leader" hidden></textarea>';
-      this.wnGroup = this.querySelector('.wn-mark-states');
+      // Compact: one "Add note" button until the note has text.
+      this.innerHTML = '<button type="button" class="wn-mark-note-toggle" aria-expanded="false">Add note</button>'
+        + '<textarea class="wn-mark-note" rows="1" placeholder="Note for the leader" aria-label="Note for the leader" hidden></textarea>'
+        + '<span class="wn-saved" aria-live="polite"></span>';
       this.wnNote = this.querySelector('.wn-mark-note');
       this.wnNoteToggle = this.querySelector('.wn-mark-note-toggle');
       this.wnStatus = this.querySelector('.wn-saved');
-      this.wnValue = '';
       this.wnSaveSeq = 0;
       this.wnNoteOpen = false;
       this.wnNoteToggle.addEventListener('click', function (e) {
@@ -203,35 +202,15 @@
       this.wnNote.addEventListener('blur', function () {
         if (!self.wnNote.value) { self.wnNoteOpen = false; self.wnPaintNote(); }
       });
-      this.wnGroup.addEventListener('click', function (e) {
-        var b = e.target.closest ? e.target.closest('.wn-mark-state') : null;
-        if (!b || !self.wnGroup.contains(b) || !trusted(e)) return;
-        e.preventDefault();
-        var v = b.getAttribute('data-state') || '';
-        // Clicking the state already set clears it.
-        self.wnValue = v === self.wnValue ? '' : v;
-        self.wnDirty = true;
-        self.wnPaint();
-        self.wnSave();
-      });
       this.wnNote.addEventListener('input', function (e) {
+        self.wnFit();
         if (!trusted(e)) return;
         self.wnDirty = true;
+        // The host keeps the text until it is saved: a leader's board edit replaces this document.
+        kit.send({ t: 'wn-board:note-draft', id: self.wnId, note: self.wnNote.value });
         clearTimeout(self.wnTimer);
         self.wnTimer = setTimeout(function () { self.wnSave(); }, 500);
       });
-      this.wnPaint();
-    }
-    /** The state buttons, the current one pressed; a state the list does not name still shows. */
-    wnPaint() {
-      var list = this.wnStates.slice();
-      var v = this.wnValue;
-      if (v && !list.some(function (o) { return o.key === v; })) list.push({ key: v, label: v });
-      this.wnGroup.innerHTML = list.map(function (o) {
-        var on = o.key === v;
-        return '<button type="button" class="wn-mark-state' + (on ? ' wn-on' : '') + '" data-state="' + esc(o.key)
-          + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + esc(o.label) + '</button>';
-      }).join('');
     }
     /** The note shows while it has text or the user opened it. */
     wnPaintNote() {
@@ -239,6 +218,14 @@
       if (this.wnNote.hidden !== !shown) this.wnNote.hidden = !shown;
       if (this.wnNoteToggle.hidden !== shown) this.wnNoteToggle.hidden = shown;
       this.wnNoteToggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
+      this.wnFit();
+    }
+    /** The note grows with its text (up to the CSS max-height, then it scrolls), so the user reads all of it. */
+    wnFit() {
+      var t = this.wnNote;
+      if (t.hidden) return;
+      t.style.height = 'auto';
+      t.style.height = (t.scrollHeight + t.offsetHeight - t.clientHeight) + 'px';
     }
     wnSetStatus(text, failed) {
       this.wnStatus.textContent = text;
@@ -250,7 +237,7 @@
       var mine = ++this.wnSaveSeq;
       this.wnSaving = true;
       this.wnSetStatus('Saving…');
-      kit.request({ t: 'wn-board:mark', id: this.wnId, state: this.wnValue, note: this.wnNote.value }, function (ack) {
+      kit.request({ t: 'wn-board:mark', id: this.wnId, note: this.wnNote.value }, function (ack) {
         if (mine !== self.wnSaveSeq) return; // a newer save owns the status line
         self.wnSaving = false;
         if (!ack.ok) { self.wnSetStatus(ack.error || 'Not saved', true); return; }
@@ -263,36 +250,140 @@
       // What the user is typing (or has not saved yet) wins over what arrives.
       if (this.wnDirty || this.wnSaving || document.activeElement === this.wnNote) return;
       var mark = state.marks[this.wnId];
-      var value = mark && mark.state ? mark.state : '';
-      if (value !== this.wnValue) { this.wnValue = value; this.wnPaint(); }
       var note = mark && mark.note ? mark.note : '';
+      // Typed in the document before this one and not saved yet: shown again, and saved now.
+      var draft = Object.prototype.hasOwnProperty.call(state.note_drafts, this.wnId) ? state.note_drafts[this.wnId] : null;
+      if (typeof draft === 'string' && draft !== note) {
+        this.wnNote.value = draft;
+        this.wnNoteOpen = true;
+        this.wnDirty = true;
+        this.wnPaintNote();
+        this.wnSave();
+        return;
+      }
       if (this.wnNote.value !== note) this.wnNote.value = note;
       this.wnPaintNote();
     }
   }
 
-  // ── <walnut-project id labels?>: the project's status pill and its tasks as compact live chips ──
+  // ── <walnut-project id labels?>: the project's status pill (the user picks one there) and its tasks as chips ──
+  var openPickers = new Set();
+
   class WalnutProject extends kit.Base {
-    wnSetup() { this.wnRecount = true; }
+    get wnId() { return this.getAttribute('id') || ''; }
+    wnSetup() {
+      var self = this;
+      this.wnRecount = true;
+      this.wnOpen = false;
+      this.wnBusy = false;
+      this.wnError = '';
+      this.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('button') : null;
+        if (!b || !self.contains(b)) return;
+        e.preventDefault();
+        if (!trusted(e)) return;
+        if (b.classList.contains('wn-proj-pill')) self.wnToggle(!self.wnOpen);
+        else if (b.classList.contains('wn-proj-cancel')) self.wnToggle(false, true);
+        else if (b.hasAttribute('data-pick')) self.wnPick(b.getAttribute('data-pick'));
+      });
+      this.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && self.wnOpen) { e.preventDefault(); self.wnToggle(false, true); }
+      });
+    }
+    /** The four statuses Walnut knows, in order; `labels` only renames them (an unknown key is not offered). */
+    wnLabels() {
+      var custom = {};
+      kit.parsePairs(this.getAttribute('labels'), '').forEach(function (l) { custom[l.key] = l.label; });
+      return kit.parsePairs(kit.DEFAULT_LABELS).map(function (d) {
+        return { key: d.key, label: Object.prototype.hasOwnProperty.call(custom, d.key) ? custom[d.key] : d.label };
+      });
+    }
+    /** Open or close the picker; `refocus` puts the focus back on the pill. */
+    wnToggle(open, refocus) {
+      this.wnOpen = open;
+      this.wnError = '';
+      if (open) openPickers.add(this); else openPickers.delete(this);
+      this.wnFocus = open ? 'pick' : refocus ? 'pill' : '';
+      this.wnRender();
+    }
+    wnPick(status) {
+      var self = this;
+      var id = this.wnId;
+      if (!id || this.wnBusy) return;
+      // The status it already has: nothing to tell the leader.
+      if (status === kit.projectStatus(id)) { this.wnToggle(false, true); return; }
+      this.wnBusy = true;
+      this.wnError = '';
+      this.wnRender();
+      kit.request({ t: 'wn-board:project', id: id, status: status }, function (ack) {
+        self.wnBusy = false;
+        if (!ack.ok) {
+          self.wnError = ack.error || 'The status was not saved.';
+          self.wnRender();
+          return;
+        }
+        if (ack.project) state.projects[id] = ack.project; else delete state.projects[id];
+        self.wnToggle(false, true);
+        kit.applyProjects();
+        kit.renderAll();
+      });
+    }
     wnRender() {
       if (!kit.flags.hasData) return;
-      var id = this.getAttribute('id') || '';
+      var id = this.wnId;
       var p = state.projects[id] || null;
       var status = kit.projectStatus(id);
+      var labels = this.wnLabels();
       var label = status;
-      kit.parsePairs(this.getAttribute('labels'), kit.DEFAULT_LABELS).forEach(function (l) { if (l.key === status) label = l.label; });
-      var tip = p && p.status
-        ? 'Set by ' + writerLabel(p.updated_by) + (p.updated_at ? ', ' + kit.when(p.updated_at) : '')
-        : 'From the board itself';
+      labels.forEach(function (l) { if (l.key === status) label = l.label; });
+      var by = p && (p.status_by || p.updated_by);
+      var at = p && (p.status_at || p.updated_at);
+      var tip = (p && p.status ? 'Set by ' + writerLabel(by) + (at ? ', ' + kit.when(at) : '') : 'From the board itself') + '. Click to change it.';
       // data-proj-status, never data-status: the strip counts [data-status] as sections.
-      var pill = status
-        ? '<span class="wn-proj-pill" data-proj-status="' + esc(status) + '" title="' + esc(tip) + '">' + esc(label) + '</span>'
-        : '';
+      var pill = '<button type="button" class="wn-proj-pill' + (status ? '' : ' wn-proj-unset') + '"'
+        + (status ? ' data-proj-status="' + esc(status) + '"' : '')
+        + ' aria-haspopup="true" aria-expanded="' + (this.wnOpen ? 'true' : 'false') + '"' + (this.wnOpen ? ' hidden' : '')
+        + ' title="' + esc(tip) + '">'
+        + esc(status ? label : 'Set status') + '</button>';
+      var pick = '';
+      if (this.wnOpen) {
+        var dis = this.wnBusy ? ' disabled' : '';
+        pick = '<span class="wn-proj-pick" role="group" aria-label="Status of this project">'
+          + labels.map(function (l) {
+            var on = l.key === status;
+            return '<button type="button" class="wn-proj-opt' + (on ? ' wn-on' : '') + '" data-pick="' + esc(l.key)
+              + '" data-proj-status="' + esc(l.key) + '" aria-pressed="' + (on ? 'true' : 'false') + '"' + dis + '>' + esc(l.label) + '</button>';
+          }).join('')
+          + '<button type="button" class="wn-proj-cancel" aria-label="Close" title="Close"' + dis + '>×</button>'
+          + (this.wnError ? '<span class="wn-proj-error" role="alert">' + esc(this.wnError) + '</span>' : '')
+          + '</span>';
+      }
       var tasks = p && Array.isArray(p.tasks) ? p.tasks : [];
       var chips = tasks.map(function (t) { return '<walnut-task id="' + esc(t) + '" compact></walnut-task>'; }).join('');
-      kit.setHtml(this, '<span class="wn-proj">' + pill + (chips ? '<span class="wn-proj-tasks">' + chips + '</span>' : '') + '</span>');
+      // New data while the user is on a control (the leader edited the board) rebuilds the
+      // buttons: the focus goes to the same control in the new ones.
+      var had = this.contains(document.activeElement) ? document.activeElement : null;
+      var keep = !had ? '' : had.hasAttribute('data-pick') ? 'opt:' + had.getAttribute('data-pick')
+        : had.classList.contains('wn-proj-pill') ? 'pill' : had.classList.contains('wn-proj-cancel') ? 'cancel' : '';
+      kit.setHtml(this, '<span class="wn-proj">' + pill + pick + (chips ? '<span class="wn-proj-tasks">' + chips + '</span>' : '') + '</span>');
+      var focus = this.wnFocus;
+      this.wnFocus = '';
+      if (!focus && keep && !this.contains(document.activeElement)) {
+        var same = keep === 'pill' ? this.querySelector('.wn-proj-pill') : keep === 'cancel' ? this.querySelector('.wn-proj-cancel')
+          : this.querySelector('.wn-proj-opt[data-pick="' + kit.cssId(keep.slice(4)) + '"]');
+        if (same) same.focus();
+        return;
+      }
+      var target = focus === 'pill' ? this.querySelector('.wn-proj-pill')
+        : focus === 'pick' ? this.querySelector('.wn-proj-opt.wn-on') || this.querySelector('.wn-proj-opt') : null;
+      if (target) target.focus();
     }
   }
+  // A click anywhere else closes an open picker (its own clicks are handled above).
+  document.addEventListener('click', function (e) {
+    var path = e.composedPath ? e.composedPath() : [e.target];
+    openPickers.forEach(function (pk) { if (path.indexOf(pk) < 0) pk.wnToggle(false); });
+  });
 
   // ── <walnut-check id>: one point; the author's children are its text, and one control goes first ──
   class WalnutCheck extends kit.Base {

@@ -39,13 +39,16 @@ export interface BoardRef {
 
 export type BoardProjectStatus = 'decide' | 'wip' | 'wait' | 'done';
 
-/** A section of the board: its status lives in Walnut (`board_project_set`), not in the html. */
+/** A section of the board: its status lives in Walnut (`board_project_set`, or the user's pick), not in the html. */
 export interface BoardProject {
   title?: string;
   status?: BoardProjectStatus;
   tasks?: string[];
   updated_at: string;
   updated_by: string;
+  /** Who last changed the status ('human' = the user's pick on the page), and when. */
+  status_by?: string;
+  status_at?: string;
 }
 
 /** A point on the page as GET reports it: `hash` is the CURRENT one, `read` = the user read this version. */

@@ -9,7 +9,7 @@
  * The frame has an opaque origin (sandbox="allow-scripts", no allow-same-origin),
  * so everything goes through postMessage: the host posts `wn-board:data` (refs,
  * threads, marks, seen, projects, checks, choices, reminders,
- * section_seen, composing) and acks; the frame posts requests up. This part owns the state,
+ * section_seen, composing, note_drafts) and acks; the frame posts requests up. This part owns the state,
  * the bridge, links, scroll, the project statuses and the shared helpers, and
  * hands them to the other parts as `window.__wnBoardKit` (the last part takes it
  * off window before any author script runs).
@@ -30,6 +30,8 @@
   var state = {
     boardTaskId: '', refs: {}, threads: {}, marks: {}, seen: {},
     projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {},
+    // Notes the user typed and Walnut has not saved yet, kept by the host across a new document.
+    note_drafts: {},
   };
   // composing: the thread the host's docked composer replies in ('' = none).
   var flags = { hasData: false, filter: '', composing: '' };
@@ -329,7 +331,8 @@
     send: send, request: request, trusted: trusted, nextId: nextId, esc: esc, hhmm: hhmm, when: when,
     parsePairs: parsePairs, whoOf: whoOf, unreadIn: unreadIn, markSeen: markSeen, addMessage: addMessage,
     removeMessage: removeMessage, renderAll: renderAll, setHtml: setHtml, openAncestors: openAncestors, topSections: topSections,
-    threadEls: threadEls, applyFilter: applyFilter, projectStatus: projectStatus, sectionStatus: sectionStatus,
+    threadEls: threadEls, applyFilter: applyFilter, applyProjects: applyProjects, projectStatus: projectStatus,
+    sectionStatus: sectionStatus,
     countedStatuses: countedStatuses,
     choiceAnswered: choiceAnswered, cssId: cssId, watchers: watchers, onHost: onHost,
     reminderOf: reminderOf, reminderDue: reminderDue, reminderTargets: reminderTargets, dueTargets: dueTargets,
@@ -354,6 +357,7 @@
       state.choices = obj(d.choices);
       state.reminders = obj(d.reminders);
       state.section_seen = obj(d.section_seen);
+      state.note_drafts = obj(d.note_drafts);
       flags.composing = typeof d.composing === 'string' ? d.composing : '';
       flags.hasData = true;
       applyProjects();

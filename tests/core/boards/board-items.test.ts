@@ -34,6 +34,7 @@ import {
   setBoardProject,
   setBoardReminder,
   setBoardSectionSeen,
+  writeBoardProject,
 } from '../../../src/core/boards/board-items.js'
 
 const T = 'mt0abc12-aaaa'
@@ -217,6 +218,43 @@ describe('projects', () => {
   it('an id like `constructor` is just an id', async () => {
     expect(await setBoardProject(T, 'constructor', { status: 'wip' }, { by: 'human' })).toMatchObject({ status: 'wip' })
     expect(await setBoardProject(T, 'toString', { title: 'x' }, { by: 'human' })).toMatchObject({ title: 'x' })
+  })
+
+  it('records who set the status; a status the user picked stays theirs until a session overrides it', async () => {
+    const lead = { by: 'task:lead' } as const
+    const first = await writeBoardProject(T, 'cause-a', { title: 'Cache TTL', status: 'wip' }, lead)
+    expect(first).toMatchObject({ previous: null, statusChanged: true, project: { status: 'wip', status_by: 'task:lead' } })
+    const picked = await writeBoardProject(T, 'cause-a', { status: 'wait' }, { by: 'human' })
+    expect(picked.statusChanged).toBe(true)
+    expect(picked.previous).toMatchObject({ status: 'wip', status_by: 'task:lead' })
+    expect(picked.project).toMatchObject({ status: 'wait', status_by: 'human', status_at: expect.any(String) })
+    const pickedAt = picked.project!.status_at
+
+    // A session that would change or remove it is refused, and nothing is written.
+    const before = await rawFile()
+    for (const input of [{ status: 'wip' }, { status: '' }, { delete: true }, { title: null, status: null, tasks: null }]) {
+      expect(await boardError(() => setBoardProject(T, 'cause-a', input, lead)))
+        .toMatchObject({ code: 'status_set_by_user', statusCode: 409, details: { project: 'cause-a', status: 'wait', status_at: pickedAt } })
+    }
+    expect(await rawFile()).toBe(before)
+    expect((await boardError(() => setBoardProject(T, 'cause-a', { status: 'done' }, lead))).message)
+      .toMatch(/^The user set project "cause-a" to wait \(Waiting on others\) at .+override_user: true/)
+
+    // Title, tasks and the same status go through, and the pick stays the user's.
+    const kept = await writeBoardProject(T, 'cause-a', { title: 'Cache TTL (prod)', tasks: ['t1'], status: 'wait' }, lead)
+    expect(kept.statusChanged).toBe(false)
+    expect(kept.project).toMatchObject({ title: 'Cache TTL (prod)', tasks: ['t1'], status: 'wait', status_by: 'human', status_at: pickedAt, updated_by: 'task:lead' })
+
+    // Saying so replaces it; from then on the status is the session's again.
+    expect(await setBoardProject(T, 'cause-a', { status: 'wip' }, { ...lead, overrideUser: true }))
+      .toMatchObject({ status: 'wip', status_by: 'task:lead' })
+    expect(await setBoardProject(T, 'cause-a', { status: 'done' }, lead)).toMatchObject({ status: 'done', status_by: 'task:lead' })
+    // The user changes theirs at will; a cleared status forgets who set it.
+    expect(await setBoardProject(T, 'cause-a', { status: 'decide' }, { by: 'human' })).toMatchObject({ status_by: 'human' })
+    const cleared = await setBoardProject(T, 'cause-a', { status: '' }, { by: 'human' })
+    expect(cleared).not.toHaveProperty('status_by')
+    expect(cleared).not.toHaveProperty('status_at')
+    expect(await setBoardProject(T, 'cause-a', { status: 'wip' }, lead)).toMatchObject({ status_by: 'task:lead' })
   })
 })
 

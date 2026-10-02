@@ -1,8 +1,9 @@
 /**
  * What the board task's session hears, and the one way it hears it.
  *
- * A human's thread message, the user's answer to a choice, and a reminder that
- * came due all reach the board task's session through performSessionSend as the
+ * A human's thread message, the user's answer to a choice, a project status the
+ * user picked, and a reminder that came due all reach the board task's session
+ * through performSessionSend as the
  * human (no caller sid, no reply request), the way a human `task_send` does: a
  * stopped session is woken, a COMPLETE task reopens. Anything the user (or the
  * board's author) wrote is block-quoted, so nothing inside reads as Walnut's own
@@ -11,7 +12,8 @@
 
 import { log } from '../../logging/index.js';
 import { choiceSpecs, own, threadMeta } from './board-html.js';
-import type { BoardChoice, BoardReminder } from './board-store.js';
+import { BOARD_PROJECT_STATUS_LABELS } from './board-items.js';
+import type { BoardChoice, BoardProject, BoardProjectStatus, BoardReminder } from './board-store.js';
 
 export type BoardDelivery =
   | { state: 'queued' | 'deferred'; sessionId: string }
@@ -73,6 +75,34 @@ export async function buildChoicePrompt(html: string, choiceId: string, choice: 
     + 'Act on that answer now, then update that section with board_edit (and its project with board_project_set if the status changed). '
     + `If you need to tell the user something about it, post in that section's thread with ${op('board_post', { thread: '...', text: '...' })}; `
     + `board_get shows every answer. ${NOT_AN_ORDER}`;
+}
+
+/** `"wait" (Waiting on others)`, the label in the page's words. */
+function statusName(status: BoardProjectStatus | undefined): string {
+  return status ? `${status} (${BOARD_PROJECT_STATUS_LABELS[status]})` : 'no status';
+}
+
+/**
+ * `On your Board the user set project "Venue" (venue) to wait (Waiting on others);
+ * it was wip (In progress), set by you.` and what to do with it.
+ */
+export function buildProjectStatusPrompt(
+  projectId: string,
+  project: BoardProject,
+  previous: BoardProject | null,
+  boardTaskId: string,
+): string {
+  const name = project.title ? `"${project.title}" (${projectId})` : `"${projectId}"`;
+  let was = '; it had no status in Walnut before (the page showed its own)';
+  if (previous?.status) {
+    const by = previous.status_by ?? previous.updated_by;
+    const who = by === 'human' ? 'by the user' : by === `task:${boardTaskId}` ? 'by you' : `by ${by.replace(/^task:/, 'task ')}`;
+    was = `; it was ${statusName(previous.status)}, set ${who}`;
+  }
+  return `On your Board the user set project ${name} to ${statusName(project.status)}${was}. `
+    + 'Walnut saved it and the page already shows it. Act on it if it changes the work (a project the user moved '
+    + 'to wait or done needs nothing from you until it moves again), and bring that section\'s text in line with '
+    + 'board_edit. Your board_project_set keeps the user\'s status unless you pass override_user: true.';
 }
 
 /** `A reminder the user set on your Board is due: "Deploy timing" (choice deploy-when)`, the note quoted. */

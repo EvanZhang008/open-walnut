@@ -4,8 +4,8 @@ description: >-
   Keep a Board for a task that leads other tasks: one HTML page the user reads instead
   of your chat, with an overview, one section per area of work (a board project) whose
   status Walnut keeps, the owning tasks as live chips, points the user ticks as read,
-  decisions as numbered choices, a chat thread per section that reaches you, marks,
-  and reminders. Use when your task has workers (subtasks), when a job runs over days,
+  decisions as numbered choices, a chat thread per section that reaches you, the
+  user's notes, and reminders. Use when your task has workers (subtasks), when a job runs over days,
   when the user says "board", "track this", "where are we", "what needs me", or asks
   you to stop reporting in chat. Owns the board format, the walnut-* components, the
   board_* operations and the rules for writing a board.
@@ -16,25 +16,26 @@ description: >-
 A leader's chat is noise: every worker that stops, every check, every question lands in
 one scroll the user cannot follow. The Board is the standing surface instead. The user
 opens the **Board** tab on your session (next to Files and Changed), reads the state of
-every area, ticks what they have read, answers decisions, types a question under the
-section it belongs to, and leaves marks. You keep the board current; Walnut keeps the
-threads, the marks, the read ticks, the answers, the reminders and the task state live.
+every area, ticks what they have read, answers decisions, sets a project's status, types
+a question under the section it belongs to, and leaves notes. You keep the board current;
+Walnut keeps the threads, the notes, the statuses, the read ticks, the answers, the
+reminders and the task state live.
 
 Born 2026-10-01 from a leader that ran 40 tickets through a hand-made HTML file: sections
 by root cause, a status strip, per-section chat, red dots, personal marks. What that file
-could not do, Walnut now does: the user's questions and answers reach you, marks and read
-ticks are readable by you, task chips and section status show live state.
+could not do, Walnut now does: the user's questions, answers and status picks reach you,
+notes and read ticks are readable by you, task chips and section status show live state.
 
 ## 1. The operations
 
 | Operation | What |
 |---|---|
-| `board_get {task?}` | The board html, every thread's messages, every mark, the projects and their status, which points the user read (and which changed since), the user's answers, the reminders, and the live state of each task the board names. Read it before every edit. |
+| `board_get {task?}` | The board html, every thread's messages, the user's notes (`marks`), the projects and their status (`status_by: "human"` is the user's pick), which points the user read (and which changed since), the user's answers, the reminders, and the live state of each task the board names. Read it before every edit. |
 | `board_set {task?, html}` | Write the whole board. First version, or a rebuild. |
 | `board_edit {task?, edits: [{old, new}]}` | Replace exact strings. Each `old` must occur ONCE in the current html, or nothing is written and the error names the edit. This is the normal way to update. |
 | `board_post {task?, thread, text}` | Your answer or note in a section's thread. One message per post. The outcome names the new message id. |
 | `board_post_delete {task?, thread, id}` | Delete one of your own posts (a wrong or outdated answer). The user can delete any post from the Board tab. |
-| `board_project_set {task?, id, title?, status?, tasks?, delete?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title and tasks. The page recolors on its own. |
+| `board_project_set {task?, id, title?, status?, tasks?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title and tasks. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. |
 | `board_remind {task?, target, at, note?}` | A reminder on a choice or a thread (`at` is an ISO time, `""` clears). |
 
 **A team shares one board**: the nearest ancestor that has a board, else the root
@@ -54,16 +55,16 @@ else is your own HTML, CSS and script.
 |---|---|---|
 | `<walnut-task id="TASK_ID">` | A chip with the task's live phase and title; click opens the task | `compact` shows the title only. Always name a task through this element, never a bare id in text |
 | `data-project="ID"` on a section | Walnut sets the element's `data-status` from that project's status | So your CSS and `<walnut-strip>` recolor and recount when `board_project_set` runs. Put it on the section, not also on its overview row |
-| `<walnut-project id="ID">` | A status pill and the project's tasks as compact live chips | Put it in the section's heading and in the overview row |
+| `<walnut-project id="ID">` | A status pill and the project's tasks as compact live chips. The user clicks the pill to pick a status | Put it in the section's heading and in the overview row. The user's pick is stored as theirs and delivered to your session |
 | `<walnut-check id="ID">text</walnut-check>` | A point the user ticks as read | Walnut hashes the text: when you edit it, it comes back unread with a "changed" hint. Every fact, cause, fix and to-do is one |
 | `<walnut-choice id="ID" title="…" options="a:Label,b:Label" recommended="a" task="TASK_ID">` | Numbered option buttons, the recommended one tagged | The user's pick is stored and delivered to your session. `options` is `key:Label` pairs split by commas, so a label holds no comma. Gets a Remind me control |
 | `<walnut-thread id="area-a" title="Area A">` | That section's conversation: messages oldest first, the composer below (typed or by voice), unread badge | `task="TASK_ID"` tells you which task a question is about. Messages render light markdown. Gets a Remind me control. One thread per section; a thread at the bottom of the page is useless, the user cannot tell which issue it belongs to |
-| `<walnut-mark id="area-a">` | The user's mark (Revisit, Reviewed, Waiting on others) and a note, saved in Walnut | You read them in `board_get` under `marks` |
+| `<walnut-mark id="area-a">` | The user's note for you: an "Add note" button until it has text, saved in Walnut | A light note left after a glance; not delivered, you read it in `board_get` under `marks`. The status is `<walnut-project>`'s, not the note's |
 | `<walnut-strip>` | Counts of sections by status, click to filter | Counts elements carrying `data-status="decide|wip|wait|done"`; `labels="decide:Needs you,…"` renames |
 | `<walnut-unread>` | Total unread messages and due reminders | Put it in the header |
 
 Ids (`[A-Za-z0-9][A-Za-z0-9._:-]*`, up to 128 chars) are stable names. Renaming one
-orphans its messages, marks, ticks and answers, so pick them once.
+orphans its messages, notes, ticks and answers, so pick them once.
 
 A **board project** is one area on this board: one cause or one ticket. It is NOT a
 Walnut project (the `project` field of a task); the two never mix.
@@ -77,14 +78,14 @@ Walnut project (the `project` field of a task); the two never mix.
 5. **Sections are areas of work, not buckets.** Each section is one board project: one cause or one ticket, never a bundle. There is no "all new items" and no "other" project. A new item goes into the project whose cause it shares; a new cause gets a new project.
 6. **Every fact, cause, fix and to-do is its own `<walnut-check>` point.** The user ticks what they read; a point you edit comes back unread on its own.
 7. **Decisions are `<walnut-choice>`** with numbered options and the recommended one marked. Explain the options in the points above it; keep each label short.
-8. **Project status lives in Walnut** (`board_project_set`), never in hand-edited html. `data-status` in your html is only the starting value.
+8. **Project status lives in Walnut** (`board_project_set`, or the user's pick on the pill), never in hand-edited html. `data-status` in your html is only the starting value. One status per project, one source: what the user picked is the status.
 
 ## 4. The layout
 
-- **An overview first**: one row per project with its status (`<walnut-project>`), the latest update, the next step, what needs the user, and the user's `<walnut-mark>` in that row, where they look first.
+- **An overview first**: one row per project with its status (`<walnut-project>`, which the user can change there), the latest update, the next step, what needs the user, and the user's note (`<walnut-mark>`) in that row, where they look first.
 - **Then the projects stacked top to bottom, like an article.** No side-by-side grids unless the content really is a comparison.
 - **Each project opens with** overview, latest update, needs you (the choice), to do, done; long details folded in `<details>`; the thread at its end.
-- **Put the user's mark in the overview row or at the bottom of a section**, never beside the text.
+- **Put the user's note in the overview row or at the bottom of a section**, never beside the text.
 - **A section you changed shows the user a red dot on its own.** You do nothing for it.
 - **A choice the user answered leaves the needs-you list by itself**: give the overview row of a decision `data-choice="<choice id>"`.
 - **Header**: title, when you last checked, `<walnut-strip>`, `<walnut-unread>`.
@@ -96,7 +97,7 @@ Walnut project (the `project` field of a task); the two never mix.
 - **Edit small.** One `board_edit` pass per change, several edits in one call when they belong together. Rebuild with `board_set` only when the structure changes.
 - **A user's question in a thread is three writes**: your answer with `board_post`, the change it caused in that section's points or status with `board_edit` / `board_project_set`, and one line about it in your chat reply (Walnut writes your task's note and work log from your session; there is no op for it). Walnut delivers the question into your session with the thread and the task it is about; answer in the thread, not only in chat.
 - **A thread is a conversation.** One message per post: never paste a history as one blob, post it message by message. Light markdown. The user answers in the thread's own composer (typed or by voice), never in your chat.
-- **Marks, read ticks and choices are the user talking to you without typing.** Read them on every `board_get`: "Revisit" means the section is not done for them, "Waiting on others" means stop asking; a changed point they had read needs nothing from you, they see it unread. A choice answer also arrives in your session: act on it, then update that section.
+- **Statuses, notes, read ticks and choices are the user talking to you without typing.** A status the user picks arrives in your session like a choice answer: "Waiting on others" or "Done" means stop asking about it, "Needs you" means they want it raised. It stays theirs; do not move it back on your next `board_project_set` unless the work itself moved, and then say why in the section. Read notes on every `board_get`. A changed point they had read needs nothing from you, they see it unread. A choice answer also arrives in your session: act on it, then update that section.
 - **When the user says "later", set a reminder** (`board_remind`, or they use the Remind me control). When it comes due Walnut tells you in your session and the board shows it due; raise that item with the user again.
 - **A worker's area belongs to the worker.** When a thread's question is about a task you lead, hand it over with `task_send` and show that task's live chip and last step in the section; do not investigate it yourself.
 - **Keep the board current, not complete.** The user reads it between your turns. Update it when a worker reports, when a decision lands, when you learn something that changes a status, and at the end of every turn that changed anything.
@@ -149,7 +150,7 @@ Walnut project (the `project` field of a task); the two never mix.
 
 <h2>Overview</h2>
 <table>
-  <tr><th>Project</th><th>Status</th><th>Latest update</th><th>Next step</th><th>Needs you</th><th>Your mark</th></tr>
+  <tr><th>Project</th><th>Status</th><th>Latest update</th><th>Next step</th><th>Needs you</th><th>Your note</th></tr>
   <tr data-choice="area-a-purge">
     <td><a href="#area-a">Area A: cached settings outlive a change</a></td>
     <td><walnut-project id="area-a"></walnut-project></td>

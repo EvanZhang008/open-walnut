@@ -3,7 +3,7 @@
  *
  * A board belongs to a task. Its html is written by that task's session or any
  * task in its tree; Walnut keeps the chat threads (a human's questions typed on
- * the Board tab, a session's answers), the user's marks, the board's projects
+ * the Board tab, a session's answers), the user's notes, the board's projects
  * (one area of this board each, NOT a Walnut project) and their status, the
  * user's read ticks and answers to choices, and reminders beside it. The web UI
  * renders the html with live `<walnut-task>` chips. Routes: src/web/routes/board-v1.ts.
@@ -33,7 +33,7 @@ interface BoardBody {
   board?: { html?: string; version?: number; updated_at?: string; updated_by?: string } | null
   threads?: Record<string, Array<{ author?: string; ts?: string }>>
   marks?: Record<string, { state?: string; note?: string }>
-  projects?: Record<string, { title?: string; status?: string; tasks?: string[] }>
+  projects?: Record<string, { title?: string; status?: string; tasks?: string[]; status_by?: string }>
   checks?: Record<string, { hash?: string; read?: boolean; changed?: boolean }>
   choices?: Record<string, { option?: string; label?: string }>
   reminders?: Record<string, { at?: string; fired_at?: string }>
@@ -109,7 +109,9 @@ function itemsSummary(b: BoardBody, nowMs: number): string {
     const counts = STATUS_ORDER.map((s) => [s, projects.filter((p) => p.status === s).length] as const).filter(([, n]) => n);
     const none = projects.filter((p) => !p.status || !STATUS_ORDER.includes(p.status)).length;
     const parts = [...counts.map(([s, n]) => `${n} ${s}`), ...(none ? [`${none} without a status`] : [])];
-    out.push(`${plural(projects.length, 'project')}: ${parts.join(', ')}.`);
+    const byUser = Object.entries(b.projects ?? {}).filter(([, p]) => p.status && p.status_by === 'human');
+    const picked = byUser.length ? ` The user set ${capped(byUser.map(([id, p]) => `${id} to ${p.status}`))}.` : '';
+    out.push(`${plural(projects.length, 'project')}: ${parts.join(', ')}.${picked}`);
   }
   const checks = Object.values(b.checks ?? {});
   if (checks.length) {
@@ -143,7 +145,8 @@ defineOp({
   title: 'Read a task\'s board',
   description:
     'Read your team\'s Board (or the one of the task you name): its html, every chat thread with the user\'s ' +
-    'messages and yours, the user\'s marks and notes, the board\'s projects and their status, which points ' +
+    'messages and yours, the user\'s notes (under `marks`), the board\'s projects and their status (with who ' +
+    'set it: status_by "human" is the user\'s pick), which points ' +
     'the user ticked read (and which changed since), the user\'s answers to choices, reminders, and the live ' +
     'state of each task the board names. Read it before every edit. No board yet means a leader has not made ' +
     'one: the walnut-board skill says how.',
@@ -295,7 +298,9 @@ defineOp({
     'area of this board, one cause or one ticket; it is NOT a Walnut project (a task\'s project field). Its ' +
     'status (decide = needs the user, wip, wait, done) lives in Walnut: every element with ' +
     'data-project="<id>" and every <walnut-project id> on the page recolors on its own, and the strip ' +
-    'recounts. Absent fields keep their value; status "" clears it; tasks is a full replacement; a project ' +
+    'recounts. The user can pick a status on the page too (you are told when they do); a status the user ' +
+    'picked stays theirs: changing or removing it is refused unless you pass override_user: true. ' +
+    'Absent fields keep their value; status "" clears it; tasks is a full replacement; a project ' +
     'left with no title, status and tasks, or delete: true, is removed.',
   input: {
     task: TASK_ARG,
@@ -306,6 +311,8 @@ defineOp({
     tasks: z.array(z.string().min(1)).max(200).optional().describe(
       'The task ids working on this area (full ids or unique prefixes); replaces the whole list'),
     delete: z.boolean().optional().describe('Remove the project'),
+    override_user: z.boolean().optional().describe(
+      'true: replace (or remove) a status the user picked on the page; without it that status stays'),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
@@ -315,6 +322,7 @@ defineOp({
       ...(args.status !== undefined ? { status: args.status } : {}),
       ...(args.tasks !== undefined ? { tasks: args.tasks } : {}),
       ...(args.delete === true ? { delete: true } : {}),
+      ...(args.override_user === true ? { override_user: true } : {}),
     }) as { project?: { status?: string; tasks?: string[] } | null };
     const project = body.project;
     return withOutcome(

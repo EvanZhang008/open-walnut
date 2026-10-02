@@ -159,7 +159,7 @@ describe('board ops', () => {
       get: {
         ...BOARD,
         projects: {
-          'cause-a': { status: 'decide' }, 'cause-b': { status: 'wip' }, 'cause-c': { status: 'wip' },
+          'cause-a': { status: 'decide' }, 'cause-b': { status: 'wip', status_by: 'human' }, 'cause-c': { status: 'wip' },
           'cause-d': { status: 'done' }, 'cause-e': { title: 'No status yet' },
         },
         checks: {
@@ -170,7 +170,7 @@ describe('board ops', () => {
       },
     }))
     const got = await r.speak({ task: 'lead01' })
-    expect(got.outcome).toContain(' 5 projects: 1 decide, 2 wip, 1 done, 1 without a status.')
+    expect(got.outcome).toContain(' 5 projects: 1 decide, 2 wip, 1 done, 1 without a status. The user set cause-b to wip.')
     expect(got.outcome).toContain(' 2 of 4 points read, 1 changed since read.')
     expect(got.outcome).toContain(' 2 choices answered: when "Run it now"; rollout "b".')
     expect(got.outcome).toContain(` Reminders: 1 due (when), 1 pending (area-a at ${soon}).`)
@@ -191,6 +191,14 @@ describe('board ops', () => {
     expect(d.seen[2].body).toEqual({ delete: true })
     expect(gone.outcome).toBe('Project "cause-a" removed from lead01\'s board.')
     expect(getOp('board_project_set')!.description).toMatch(/NOT a Walnut project/)
+    // A status the user picked is replaced only on purpose: override_user rides along, false is left out.
+    const o = run('board_project_set', server())
+    await o.speak({ id: 'cause-a', status: 'done', override_user: true })
+    expect(o.seen[2].body).toEqual({ status: 'done', override_user: true })
+    const k = run('board_project_set', server())
+    await k.speak({ id: 'cause-a', status: 'done', override_user: false })
+    expect(k.seen[2].body).toEqual({ status: 'done' })
+    expect(getOp('board_project_set')!.description).toMatch(/stays theirs: changing or removing it is refused unless you pass override_user: true/)
   })
 
   it('board_remind sets with an ISO time and clears with ""', async () => {

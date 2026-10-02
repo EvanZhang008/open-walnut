@@ -117,7 +117,7 @@ describe('walnut-board skill', () => {
     expect(BOARD).toMatch(/Project status lives in Walnut/)
     expect(BOARD).toMatch(/One message per post: never paste a history as one blob/)
     expect(BOARD).toMatch(/When the user says "later", set a reminder/)
-    expect(BOARD).toMatch(/Put the user's mark in the overview row or at the bottom of a section/)
+    expect(BOARD).toMatch(/Put the user's note in the overview row or at the bottom of a section/)
     expect(BOARD).toMatch(/A section you changed shows the user a red dot on its own/)
     expect(BOARD).not.toMatch(/[\u2013\u2014]/)
   })
