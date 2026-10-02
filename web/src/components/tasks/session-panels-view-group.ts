@@ -1,10 +1,11 @@
 /**
- * The filter menu's "Session panels" row: how many session panels sit side by side on the
- * home page, 1 to 5 or Auto. It is the same app-wide setting as Settings → General and the
- * session kebab (useSessionPanelMode), shown here because the task panel is where the user
- * is when the strip feels too crowded or too sparse (2026-09-23: "this should show the
- * number of session panels we can adjust"). Under Auto the row also says how many panels
- * Auto means in this window right now.
+ * The Display menu's "Session columns" row: how many session panels sit side by side on the
+ * home page, 1 to 5 or Auto. It is the same app-wide setting as Settings, General
+ * (useSessionPanelMode); the session kebab's Columns row renders this very group, so both
+ * in-context surfaces show the same choice and the same count. The task panel has it
+ * because that is where the user is when the strip feels too crowded or too sparse
+ * (2026-09-23: "this should show the number of session panels we can adjust"). Under Auto
+ * the row also says how many panels Auto means in this window right now.
  */
 import {
   MAX_PANELS, MIN_PANELS, useLiveSessionPanelCount, useSessionPanelMode, type SessionPanelMode,
@@ -22,7 +23,7 @@ export function sessionPanelsViewGroup(
   setMode: (mode: SessionPanelMode) => void,
 ): ViewOptionGroup {
   return {
-    label: 'Session panels',
+    label: 'Session columns',
     options: [{
       key: 'session-panels',
       label: 'Side by side',

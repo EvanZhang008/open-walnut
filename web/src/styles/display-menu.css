@@ -1,0 +1,205 @@
+/*
+ * display-menu: the task panel's Display menu (.dm-*): DisplayMenu.tsx,
+ * DisplaySortRows.tsx, DisplayViewsFlyout.tsx. Shared primitives (.tp-btn,
+ * .tp-pop, .tp-seg, focus ring) come from filter-toolbar-base.css. Existing
+ * tokens only, both themes.
+ */
+
+/* Fixed-height scroll box: DisplayMenu writes `height` once at open; the
+   placement hook adds `maxHeight`. Width is set inline (320px, viewport - 16). */
+.dm-menu {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 6px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 12px;
+}
+
+.dm-section { display: flex; flex-direction: column; padding: 2px 6px; }
+.dm-section + .dm-section { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
+.dm-heading {
+  /* One heading style with the Sort / Group labels (F31): sentence case. */
+  padding: 4px 8px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+/* View rows (and the flyout's rows): a check slot, then the name. */
+.dm-view, .dm-flyout-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dm-view:hover, .dm-flyout-item:hover { background: var(--bg-hover); }
+/* Selected: the tint plus the check icon; the words keep --fg, since --accent-text on
+   the tint reads at about 3.3:1 in the dark theme (C36 wants 4.5:1 in both). */
+.dm-view[aria-pressed='true'], .dm-flyout-item[aria-checked='true'] {
+  background: var(--accent-subtle);
+  color: var(--fg);
+}
+.dm-check { color: var(--accent-text); }
+.dm-check { display: inline-flex; width: 12px; flex-shrink: 0; justify-content: center; }
+.dm-view-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-more-chevron { display: inline-flex; color: var(--fg-muted); }
+.dm-more-views[aria-expanded='true'] { background: var(--bg-hover); }
+
+/* Setting rows: name on the left, its control on the right. */
+.dm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 8px;
+  box-sizing: border-box;
+}
+.dm-row .tp-seg-btn { line-height: 16px; }
+.dm-row-label { color: var(--fg-secondary); white-space: nowrap; }
+/* Each segment sizes to its own word (the base .tp-seg-btn splits the width equally,
+   which clipped "By project" and "Auto (2)"); the label never shrinks. */
+.dm-row-label { flex-shrink: 0; }
+.dm-seg { flex: none; width: auto; }
+.dm-seg-btn { flex: none; min-width: 22px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+/* The view-specific slot: room for its tallest form (one row: Collapse all, Tier
+   layout or Recent order), so a view switch never moves a row or resizes the box. */
+.dm-context { --dm-row-h: 30px; min-height: var(--dm-row-h); }
+.dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-secondary); font-size: 11px; }
+
+/* Show tab bar: the whole row is the switch; the track mirrors .tp-switch. */
+.dm-switch-row {
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dm-switch-row:hover, .dm-action:hover { background: var(--bg-hover); }
+.dm-switch-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  /* Off track >= 3:1 against the menu in both themes (F28). */
+  background: var(--fg-muted);
+  transition: background-color 120ms ease-out;
+}
+.dm-switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  transition: transform 120ms ease-out;
+}
+.dm-switch-row[aria-checked='true'] .dm-switch-track { background: var(--accent); }
+.dm-switch-row[aria-checked='true'] .dm-switch-track::after { transform: translateX(12px); }
+
+/* Collapse / Expand all projects: a one-shot action, not a setting. */
+.dm-action {
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Sort: the "own order" note and the inline confirm (never a browser confirm). */
+.dm-note { height: 18px; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--fg-secondary); text-align: right; }
+.dm-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  margin: 0 8px 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-hover);
+}
+.dm-confirm-text { flex: 1 1 100%; color: var(--fg); font-size: 11px; line-height: 1.4; }
+.dm-text-btn {
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dm-text-btn:hover { background: var(--bg-elevated); }
+
+/* More views flyout: its own portal, scrolls inside (the hook sets maxHeight). */
+.dm-views-flyout {
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 4px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 12px;
+}
+/* Tier views above, Recent and Projects below (F12). */
+.dm-flyout-sep { flex: none; height: 1px; margin: 4px 2px; background: var(--border); }
+
+/* One focus ring, both themes (spec 5.9). */
+.dm-view:focus-visible, .dm-flyout-item:focus-visible, .dm-switch-row:focus-visible,
+.dm-action:focus-visible, .dm-text-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dm-menu, .dm-views-flyout { animation-duration: 0ms; }
+  .dm-switch-track, .dm-switch-track::after { transition-duration: 0ms; }
+}
+
+/* A view with no view-specific rows keeps the slot's room but drops its divider. */
+.dm-section.dm-context:empty { border-top-color: transparent; }
+
+/* Opened with the pointer: the first focused row draws no ring until a key is pressed (F29). */
+.dm-menu[data-pointer-open] .dm-view:focus-visible,
+.dm-menu[data-pointer-open] .dm-view:focus { outline: none; }
+/* After a key, the focused control shows the ring in every engine (WebKit skips
+   :focus-visible on a focus moved by script after a click). */
+.dm-menu[data-keyed] :is(.dm-view, .dm-switch-row, .dm-action, .dm-text-btn, .tp-seg-btn, .tp-switch):focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A `view-dropdown:reveal` landing (view-dropdown-reveal.ts): the row the user was sent to
+   pulses twice so the eye finds it among the others. Same beat as the Settings deep-link flash. */
+.dm-row.dm-row-flash { animation: dm-row-flash 3000ms ease-out; border-radius: 6px; }
+@keyframes dm-row-flash {
+  0%, 20% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 1px var(--accent); }
+  40% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 1px transparent; }
+  60% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 1px var(--accent); }
+  100% { background-color: transparent; box-shadow: 0 0 0 1px transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .dm-row.dm-row-flash { animation: none; box-shadow: 0 0 0 1px var(--accent); } }

@@ -90,17 +90,34 @@ show inline after the open ones, other completed hits that show the query fold i
   reduce it themselves"): close a column, or pick a lower count. What the strip owes them is
   finding that count: the grow moment raises a `hint` toast ("Panel count is now 4: all 3 were
   pinned", kind `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "Adjust panels"
-  button opens the picker the user ALREADY HAS beside the strip, the task panel's view menu (the
-  sliders button next to New task), on its Session panels row, pulsing
+  button opens the picker the user ALREADY HAS beside the strip, the task panel's Display menu
+  (the sliders button next to New task), on its Session columns row, pulsing
   (`revealViewOption('session-panels')` in `components/tasks/view-dropdown-reveal.ts`: a window
-  event the `ViewDropdown` that renders the option answers; it shows a hidden task panel first and
-  waits for the trigger to hold still, `whenSettled`, before placing the menu, because the panel
-  slides open over 250ms). It does NOT send the user to Settings (2026-10-02: "that's ridiculous,
-  it's too far away"); `/settings#session-panels` still works as a typed deep link (`ROW_TARGETS`
+  event the home `DisplayButton` answers (`DisplayMenu.tsx`, row class `dm-row-flash`); it shows
+  a hidden task panel first and waits for the trigger to hold still, `whenSettled`, before
+  placing the menu, because the panel slides open over 250ms). It does NOT send the user to
+  Settings (2026-10-02: "that's ridiculous, it's too far away"); `/settings#session-panels` still
+  works as a typed deep link (`ROW_TARGETS`
   in `components/settings/settings-routing.ts`, pulses the row with
   `settings-anchor-flash-strong`). The Panels 1-5/Auto row is also the FIRST row of the session
   kebab (`leadingSection` of `TaskQuickActions`, above Task detail), not a line between the view
   toggles.
+- **The home task panel has ONE filter concept and two toolbar buttons** (2026-10-02, the new-user
+  redesign: "what is pinned, focus, satellite? filter is filter"). **Filter** (funnel, count badge,
+  `components/tasks/FilterMenu.tsx`) is a one-page popover of dimension rows (Status, Project, Date,
+  Source; Priority, Blocked, Tags, Sprint, Time window under `More filters`) plus a `Search filters`
+  box; what it sets shows as chips in the filter row under the toolbar (`FilterBar.tsx`, one chip per
+  dimension, `Clear`, the hit count), the one place that says "a filter is on". There is ONE Status
+  (To Do, In Progress, Need Action, Waiting, Complete; the default is the three open ones), never a
+  Status AND a Phase. **Display** (sliders, `DisplayMenu.tsx`) holds how the list is laid out: the
+  View rows (All, Pinned, the rest behind `More views`, same list and order as the tab bar), Show tab
+  bar, Session columns, Sort, Group, Collapse all. Tier names never sit at the first level of either.
+  State lives in `useHomeFilters.ts` (`FilterState`, persisted under `walnut-todo-filters`, chips
+  derived by `filter-bar-dims.ts`, the list predicate in `filter-predicate.ts`); `/tasks` keeps
+  `ViewDropdown` for now with the same one-Status section. Every popover and flyout here is placed by
+  `useMenuPlacement` and closed through `hooks/useOverlayLayer.ts` (one outside-press/Escape layer per
+  open overlay, child portals exempt). Specs: `tests/e2e/browser/filter-bar*.spec.ts`,
+  `display-menu.spec.ts`, `todo-search-and-filters.spec.ts`; helpers in `filter-bar-helpers.ts`.
 - **One browser, one task store.** `TasksContext` (`useTasks`) is the only in-browser truth for
   a task row. A surface that shows a task reads it from there (`useStoreTask(id)`) and writes
   through the store's optimistic mutators (`update` / `setPhase` / `moveTask`), so the board

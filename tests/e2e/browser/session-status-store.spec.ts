@@ -181,9 +181,9 @@ async function navigateToTasks(page: Page, mobile = false): Promise<void> {
   await expect(page.getByTestId('tasks-table')).toBeVisible()
 }
 
-/** Show every status on the /tasks table (Todo on by default; turn Done on too). */
+/** Show every status on the /tasks table (Open on by default; turn Complete on too). */
 async function showAllStatusesOnTasksPage(page: Page): Promise<void> {
-  const doneChip = page.locator('.tp-chip', { hasText: 'Done' })
+  const doneChip = page.locator('.tp-chip', { hasText: 'Complete' })
   if (!/\bon\b/.test((await doneChip.getAttribute('class')) ?? '')) await doneChip.click()
 }
 

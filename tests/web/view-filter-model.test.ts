@@ -8,18 +8,24 @@
  *     that also clears its siblings would silently widen/narrow the query);
  *   - an empty query still reads as a sentence ("Showing every task.") so the
  *     strip never renders as a dangling "Showing ";
- *   - sort never appears — it's presentation, not a filter, and a removable
+ *   - sort never appears: it's presentation, not a filter, and a removable
  *     sort chip would leave the query with no comparator.
  */
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_TASK_QUERY_FILTER_STATE,
+  QUERY_STATUS_OPTIONS,
+  QUERY_STATUS_ORDER,
   TAG_CHIP_CAP,
   buildFilterSentence,
+  queryStatusSet,
   searchFilterOptions,
   tagChipOptions,
+  withQueryStatus,
   type TaskQueryFilterState,
 } from '../../web/src/components/tasks/view-filter-model';
+import { STATUS_FILTER_ORDER, foldQueryStatus } from '../../web/src/components/tasks/filter-bar-model';
+import { PHASE_LABELS } from '../../web/src/utils/session-status';
 
 const base = DEFAULT_TASK_QUERY_FILTER_STATE;
 
@@ -41,7 +47,7 @@ describe('buildFilterSentence', () => {
       timePreset: '24h',
     };
     expect(text(buildFilterSentence(state))).toBe(
-      'Showing [Doing], priority [Immediate], in [Walnut] or [iOS App], updated in [24h].',
+      'Showing [In Progress] or [Need Action], priority [Immediate], in [Walnut] or [iOS App], updated in [24h].',
     );
   });
 
@@ -85,7 +91,7 @@ describe('buildFilterSentence', () => {
       .toBe('Showing every task.');
     // Non-empty query: sort stays out of the sentence (distinguishes "sort
     // excluded" from "empty query short-circuits").
-    expect(text(buildFilterSentence({ ...base, sort: 'priority', completion: ['todo'] })))
+    expect(text(buildFilterSentence({ ...base, sort: 'priority', phases: ['TODO'] })))
       .toBe('Showing [To Do].');
   });
 });
@@ -94,7 +100,7 @@ describe('searchFilterOptions', () => {
   const lists = {
     projectOptions: ['', 'Walnut', 'iOS App'],
     sourceOptions: ['local', 'ms-todo'],
-    sprintOptions: ['Nov 10 – Nov 21'],
+    sprintOptions: ['Nov 10 \u2013 Nov 21'],
   };
 
   it('empty query returns nothing (detail pane shows the section instead)', () => {
@@ -209,5 +215,105 @@ describe('tagChipOptions', () => {
     const all = tagChipOptions(many, many);
     expect(all.options).toHaveLength(many.length);
     expect(all.hidden).toBe(0);
+  });
+});
+
+/**
+ * The merged Status (spec D7): /tasks shows ONE Status section, not Status +
+ * Phase. Its five values are the status words (no "Doing", no "Done"), it reads a
+ * legacy completion list folded into phases (so a stored /tasks query keeps its
+ * meaning), and it writes exact phases with completion cleared.
+ */
+describe('merged Status', () => {
+  const STATUS_WORDS = ['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'];
+
+  it('has the filter bar order and the status words', () => {
+    expect([...QUERY_STATUS_ORDER]).toEqual([...STATUS_FILTER_ORDER]);
+    expect(QUERY_STATUS_OPTIONS.map((o) => o.label)).toEqual(STATUS_WORDS);
+    for (const o of QUERY_STATUS_OPTIONS) expect(o.label).toBe(PHASE_LABELS[o.value]);
+  });
+
+  it('agrees with foldQueryStatus for every shape a stored query can have', () => {
+    const shapes: Pick<TaskQueryFilterState, 'completion' | 'phases'>[] = [
+      { completion: [], phases: [] },
+      { completion: ['todo', 'in_progress'], phases: [] },
+      { completion: ['complete'], phases: [] },
+      { completion: ['todo'], phases: [] },
+      { completion: [], phases: ['COMPLETE', 'TODO'] },
+      { completion: ['todo'], phases: ['WAITING'] },
+    ];
+    for (const shape of shapes) expect(queryStatusSet(shape)).toEqual(foldQueryStatus(shape) ?? []);
+  });
+
+  it('reads the /tasks default (completion todo + in_progress) as the four not-complete statuses', () => {
+    expect(queryStatusSet({ completion: ['todo', 'in_progress'], phases: [] }))
+      .toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING']);
+  });
+
+  it('writes exact phases in order and clears completion; an empty set is no condition', () => {
+    const from = { ...base, completion: ['todo', 'in_progress'] as TaskQueryFilterState['completion'] };
+    expect(withQueryStatus(from, ['COMPLETE', 'TODO'])).toMatchObject({ phases: ['TODO', 'COMPLETE'], completion: [] });
+    const none = withQueryStatus(from, []);
+    expect(none.phases).toEqual([]);
+    expect(none.completion).toEqual([]);
+    expect(text(buildFilterSentence(none))).toBe('Showing every task.');
+  });
+
+  it('puts one Status group in the sentence whose chips remove one status each', () => {
+    const state: TaskQueryFilterState = { ...base, completion: ['complete'] };
+    expect(text(buildFilterSentence(state))).toBe('Showing [Complete].');
+    const tokens = buildFilterSentence({ ...base, phases: ['TODO', 'WAITING'] });
+    const chips = tokens.filter((t) => t.kind === 'chip');
+    expect(chips.map((c) => c.kind === 'chip' && c.dim)).toEqual(['status', 'status']);
+    const waiting = chips.find((c) => c.kind === 'chip' && c.value === 'WAITING')!;
+    expect(waiting.kind === 'chip' && waiting.removed.phases).toEqual(['TODO']);
+    expect(waiting.kind === 'chip' && waiting.removed.completion).toEqual([]);
+  });
+
+  it('search lists one Status group (no Phase group), found by "phase" too, with no Doing or Done', () => {
+    const lists = { projectOptions: [], sourceOptions: [], sprintOptions: [] };
+    for (const q of ['status', 'phase']) {
+      const groups = searchFilterOptions(base, lists, q);
+      expect(groups.map((g) => g.dimension)).toEqual(['Status']);
+      expect(groups[0].options.map((o) => o.label)).toEqual(STATUS_WORDS);
+      expect(groups[0].options.every((o) => o.section === 'q-status')).toBe(true);
+    }
+    const labels = searchFilterOptions(base, lists, 'o').flatMap((g) => g.options.map((o) => o.label));
+    expect(labels).not.toContain('Done');
+    expect(labels).not.toContain('Doing');
+  });
+
+  it('a search pick on a folded completion set writes phases and keeps the rest', () => {
+    const state: TaskQueryFilterState = { ...base, completion: ['todo', 'in_progress'], projects: ['Walnut'] };
+    const lists = { projectOptions: ['Walnut'], sourceOptions: [], sprintOptions: [] };
+    const complete = searchFilterOptions(state, lists, 'complete')[0].options[0];
+    expect(complete.selected).toBe(false);
+    expect(complete.toggled).toMatchObject({
+      phases: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING', 'COMPLETE'], completion: [], projects: ['Walnut'],
+    });
+  });
+});
+
+/**
+ * C50 on /tasks: every status word a /tasks chip shows is a Status value word.
+ * A legacy completion value read back from an older saved query and a phase
+ * value both read "Status: <word>", never Phase, Doing or Done.
+ */
+describe('/tasks chips use the Status words (C50)', () => {
+  const WORDS = ['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'];
+  it('legacy completion and phase values label as Status with a Status word', async () => {
+    const { buildTaskFilterChips } = await import('../../web/src/components/tasks/TaskFilterChips');
+    const query: TaskQueryFilterState = {
+      ...DEFAULT_TASK_QUERY_FILTER_STATE,
+      completion: ['todo', 'in_progress', 'complete'],
+      phases: ['TODO', 'COMPLETE'],
+    };
+    const chips = buildTaskFilterChips(query, () => {});
+    const status = chips.filter((c) => c.key.startsWith('completion:') || c.key.startsWith('phase:'));
+    expect(status).toHaveLength(5);
+    for (const c of status) {
+      expect(c.label).toBe('Status');
+      expect(WORDS).toContain(c.value);
+    }
   });
 });

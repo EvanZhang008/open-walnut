@@ -16,7 +16,7 @@ import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus } from '@open-walnut/core';
 import type { TaskPhase } from '@/types/session';
-import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, phasePickerChoices, matchesPhaseFilter, taskNeedsAction } from '@/utils/session-status';
+import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, phasePickerChoices, taskNeedsAction } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
@@ -27,7 +27,6 @@ import { recentActivityTime, recentActivityTitle, type RecentSortMode } from './
 import { footerStatusScope } from './footer-scope';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { TAB_BAR_HIDDEN_TABS_KEY, TASK_SHORTCUTS_KEY, useNavigationList, useNavigationPreference } from '@/hooks/useNavigationPreference';
-import { useSessionPanelsViewGroup } from './session-panels-view-group';
 import { AgentSearchPanel } from './AgentSearchPanel';
 import { NewLauncherButton } from './NewLauncherButton';
 import { TierPlusButton } from './ProjectHeaderMenus';
@@ -108,36 +107,18 @@ import { dragBus } from '@/utils/drag-bus';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
-import {
-  ViewDropdown,
-  DEFAULT_TASK_QUERY_FILTER_STATE,
-  hasActiveTaskQuery,
-  isPinnedFiltered,
-  logTaskQueryChange,
-  timeWindowLabel,
-  toTaskQuery,
-  type SortBy,
-  type GroupBy,
-  type DateFilter,
-  type TaskQueryFilterState,
-  type ViewOptionGroup,
-} from './ViewDropdown';
-import { TaskFilterChips } from './TaskFilterChips';
-import {
-  buildTaskQueryContext,
-  deriveSourceOptions,
-  deriveSprintOptions,
-  deriveTagOptions,
-  safeNormalizeTaskQuery,
-} from './task-query-state';
-import { useTagDisplay } from '@/stores/tag-display-store';
-import {
-  matchesTaskQuery,
-  type NormalizedTaskQuery,
-  type TaskQuery,
-  type TaskQueryContext,
-} from '@open-walnut/task-query';
-import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
+import { type SortBy, type GroupBy } from './ViewDropdown';
+import { FilterButton } from './FilterMenu';
+import { FilterBar } from './FilterBar';
+import { DisplayButton } from './DisplayMenu';
+import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
+import { isDefaultStatus } from './filter-bar-model';
+import { markTierUsed, readTierUsed } from './filter-bar-persist';
+import { hiddenByReasons, passesChips } from './filter-predicate';
+import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
+import { TodoFilterFooter, footerScope } from './TodoFilterFooter';
+import { TodoProjectsMiniBar } from './TodoProjectsMiniBar';
+import { TodoFilterEmpty, FilterOverrideReasons, isJustCreated } from './TodoFilterEmpty';
 import { staleDonePinIds } from './pin-search-fold';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
 import { ancestorHeadings, buildFolderParents, folderAncestors, folderDepth, nestFolderUnits } from './folder-tree';
@@ -160,7 +141,7 @@ import {
 } from './tier-group-sentinels';
 import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from './task-move-project';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
-import { DEFAULT_HIDDEN_TABS } from './tab-bar-model';
+import { DEFAULT_HIDDEN_TABS, allViews } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
@@ -177,7 +158,10 @@ type Task = CoreTask & {
   is_blocked?: boolean;
 };
 
-const DATE_LABELS: Record<string, string> = { now: 'Now', overdue: 'Overdue', 'this-week': 'This Week', 'no-date': 'No Date' } as const;
+/** A tier view (Focus, Satellite, Parked or a custom tier). */
+function isTierSection(s: string): boolean {
+  return s === 'focus' || s === 'satellite' || s === 'wait' || s.startsWith('ct_');
+}
 
 /** Inline split-pane target. Project is the single grouping layer, so 'project' is
  *  the only kind; Inbox ('') has no registry row and therefore no detail pane. */
@@ -208,7 +192,7 @@ interface TodoPanelProps {
    *  the Pinned region only — no TASKS tab switch, no project expansion.
    *  'all' (default) = full locate incl. tab switch. 'locate' = 'all' asked from outside
    *  the panel, which also moves the panel to the task's tier tab or to All. */
-  focusScope?: 'all' | 'pinned' | 'locate';
+  focusScope?: 'all' | 'pinned' | 'locate' | 'created';
   favorites?: UseFavoritesReturn;
   ordering?: UseOrderingReturn;
   /** `project` is '' for Inbox. */
@@ -550,7 +534,6 @@ const LS_SORT_KEY = 'walnut-todo-sortBy';
 /** Per-project task order, `{ [project]: SortBy }`; a project absent here follows LS_SORT_KEY. */
 const LS_PROJECT_SORT_KEY = 'walnut-todo-project-sort';
 const LS_GROUP_KEY = 'walnut-todo-groupBy';
-const LS_DATE_FILTER_KEY = 'walnut-todo-dateFilter';
 const LS_SECTION_KEY = 'walnut-todo-active-section';
 
 function readSetFromStorage(key: string): Set<string> {
@@ -586,16 +569,6 @@ function readListOpen(): Set<string> {
 function saveListOpen(open: Set<string>): Set<string> {
   persistSet(LS_LIST_OPEN_PROJS_KEY, open);
   return open;
-}
-
-function readTab(): string {
-  // '' = the All chip. (Before the starred system was retired this defaulted to
-  // the ★ tab; a persisted '\u2605' now self-heals to All via the stale-tab effect.)
-  try { return localStorage.getItem(LS_TAB_KEY) ?? ''; } catch { return ''; }
-}
-
-function persistTab(tab: string) {
-  try { localStorage.setItem(LS_TAB_KEY, tab); } catch { /* ignore */ }
 }
 
 function readSection(): TodoSection {
@@ -726,7 +699,7 @@ interface SortableTaskItemProps {
   searchContext?: string; // Project label shown at the end of a search / flat-list row
   /** Search rows only: the tier a pinned hit lives in, as a pill (search is one flat list). */
   searchTierLabel?: string;
-  filterOverrideReason?: string;  // Why this task is outside current filters (focus override)
+  filterOverrideReason?: ReactNode;  // Why this task is outside current filters (focus override)
   isFadingOverride?: boolean;     // Task is fading out after focus moved away
   /** Virtual-group rendering: present when this task is part of a multi-member group. */
   groupInfo?: GroupRenderInfo;
@@ -1029,7 +1002,7 @@ function FolderHeaderRow({ groupId, label, count, project, depth, folderDepth: n
         data-group-id={groupId}
         data-folder-depth={nestDepth || undefined}
         title={onToggleCollapse
-          ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}`
+          ? `Folder: click to ${collapsed ? 'expand' : 'collapse'}`
           : 'Folder — independent tasks kept together inside this project'}
         // Click ANYWHERE on the row, the name included, folds/unfolds. Only the
         // chevron and the "···" menu button stopPropagation.
@@ -1357,7 +1330,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           aria-label={isSelected ? 'Deselect task' : 'Select task'}
           title={isSelected ? 'Deselect' : 'Select'}
         >
-          {isSelected ? '✓' : ''}
+          {isSelected ? ICONS.ICON_CHECK : null}
         </button>
       )}
 
@@ -1378,7 +1351,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           {/* Unread dot — leftmost, keeps everything on one line. Clears when the
               user opens the task (MainPage.handleFocusTask marks it read). */}
           {!isDone && (task.unread ? (
-            <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
+            <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
           ) : needsAction && (
             <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
           ))}
@@ -1390,7 +1363,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
             }}
             aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-            title={isDone ? 'Done — click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+            title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
           >
             {ICONS.binaryPhaseIcon(isDone, task.phase)}
           </button>
@@ -1489,14 +1462,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             )}
           </div>
         )}
-        {/* Filter override reason — shown below title when task is outside current filters */}
-        {filterOverrideReason && (
-          <div className="task-filter-override-row">
-            <span className="task-filter-override-badge" title="This task is outside your current filters and is shown temporarily because you navigated to it. It will fade away when you select another task.">
-              {filterOverrideReason}
-            </span>
-          </div>
-        )}
+        {/* Why the task is outside the current filters (focus override, spec 5.12). */}
+        {filterOverrideReason}
       </div>
     </div>
     </>
@@ -1582,11 +1549,13 @@ function DroppableHeader({ id, project, disabled, children }: DroppableHeaderPro
 function ProjectHeaderRow({
   project, taskCount, collapsed, source, droppableDisabled, dragHandleProps,
   isFavorite, onToggleFavorite, onToggleCollapse, onViewDetails, onAddTask, onAddFolder, onAddSession,
-  onMoveUp, onMoveDown, sort, onSetSort,
+  onMoveUp, onMoveDown, sort, onSetSort, onFilterToProject,
 }: {
   /** '' = Inbox. */
   project: string;
   taskCount: number;
+  /** "Filter to this project" (spec 6.8). */
+  onFilterToProject?: (project: string) => void;
   /** How this project's tasks are ordered, and the menu rows that change it. */
   sort?: SortBy;
   onSetSort?: (project: string, sort: SortBy) => void;
@@ -1618,6 +1587,7 @@ function ProjectHeaderRow({
     onMoveUp,
     onMoveDown,
     onSetSort,
+    onFilterToProject,
   });
   return (
     <>
@@ -1627,7 +1597,7 @@ function ProjectHeaderRow({
             ref={setHeaderRef}
             className={`todo-group-project-header${isHeaderOver ? ' header-drop-active' : ''}`}
             {...dragHandleProps}
-            title={`Project — click to ${collapsed ? 'expand' : 'collapse'}`}
+            title={`Project: click to ${collapsed ? 'expand' : 'collapse'}`}
             // dnd-kit swallows the click once its 5px activation fired, so a real
             // project drag can never also fold the group.
             onClick={() => onToggleCollapse(project)}
@@ -1650,7 +1620,7 @@ function ProjectHeaderRow({
               <button
                 className="todo-group-name-btn"
                 onClick={(e) => { e.stopPropagation(); onToggleCollapse(project); }}
-                title={`${project || 'Inbox'} — click to ${collapsed ? 'expand' : 'collapse'}`}
+                title={`${project || 'Inbox'}: click to ${collapsed ? 'expand' : 'collapse'}`}
               >
                 {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
                 <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
@@ -1756,14 +1726,14 @@ function EmptyFolderRow({ groupId, label, project, onRename, onDelete, onMoveToP
       ref={setNodeRef}
       className={`task-group-chip task-group-chip-empty${isOver ? ' task-group-chip-drop' : ''}`}
       data-group-id={groupId}
-      title="Empty folder — drag a task here to file it"
+      title="Empty folder: drag a task here to file it"
       onContextMenu={(e) => folderMenu.open(e, { groupId, label, project })}
     >
       <span className="task-group-chip-icon" aria-hidden="true">
         {ICONS.ICON_FOLDER_OUTLINE}
       </span>
       <span className="task-group-chip-label">{label}</span>
-      <span className="task-group-chip-empty-hint" aria-hidden="true">empty — drag a task here</span>
+      <span className="task-group-chip-empty-hint" aria-hidden="true">empty: drag a task here</span>
       {(onRename || onDelete || onMoveToProject) && (
         <button
           type="button"
@@ -1844,93 +1814,6 @@ function readGroupBy(): GroupBy {
 
 function persistGroupBy(v: GroupBy) {
   try { localStorage.setItem(LS_GROUP_KEY, v); } catch { /* ignore */ }
-}
-
-function readDateFilter(): DateFilter {
-  try {
-    const v = localStorage.getItem(LS_DATE_FILTER_KEY);
-    if (v === 'now' || v === 'overdue' || v === 'this-week' || v === 'no-date' || v === '') return v as DateFilter;
-  } catch { /* ignore */ }
-  return 'now'; // default: only show tasks that need attention
-}
-
-function persistDateFilter(v: DateFilter) {
-  try { localStorage.setItem(LS_DATE_FILTER_KEY, v); } catch { /* ignore */ }
-}
-
-/**
- * Resolve an effective date field for a task: if the task has no value,
- * walk up the parent chain and inherit the first ancestor's value.
- */
-function getEffectiveDateField(task: Task, allTasks: Task[], field: 'due_date' | 'start_date'): string | undefined {
-  if (task[field]) return task[field];
-  if (!task.parent_task_id) return undefined;
-  // Walk up parent chain (max 10 depth to avoid infinite loops)
-  let current: Task | undefined = task;
-  for (let i = 0; i < 10 && current?.parent_task_id; i++) {
-    const parent: Task | undefined = resolveParentRef(allTasks, current.parent_task_id);
-    if (!parent) break;
-    if (parent[field]) return parent[field];
-    current = parent;
-  }
-  return undefined;
-}
-
-function getEffectiveDueDate(task: Task, allTasks: Task[]): string | undefined {
-  return getEffectiveDateField(task, allTasks, 'due_date');
-}
-
-function getEffectiveStartDate(task: Task, allTasks: Task[]): string | undefined {
-  return getEffectiveDateField(task, allTasks, 'start_date');
-}
-
-/** True when the task's (inherited) start_date is still in the future —
- *  i.e. the task is deferred and not yet actionable. Day-level start dates
- *  activate at local midnight of that day. */
-function isDeferredByStart(task: Task, allTasks: Task[], now = Date.now()): boolean {
-  const effectiveStart = getEffectiveStartDate(task, allTasks);
-  if (!effectiveStart) return false;
-  const startMs = parseDateLocal(effectiveStart).getTime();
-  return Number.isFinite(startMs) && startMs > now;
-}
-
-/** Match task against dateFilter. Uses time-level precision for "now".
- *  Child tasks inherit parent's due_date/start_date for filtering if they
- *  have none.
- *
- *  "Now" is START-time driven: it answers "what should I look at now", so a
- *  task is shown unless its start_date says the work begins later. Due dates
- *  are deadlines — they mark Overdue but never hide a task from Now. */
-function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task[]): boolean {
-  if (!filter) return true; // "All"
-  const now = Date.now();
-  switch (filter) {
-    case 'now':
-      // Everything actionable now: no start date, or start time has arrived.
-      return !isDeferredByStart(task, allTasks, now);
-    case 'overdue': {
-      const effectiveDue = getEffectiveDueDate(task, allTasks);
-      const dueMs = effectiveDue ? parseDateLocal(effectiveDue).getTime() : null;
-      if (!dueMs) return false;
-      // Time-level dates: overdue if past now; Day-level: overdue if before start of today
-      if (effectiveDue!.includes('T')) return dueMs < now;
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      return dueMs < todayStart.getTime();
-    }
-    case 'this-week': {
-      // Same start-driven semantics with a 7-day horizon: hide only tasks
-      // whose start is beyond this week.
-      const effectiveStart = getEffectiveStartDate(task, allTasks);
-      const startMs = effectiveStart ? parseDateLocal(effectiveStart).getTime() : null;
-      return !startMs || startMs <= now + 7 * 86_400_000;
-    }
-    case 'no-date':
-      // no-date means the task itself is unscheduled (not inherited)
-      return !task.due_date && !task.start_date;
-    default:
-      return true;
-  }
 }
 
 /** Sort tasks by priority (Immediate → Important → Backlog → None), then by created_at descending within same priority */
@@ -2545,11 +2428,13 @@ const NO_SEPARATORS: TierSeparator[] = [];
 // IS the collapse control, and every tier verb lives in its ··· / right-click menu.
 // No grip, no icon, no count, and no per-tier resize handle: the All view is one
 // scroller now, so a per-tier maxHeight would carve a second scrollbar out of it.
-function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode }: {
+function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode }: {
   /** `id` + `label` of the tier — the four built-ins pass a synthetic def. */
   def: CustomTierDef;
   /** In a stacked view (All or Pinned): the tier draws its heading and takes header drops. */
   isAll: boolean;
+  /** 5.10: the only tier with tasks on a board that never picked a tier: no heading. */
+  headless?: boolean;
   /** Chevron-folded in the stacked view (content hidden). */
   folded: boolean;
   /** Raw collapsed-set membership (chevron direction). */
@@ -2596,7 +2481,7 @@ function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleI
   ];
   return (
     <div className="todo-pinned-subgroup">
-      {isAll && (
+      {isAll && !headless && (
         <div ref={setNodeRef} className={`todo-pinned-subgroup-heading${isOver ? ' navigation-drop-target' : ''}`}>
         <NavigationHeading
           id={def.id}
@@ -2617,7 +2502,7 @@ function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleI
             <TierDropZone id={`${def.id}-drop-zone`} isEmpty={isEmpty}>
               {children}
             </TierDropZone>
-            <InlineAdd label={`Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} />
+            <InlineAdd label={headless ? 'Add a pinned task…' : `Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} />
           </div>
         </SortableContext>
       )}
@@ -2928,7 +2813,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       {/* Unread dot — the tinted background alone was too subtle on a dense
           pinned strip, and the user asked for the dot on these cards too. */}
       {unread ? (
-        <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
+        <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
       ) : needsAction && !isDone && (
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
@@ -2940,7 +2825,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-        title={isDone ? 'Done — click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+        title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
@@ -2994,7 +2879,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -3007,40 +2892,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const navigate = useNavigate();
   const prompt = usePrompt();
   const confirm = useConfirm();
-  const [showCompleted, setShowCompleted] = useState(false);
-  // Waiting tasks are parked: out of the list, the tier cards and Recent by
-  // default (user ruling 2026-10-01, "I don't want to see the wait one"). They
-  // come back with this toggle or a phase filter that NAMES Waiting; search
-  // always finds them (it ignores every view toggle, see searchMatches).
-  const [showWaiting, setShowWaiting] = useState(false);
-  const [phaseFilter, setPhaseFilter] = useState('');
-  // Canonical composable query (src/core/task-query.ts) — the same model REST
-  // and the agent tool use. Starts neutral: the legacy showCompleted toggle
-  // still owns "hide done" on this surface, so seeding a completion condition
-  // here would double-apply it and fight the toggle.
-  const [taskQueryState, setTaskQueryState] = useState<TaskQueryFilterState>(DEFAULT_TASK_QUERY_FILTER_STATE);
-  const waitingRevealed = showWaiting || phaseFilter === 'WAITING' || taskQueryState.phases.includes('WAITING');
-  /** The list's hiding rule for a parked task; the pins, Recent and the focus
-   *  override read the same predicate so "would the list hide this?" cannot
-   *  drift from "does the list hide it". Read via a ref by the focus effect. */
-  const hiddenAsWaiting = useCallback(
-    (t: Task): boolean => t.phase === 'WAITING' && !waitingRevealed,
-    [waitingRevealed],
-  );
-  const hiddenAsWaitingRef = useRef<(t: Task) => boolean>(() => false);
-  /** An explicit pinned condition (Yes OR No) routes pinned tasks through the
-   *  normal filtered list and suppresses the separate Focus/Pinned area — no
-   *  duplicate rows, and a completed-but-pinned task becomes reachable. */
-  const pinnedQueryActive = isPinnedFiltered(taskQueryState);
-  // The focus-override effect (far above the query memos in source order, and
-  // deliberately not re-run on filter changes) reads these predicates through
-  // refs. Both are published from a post-commit effect below, never during
-  // render: a render can be thrown away or replayed (StrictMode, Suspense), so
-  // assigning a ref in the render body can leave the ref pointing at a predicate
-  // from a render React discarded.
-  const matchesQueryRef = useRef<(t: Task) => boolean>(() => true);
-  const completedBypassRef = useRef<(t: Task) => boolean>(() => false);
-  const [dateFilter, setDateFilter] = useState<DateFilter>(readDateFilter);
+  // The focus-override effect (above the filter memos, deliberately not re-run
+  // on filter changes) reads the board predicate through this ref, published
+  // from a layout effect below, never during render.
+  const passesBoardRef = useRef<(t: Task) => boolean>(() => true);
+  // 5.10: tier headings stay off a one-tier board until the user picks a tier once.
+  const [tierUsed, setTierUsed] = useState(readTierUsed);
+  const noteTierUsed = useCallback(() => { markTierUsed(); setTierUsed(true); }, []);
+  const onSetTier = useMemo(() => onSetTierProp && ((...args: Parameters<NonNullable<typeof onSetTierProp>>) => {
+    noteTierUsed();
+    return onSetTierProp(...args);
+  }), [onSetTierProp, noteTierUsed]);
   const [sortBy, setSortBy] = useState<SortBy>(readSortBy);
   // A project's own order (its right-click "Sort tasks by"); the rest follow sortBy.
   // Only the By-project list reads it: "In one list" has one order for everything.
@@ -3069,14 +2931,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setSortBy(v); persistSortBy(v);
     setProjectSorts({}); persistProjectSorts({});
   }, []);
-  // Active project tab. '' = All, INBOX_TAB = Inbox, else a project name.
-  const [activeProject, setActiveProject] = useState(readTab);
 
   // Focus override: when a focused task would be hidden by filters, store its ID here
   // instead of clearing filters. The filtered useMemo exempts this task from all filter checks.
   // When focus moves away, the task fades out (fadingOverrideRef) before being removed.
   const focusOverrideRef = useRef<string | null>(null);
   const fadingOverrideRef = useRef<string | null>(null);
+  // The override a creation started (5.11), not a locate: only it gets the pill and toast.
+  const createdOverrideRef = useRef<string | null>(null);
   const fadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [_overrideTick, setOverrideTick] = useState(0);
   const clearFocusOverride = useCallback(() => {
@@ -3105,16 +2967,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return () => { if (fadingTimerRef.current) clearTimeout(fadingTimerRef.current); };
   }, []);
 
-  // Apply externally-set project (e.g. from URL deep link)
-  const prevExternalProjRef = useRef(externalProject);
-  useEffect(() => {
-    if (externalProject !== undefined && externalProject !== prevExternalProjRef.current) {
-      setActiveProject(externalProject);
-      persistTab(externalProject);
-    }
-    prevExternalProjRef.current = externalProject;
-  }, [externalProject]);
-
   // Auto-refresh tick: bump every 60s so time-dependent UI re-evaluates —
   // the date filter (deferred tasks appear on time) AND the per-row ▶ start
   // pill, which renders in the "All" view too, so the timer runs always.
@@ -3123,6 +2975,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // visibleInterval: hidden tabs skip the re-render tick; one catch-up on return.
     return visibleInterval(() => setTick((t) => t + 1), 60_000);
   }, []);
+
+  // Filter state (both internal models, spec D5) lives in useHomeFilters.
+  const homeFilters = useHomeFilters({
+    tasks, loading, projectOrder: ordering?.projectOrder, externalProject, onProjectChange, clearFocusOverride,
+    timeTick: _tick,
+  });
+  const { showCompleted } = homeFilters;
+  const filterState = homeFilters.state;
+  const filterEvalCtx = homeFilters.evalCtx;
+  const waitingRevealed = filterState.status.includes('WAITING');
+  /** The list's hiding rule for a task on hold; pins and Recent read it too. */
+  const hiddenAsWaiting = useCallback(
+    (t: Task): boolean => t.phase === 'WAITING' && !waitingRevealed,
+    [waitingRevealed],
+  );
 
   // Registry projects (incl. zero-task ones) + provider source for the badges.
   const projectRegistry = useProjectRegistry();
@@ -3216,7 +3083,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Read by the locate effect, whose deps deliberately leave out view state.
   const tabBarRef = useRef({ shown: quickViews, hidden: tabBarHidden });
   tabBarRef.current = { shown: quickViews, hidden: tabBarHidden };
-  const sessionPanelsGroup = useSessionPanelsViewGroup();
   // Per-tier view mode (project clustering vs raw pin order) — see TierViewMode.
   const [tierViewModes, setTierViewModes] = useState<Record<string, TierViewMode>>(readTierViewModes);
   const tierViewMode = useCallback(
@@ -3246,13 +3112,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Holds the EFFECTIVE section (assigned after search-view resolution below).
   const activeSectionRef = useRef<TodoSection>(activeSection);
   const handleSectionChange = useCallback((section: TodoSection) => {
+    if (isTierSection(section)) noteTierUsed();
     if (isSearchModeRef.current) { setSearchSection(section); return; }
     // startTransition: switching into a big section (Tasks/All = thousands of
     // mounted rows) is a multi-second render. Time-slice it so the click never
     // freezes the page — typing/scrolling stay responsive while rows mount.
     startTransition(() => setActiveSection(section));
     persistSection(section);
-  }, []);
+  }, [noteTierUsed]);
   // Self-heal a stale custom-tier tab: if the active tab is a deleted tier's id
   // (registry loaded, id absent), fall back to Focus instead of an empty panel.
   // MUST wait for customTiersLoaded: the registry starts as [] while the fetch is
@@ -3378,13 +3245,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // restores the pre-search view.
   isSearchModeRef.current = isSearchMode;
   const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : activeSection;
-  // A pinned condition empties the tier regions on purpose (dedup — the pins are
-  // in the main list now), so a tier TAB would be a blank panel. Show the Tasks
-  // list instead. Ephemeral: the persisted tab is untouched, so clearing the
-  // condition returns the user to the tier they were on.
-  const isTierSection = (s: TodoSection) =>
-    s === 'focus' || s === 'satellite' || s === 'wait' || s.startsWith('ct_');
-  const effectiveSection: TodoSection = pinnedQueryActive && (isTierSection(rawSection) || rawSection === 'pinned') ? 'tasks' : rawSection;
+  // The home Filter has no Pinned dimension (spec 3.2), so the view is the section.
+  const effectiveSection: TodoSection = rawSection;
+
   activeSectionRef.current = effectiveSection;
   // Drop the ephemeral override when the query is cleared, so the next search
   // starts from the All default again.
@@ -3590,20 +3453,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // scroll the Pinned region only. Switching the TASKS tab to the capture project
     // filtered the list below down to ~1 task and read as data loss.
     const pinnedOnly = focusScope === 'pinned';
-    scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, proj: task.project, activeTab: activeProject, scope: focusScope ?? 'all' });
+    scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, proj: task.project, scope: focusScope ?? 'all' });
 
-    // Switch to the task's project tab (unless already showing All). `proj` is the
-    // GROUP key ('' = Inbox); `projTab` is the TAB id, where '' is taken by the All
-    // chip so Inbox rides the INBOX_TAB sentinel instead.
+    // `proj` is the GROUP key ('' = Inbox). A Project chip that excludes it is
+    // never switched away: the focus override below keeps the task on screen and
+    // names the chip that hides it (spec 5.12).
     const proj = task.project || '';
-    const projTab = proj || INBOX_TAB;
     if (isUserLocate && !pinnedOnly) {
-      if (activeProject !== '' && activeProject !== projTab) {
-        setActiveProject(projTab);
-        persistTab(projTab);
-        onProjectChange?.(projTab);
-      }
-
       setRevealedProjects(prev => prev.has(proj) ? prev : new Set(prev).add(proj));
 
       // Expand collapsed parent if focused task is a child (temporary — not persisted,
@@ -3622,24 +3478,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
 
     // Focus override: instead of clearing filters, temporarily inject the task
-    // into the filtered list. It fades out when focus moves away.
-    // Note: activeProject is NOT checked here — tab-switching above already ensures
-    // the task's project is visible. Override only handles toolbar filters.
-    // Row conditions go through the SAME shared predicate the list uses (read via
-    // a ref: this effect's deps deliberately don't include filter state), so
-    // "would the list hide this?" can no longer drift from "does the list hide it".
-    const isDone = task.status === 'done';
-    const wouldBeHidden =
-      (isDone && !completedBypassRef.current(task) && !showCompleted && phaseFilter !== 'COMPLETE') ||
-      hiddenAsWaitingRef.current(task) ||
-      !matchesQueryRef.current(task) ||
-      (!!dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks));
+    // into the filtered list. It fades out when focus moves away. The SAME board
+    // predicate the list uses (read via a ref: this effect's deps deliberately
+    // don't include filter state), so "would the list hide this?" cannot drift.
+    const wouldBeHidden = !passesBoardRef.current(task);
+    // 5.11: a task just created (a tier quick-add, Save as todo) that the chips
+    // hide keeps the override too, so it stays on screen with its pill.
+    // 'created' = the draft's Save as todo (F07): its task gets the pill too.
+    const keepCreated = wouldBeHidden && (pinnedOnly || focusScope === 'created') && isJustCreated(task.created_at);
 
-    if (wouldBeHidden && !pinnedOnly) {
+    if (wouldBeHidden && (!pinnedOnly || keepCreated)) {
       // Cancel any in-progress fade-out from a previous override
       if (fadingTimerRef.current) { clearTimeout(fadingTimerRef.current); fadingTimerRef.current = null; }
       fadingOverrideRef.current = null;
       focusOverrideRef.current = focusedTaskId;
+      createdOverrideRef.current = keepCreated ? focusedTaskId : null;
       setOverrideTick(n => n + 1);
     } else if (focusOverrideRef.current) {
       // Task is visible normally — clear stale override
@@ -3704,12 +3557,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // scrollToTask uses double-RAF + retry to wait for React commit + browser paint.
     // pinned scope skips the main-list scroll — the tab wasn't switched, so the task
     // may not even be in the list below; only the Pinned region jump applies.
-    if (!pinnedOnly) scrollToTask(focusedTaskId);
+    if (!pinnedOnly || keepCreated) scrollToTask(focusedTaskId);
     // Also jump the top Pinned region (no-op if the task isn't pinned — the DOM
     // query simply finds nothing). Keeps the PIN row in sync with the list below.
     scrollToPinnedTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedTaskId, focusNonce, tasks, activeProject, favorites]);
+  }, [focusedTaskId, focusNonce, tasks, favorites]);
 
   // Auto-expand parent when a child task is created (via WS event)
   // Persist to localStorage so expansion survives page refresh (fork subtask bug fix)
@@ -5359,35 +5212,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
 
-  // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
-  // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
-  const projectTabs = useMemo(() => {
-    const set = new Set<string>();
-    let hasInbox = false;
-    for (const t of tasks) {
-      if (t.project) set.add(t.project); else hasInbox = true;
-    }
-    const names = orderedSort(Array.from(set), ordering?.projectOrder ?? []);
-    return hasInbox ? [...names, INBOX_TAB] : names;
-  }, [tasks, ordering?.projectOrder]);
-
-  // Self-heal a stale project tab (same shape as the custom-tier heal above):
-  // the persisted tab may name a project that was renamed/deleted/emptied since,
-  // and ViewDropdown renders no chip for it — so the list filters to zero with no
-  // visible way back. Fall back to All. This is also what retires a persisted ★
-  // tab from the removed starred system: it has no chip, so it heals to All.
-  // MUST wait for the task list to actually load: healing against the empty
-  // pre-fetch snapshot would overwrite the user's tab on every page load.
-  useEffect(() => {
-    if (loading || tasks.length === 0) return;
-    // '' (All) is always legal; everything else must have a chip.
-    if (activeProject === '') return;
-    if (projectTabs.includes(activeProject)) return;
-    setActiveProject('');
-    persistTab('');
-    onProjectChange?.('');
-  }, [loading, tasks.length, activeProject, projectTabs, onProjectChange]);
-
   /** Every live project group key: real project names + '' when Inbox exists. */
   const liveGroupKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -5420,334 +5244,95 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, [loading, tasks.length, liveGroupKeys]);
 
-  // Project counts for ViewDropdown (Inbox counted under the INBOX_TAB sentinel)
-  const projectCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const t of tasks) {
-      if ((t.status !== 'done' || showCompleted) && !hiddenAsWaiting(t)) {
-        const key = t.project || INBOX_TAB;
-        counts[key] = (counts[key] ?? 0) + 1;
-      }
-    }
-    return counts;
-  }, [tasks, showCompleted, hiddenAsWaiting]);
-
-  // Value lists for the query panel — derived from the loaded tasks (plus the
-  // registry for projects, so a zero-task project is still selectable).
-  const queryProjectOptions = useMemo(() => {
-    const byLower = new Map<string, string>();
-    for (const name of projectRegistry.projectNames) byLower.set(name.toLowerCase(), name);
-    for (const t of tasks) {
-      const project = t.project || '';
-      if (project && !byLower.has(project.toLowerCase())) byLower.set(project.toLowerCase(), project);
-    }
-    // '' is a REAL selectable value (Inbox), and it must lead: it's where quick
-    // capture lands, so it's the most-used bucket.
-    return ['', ...[...byLower.values()].sort((a, b) => a.localeCompare(b))];
-  }, [tasks, projectRegistry.projectNames]);
-
-  const querySourceOptions = useMemo(() => deriveSourceOptions(tasks), [tasks]);
-  const querySprintOptions = useMemo(() => deriveSprintOptions(tasks), [tasks]);
-  const tagDisplay = useTagDisplay().compiled;
-  const queryTagOptions = useMemo(() => deriveTagOptions(tasks, tagDisplay.shown), [tasks, tagDisplay]);
-
-  const handleQueryChange = useCallback((next: TaskQueryFilterState) => {
-    setTaskQueryState(next);
-    logTaskQueryChange('todo-panel', next);
-    clearFocusOverride();
-  }, [clearFocusOverride]);
-
-  // ── The ONE task-row predicate ──
+  // ── The ONE board predicate (spec 4.6, 5.6, 5.7) ──
   //
-  // Row conditions (completion/phase/priority/project/source/sprint/tags/
-  // pinned/blocked/time) go through the shared evaluator, so this
-  // surface, /tasks, REST and the agent tool cannot drift. What stays local is
-  // deliberately NOT expressible as a task-row query: the due-date view filter
-  // (ancestor date inheritance + "now" relative to a start_date), the
-  // recent-completion grace window, manual ordering, and grouping.
+  // Every surface (the list, the pin area, tier views, Recent, search, counts,
+  // the footer and the focus-override reasons) asks filter-predicate's
+  // passesChips, so a chip means the same thing in every view (D10). What stays
+  // local is the completion / parking grace: a row just completed or set to
+  // Waiting stays for its exit animation before the Status rule takes it out.
+  const passesBoard = useCallback((t: Task): boolean => {
+    if (passesChips(t, filterEvalCtx)) return true;
+    return (keepWhileCompleting(t) || keepWhileParking(t)) && passesChips(t, filterEvalCtx, { except: 'status' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
+  }, [filterEvalCtx, keepWhileCompleting, keepWhileParking, recentTick]);
 
-  // The legacy single-value selects still exist in the panel toolbar. They fold
-  // into the SAME query object instead of being a second predicate layer —
-  // otherwise "AND all active filters" would be two independent code paths again.
-  const legacyFolds = useCallback((query: TaskQuery): TaskQuery => {
-    const next: TaskQuery = { ...query };
-    // Legacy 'TODO' meant "anything not COMPLETE" (matchesPhaseFilter), which is
-    // completion todo+in_progress, NOT the exact TODO phase.
-    if (phaseFilter === 'TODO') {
-      next.completion = ['todo', 'in_progress'];
-    } else if (phaseFilter) {
-      next.phases = [...(next.phases ?? []), phaseFilter as TaskPhase];
-    }
-    return next;
-  }, [phaseFilter]);
-
-  // ONE `now` for BOTH normalizations: relative windows must not slide mid-pass,
-  // and search-mode results must agree with the plain list.
-  //
-  // `timeTick` gates the 60s timer into this chain ONLY while a relative window
-  // is actually set. `_tick` fires unconditionally (the per-row ▶ start pill
-  // needs it), and having it as a raw dep re-normalized the query and re-ran the
-  // whole filter/sort/tier memo chain every minute on an unfiltered panel, for a
-  // guaranteed-identical result.
-  //
-  // Two normalized forms because they have different audiences:
-  //  • queryOnly   — the canonical conditions the user set in the query panel.
-  //                  Search results AND with THESE (an active filter is a real
-  //                  refinement the chips advertise).
-  //  • withLegacy  — plus the legacy toolbar selects. Only the plain list uses
-  //                  it; search deliberately bypasses them (2026-08-09 ruling,
-  //                  pinned by todo-search-ignores-filters.spec.ts — the Date
-  //                  select defaults to "Now", so intersecting made deferred
-  //                  tasks unfindable).
-  const timeTick = taskQueryState.timePreset === null ? 0 : _tick;
-  const { queryOnly, withLegacy } = useMemo<{
-    queryOnly: NormalizedTaskQuery | null;
-    withLegacy: NormalizedTaskQuery | null;
-  }>(() => {
-    const now = new Date();
-    const canonical = toTaskQuery(taskQueryState);
-    return {
-      queryOnly: safeNormalizeTaskQuery(canonical, now),
-      withLegacy: safeNormalizeTaskQuery(legacyFolds(canonical), now),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- timeTick re-arms relative time windows
-  }, [taskQueryState, legacyFolds, timeTick]);
-
-  // Context the pure evaluator can't derive from a task row on its own — shared
-  // verbatim with /tasks (see task-query-state.ts).
-  const queryContext = useMemo<TaskQueryContext>(
-    () => buildTaskQueryContext(tasks, taskQueryState.blocked !== undefined),
-    [tasks, taskQueryState.blocked],
-  );
-
-  /** Full predicate for the plain list: canonical query AND legacy selects.
-   *  Legacy 'high'/'medium'/'low' priorities are folded by the shared evaluator
-   *  itself (normalizeTaskPriority), so nothing is rewritten here — task object
-   *  identity matters to the pinned-drag freeze memos. */
-  const matchesQuery = useCallback((t: Task): boolean => (
-    withLegacy === null || matchesTaskQuery(t, withLegacy, queryContext)
-  ), [withLegacy, queryContext]);
-
-  /** Canonical conditions only — what search results are intersected with. */
-  const matchesCanonicalQuery = useCallback((t: Task): boolean => (
-    queryOnly === null || matchesTaskQuery(t, queryOnly, queryContext)
-  ), [queryOnly, queryContext]);
-
-  /** With `pinned: true` a completed-BUT-pinned task must be reachable —
-   *  otherwise the answer to "show me my pins" is silently truncated, which is
-   *  the whole reason pins move into the normal stream. The bypass is scoped to
-   *  the rows the condition selects, so `pinned: false` (and every other query)
-   *  keeps honoring the showCompleted toggle for ordinary tasks. */
-  const completedBypass = useCallback(
-    (t: Task): boolean => taskQueryState.pinned === true && !!t.pinned,
-    [taskQueryState.pinned],
-  );
-
-  // Publish both predicates for the focus-override effect OUTSIDE render: a
-  // render can be discarded or replayed (StrictMode, Suspense), so assigning a
-  // ref in the render body can leave it pointing at a predicate from a render
-  // React threw away.
-  //
-  // useLayoutEffect, NOT useEffect: the consumer is a passive effect declared
-  // EARLIER in this component, and passive effects run in declaration order, so
-  // publishing from a passive effect here would hand that consumer the PREVIOUS
-  // commit's predicates. Measured: a plain useEffect made
-  // pinned-drag-storm.spec.ts fail every run (the one-commit-stale wouldBeHidden
-  // verdict flips, the extra setOverrideTick render remounts cards mid-drag, and
-  // dnd-kit's measureRect loops into React #185). Layout effects all run before
-  // any passive effect, so the consumer still sees this commit's predicates.
-  useLayoutEffect(() => {
-    matchesQueryRef.current = matchesQuery;
-    completedBypassRef.current = completedBypass;
-    hiddenAsWaitingRef.current = hiddenAsWaiting;
-  }, [matchesQuery, completedBypass, hiddenAsWaiting]);
+  // Publish the predicate for the focus-override effect OUTSIDE render. A layout
+  // effect, NOT useEffect: the consumer is a passive effect declared EARLIER in
+  // this component, and passive effects run in declaration order, so a passive
+  // publish would hand it the PREVIOUS commit's predicate (measured: that made
+  // pinned-drag-storm.spec.ts fail every run via a React #185 loop).
+  useLayoutEffect(() => { passesBoardRef.current = passesBoard; }, [passesBoard]);
 
   const filterResult = useMemo(() => {
-    // matchedIds: the REAL hits. Everything the user is told (result count,
-    // chips) counts only these.
-    // SYNC: keep in sync with wouldBeHidden in focus effect
-    const matchedList = tasks.filter((t) => {
-      // Focus override: always include the focused/fading task regardless of filters
-      if (focusOverrideRef.current === t.id || fadingOverrideRef.current === t.id) return true;
-
-      if (!completedBypass(t) && !showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
-        // Keep recently-completed tasks visible for the grace period (visual feedback
-        // + exit animation) before hiding them.
-        if (!keepWhileCompleting(t)) return false;
-      }
-      // Parked tasks leave the same way, after the same grace.
-      if (hiddenAsWaiting(t) && !keepWhileParking(t)) return false;
-
-      // Every task-row condition, shared with REST / the agent tool / /tasks.
-      if (!matchesQuery(t)) return false;
-
-      // `pinned: true` inherits the tier area's cross-project contract: pinning
-      // means "keep this in front of me no matter which project tab I'm on". The
-      // tab NAVIGATES and the Date select is a VIEW; neither may silently
-      // subtract from the answer to "show me my pins" — Date defaults to "Now",
-      // which would otherwise eat the pin list (a pinned task with a deferred
-      // due date used to disappear entirely).
-      // Checked BEFORE the date filter for exactly that reason.
-      if (taskQueryState.pinned === true && t.pinned) return true;
-
-      // Date filter (skip for completed tasks — they don't need date filtering)
-      // Child tasks inherit parent's due_date if they have none.
-      if (dateFilter && t.status !== 'done' && !matchesDateFilter(t, dateFilter, tasks)) return false;
-
-      // Tab ids: '' = All (no scoping), INBOX_TAB = the no-project bucket.
-      if (activeProject && (t.project || INBOX_TAB) !== activeProject) return false;
-      return true;
-    });
-    const matchedIds = new Set<string>(matchedList.map((t) => t.id));
-
-    // contextIds: descendants pulled in for HIERARCHY CONTEXT only, at any
-    // depth. They are RENDERED but are not filter hits: a parent matching must
-    // never make its whole subtree count as matches, or the result count and the
-    // chips would over-report. Only the completed-hiding rule applies to them.
+    // SYNC: the focus effect's wouldBeHidden reads the same passesBoard.
+    const overrideIds = new Set([focusOverrideRef.current, fadingOverrideRef.current]);
+    const matchedList = tasks.filter((t) => overrideIds.has(t.id) || passesBoard(t));
+    // matchedIds: the REAL hits, the focus-override row excluded (4.6).
+    const matchedIds = new Set<string>();
+    for (const t of matchedList) if (!overrideIds.has(t.id) || passesBoard(t)) matchedIds.add(t.id);
+    // contextIds: descendants pulled in for HIERARCHY CONTEXT only. They are
+    // RENDERED but are not hits: only the completed and Waiting hiding applies.
     const result = withSubtaskContext(tasks, matchedList, (t) =>
-      (completedBypass(t) || showCompleted || t.status !== 'done' || phaseFilter === 'COMPLETE' || keepWhileCompleting(t))
+      (showCompleted || t.status !== 'done' || keepWhileCompleting(t))
       && (!hiddenAsWaiting(t) || keepWhileParking(t)));
     return { list: result, matchedIds };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, hiddenAsWaiting, keepWhileParking, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject]);
+  }, [tasks, showCompleted, passesBoard, hiddenAsWaiting, keepWhileParking, keepWhileCompleting, _tick, _overrideTick, recentTick]);
 
-  /**
-   * Rows to RENDER = real hits + their descendant context, minus the pins the
-   * region ABOVE already draws.
-   *
-   * Only in the stacked All view, and only while the pins really are shown twice:
-   * a tier TAB / the Tasks tab / a search render one region, and an explicit
-   * `pinned` condition deliberately routes the pins THROUGH this list (see
-   * pinnedQueryActive) — subtracting there would make them unreachable.
-   *
-   * Two things survive the cut, both because dropping them loses information the
-   * list is the only carrier of: the focus-override task (it was injected past
-   * every filter precisely so it can be located here), and a pinned PARENT whose
-   * children remain — a child row without its parent row reads as a top-level
-   * task in the wrong place.
-   */
   // Read here, not further down: the dedupe memo below is the first consumer.
   const filterOverrideId = focusOverrideRef.current;
   const fadingOverrideId = fadingOverrideRef.current;
-  /** Real hits only — what counts and chips report. */
+  /** Real hits only: what counts report. */
   const matchedIds = filterResult.matchedIds;
 
-  // Whether a completed task will actually disappear after the grace period —
-  // mirrors the visibility filter (`isDone && !showCompleted && phaseFilter !== 'COMPLETE'`).
-  // Drives the exit animation: only play fade+collapse when the item WILL be removed.
-  // Search mode keeps completed tasks visible, so no exit animation there either
-  // (otherwise the row fades out then pops back when the grace timer clears).
-  const completedWillHide = !showCompleted && phaseFilter !== 'COMPLETE' && !isSearchMode;
-  // The parked twin, and one answer for every row: "is this row on its way out?"
+  // Whether a completed task will actually disappear after the grace period:
+  // drives the exit animation (search keeps completed rows, so none there).
+  const completedWillHide = !showCompleted && !isSearchMode;
+  // The Waiting twin, and one answer for every row: "is this row on its way out?"
   const waitingWillHide = !waitingRevealed && !isSearchMode;
   const isRowVanishing = useCallback((t: Task): boolean => graceExiting && (
     (recentlyCompletedRef.current.has(t.id) && completedWillHide)
     || (recentlyParkedRef.current.has(t.id) && waitingWillHide)
   ), [graceExiting, completedWillHide, waitingWillHide]);
-  // Parked tasks the default view hides right now: the reveal toggle's count.
-  const hiddenWaitingCount = useMemo(
-    () => (waitingRevealed || isSearchMode ? 0 : tasks.reduce((n, t) => n + (t.phase === 'WAITING' ? 1 : 0), 0)),
-    [tasks, waitingRevealed, isSearchMode],
-  );
 
   // The list arrives with a recent window of completed tasks (useTasks); the
   // first view that shows completed rows loads the rest of the archive once.
   const tasksStore = useTasksContextSafe();
-  const ensureAllTasks = tasksStore?.ensureAllTasks;
-  const wantsCompletedArchive = showCompleted || phaseFilter === 'COMPLETE' || isSearchMode
-    || taskQueryState.completion.includes('complete') || taskQueryState.phases.includes('COMPLETE');
-  useEffect(() => {
-    if (wantsCompletedArchive) ensureAllTasks?.();
-  }, [wantsCompletedArchive, ensureAllTasks]);
+  const wantsCompletedArchive = showCompleted || isSearchMode || filterState.status.includes('COMPLETE');
+  const archiveLoading = useArchiveFetch(wantsCompletedArchive, tasksStore);
 
-  // What the view hides on its own, for the footer bar under the list: the
-  // status hides (waiting, completed) and the quick filters that drop rows
-  // without a chip above the list (the Date select defaults to Now, the legacy
-  // Phase select). Each is a count the user can act on in one click. The
-  // canonical query conditions already have their own chips (TaskFilterChips),
-  // so they are not repeated here. Counted over what THIS view draws (a tier
-  // tab counts its tier, Recent its feed, the list its project tab; see
-  // footerStatusScope), never the whole board. Completed = the scope's loaded
-  // done rows, plus the archive the list has not fetched yet (completedHidden)
-  // when the scope is the whole board.
-  const footerScope = useMemo(() => footerStatusScope({
-    section: effectiveSection, tasks, activeProject,
-    pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds, customMemberIds, hiddenGroups,
-    showCompleted, waitingRevealed, recentSortMode,
-  }), [effectiveSection, tasks, activeProject, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds, customMemberIds, hiddenGroups, showCompleted, waitingRevealed, recentSortMode]);
-  const completedCount = footerScope.completed + (footerScope.wholeBoard ? (tasksStore?.completedHidden ?? 0) : 0);
-  const waitingCount = footerScope.waiting;
-  const dateHiddenCount = useMemo(() => {
-    if (!dateFilter) return 0;
-    let n = 0;
-    for (const t of footerScope.scope) {
-      if (t.status === 'done' || hiddenAsWaiting(t)) continue;
-      if (!matchesDateFilter(t, dateFilter, tasks)) n += 1;
-    }
-    return n;
-  }, [footerScope.scope, tasks, dateFilter, hiddenAsWaiting]);
-
+  // Focus-override reasons in the chips' own words (5.12), one Show per reason.
   const overrideReasonTaskId = filterOverrideId || fadingOverrideId;
-
-  // Compute descriptive reason for focus-override badge (e.g. "outside Now filter").
-  // Only computed for the single override task (at most one at a time), not per-task.
-  const filterOverrideReason = useMemo(() => {
+  const filterOverrideReasons = useMemo(() => {
     if (!overrideReasonTaskId) return undefined;
-    const task = tasks.find(t => t.id === overrideReasonTaskId);
+    const task = tasks.find((t) => t.id === overrideReasonTaskId);
     if (!task) return undefined;
-    const reasons: string[] = [];
-    const isDone = task.status === 'done';
-    if (isDone && !completedBypass(task) && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
-    if (hiddenAsWaiting(task)) reasons.push('waiting (hidden by default)');
-    if (phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) reasons.push(`phase ≠ ${phaseFilter}`);
-    if (dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) reasons.push(`outside "${DATE_LABELS[dateFilter] || dateFilter}" date filter`);
-    // Canonical query conditions get ONE combined reason: they're composable, so
-    // enumerating each mismatch would be a paragraph. The chips above the list
-    // already name every active condition.
-    if (!matchesCanonicalQuery(task) && hasActiveTaskQuery(taskQueryState)) {
-      const window = timeWindowLabel(taskQueryState);
-      reasons.push(window ? `outside the active filters (${window})` : 'outside the active filters');
-    }
-    return reasons.length > 0 ? reasons.join(' · ') : undefined;
-  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, dateFilter, completedBypass, hiddenAsWaiting, matchesCanonicalQuery, taskQueryState]);
-
-  // Every REFINEMENT the user set, and nothing that is mere navigation:
-  //   • the full canonical query (including its own `projects` condition, which
-  //     IS a refinement — the user picked those project chips in the View panel);
-  //   • the legacy toolbar selects, folded into that same query (phase, priority,
-  //     tag), plus the due-date view filter.
-  // What it deliberately does NOT apply is the legacy nav PROJECT TAB: it
-  // navigates rather than refines. Used by the Pinned/Recent visibility
-  // set below, so a pin/recent card never disappears merely because the user
-  // switched project tabs — pins are a cross-project focus view by design. NOT
-  // used by search, which ignores all view controls (see `searchMatches`).
-  const passesExplicitFilters = useCallback((t: Task): boolean => {
-    if (!matchesQuery(t)) return false;
-    if (dateFilter && t.status !== 'done' && !matchesDateFilter(t, dateFilter, tasks)) return false;
-    return true;
-  }, [matchesQuery, dateFilter, tasks]);
+    const reasons = hiddenByReasons(task, filterEvalCtx, homeFilters.lists);
+    if (reasons.length === 0) return undefined;
+    return { task, reasons };
+  }, [overrideReasonTaskId, tasks, filterEvalCtx, homeFilters.lists]);
+  // A locate of a task someone else just made shows the reasons; only a creation here gets the pill.
+  const overrideCreated = !!filterOverrideReasons && createdOverrideRef.current === filterOverrideReasons.task.id
+    && isJustCreated(filterOverrideReasons.task.created_at);
+  const { showTask } = homeFilters;
+  const showOverrideDim = useCallback((dim: FilterDim) => {
+    if (filterOverrideReasons) showTask(filterOverrideReasons.task, [dim], 'override');
+  }, [filterOverrideReasons, showTask]);
+  const filterOverrideNode = filterOverrideReasons
+    ? <FilterOverrideReasons reasons={filterOverrideReasons.reasons} created={overrideCreated} onShow={showOverrideDim} />
+    : undefined;
+  useCreatedOutsideToast(overrideCreated ? filterOverrideReasons : undefined, showTask);
 
   // --- Search filtering: search spans the WHOLE task set ---
-  // Search's job is CANDIDATES + RANKING, not view state. It ignores the legacy
-  // view controls — the project tab, the completed toggle, and the legacy
-  // selects (priority, phase, source, tag, date). Typing a title you know
-  // exists must find it, or the feature is untrustworthy: the Date select
-  // DEFAULTS to "Now" (which hides any task whose start_date is still in the
-  // future), so the old intersect made a deferred task silently unfindable. A
-  // row carries its own explanation of why it isn't in the plain list (project
-  // context pill + the "▶ <date>" deferred-start pill).
-  //
-  // The CANONICAL query conditions DO still AND on top, and that asymmetry is
-  // the rule: a condition the user just set in the View panel is explicit and
-  // chip-advertised, whereas the legacy selects carry shipped defaults nobody
-  // chose. Nothing in the canonical query is active by default, so this can't
-  // resurrect the unfindable-task bug.
+  // Search honors every chip the user added and bypasses only the defaults
+  // nobody chose (Status open, Date Available now; spec 5.7, D11): typing a
+  // title you know exists must find it, and the Date default hides any task
+  // whose start date is still in the future.
   const searchMatches = useMemo(() => {
     if (!isSearchMode) return filterResult.list;
 
-    const eligibleTasks = hasActiveTaskQuery(taskQueryState)
-      ? tasks.filter(matchesCanonicalQuery)
-      : tasks;
+    const eligibleTasks = tasks.filter((t) => passesChips(t, filterEvalCtx, { bypassDefaults: true }));
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
@@ -5788,7 +5373,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       ...metadataMatches,
       ...serverMatches.filter((task) => !metadataTaskIds.has(task.id)),
     ];
-  }, [tasks, filterResult.list, isSearchMode, deferredSearchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
+  }, [tasks, filterResult.list, isSearchMode, deferredSearchQuery, searchResults, filterEvalCtx]);
 
   // Completed results (search only): a finished task must be findable by its own
   // title (2026-09-23: a done task titled with the exact query was hidden, with
@@ -5806,6 +5391,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [searchMatches],
   );
   const [showDoneResults, setShowDoneResults] = useState(false);
+  // Include Complete lives in the filter row and only while Status is default (5.7).
+  const statusIsDefault = isDefaultStatus(filterState.status);
   useEffect(() => {
     if (!isSearchMode) setShowDoneResults(false);
   }, [isSearchMode]);
@@ -5831,9 +5418,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         return at < 0 ? Infinity : at;
       },
       completedAt: (task) => task.completed_at,
-    }, showDoneResults);
-  }, [searchOpenMatches, searchMatches, showDoneResults, isSearchMode, searchResults, deferredSearchQuery]);
-  const searchDoneCount = searchSplit.looseDone;
+    }, showDoneResults || !statusIsDefault);
+  }, [searchOpenMatches, searchMatches, showDoneResults, statusIsDefault, isSearchMode, searchResults, deferredSearchQuery]);
+  // Include Complete (C56) counts every completed hit of the search, inline,
+  // folded or loose: it is the one switch that brings them all in rank order.
+  const searchDoneCount = isSearchMode ? searchMatches.length - searchOpenMatches.length : 0;
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
@@ -5861,32 +5450,34 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Pinned membership and ordering stay based on the complete tier arrays. Filters only
   // constrain the rendered IDs so hidden cards keep their stable pin position.
   //
-  // Crucially, the NON-search set here applies ONLY the explicit toolbar filters
-  // (passesExplicitFilters) and NOT the project tab — Pinned/Recent are a
-  // cross-project focus view: pinning a task means "keep this in front of me no
-  // matter which project tab I'm on". Reusing `filtered` (which scopes to
-  // activeProject) would make pins/recent vanish whenever the user navigated off
-  // the "All" tab, then reappear on search (which already bypasses the tab). The
-  // main task list below still uses `filtered`/`searchFiltered` and stays tab-scoped.
+  // The same board predicate as the list, so a Project chip scopes the pin area,
+  // Pinned, the tier views and Recent too (spec D10, 4.3).
   // FROZEN during a pinned drag: this membership set derives from the live
   // `tasks` array, so external churn (WS echoes / refetches) would otherwise
   // change the SortableContext items / remount cards mid-drag (→ React #185 via
   // dnd-kit useRect). Tier ORDER is separately frozen by the drag ref
   // (dragTierIdsRef) — freezing membership here completes the invariant.
+  // The focus-override task (a locate, or a task created under the chips, 5.11)
+  // stays in its tier too, so a Pinned or tier view keeps it on screen with its
+  // reasons; it is never a hit, so the counts below leave it out (4.6).
+  const overrideOnlyIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of [filterOverrideId, fadingOverrideId]) {
+      const t = id ? tasks.find((x) => x.id === id) : undefined;
+      if (t && !passesBoard(t)) ids.add(t.id);
+    }
+    return ids;
+  }, [filterOverrideId, fadingOverrideId, tasks, passesBoard]);
   const visibleTaskIdsLive = useMemo(
     () => new Set(
-      (isSearchMode ? searchMatches : tasks.filter(passesExplicitFilters)).map((task) => task.id),
+      (isSearchMode ? searchMatches : tasks.filter((t) => overrideOnlyIds.has(t.id) || passesBoard(t))).map((task) => task.id),
     ),
-    [tasks, isSearchMode, searchMatches, passesExplicitFilters],
+    [tasks, isSearchMode, searchMatches, passesBoard, overrideOnlyIds],
   );
   const visibleTaskIds = useFrozenWhile(visibleTaskIdsLive, isPinnedDragActive);
-  // PINNED DEDUP — ONE source for every tier consumer below (tier id lists, the
-  // display arrays, the tab badges, the section mount conditions). With an
-  // explicit pinned condition the pins already flow through the normal filtered
-  // list, so the separate Focus/Pinned area empties out; otherwise every pinned
-  // hit would render twice (once per surface) and be double-counted. Recent is
-  // untouched: it's an activity feed, not a second copy of the pinned tiers.
-  const tierVisibleTaskIds = pinnedQueryActive ? EMPTY_ID_SET : visibleTaskIds;
+  // ONE source for every tier consumer below (tier id lists, display arrays, tab
+  // badges, section mount conditions); the All list dedupes against it.
+  const tierVisibleTaskIds = visibleTaskIds;
   const [showStaleDonePins, setShowStaleDonePins] = useState(false);
   useEffect(() => {
     if (!isSearchMode) setShowStaleDonePins(false);
@@ -5915,14 +5506,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => new Set(pinnedTasks.filter(task => tierDisplayTaskIds.has(task.id)).map(task => task.id)),
     [pinnedTasks, tierDisplayTaskIds],
   );
-  const dedupePinned = isAll && !isSearchMode && !pinnedQueryActive;
+  const dedupePinned = isAll && !isSearchMode;
   const filtered = useMemo(() => {
     const list = filterResult.list;
     if (!dedupePinned || displayedPinIds.size === 0) return list;
     const keep = new Set<string>();
     const dropped: Task[] = [];
     for (const task of list) {
-      if (displayedPinIds.has(task.id) && task.id !== filterOverrideId && task.id !== fadingOverrideId) dropped.push(task);
+      if (displayedPinIds.has(task.id)) dropped.push(task);
       else keep.add(task.id);
     }
     // Retained children still need their pinned ancestors in the project list.
@@ -5939,7 +5530,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
     return list.filter(task => keep.has(task.id));
-  }, [filterResult.list, dedupePinned, displayedPinIds, filterOverrideId, fadingOverrideId]);
+  }, [filterResult.list, dedupePinned, displayedPinIds]);
   const visibleRecentTasks = useMemo(
     () => recentTasks.filter((task) => visibleTaskIds.has(task.id)),
     [recentTasks, visibleTaskIds],
@@ -6554,7 +6145,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // A query's hits must be on screen, so while one is active every project group
   // starts open and folds only for that query; the saved fold set is untouched.
-  const queryActive = hasActiveTaskQuery(taskQueryState);
+  const queryActive = homeFilters.chips.some((c) => c.dim !== 'date');
   const [queryFoldedProjects, setQueryFoldedProjects] = useState<Set<string>>(() => new Set());
   useEffect(() => { if (!queryActive) setQueryFoldedProjects(new Set()); }, [queryActive]);
   const isListProjectCollapsed = useCallback(
@@ -8027,7 +7618,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
           onMoveUp={i > 0 && pinnedTaskMap.get(ids[i - 1])?.project === task.project && pinnedTaskMap.get(ids[i - 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i - 1]) : undefined}
           onMoveDown={i < ids.length - 1 && pinnedTaskMap.get(ids[i + 1])?.project === task.project && pinnedTaskMap.get(ids[i + 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i + 1]) : undefined}
-          onStartSelect={onStartSelect} landingDepth={task.id === activeDragPinnedId ? dragLandingDepth : undefined} />
+          onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} landingDepth={task.id === activeDragPinnedId ? dragLandingDepth : undefined}
+          filterOverrideReason={task.id === filterOverrideId || task.id === fadingOverrideId ? filterOverrideNode : undefined} />
       );
     }
     // Project-mode lines whose neighbours are all gone end up here, at the bottom
@@ -8040,7 +7632,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId]);
+  }, [filterOverrideId, fadingOverrideId, filterOverrideNode, movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -8071,18 +7663,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Section counts for the tab badges. `focus`/`satellite`/`wait`/`recent`
   // come from the already-computed display arrays, so the badges track exactly what
   // the tab would render (incl. project/filter scoping).
+  const hits = (list: readonly Task[]) => (overrideOnlyIds.size === 0 ? list.length
+    : list.reduce((n, t) => n + (overrideOnlyIds.has(t.id) ? 0 : 1), 0));
   const sectionCounts: Partial<Record<TodoSection, number>> = {
-    focus: focusTasksDisplay.length,
-    satellite: satelliteTasksDisplay.length,
-    wait: waitTasksDisplay.length,
-    recent: visibleRecentTasks.length,
-    // Real hits only — descendant CONTEXT rows never inflate the badge.
-    tasks: isSearchMode ? searchMatches.length : matchedIds.size,
+    focus: hits(focusTasksDisplay),
+    satellite: hits(satelliteTasksDisplay),
+    wait: hits(waitTasksDisplay),
+    recent: hits(visibleRecentTasks),
+    // Real hits only: descendant CONTEXT rows never inflate the badge. A search
+    // counts the rows it draws (folded Completed / Related rows wait), F06.
+    tasks: isSearchMode ? (searchResultCount ?? 0) : matchedIds.size,
   };
   for (const def of customTiers ?? []) {
-    sectionCounts[def.id] = customTierRender[def.id]?.display.length ?? 0;
+    sectionCounts[def.id] = hits(customTierRender[def.id]?.display ?? []);
   }
-  sectionCounts.pinned = focusTasksDisplay.length + satelliteTasksDisplay.length + waitTasksDisplay.length
+  sectionCounts.pinned = (sectionCounts.focus ?? 0) + (sectionCounts.satellite ?? 0) + (sectionCounts.wait ?? 0)
     + (customTiers ?? []).reduce((sum, def) => sum + (sectionCounts[def.id] ?? 0), 0);
   // Parked pins a tier holds but hides by default: a tier with only those keeps its tab
   // under "Hide empty tabs" (the footer's "N waiting hidden" needs the tab to be
@@ -8102,6 +7697,94 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return held;
   }, [tasks, waitingRevealed, isSearchMode, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds, hiddenGroups]);
+  // One count for the filter row, every tab badge and the hit rows (4.6): real
+  // hits only (no focus-override row, no descendant context rows). All counts
+  // the list hits, which already hold every pin that passes the chips.
+  sectionCounts.all = isSearchMode ? (searchResultCount ?? 0) : matchedIds.size;
+  const filterCount = loading ? null
+    : isSearchMode ? (searchResultCount ?? 0)
+    : (sectionCounts[effectiveSection] ?? 0);
+  // 5.3: chips are set and nothing matches: say so, with one way back.
+  const showFilterEmpty = !isSearchMode && filterCount === 0 && homeFilters.chips.length > 0;
+  const toggleIncludeComplete = useCallback(() => setShowDoneResults((v) => !v), []);
+  // The view name rides in the filter row whenever no tab shows it: the bar is
+  // hidden, or the view is Projects, which the bar never draws (F36).
+  const viewItemLabel = (!quickViews || effectiveSection === 'tasks') && effectiveSection !== 'all'
+    ? (allViews(customTiers ?? []).find((v) => v.id === effectiveSection)?.label ?? effectiveSection)
+    : null;
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const displayButtonRef = useRef<HTMLButtonElement | null>(null);
+  const filterBar = useMemo<FilterBarController>(() => ({
+    state: homeFilters.state, lists: homeFilters.lists, chips: homeFilters.chips, facets: homeFilters.facets,
+    recent: homeFilters.recent, apply: homeFilters.apply, clearAll: homeFilters.clearAll,
+    menuOpen: homeFilters.menuOpen, setMenuOpen: homeFilters.setMenuOpen, setChipMenuOpen: homeFilters.setChipMenuOpen,
+    buttonRef: homeFilters.buttonRef, rowRef: homeFilters.rowRef, listScrollRef: homeFilters.listScrollRef,
+    count: filterCount,
+    archiveLoading,
+    search: {
+      active: isSearchMode,
+      includeComplete: isSearchMode && statusIsDefault && searchDoneCount > 0
+        ? { count: searchDoneCount, on: showDoneResults, toggle: toggleIncludeComplete }
+        : null,
+    },
+    viewItem: viewItemLabel ? { label: viewItemLabel } : null,
+    openDisplay: () => { homeFilters.setMenuOpen(false); setDisplayOpen(true); },
+  }), [homeFilters, filterCount, archiveLoading, isSearchMode, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
+  const footerTasks = useMemo(() => footerScope(tasks, effectiveSection, {
+    pinned: pinnedTaskIds, focus: focusTaskIds, wait: waitTaskIds, custom: customTierIds,
+  }), [tasks, effectiveSection, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds]);
+  const applyFromFooter = useCallback((next: FilterState) => homeFilters.apply(next, 'footer'), [homeFilters]);
+  // A stable ref callback: an inline one is detached (set to null) on every commit,
+  // which left FilterBar's scroll keeper reading a null list scroller.
+  const listScrollRef = homeFilters.listScrollRef;
+  const setListScrollEl = useCallback((el: HTMLDivElement | null) => { listScrollRef.current = el; }, [listScrollRef]);
+  // 6.8: the project heading's "Filter to this project" replaces the Project set.
+  const filterToProject = useCallback(
+    (project: string) => homeFilters.apply({ ...homeFilters.state, projects: [project] }, 'board'),
+    [homeFilters],
+  );
+  // D8: Sort and Group only reorder the Projects list, which only All and
+  // Projects draw (search ranks by relevance), so the rows show only there.
+  const listOrderApplies = (effectiveSection === 'all' || effectiveSection === 'tasks') && !isSearchMode;
+  const displayProps: DisplayMenuProps = {
+    open: displayOpen,
+    onOpenChange: setDisplayOpen,
+    buttonRef: displayButtonRef,
+    section: effectiveSection,
+    onSectionChange: (id: string) => handleSectionChange(id as TodoSection),
+    customTiers: customTiers ?? [],
+    quickViews,
+    onQuickViewsChange: (next: boolean) => {
+      setQuickViews(next);
+      if (next) return;
+      // C56: hiding the bar from Display reads like hiding it from its own menu:
+      // the menu closes, focus lands on Display (where the bar comes back), a toast says so.
+      setDisplayOpen(false);
+      requestAnimationFrame(() => displayButtonRef.current?.focus({ preventScroll: true }));
+      notify({ kind: 'sort', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden' });
+    },
+    viewTitleHint: viewItemLabel,
+    sortBy,
+    projectSortCount: Object.keys(projectSorts).length,
+    onSortForAll: setSortForAll,
+    showSort: listOrderApplies,
+    groupBy,
+    onGroupByChange: (v: GroupBy) => { setGroupBy(v); persistGroupBy(v); },
+    showGroup: listOrderApplies,
+    allCollapsed,
+    onCollapseExpandAll: handleCollapseExpandAll,
+    // F05: only in the views whose list has project groups for the action to fold
+    // (All and Projects, with at least one project). Under Flat it still sets the
+    // folds the By project list opens with.
+    showCollapse: listOrderApplies && liveGroupKeys.size > 0,
+    orderNote: listOrderApplies ? null : isSearchMode ? 'Search ranks by match' : 'Only in All and Projects',
+    tierLayout: isTierSection(effectiveSection) && !isSearchMode
+      ? { mode: tierViewMode(effectiveSection), onChange: (m: 'project' | 'custom') => setTierViewMode(effectiveSection, m) }
+      : null,
+    recentOrder: effectiveSection === 'recent' && !isSearchMode
+      ? { mode: recentSortMode, onChange: handleRecentSortChange }
+      : null,
+  };
   /**
    * One tier's render model, for the section loop below. A pure LOOKUP over the
    * memos that already exist (three per built-in, one bundle per custom) — no
@@ -8133,72 +7816,36 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // under it need not). A custom tier always draws: the user just made it and needs its
   // add row. Every tier mounts while a pinned card is dragged, so an empty one can still
   // take the drop; a single-tier view always draws its tier.
+  // F25: under an active chip an empty custom tier steps aside too (no heading over nothing).
   const tierHiddenWhenEmpty = (tier: FocusTier, model: { display: unknown[] }) =>
-    isStacked && !isPinnedDragActive && isBuiltinTier(tier) && model.display.length === 0;
+    isStacked && !isPinnedDragActive && (isBuiltinTier(tier) || homeFilters.chips.length > 0) && model.display.length === 0;
+  // 5.10: one tier with tasks and no tier ever picked: the pins sit under Pinned
+  // with no tier heading (a lone `Satellite` title is what makes new users ask).
+  // Latched for a live drag: the empty tiers that open as drop zones get their
+  // headings, while the tier the card came from keeps its headless layout, so no
+  // heading is inserted above the cards (and the card under the pointer does not
+  // jump) the moment a drag starts.
+  const tiersWithTasks = allTierKeys.filter((tier) => showSection(tier) && (tierSectionModel(tier)?.display.length ?? 0) > 0);
+  // F08: a user who never picked a tier sees no tier name, also once a draft (which
+  // lands in Focus) joins pins (which land in Satellite). A task in any other tier
+  // (Parked, a custom tier), alone or not, means the board has tiers on purpose: all
+  // keep headings.
+  const headlessKey = useFrozenWhile<string>(
+    !isStacked || tierUsed || tiersWithTasks.length === 0 ? ''
+      : tiersWithTasks.every((t) => t === 'focus' || t === 'satellite') ? tiersWithTasks.join('|') : '',
+    isPinnedDragActive,
+  );
+  const headlessTiers = useMemo(() => new Set(headlessKey ? headlessKey.split('|') : []), [headlessKey]);
   const anyTierDrawn = allTierKeys.some((tier) => {
     const model = tierSectionModel(tier);
     return !!model && !tierHiddenWhenEmpty(tier, model);
   });
 
-  // Date quick chip (tier bar + tasks mini-bar): one click flips between the
-  // two everyday values — Now (hide deferred) and All. From a long-tail value
-  // (Overdue/Week/No date, set in the View panel) a click lands on Now, so the
-  // chip always converges on the everyday pair.
-  const dateQuickLabel = dateFilter ? (DATE_LABELS[dateFilter] ?? dateFilter) : 'All';
-  const toggleDateQuick = () => {
-    const next: DateFilter = dateFilter === 'now' ? '' : 'now';
-    setDateFilter(next); persistDateFilter(next); clearFocusOverride();
-  };
-  const dateQuickChip = (
-    <button
-      type="button"
-      className={`todo-minibar-btn todo-minibar-date${dateFilter ? ' on' : ''}`}
-      title={dateFilter === 'now'
-        ? 'Date: Now — tasks with a future start date are hidden. Click to show All.'
-        : dateFilter === ''
-          ? 'Date: All — every task shown, deferred ones included. Click to switch to Now.'
-          : `Date: ${dateQuickLabel} (set in the View panel). Click to switch to Now.`}
-      onClick={toggleDateQuick}
-    >
-      ◷ {dateQuickLabel}
-    </button>
-  );
-
   const tierSectionActive = isTierSection(effectiveSection) && !isSearchMode;
-  const viewGroups: ViewOptionGroup[] = [
-    { label: 'Show', options: [
-      { id: 'all', label: 'All tasks' }, { id: 'pinned', label: 'Pinned' }, { id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' },
-      { id: 'wait', label: 'Parked' }, ...(customTiers ?? []),
-      { id: 'recent', label: 'Recent' }, { id: 'tasks', label: 'Projects' },
-    ].map((view) => ({ key: view.id, label: view.label, active: effectiveSection === view.id, onSelect: () => handleSectionChange(view.id as TodoSection) })) },
-  ];
-  const activeFilterOptions = [
-    ...(dateFilter ? [{ key: 'date', label: `Date: ${dateQuickLabel} ×`, title: 'Remove this filter', onSelect: () => { setDateFilter(''); persistDateFilter(''); clearFocusOverride(); } }] : []),
-    ...(phaseFilter ? [{ key: 'phase', label: `Phase: ${PHASE_LABEL[phaseFilter] ?? phaseFilter} ×`, title: 'Remove this filter', onSelect: () => { setPhaseFilter(''); clearFocusOverride(); } }] : []),
-    ...(activeProject ? [{ key: 'project', label: `Project: ${activeProject === INBOX_TAB ? 'Inbox' : activeProject} ×`, title: 'Remove this filter', onSelect: () => { setActiveProject(''); persistTab(''); onProjectChange?.(''); } }] : []),
-    ...(isSearchMode && searchDoneCount > 0 ? [{ key: 'search-done', label: `Done ${searchDoneCount}`, active: showDoneResults, title: 'Include completed matches', onSelect: () => setShowDoneResults((v) => !v) }] : []),
-  ];
-  if (activeFilterOptions.length) viewGroups.push({ label: 'Active filters', options: activeFilterOptions });
-  viewGroups.push({ label: 'Layout', options: [
-    ...(tierSectionActive ? [
-      { key: 'tier-project', label: 'Group by project', active: tierViewMode(effectiveSection) === 'project', onSelect: () => setTierViewMode(effectiveSection, 'project') },
-      { key: 'tier-custom', label: 'Custom order', active: tierViewMode(effectiveSection) === 'custom', onSelect: () => setTierViewMode(effectiveSection, 'custom') },
-    ] : []),
-    ...(effectiveSection === 'recent' && !isSearchMode ? [
-      { key: 'recent-updated', label: 'Sort by update', active: recentSortMode === 'updated', onSelect: () => handleRecentSortChange('updated') },
-      { key: 'recent-created', label: 'Sort by creation time', active: recentSortMode === 'created', onSelect: () => handleRecentSortChange('created') },
-    ] : []),
-    { key: 'collapse', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll },
-  ] });
-  // The horizontal strip of views (All, Focus, Satellite...) across the top of the panel.
-  // Every heading's right-click menu carries the same switch (NavigationHeading).
-  viewGroups.push({ label: 'Task panel', options: [
-    { key: 'quick-views', label: 'Show tab bar', toggle: true, active: quickViews, title: 'All, Focus, Satellite and the other views as tabs across the top', onSelect: () => setQuickViews(!quickViews) },
-  ] });
-  viewGroups.push(sessionPanelsGroup);
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}>
+      <div className="fb-toolbar-scope">
       <div className="todo-panel-toolbar">
         <TodoSearchBar
           query={searchQuery}
@@ -8208,43 +7855,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           resultCount={searchResultCount}
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
-        <ViewDropdown
-          projects={projectTabs}
-          activeProject={activeProject}
-          onProjectChange={(p) => { setActiveProject(p); persistTab(p); onProjectChange?.(p); }}
-          projectCounts={projectCounts}
-          phaseFilter={phaseFilter}
-          onPhaseFilterChange={(v) => { setPhaseFilter(v); clearFocusOverride(); }}
-          dateFilter={dateFilter}
-          onDateFilterChange={(v) => { setDateFilter(v); persistDateFilter(v); clearFocusOverride(); }}
-          sortBy={sortBy}
-          onSortByChange={setSortForAll}
-          groupBy={groupBy}
-          onGroupByChange={(v) => { setGroupBy(v); persistGroupBy(v); }}
-          showCompleted={showCompleted}
-          onShowCompletedChange={(v) => { setShowCompleted(v); clearFocusOverride(); }}
-          showWaiting={showWaiting}
-          waitingCount={hiddenWaitingCount}
-          onShowWaitingChange={(v) => { setShowWaiting(v); clearFocusOverride(); }}
-          onClearAll={() => {
-            setActiveProject(''); persistTab(''); onProjectChange?.('');
-            setPhaseFilter('');
-            setShowWaiting(false);
-            setDateFilter(''); persistDateFilter('');
-            setTaskQueryState((prev) => ({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: prev.sort }));
-            clearFocusOverride();
-          }}
-          query={taskQueryState}
-          onQueryChange={handleQueryChange}
-          queryProjectOptions={queryProjectOptions}
-          querySourceOptions={querySourceOptions}
-          querySprintOptions={querySprintOptions}
-          queryTagOptions={queryTagOptions}
-          viewGroups={viewGroups}
-        />
+        <FilterButton controller={filterBar} />
+        <DisplayButton {...displayProps} />
         <button
           type="button"
           className="todo-panel-hide"
+          tabIndex={0}
           aria-label="Hide task panel"
           title="Hide task panel"
           onClick={() => {
@@ -8254,6 +7870,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         >
           {ICONS.ICON_SIDE_PANEL}
         </button>
+      </div>
+      <FilterBar controller={filterBar} />
       </div>
 
       {banner}
@@ -8271,7 +7889,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       )}
 
       {/* A single-tier view names its tier and keeps the tier's "+" (the All view's
-          tier headings carry the same control). View modes live in the filter menu. */}
+          tier headings carry the same control). View modes live in the Display menu. */}
       {tierSectionActive && (
         <div className="tier-solo-heading" data-testid="tier-view-bar">
           <span className={`navigation-icon todo-tier-icon-${isBuiltinTier(effectiveSection) ? effectiveSection : 'custom'}`} aria-hidden="true">{ICONS.tierIcon(effectiveSection)}</span>
@@ -8286,13 +7904,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </div>
       )}
 
-      {/* Only present while the user has set a query condition themselves. */}
-      <TaskFilterChips
-        query={taskQueryState}
-        onQueryChange={handleQueryChange}
-        onClearAll={clearFocusOverride}
-      />
-
       {quickViews && <TodoSectionTabs
         active={effectiveSection}
         onChange={handleSectionChange}
@@ -8300,73 +7911,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         heldCounts={sectionHeldCounts}
         countsReady={!loading}
         customTiers={customTiers}
-        searchDone={isSearchMode && searchDoneCount > 0
-          ? { count: searchDoneCount, shown: showDoneResults, onToggle: () => setShowDoneResults((v) => !v) }
-          : undefined}
       />}
 
-      {/* Mini-bar: high-frequency verbs that used to hide in the View dropdown.
-          ONLY on the Tasks section view — the pinned tiers and the stacked All
-          view keep their clean chrome (user ruling 2026-08-10). */}
+      {/* Projects view only: Running and Collapse/Expand (spec 5.6). */}
       {quickViews && !isSearchMode && effectiveSection === 'tasks' && (
-        <div className="todo-minibar">
-          <button
-            type="button"
-            className="todo-minibar-btn"
-            title={allCollapsed ? 'Expand all projects' : 'Collapse all projects'}
-            onClick={handleCollapseExpandAll}
-          >
-            {allCollapsed ? '⌃⌃ Expand all' : '⌄⌄ Collapse all'}
-          </button>
-          <span className="todo-minibar-sep" />
-          <button
-            type="button"
-            className={`todo-minibar-btn${showCompleted ? ' on' : ''}`}
-            title={showCompleted ? 'Hide completed tasks' : 'Show completed tasks'}
-            onClick={() => { setShowCompleted(!showCompleted); clearFocusOverride(); }}
-          >
-            ✓ Done
-          </button>
-          <button
-            type="button"
-            className={`todo-minibar-btn${showWaiting ? ' on' : ''}`}
-            title={showWaiting ? 'Hide waiting tasks' : 'Show waiting tasks (parked until something happens)'}
-            data-testid="todo-minibar-waiting"
-            onClick={() => { setShowWaiting(!showWaiting); clearFocusOverride(); }}
-          >
-            ⧗ Waiting{hiddenWaitingCount > 0 ? ` (${hiddenWaitingCount})` : ''}
-          </button>
-          <button
-            type="button"
-            className="todo-minibar-btn"
-            title="Cycle sort: manual → priority → date → updated"
-            onClick={() => {
-              const cycle: SortBy[] = ['manual', 'priority', 'date', 'updated'];
-              const next = cycle[(cycle.indexOf(sortBy) + 1) % cycle.length];
-              setSortForAll(next);
-            }}
-          >
-            ↕ {sortBy === 'manual' ? 'Manual' : sortBy === 'priority' ? 'Priority' : sortBy === 'date' ? 'Date' : 'Updated'}
-          </button>
-          {dateQuickChip}
-          {runningTaskIds.length > 0 && (
-            <>
-              <span className="todo-minibar-sep" />
-              <button
-                type="button"
-                className="todo-minibar-btn todo-minibar-running"
-                title="Jump to the next task with a running session"
-                onClick={jumpToNextRunning}
-              >
-                <span className="todo-minibar-running-dot" />
-                Running ({runningTaskIds.length})
-              </button>
-            </>
-          )}
-        </div>
+        <TodoProjectsMiniBar
+          runningCount={runningTaskIds.length}
+          onJumpRunning={jumpToNextRunning}
+          allCollapsed={allCollapsed}
+          onCollapseExpandAll={handleCollapseExpandAll}
+        />
       )}
 
-      <div className={`home-navigation-scroll${isStacked ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}`}>
+      {showFilterEmpty && <TodoFilterEmpty onClear={homeFilters.clearAll} />}
+
+      <div ref={setListScrollEl} className={`home-navigation-scroll${isStacked ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}${showFilterEmpty && overrideOnlyIds.size === 0 ? ' is-filter-empty' : ''}`}>
       <NavigationSections storageKey="walnut-todo-navigation-order">
         <NavigationSection key="pinned" navId="pinned">
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin.
@@ -8388,16 +7947,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               view the "Pinned" wrapper header is dropped (the tab already names the
               tier) and only that tier's subgroup renders. A pinned query condition
               routes every pin through the list, so the tier area steps aside. */}
-          {anyTierVisible && !pinnedQueryActive && (anyTierDrawn || (isStacked && !isSearchMode)) && (
+          {anyTierVisible && (anyTierDrawn || (isStacked && !isSearchMode)) && (
             <div className={`todo-pinned-section${isStacked ? '' : ' todo-pinned-section-solo'}`}>
               {isStacked && (
               <NavigationHeading id="pinned" label="Pinned" className="todo-pinned-header" collapsed={isFolded('pinned')} onClick={() => toggleSection('pinned')}
                 actions={[
                   { key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') },
-                  ...(anyTierDrawn ? [{ key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) }] : []),
+                  ...(anyTierDrawn && !tiersWithTasks.every((t) => headlessTiers.has(t)) ? [{ key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) }] : []),
                 ]} />
               )}
-              {!isFolded('pinned') && !anyTierDrawn && (
+              {/* F34: no "nothing pinned" verdict before the pins have loaded. */}
+              {!isFolded('pinned') && !anyTierDrawn && !loading && (
                 <p className="todo-pinned-empty" data-testid="todo-pinned-empty">Nothing pinned yet. Pin a task from its menu to keep it here.</p>
               )}
               {!isFolded('pinned') && anyTierDrawn && (
@@ -8412,7 +7972,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <TierNavigationGroup
                           def={model.def}
                           isAll={isStacked}
-                          folded={isFolded(tier)}
+                          headless={headlessTiers.has(tier)}
+                          folded={!headlessTiers.has(tier) && isFolded(tier)}
                           collapsed={chevronCollapsed(tier)}
                           onToggle={toggleSection}
                           visibleIds={model.visibleIds}
@@ -8455,9 +8016,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 ? 'Hide completed matches older than 30 days'
                 : 'Show them in their pinned positions'}
             >
+              {ICONS.ICON_CHECK}
               {showStaleDonePins
-                ? `✓ hide ${staleDonePinMatchCount} older completed`
-                : `✓ ${staleDonePinMatchCount} older completed match${staleDonePinMatchCount === 1 ? '' : 'es'} hidden`}
+                ? `Hide ${staleDonePinMatchCount} older completed`
+                : `${staleDonePinMatchCount} older completed match${staleDonePinMatchCount === 1 ? '' : 'es'} hidden`}
             </button>
           )}
 
@@ -8695,7 +8257,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <p className="text-sm">Start with New task above. Projects are created for you as you go.</p>
           </div>
         )}
-        {!loading && !isSearchMode && filtered.length === 0 && tasks.length > 0 && (
+        {/* F35: a list emptied only because its tasks sit in Pinned above says nothing. */}
+        {!loading && !isSearchMode && filtered.length === 0 && filterResult.list.length === 0 && tasks.length > 0 && !showFilterEmpty && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <p className="text-sm">No tasks found</p>
           </div>
@@ -8744,7 +8307,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       pinnedTier={getTier(task.id)}
                       searchContext={task.project || 'Inbox'}
                       searchTierLabel={tier ? tierDisplayLabel(tier, customTiers) : undefined}
-                      filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
+                      filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideNode : undefined}
                       isFadingOverride={fadingOverrideId === task.id}
                     />
                   );
@@ -8814,7 +8377,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                   isPinned={pinnedTaskIds?.has(task.id)}
                   searchContext={task.project || 'Inbox'}
-                  filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
+                  filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideNode : undefined}
                   isFadingOverride={fadingOverrideId === task.id}
                   groupInfo={listGroupInfo.get(task.id)}
                   onRenameGroup={handleRenameGroup}
@@ -8877,6 +8440,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onMoveDown={(p) => moveProjectBy(allGroupKeys, p, 1)}
                         sort={sortForProject(project)}
                         onSetSort={setProjectSort}
+                        onFilterToProject={filterToProject}
                       />
                       {!isListProjectCollapsed(project) && (() => {
                         const batch = cutRows(project, projTasks.filter((t) => !isChildHidden(t.id)));
@@ -8916,7 +8480,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                                 isPinned={pinnedTaskIds?.has(task.id)}
                                 pinnedTier={getTier(task.id)}
-                                filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
+                                filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideNode : undefined}
                                 isFadingOverride={fadingOverrideId === task.id}
                                 groupInfo={listGroupInfo.get(task.id)}
                                 onRenameGroup={handleRenameGroup}
@@ -9003,59 +8567,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </NavigationSections>
       </div>
 
-      {/* Filter footer: what this view hides on its own, one click to see it.
-          Search ignores every view toggle, so there is nothing to report there.
-          Without this, "Show waiting" lived only inside View options and a parked
-          task simply vanished from Focus with no trace (user, 2026-10-01). */}
-      {!isSearchMode && (waitingCount > 0 || completedCount > 0 || dateHiddenCount > 0 || phaseFilter) && (
-        <div className="todo-filter-footer" data-testid="todo-filter-footer">
-          {waitingCount > 0 && (
-            <button
-              type="button"
-              className={`todo-filter-footer-chip${showWaiting ? ' on' : ''}`}
-              data-testid="todo-filter-footer-waiting"
-              title={showWaiting ? 'Hide waiting tasks again' : 'Show the waiting tasks (parked until something happens)'}
-              onClick={() => { setShowWaiting(!showWaiting); clearFocusOverride(); }}
-            >
-              <span className="todo-filter-footer-icon" aria-hidden="true">{ICONS.ICON_PHASE_WAITING}</span>
-              {waitingCount} waiting {showWaiting ? 'shown' : 'hidden'}
-            </button>
-          )}
-          {completedCount > 0 && (
-            <button
-              type="button"
-              className={`todo-filter-footer-chip${showCompleted ? ' on' : ''}`}
-              data-testid="todo-filter-footer-completed"
-              title={showCompleted ? 'Hide completed tasks again' : 'Show the completed tasks'}
-              onClick={() => { setShowCompleted(!showCompleted); clearFocusOverride(); }}
-            >
-              <span className="todo-filter-footer-icon" aria-hidden="true">{ICONS.ICON_PHASE_COMPLETE}</span>
-              {completedCount} completed {showCompleted ? 'shown' : 'hidden'}
-            </button>
-          )}
-          {dateFilter && dateHiddenCount > 0 && (
-            <button
-              type="button"
-              className="todo-filter-footer-chip"
-              data-testid="todo-filter-footer-date"
-              title={`Date filter "${DATE_LABELS[dateFilter] || dateFilter}" hides ${dateHiddenCount} deferred ${dateHiddenCount === 1 ? 'task' : 'tasks'}: click to show every date`}
-              onClick={() => { setDateFilter(''); persistDateFilter(''); clearFocusOverride(); }}
-            >
-              {dateHiddenCount} deferred hidden · Date: {DATE_LABELS[dateFilter] || dateFilter} ×
-            </button>
-          )}
-          {phaseFilter && (
-            <button
-              type="button"
-              className="todo-filter-footer-chip on"
-              data-testid="todo-filter-footer-phase"
-              title="Only this status is shown: click to show every status"
-              onClick={() => { setPhaseFilter(''); clearFocusOverride(); }}
-            >
-              Phase: {(PHASE_LABELS as Record<string, string>)[phaseFilter] ?? phaseFilter} ×
-            </button>
-          )}
-        </div>
+      {/* Filter footer: what the default filters hide in this view (spec 5.6). */}
+      {!isSearchMode && (
+        <TodoFilterFooter
+          tasks={footerTasks}
+          ctx={filterEvalCtx}
+          archiveHidden={footerTasks === tasks ? (tasksStore?.completedHidden ?? 0) : 0}
+          onApply={applyFromFooter}
+        />
       )}
 
       {/* Detail pane: the project registry row (inline split-pane). Task detail now

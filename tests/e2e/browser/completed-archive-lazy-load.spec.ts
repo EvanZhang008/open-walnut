@@ -7,15 +7,20 @@
  * server and parsed by the browser for 77 rendered rows. Now the list request
  * carries `completedWithinDays`, the server answers with the open tasks plus the
  * recent completions and a `completedHidden` count, and the first view that
- * shows completed rows (Show completed here) loads the rest once.
+ * shows completed rows (Status with Complete here, spec 5.8) loads the rest once.
  *
  * The window is rewritten to 0 days on the wire so a task completed a moment ago
  * counts as "old"; the client cannot be asked to backdate a completion.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
+import { filterChip, setStatus } from './filter-bar-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/completed-archive-lazy-load'
+
+// Four trips through the Filter menu; the default 30s is too tight on a loaded machine.
+test.setTimeout(120_000)
 
 async function createTaskViaApi(title: string): Promise<{ id: string; title: string }> {
   const uniqueTitle = `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -57,14 +62,15 @@ function watchListRequests(page: Page): { windowed: () => number; whole: () => n
   return { windowed: () => windowed, whole: () => whole }
 }
 
+/** Status open + Complete (the old Show completed), or back to the default open set. */
 async function setShowCompleted(page: Page, on: boolean): Promise<void> {
-  await page.getByRole('button', { name: 'View options' }).click()
-  const box = page.locator('.vd-check input[type="checkbox"]')
-  if (on) await box.check(); else await box.uncheck()
-  await page.keyboard.press('Escape')
+  await setStatus(page, on ? ['To Do', 'In Progress', 'Need Action', 'Complete'] : ['To Do', 'In Progress', 'Need Action'])
+  if (on) await expect(filterChip(page, 'status')).toContainText('Open, Complete')
+  else await expect(filterChip(page, 'status')).toHaveCount(0)
 }
 
-test('a board load leaves old completions on the server; Show completed loads them once', async ({ page }) => {
+test('a board load leaves old completions on the server; Status with Complete loads them once', async ({ page }) => {
+  await isolateUiPrefs(page)
   const open = await createTaskViaApi('Archive open')
   const done = await createTaskViaApi('Archive done')
   await unpinViaApi(open.id)
@@ -112,6 +118,8 @@ test('a board load leaves old completions on the server; Show completed loads th
   const doneRow = rowFor(done.title).first()
   await expect(doneRow).toBeVisible({ timeout: 10_000 })
   await expect(doneRow).toHaveClass(/-done\b/)
+  // The footer names the same set in the Status word (C8).
+  await expect(page.getByTestId('todo-filter-footer-completed')).toContainText('Complete shown')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/archive-loaded-${test.info().project.name}.png` })
 
   // Toggling again does not re-read the archive: it is loaded for this page.
@@ -121,7 +129,7 @@ test('a board load leaves old completions on the server; Show completed loads th
   await expect(doneRow).toBeVisible({ timeout: 10_000 })
   expect(requests.whole()).toBe(1)
 
-  // Restore the shared pref for the specs that follow (it persists via /api/ui-prefs).
+  // isolateUiPrefs keeps the filter record out of the shared prefs; reset anyway.
   await setShowCompleted(page, false)
 })
 

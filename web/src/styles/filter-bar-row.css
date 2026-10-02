@@ -1,0 +1,167 @@
+/*
+ * filter-bar-row: the filter row under the home toolbar (.fb-row, spec 6.4)
+ * and its overflow list. Split from filter-bar.css (each file < 500 lines).
+ */
+
+/* ── Filter row (6.4) ── */
+.fb-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 8px;
+  min-height: 32px;
+  box-sizing: border-box;
+  opacity: 1;
+  transition: opacity 120ms ease-out;
+}
+.fb-row.is-collapsing { opacity: 0; }
+/* Popover open (F03): the row floats at its in-flow place over the tab bar; the
+   spacer after it keeps the height the row had before, so nothing below moves. */
+.fb-row.is-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.fb-row-spacer { flex: none; }
+/* Popover open: the chip lines are held (inline min-height), so a new line never moves it (C47). */
+.fb-row.is-menu-open .fb-row-chips { align-content: flex-start; }
+.fb-row-chips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.fb-row-lead { display: inline-flex; align-items: center; height: 24px; color: var(--fg-secondary); font-size: 12px; }
+.fb-chip {
+  display: inline-flex;
+  align-items: stretch;
+  height: 24px;
+  max-width: 100%;
+  border-radius: 12px;
+  background: var(--bg-hover);
+  color: var(--fg);
+  font-size: 12px;
+  animation: fb-chip-in 80ms ease-out;
+}
+@keyframes fb-chip-in { from { opacity: 0; } to { opacity: 1; } }
+.fb-chip-body,
+.fb-chip-x,
+.fb-view-item,
+.fb-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.fb-chip-body { gap: 4px; min-width: 0; padding: 0 4px 0 9px; border-radius: 12px 0 0 12px; }
+.fb-chip-dim { flex: none; color: var(--fg-secondary); }
+.fb-chip-val {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.fb-chip-val.is-missing { font-style: italic; color: var(--fg-muted); font-weight: 400; }
+.fb-chip-caret { display: inline-flex; flex: none; color: var(--fg-secondary); }
+/* Hover is one shade darker over the whole chip (F19); an open chip menu keeps
+   that shade plus an accent edge, so hover never looks like "opened". */
+.fb-chip:hover,
+.fb-chip:has(.fb-chip-body[aria-expanded='true']) { background: var(--border); }
+.fb-chip:has(.fb-chip-body[aria-expanded='true']) { box-shadow: inset 0 0 0 1px var(--accent); }
+.fb-chip-x {
+  justify-content: center;
+  width: 22px;
+  padding: 0;
+  border-radius: 0 12px 12px 0;
+  color: var(--fg-secondary);
+}
+.fb-chip-x svg { width: 12px; height: 12px; }
+.fb-chip-x:hover { background: var(--border-strong); color: var(--fg); }
+.fb-chip-plus {
+  align-items: center;
+  padding: 0 9px;
+  border: none;
+  color: var(--fg);
+  font-family: inherit;
+  cursor: pointer;
+}
+.fb-chip-plus:hover { background: var(--border); }
+.fb-view-item { gap: 4px; height: 24px; padding: 0 9px; border-radius: 12px; border: 1px dashed var(--border); }
+.fb-view-item:hover { background: var(--bg-hover); }
+.fb-toggle {
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 12px;
+  background: var(--bg-hover);
+}
+.fb-toggle[aria-pressed='true'] { background: var(--accent-subtle); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-text); }
+.fb-clear { height: 24px; }
+/* Clear ends the last chip line at its right edge; on a full line it wraps, still right-aligned. */
+.fb-clear { margin-left: auto; }
+/* Inline children, so innerText is just the visible words (no flex-item breaks). */
+.fb-count {
+  flex: none;
+  display: inline-block;
+  height: 24px;
+  line-height: 24px;
+  margin-left: auto;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fb-chip-body:focus-visible,
+.fb-chip-x:focus-visible,
+.fb-chip-plus:focus-visible,
+.fb-view-item:focus-visible,
+.fb-toggle:focus-visible,
+.fb-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Overflow list of the chips past two lines (5.4). */
+.fb-overflow-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 180px;
+  max-width: 320px;
+  padding: 6px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+/* ── Narrow panel (container query on .fb-toolbar-scope, 5.5) ──
+   Chips keep their dimension names and the count keeps its unit at every
+   width (F01): a bare `Any` or `Complete` means nothing alone. Only the
+   value text gets a shorter cap. */
+@container todo-toolbar (max-width: 419px) {
+  .fb-chip-val { max-width: 120px; }
+}
+
+
+/* ── Board pieces the filters own ── */
+/* 5.3 / F25: zero matches under chips: the empty state is the only thing in the list. */
+.home-navigation-scroll.is-filter-empty > * { display: none; }
+/* 5.11 / F07: a pinned card the chips would hide carries its reasons or its pill on its own line. */
+.todo-pinned-card:has(> .todo-pinned-card-override),
+.todo-focus-card:has(> .todo-pinned-card-override) { flex-wrap: wrap; }
+.todo-pinned-card-override { flex: 1 0 100%; min-width: 0; padding-left: 22px; }
+
+/* ── Reduced motion: no transitions or animations at all (C42) ── */
+@media (prefers-reduced-motion: reduce) {
+  .fb-chip,
+  .fb-overflow-menu { animation-duration: 0ms; }
+  .fb-row { transition-duration: 0ms; }
+}

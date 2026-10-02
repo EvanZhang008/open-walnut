@@ -1,12 +1,14 @@
 import fs from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { isolateUiPrefs, selectProject } from './todo-panel-helpers';
+import { closeFilterMenu, filterChip, filterValue, openFilterMenu } from './filter-bar-helpers';
 
 const SCREENSHOT_DIR = '/tmp/test-and-verify';
 const TARGET_S1 = '2532066a-e210-4702-be34-ed01008adbde';
 const TARGET_S2 = 'c520a153-6fb8-489d-b18f-c9e0d7ab9f48';
 // `_inbox` is the url token for the Inbox tab (tasks with no project). Sentinel
 // tab tokens are namespaced with '_' so a project legitimately NAMED "inbox"
-// stays deep-linkable — the mapping is injective in both directions. See the
+// stays deep-linkable: the mapping is injective in both directions. See the
 // `?proj=` section of web/src/components/tasks/task-tabs.ts (the pre-2026-08 bare
 // `inbox` token is intentionally no longer decoded as the sentinel). This used to
 // deep-link the ★ tab, which was retired with the starred system.
@@ -60,14 +62,18 @@ async function expectTargetSelection(page: Page): Promise<void> {
   await expect(panels.nth(1).locator('.session-panel-title')).toHaveText(TARGET_TITLES[1]);
   await expect(page.locator('.task-detail-modal')).toHaveCount(0);
 
-  const viewPanel = page.locator('.vd-panel');
-  if (!await viewPanel.isVisible()) {
-    await page.getByRole('button', { name: 'View options' }).click();
-  }
-  await page.locator('.vd-rail-btn[data-rail-section="projects"]').click();
-  await expect(page.locator('.vd-cat', { hasText: 'Inbox' }).first()).toHaveClass(/\bvd-active\b/);
-  await page.keyboard.press('Escape');
+  // The restored project is a Project chip (4.3) and the selected Project value in the Filter popover.
+  await expect(filterChip(page, 'project')).toContainText('Inbox');
+  await openFilterMenu(page);
+  await expect(filterValue(page, 'project', 'Inbox')).toHaveAttribute('aria-pressed', 'true');
+  await closeFilterMenu(page);
 }
+
+// The restored Project chip persists in walnut-todo-filters, which ui-prefs-sync mirrors
+// to the shared fixture: keep it out of every other spec file.
+test.beforeEach(async ({ page }) => {
+  await isolateUiPrefs(page);
+});
 
 test('malformed HTTP 200 task list retains and restores the deep-linked task', async ({
   page,
@@ -377,10 +383,8 @@ test('exact taskless deep link is restored by Back during a failed warm refresh'
   await page.locator('.main-page-session-column .session-panel-close').first().click();
   await page.locator('.main-page-session-column .session-panel-close').first().click();
   await expect(page.locator('.main-page-session-column .session-panel')).toHaveCount(0);
-  await page.getByRole('button', { name: 'View options' }).click();
-  await page.locator('.vd-rail-btn[data-rail-section="projects"]').click();
-  await page.locator('.vd-cat', { hasText: 'All' }).click();
-  await page.keyboard.press('Escape');
+  // Back to every project: remove the Project chip.
+  await selectProject(page, 'All');
   await expect.poll(() => {
     const url = new URL(page.url());
     return `${url.pathname}${url.search}`;

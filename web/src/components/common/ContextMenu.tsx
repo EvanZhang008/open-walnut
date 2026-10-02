@@ -36,6 +36,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
+import { ICON_CHECK } from './Icons';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import {
   keepNativeContextMenu,
@@ -504,7 +505,7 @@ export function ContextMenu({
                 }}
               >
                 {row.checked !== undefined
-                  ? <span className="wn-context-menu-icon wn-context-menu-check" aria-hidden="true">{row.checked ? '✓' : ''}</span>
+                  ? <span className="wn-context-menu-icon wn-context-menu-check" aria-hidden="true">{row.checked ? ICON_CHECK : null}</span>
                   : row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
                 <span className="wn-context-menu-label">{row.ai && aiMark()}{row.label}</span>
               </button>

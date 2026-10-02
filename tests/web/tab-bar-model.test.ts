@@ -8,7 +8,10 @@
  * nobody has customised is All and Pinned alone, and Pinned never hides for being empty.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, tabBarTabs, visibleTabBarTabs } from '@/components/tasks/tab-bar-model'
+import {
+  DEFAULT_HIDDEN_TABS, DISPLAY_FIRST_LAYER_LIMIT, ROOMY_TAB_LIMIT, allViews, displayViewLayers, tabBarTabs,
+  tabMenuGroups, viewLabel, viewTitle, visibleTabBarTabs,
+} from '@/components/tasks/tab-bar-model'
 
 const customs = [{ id: 'ct_a', label: 'Reading' }, { id: 'ct_b', label: 'Errands' }]
 const ids = (tabs: { id: string }[]) => tabs.map((tab) => tab.id)
@@ -81,5 +84,79 @@ describe('visibleTabBarTabs', () => {
     it('leaves the tiers in the bar menu so they can be put back', () => {
       expect(ids(tabBarTabs()).filter((id) => !DEFAULT_HIDDEN_TABS.includes(id))).toEqual(['all', 'pinned'])
     })
+  })
+})
+
+const TIER_WORDS = /tier|focus|satellite|backlog|parked/i
+
+describe('view titles (one source for Display, the flyout and the tabs)', () => {
+  it('words All and Pinned without any tier name', () => {
+    expect(viewTitle('all')).toBe('All: every open task on your board')
+    expect(viewTitle('pinned')).toBe('Pinned: tasks you pinned to keep in front of you')
+    for (const id of ['all', 'pinned']) {
+      expect(viewTitle(id)).not.toMatch(TIER_WORDS)
+      expect(viewLabel(id)).not.toMatch(TIER_WORDS)
+    }
+  })
+
+  it('has a Projects entry that the bar itself never draws', () => {
+    expect(viewTitle('tasks')).toBe('Projects: every task grouped by project, with filters applied')
+    expect(viewLabel('tasks')).toBe('Projects')
+    expect(ids(tabBarTabs(customs))).not.toContain('tasks')
+    expect(ids(allViews(customs)).at(-1)).toBe('tasks')
+  })
+
+  it('gives every view a non-empty title, custom tiers included', () => {
+    for (const view of allViews(customs)) expect(viewTitle(view.id, customs)).not.toBe('')
+    expect(viewTitle('ct_a', customs)).toBe('Reading: a list of pins you made')
+    // F30: no first-level title uses the word tier.
+    for (const id of ['all', 'pinned', 'ct_a']) expect(viewTitle(id, customs)).not.toMatch(/tier/i)
+    expect(viewTitle('nope')).toBe('')
+  })
+
+  it('keeps tabs and viewTitle on the same sentence', () => {
+    for (const tab of tabBarTabs(customs)) expect(viewTitle(tab.id, customs)).toBe(tab.title)
+  })
+})
+
+describe('displayViewLayers', () => {
+  it('puts only All and Pinned on the first layer by default, everything else in More views', () => {
+    const { first, more } = displayViewLayers([], DEFAULT_HIDDEN_TABS)
+    expect(ids(first)).toEqual(['all', 'pinned'])
+    expect(ids(more)).toEqual(['focus', 'satellite', 'wait', 'recent', 'tasks'])
+    expect(first.map((v) => `${v.label} ${v.title}`).join(' ')).not.toMatch(TIER_WORDS)
+  })
+
+  it('follows the bar: a tab the user keeps moves to the first layer in bar order, and leaves More views', () => {
+    const hidden = DEFAULT_HIDDEN_TABS.filter((id) => id !== 'focus')
+    const { first, more } = displayViewLayers(customs, hidden)
+    expect(ids(first)).toEqual(['all', 'pinned', 'focus', 'ct_a', 'ct_b'])
+    expect(ids(more)).toEqual(['satellite', 'wait', 'recent', 'tasks'])
+  })
+
+  it('caps the first layer so 30 custom tiers spill into the flyout, keeping menu order', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ id: `ct_${i}`, label: `Tier ${i}` }))
+    const { first, more } = displayViewLayers(many, DEFAULT_HIDDEN_TABS)
+    expect(first).toHaveLength(DISPLAY_FIRST_LAYER_LIMIT)
+    expect(ids(first).slice(0, 3)).toEqual(['all', 'pinned', 'ct_0'])
+    expect(ids(more).slice(0, 4)).toEqual(['focus', 'satellite', 'wait', `ct_${DISPLAY_FIRST_LAYER_LIMIT - 2}`])
+    expect(ids(more).slice(-2)).toEqual(['recent', 'tasks'])
+    expect(first.length + more.length).toBe(allViews(many).length)
+  })
+
+  it('never lists a view twice and keeps Projects out of the first layer even when nothing is hidden', () => {
+    const { first, more } = displayViewLayers(customs, [])
+    expect(new Set([...ids(first), ...ids(more)]).size).toBe(allViews(customs).length)
+    expect(ids(first)).not.toContain('tasks')
+  })
+})
+
+describe('tabMenuGroups (the bar chevron menu)', () => {
+  it('lists All, Pinned and Recent above the divider and every tier under More views', () => {
+    const { top, tiers } = tabMenuGroups(tabBarTabs(customs))
+    expect(ids(top)).toEqual(['all', 'pinned', 'recent'])
+    expect(ids(tiers)).toEqual(['focus', 'satellite', 'wait', 'ct_a', 'ct_b'])
+    expect(top.map((t) => `${t.label} ${t.title}`).join(' ')).not.toMatch(TIER_WORDS)
+    for (const tier of tiers) expect(tier.title).not.toBe('')
   })
 })

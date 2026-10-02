@@ -352,3 +352,55 @@
 .home-navigation-scroll [data-task-id] { scroll-margin-top: 26px; }
 .home-navigation-scroll.is-stacked .todo-pinned-section [data-task-id] { scroll-margin-top: 78px; }
 .home-navigation-scroll.is-stacked .todo-tasks-section:has(> .todo-tasks-header) [data-task-id] { scroll-margin-top: 52px; }
+
+/* ── Home filters (spec 5.3, 5.6, 5.11, 5.12) ── */
+/* The toolbar and the filter row share one container-query scope; the panel
+   root keeps container-type normal (its fixed drag overlays need the viewport). */
+.fb-toolbar-scope { flex-shrink: 0; }
+.todo-filter-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 28px 12px; text-align: center; flex-shrink: 0;
+}
+.todo-filter-empty-title { font-size: 13px; color: var(--fg); }
+.todo-filter-empty-clear {
+  font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-hover); color: var(--fg);
+}
+.todo-filter-empty-clear:hover { border-color: var(--accent); }
+.todo-filter-empty-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.todo-filter-footer-sep { color: var(--fg-secondary); margin-left: -7px; }
+/* F18: the comma touches the word before it (no " , "); muted text stays >= 4.5:1 (F28). */
+.todo-filter-footer .todo-filter-footer-chip { padding: 0 3px; color: var(--fg-secondary); }
+.todo-filter-footer .todo-filter-footer-chip.on { color: var(--accent-text); }
+.todo-filter-footer { color: var(--fg-secondary); }
+.task-filter-override-show {
+  font: inherit; font-size: inherit; margin-left: 4px; padding: 0 2px; border: 0; border-radius: 3px;
+  background: transparent; color: var(--accent-text, var(--accent)); cursor: pointer; text-decoration: underline;
+}
+.task-filter-override-show:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.task-filter-outside-pill {
+  display: inline-flex; align-items: center; font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  background: var(--bg-hover); color: var(--fg-muted); white-space: nowrap;
+}
+.todo-minibar-icon { display: inline-flex; margin-right: 4px; }
+.todo-minibar-icon svg { width: 12px; height: 12px; }
+/* Filter and Display took 32px from the search field. While a query is typed on
+   a narrow toolbar, the field gets that room back so the text stays visible: the
+   filter row already shows the result count (5.7), and New task folds to its
+   plus icon until the query is cleared. */
+@container (max-width: 340px) {
+  .app-shell-navigation .todo-panel-toolbar .todo-search-count { display: none; }
+  .app-shell-navigation .todo-panel-toolbar:has(.todo-search-clear) .new-launcher-label { display: none; }
+  .app-shell-navigation .todo-panel-toolbar:has(.todo-search-clear) .new-launcher-btn { width: 28px; padding: 0; }
+}
+/* A headless tier (5.10: the board uses one tier, so its heading is not drawn) has no
+   tier heading to stick under: its project labels and scroll targets sit right under
+   the Pinned heading, or a label would be pushed down over its own first card. */
+.home-navigation-scroll.is-stacked .todo-pinned-subgroup:not(:has(> .todo-pinned-subgroup-heading)) .tier-project-label { top: 26px; }
+.home-navigation-scroll.is-stacked .todo-pinned-subgroup:not(:has(> .todo-pinned-subgroup-heading)) [data-task-id] { scroll-margin-top: 52px; }
+/* F10: Filter and Display cost the search field room on the default (narrow) panel;
+   tighter gaps between the toolbar's buttons give most of it back. */
+@container todo-toolbar (max-width: 419px) {
+  .app-shell-navigation .todo-panel-toolbar { gap: 4px; }
+  .app-shell-navigation .todo-panel-toolbar .todo-search-bar { padding: 0 6px; }
+}

@@ -73,7 +73,7 @@ test('a task edit in the session header reaches the board row before the server 
   const rowPhase = row.locator('.task-phase-icon-btn')
   await expect(headerPhase).toHaveAttribute('title', 'Click to complete')
   await headerPhase.click()
-  await expect(rowPhase).toHaveAttribute('title', 'Done — click to reopen', { timeout: INSTANT_MS })
+  await expect(rowPhase).toHaveAttribute('title', 'Done: click to reopen', { timeout: INSTANT_MS })
   expect(patchesAnswered).toBe(0)
 
   // 3. Reopen from the BOARD row → session header flips, same frame.

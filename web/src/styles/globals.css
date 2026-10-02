@@ -10229,7 +10229,6 @@ body.walnut-dragging {
 .vd-cat.vd-cursor { outline: 2px solid var(--accent); outline-offset: 1px; }
 .vd-cat-check { margin-right: 6px; font-size: 10px; flex-shrink: 0; }
 .vd-cat-name { overflow: hidden; text-overflow: ellipsis; }
-.vd-cat-n { font-size: 10px; opacity: 0.7; margin-left: 4px; flex-shrink: 0; }
 
 /* Controls grid: 2 columns of fields (label above control) — never overflows the panel */
 .vd-grid {
@@ -10244,14 +10243,6 @@ body.walnut-dragging {
   cursor: pointer;
 }
 .vd-sel:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.vd-sel.vd-filtered { color: var(--accent); border-color: var(--accent); font-weight: 500; }
-
-/* Quick filters Date row: All/Now segmented pair + a compact "More…" select.
-   The seg takes the room; the select only fits its label. */
-.vd-span2 { grid-column: 1 / -1; }
-.vd-daterow { display: flex; align-items: stretch; gap: 8px; }
-.vd-daterow .vd-seg { flex: 1; min-width: 0; }
-.vd-sel-more { width: auto; flex: 0 0 auto; }
 
 /* Sort + Group: segmented controls fill their grid cell */
 .vd-seg {
@@ -10270,7 +10261,7 @@ body.walnut-dragging {
 .vd-seg-btn:hover { background: var(--hover-bg, rgba(0,0,0,0.04)); }
 .vd-seg-btn.vd-active { background: var(--accent); color: white; }
 
-/* Footer: show completed + clear (flex row pinned under the body) */
+/* Footer: Clear all (flex row pinned under the body) */
 .vd-footer {
   display: flex; align-items: center; justify-content: space-between;
   flex-shrink: 0; padding: 8px 12px; border-top: 1px solid var(--border);
@@ -10278,11 +10269,6 @@ body.walnut-dragging {
 /* Query section fields stack with breathing room inside the detail pane */
 .vd-query .vd-field { margin-top: 8px; }
 .vd-query .vd-field:first-child { margin-top: 0; }
-.vd-check {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 11px; color: var(--fg-muted); cursor: pointer;
-}
-.vd-check input { margin: 0; cursor: pointer; }
 .vd-clear {
   font-size: 11px; color: var(--fg-muted); background: none;
   border: none; cursor: pointer; padding: 2px 6px; border-radius: 4px;
@@ -11840,6 +11826,7 @@ body.walnut-dragging {
   transition: background 0.12s, border-color 0.12s;
 }
 .todo-item-select-checkbox:hover { border-color: var(--accent); }
+.todo-item-select-checkbox svg { width: 11px; height: 11px; }
 .todo-item-select-checkbox.checked {
   background: var(--accent);
   border-color: var(--accent);
@@ -16282,9 +16269,14 @@ a.task-kebab-info:hover {
 }
 
 .notification-toast-icon {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
+  color: var(--accent);
 }
+.notification-toast--success .notification-toast-icon { color: var(--success, #3aa757); }
+.notification-toast--warning .notification-toast-icon { color: var(--warning); }
+.notification-toast--error .notification-toast-icon { color: var(--danger, #d94a38); }
 
 .notification-toast-title {
   font-size: 12px;
@@ -32406,6 +32398,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   opacity: 0.75;
 }
 .todo-pinned-stale-fold:hover { opacity: 1; color: var(--accent); }
+.todo-pinned-stale-fold svg { width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; }
 
 /* Completed-results toggle chip: rides the right edge of the section-tab strip
    during search. Inherits .todo-section-tab visuals; label stays visible (the

@@ -1,5 +1,5 @@
 /**
- * Is there a route to a session from EVERY task surface — and can a user SEE it?
+ * Is there a route to a session from EVERY task surface: and can a user SEE it?
  *
  * The seeding spec (tests/e2e/browser/draft-session-seeds.spec.ts) proves that when
  * a "+" is clicked the draft comes up correctly configured. It says nothing about
@@ -7,23 +7,23 @@
  * audit found four surfaces where it did not:
  *
  *   GAP-1  single-tier tabs (Satellite / Focus / Wait / customs) had NO
- *          session "+" at all — the tier sublabels that carry one are gated on the
+ *          session "+" at all: the tier sublabels that carry one are gated on the
  *          stacked All view, so the tier tabs were the only region of the panel with
  *          no route to a session.
  *   GAP-2  a tier's "By project" folder label was a plain <div> with no action slot,
  *          so the by-project tier view had no project "+" (the All view's project
  *          header has had one since R7).
  *   GAP-3  the /tasks page's project group headers carried only the kebab.
- *   GAP-4  pinned tier CARDS rendered no ▶ Start, though the CSS already styled one —
+ *   GAP-4  pinned tier CARDS rendered no ▶ Start, though the CSS already styled one:
  *          so the pinned area (the most-worked surface) was the one place a task row
  *          could not become a session in one click.
  *   GAP-5  the toolbar visually exposed only a generic "+" while its accessible
  *          name said "New session", even though both draft actions create a task.
- *   GAP-6  every "+" was `opacity: 0` until hover — a control nobody can see until
+ *   GAP-6  every "+" was `opacity: 0` until hover: a control nobody can see until
  *          they happen to hover the right row may as well not exist.
  *
  * Split from the seeding spec by SUBJECT (same convention as the other siblings, see
- * that file's header): this one owns REACHABILITY and DISCOVERABILITY — "the control
+ * that file's header): this one owns REACHABILITY and DISCOVERABILITY: "the control
  * is on this surface, it is visible before you touch anything, and it does the same
  * thing here as everywhere else". Configuration semantics stay next door.
  *
@@ -49,7 +49,7 @@ import {
   navigateToTasksPage, openSessionFromPlus, pinToTier, plusControl, presetTierViewModes,
   restVisibility, tasksPageGroupHeader, tierProjectLabel, tierViewBar,
 } from './draft-surface-helpers'
-import { presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 
 /** Artifacts of this run. Per-run overridable, same convention as the siblings. */
 const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-gap-fix'
@@ -72,9 +72,13 @@ test.beforeAll(async () => {
 
 // Round-trips here queue behind the fixture's session health monitor on its seeded
 // 500-session dataset (~20s event-loop blocks), and the /tasks scenario adds a real
-// SPA navigation on top — the same budget the sibling specs run on, for the same
+// SPA navigation on top: the same budget the sibling specs run on, for the same
 // reasons. No scenario in this file spawns a CLI.
 test.setTimeout(180_000)
+
+// presetPanelView writes walnut-todo-filters, which ui-prefs-sync mirrors to the shared
+// fixture: cut this file off from that mirror so no other spec inherits its filters.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 // Serial within the file: every scenario mounts the pinned area / project groups of
 // ONE shared fixture and seeds registry rows + pins, so running them concurrently
@@ -141,14 +145,14 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
   expect(seen, 'the tier "+" is a pure client-state route').toEqual([])
-  // The menu closed behind the choice — it must not sit over the fresh column.
+  // The menu closed behind the choice: it must not sit over the fresh column.
   await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
   // The draft column draws NO tier control (the Focus / Satellite / Wait
-  // row was removed 2026-09-15), so the seed is invisible until it commits — and
+  // row was removed 2026-09-15), so the seed is invisible until it commits: and
   // nothing in the column may pretend otherwise.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
-  // A tier seed leaves everything else neutral — this is not a project route.
+  // A tier seed leaves everything else neutral: this is not a project route.
   await expect(draftProjectPill(panel)).toHaveCount(0)
 
   expect(await tierModes(), 'the tier "+" must not flip the tier view mode').toBe(modesBefore)
@@ -211,7 +215,7 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
 
   await page.setViewportSize({ width: 2400, height: 1000 })
   // 'project' mode is the default, but the key rides ui-prefs-sync on a SHARED
-  // server — another spec's flip to 'custom' would be merged back in at boot and
+  // server: another spec's flip to 'custom' would be merged back in at boot and
   // 'custom' renders NO labels. Pin it so this scenario can't be sabotaged.
   await presetTierViewModes(page, { satellite: 'project' })
   await presetPanelView(page, { section: 'satellite', project: '' })
@@ -223,7 +227,7 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
   await expect(plus, 'the by-project tier label must carry a project "+"').toHaveCount(1)
 
   // The label is an HTML5 drag handle for project REORDERING, and it is also
-  // `pointer-events: none` unless draggable — so the action slot has to re-enable
+  // `pointer-events: none` unless draggable: so the action slot has to re-enable
   // hit-testing without arming a drag. Proven by watching for the reorder WRITE
   // during the click window rather than diffing `/api/ordering` before/after: that
   // config key is global and another spec file (they run in parallel) could move it
@@ -240,9 +244,9 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
   await expect(panel).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('plus-menu'), 'the menu closes behind the choice').toHaveCount(0)
 
-  // Half one of the seed — synchronous, from the click itself.
+  // Half one of the seed: synchronous, from the click itself.
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${SURFACE_PROJECT}`)
-  // Half two — the project's declared folder, patched in when the detail fetch
+  // Half two: the project's declared folder, patched in when the detail fetch
   // lands. This is what proves the label's "+" routes through the SAME handler as
   // the All-view project header rather than merely setting a pill.
   await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · Local`, { timeout: 15_000 })
@@ -261,11 +265,11 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
 // ── 3. /tasks group header "+" → a draft on the home columns (GAP-3) ────────
 
 test('the /tasks group header "+" lands on home with a draft seeded from that project', async ({ page }) => {
-  // Sessions live ONLY on the home columns, so /tasks cannot open one in place —
+  // Sessions live ONLY on the home columns, so /tasks cannot open one in place:
   // which is why its group headers had a kebab and nothing else. The fix rides the
   // existing `session-launcher:open` event (MainPage stays mounted behind every
   // route), so the CROSS-PAGE half is the part worth asserting: the draft has to be
-  // open by the time home paints, and it has to carry the project's folder too —
+  // open by the time home paints, and it has to carry the project's folder too:
   // proof it routed through the project handler rather than opening a bare draft.
   await claimFolder(page, SURFACE_PROJECT, surfaceCwd)
   const stamp = Date.now()
@@ -273,14 +277,14 @@ test('the /tasks group header "+" lands on home with a draft seeded from that pr
 
   await page.setViewportSize({ width: 2400, height: 1000 })
   await loadHome(page)
-  // Real SPA navigation (never page.goto) — through the sidebar, as a user would.
+  // Real SPA navigation (never page.goto): through the sidebar, as a user would.
   await navigateToTasksPage(page)
 
   const header = tasksPageGroupHeader(page, SURFACE_PROJECT)
   await expect(header).toBeVisible({ timeout: 25_000 })
   const plus = header.getByRole('button', { name: `New session in ${SURFACE_PROJECT}` })
   await expect(plus, 'the /tasks group header must offer a session route').toHaveCount(1)
-  // The kebab is still there — the "+" was ADDED beside it, not swapped in.
+  // The kebab is still there: the "+" was ADDED beside it, not swapped in.
   // Addressed by ATTRIBUTE, not getByRole: the kebab's wrapper is `display: none`
   // until the row is hovered, and a role locator resolves through the accessibility
   // tree, which excludes display:none subtrees entirely (count 0, not 1).
@@ -297,7 +301,7 @@ test('the /tasks group header "+" lands on home with a draft seeded from that pr
   // The folder half: only handleOpenLauncherForProject patches this in, so its
   // presence is what distinguishes the fix from a generic "open a draft" event.
   await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · Local`, { timeout: 15_000 })
-  // The header's click handler toggles the group's collapse — the "+" must not have
+  // The header's click handler toggles the group's collapse: the "+" must not have
   // also folded it (checked after the navigation, so the state is the persisted one).
   const collapsed = await page.evaluate(() => {
     try { return localStorage.getItem('walnut-tasks-page-collapsed') ?? '[]' } catch { return '[]' }
@@ -312,11 +316,11 @@ test('the /tasks group header "+" lands on home with a draft seeded from that pr
 
 test('▶ on a title-only pinned tier card opens a bound draft, exactly like a list row', async ({ page }) => {
   // The pinned area is the most-worked surface, and it was the one place a task
-  // could not become a session in one click — the CSS already styled a ▶ on
+  // could not become a session in one click: the CSS already styled a ▶ on
   // `.todo-pinned-card`, so this was a missing render, not a missing design.
   //
   // Title-only ON PURPOSE: a bare title is not a brief, so ▶ must hand over a BOUND
-  // draft instead of spending a launch (the same rule the list rows follow —
+  // draft instead of spending a launch (the same rule the list rows follow:
   // tests/e2e/browser/draft-session-column.spec.ts scenario 8). The task carries its
   // own cwd, so the bound draft needs no folder pick.
   const stamp = Date.now()
@@ -335,7 +339,7 @@ test('▶ on a title-only pinned tier card opens a bound draft, exactly like a l
   await expect(startBtn, 'a pinned tier card must offer ▶ Start').toHaveCount(1)
   await expect(startBtn).toBeVisible()
   // Same control as everywhere else, addressed by the shared aria-label rather than
-  // the class — a second definition drifting under the same class is the regression
+  // the class: a second definition drifting under the same class is the regression
   // this guards.
   await expect(startBtn).toHaveAttribute('aria-label', 'Start a session for this task')
 
@@ -383,7 +387,15 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   const btn = toolbar.locator('.new-launcher-btn')
   const label = btn.locator('.new-launcher-label')
   const search = toolbar.getByPlaceholder(/Search tasks/)
-  const view = toolbar.getByRole('button', { name: 'View options' })
+  // Filter + Display replaced the single View options button (one more 28px control).
+  const filterBtn = toolbar.getByRole('button', { name: 'Filter', exact: true })
+  const view = toolbar.getByRole('button', { name: 'Display', exact: true })
+  /** Room the Filter button takes from the search input: its width plus one toolbar gap. */
+  const filterRoom = async () => {
+    const box = await filterBtn.boundingBox()
+    const gap = await toolbar.evaluate((el) => parseFloat(getComputedStyle(el).columnGap) || 0)
+    return (box?.width ?? 0) + gap
+  }
   const collapsedButtonPx = 28
   const toolbarContentWidth = () => toolbar.evaluate((element) => {
     const style = getComputedStyle(element)
@@ -397,11 +409,13 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(btn).toHaveAttribute('aria-label', 'New task')
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
+  await expect(filterBtn).toBeVisible()
   expect(await toolbarContentWidth()).toBeGreaterThan(275)
   const normalBox = await btn.boundingBox()
   const normalSearchBox = await search.boundingBox()
   expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx * 2)
-  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100)
+  // The search input gives up exactly the Filter button's room (it measured ~113px before it).
+  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100 - (await filterRoom()))
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
 
   // With the pinned 25% panel and collapsed sidebar, a 4px viewport step moves
@@ -411,8 +425,9 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(label).toBeVisible()
   expect(await toolbarContentWidth()).toBe(276)
   const boundaryWideSearchBox = await search.boundingBox()
-  // The home toolbar's hide button costs 32px, so at the breakpoint the input is ~68px.
-  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(60)
+  // The home toolbar's hide button costs 32px, so at the breakpoint the input was ~68px;
+  // the Filter button takes exactly its own room from that, and nothing more.
+  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(60 - (await filterRoom()))
 
   await page.setViewportSize({ width: 1240, height: 900 })
   await expect(label).toBeHidden()
@@ -420,6 +435,7 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(btn.locator('svg')).toBeVisible()
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
+  await expect(filterBtn).toBeVisible()
   expect(await toolbarContentWidth()).toBe(275)
   const narrowBox = await btn.boundingBox()
   const narrowSearchBox = await search.boundingBox()
@@ -438,7 +454,7 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
 test('the session "+" is legible at rest on every surface, while the kebab stays hover-only', async ({ page }) => {
   // A control that only exists on hover is a control nobody finds: you have to
   // already know it is there to hover the right row. All four "+" surfaces are now
-  // muted-but-visible at rest and go full on hover — the KEBAB deliberately did not
+  // muted-but-visible at rest and go full on hover: the KEBAB deliberately did not
   // change, and that contrast is asserted too, so "make it discoverable" can't
   // quietly become "reveal every action all the time".
   //
@@ -458,14 +474,14 @@ test('the session "+" is legible at rest on every surface, while the kebab stays
   await presetPanelView(page, { section: 'satellite', project: '' })
   await loadHome(page)
 
-  // Surface A — the tier tab's view-mode bar (GAP-1's control).
+  // Surface A: the tier tab's view-mode bar (GAP-1's control).
   const tierPlus = plusControl(tierViewBar(page))
   await expect(tierPlus).toHaveCount(1, { timeout: 25_000 })
   const tierRest = await restVisibility(tierPlus)
   expect(tierRest.hovered, 'the tier "+" was measured under the pointer').toBe(false)
   expect(tierRest.opacity, 'the tier tab "+" is invisible at rest').toBeGreaterThan(0.2)
 
-  // Surface B — the by-project tier label (GAP-2's control).
+  // Surface B: the by-project tier label (GAP-2's control).
   const labelPlus = plusControl(tierProjectLabel(page, SURFACE_PROJECT))
   await expect(labelPlus).toHaveCount(1, { timeout: 25_000 })
   const labelRest = await restVisibility(labelPlus)
@@ -476,7 +492,7 @@ test('the session "+" is legible at rest on every surface, while the kebab stays
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-07-rest-visible-home.png`, fullPage: false })
 
-  // Surface C — the /tasks group header, reached by real SPA navigation. Its "+"
+  // Surface C: the /tasks group header, reached by real SPA navigation. Its "+"
   // and its kebab share one row, which is what makes the contrast measurable side
   // by side rather than across two different designs.
   await navigateToTasksPage(page)
@@ -488,7 +504,7 @@ test('the session "+" is legible at rest on every surface, while the kebab stays
   expect(pageRest.hovered, 'the /tasks "+" was measured under the pointer').toBe(false)
   expect(pageRest.opacity, 'the /tasks group header "+" is invisible at rest').toBeGreaterThan(0.2)
 
-  // The kebab on that SAME header is still hover-only — the change was targeted at
+  // The kebab on that SAME header is still hover-only: the change was targeted at
   // the primary verb. Addressed by ATTRIBUTE because its wrapper is `display: none`
   // at rest, which puts it outside the accessibility tree a role locator searches.
   const kebab = header.locator(`[aria-label="Actions for ${SURFACE_PROJECT}"]`)

@@ -14,7 +14,11 @@
  * pinned filler cards, and their titles must hold still until the drop.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { selectProject, showAllSections } from './todo-panel-helpers'
+import { isolateUiPrefs, selectProject, showAllSections } from './todo-panel-helpers'
+
+// The Project chip lives in walnut-todo-filters, which ui-prefs-sync mirrors to the
+// shared fixture: keep this file's chips (and every other file's) out of each other.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 

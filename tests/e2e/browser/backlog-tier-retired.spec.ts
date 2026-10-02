@@ -89,10 +89,12 @@ test('no surface offers Backlog: the tab bar menu and the View menu list Focus, 
   await page.keyboard.press('Escape')
   await expect(tabMenu).toHaveCount(0)
 
-  await page.locator('#home-task-navigation .todo-panel-toolbar button[aria-label="View options"]').click()
-  const panel = page.locator('.vd-panel')
+  // The Display menu: the tiers are first-layer rows here (the fixture keeps every tab
+  // on the bar), and Backlog is not among them.
+  await page.locator('#home-task-navigation .todo-panel-toolbar button[aria-label="Display"]').click()
+  const panel = page.locator('.dm-menu')
   await expect(panel).toBeVisible()
-  for (const key of ['focus', 'satellite', 'wait']) await expect(panel.locator(`[data-view-option="${key}"]`)).toHaveCount(1)
+  for (const key of ['focus', 'satellite', 'wait']) await expect(panel.locator(`.dm-view[data-view-option="${key}"]`)).toHaveCount(1)
   await expect(panel.locator('[data-view-option="backlog"]')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)

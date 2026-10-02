@@ -156,7 +156,7 @@ export function GroupChip({ groupId, tier, label, path, leafId, project, showPro
       className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}${projectCollapsed ? ' tier-project-collapsed' : ''}${isDropTarget ? ' task-group-chip-drop' : ''}`}
       data-drop-target={isDropTarget ? 'folder' : undefined}
       title={canCollapse
-        ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
+        ? `Folder: click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
         : 'Folder — press and drag to move the whole folder'}
       // A+B drag: the whole chip is the activator (5px distance keeps the label's
       // click-to-fold and the "···" button working); the gutter grip is a hint.
@@ -311,12 +311,16 @@ interface SortableTierCardProps {
   onSelectToggle?: (taskId: string) => void;
   /** Enter select mode with this task pre-picked (kebab "Select…"). */
   onStartSelect?: (taskId: string) => void;
+  /** True when a drag is hovering this card and dropping would group the two. */
+  isGroupTarget?: boolean;
+  /** Why the filters would hide this card (focus override, 5.11/5.12): the reasons or the `Outside filters` pill. */
+  filterOverrideReason?: ReactNode;
   /** Set while this card is dragged: the depth of the folder its gap files it into
    *  (null = loose), so the gap is indented where the card will land. */
   landingDepth?: number | null;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, onMoveUp, onMoveDown, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, landingDepth }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, onMoveUp, onMoveDown, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget, filterOverrideReason, landingDepth }: SortableTierCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
@@ -448,7 +452,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       style={style}
       data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
-      className={`${cardClass}${groupClass}${projectCollapsed ? ' tier-project-collapsed' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`${cardClass}${groupClass}${projectCollapsed ? ' tier-project-collapsed' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}${filterOverrideReason ? ' task-filter-override' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Select mode: a click anywhere toggles selection (no navigation/edit).
@@ -482,7 +486,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       {/* Unread dot — same affordance as the main list row, so the Focus and
           Satellite strips read the same way as the list. */}
       {unread ? (
-        <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
+        <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
       ) : needsAction && !isDone && (
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
@@ -494,7 +498,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-        title={isDone ? 'Done — click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+        title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
@@ -551,6 +555,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onDelete={onDelete}
         onSetPhase={onSetPhase}
       />
+      {filterOverrideReason && <div className="todo-pinned-card-override">{filterOverrideReason}</div>}
     </div>
   );
 });

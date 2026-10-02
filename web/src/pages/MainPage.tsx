@@ -18,6 +18,7 @@ import { useDragGesture } from '@/hooks/useDragGesture';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
+import { createdToastId, readTierUsed } from '@/components/tasks/filter-bar-persist';
 import { revealViewOption } from '@/components/tasks/view-dropdown-reveal';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
@@ -406,7 +407,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // "Personal", filtering the whole task list down to 1 — read as "all my tasks
   // disappeared". 'locate' is 'all' asked from OUTSIDE the task panel (a session
   // panel's Locate, a chat or scratchpad task link), which also picks the panel's view.
-  const [focusScope, setFocusScope] = useState<'all' | 'pinned' | 'locate'>('all');
+  const [focusScope, setFocusScope] = useState<'all' | 'pinned' | 'locate' | 'created'>('all');
   // Which task + session the Ask Walnut slot is showing. The slot owns the
   // selection; MainPage only mirrors it, because the context inspector has to
   // describe the session actually on screen.
@@ -2278,9 +2279,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // path (scope 'pinned'); calling handleFocusTask here would clobber
       // that scope back to 'all'.
       handleFocusTask(created, { openDetail: false });
+      // A create here, not a locate: the panel marks it if the filters hide it (5.11).
+      setFocusScope('created');
     }
     const summary = [
-      input.pinnedTier ? tierLabel(input.pinnedTier) : undefined,
+      // A user who never picked a tier never reads a tier name (F08, spec 5.10).
+      input.pinnedTier && readTierUsed() ? tierLabel(input.pinnedTier) : undefined,
       input.due_date ? `Due ${formatQuickTaskDate(input.due_date)}` : undefined,
       input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
       input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
@@ -2290,8 +2294,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     notify({
       kind: 'sort',
       severity: 'success',
+      id: createdToastId(created.id),
       title: `Task created: ${created.title}`,
-      ...(summary.length > 0 ? { body: summary.join(' · ') } : {}),
+      ...(summary.length > 0 ? { body: summary.join(', ') } : {}),
       dedupKey: created.id,
       persistent: false,
       action: { label: 'Undo', kind: 'callback' },

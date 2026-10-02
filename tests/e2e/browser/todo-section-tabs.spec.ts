@@ -8,18 +8,20 @@
  * needs source and target mounted together.
  *
  * These assertions are about the LAYOUT CONTRACT, not styling:
- *   1. the strip renders its 6 tabs (Projects moved to the filter menu, the Scratchpad to the rail)
+ *   1. the strip renders its 7 tabs (Projects moved to the Display menu, the Scratchpad to the rail)
  *   2. picking a tier tab mounts that tier and UNMOUNTS the others
  *   3. the picked section actually gets the height (not a few-rows sliver)
  *   4. `All` restores the stacked view (every section header back)
  *   5. the choice survives a reload (localStorage)
  *   6. searching from a tier tab still shows results (auto-routes to Tasks)
  *   7. the bar's own menu picks the tabs, hides empty ones, and turns the bar off
+ *   8. that menu lists All, Pinned and Recent first and the tiers under More views (spec 5.10)
  */
 
 import { test, expect } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
 import { isolateUiPrefs, openListProject, selectProject, selectSection, showMoreUntil } from './todo-panel-helpers'
+import { closeViewMenu, openViewMenu } from './home-navigation-helpers'
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
@@ -49,7 +51,7 @@ async function seedPinnedTasks(page: Page, project = 'Work') {
     const body = await res.json() as { task?: { id?: string } }
     const id = body.task?.id
     if (!id) throw new Error('seed create returned no task id')
-    // Pin, then place in the target tier — two endpoints (a bare pin carries no tier and
+    // Pin, then place in the target tier: two endpoints (a bare pin carries no tier and
     // reads as Satellite, so Focus is set explicitly too).
     const pin = await page.request.post(`/api/focus/tasks/${id}`)
     if (!pin.ok()) throw new Error(`seed pin failed: ${pin.status()} ${await pin.text()}`)
@@ -60,6 +62,9 @@ async function seedPinnedTasks(page: Page, project = 'Work') {
 }
 
 test.describe('todo panel section tabs', () => {
+  // Several steps each wait on a reload; 30s is not enough on a busy machine.
+  test.describe.configure({ timeout: 120_000 })
+
   test('tabs swap which section owns the panel', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 20_000 })
@@ -69,24 +74,21 @@ test.describe('todo panel section tabs', () => {
     const strip = page.locator('.todo-section-tabs')
     await expect(strip).toBeVisible({ timeout: 20_000 })
 
-    // The PROJECT chip is a separate axis from the section tabs; pick "All" so
-    // no project scoping can filter the seed tasks out of the tiers.
-    await page.getByRole('button', { name: 'View options' }).click()
-    await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
-    await page.locator('.vd-cat').filter({
-      has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),
-    }).click()
-    await page.keyboard.press('Escape')
+    // The Project filter is a separate axis from the section tabs; drop any Project
+    // chip so no project scoping can filter the seed tasks out of the tiers.
+    await selectProject(page, 'All')
 
     // 1. all seven tabs present (the shortcut fixture keeps every tab on the bar, empty or
-    // not); All is its word alone, and neither Projects nor the Scratchpad is a tab any more.
+    // not); All is its word plus the view's count (spec 4.6: the active tab's badge is the
+    // same number as the filter row's count), and neither Projects nor the Scratchpad is a tab.
     for (const name of TABS) {
       await expect(tab(page, name)).toBeVisible()
     }
     // (Custom tiers other specs made on the shared fixture add tabs of their own.)
     await expect(page.locator('.todo-section-tabs [role="tab"]:not(.todo-section-tab-custom)')).toHaveCount(TABS.length)
     await expect(tab(page, 'All').locator('.todo-section-tab-icon')).toHaveCount(0)
-    await expect(tab(page, 'All')).toHaveText('All')
+    await expect(tab(page, 'All').locator('.todo-section-tab-label')).toHaveText('All')
+    await expect(tab(page, 'All').locator('.todo-section-tab-count')).toHaveText(/^(\d+|99\+)$/)
     await expect(page.locator('.todo-section-tab-tasks, .todo-section-tab-notes')).toHaveCount(0)
 
     // 2 + 3. Focus tab: the Focus tier is mounted, the other tiers are not, and
@@ -97,7 +99,7 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('.todo-pinned-wrapper-solo')).toBeVisible()
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toBeVisible()
 
-    // Wait's drop zone belongs to a different tab — it must be gone from the DOM.
+    // Wait's drop zone belongs to a different tab: it must be gone from the DOM.
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(0)
     // The stacked view's section headers are gone too (the tab strip names the section).
     await expect(page.locator('.todo-pinned-header')).toHaveCount(0)
@@ -107,7 +109,7 @@ test.describe('todo panel section tabs', () => {
     const soloBox = await page.locator('.todo-pinned-section-solo').boundingBox()
     expect(panelBox).not.toBeNull()
     expect(soloBox).not.toBeNull()
-    // The solo section should command most of the panel — the whole point of the
+    // The solo section should command most of the panel: the whole point of the
     // change. Anything under half means it's still being squeezed by siblings.
     expect(soloBox!.height).toBeGreaterThan(panelBox!.height * 0.5)
 
@@ -116,7 +118,7 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(0)
 
-    // 4. All tab: the stacked view is back — Pinned + Tasks headers both render.
+    // 4. All tab: the stacked view is back: Pinned + Tasks headers both render.
     await tab(page, 'All').click()
     await expect(page.locator('.todo-tasks-header')).toHaveCount(1)
     await expect(page.locator('.todo-pinned-header').first()).toBeVisible()
@@ -181,18 +183,13 @@ test.describe('todo panel section tabs', () => {
     await page.reload()
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
 
-    // Project chip → All so the seed task is visible in the main list.
-    await page.getByRole('button', { name: 'View options' }).click()
-    await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
-    await page.locator('.vd-cat').filter({
-      has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),
-    }).click()
-    await page.keyboard.press('Escape')
+    // No Project chip, so the seed task is visible in the main list.
+    await selectProject(page, 'All')
 
     await selectSection(page, 'Tasks')
     await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
 
-    // Click the pinned task's row in the main list — the view must NOT teleport
+    // Click the pinned task's row in the main list: the view must NOT teleport
     // to the task's pin tier (the old behavior); the user is working in Tasks.
     // Its project starts folded (the list opens only what the user opened) and may be
     // long enough to draw in batches.
@@ -215,10 +212,7 @@ test.describe('todo panel section tabs', () => {
     await page.reload()
     const strip = page.locator('.todo-section-tabs')
     await expect(strip).toBeVisible({ timeout: 20_000 })
-    await page.getByRole('button', { name: 'View options' }).click()
-    await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
-    await page.locator('.vd-cat').filter({ has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }) }).click()
-    await page.keyboard.press('Escape')
+    await selectProject(page, 'All')
 
     // Two built-in tabs, both spelled out: a short bar names every tab, so it says what it is.
     await expect(page.locator('.todo-section-tabs [role="tab"]:not(.todo-section-tab-custom)')).toHaveCount(2)
@@ -247,13 +241,12 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('.todo-panel-list')).toHaveCount(0)
     await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
 
-    // The view survives a reload, and the View menu offers it by name.
+    // The view survives a reload, and the Display menu offers it by name.
     await page.reload()
     await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
-    await page.getByRole('button', { name: 'View options' }).click()
-    await page.locator('.vd-panel [data-rail-section="view"]').click()
-    await expect(page.locator('.vd-panel [data-view-option="pinned"]')).toHaveAttribute('aria-pressed', 'true')
-    await page.keyboard.press('Escape')
+    await openViewMenu(page)
+    await expect(page.locator('.dm-menu [data-view-option="pinned"]')).toHaveAttribute('aria-pressed', 'true')
+    await closeViewMenu(page)
 
     // The tiers wait in the bar's menu: two more and the bar is crowded, so only the active
     // tab keeps its name.
@@ -269,5 +262,40 @@ test.describe('todo panel section tabs', () => {
     await expect(tab(page, 'Focus').locator('.todo-section-tab-label')).not.toBeVisible()
     await expect(tab(page, 'Pinned').locator('.todo-section-tab-label')).toBeVisible()
     expect(JSON.parse(await page.evaluate(() => localStorage.getItem('walnut-todo-tab-bar-hidden-tabs') ?? '[]'))).toEqual(['wait', 'recent'])
+  })
+
+  test('the bar menu lists All, Pinned and Recent first and every tier under More views, each with its sentence', async ({ page }) => {
+    await page.addInitScript(() => localStorage.removeItem('walnut-todo-tab-bar-hidden-tabs'))
+    await page.goto('/')
+    await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
+    await page.getByRole('button', { name: 'Tab bar options' }).click()
+    const menu = page.locator('.wn-context-menu')
+    await expect(menu).toBeVisible()
+    // Read the menu top to bottom: section headers, dividers and items in DOM order.
+    const rows = await menu.locator('.wn-context-menu-section, .wn-context-menu-divider, [role="menuitemcheckbox"]').evaluateAll((els) =>
+      els.map((el) => el.classList.contains('wn-context-menu-divider') ? '---'
+        : el.classList.contains('wn-context-menu-section') ? `#${el.textContent?.trim()}`
+          : el.querySelector('.wn-context-menu-label')?.textContent?.trim() ?? ''))
+    const moreAt = rows.indexOf('#More views')
+    expect(moreAt).toBeGreaterThan(0)
+    expect(rows.slice(0, moreAt)).toEqual(['#Tabs', 'All', 'Pinned', 'Recent', '---'])
+    const tiers = rows.slice(moreAt + 1, rows.indexOf('---', moreAt))
+    expect(tiers.slice(0, 3)).toEqual(['Focus', 'Satellite', 'Parked'])
+    // The words above the divider never name a tier; every tier item explains itself on hover.
+    expect(rows.slice(0, moreAt).join(' ')).not.toMatch(/focus|satellite|backlog|parked/i)
+    for (const name of ['Focus', 'Satellite', 'Parked']) {
+      const title = await menu.getByRole('menuitemcheckbox', { name, exact: true }).getAttribute('title')
+      expect(title, name).toBeTruthy()
+    }
+    // All and Pinned explain themselves without a tier word, on the bar and in the menu.
+    for (const name of ['All', 'Pinned'] as const) {
+      const titles = [await tab(page, name).getAttribute('title'), await menu.getByRole('menuitemcheckbox', { name, exact: true }).getAttribute('title')]
+      for (const title of titles) {
+        expect(title, name).toBeTruthy()
+        expect(title!, name).not.toMatch(/tier|focus|satellite|backlog|parked/i)
+      }
+    }
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
   })
 })

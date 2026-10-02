@@ -28,6 +28,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { filterChip, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { DRAFT_PANEL } from './draft-helpers'
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
 
@@ -312,7 +313,7 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect(detail.getByTestId('task-detail-wait-until')).toHaveCount(0)
 })
 
-test('Waiting tasks are out of the list and the tiers by default; "Show waiting" brings them back; parking a card fades it out', async ({ page, browserName }) => {
+test('Waiting tasks are out of the list and the tiers by default; Status Waiting brings them back; parking a card fades it out', async ({ page, browserName }) => {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   // Both are born pinned (Satellite) like every interactive create; the parked
   // one moves to Focus: a Waiting pin keeps its tier but is not drawn there.
@@ -335,26 +336,23 @@ test('Waiting tasks are out of the list and the tiers by default; "Show waiting"
   // draws cards: match on the task id alone.)
   const footer = page.getByTestId('todo-filter-footer')
   const waitingChip = footer.getByTestId('todo-filter-footer-waiting')
-  await expect(waitingChip).toHaveText(/^\d+ waiting hidden$/)
-  await expect(footer.getByTestId('todo-filter-footer-completed')).toHaveText(/^\d+ completed hidden$/)
+  await expect(waitingChip).toHaveText(/^\d+ Waiting hidden$/)
+  await expect(footer.getByTestId('todo-filter-footer-completed')).toHaveText(/^\d+ Complete hidden$/)
   await shot(footer, 'filter-footer', browserName)
   await waitingChip.click()
-  await expect(waitingChip).toHaveText(/^\d+ waiting shown$/)
+  await expect(waitingChip).toHaveText(/^\d+ Waiting shown$/)
   await expect(waitingChip).toHaveClass(/\bon\b/)
+  await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
   await expect(anyParked).toHaveCount(1, { timeout: 15_000 })
   await expect(anyParked).toBeVisible()
   await expect(anyParked.getByTitle('Waiting: click to complete')).toBeVisible()
   await shot(page.locator('.todo-panel'), 'show-waiting-on', browserName)
-  // View options carries the same switch (now on); unchecking it hides them again.
-  await page.getByRole('button', { name: 'View options' }).click()
-  const showWaiting = page.locator('.vd-footer').getByTestId('vd-show-waiting')
-  await expect(showWaiting.locator('input')).toBeChecked()
-  await showWaiting.locator('input').uncheck()
-  await page.keyboard.press('Escape')
+  // The Status chip is the same switch: removing it hides them again.
+  await removeFilterChip(page, 'status')
   await expect(anyParked).toHaveCount(0)
-  await expect(waitingChip).toHaveText(/^\d+ waiting hidden$/)
+  await expect(waitingChip).toHaveText(/^\d+ Waiting hidden$/)
 
-  // Search always finds it (search ignores every view toggle).
+  // Search finds it: the default Status is bypassed while searching (5.7).
   await page.locator('.todo-search-input').fill(`Hidewait ${stamp}`)
   await expect(page.locator(`.todo-panel-item[data-task-id="${parked.id}"]`)).toBeVisible({ timeout: 15_000 })
   await expect(footer).toHaveCount(0)
@@ -430,7 +428,7 @@ test('the footer counts the current view: a tier tab counts its own tier, and "S
   await expect(doneCard).toHaveCount(0)
   expect(await countOf(completedChip)).toBeGreaterThanOrEqual(1)
   await completedChip.click()
-  await expect(completedChip).toHaveText(/^\d+ completed shown$/)
+  await expect(completedChip).toHaveText(/^\d+ Complete shown$/)
   await expect(doneCard).toBeVisible({ timeout: 15_000 })
   await shot(page.locator('.todo-panel'), 'footer-scope-focus-completed', browserName)
   await completedChip.click()
@@ -453,7 +451,7 @@ test('the footer counts the current view: a tier tab counts its own tier, and "S
   expect(await countOf(waitingChip)).toBe(allWaiting)
 })
 
-test('the Projects view minibar has a Waiting toggle with the hidden count', async ({ page, browserName }) => {
+test('the Projects view keeps only Running and Collapse; Waiting comes back through Status', async ({ page, browserName }) => {
   // The minibar lives on the Projects view of the tab bar (off by default in this fixture).
   await page.addInitScript(() => localStorage.setItem('walnut-todo-quick-views-visible', 'true'))
   await presetPanelView(page, { section: 'tasks' })
@@ -463,20 +461,22 @@ test('the Projects view minibar has a Waiting toggle with the hidden count', asy
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   const rowEl = page.locator(`.todo-panel-item[data-task-id="${parked.id}"]`)
-  const toggle = page.getByTestId('todo-minibar-waiting')
-  await expect(toggle).toBeVisible({ timeout: 15_000 })
-  await expect(toggle).toHaveText(/^⧗ Waiting \(\d+\)$/)
+  const bar = page.locator('.todo-minibar')
+  await expect(bar).toBeVisible({ timeout: 15_000 })
+  // Spec 5.6: no Done, Waiting, Sort or Date buttons, no text glyphs, no View panel hint.
+  await expect(page.getByTestId('todo-minibar-waiting')).toHaveCount(0)
+  await expect(bar.getByRole('button')).toHaveCount(await bar.locator('.todo-minibar-running').count() + 1)
+  await expect(bar.getByRole('button', { name: /(Collapse|Expand) all projects/ })).toBeVisible()
+  expect((await bar.innerText()) + (await bar.innerHTML())).not.toMatch(/[\u2713\u29D7\u2195\u25F7\u2303\u2304]|View panel/)
   await expect(rowEl).toHaveCount(0)
-  await toggle.click()
-  await expect(toggle).toHaveClass(/\bon\b/)
-  await expect(toggle).toHaveText('⧗ Waiting')
+  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
   await expect(rowEl).toBeVisible({ timeout: 15_000 })
-  await shot(page.locator('.todo-minibar'), 'minibar-waiting-on', browserName)
-  await toggle.click()
+  await shot(page.locator('.todo-panel'), 'projects-waiting-on', browserName)
+  await setStatus(page, ['To Do', 'In Progress', 'Need Action'])
   await expect(rowEl).toHaveCount(0)
 })
 
-test('the Phase filter can show only Waiting tasks; a Waiting task keeps a plain TRIGGER pill', async ({ page, browserName }) => {
+test('the Status filter can show only Waiting tasks; a Waiting task keeps a plain TRIGGER pill', async ({ page, browserName }) => {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const waiting = await createTask(`Waitfilter ${stamp} hit`)
   const plain = await createTask(`Waitfilter ${stamp} miss`)
@@ -500,25 +500,15 @@ test('the Phase filter can show only Waiting tasks; a Waiting task keeps a plain
   await expect(pill).not.toHaveAttribute('data-snoozed', 'true')
   await shot(rowEl, 'row-waiting-trigger', browserName)
 
-  // The Phase (exact) filter offers Waiting and, during a search, shows the parked
-  // task only. (The toolbar's legacy single-value Phase segment also lists it, but
-  // that segment folds into the plain list, not into search mode, for every phase.)
-  await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await expect(page.locator('.vd-panel .vd-seg-btn[data-phase-value="WAITING"]')).toHaveText('Waiting')
-  await page.locator('.vd-rail-btn[data-rail-section="q-phase"]').click()
-  const waitingChip = page.locator('.vd-panel .vd-cat[data-filter-value="WAITING"]')
-  await expect(waitingChip).toHaveText('Waiting')
-  await waitingChip.click()
-  await page.keyboard.press('Escape')
+  // The Status filter offers Waiting and, during a search, a Status chip the user
+  // added narrows the results (spec 5.7: search honors added chips).
+  await setStatus(page, ['Waiting'])
+  await expect(filterChip(page, 'status')).toHaveText(/Waiting/)
   await expect(rowEl).toBeVisible({ timeout: 15_000 })
   await expect(plainRow).toHaveCount(0)
   await shot(page.locator('.todo-panel'), 'filter-waiting-only', browserName)
   // Chip off: both again.
-  await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-rail-btn[data-rail-section="q-phase"]').click()
-  await page.locator('.vd-panel .vd-cat[data-filter-value="WAITING"]').click()
-  await page.keyboard.press('Escape')
+  await removeFilterChip(page, 'status')
   await expect(rowEl).toBeVisible({ timeout: 15_000 })
   await expect(plainRow).toBeVisible()
 })

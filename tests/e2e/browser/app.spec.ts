@@ -13,13 +13,14 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs, selectProject, showEverything } from './todo-panel-helpers'
+import { addFilter } from './filter-bar-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 /**
  * Make every task visible: the "All" PROJECT chip (so no project scoping) plus the
  * "All" SECTION tab (so the main task list and the pinned tiers are all mounted).
- * These are two independent axes — the panel defaults to the Focus section tab, in
+ * These are two independent axes: the panel defaults to the Focus section tab, in
  * which `.todo-panel-item` rows don't exist at all.
  */
 async function showAllTasks(page: Page): Promise<void> {
@@ -111,19 +112,13 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
 
   const pinnedCard = (taskId: string) => page.locator(`.todo-focus-card[data-task-id="${taskId}"]`)
 
-  await page.getByRole('button', { name: 'View options' }).click()
-  // The Date filter renders as direct All/Now buttons in the "Quick filters"
-  // rail section (the panel's landing section).
-  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-panel .vd-seg-btn[data-date-value=""]').click()
-  await page.keyboard.press('Escape')
+  // Date lives in the Filter popover's Date row (Any date).
+  await addFilter(page, 'date', '')
   await expect(pinnedCard(futurePinned.id)).toBeVisible({ timeout: 5000 })
   await expect(pinnedCard(currentPinned.id)).toBeVisible()
 
-  await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-panel .vd-seg-btn[data-date-value="now"]').click()
-  await page.keyboard.press('Escape')
+  // Date lives in the Filter popover's Date row (Available now).
+  await addFilter(page, 'date', 'now')
   await expect(pinnedCard(futurePinned.id)).toBeHidden()
   await expect(pinnedCard(currentPinned.id)).toBeVisible()
 })
@@ -131,7 +126,7 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
 test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
   const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   // The toolbar-filter leg below uses the legacy DATE filter (Priority and Tag
-  // were retired from Quick filters 2026-08-23 — priority lives in the
+  // were retired from Quick filters 2026-08-23: priority lives in the
   // canonical query rail, which search deliberately does NOT bypass).
   // filterMismatch is deferred (future start_date), so Date=Now hides it.
   const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
@@ -157,12 +152,10 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await showAllTasks(page)
 
   // Date defaults to Now, which would hide the deferred fixture from the very
-  // first assertion — start from the neutral All view; the filter leg below
+  // first assertion: start from the neutral All view; the filter leg below
   // flips it to Now mid-search.
-  await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-panel .vd-seg-btn[data-date-value=""]').click()
-  await page.keyboard.press('Escape')
+  // Date lives in the Filter popover's Date row (Any date).
+  await addFilter(page, 'date', '')
 
   const pinnedHeader = page.locator('.todo-pinned-label').filter({ hasText: /^Pinned$/ }).locator('..')
   const pinnedSection = pinnedHeader.locator('..')
@@ -211,13 +204,10 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await expect(pinnedCard(filterMismatch.id)).toBeVisible()
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
 
-  await page.getByRole('button', { name: 'View options' }).click()
-  // The Date buttons render in the "Quick filters" rail section of the panel.
-  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
-  await page.locator('.vd-panel .vd-seg-btn[data-date-value="now"]').click()
-  await page.keyboard.press('Escape')
+  // Date lives in the Filter popover's Date row (Available now).
+  await addFilter(page, 'date', 'now')
 
-  // Search ignores EVERY toolbar filter (user ruling 2026-08-09 — see
+  // Search ignores EVERY toolbar filter (user ruling 2026-08-09: see
   // todo-search-ignores-filters.spec.ts): while the query is active, the
   // Date=Now filter must NOT hide a matching (deferred) card anywhere. It only
   // takes effect once the query is cleared (asserted below).
@@ -378,7 +368,7 @@ test('project chips filter tasks', async ({ page }) => {
 
 test('pinned + recent stay visible across project chips (cross-project focus view)', async ({ page }) => {
   // Regression: a pinned task from another project must NOT vanish when the user
-  // navigates to a different project chip. Pins are a cross-project focus view —
+  // navigates to a different project chip. Pins are a cross-project focus view:
   // scoping the Pinned/Recent sections to the active chip made "all my focused tasks
   // disappeared" (they reappeared only on search, which bypasses the chip).
   const query = `xproj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -394,7 +384,7 @@ test('pinned + recent stay visible across project chips (cross-project focus vie
   const recentCard = page.locator(`.todo-pinned-section-recent .todo-pinned-card[data-task-id="${lifePinned.id}"]`)
   await expect(pinnedCard).toBeVisible({ timeout: 5000 })
 
-  // Navigate to the Work chip — the Life-project pin must remain visible in both the
+  // Navigate to the Work chip: the Life-project pin must remain visible in both the
   // Pinned tier and the Recent feed even though it belongs to a different project.
   // (No global pinned-count assertion: /api/focus/tasks is shared state and this suite
   // runs fully parallel, so other tests' pins would make an exact count flaky.)

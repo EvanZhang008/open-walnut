@@ -1,0 +1,378 @@
+/*
+ * filter-bar: the home task panel's Filter popover (.fb-menu), its flyouts
+ * (.fb-values-flyout, .fb-chip-menu, .fb-overflow-menu) and the filter row
+ * (.fb-row). Builds on filter-toolbar-base.css (.tp-*). Existing tokens only.
+ * Dark theme: selected values use --fg instead of --accent-text, which is the
+ * bare accent there and falls under 4.5:1 on --accent-subtle.
+ */
+
+/* ── Filter popover ── */
+.fb-menu {
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  box-sizing: border-box;
+  overflow: hidden;
+  font-size: 12px;
+}
+.fb-menu-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0;
+}
+/* The height measure reads the body's natural height as drawn (G25, F14). */
+.fb-menu[data-measuring] .fb-menu-body { flex: none; overflow: visible; }
+
+.fb-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  flex: none;
+}
+.fb-search-icon { display: inline-flex; flex: none; }
+.fb-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  padding: 0;
+}
+.fb-search-input::placeholder { color: var(--fg-muted); }
+/* One focus indicator (F16): the row's underline; the global input ring stays out. */
+.fb-search-input:focus,
+.fb-search-input:focus-visible { box-shadow: none; border: none; outline: none; }
+.fb-search:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
+.fb-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.fb-search-clear:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* Dimension rows: 84px label column, wrapping values. */
+.fb-dims { display: flex; flex-direction: column; }
+.fb-dim { display: flex; align-items: flex-start; gap: 6px; padding: 2px 8px; }
+.fb-dim-label {
+  flex: none;
+  width: 84px;
+  padding-top: 4px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 14px;
+}
+.fb-dim-values {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px;
+}
+.fb-loading,
+.fb-row-empty {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+}
+
+/* Values (F04, F15): symmetric padding at rest; a pick moves the label right and
+   draws the tick in the left padding, so the chip's width never changes (C47) and
+   an unselected value has no empty slot. */
+.tp-val.fb-val { position: relative; height: 22px; padding: 0 9px; gap: 3px; font-family: inherit; }
+.tp-val.fb-val[aria-pressed='true'] { padding: 0 4px 0 14px; }
+.tp-val.fb-val .fb-check { position: absolute; left: 3px; top: 50%; width: 10px; height: 10px; margin-top: -5px; }
+.tp-val.fb-val .fb-check svg { width: 10px; height: 10px; }
+.fb-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.fb-val-icon { display: inline-flex; align-items: center; flex: none; color: var(--fg-secondary); }
+.fb-val-icon svg { width: 12px; height: 12px; }
+.fb-val[aria-pressed='true'] .fb-val-icon { color: inherit; }
+.fb-val-text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.fb-val .tp-count { color: var(--fg-secondary); font-size: 11px; }
+.fb-val.is-zero,
+.fb-val.is-zero .tp-count { color: var(--fg-muted); }
+.fb-val.is-missing .fb-val-text { font-style: italic; color: var(--fg-muted); }
+/* The last Status value cannot be removed (F32): a dashed edge and no pointer say so. */
+.fb-val[aria-disabled='true'] { opacity: 1; border-style: dashed; cursor: not-allowed; }
+.fb-opt-body[aria-disabled='true'] .fb-opt-label { text-decoration: underline dotted; }
+.fb-more-btn { padding: 0 8px; color: var(--fg-secondary); }
+
+/* Project / Source: the add square sits in the chip's left padding (G13). */
+.fb-val-pair { position: relative; display: inline-flex; }
+.fb-val-pair .tp-val.fb-val,
+.fb-val-pair .tp-val.fb-val[aria-pressed='true'] { padding: 0 8px 0 24px; }
+.fb-val-add {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--fg-muted);
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.fb-val-add svg { width: 10px; height: 10px; }
+.fb-val-add[aria-checked='true'] { border-color: var(--accent); }
+.fb-val-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Status: the small `Open` label over the three open values (4.2a). */
+.fb-status-open { display: inline-flex; flex-direction: column; gap: 1px; }
+/* The Status name sits level with its first value row, under the `Open` caption (F17). */
+.fb-dim[data-filter-dim='status'] > .fb-dim-label { padding-top: 16px; }
+.fb-open-label { font-size: 10px; line-height: 11px; color: var(--fg-secondary); padding-left: 4px; }
+.fb-status-open-values { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+
+/* Time window basis segments in a row. */
+.fb-time-basis { flex: none; }
+.fb-time-basis .tp-seg-btn { padding: 3px 8px; }
+/* No window set: the basis is a quiet choice, not a live filter (F21). */
+.fb-time-basis.is-unset .tp-seg-btn[aria-checked='true'] { background: var(--bg-hover); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.fb-break { flex-basis: 100%; height: 0; }
+/* Tags read like the board's TagChip (F21): tag colours, bold key prefix. */
+.fb-val.fb-val-tag:not([aria-pressed='true']) { background: rgba(175, 82, 222, 0.1); color: #8944AB; }
+:root[data-theme='dark'] .fb-val.fb-val-tag:not([aria-pressed='true']) { background: rgba(175, 82, 222, 0.18); color: #BF5AF2; }
+.fb-tag-prefix { font-weight: 700; }
+
+/* More filters fold. */
+.fb-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px;
+  border: none;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fb-more-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.fb-more-chevron { display: inline-flex; transition: transform 120ms ease-out; }
+.fb-more-toggle[aria-expanded='true'] .fb-more-chevron { transform: rotate(90deg); }
+.fb-more-body { display: flex; flex-direction: column; }
+.fb-more-body[hidden] { display: none; }
+
+/* Bottom strip: what is on, Clear, count. */
+.fb-menu-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.fb-menu-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg-secondary);
+}
+.fb-menu-count { flex: none; color: var(--fg-secondary); font-variant-numeric: tabular-nums; }
+.fb-text-btn {
+  flex: none;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.fb-text-btn:hover { background: var(--bg-hover); text-decoration: underline; }
+
+/* ── Search results (6.3) ── */
+.fb-search-results { display: flex; flex-direction: column; padding: 2px 0; }
+.fb-hit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fb-hit.is-active { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--accent); }
+.fb-hit-dim { flex: none; width: 76px; color: var(--fg-secondary); }
+.fb-hit-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fb-hit.is-selected .fb-hit-value { color: var(--fg-secondary); }
+.fb-hit-note { flex: none; color: var(--fg-secondary); font-size: 11px; }
+.fb-pin-hint { color: var(--accent-text); }
+.fb-pin-hint:hover { background: var(--bg-hover); }
+.fb-empty { padding: 8px 10px; color: var(--fg-secondary); font-size: 12px; }
+
+/* ── Shared value list: flyouts and chip menus ──
+ * Only the rows scroll: the search box, the time controls and `Remove filter`
+ * stay in view however long the list is (C31). */
+.fb-values-flyout,
+.fb-chip-menu { display: flex; flex-direction: column; width: 260px; box-sizing: border-box; overflow: hidden; font-size: 12px; }
+.fb-list { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.fb-list-search,
+.fb-chip-menu-head,
+.fb-custom-time,
+.fb-chip-menu-foot { flex: none; }
+.fb-list-rows { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 0; }
+.fb-opt { position: relative; display: flex; align-items: center; }
+.fb-opt:hover { background: var(--bg-hover); }
+.fb-opt-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fb-opt .fb-val-add { position: static; margin-left: 10px; }
+.fb-opt .fb-val-add + .fb-opt-body { padding-left: 6px; }
+.fb-opt-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fb-opt.is-selected .fb-opt-body { color: var(--accent-text); font-weight: 500; }
+.fb-opt.is-missing .fb-opt-label { font-style: italic; color: var(--fg-muted); }
+.fb-opt-body .tp-count { color: var(--fg-secondary); font-size: 11px; }
+.fb-opt-body .tp-count.is-zero { color: var(--fg-muted); }
+.fb-opt-body[aria-disabled='true'] { cursor: default; }
+/* `Only`: on hover, on keyboard focus anywhere in the row, always on touch (6.4). */
+.fb-only {
+  flex: none;
+  visibility: hidden;
+  margin-right: 6px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.fb-only:hover { background: var(--bg-hover); text-decoration: underline; }
+.fb-opt:hover .fb-only,
+.fb-opt:focus-within .fb-only { visibility: visible; }
+@media (hover: none) {
+  .fb-only { visibility: visible; }
+}
+.fb-opt:has(.fb-opt-body:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fb-opt-body:focus-visible { outline: none; }
+.fb-only:focus-visible,
+.fb-hit:focus-visible,
+.fb-more-toggle:focus-visible,
+.fb-text-btn:focus-visible,
+.fb-search-clear:focus-visible,
+.fb-chip-menu-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.fb-chip-menu-head { padding: 8px 10px 2px; }
+.fb-custom-time { display: flex; align-items: center; gap: 6px; padding: 4px 10px 8px; }
+.fb-custom-input {
+  width: 64px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+}
+.fb-custom-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fb-chip-menu-foot { border-top: 1px solid var(--border); padding: 4px 0; }
+.fb-chip-menu-remove {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fb-chip-menu-remove:hover { background: var(--bg-hover); }
+
+/* ── Narrow viewport ── */
+@media (max-width: 999px) {
+  .fb-menu { width: min(380px, calc(100vw - 16px)); }
+  .fb-values-flyout,
+  .fb-chip-menu { width: min(260px, calc(100vw - 16px)); }
+}
+@media (max-width: 599px) {
+  .fb-menu { width: calc(100vw - 16px); }
+  .fb-dim { flex-direction: column; gap: 2px; }
+  .fb-dim-label { width: auto; padding-top: 0; }
+}
+
+/* ── Dark theme: selected text stays >= 4.5:1 ── */
+:root[data-theme='dark'] .fb-val[aria-pressed='true'],
+:root[data-theme='dark'] .fb-toggle[aria-pressed='true'],
+:root[data-theme='dark'] .fb-opt.is-selected .fb-opt-body,
+:root[data-theme='dark'] .fb-val-add { color: var(--fg); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .fb-val[aria-pressed='true'],
+  :root:not([data-theme]) .fb-toggle[aria-pressed='true'],
+  :root:not([data-theme]) .fb-opt.is-selected .fb-opt-body,
+  :root:not([data-theme]) .fb-val-add { color: var(--fg); }
+}
+
+/* ── Reduced motion: no transitions or animations at all (C42) ── */
+@media (prefers-reduced-motion: reduce) {
+  .fb-menu,
+  .fb-values-flyout,
+  .fb-chip-menu,
+  .fb-overflow-menu,
+  .fb-chip { animation-duration: 0ms; }
+  .fb-row,
+  .fb-more-chevron,
+  .fb-val { transition-duration: 0ms; }
+}

@@ -1,5 +1,5 @@
 /**
- * TaskFilterChips — compact "Filtered by" strip for the shared task query model.
+ * TaskFilterChips: compact "Filtered by" strip for the shared task query model.
  *
  * Interaction is modelled on `web/src/components/usage/UsageFilterChips.tsx`
  * (click a chip to remove that one condition, "Clear all" to reset), and it
@@ -15,6 +15,8 @@
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
 import type { TaskCompletion } from '@open-walnut/task-query';
 import { TagChip } from './TagChip';
+import { ICON_CLOSE } from '../common/Icons';
+import '@/styles/view-menu-choices.css';
 import {
   COMPLETION_OPTIONS,
   DEFAULT_TASK_QUERY_FILTER_STATE,
@@ -48,7 +50,7 @@ function labelOf<T extends string>(options: { value: T; label: string }[], value
 }
 
 /** Build the chip list for a query state (one chip per removable condition). */
-function buildTaskFilterChips(
+export function buildTaskFilterChips(
   query: TaskQueryFilterState,
   onQueryChange: (next: TaskQueryFilterState) => void,
 ): TaskFilterChip[] {
@@ -66,7 +68,8 @@ function buildTaskFilterChips(
   for (const value of query.phases) {
     chips.push({
       key: `phase:${value}`,
-      label: 'Phase',
+      // The /tasks panel merged Completion and Phase into one Status section.
+      label: 'Status',
       value: labelOf<TaskPhase>(PHASE_FILTER_OPTIONS, value),
       onRemove: () => patch({ phases: toggleQueryValue(query.phases, value) }),
     });
@@ -166,7 +169,7 @@ export function TaskFilterChips({ query, onQueryChange, onClearAll }: Props) {
           >
             <span className="usage-chip-dim">{c.label}</span>
             <span className="usage-chip-val">{c.value}</span>
-            <span className="usage-chip-x">×</span>
+            <span className="usage-chip-x" aria-hidden="true">{ICON_CLOSE}</span>
           </button>
         )
       ))}

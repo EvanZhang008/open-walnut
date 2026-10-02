@@ -68,6 +68,8 @@ export interface ProjectMenuActions {
   /** Order this project's tasks, this project only. The main list only: a tier's
    *  project run keeps the tier's pinned order, so the tier label passes nothing. */
   onSetSort?: (project: string, sort: SortBy) => void;
+  /** Narrow the home board to this one project (spec 6.8: replaces the Project chip). */
+  onFilterToProject?: (project: string) => void;
   /** Forwarded to useProjectActions: rename/delete finished on the server. */
   onChanged?: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
 }
@@ -118,6 +120,12 @@ export function buildProjectMenuItems(
     },
     { key: 'move-up', label: 'Move up', when: !!actions.onMoveUp, onSelect: () => actions.onMoveUp?.(target.project) },
     { key: 'move-down', label: 'Move down', when: !!actions.onMoveDown, onSelect: () => actions.onMoveDown?.(target.project) },
+    {
+      key: 'filter-to-project',
+      label: 'Filter to this project',
+      when: !!actions.onFilterToProject,
+      onSelect: () => actions.onFilterToProject?.(target.project),
+    },
     { divider: true },
     {
       key: 'new-task',

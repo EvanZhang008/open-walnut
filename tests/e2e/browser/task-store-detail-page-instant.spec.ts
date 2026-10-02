@@ -102,7 +102,7 @@ test('a write on /tasks/:id reaches the mounted home board row before the server
   await expect(rowPhase).toHaveAttribute('title', 'Click to complete')
   const completeBefore = togglesAnswered
   await page.locator('.tdv2-head .btn-primary').click()
-  await expect(rowPhase).toHaveAttribute('title', 'Done — click to reopen', { timeout: INSTANT_MS })
+  await expect(rowPhase).toHaveAttribute('title', 'Done: click to reopen', { timeout: INSTANT_MS })
   expect(togglesAnswered).toBe(completeBefore)
 
   // 3. Reopen (a completed row leaves the board after a 3s grace, and the

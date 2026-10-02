@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, selectProject } from './todo-panel-helpers';
-import { arrange, chooseViewOption, homeToolbar, openHome, setShowCompleted } from './home-navigation-helpers';
+import { arrange, chooseViewOption, openHome, setShowCompleted } from './home-navigation-helpers';
+import { displayButton, setStatus } from './filter-bar-helpers';
 
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(90_000);
@@ -24,26 +25,33 @@ test('completed pins remain available and filtering never expands unrelated proj
   await setShowCompleted(page, true);
   await selectProject(page, 'Navigation Alpha');
   const project = (name: string) => page.locator('.todo-group-project').filter({ has: page.locator('.todo-group-project-name', { hasText: new RegExp(`^${name}$`) }) });
-  await project('Navigation Alpha').locator('.todo-group-name-btn').click();
-  await expect(project('Navigation Alpha').locator(`[data-task-id="${ids[0]}"]`)).toBeVisible();
+  const pinnedCard = page.locator(`.todo-pinned-section [data-task-id="${ids[0]}"]`);
+  // In All a pin draws ONCE, in the pinned area (C25 + C48): the completed pin is on screen
+  // there under its project chip, the list holds no copy, and the other project is not drawn.
+  await expect(pinnedCard).toBeVisible();
+  await expect(page.locator(`.todo-panel-list [data-task-id="${ids[0]}"]`)).toHaveCount(0);
+  await expect(project('Navigation Beta')).toHaveCount(0);
   await selectProject(page, 'All');
+  // With every chip off the list shows the user's own folds again: what a filter opened
+  // was never saved as opened by the user, so the unrelated project is folded.
+  await setShowCompleted(page, false);
+  await expect(project('Navigation Beta').locator('.todo-group-project-name')).toBeVisible();
   await expect(project('Navigation Beta').locator('.todo-panel-item')).toHaveCount(0);
-  // The list remembers what the user opened; everything else stays folded.
   const opened = await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-list-opened') ?? '[]'));
-  expect(opened).toContain('Navigation Alpha');
+  expect(opened).not.toContain('Navigation Alpha');
   expect(opened).not.toContain('Navigation Beta');
+  await setShowCompleted(page, true);
   await arrange(page, 'Flat');
   await chooseViewOption(page, 'collapse');
   await arrange(page, 'By project');
-  await expect(project('Navigation Alpha').locator('.todo-panel-item')).toHaveCount(0);
   await expect(project('Navigation Beta').locator('.todo-panel-item')).toHaveCount(0);
   await chooseViewOption(page, 'collapse');
-  await expect(project('Navigation Alpha').locator(`[data-task-id="${ids[0]}"]`)).toBeAttached();
   await expect(project('Navigation Beta').locator(`[data-task-id="${ids[1]}"]`)).toBeAttached();
+  await expect(pinnedCard).toBeAttached();
   await page.reload();
-  await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(displayButton(page)).toBeVisible({ timeout: 30_000 });
   await setShowCompleted(page, true);
-  await expect(project('Navigation Alpha').locator(`[data-task-id="${ids[0]}"]`)).toBeAttached();
+  await expect(pinnedCard).toBeAttached();
 });
 
 test('calendar day and task scheduling survive closing the panel without leaked popovers', async ({ page, baseURL }) => {
@@ -106,10 +114,14 @@ test('menu sorting keeps completed pins in their original slots', async ({ page,
   await row.hover();
   await row.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.locator('.task-kebab-item').filter({ hasText: 'Move up' }).click();
-  const expected = [...before];
-  const first = expected.indexOf(ids[0]), last = expected.indexOf(ids[2]);
-  [expected[first], expected[last]] = [expected[last], expected[first]];
-  await expect.poll(async () => (await (await page.request.get('/api/focus/tasks')).json()).pinned_tasks).toEqual(expected);
+  // Compare only this test's own pins: parallel workers pin tasks on the same
+  // fixture board, so the global list is not ours to pin exactly. Move up swaps
+  // the two open rows around the completed one, which keeps its middle slot.
+  await expect.poll(async () => ((await (await page.request.get('/api/focus/tasks')).json()).pinned_tasks as string[])
+    .filter((id) => own.has(id))).toEqual([ids[2], ids[1], ids[0]]);
+  // Leave no custom tier behind: other specs count the tabs on the shared bar.
+  for (const id of ids) await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {});
+  await page.request.delete(`/api/focus/tiers/${tierId}`).catch(() => {});
 });
 
 test('project title drag and keyboard menu sorting preserve task ownership', async ({ page, baseURL }) => {
@@ -155,6 +167,9 @@ test('project title drag and keyboard menu sorting preserve task ownership', asy
     expect((await response.json()).task.project).toBe(projects[i]);
     await expect(zone.locator(`[data-task-id="${tasks[i]}"]`)).toBeVisible();
   }
+  // Leave no custom tier behind: other specs count the tabs on the shared bar.
+  for (const id of tasks) await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {});
+  await page.request.delete(`/api/focus/tiers/${tierId}`).catch(() => {});
 });
 
 test('navigation undo reports storage failure without silently reverting the order', async ({ page, baseURL }) => {
@@ -179,4 +194,64 @@ test('navigation undo reports storage failure without silently reverting the ord
   expect(await page.evaluate(() => localStorage.getItem('walnut-todo-navigation-order'))).toBe(before);
   await page.reload();
   await expect.poll(() => page.locator('#home-task-navigation .navigation-heading.todo-pinned-header').evaluateAll(rows => rows.map(row => row.getAttribute('data-navigation-id')))).toEqual(['tasks', 'pinned']);
+});
+
+// C57 / C50 / C20: /tasks keeps its query-only panel, but Status is ONE section there too, in
+// the status words, and a Status pick matches the same hit set as the home Status chip.
+test('/tasks has one Status section in the status words, matching the home hit set', async ({ page, baseURL }) => {
+  const stamp = Date.now();
+  const project = `Status Parity ${stamp}`;
+  const ids: string[] = [];
+  for (const [title, done] of [[`parity open ${stamp}`, false], [`parity doing ${stamp}`, false], [`parity done ${stamp}`, true]] as const) {
+    const response = await page.request.post('/api/tasks', { data: { title, project, source: 'local' } });
+    expect(response.ok()).toBe(true);
+    const id = (await response.json()).task.id as string;
+    ids.push(id);
+    if (done) expect((await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true);
+  }
+  try {
+    await boot(page, baseURL!);
+    // Home: Status Complete only, in this project.
+    await setStatus(page, ['Complete']);
+    await page.locator('#home-task-navigation .todo-search-bar input').fill(`parity`);
+    const homeRow = (id: string) => page.locator(`#home-task-navigation [data-task-id="${id}"]`).first();
+    await expect(homeRow(ids[2])).toBeVisible({ timeout: 15_000 });
+    const visibleHome: string[] = [];
+    for (const id of ids) if (await homeRow(id).count()) visibleHome.push(id);
+    expect(visibleHome).toEqual([ids[2]]);
+    await page.locator('#home-task-navigation .todo-search-bar input').fill('');
+
+    await page.locator('.sidebar a[href="/tasks"]').click();
+    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 20_000 });
+    // MainPage stays mounted (hidden) behind /tasks, so the trigger is scoped to the page.
+    await page.locator('.tasks-page button[aria-label="View options"]').click();
+    const panel = page.locator('.vd-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel.locator('[data-rail-section="q-phase"]')).toHaveCount(0);
+    await expect(panel.locator('[data-rail-section="q-status"]')).toHaveCount(1);
+    await expect(panel.locator('[data-rail-section="q-status"] .vd-rail-name')).toHaveText('Status');
+    await panel.locator('[data-rail-section="q-status"]').click();
+    const values = panel.locator('.vd-query .vd-cat[data-filter-value]');
+    await expect(values.locator('.vd-cat-name')).toHaveText(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete']);
+    expect(await panel.innerText()).not.toMatch(/\b(Done|Doing)\b/);
+    // The page's default (open work) reads as the four not-complete statuses; make it Complete only.
+    for (const value of ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING', 'COMPLETE']) {
+      const chip = panel.locator(`.vd-cat[data-filter-value="${value}"]`);
+      const pressed = (await chip.getAttribute('aria-pressed')) === 'true';
+      if (pressed !== (value === 'COMPLETE')) await chip.click();
+    }
+    await expect(panel.locator('.vd-cat[aria-pressed="true"]')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    const tableHits = await page.locator('[data-testid="tasks-table"] .tp-row[data-task-id]').evaluateAll(
+      (rows, own) => rows.map((r) => r.getAttribute('data-task-id')!).filter((id) => (own as string[]).includes(id)), ids);
+    expect(tableHits).toEqual(visibleHome);
+    // The chip strip's remove control is an icon, not a text glyph.
+    const chipX = page.locator('.task-filter-chips .usage-chip-x').first();
+    await expect(chipX.locator('svg')).toHaveCount(1);
+    expect(await page.locator('.task-filter-chips').innerText()).not.toContain('\u00d7');
+  } finally {
+    for (const id of ids) await page.request.delete(`/api/tasks/${id}`).catch(() => {});
+  }
 });

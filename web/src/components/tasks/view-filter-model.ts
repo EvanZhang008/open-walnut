@@ -1,5 +1,5 @@
 /**
- * view-filter-model — pure state model behind the [▾ View] filter panel.
+ * view-filter-model: pure state model behind the [▾ View] filter panel.
  *
  * Everything here is React-free so the sentence builder and the cross-dimension
  * search index can be unit-tested without a DOM. `ViewDropdown.tsx` re-exports
@@ -9,11 +9,11 @@
 
 // Relative import, NOT '@/utils/session-status': this module is imported by a
 // unit test, and an aliased runtime import ties every consumer to configs that
-// declare the alias — when one didn't (base vitest, before it gained the block),
+// declare the alias; when one didn't (base vitest, before it gained the block),
 // the test died at collection with zero assertions, invisible to the baseline gate.
 import { PHASE_LABELS } from '../../utils/session-status';
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
-import { QUERY_TASK_PHASES } from '@open-walnut/task-query';
+import { COMPLETION_TO_PHASES, QUERY_TASK_PHASES } from '@open-walnut/task-query';
 import type {
   TaskCompletion,
   TaskQuery,
@@ -56,7 +56,7 @@ export interface TaskQueryFilterState {
  * Neutral default: nothing filtered, newest-updated first. Deliberately carries
  * NO implicit "hide completed": hiding completed tasks is an explicit choice a
  * surface makes (/tasks seeds `completion: ['todo','in_progress']`, the home
- * panel keeps its own ✓ Done toggle), never a rule buried in the evaluator.
+ * panel keeps its own Complete status), never a rule buried in the evaluator.
  */
 export const DEFAULT_TASK_QUERY_FILTER_STATE: TaskQueryFilterState = {
   completion: [],
@@ -90,12 +90,14 @@ const PRESET_WINDOWS: Record<Exclude<TimePresetKey, 'custom'>, { value: number; 
 
 export const COMPLETION_OPTIONS: { value: TaskCompletion; label: string }[] = [
   { value: 'todo', label: 'To Do' },
-  { value: 'in_progress', label: 'Doing' },
-  { value: 'complete', label: 'Done' },
+  // Same words as the Status values (STATUS_OPTIONS): a legacy completion chip
+  // read back from an older saved query must not show Doing or Done.
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'complete', label: 'Complete' },
 ];
 
 /**
- * Full phase list, derived from QUERY_TASK_PHASES — don't restate the count
+ * Full phase list, derived from QUERY_TASK_PHASES; don't restate the count
  * here, it goes stale on every phase-model change (was "7", then "5"; the set
  * is whatever the shared query model says). The legacy control showed only
  * TODO/COMPLETE.
@@ -105,6 +107,27 @@ export const COMPLETION_OPTIONS: { value: TaskCompletion; label: string }[] = [
  */
 export const PHASE_FILTER_OPTIONS: { value: TaskPhase; label: string }[] =
   QUERY_TASK_PHASES.map((value) => ({ value, label: PHASE_LABELS[value] }));
+
+/** Merged Status (one /tasks section): open block, then Waiting, Complete. Pinned equal to
+ *  STATUS_FILTER_ORDER by a unit test; restated because filter-bar-dims imports this module. */
+export const QUERY_STATUS_ORDER: readonly TaskPhase[] = ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING', 'COMPLETE'];
+
+export const QUERY_STATUS_OPTIONS: { value: TaskPhase; label: string }[] =
+  QUERY_STATUS_ORDER.map((value) => ({ value, label: PHASE_LABELS[value] }));
+
+/** The status set a query selects: exact phases, else completion folded into phases; [] = none.
+ *  Agrees with foldQueryStatus in filter-bar-model.ts. */
+export function queryStatusSet(state: Pick<TaskQueryFilterState, 'completion' | 'phases'>): TaskPhase[] {
+  const raw: readonly TaskPhase[] = state.phases.length
+    ? state.phases
+    : state.completion.flatMap((c) => COMPLETION_TO_PHASES[c] ?? []);
+  return QUERY_STATUS_ORDER.filter((p) => raw.includes(p));
+}
+
+/** Write a status set as THE status condition: exact phases, completion cleared ([] = no condition). */
+export function withQueryStatus(state: TaskQueryFilterState, set: readonly TaskPhase[]): TaskQueryFilterState {
+  return { ...state, phases: QUERY_STATUS_ORDER.filter((p) => set.includes(p)), completion: [] };
+}
 
 export const QUERY_PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
   { value: 'immediate', label: 'Immediate' },
@@ -152,7 +175,7 @@ export function taskQueryTime(state: TaskQueryFilterState): TaskQueryTime | unde
 
 /**
  * Convert the UI state into the canonical `TaskQuery`. Empty arrays and
- * `undefined` tri-states are OMITTED — an empty array would mean "match nothing"
+ * `undefined` tri-states are OMITTED: an empty array would mean "match nothing"
  * to the shared evaluator, the opposite of "no condition".
  *
  * `sort` always rides along: the shared comparator needs a key, and
@@ -179,7 +202,7 @@ export function hasActiveTaskQuery(state: TaskQueryFilterState): boolean {
   return Object.keys(toTaskQuery(state)).some((key) => key !== 'sort');
 }
 
-/** True when an explicit pinned condition is set — the surfaces use this to
+/** True when an explicit pinned condition is set; the surfaces use this to
  *  suppress the separate Focus/Pinned area so a pinned task can't appear twice. */
 export function isPinnedFiltered(state: TaskQueryFilterState): boolean {
   return state.pinned !== undefined;
@@ -202,7 +225,7 @@ export function timeWindowLabel(state: TaskQueryFilterState): string | null {
 //
 // The active query rendered as one plain-English line: word tokens between
 // removable value chips. The panel shows it under the search bar so the whole
-// filter state is readable at a glance — and every chip carries the patch that
+// filter state is readable at a glance; and every chip carries the patch that
 // removes just that one condition.
 
 export type SentenceToken =
@@ -226,18 +249,19 @@ function labelOf<T extends string>(options: { value: T; label: string }[], value
 /** The array-valued dimensions a sentence chip can remove one value from.
  *  Narrowed on purpose: a computed key in an object spread ({...state, [dim]: x})
  *  type-checks as `string` and would silently accept `'pinned'` or `'sort'`,
- *  corrupting the removed state — this union keeps the spread honest. */
+ *  corrupting the removed state; this union keeps the spread honest. */
 type ArrayDim = 'completion' | 'phases' | 'priorities' | 'projects' | 'sources' | 'sprints' | 'tagsAny';
 
 /** Append `lead` word(s), then one chip per value joined by `joiner` words. */
 function pushGroup(
   tokens: SentenceToken[],
   state: TaskQueryFilterState,
-  dim: ArrayDim,
+  dim: ArrayDim | 'status',
   values: string[],
   labels: string[],
   lead: string,
   joiner: string,
+  remove: (value: string) => TaskQueryFilterState = (value) => ({ ...state, [dim]: values.filter((v) => v !== value) }),
 ): void {
   if (!values.length) return;
   if (tokens.length > 1) tokens.push({ kind: 'word', text: ', ' });
@@ -249,7 +273,7 @@ function pushGroup(
       dim,
       value,
       label: labels[i],
-      removed: { ...state, [dim]: values.filter((v) => v !== value) },
+      removed: remove(value),
     });
   });
 }
@@ -257,16 +281,16 @@ function pushGroup(
 /**
  * Build the sentence for a query state. Always starts with "Showing"; an empty
  * query yields the neutral "Showing every task." line (word tokens only).
- * Sort is NOT part of the sentence — it's a presentation default, not a filter
+ * Sort is NOT part of the sentence: it's a presentation default, not a filter
  * (the panel footer shows it separately).
  */
 export function buildFilterSentence(state: TaskQueryFilterState): SentenceToken[] {
   const tokens: SentenceToken[] = [{ kind: 'word', text: 'Showing ' }];
 
-  pushGroup(tokens, state, 'completion', state.completion,
-    state.completion.map((v) => labelOf(COMPLETION_OPTIONS, v)), '', 'or');
-  pushGroup(tokens, state, 'phases', state.phases,
-    state.phases.map((v) => labelOf(PHASE_FILTER_OPTIONS, v)), 'in phase', 'or');
+  // ONE Status group: exact phases, or a completion list folded into phases.
+  const status = queryStatusSet(state);
+  pushGroup(tokens, state, 'status', status, status.map((v) => PHASE_LABELS[v]), '', 'or',
+    (value) => withQueryStatus(state, status.filter((v) => v !== value)));
   pushGroup(tokens, state, 'priorities', state.priorities,
     state.priorities.map((v) => labelOf(QUERY_PRIORITY_OPTIONS, v)), 'priority', 'or');
   pushGroup(tokens, state, 'projects', state.projects,
@@ -320,7 +344,7 @@ export function buildFilterSentence(state: TaskQueryFilterState): SentenceToken[
 // without knowing which section they live in.
 
 export interface FilterSearchOption {
-  /** Owning rail-section id — the panel uses it to special-case single-select
+  /** Owning rail-section id; the panel uses it to special-case single-select
    *  sections (picking an already-selected 'q-sort' option is skipped). */
   section: string;
   /** Dimension display name, e.g. "Project". */
@@ -409,8 +433,17 @@ export function searchFilterOptions(
       })));
   };
 
-  arrayDim('q-status', 'Status', 'completion', COMPLETION_OPTIONS);
-  arrayDim('q-phase', 'Phase', 'phases', PHASE_FILTER_OPTIONS);
+  // The merged Status (one section, q-status): 'phase' still finds it.
+  const status = queryStatusSet(state);
+  push('Status', QUERY_STATUS_OPTIONS
+    .filter((o) => matches(query, 'status phase', o.label))
+    .map((o) => ({
+      section: 'q-status',
+      dimension: 'Status',
+      label: o.label,
+      selected: status.includes(o.value),
+      toggled: withQueryStatus(state, toggleQueryValue(status, o.value)),
+    })));
   arrayDim('q-priority', 'Priority', 'priorities', QUERY_PRIORITY_OPTIONS);
   arrayDim('q-project', 'Project', 'projects',
     lists.projectOptions.map((p) => ({ value: p, label: p === '' ? 'Inbox' : p })));

@@ -13,6 +13,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { chooseViewOption } from './home-navigation-helpers'
 import { seedShortcutBars } from './shortcut-test-fixture'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -164,10 +165,8 @@ test('a subtask from a task in a shared folder lands in a subfolder the board dr
     await expect(card(page, child)).toBeVisible()
 
     // The Projects view draws the same tree: the subfolder's header one step in.
-    await page.locator('.todo-panel-toolbar').getByRole('button', { name: 'View options' }).click()
-    await page.locator('.vd-rail-btn[data-rail-section="view"]').click()
-    await page.locator('.vd-panel [data-view-option="tasks"]').click()
-    await page.keyboard.press('Escape')
+    // Projects lives in Display's More views flyout.
+    await chooseViewOption(page, 'tasks')
     // A project's list shows its first rows and folders sink to the bottom, so the
     // fixture's busy Walnut project needs "Show more", as it would for the user.
     await expect(page.locator('.todo-panel .todo-panel-item').first()).toBeVisible({ timeout: 30_000 })

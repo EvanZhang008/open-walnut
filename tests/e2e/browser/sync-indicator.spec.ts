@@ -20,8 +20,8 @@ test.describe('TaskCard SyncIndicator', () => {
   async function showAllStatuses(page: import('@playwright/test').Page) {
     await page.goto('/tasks')
     await page.waitForLoadState('networkidle')
-    // The /tasks table shows Todo-only by default — turn the Done chip on too.
-    const doneChip = page.locator('.tp-chip', { hasText: 'Done' })
+    // The /tasks table shows open tasks only by default, so turn the Complete chip on too.
+    const doneChip = page.locator('.tp-chip', { hasText: 'Complete' })
     if (!/\bon\b/.test((await doneChip.getAttribute('class')) ?? '')) await doneChip.click()
   }
 

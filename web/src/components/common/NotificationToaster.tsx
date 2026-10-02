@@ -25,7 +25,8 @@
  * end for exactly the asks that most needed answering.
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
 import { useNavigate } from 'react-router-dom';
 import {
   useNotifications, permissionDetail, requestIdOf,
@@ -42,11 +43,12 @@ import { navigateToTarget } from '@/utils/open-session';
 
 // Escape-coded so the source bytes are identical across editors/terminals
 // (raw multi-codepoint emoji like ⚠️ can render or copy-paste inconsistently).
-const SEVERITY_ICON: Record<NotificationSeverity, string> = {
-  info: '\u{1F514}',          // 🔔 bell
-  success: '✅',          // ✅ check
-  warning: '⚠️',    // ⚠️ warning sign + emoji variation selector
-  error: '❌',            // ❌ cross
+// Severity marks come from Icons.tsx (SVG, currentColor), never emoji.
+const SEVERITY_ICON: Record<NotificationSeverity, ReactNode> = {
+  info: ICON_INFO,
+  success: ICON_CHECK,
+  warning: ICON_WARNING,
+  error: ICON_CLOSE,
 };
 
 /** How long an answered permission toast stays up before self-dismissing. */
@@ -363,7 +365,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
       {/* Hoisted out of the actions row: a failed SUBMIT from the answer form
           above needs the same message, and the form has no actions row of its own. */}
       {!settled && failed && (
-        <div className="nfc-perm-error nfc-perm-error--block">Failed — open the session to respond</div>
+        <div className="nfc-perm-error nfc-perm-error--block">Failed. Open the session to respond.</div>
       )}
     </div>
   );

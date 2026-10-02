@@ -1,0 +1,189 @@
+/*
+ * filter-toolbar-base: shared primitives for the home task panel's Filter bar
+ * and Display menu (.tp-*). Feature styles (.fb-*, .dm-*) live in
+ * filter-bar.css. Existing tokens only; no hard-coded theme colors except the
+ * white badge text the spec names.
+ */
+
+/* Container query scope: wraps ONLY the toolbar and the filter row, never
+   .todo-panel (its fixed dnd-kit overlays must not get a new containing block). */
+.fb-toolbar-scope {
+  container-type: inline-size;
+  container-name: todo-toolbar;
+  /* Containment makes this a stacking context: lift it so the floating filter
+     row (popover open) paints over the tab bar and list below. */
+  position: relative;
+  z-index: 6;
+}
+
+/* Toolbar button: icon + label, 28px tall. */
+.tp-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tp-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.tp-btn[aria-expanded='true'],
+.tp-btn[aria-pressed='true'],
+.tp-btn:active {
+  /* Pressed colors copied from .vd-seg-btn.vd-active. */
+  background: var(--accent);
+  color: white;
+}
+.tp-btn svg { flex-shrink: 0; }
+.tp-btn-label { display: inline; }
+
+@container todo-toolbar (max-width: 419px) {
+  .tp-btn { padding: 0 6px; }
+  .tp-btn-label { display: none; }
+}
+
+/* Count badge on a toolbar button (Filter: number of chips). Inline after the
+   label (F40): it never sits on the button's border or ring. */
+.tp-badge {
+  position: static;
+  flex: none;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+/* Popover shell (Filter, Display, flyouts, chip menus). */
+.tp-pop {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  animation: tp-pop-in 120ms ease-out;
+}
+@keyframes tp-pop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Value chip inside a popover row. */
+.tp-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--bg-hover);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 80ms ease-out, border-color 80ms ease-out;
+}
+.tp-val:hover { background: var(--bg-tertiary, var(--bg-hover)); }
+.tp-val[aria-pressed='true'] {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.tp-val[aria-disabled='true'] { cursor: default; }
+
+/* Segmented control (Display: Sort, Group, Session columns). */
+.tp-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tp-seg-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tp-seg-btn:last-child { border-right: none; }
+.tp-seg-btn:hover { background: var(--bg-hover); }
+/* Same pressed values as .vd-seg-btn.vd-active. */
+.tp-seg-btn[aria-pressed='true'],
+.tp-seg-btn[aria-checked='true'] { background: var(--accent); color: white; }
+
+/* Custom switch (never a native checkbox). */
+.tp-switch[role='switch'] {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  /* Off track >= 3:1 against the menu in both themes (F28). */
+  background: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 120ms ease-out;
+}
+.tp-switch[role='switch']::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  transition: transform 120ms ease-out;
+}
+.tp-switch[role='switch'][aria-checked='true'] { background: var(--accent); }
+.tp-switch[role='switch'][aria-checked='true']::after { transform: translateX(12px); }
+
+/* One focus ring for every new control, both themes. */
+.tp-btn:focus-visible,
+.tp-val:focus-visible,
+.tp-seg-btn:focus-visible,
+.tp-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Numbers that change in place: fixed slot, no reflow. */
+.tp-count {
+  display: inline-block;
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-pop { animation-duration: 0ms; }
+  .tp-val, .tp-switch[role='switch'], .tp-switch[role='switch']::after { transition-duration: 0ms; }
+}

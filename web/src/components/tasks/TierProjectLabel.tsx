@@ -111,7 +111,7 @@ export function TierProjectLabelRow({
         {...dragProps}
         title={inert
           ? 'Project'
-          : `Project — click to ${collapsed ? 'expand' : 'collapse'}, drag to reorder projects`}
+          : `Project: click to ${collapsed ? 'expand' : 'collapse'}, drag to reorder projects`}
         onClick={() => { if (!inert) onToggleCollapse(project); }}
         onContextMenu={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite })}
       >

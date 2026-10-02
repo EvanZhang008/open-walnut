@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
+import { closeFilterMenu, displayButton, filterChip, openFilterMenu, removeFilterChip } from './filter-bar-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
@@ -10,6 +11,9 @@ test.setTimeout(120_000);
 
 async function boot(page: Page, baseURL: string) {
   await isolateUiPrefs(page);
+  // These tests are about tier headings. A user who never picked a tier sees none while one
+  // tier holds cards (spec 5.10, pinned in filter-bar-board.spec.ts), so mark one picked.
+  await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'));
   await openHome(page, baseURL);
 }
 const navigation = (page: Page) => page.locator('#home-task-navigation');
@@ -64,7 +68,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await expect(page.locator('.todo-section-tabs, .task-view-row')).toHaveCount(0);
   await expect(page.getByTestId('tier-view-bar')).toHaveCount(0);
   expect(await homeToolbar(page).evaluate(bar => [...bar.children].map(child => child.className.split(' ')[0])))
-    .toEqual(['todo-search-bar', 'new-launcher-btn', 'vd', 'todo-panel-hide']);
+    .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'tp-btn', 'todo-panel-hide']);
+  // Filter before Display, each named by its aria-label.
+  expect(await homeToolbar(page).locator(':scope > .tp-btn').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Filter', 'Display']);
   await expect(homeToolbar(page).locator('.todo-search-input')).toBeVisible();
   // One base colour: the task column is the page background, not the grey secondary band.
   expect(await page.locator('.main-page-todo').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
@@ -78,12 +84,16 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
     const s = getComputedStyle(el);
     return { background: s.backgroundColor, border: `${s.borderTopWidth} ${s.borderTopColor}`, color: s.color };
   });
-  const [searchLook, createLook, filterLook, hideLook] = await Promise.all(
-    ['.todo-search-bar', '.new-launcher-btn', '.vd-trigger-icon', '.todo-panel-hide'].map(look));
+  const [searchLook, createLook, filterLook, displayLook, hideLook] = await Promise.all(
+    ['.todo-search-bar', '.new-launcher-btn', '.fb-filter-btn', '.dm-display-btn', '.todo-panel-hide'].map(look));
   expect(createLook.background).toBe(searchLook.background);
   expect(createLook.border).toBe(searchLook.border);
   expect(createLook.color).toBe('rgb(29, 29, 31)');
-  expect(filterLook.color).toBe(hideLook.color);
+  // Filter and Display carry words now, so they read in the secondary grey (the hide
+  // button is a bare icon in the muted one); neither wears the accent at rest.
+  expect(displayLook.color).toBe(filterLook.color);
+  expect(displayLook.background).toBe(hideLook.background);
+  expect(displayLook.color).not.toBe('rgb(0, 122, 255)');
 
   // Default list is everything; the tiers are headings of one page (the empty ones are
   // covered by their own test below).
@@ -175,21 +185,29 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await project.locator('.todo-group-name-btn').click();
   await expect(row).toBeVisible();
 
-  // The filter menu owns views, active filters and layout toggles. Like the New task
-  // popover it starts at the task panel's left edge (never over the rail) and runs right
-  // over the chat; its section list fits without scrolling.
+  // Display owns views and layout; Filter owns which tasks show. Display opens under its
+  // button, right edges aligned (useMenuPlacement), unless its left edge would leave the
+  // task panel (F11: it then starts at the panel's left edge, never over the rail), and
+  // fits without scrolling.
   await openViewMenu(page);
-  const panelLeft = await page.locator('#home-task-navigation').evaluate(el => el.getBoundingClientRect().left);
-  expect(Math.round((await page.locator('.vd-panel').boundingBox())!.x)).toBe(Math.round(panelLeft + 8));
-  expect(await page.locator('.vd-panel .vd-rail').evaluate(el => el.scrollHeight <= el.clientHeight)).toBe(true);
-  await page.locator('.vd-panel [data-rail-section="quick"]').click();
-  await page.locator('.vd-panel [data-date-value="now"]').click();
-  await page.locator('.vd-panel [data-rail-section="view"]').click();
-  await expect(page.locator('.vd-panel [data-view-option="date"]')).toHaveText('Date: Now ×');
-  await expect(homeToolbar(page).locator('.vd-dot')).toBeVisible();
-  await page.locator('.vd-panel [data-view-option="date"]').click();
-  await expect(page.locator('.vd-panel [data-view-option="date"]')).toHaveCount(0);
+  const menuBox = (await page.locator('.dm-menu').boundingBox())!;
+  const displayBox = (await displayButton(page).boundingBox())!;
+  const panelLeftX = Math.max(8, await leftOf(page.locator('.todo-panel').first()));
+  const alignedRight = Math.max(displayBox.x + displayBox.width, panelLeftX + menuBox.width);
+  expect(Math.abs(menuBox.x + menuBox.width - alignedRight)).toBeLessThanOrEqual(1);
+  expect(menuBox.x).toBeGreaterThanOrEqual(panelLeftX - 1);
+  expect(menuBox.y).toBeGreaterThan(displayBox.y);
+  expect(await page.locator('.dm-menu').evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
   await closeViewMenu(page);
+  // A date condition is a chip in the filter row with a badge on Filter; Display carries no dot.
+  await openFilterMenu(page);
+  await page.locator('.fb-menu [data-filter-dim="date"] [data-date-value=""]').click();
+  await expect(filterChip(page, 'date')).toBeVisible();
+  await expect(page.getByTestId('filter-badge')).toHaveText('1');
+  await expect(displayButton(page).locator('.vd-dot')).toHaveCount(0);
+  await closeFilterMenu(page);
+  await removeFilterChip(page, 'date');
+  await expect(filterChip(page, 'date')).toHaveCount(0);
   await chooseViewOption(page, 'wait');
   await expect(page.getByTestId('tier-view-bar')).toContainText('Parked');
   await expect(heading(page, 'focus')).toHaveCount(0);
@@ -313,6 +331,9 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   await page.addInitScript(() => {
     localStorage.setItem('walnut-todo-list-open-projs', JSON.stringify(['Orchard', 'Meadowlark']));
     localStorage.setItem('walnut-todo-list-collapsed-projs', '[]');
+    // A user who has picked tiers before: with one tier holding cards, a new user's board
+    // draws no tier heading at all (spec 5.10); this test is about the headings.
+    localStorage.setItem('walnut-todo-tier-used', '1');
   });
   const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
   const task = (id: string, title: string, project: string, extra: Record<string, unknown> = {}) => ({
@@ -583,7 +604,7 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
     .toEqual({ project: 12, circle: 22, dot: 12, memberCircle: 38, memberDot: 28 });
   // In the list the selected row fills the same blue.
   await page.mouse.move(900, 500);
-  // (Closing the filter menu with Escape on the way here must not have dropped the selection.)
+  // (Closing the Display menu with Escape on the way here must not have dropped the selection.)
   await expect(navigation(page).locator(`.todo-panel-item${member}`)).toHaveClass(/task-focused/);
   expect(await navigation(page).locator(`.todo-panel-item${member} .todo-row-pill`).evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 122, 255, 0.08)');
   await chooseViewOption(page, 'all');
@@ -655,7 +676,7 @@ test('each project sorts its own tasks from its right-click menu, newest update 
   await expect.poll(orderA).toEqual([a3, a2, a1]);
 });
 
-test('the tab bar is one switch, in the filter menu and in every heading menu', async ({ page, baseURL }) => {
+test('the tab bar is one switch, in the Display menu and in every heading menu', async ({ page, baseURL }) => {
   const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`;
   // An empty tier is hidden, so give Focus a card for its heading to show.
   const pinned = await page.request.post('/api/tasks', { data: { title: `Tab bar pin ${tag}`, project: `Tab bar ${tag}`, source: 'local' } });
@@ -667,11 +688,11 @@ test('the tab bar is one switch, in the filter menu and in every heading menu', 
   const tabs = page.locator('.todo-section-tabs');
   await expect(tabs).toHaveCount(0);
 
-  // The filter menu: a switch in a Task panel group of its own, no longer a Layout chip.
+  // The Display menu: one switch row right under the views, never a chip.
   await openViewMenu(page);
-  const panelSwitch = page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' });
+  const panelSwitch = page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' });
   await expect(panelSwitch).not.toBeChecked();
-  await expect(page.locator('.vd-panel [data-view-group="Layout"] [data-view-option="quick-views"]')).toHaveCount(0);
+  await expect(page.locator('.dm-menu [data-view-option="quick-views"]')).toHaveAttribute('role', 'switch');
   await panelSwitch.click();
   await expect(panelSwitch).toBeChecked();
   await expect(tabs).toBeVisible();
@@ -770,7 +791,7 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await boot(page, baseURL!);
   await expect(navigation(page).locator('[data-task-id="tabs-focus"]')).toBeVisible({ timeout: 30_000 });
   await openViewMenu(page);
-  await page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' }).click();
+  await page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' }).click();
   await closeViewMenu(page);
   const bar = page.locator('.todo-section-tabs');
   const tabs = bar.locator('[role="tab"]');
@@ -824,16 +845,18 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   // The choices survive a reload.
   const kept = await names();
   await page.reload();
-  await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(displayButton(page)).toBeVisible({ timeout: 30_000 });
   await expect.poll(names).toEqual(kept);
 
-  // "Show tab bar" in the bar's menu turns it off, and focus lands on the filter menu, where it comes back.
+  // "Show tab bar" in the bar's menu turns it off; focus lands on Display, where it comes back,
+  // and a toast says so.
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
   await row('Show tab bar').click();
   await expect(bar).toHaveCount(0);
-  await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeFocused();
+  await expect(displayButton(page)).toBeFocused();
+  await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true }).first()).toBeVisible();
   await openViewMenu(page);
-  const panelSwitch = page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' });
+  const panelSwitch = page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' });
   await expect(panelSwitch).not.toBeChecked();
   await panelSwitch.click();
   await closeViewMenu(page);
@@ -881,7 +904,7 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await expect.poll(() => sessionColumnOrder(page)).toEqual(seededColumns);
   const showTabBar = async () => {
     await openViewMenu(page);
-    await page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' }).click();
+    await page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' }).click();
     await closeViewMenu(page);
   };
   await showTabBar();
@@ -926,7 +949,7 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await locate.click();
   await landedOn('Pinned');
 
-  // Without the bar, All, even from a single tier picked in the filter menu.
+  // Without the bar, All, even from a single tier picked in the Display menu.
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
   await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Show tab bar', exact: true }).click();
   await expect(bar).toHaveCount(0);
@@ -1030,7 +1053,7 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     await boot(page, baseURL!);
     // No longer a view of the task panel.
     await openViewMenu(page);
-    await expect(page.locator('.vd-panel [data-view-option="notes"]')).toHaveCount(0);
+    await expect(page.locator('.dm-menu [data-view-option="notes"], .dm-views-flyout [data-view-option="notes"]')).toHaveCount(0);
     await closeViewMenu(page);
 
     const toggle = page.getByTestId('sidebar-toggle-scratchpad');
@@ -1070,7 +1093,7 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
 
     // A reload keeps both open with the text, and does not pull focus into the editor.
     await page.reload();
-    await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(displayButton(page)).toBeVisible({ timeout: 30_000 });
     await expect(editor).toContainText(line);
     await expect(calendar).toBeVisible();
     expect(await editor.evaluate(el => el.contains(document.activeElement))).toBe(false);

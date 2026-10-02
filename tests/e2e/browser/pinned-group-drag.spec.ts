@@ -19,7 +19,11 @@
  * here is about the RELATIVE order of this test's own ids.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { selectSection } from './todo-panel-helpers'
+import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
+
+// The Project chip lives in walnut-todo-filters, which ui-prefs-sync mirrors to the
+// shared fixture: keep this file's chips (and every other file's) out of each other.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 

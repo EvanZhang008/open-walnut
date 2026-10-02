@@ -1,11 +1,11 @@
 /**
- * Multi-select batch actions — "complete N tasks" / "delete N tasks" from the
+ * Multi-select batch actions: "complete N tasks" / "delete N tasks" from the
  * Todo panel's selection bar.
  *
  * REPRO of the reported bug: entering multi-select (kebab → "Select…", then
  * clicking rows) showed a selection bar whose only verbs were Group, priority, pin
  * and date. There was NO Complete and NO Delete anywhere in the batch dropdown, so
- * a user who had picked 10 tasks could not complete or delete them — the feature
+ * a user who had picked 10 tasks could not complete or delete them: the feature
  * looked broken because the actions genuinely did not exist.
  *
  * Every interaction below is a real UI click (no page.goto navigation, no direct
@@ -13,18 +13,23 @@
  * checkbox → selection bar → batch dropdown → REST batch endpoint → WS → row state.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { showEverything } from './todo-panel-helpers'
+import { isolateUiPrefs, showEverything } from './todo-panel-helpers'
+import { setShowCompleted } from './home-navigation-helpers'
 
 const API = 'http://localhost:3457'
 
 // Serial: every test here mutates the ONE shared fixture task list (and the Reopen
 // test flips the panel's "Show completed" pref, which round-trips through
 // /api/ui-prefs). Under the config's fullyParallel default, a sibling's completes/
-// deletes re-render the list from under an in-flight click — a harness interference
+// deletes re-render the list from under an in-flight click: a harness interference
 // artifact, not a product bug. Same reason the codex-* specs run serial.
 test.describe.configure({ mode: 'serial' })
 
-/** Seed a task via REST (setup only — never the action under test). */
+// The Status filter persists in walnut-todo-filters, which ui-prefs-sync mirrors to the
+// shared fixture: cut this file off from that mirror so no other spec sees our Status.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
+
+/** Seed a task via REST (setup only: never the action under test). */
 async function seedTask(title: string): Promise<{ id: string; title: string }> {
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
@@ -67,7 +72,7 @@ function barBtn(page: Page, name: RegExp) {
   return page.locator('.task-selection-bar').getByRole('button', { name })
 }
 
-/** Open the overflow menu (secondary attribute setters only — pin / priority / date). */
+/** Open the overflow menu (secondary attribute setters only: pin / priority / date). */
 async function openMoreMenu(page: Page) {
   await barBtn(page, /^More/).click()
   await expect(page.locator('.task-batch-dropdown')).toBeVisible()
@@ -83,7 +88,7 @@ async function setup(page: Page, titles: string[]) {
   return tasks
 }
 
-test('selection bar shows Complete and Delete directly — not behind a caret', async ({ page }) => {
+test('selection bar shows Complete and Delete directly, not behind a caret', async ({ page }) => {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const titles = [`Batch menu A ${stamp}`, `Batch menu B ${stamp}`]
   await setup(page, titles)
@@ -118,7 +123,7 @@ test('multi-select completes every selected task', async ({ page }) => {
   await selectRows(page, titles)
   await barBtn(page, /^Complete/).click()
 
-  // Selection bar closes — the action was the user's intent, so select mode exits.
+  // Selection bar closes: the action was the user's intent, so select mode exits.
   await expect(page.locator('.task-selection-bar')).toBeHidden({ timeout: 10_000 })
 
   // Server truth: all three are COMPLETE.
@@ -168,7 +173,7 @@ test('cancelling the delete confirm keeps every task', async ({ page }) => {
   await expect(dialog).toBeVisible({ timeout: 10_000 })
   await dialog.getByRole('button', { name: /Cancel/i }).click()
 
-  // Nothing deleted — the tasks still exist.
+  // Nothing deleted: the tasks still exist.
   for (const t of tasks) {
     expect(await fetchTask(t.id)).not.toBeNull()
   }
@@ -184,10 +189,8 @@ test('a done selection offers Reopen instead of Complete', async ({ page }) => {
   await barBtn(page, /^Complete/).click()
   await expect.poll(async () => (await fetchTask(tasks[0].id))?.phase, { timeout: 15_000 }).toBe('COMPLETE')
 
-  // Show done rows, re-select them, and the bar should now offer Reopen.
-  await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-check input[type="checkbox"]').check()
-  await page.keyboard.press('Escape')
+  // Show done rows (Status gains Complete), re-select them, and the bar should now offer Reopen.
+  await setShowCompleted(page, true)
   await page.waitForTimeout(500)
 
   await selectRows(page, titles)
@@ -200,16 +203,13 @@ test('a done selection offers Reopen instead of Complete', async ({ page }) => {
     return phases.join(',')
   }, { timeout: 15_000 }).toBe('TODO,TODO')
 
-  // Restore "Show completed" — it persists via /api/ui-prefs on the shared fixture,
-  // so leaving it on changes what later specs (here and in other files) see.
-  await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-check input[type="checkbox"]').uncheck()
-  await page.keyboard.press('Escape')
+  // Restore the default Status (isolateUiPrefs already keeps it out of other files).
+  await setShowCompleted(page, false)
 })
 
 // ── Second surface: the /tasks page ──
 // 2026-08-09: the /tasks page was reworked into a dense rail+table workspace
-// (TasksPageTable) which does NOT have multi-select yet — TaskList (kept in the
+// (TasksPageTable) which does NOT have multi-select yet: TaskList (kept in the
 // tree as the reference implementation) still passes the wiring tests in
 // tests/web/task-list-grouping.test.ts. Re-enable this spec against .tp-row when
 // the selection verbs are ported to the table.
@@ -239,7 +239,7 @@ test.skip('/tasks page selection bar can complete and delete a multi-selection',
   await expect(bar).toBeVisible()
   await expect(page.locator('.task-selection-count')).toHaveText('2 selected')
 
-  // Complete — the verb that did not exist on this surface either.
+  // Complete: the verb that did not exist on this surface either.
   await bar.getByRole('button', { name: /Complete/ }).click()
   await expect.poll(async () => {
     const phases = await Promise.all(tasks.map(async (t) => (await fetchTask(t.id))?.phase))

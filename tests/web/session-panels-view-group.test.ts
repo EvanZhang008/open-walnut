@@ -33,3 +33,21 @@ describe('sessionPanelsViewGroup', () => {
     expect(setMode.mock.calls).toEqual([['4'], ['auto']]);
   });
 });
+
+describe('sessionPanelsViewGroup as the Display menu and session kebab row', () => {
+  it('is titled Session columns and keeps the session-panels option key both surfaces locate', () => {
+    const group = sessionPanelsViewGroup('auto', 2, vi.fn());
+    expect(group.label).toBe('Session columns');
+    expect(row(group).key).toBe('session-panels');
+    expect(row(group).choices.map((c) => c.key)).toEqual(['1', '2', '3', '4', '5', 'auto']);
+  });
+
+  it('gives every choice a title, and no title or label uses an en or em dash', () => {
+    for (const mode of ['auto', '1', '5'] as const) {
+      for (const c of row(sessionPanelsViewGroup(mode, 3, vi.fn())).choices) {
+        expect(c.title).toBeTruthy();
+        expect(`${c.label} ${c.title}`).not.toMatch(/[\u2013\u2014]/);
+      }
+    }
+  });
+});

@@ -25,6 +25,8 @@ import {
   type TaskQueryFilterState,
 } from '@/components/tasks/ViewDropdown';
 import { TaskFilterChips } from '@/components/tasks/TaskFilterChips';
+import { foldQueryStatus } from '@/components/tasks/filter-bar-model';
+import { ICON_COLLAPSE, ICON_EXPAND, ICON_PHASE_COMPLETE, ICON_PHASE_TODO } from '@/components/common/Icons';
 import {
   buildTaskQueryContext,
   deriveSourceOptions,
@@ -61,7 +63,7 @@ function readColumns(): TpColumnId[] {
   try { return parseColumns(localStorage.getItem(LS_TASKS_PAGE_COLUMNS)); } catch { return parseColumns(null); }
 }
 
-/** /tasks — dense two-pane workspace: project rail (left) + task table (right). */
+/** /tasks: dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
   const { tasks, loading, error, toggleComplete, create, deleteTask, update, completedHidden, ensureAllTasks } = useTasksContext();
   const { projectOrder, reorderProjects } = useOrdering();
@@ -98,13 +100,14 @@ export function DashboardPage() {
     logTaskQueryChange('tasks-page', next);
   }, []);
 
-  // The two toolbar status chips map onto the completion dimension. An EMPTY
-  // completion array means "no condition", i.e. show everything — so both chips
-  // read as ON there, matching what the table actually shows.
-  const noCompletionCondition = query.completion.length === 0;
-  const showTodoChip = noCompletionCondition
-    || query.completion.includes('todo') || query.completion.includes('in_progress');
-  const showDoneChip = noCompletionCondition || query.completion.includes('complete');
+  // The two toolbar status chips read the ONE status set the View panel's Status
+  // section writes (phases, or a legacy completion list folded into phases). No
+  // status condition means show everything, so both chips read as ON there,
+  // matching what the table actually shows.
+  const statusSet = foldQueryStatus(query);
+  const noStatusCondition = !statusSet || statusSet.length === 0;
+  const showTodoChip = noStatusCondition || statusSet.some((p) => p !== 'COMPLETE');
+  const showDoneChip = noStatusCondition || statusSet.includes('COMPLETE');
   // Completed rows on this page mean the whole archive, not the recent window.
   useEffect(() => { if (showDoneChip) ensureAllTasks(); }, [showDoneChip, ensureAllTasks]);
 
@@ -113,20 +116,19 @@ export function DashboardPage() {
   // can run twice (StrictMode) or be replayed, which would double-log. They're
   // click handlers on a single state field, so there is no batching race to lose.
   const toggleCompletionChip = useCallback((which: 'todo' | 'done') => {
-    const hadTodo = query.completion.length === 0
-      || query.completion.includes('todo') || query.completion.includes('in_progress');
-    const hadDone = query.completion.length === 0 || query.completion.includes('complete');
-    let todo = which === 'todo' ? !hadTodo : hadTodo;
-    let done = which === 'done' ? !hadDone : hadDone;
-    // At least one side stays on — an empty status set would show nothing and
+    let todo = which === 'todo' ? !showTodoChip : showTodoChip;
+    let done = which === 'done' ? !showDoneChip : showDoneChip;
+    // At least one side stays on; an empty status set would show nothing and
     // read as data loss (this page's long-standing rule).
     if (!todo && !done) { if (which === 'todo') done = true; else todo = true; }
     const completion: TaskQueryFilterState['completion'] = [];
     if (todo) completion.push('todo', 'in_progress');
     if (done) completion.push('complete');
     // Both on = no condition at all, so the chips stop showing up as filters.
-    handleQueryChange({ ...query, completion: todo && done ? [] : completion });
-  }, [query, handleQueryChange]);
+    // The chip owns the whole status condition: an exact phase set from the
+    // panel is replaced, never AND-ed with the chip's completion list.
+    handleQueryChange({ ...query, completion: todo && done ? [] : completion, phases: [] });
+  }, [query, handleQueryChange, showTodoChip, showDoneChip]);
 
   const togglePriorityChip = useCallback((value: 'immediate' | 'important') => {
     handleQueryChange({
@@ -225,7 +227,7 @@ export function DashboardPage() {
     [tasks],
   );
 
-  // All projects currently visible in the grouped table ('' excluded) — the
+  // All projects currently visible in the grouped table ('' excluded); the
   // Collapse-all target set and the reorder baseline.
   const visibleProjectKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -234,7 +236,7 @@ export function DashboardPage() {
   }, [tasks]);
 
   // `every` is vacuously true on an empty set, so with ZERO tasks loaded the
-  // toolbar claimed everything was collapsed and offered "Expand all" — clicking
+  // toolbar claimed everything was collapsed and offered "Expand all"; clicking
   // it then wrote an empty set over the user's persisted per-project collapse
   // state. No visible groups means nothing is collapsed.
   const allGroupsCollapsed = useMemo(
@@ -263,7 +265,7 @@ export function DashboardPage() {
     done: inScope.filter((t) => t.status === 'done').length + (activeProject === null ? completedHidden : 0),
   }), [inScope, completedHidden, activeProject]);
 
-  // Value lists for the query panel — registry names union task-derived ones, so
+  // Value lists for the query panel; registry names union task-derived ones, so
   // a zero-task project is still selectable. '' (Inbox) leads: it's a real value.
   const queryProjectOptions = useMemo(
     () => ['', ...railProjects.map((p) => p.name)],
@@ -287,7 +289,7 @@ export function DashboardPage() {
   const [minuteTick, setMinuteTick] = useState(0);
   useEffect(() => visibleInterval(() => setMinuteTick((n) => n + 1), 60_000), []);
 
-  // The tick only reaches the memo while a relative window is actually set —
+  // The tick only reaches the memo while a relative window is actually set:
   // otherwise every minute re-normalized the query and re-ran the filter pass
   // over the whole table for a guaranteed-identical result.
   const timeTick = query.timePreset === null ? 0 : minuteTick;
@@ -309,7 +311,7 @@ export function DashboardPage() {
     const q = search.trim().toLowerCase();
     return inScope.filter((t: Task) => {
       if (normalized && !matchesTaskQuery(t, normalized, queryContext)) return false;
-      // Local title/project text match — the candidate role search plays here
+      // Local title/project text match; the candidate role search plays here
       // (this page has no semantic search service). It ANDs with the query.
       if (q && !t.title.toLowerCase().includes(q) && !(t.project ?? '').toLowerCase().includes(q)) return false;
       return true;
@@ -344,7 +346,7 @@ export function DashboardPage() {
 
   const handleReorderProjects = useCallback((order: string[]) => {
     // The rail only shows NAMED projects, but ordering.projects may hold other
-    // entries — notably '' (Inbox), placed by the home panel's tier-label drag.
+    // entries; notably '' (Inbox), placed by the home panel's tier-label drag.
     // A wholesale replace would silently drop them; re-insert each missing
     // entry at its old index so a rail drag never rewrites slots it can't see.
     const railSet = new Set(order.map((n) => n.toLowerCase()));
@@ -397,7 +399,7 @@ export function DashboardPage() {
       <main className="tp-board">
         <div className="tp-toolbar">
           <span className="tp-title" title={boardTitle}>{boardTitle}</span>
-          <span className="tp-stats">{stats.todo} todo · {stats.done} done</span>
+          <span className="tp-stats">{stats.todo} open · {stats.done} complete</span>
           {/* The high-frequency conditions stay one click away as chips; every
               other dimension lives in the shared View panel next to them. Both
               write the SAME query state, so a chip and a panel chip can never
@@ -407,14 +409,14 @@ export function DashboardPage() {
             className={`tp-chip${showTodoChip ? ' on' : ''}`}
             onClick={() => toggleCompletionChip('todo')}
           >
-            ○ Todo
+            <span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_TODO}</span>Open
           </button>
           <button
             type="button"
             className={`tp-chip${showDoneChip ? ' on' : ''}`}
             onClick={() => toggleCompletionChip('done')}
           >
-            ✓ Done
+            <span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_COMPLETE}</span>Complete
           </button>
           {showPriority && (
             <>
@@ -448,7 +450,7 @@ export function DashboardPage() {
               <button
                 type="button"
                 className={`tp-chip${grouped ? ' on' : ''}`}
-                title={grouped ? 'Grouped by project — click for a flat list' : 'Flat list — click to group by project'}
+                title={grouped ? 'Grouped by project: click for a flat list' : 'Flat list: click to group by project'}
                 onClick={handleGroupedToggle}
               >
                 ⊟ Group
@@ -460,7 +462,8 @@ export function DashboardPage() {
                   title={allGroupsCollapsed ? 'Expand all projects' : 'Collapse all projects'}
                   onClick={handleCollapseExpandAll}
                 >
-                  {allGroupsCollapsed ? '⌃⌃ Expand all' : '⌄⌄ Collapse all'}
+                  <span className="tp-chip-icon" aria-hidden="true">{allGroupsCollapsed ? ICON_EXPAND : ICON_COLLAPSE}</span>
+                  {allGroupsCollapsed ? 'Expand all' : 'Collapse all'}
                 </button>
               )}
             </>

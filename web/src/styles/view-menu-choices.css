@@ -1,16 +1,26 @@
-/* A filter-menu row with a few values (Session panels: 1 to 5, Auto): the label on the left and
-   the menu's own segmented control on the right, in the row shape of the "Show tab bar" switch.
-   Two classes: .vd-toggle (home-navigation.css) loads after this file and would win a tie. */
-.vd-toggle.vd-choice-row { cursor: default; padding-top: 4px; padding-bottom: 4px; }
-.vd-choice-row .vd-seg { width: auto; flex: none; background: var(--bg); }
-.vd-choice-row .vd-seg-btn { flex: none; min-width: 26px; font-variant-numeric: tabular-nums; }
-
-/* A `view-dropdown:reveal` landing (view-dropdown-reveal.ts): the group the user was sent to pulses
-   twice so the eye finds it among the other rows. Same beat as the Settings deep-link flash. */
-.vd-field.vd-field-flash { animation: vd-field-flash 3000ms ease-out; border-radius: 8px; padding: 4px 6px; margin: -4px -6px; }
-@keyframes vd-field-flash {
-  0%, 20% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 0 1px var(--accent); }
-  40% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 3px transparent, 0 0 0 1px transparent; }
-  60% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 0 1px var(--accent); }
-  100% { background-color: transparent; box-shadow: 0 0 0 3px transparent, 0 0 0 1px transparent; }
+/* Icon slots that replaced old text glyphs (check, times, circle, chevrons) on the
+   /tasks filter panel (ViewDropdown), its chips and toolbar, and the tab bar's menu
+   button. Icons come from Icons.tsx at 12 to 14px; these rules size them to the text
+   they sit in. Existing tokens only. */
+.vd-cat-check, .vd-cat-icon { display: inline-flex; align-items: center; }
+.vd-cat-check svg { width: 10px; height: 10px; }
+.vd-cat-icon { margin-right: 4px; flex-shrink: 0; }
+.vd-cat-icon svg { width: 11px; height: 11px; }
+.vd-sc-x, .vd-search-clear { display: inline-flex; align-items: center; justify-content: center; }
+.vd-sc-x svg { width: 9px; height: 9px; }
+.vd-search-clear svg { width: 11px; height: 11px; }
+.task-filter-chips .usage-chip-x { display: inline-flex; align-items: center; }
+.task-filter-chips .usage-chip-x svg { width: 9px; height: 9px; }
+.tp-chip-icon { display: inline-flex; align-items: center; margin-right: 4px; }
+.tp-chip-icon svg { width: 11px; height: 11px; }
+/* The tab bar's own menu button (TodoSectionTabs): the shared chevron at the old 10px. */
+.todo-section-tabs-menu-icon { display: inline-flex; align-items: center; }
+.todo-section-tabs-menu-icon svg { width: 10px; height: 10px; }
+/* The tab bar menu's section names use the Display menu's heading style (F31):
+   sentence case, not the app-wide uppercase eyebrow. */
+.wn-context-menu.todo-section-tabs-ctx .wn-context-menu-section {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
 }

@@ -163,8 +163,8 @@ test('project, filter, search and columns survive leaving the page and a reload'
   await page.keyboard.press('Escape')
   await page.locator('[data-testid="tasks-rail"] .tp-rail-item', { hasText: 'Lantern' }).click()
   await expect(page.locator('.tasks-page .tp-title')).toHaveText('Lantern')
-  await chip(page, 'Done').click()
-  await expect(chip(page, 'Done')).toHaveClass(/\bon\b/)
+  await chip(page, 'Complete').click()
+  await expect(chip(page, 'Complete')).toHaveClass(/\bon\b/)
   await page.locator('.tasks-page .tp-search').fill('recent')
   await expect(row(page, OPEN_RECENT)).toBeVisible()
   const hitsBefore = await page.locator(`${TABLE} .tp-row`).count()
@@ -173,8 +173,8 @@ test('project, filter, search and columns survive leaving the page and a reload'
   const assertRestored = async (label: string) => {
     await expect(page.locator('.tasks-page .tp-title'), label).toHaveText('Lantern')
     await expect(page.locator('.tasks-page .tp-search'), label).toHaveValue('recent')
-    await expect(chip(page, 'Done'), label).toHaveClass(/\bon\b/)
-    await expect(chip(page, 'Todo'), label).toHaveClass(/\bon\b/)
+    await expect(chip(page, 'Complete'), label).toHaveClass(/\bon\b/)
+    await expect(chip(page, 'Open'), label).toHaveClass(/\bon\b/)
     const labels = await headerLabels(page)
     expect(labels, label).toContain('Created')
     expect(labels, label).not.toContain('Updated')
@@ -240,8 +240,8 @@ test('rows carry the home list\'s circle colour and red marks', async ({ page, b
     const rowBox = (await row(page, needsActionId).boundingBox())!
     expect(box.x, 'mark sits in the left gutter, before the circle').toBeLessThan(rowBox.x + 20)
 
-    // Green check: a done row (turn the Done chip on to see one).
-    await chip(page, 'Done').click()
+    // Green check: a done row (turn the Complete chip on to see one).
+    await chip(page, 'Complete').click()
     await expect(row(page, 'pw-tq-pinned-done-recent').locator('.tp-status-circle')).toHaveClass(/task-circle-done/)
     await expect(row(page, 'pw-tq-pinned-done-recent').locator('.task-unread-dot')).toHaveCount(0)
     await page.screenshot({ path: `${SHOTS}/06-circles-and-marks.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } })
