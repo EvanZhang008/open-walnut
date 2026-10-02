@@ -213,6 +213,16 @@ const META_FIELDS = [
   'hidden', 'suggestDismissed', 'refinedAt',
 ] as const
 
+/** The number the next Ask gets: one past the highest `seq` the record holds.
+ *  (A fixture reset restores the seed's entries but a meta entry a previous test
+ *  added keeps its write-once seq, so the next number is read, not assumed.) */
+export async function nextQuestionNumber(request: APIRequestContext, sessionId: string): Promise<number> {
+  const rec = await readRecord(request, sessionId)
+  let max = 0
+  for (const m of rec.threadMeta ?? []) { const s = (m as { seq?: number }).seq; if (typeof s === 'number' && s > max) max = s }
+  return max + 1
+}
+
 /**
  * Put a fixture session back to its seeded anchors, meta and pins. Anchors and
  * pins are whole-list writes; meta is an UPSERT on the server, so every seeded
