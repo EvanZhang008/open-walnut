@@ -56,6 +56,23 @@ function scheduleTreeShapeCheck(filename: string): void {
   treeChangedTimer.unref?.();
 }
 
+/**
+ * On Linux, Node runs a recursive fs.watch in JS: when a folder appears it reads
+ * it, and a folder gone by then (a note's `.lock` dir, a sync moving a folder)
+ * comes back as an 'error' event. An 'error' nobody listens for is an uncaught
+ * exception, and it took the whole server down (CI, 2026-10-02: `scandir
+ * '.../Nested List.md.lock'`). The watcher keeps running after it, so a
+ * vanished path is only logged.
+ */
+export function hearWatchErrors(watcher: fs.FSWatcher, root: string): fs.FSWatcher {
+  watcher.on('error', (err: NodeJS.ErrnoException) => {
+    const meta = { root, code: err.code, error: err.message };
+    if (err.code === 'ENOENT') log.memory.debug('notes-watcher: a watched path vanished', meta);
+    else log.memory.warn('notes-watcher: watch error', meta);
+  });
+  return watcher;
+}
+
 function notifyGitVersioning(filename: string): void {
   import('./git-versioning.js')
     .then(({ getGitVersioning }) => { getGitVersioning()?.notifyMemoryChange(filename); })
@@ -94,18 +111,18 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
 
   try {
     if (semantic && fs.existsSync(MEMORY_DIR)) {
-      watchers.push(fs.watch(MEMORY_DIR, { recursive: true }, (_event, filename) => {
+      watchers.push(hearWatchErrors(fs.watch(MEMORY_DIR, { recursive: true }, (_event, filename) => {
         if (filename && filename.endsWith('.md')) {
           scheduleMemoryUpsert(path.join(MEMORY_DIR, filename));
           notifyGitVersioning(filename);
         }
-      }));
+      }), MEMORY_DIR));
     }
     if (fs.existsSync(NOTES_DIR)) {
       // ONE inotify registration → the structural sidecar reconciler, which
       // ALSO drives the search index per changed file. The reconciler has its
       // own per-path coalescing queue + debounce, so we hand it the changed path.
-      watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (_eventType, filename) => {
+      watchers.push(hearWatchErrors(fs.watch(NOTES_DIR, { recursive: true }, (_eventType, filename) => {
         if (!filename) return;
         // Every event may be a shape change (macOS reports a plain write as
         // 'rename'); the tree decides from the disk, once per burst. Reads in
@@ -120,7 +137,7 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
             .then(({ scheduleAttachmentExtract }) => { void scheduleAttachmentExtract(filename); })
             .catch(() => {});
         }
-      }));
+      }), NOTES_DIR));
     }
   } catch { /* graceful */ }
 

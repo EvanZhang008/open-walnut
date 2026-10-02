@@ -38,6 +38,10 @@ export function watchClaudeSettings(onChange: () => void): () => void {
         }
       }, DEBOUNCE_MS);
     });
+    // An unheard 'error' on a watcher is an uncaught exception (the server exits).
+    watcher.on('error', (err) => {
+      log.session.warn('claude settings watch error', { error: err.message });
+    });
   } catch (err) {
     // Missing ~/.claude or unsupported fs — degrade to no watching.
     log.session.warn('cannot watch claude settings', {
