@@ -2246,6 +2246,28 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// The groups in pids that still have a running member. A zombie does not count:
+// the exit ladder blocks the event loop, so the daemon never reaps its own dead
+// CLIs while it waits, and kill(-pgid, 0) keeps answering for their zombies.
+// One ps per poll; when ps cannot answer, kill(-pgid, 0) decides alone. Keep in
+// sync with daemon-standalone.ts.
+function runningGroupsSync(pids) {
+  const alive = pids.filter(isProcessGroupAlive);
+  if (alive.length === 0) return alive;
+  let out;
+  try {
+    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000 });
+  } catch {
+    return alive;
+  }
+  const running = new Set();
+  for (const line of out.split('\\n')) {
+    const parts = line.trim().split(/\\s+/);
+    if (parts[0] && parts[1] && !parts[1].startsWith('Z')) running.add(Number(parts[0]));
+  }
+  return alive.filter((pid) => running.has(pid));
+}
+
 // Is this an isolated-dir daemon (sandbox / test / ephemeral demo) whose CLI
 // children must die with it? Derived from DAEMON_DIR — the same definition
 // local-daemon.ts uses for parentWatchdogEnv/stopIfIsolated — NOT from
@@ -2282,22 +2304,20 @@ function reapAllSessionGroupsSync() {
   if (pids.length === 0) return;
 
   const sigintDeadline = Date.now() + 5000;
-  while (Date.now() < sigintDeadline && pids.some(isProcessGroupAlive)) sleepSync(200);
+  while (Date.now() < sigintDeadline && runningGroupsSync(pids).length > 0) sleepSync(200);
 
-  const stillAlive = pids.filter(isProcessGroupAlive);
+  const stillAlive = runningGroupsSync(pids);
   if (stillAlive.length === 0) return;
   for (const pid of stillAlive) {
     logMsg('info', 'isolated-dir exit: SIGTERM session group', { pid });
     killProcessGroup(pid, 'SIGTERM');
   }
   const termDeadline = Date.now() + 2000;
-  while (Date.now() < termDeadline && stillAlive.some(isProcessGroupAlive)) sleepSync(200);
+  while (Date.now() < termDeadline && runningGroupsSync(stillAlive).length > 0) sleepSync(200);
 
-  for (const pid of stillAlive) {
-    if (isProcessGroupAlive(pid)) {
-      logMsg('warn', 'isolated-dir exit: SIGKILL session group', { pid });
-      killProcessGroup(pid, 'SIGKILL');
-    }
+  for (const pid of runningGroupsSync(stillAlive)) {
+    logMsg('warn', 'isolated-dir exit: SIGKILL session group', { pid });
+    killProcessGroup(pid, 'SIGKILL');
   }
 }
 

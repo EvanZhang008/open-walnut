@@ -76,6 +76,7 @@ export const SLOW_TEST_FILES = [
   'tests/scripts/cloud-ensure-harness.test.ts', // ~75s: 67 tests, mostly real runs of the harness script and setup.sh blocks (bash + node) in a sandbox
   'tests/scripts/release-promote-steps.test.ts', // ~10-40s: the release job's steps against a bare origin, real git pushes
   'tests/lib/hybrid-search-embed-worker-process.test.ts', // ~5-15s: real node hosts and workers through tsx
+  'tests/providers/daemon-isolated-exit-reap-twins.test.ts', // ~15s: both daemon twins exit with live sessions; one case waits out the 5s SIGINT grace
   'tests/web/routes/bug-report.test.ts', // 5s
   'tests/web/routes/task-hook-maintainer.test.ts', // 5s
   'tests/web/routes/chat-plan-mode.test.ts', // 5s
