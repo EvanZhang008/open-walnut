@@ -141,6 +141,9 @@ export function daemonServiceConfigPaths(
   return []
 }
 
+/** How soon a local upgrade deferred for open ACP turns is tried again. */
+export const LOCAL_UPGRADE_RECHECK_MS = 60_000
+
 export type ServiceProbeState = 'present' | 'absent' | 'unknown'
 export interface ServiceTakeoverProbe { path: string; state: ServiceProbeState }
 export interface ServiceTakeover {
@@ -275,6 +278,29 @@ export class LocalDaemon {
     return this._ensureInFlight
   }
 
+  /** The re-run of an upgrade deferred while ACP turns were open. */
+  private _upgradeRecheck: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * A deferred upgrade needs a clock. "A later ensureRunning() does it" was
+   * the plan, but while the connection stays up only a new session calls
+   * ensureRunning(), so the old daemon could serve until the next server
+   * restart. Re-running it is safe: a turn still open defers again, an idle
+   * daemon is upgraded.
+   */
+  private scheduleUpgradeRecheck(): void {
+    if (this._upgradeRecheck) return
+    this._upgradeRecheck = setTimeout(() => {
+      this._upgradeRecheck = null
+      this.ensureRunning().catch((err) => {
+        log.session.warn('local daemon: deferred upgrade check failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }, LOCAL_UPGRADE_RECHECK_MS)
+    this._upgradeRecheck.unref?.()
+  }
+
   private async ensureRunningInner(): Promise<number> {
     const binaryPath = this.findDaemonBinary()
     const expectedVersion = this.readBinaryVersion(binaryPath)
@@ -328,7 +354,7 @@ export class LocalDaemon {
           // mid-flight on (each dev:prod deploy used to kill live codex turns —
           // 6 shutdowns across 3 days on one session). The daemon advertises
           // open turns in acp-busy.json; while any are open, keep the old
-          // daemon and let a later ensureRunning() (post-turn) do the upgrade.
+          // daemon and try again on a clock (scheduleUpgradeRecheck).
           const busySids = this.readAcpBusySids()
           if (busySids.length > 0) {
             log.session.warn('local daemon version mismatch — upgrade DEFERRED (ACP turns open)', {
@@ -342,6 +368,7 @@ export class LocalDaemon {
             // Deferring the upgrade still means driving that daemon, so it gets
             // the same ownership audit as the version-match path below.
             this.auditOwnerOnAdopt(this._instanceId)
+            this.scheduleUpgradeRecheck()
             return existingPort
           }
           log.session.info('local daemon version mismatch — restarting', {
@@ -650,6 +677,8 @@ export class LocalDaemon {
    */
   async stopIfIsolated(): Promise<void> {
     if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) return
+    if (this._upgradeRecheck) clearTimeout(this._upgradeRecheck)
+    this._upgradeRecheck = null
     await this.stopDaemon()
   }
 

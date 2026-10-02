@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  LOCAL_UPGRADE_RECHECK_MS,
   LocalDaemon,
   classifyServiceConfigError,
   classifyServiceTakeover,
@@ -283,6 +284,67 @@ describe('LocalDaemon — unmanaged hosts keep their on-demand behavior', () => 
   afterEach(() => {
     vi.restoreAllMocks()
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  })
+
+  it('an upgrade put off for open ACP turns is tried again on a clock and goes ahead once they close', async () => {
+    vi.useFakeTimers()
+    try {
+      const daemon = new LocalDaemon({ daemonDir: tmpDir, binaryPath: path.join(tmpDir, 'bin', 'daemon-fake') })
+      const internals = daemon as unknown as {
+        readBinaryVersion(): string
+        readPortFile(): number | null
+        ping(port: number): Promise<unknown>
+        readAcpBusySids(): string[]
+        auditOwnerOnAdopt(): void
+      }
+      vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+      vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
+      vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: [] })
+      vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+      const busy = vi.spyOn(internals, 'readAcpBusySids').mockReturnValue(['acp-1'])
+      const stop = vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
+      const start = vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(32200)
+
+      await expect(daemon.ensureRunning()).resolves.toBe(32100)
+      await vi.advanceTimersByTimeAsync(LOCAL_UPGRADE_RECHECK_MS)
+      expect(busy).toHaveBeenCalledTimes(2)
+      expect(stop).not.toHaveBeenCalled()
+
+      busy.mockReturnValue([])
+      await vi.advanceTimersByTimeAsync(LOCAL_UPGRADE_RECHECK_MS)
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(start).toHaveBeenCalledTimes(1)
+      expect(daemon.port).toBe(32200)
+
+      // Upgraded: no clock is left running.
+      await vi.advanceTimersByTimeAsync(LOCAL_UPGRADE_RECHECK_MS * 3)
+      expect(busy).toHaveBeenCalledTimes(3)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('stopIfIsolated() also ends a pending upgrade clock', async () => {
+    vi.useFakeTimers()
+    try {
+      const daemon = new LocalDaemon({ daemonDir: tmpDir, binaryPath: path.join(tmpDir, 'bin', 'daemon-fake') })
+      const internals = daemon as unknown as {
+        readBinaryVersion(): string
+        readPortFile(): number | null
+        ping(port: number): Promise<unknown>
+        readAcpBusySids(): string[]
+        auditOwnerOnAdopt(): void
+      }
+      vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+      vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
+      const ping = vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: [] })
+      vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+      vi.spyOn(internals, 'readAcpBusySids').mockReturnValue(['acp-1'])
+      vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
+
+      await daemon.ensureRunning()
+      await daemon.stopIfIsolated()
+      await vi.advanceTimersByTimeAsync(LOCAL_UPGRADE_RECHECK_MS * 2)
+      expect(ping).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
   })
 
   it('ensureRunning() still reaches the spawn path', async () => {

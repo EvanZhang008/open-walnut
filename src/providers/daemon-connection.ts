@@ -174,8 +174,10 @@ export class DaemonServiceNotReadyError extends Error {
   readonly unknown: string[]
 
   constructor(hostKey: string, what: string, takeover: ServiceTakeover) {
+    // Only a config Walnut actually saw makes "runs as an OS service" a fact.
+    const claim = takeover.present.length ? 'runs' : 'may run'
     super(
-      `remote host '${hostKey}' runs the walnut session daemon as an OS service `
+      `remote host '${hostKey}' ${claim} the walnut session daemon as an OS service `
       + `(${serviceTakeoverEvidence(takeover)}) — ${what}. Run on that host: ${serviceTakeoverInstruction()}`,
     )
     this.name = 'DaemonServiceNotReadyError'
@@ -184,6 +186,48 @@ export class DaemonServiceNotReadyError extends Error {
     this.unknown = takeover.unknown
   }
 }
+
+/**
+ * A takeover verdict that may be NO verdict: `undetermined` says why the probe
+ * got no answer (ssh timed out, the reply was cut short). `managed` stays true so
+ * every guard that only reads it still refuses destructive steps, but callers
+ * must not treat it as a finding: nothing was seen, so nothing is claimed, and
+ * the decision it blocked is asked again.
+ */
+export type RemoteServiceTakeover = ServiceTakeover & {
+  undetermined?: string
+  /** The runtime dir the probe classified (its own marker file lives there). */
+  dir?: string
+}
+
+/**
+ * The service probe got no answer, so nobody knows whether an OS service owns
+ * the daemon. Not "managed", not "unmanaged": Walnut does nothing destructive,
+ * claims nothing, and retries (the reconnect loop for a connect, a timer for a
+ * live connection). Before this, a 5s ssh timeout under load read as "runs the
+ * daemon as an OS service": hosts with no service at all failed reconnects with
+ * that message, and a stale daemon was kept until some later reconnect.
+ */
+export class DaemonServiceProbeError extends Error {
+  readonly kind = 'service-probe-no-answer'
+  readonly hostKey: string
+
+  constructor(hostKey: string, what: string, reason: string) {
+    super(`could not check whether '${hostKey}' runs its session daemon as an OS service (${reason}); ${what}. Walnut checks again on its own.`)
+    this.name = 'DaemonServiceProbeError'
+    this.hostKey = hostKey
+  }
+}
+
+/** Per-attempt deadlines for the service probe: a loaded Mac or proxy can take more than one short window. */
+export const SERVICE_PROBE_TIMEOUTS_MS = [10_000, 20_000]
+
+/**
+ * When a postponed daemon update is checked again on a live connection. Ends
+ * on a slow steady step: the reasons are transient (no probe answer, an ACP
+ * turn open) and the check is one small ssh round trip.
+ */
+export const UPGRADE_RECHECK_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000]
 
 /** Marker files the probe below classifies, in the order it reports them. */
 export function remoteServiceProbePaths(runtimeDir = '/tmp/open-walnut'): string[] {
@@ -225,7 +269,7 @@ export function buildRemoteServiceProbeCmd(paths: string[]): string {
  * Parse the probe output. A path the reply never mentions is `unknown`, not
  * absent — same rule as the sentinel: silence is never evidence of absence.
  */
-export function parseRemoteServiceProbe(output: string, paths: string[]): ServiceTakeover {
+export function parseRemoteServiceProbe(output: string, paths: string[]): RemoteServiceTakeover {
   const seen = new Map<string, ServiceProbeState>()
   let complete = false
   for (const line of output.split('\n').map((l) => l.trim()).filter(Boolean)) {
@@ -233,13 +277,35 @@ export function parseRemoteServiceProbe(output: string, paths: string[]): Servic
     const match = /^(present|absent|unknown) (.+)$/.exec(line)
     if (match) seen.set(match[2], match[1] as ServiceProbeState)
   }
-  return classifyServiceTakeover(paths.map((p) => ({
+  const takeover = classifyServiceTakeover(paths.map((p) => ({
     path: p,
     state: complete ? (seen.get(p) ?? 'unknown') : 'unknown',
   })))
+  return complete ? takeover : { ...takeover, undetermined: 'the probe reply was cut short' }
 }
 
 class DaemonShutdownPendingError extends Error {}
+
+/** The errors that are a lifecycle DECISION (refuse, retry), never an ssh failure to swallow. */
+function isServiceDecisionError(err: unknown): boolean {
+  return err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError
+    || err instanceof DaemonServiceProbeError
+}
+
+/**
+ * Commands a re-check's stop waits for: cut mid-way, each leaves a session or a
+ * file in a state nobody knows. Reads and pings just fail and are asked again.
+ */
+const UPGRADE_HOLD_COMMANDS = new Set([
+  'send', 'sendRaw', 'start', 'attach', 'stop', 'rename', 'setMode',
+  'acpSend', 'acpStop', 'acpCancel', 'acpSetConfigOption',
+  'fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir', 'host.fix', 'triggers.run', 'triggers.ack', 'offline.ack',
+])
+
+/** A re-check's connection is gone: its decision is dropped, the reconnect makes a fresh one. */
+const UPGRADE_STALE = 'stale'
+/** What a re-check's gate answers right before a stop: go (null), stale, or a reason to wait. */
+type UpgradeHold = null | typeof UPGRADE_STALE | string
 
 /**
  * Where a connect() attempt currently is. A first connect to a fresh host can
@@ -610,6 +676,7 @@ export class DaemonConnection {
   private setConnected(value: boolean): void {
     const changed = this._connected !== value
     this._connected = value
+    if (changed) this._connectionEpoch++
     if (value) {
       this._disconnectedSince = null
       this._reconnectAttempts = 0
@@ -1179,7 +1246,7 @@ export class DaemonConnection {
         try {
           await this.forceRedeployAndReconnect()
         } catch (err) {
-          if (err instanceof DaemonServiceNotReadyError) this.closeTransport()
+          if (err instanceof DaemonServiceNotReadyError || err instanceof DaemonServiceProbeError) this.closeTransport()
           throw err
         }
       } else {
@@ -1679,11 +1746,12 @@ export class DaemonConnection {
     this.setConnected(false)
     this._connecting = false
 
-    // Cancel reconnect
+    // Cancel reconnect, and a postponed update check (it only runs on a live connection)
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    this.clearUpgradeRecheck()
     if (this.sshTarget) clearReconnectCause(this.hostKey)
 
     // Stop ping
@@ -1978,28 +2046,44 @@ export class DaemonConnection {
    *
    * Answers from SURVIVING CONFIG, not from "is it enabled/active": a disabled
    * unit still belongs to the manager, and walnut must never enable or edit it.
-   * Any failure to tell (SSH down, unreadable dir, truncated reply) resolves to
-   * managed — see the rule block in local-daemon.ts. One SSH round trip.
+   * An unreadable dir resolves to managed (see the rule block in local-daemon.ts).
+   * No answer at all (ssh failed or timed out, the reply was cut short) is asked
+   * once more with a longer deadline, then comes back `undetermined`: still
+   * refused like managed, but never reported as a service. One SSH round trip
+   * when the host answers.
    */
-  private async detectServiceTakeover(): Promise<ServiceTakeover> {
-    const paths = remoteServiceProbePaths(this._remoteDir)
-    let output = ''
-    try {
-      output = await this.sshExec(buildRemoteServiceProbeCmd(paths), 5_000)
-    } catch (err) {
-      log.session.warn('DaemonConnection: OS-service probe failed — treating the daemon as service-managed', {
-        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+  private async detectServiceTakeover(): Promise<RemoteServiceTakeover> {
+    const dir = this._remoteDir
+    const paths = remoteServiceProbePaths(dir)
+    let reason = 'no answer'
+    for (let attempt = 0; attempt < SERVICE_PROBE_TIMEOUTS_MS.length; attempt++) {
+      const timeoutMs = SERVICE_PROBE_TIMEOUTS_MS[attempt]
+      try {
+        const takeover = parseRemoteServiceProbe(await this.sshExec(buildRemoteServiceProbeCmd(paths), timeoutMs), paths)
+        if (!takeover.undetermined) return { ...takeover, dir }
+        reason = takeover.undetermined
+      } catch (err) {
+        const detail = (err instanceof Error ? err.message : String(err)).split('\n').map((l) => l.trim()).filter(Boolean).pop()
+        reason = (detail ?? 'no answer').slice(0, 200)
+      }
+      log.session.warn('DaemonConnection: OS-service probe got no answer', {
+        host: this.hostKey, attempt: attempt + 1, of: SERVICE_PROBE_TIMEOUTS_MS.length, timeoutMs, reason,
       })
-      return classifyServiceTakeover(paths.map((p) => ({ path: p, state: 'unknown' as ServiceProbeState })))
     }
-    return parseRemoteServiceProbe(output, paths)
+    return {
+      ...classifyServiceTakeover(paths.map((p) => ({ path: p, state: 'unknown' as ServiceProbeState }))),
+      undetermined: reason,
+      dir,
+    }
   }
 
   /**
    * Check if daemon is already running on the remote host.
    * Returns the port number if running, null otherwise — or throws
    * DaemonServiceNotReadyError when an OS service owns a daemon that is not
-   * answering (never null, which would license an unmanaged nohup start).
+   * answering (never null, which would license an unmanaged nohup start), and
+   * DaemonServiceProbeError when no daemon answers and the service probe got
+   * no answer either (retryable; nothing is started).
    *
    * Tries the binary first, then falls back to the old node-based daemon
    * (in case a previous source-deploy daemon is still running).
@@ -2010,9 +2094,11 @@ export class DaemonConnection {
     // must NOT fall through to deploy + nohup — that squats the runtime dir and
     // wedges every future managed start behind "service handover is required".
     // Ephemeral servers already refuse every destructive path, so skip the probe.
-    const service = this.isReadOnlyRemote
-      ? { managed: false, present: [], unknown: [] } as ServiceTakeover
+    const service: RemoteServiceTakeover = this.isReadOnlyRemote
+      ? { managed: false, present: [], unknown: [] }
       : await this.detectServiceTakeover()
+    // A real answer replaces the stand-in a recent stop of our own provides.
+    if (!service.undetermined) this._stoppedUnmanaged = null
 
     // Shell uses `|| true` so sshExec only rejects on real SSH failures (dead
     // ControlMaster, tunnel, network). A missing daemon just returns empty stdout.
@@ -2037,7 +2123,7 @@ export class DaemonConnection {
         }
       }
     } catch (err) {
-      if (err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError) throw err
+      if (isServiceDecisionError(err)) throw err
       binarySshErr = err
     }
 
@@ -2073,7 +2159,7 @@ export class DaemonConnection {
         return status.port
       }
     } catch (err) {
-      if (err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError) throw err
+      if (isServiceDecisionError(err)) throw err
       fileSshErr = err
     }
 
@@ -2082,6 +2168,28 @@ export class DaemonConnection {
     // launchd/systemd gap turn into a permanent unmanaged squatter, so the throw
     // deliberately precedes BOTH the "genuinely absent → deploy" return and the
     // non-strict "SSH failed → treat as absent" return: neither may swallow it.
+    // A probe with no answer refuses the deploy just as firmly, but says what it
+    // knows (nothing) and is retried by the reconnect loop.
+    if (service.undetermined) {
+      const sshErr = binarySshErr ?? fileSshErr
+      // The link itself is failing: in strict mode say so, as before, so the
+      // reconnect loop reads the ssh error (credentials, DNS, timeout) itself.
+      if (opts.strict && sshErr) throw sshErr as Error
+      // This connection stopped an unmanaged daemon moments ago on a determined
+      // answer (a postponed update going ahead), and this is the reconnect that
+      // replaces it: refusing would leave the host dark until a probe answers.
+      if (!sshErr && this.takeRecentUnmanagedStop()) {
+        log.session.info('DaemonConnection: no service answer, but this connection just stopped an unmanaged daemon; deploying its replacement', {
+          host: this.hostKey, reason: service.undetermined,
+        })
+        return null
+      }
+      throw new DaemonServiceProbeError(
+        this.hostKey,
+        'no daemon is answering, and Walnut will not start one before it knows',
+        service.undetermined,
+      )
+    }
     if (service.managed) {
       throw new DaemonServiceNotReadyError(
         this.hostKey,
@@ -2117,22 +2225,41 @@ export class DaemonConnection {
    * and 30s later found the same stale binary again (infinite kill loop,
    * surfaced as ECONNRESET on every in-flight session).
    */
-  private async shouldUpgradeDaemon(remotePath: string, service?: ServiceTakeover): Promise<boolean> {
+  private async shouldUpgradeDaemon(
+    remotePath: string, service?: RemoteServiceTakeover, gate?: () => UpgradeHold,
+  ): Promise<boolean> {
     // Ephemeral attach-only: never upgrade (which would --stop the production
     // daemon). Version skew between the ephemeral's binary and production's is
     // expected and must not trigger a restart of the shared singleton.
     if (this.isReadOnlyRemote) return false
+    let expected: string | null = null
+    let remoteVersion = ''
     try {
-      const expected = this.getExpectedDaemonVersion()
+      expected = this.getExpectedDaemonVersion()
       if (!expected) return false
       const takeover = service ?? await this.detectServiceTakeover()
 
-      const remoteVersion = (await this.sshExec(
+      remoteVersion = (await this.sshExec(
         `cat ${shq(this._remoteDir + '/daemon.version')} 2>/dev/null || true`, 5_000,
       )).trim()
 
+      if (remoteVersion === expected) this.clearUpgradeRecheck()
+
+      // No answer about the service: no update now (that needs a stop or a
+      // service call), no "run walnut daemon install" either. Ask again later.
+      if (takeover.undetermined) {
+        if (remoteVersion !== expected) {
+          this.postponeUpgrade(`could not check the OS-service state (${takeover.undetermined})`, expected, remoteVersion)
+        }
+        return false
+      }
+      // Anything from here on is a decision; only an open ACP turn or a held
+      // gate asks again, each on its own clock.
+      this.clearUpgradeRecheck()
+
       if (takeover.managed) {
         if (remoteVersion !== expected) {
+          if (this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.updateManagedDaemon(takeover, expected)) return true
           log.session.error(
             'DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.',
@@ -2188,23 +2315,138 @@ export class DaemonConnection {
               host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
               busySids: busy.busySids,
             })
+            this.postponeUpgrade('ACP turns are open', expected, remoteVersion, { steady: true })
             return false
           }
         }
       } catch {}
 
+      if (this.holdUpgrade(gate, expected, remoteVersion)) return false
       // Mismatch (or legacy daemon that predates daemon.version) → upgrade.
       log.session.info('DaemonConnection: daemon version mismatch — stopping for upgrade', {
         host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
       })
-      await this.stopUnmanagedDaemon()
+      // The answer read above, not a second probe: it is seconds old, and a
+      // second ssh round trip is a second chance to get no answer.
+      await this.stopUnmanagedDaemon(takeover)
       this._lastUpgradeAttempt = { expected, at: Date.now() }
       return true
     } catch (error) {
-      if (error instanceof DaemonShutdownPendingError || error instanceof DaemonServiceNotReadyError) throw error
-      // Version check failed — don't block, just reuse existing daemon
+      if (isServiceDecisionError(error)) throw error
+      // The version read failed: don't block, reuse the existing daemon, and
+      // check again later.
+      if (expected) {
+        const detail = (error instanceof Error ? error.message : String(error)).split('\n').filter(Boolean).pop() ?? 'no answer'
+        this.postponeUpgrade(`the version check did not finish (${detail.slice(0, 200)})`, expected, remoteVersion)
+      }
       return false
     }
+  }
+
+  /** A re-check's gate said not now: drop the decision (stale) or ask again (busy). */
+  private holdUpgrade(gate: (() => UpgradeHold) | undefined, expected: string, remoteVersion: string): boolean {
+    const hold = gate?.() ?? null
+    if (hold === null) return false
+    if (hold !== UPGRADE_STALE) this.postponeUpgrade(hold, expected, remoteVersion, { steady: true })
+    return true
+  }
+
+  /** The pending re-run of a postponed daemon update, and how many times it has been put off. */
+  private upgradeRecheckTimer: ReturnType<typeof setTimeout> | null = null
+  private _upgradeRecheckAttempt = 0
+  /** The re-run in progress: a reconnect waits for it, so the two never stop or deploy at once. */
+  private _upgradeRecheckInFlight: Promise<void> | null = null
+  /** The unmanaged daemon this connection last stopped itself, and where (see checkDaemonRunning). */
+  private _stoppedUnmanaged: { at: number; dir: string } | null = null
+  /** Bumped on every connected/disconnected flip, so a re-check can tell its connection is gone. */
+  private _connectionEpoch = 0
+
+  /**
+   * An update that could not be decided NOW is decided later, never dropped.
+   * Each of these reasons used to end the matter for the life of the
+   * connection: an ssh hiccup in the service probe (2026-10-01: a deploy's fix
+   * never reached a remote host), an ACP turn open at connect, a version read that
+   * timed out. Nothing else re-ran the check until some later reconnect.
+   */
+  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean } = {}): void {
+    if (this.isReadOnlyRemote || this._destroyed) return
+    // Work in progress ends on its own: ask again every minute. No answer may
+    // last a while: back off.
+    const delays = UPGRADE_RECHECK_DELAYS_MS
+    const delayMs = opts.steady ? delays[0] : delays[Math.min(this._upgradeRecheckAttempt, delays.length - 1)]
+    if (!opts.steady) this._upgradeRecheckAttempt += 1
+    log.session.warn('DaemonConnection: daemon update postponed; checking again', {
+      host: this.hostKey, reason, expected, remoteVersion: remoteVersion || '(missing)',
+      attempt: this._upgradeRecheckAttempt, retryInMs: delayMs,
+    })
+    if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
+    this.upgradeRecheckTimer = setTimeout(() => {
+      this.upgradeRecheckTimer = null
+      void this.recheckPostponedUpgrade()
+    }, delayMs)
+    this.upgradeRecheckTimer.unref?.()
+  }
+
+  private clearUpgradeRecheck(): void {
+    if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
+    this.upgradeRecheckTimer = null
+    this._upgradeRecheckAttempt = 0
+  }
+
+  /**
+   * Re-run the update decision on a live connection. When it goes ahead, the
+   * old daemon is already stopped (or its service replaced it), so the
+   * connection is dropped and the ordinary reconnect path deploys and dials the
+   * new build, the same as after a server restart. A connection that is down
+   * needs nothing here: the reconnect that brings it back runs the decision.
+   */
+  private recheckPostponedUpgrade(): Promise<void> {
+    if (this._upgradeRecheckInFlight) return this._upgradeRecheckInFlight
+    const run = this.runUpgradeRecheck().finally(() => { this._upgradeRecheckInFlight = null })
+    this._upgradeRecheckInFlight = run
+    return run
+  }
+
+  private async runUpgradeRecheck(): Promise<void> {
+    if (this._destroyed || this.isReadOnlyRemote) return
+    // A connect or reconnect still dialling may already be past its own
+    // decision (the one that postponed this): ask again once it settles.
+    if (this._connecting || this._reconnectInFlight) {
+      const expected = this.getExpectedDaemonVersion()
+      if (expected) this.postponeUpgrade('a connect was in progress', expected, '(not read)', { steady: true })
+      return
+    }
+    // Down with nothing dialling: the reconnect loop's next attempt decides.
+    if (!this._connected) return
+    const epoch = this._connectionEpoch
+    const live = () => !this._destroyed && this._connected && this._connectionEpoch === epoch
+      && !this._connecting && !this._reconnectInFlight && !this.reconnectTimer
+    // Asked right before the stop: the ssh round trips above it take seconds,
+    // and the connection may have dropped (or work started) meanwhile.
+    const gate = (): UpgradeHold => {
+      if (!live()) return UPGRADE_STALE
+      const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
+      if (writes > 0) return `${writes} daemon command(s) that change a session or a file are in flight`
+      return null
+    }
+    let goAhead = false
+    try {
+      goAhead = await this.shouldUpgradeDaemon(await this.getRemoteDaemonPath(), undefined, gate)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: postponed daemon update check failed', { host: this.hostKey, error: msg })
+      const expected = this.getExpectedDaemonVersion()
+      // A managed update that failed has its own cooldown and says so loudly;
+      // anything else (a stop the daemon refused, an ssh error) is asked again.
+      if (expected && live() && !(err instanceof DaemonServiceNotReadyError)) {
+        this.postponeUpgrade(`the check failed (${msg.split('\n')[0].slice(0, 200)})`, expected, '')
+      }
+      return
+    }
+    if (!goAhead) return
+    log.session.info('DaemonConnection: postponed daemon update going ahead; reconnecting to the new build', { host: this.hostKey })
+    // The stop usually drops the socket first, and that loss already scheduled the reconnect.
+    if (this._connected && this._connectionEpoch === epoch) this.handleConnectionLost()
   }
 
   private async updateManagedDaemon(takeover: ServiceTakeover, expected: string): Promise<boolean> {
@@ -2227,12 +2469,28 @@ export class DaemonConnection {
     return true
   }
 
-  private async stopUnmanagedDaemon(): Promise<void> {
-    const takeover = await this.detectServiceTakeover()
+  /**
+   * Did this connection stop an unmanaged daemon in this runtime dir in the
+   * last 2 minutes? Answers yes once: it licenses the one deploy that replaces it.
+   */
+  private takeRecentUnmanagedStop(): boolean {
+    const stop = this._stoppedUnmanaged
+    this._stoppedUnmanaged = null
+    return !!stop && stop.dir === this._remoteDir && Date.now() - stop.at < 2 * 60_000
+  }
+
+  private async stopUnmanagedDaemon(known?: RemoteServiceTakeover): Promise<void> {
+    // A verdict for another runtime dir (the live daemon was adopted from the
+    // other production dir after the probe) never saw this dir's marker file.
+    const takeover = known && known.dir === this._remoteDir ? known : await this.detectServiceTakeover()
+    if (takeover.undetermined) {
+      throw new DaemonServiceProbeError(this.hostKey, 'Walnut will not stop a daemon it cannot classify', takeover.undetermined)
+    }
     if (takeover.managed) throw new DaemonServiceNotReadyError(this.hostKey, 'refusing an unmanaged stop', takeover)
     try {
       const output = await this.sshExec(buildDaemonStopCmd(this._remoteDir), 45_000)
       if (!output.split('\n').includes('walnut-daemon-stop-confirmed')) throw new Error('missing shutdown confirmation')
+      this._stoppedUnmanaged = { at: Date.now(), dir: this._remoteDir }
     } catch (error) {
       throw new DaemonShutdownPendingError(`Daemon shutdown was not confirmed; no replacement was started: ${String(error)}`)
     }
@@ -2383,6 +2641,13 @@ export class DaemonConnection {
     // daemon that still answers is strictly better than a dark host), so the
     // caller surfaces one actionable error instead of a half-torn connection.
     const takeover = await this.detectServiceTakeover()
+    if (takeover.undetermined) {
+      throw new DaemonServiceProbeError(
+        this.hostKey,
+        "the daemon's capabilities do not match this server, and Walnut will not replace a daemon it cannot classify",
+        takeover.undetermined,
+      )
+    }
     if (takeover.managed) {
       throw new DaemonServiceNotReadyError(
         this.hostKey,
@@ -2408,7 +2673,7 @@ export class DaemonConnection {
     this.localPort = null
 
     try {
-      await this.stopUnmanagedDaemon()
+      await this.stopUnmanagedDaemon(takeover)
 
       // Redeploy + start + tunnel + reconnect
       const daemonPort = await this.deployAndStart()
@@ -3721,6 +3986,11 @@ export class DaemonConnection {
       return
     }
 
+    // A postponed update going ahead drops the socket while its stop is still
+    // confirming: wait for it, or this reconnect would kill the ControlMaster
+    // under that stop and race it to the deploy.
+    if (this._upgradeRecheckInFlight) await this._upgradeRecheckInFlight.catch(() => {})
+
     // Reset deploy flags — if daemon is still alive we skip deploy entirely;
     // if daemon died, deployDaemon() will set these correctly.
     this._deployedViaSource = false
@@ -3799,7 +4069,7 @@ export class DaemonConnection {
       try {
         await this.forceRedeployAndReconnect()
       } catch (err) {
-        if (err instanceof DaemonServiceNotReadyError) this.closeTransport()
+        if (err instanceof DaemonServiceNotReadyError || err instanceof DaemonServiceProbeError) this.closeTransport()
         throw err
       }
       // forceRedeploy handles setConnected(true). recoverDisconnectedSessions
