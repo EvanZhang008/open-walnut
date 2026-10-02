@@ -117,3 +117,17 @@ export function stampId(bytes: string, id: string): string {
   const newRaw = `---${eol}${newInner}${eol}---${eol}`
   return newRaw + body
 }
+
+/**
+ * The bytes a note write puts on disk, and the note's id. Content that carries an
+ * id is written as sent. Otherwise it gets the id of the note already on disk
+ * (`current`), and a NEW id only when there is no such note or it has none
+ * (IMPL-CONTRACT §1.2 #3): inbound links key on the id, so a body saved without
+ * its frontmatter must not re-identify the note.
+ */
+export function withNoteId(content: string, current: string | null): { content: string; id: string } {
+  const own = readId(parseFrontmatter(content).data)
+  if (own) return { content, id: own }
+  const id = (current !== null ? readId(parseFrontmatter(current).data) : undefined) ?? generateNoteId()
+  return { content: stampId(content, id), id }
+}

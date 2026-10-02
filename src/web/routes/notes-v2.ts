@@ -23,8 +23,7 @@ import { getConfig, updateConfig } from '../../core/config-manager.js'
 import {
   parseFrontmatter,
   readId,
-  generateNoteId,
-  stampId,
+  withNoteId,
 } from '../../core/parse-frontmatter.js'
 import { resolveAttachmentPath, invalidateAttachmentIndex } from './notes-attachment.js'
 import {
@@ -580,13 +579,9 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
     // bytes written — and hence contentHash — reflect the stamped content. The
     // FE refreshes its expected hash from the response id+hash without a spurious
     // 409. Existing frontmatter is preserved byte-for-byte except the id: line.
-    const { data } = parseFrontmatter(content)
-    let id = readId(data)
+    // A body sent without an id keeps the note's current one (withNoteId).
+    let id = readId(parseFrontmatter(content).data)
     let finalContent = content
-    if (!id) {
-      id = generateNoteId()
-      finalContent = stampId(content, id)
-    }
 
     // Optimistic locking: reject if file was modified externally.
     // Optional for backward compatibility — callers that don't send
@@ -598,16 +593,26 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
     const conflict = await withFileLock(filePath, async () => {
       // A new file changes the tree; an overwrite only changes bytes. Only the
       // former drops the tree snapshot (typing must never trigger a re-walk).
-      try { await fsp.access(filePath) } catch { created = true }
-      if (expectedHash) {
+      // The current bytes are read only when the lock or the id needs them.
+      let currentContent: string | null = null
+      if (expectedHash || !id) {
         try {
-          const currentContent = await fsp.readFile(filePath, 'utf-8')
-          const currentHash = computeContentHash(currentContent)
-          if (currentHash !== expectedHash) return currentHash
+          currentContent = await fsp.readFile(filePath, 'utf-8')
         } catch (err: any) {
           if (err.code !== 'ENOENT') throw err
-          // File doesn't exist — no conflict possible
+          created = true // file doesn't exist: no conflict possible
         }
+      } else {
+        try { await fsp.access(filePath) } catch { created = true }
+      }
+      if (expectedHash && currentContent !== null) {
+        const currentHash = computeContentHash(currentContent)
+        if (currentHash !== expectedHash) return currentHash
+      }
+      if (!id) {
+        const stamped = withNoteId(content, currentContent)
+        finalContent = stamped.content
+        id = stamped.id
       }
       await fsp.writeFile(filePath, finalContent, 'utf-8')
       return null

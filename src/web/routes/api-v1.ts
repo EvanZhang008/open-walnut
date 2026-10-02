@@ -37,7 +37,7 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { getLastSyncAtAsync } from '../../integrations/git-sync.js'
 import { setDeviceInfo } from '../../core/device-auth.js'
 import { computeContentHash } from '../../utils/file-ops.js'
-import { parseFrontmatter, readId, generateNoteId, stampId } from '../../core/parse-frontmatter.js'
+import { parseFrontmatter, readId, withNoteId } from '../../core/parse-frontmatter.js'
 import {
   toolDetail, toolResultPreview, toolResultText, toolInputPreview, thinkingLine, thinkingExcerpt,
 } from '../../core/tool-summary.js'
@@ -3269,11 +3269,12 @@ apiV1Router.get('/notes/content/*path', async (req: Request, res: Response, next
  * always reflects the bytes on disk) and fires the NOTES_UPDATED reconcile.
  */
 async function writeNote(filePath: string, notePath: string, content: string): Promise<{ contentHash: string; updatedAt: string }> {
-  const { data } = parseFrontmatter(content)
-  let finalContent = content
-  if (!readId(data)) {
-    finalContent = stampId(content, generateNoteId())
+  // A body sent without an id keeps the note's current one (withNoteId).
+  let current: string | null = null
+  if (!readId(parseFrontmatter(content).data)) {
+    try { current = await fsp.readFile(filePath, 'utf-8') } catch { /* a create */ }
   }
+  const { content: finalContent } = withNoteId(content, current)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   await fsp.writeFile(filePath, finalContent, 'utf-8')
   const stat = await fsp.stat(filePath)
