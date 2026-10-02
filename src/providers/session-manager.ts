@@ -30,6 +30,7 @@ import type { SshTarget } from './session-io.js'
 import type { SessionMode } from '../core/types.js'
 import { RemoteSessionManager } from './remote-session-manager.js'
 import { localDaemon } from './local-daemon.js'
+import { testRunnerClaude } from '../core/test-claude-guard.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 
 // ── Output Events ──
@@ -423,8 +424,11 @@ export function createSessionManager(
   _cliCommand?: string,
   directWsUrl?: string,
 ): SessionManager {
+  // Under vitest, a daemon the test did not hand over never runs the real
+  // `claude` (test-claude-guard.ts). Outside vitest this is always `claude`.
+  const cli = (directWsUrl ? null : testRunnerClaude()) ?? 'claude'
   if (host && sshTarget) {
-    return new RemoteSessionManager(tmpId, host, sshTarget, directWsUrl)
+    return new RemoteSessionManager(tmpId, host, sshTarget, directWsUrl, cli)
   }
 
   // Unified architecture: all sessions (local + remote) go through a daemon.
@@ -440,7 +444,7 @@ export function createSessionManager(
   if (!wsUrl) {
     throw new Error('Local daemon not running. Call localDaemon.ensureRunning() before creating sessions.')
   }
-  return new RemoteSessionManager(tmpId, '__local__', null, wsUrl)
+  return new RemoteSessionManager(tmpId, '__local__', null, wsUrl, cli)
 }
 
 /**

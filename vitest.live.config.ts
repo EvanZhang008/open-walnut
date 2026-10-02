@@ -13,6 +13,9 @@ export default defineConfig({
     // Per-worker parent-liveness watchdog — see vitest.config.ts.
     setupFiles: ['tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts'],
     include: ['tests/**/*.live.test.ts'],
+    // Live tests run the real CLI on purpose; every other tier is held to the
+    // mock (src/core/test-claude-guard.ts).
+    env: { WALNUT_TEST_REAL_CLAUDE: '1' },
     testTimeout: 300_000,
     hookTimeout: 120_000,
     pool: 'forks',

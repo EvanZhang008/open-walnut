@@ -30,6 +30,13 @@
  * refused connection does, the attempt is printed with its stack, and the test
  * FAILS in afterEach even when the code under test swallowed the error.
  *
+ * Model APIs get the same refusal (modelApiReason): a socket to Anthropic, Bedrock,
+ * Vertex or OpenAI from a test means a mock was missed, and the call would spend
+ * the user's money with their credentials (CI has none, so there it only fails
+ * later and differently). Every test runs on mocks; the live tier, which calls
+ * real models on purpose, sets WALNUT_TEST_REAL_CLAUDE=1. The CLI half of the
+ * same rule is src/core/test-claude-guard.ts.
+ *
  * Not covered: child processes. A CLI or server a test spawns resolves its own
  * target, so give it an explicit OPEN_WALNUT_API_URL (the spawning tests do).
  */
@@ -120,6 +127,21 @@ export function productionTargetReason(
   return `${target.host || 'localhost'}:${target.port}, the production Walnut server`
 }
 
+/** Model API hosts (a trailing-dot-free, lower-case host name). */
+const MODEL_API_HOSTS: readonly RegExp[] = [
+  /(^|\.)anthropic\.com$/,
+  /^bedrock(-runtime|-agent-runtime)?(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$/,
+  /(^|[.-])aiplatform\.googleapis\.com$/, // Vertex: <region>-aiplatform.googleapis.com
+  /^api\.openai\.com$/,
+]
+
+/** Why connecting to `target` would call a real model API, or null. */
+export function modelApiReason(target: ConnectTarget, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.WALNUT_TEST_REAL_CLAUDE === '1' || !target.host) return null
+  const host = target.host.toLowerCase().replace(/\.$/, '')
+  return MODEL_API_HOSTS.some((re) => re.test(host)) ? `${host}, a model API` : null
+}
+
 /** The running test, for the refusal message (a fetch stack never names it). */
 function currentTest(): string {
   try {
@@ -136,14 +158,19 @@ export function installProdServerGuard(): void {
   guardState.installed = true
   const original = net.Socket.prototype.connect as (this: net.Socket, ...args: unknown[]) => net.Socket
   const guarded = function (this: net.Socket, ...args: unknown[]): net.Socket {
-    const reason = productionTargetReason(connectTarget(args))
+    const target = connectTarget(args)
+    const walnut = productionTargetReason(target)
+    const reason = walnut ?? modelApiReason(target)
     if (!reason) return original.apply(this, args)
     const test = currentTest()
     const message =
       `[prod-server-guard] A test${test ? ` (${test})` : ''} tried to connect to ${reason}. ` +
-      'Refused: tests must never reach the user\'s real Walnut. Pass an explicit apiBase ' +
-      '(or OPEN_WALNUT_API_URL) for a server the test started itself (startServer({ port: 0 })) ' +
-      'or for a local stub.'
+      (walnut
+        ? 'Refused: tests must never reach the user\'s real Walnut. Pass an explicit apiBase ' +
+          '(or OPEN_WALNUT_API_URL) for a server the test started itself (startServer({ port: 0 })) ' +
+          'or for a local stub.'
+        : 'Refused: tests run on mocks, never a real model. Mock sendMessage or the provider ' +
+          'client this code path uses.')
     const where = new Error('connect attempted here').stack ?? ''
     guardState.violations.push(`${message}\n${where}`)
     // eslint-disable-next-line no-console
@@ -166,7 +193,7 @@ export function failOnViolations(when: string): void {
   if (guardState.violations.length === 0) return
   const found = guardState.violations.splice(0)
   throw new Error(
-    `${found.length} connection attempt(s) to the production Walnut were refused ${when}:\n\n${found.join('\n\n')}`,
+    `${found.length} connection attempt(s) to the production Walnut or a model API were refused ${when}:\n\n${found.join('\n\n')}`,
   )
 }
 

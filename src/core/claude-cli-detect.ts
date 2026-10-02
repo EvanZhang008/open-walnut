@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CLAUDE_CREDENTIALS_FILE } from '../constants.js';
+import { isTestScratchPath, realClaudeBlocked } from './test-claude-guard.js';
 
 /** Keychain service name Claude Code stores its OAuth (subscription) token under.
  *  Verified against the fork: `Claude Code${OAUTH_FILE_SUFFIX}${'-credentials'}`
@@ -27,6 +28,9 @@ const KEYCHAIN_OAUTH_SERVICE = 'Claude Code-credentials';
 export function resolveClaudeCliExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
+  // Under vitest only a claude a test put in a temp dir resolves, never the
+  // developer's real install (test-claude-guard.ts).
+  const testRunner = realClaudeBlocked(env);
   const home = env.HOME || os.homedir();
   const pathDirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
   const fallbackDirs = [
@@ -41,6 +45,7 @@ export function resolveClaudeCliExecutable(
   ];
 
   for (const dir of [...new Set([...pathDirs, ...fallbackDirs])]) {
+    if (testRunner && !isTestScratchPath(dir)) continue;
     const candidate = path.join(dir, 'claude');
     try {
       fs.accessSync(candidate, fs.constants.X_OK);

@@ -44,6 +44,8 @@
  * Imported here so every config built on vitest.config.ts loads it.
  */
 import './prod-server-guard.js'
+// Sessions on a daemon the test did not start run the mock CLI, never `claude`.
+import './claude-stand-in.js'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'

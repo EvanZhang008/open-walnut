@@ -44,6 +44,17 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   :3456 on this machine or to a socket under `/tmp/open-walnut`, and fails the test that tried,
   even when the code swallowed the error. Point ops at `startServer({ port: 0 })` or a local
   stub. Child processes are not covered: give a spawned CLI an explicit `OPEN_WALNUT_API_URL`.
+- **No test reaches a real Claude, neither the CLI nor the model API.** The daemon finds
+  `claude` the way the user's terminal does (login-shell PATH, then `$SHELL -c "<rc>; exec
+  claude"`), so a test whose server started a session on its own local daemon ran the user's
+  real CLI on a dev machine and failed with "claude not found" in CI; `setCliCommand(MOCK_CLI)`
+  never reached that spawn. Under vitest, `src/core/test-claude-guard.ts` now hands every daemon
+  the test did not start itself the stand-in `tests/setup/claude-stand-in.ts` writes (a `claude`
+  that runs `tests/providers/mock-claude.mjs`), and `resolveClaudeCliExecutable()` never finds the
+  developer's real CLI, as in CI (a fake one a test put in a temp dir still resolves). A daemon the test owns (MockDaemon,
+  `tests/helpers/daemon-twin.ts`) keeps `claude`. `prod-server-guard.ts` also refuses sockets to
+  Anthropic, Bedrock, Vertex and OpenAI and fails the test: mock `sendMessage` or the client. The
+  live tier opts out with `WALNUT_TEST_REAL_CLAUDE=1` (`vitest.live.config.ts`).
 - **Browser tier is serialized machine-wide.** One Chromium per worker (~385 MB), `workers`
   capped at 4, and an exclusive lease on :3457 so a second `npx playwright test` queues instead
   of colliding (specs hardcode that port; `reuseExistingServer` would otherwise let two runs

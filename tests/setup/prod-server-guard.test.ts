@@ -20,8 +20,44 @@ const installedByHarness = (globalThis as unknown as Record<symbol, { installed?
   Symbol.for('open-walnut.test.prod-server-guard')
 ]?.installed === true
 const {
-  PROD_SERVER_PORT, connectTarget, failOnViolations, guardState, isThisMachine, productionTargetReason,
+  PROD_SERVER_PORT, connectTarget, failOnViolations, guardState, isThisMachine, modelApiReason, productionTargetReason,
 } = await import('./prod-server-guard.js')
+
+describe('modelApiReason: which targets are a real model API', () => {
+  it('refuses the model APIs a test could call with the user\'s credentials', () => {
+    const hosts = [
+      'api.anthropic.com', 'API.Anthropic.com.', 'anthropic.com',
+      'bedrock-runtime.us-west-2.amazonaws.com', 'bedrock-runtime-fips.us-east-1.amazonaws.com',
+      'bedrock.eu-central-1.amazonaws.com', 'bedrock-agent-runtime.ap-northeast-1.amazonaws.com',
+      'us-east5-aiplatform.googleapis.com', 'api.openai.com',
+    ]
+    for (const host of hosts) expect(modelApiReason({ host, port: 443 }), host).toContain('a model API')
+  })
+
+  it('lets everything else through, and the live tier through everything', () => {
+    for (const host of ['s3.us-west-2.amazonaws.com', 'sts.amazonaws.com', 'example.com', 'notanthropic.com.evil', '127.0.0.1', 'github.com']) {
+      expect(modelApiReason({ host, port: 443 }), host).toBeNull()
+    }
+    expect(modelApiReason({ port: 443 })).toBeNull()
+    expect(modelApiReason({ host: 'api.anthropic.com', port: 443 }, { WALNUT_TEST_REAL_CLAUDE: '1' })).toBeNull()
+  })
+
+  it('refuses a real connect before it leaves this machine', async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const err = await new Promise<NodeJS.ErrnoException>((resolve) => {
+        net.connect({ host: 'api.anthropic.com', port: 443 }).on('error', resolve)
+      })
+      expect(err.code).toBe('ERR_TEST_PROD_SERVER')
+      expect(err.message).toContain('tests run on mocks, never a real model')
+      expect(guardState.violations).toHaveLength(1)
+      expect(() => failOnViolations('during this test')).toThrow(/api\.anthropic\.com, a model API/)
+      expect(printed).toHaveBeenCalledTimes(1)
+    } finally {
+      guardState.violations.splice(0)
+    }
+  })
+})
 
 describe('productionTargetReason: which targets are the production Walnut', () => {
   it('refuses :3456 on every name of this machine', () => {
@@ -153,7 +189,7 @@ describe('the installed guard, on a scratch port', () => {
       expect(printed).toHaveBeenCalledTimes(3)
 
       // The hook that fails the test: it throws with every attempt, then is clear.
-      expect(() => failOnViolations('during this test')).toThrow(/3 connection attempt\(s\) to the production Walnut were refused/)
+      expect(() => failOnViolations('during this test')).toThrow(/3 connection attempt\(s\) to the production Walnut or a model API were refused/)
       expect(guardState.violations).toHaveLength(0)
       expect(() => failOnViolations('during this test')).not.toThrow()
 

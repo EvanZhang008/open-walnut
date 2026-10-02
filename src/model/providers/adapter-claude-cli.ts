@@ -45,6 +45,7 @@ import { WALNUT_UTILITY_ENTRYPOINT } from '../../providers/inline-subagent.js';
 import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
 import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
+import { claudeFallbackCommand } from '../../core/test-claude-guard.js';
 import { randomUUID } from 'node:crypto';
 import {
   buildToolProtocolSection, parseProtocolReply, synthesizeToolUseBlocks,
@@ -181,7 +182,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
     const env = buildSpawnEnv();
     const command = opts.providerConfig.claude_cli_command
       || resolveClaudeCliExecutable()
-      || 'claude';
+      || claudeFallbackCommand();
 
     const key = conversationKey(systemKeyOf(opts), opts.messages);
     const now = Date.now();

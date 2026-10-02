@@ -32,6 +32,7 @@ import { log } from '../logging/index.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
 import { DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
+import { testRunnerClaude } from '../core/test-claude-guard.js'
 import {
   DAEMON_OWNER_FILE,
   PROD_DAEMON_DIR,
@@ -749,7 +750,8 @@ export class LocalDaemon {
     // reported itself only as a per-session "claude: not found" 20 times over.
     // Not fatal: the preamble also sources the user's shell rc, which can still
     // put claude on PATH, so a miss is a strong warning rather than a verdict.
-    this._spawnClaudeCli = resolveClaudeCliExecutable(env)
+    // Under vitest, sessions run the harness's stand-in instead (test-claude-guard.ts).
+    this._spawnClaudeCli = testRunnerClaude() ?? resolveClaudeCliExecutable(env)
     if (!this._spawnClaudeCli) {
       log.session.error(
         'spawning the local daemon with an environment where the claude CLI cannot be resolved — '

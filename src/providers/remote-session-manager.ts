@@ -118,6 +118,8 @@ export class RemoteSessionManager implements SessionManager {
     hostKey: string,
     sshTarget: SshTarget | null,
     directWsUrl?: string,
+    /** What the daemon runs as the CLI: `claude`, except a test's stand-in (session-manager.ts). */
+    private readonly cliCommand = 'claude',
   ) {
     this.hostKey = hostKey
     this.sshTarget = sshTarget
@@ -224,7 +226,7 @@ export class RemoteSessionManager implements SessionManager {
     const startPayload = {
       sid: this.tmpId,
       ...(this.conn!.hasCapability('cron-supervision-v1') ? { stopFence: opts.stopFence ?? null } : {}),
-      args: ['claude', ...opts.args],
+      args: [this.cliCommand, ...opts.args],
       cwd: opts.cwd,
       message: preparedMessage,
       ...(sendAfterStart ? { deferMessage: true } : {}),
