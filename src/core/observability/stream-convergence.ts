@@ -86,6 +86,14 @@ export function diffStreamedVsPersisted(
  *  slow remote (SSH) history read. A turn's messages not persisted after this
  *  long is a defect, not lag. */
 const CHECK_DELAY_MS = 15_000
+/**
+ * A whole turn missing on the first look is read AGAIN this much later before
+ * anything reaches the user. The one full-loss alarm on record (2026-09-29, 1/1)
+ * named a message that is in the file today: the CLI wrote it late and the
+ * file was later rewritten around it. A loss that is real is still a loss a
+ * minute later; a write that was merely late is not.
+ */
+const CONFIRM_DELAY_MS = 60_000
 /** Per-session incident dedupe window — a flapping session opens ONE case file. */
 const INCIDENT_DEDUPE_MS = 30 * 60_000
 
@@ -97,20 +105,30 @@ const lastIncidentAt = new Map<string, number>()
  * buffer BEFORE clearSoon wipes it. Fire-and-forget: never throws, never
  * blocks the turn pipeline; an unreadable history (SSH down, daemon timeout)
  * skips silently rather than false-alarming.
+ *
+ * What reaches the USER (an error card with "Ask AI to fix") is only a whole
+ * turn missing from history on two reads a minute apart. Everything else is a
+ * `warn` log line plus a case file in the incident store: 13 alarms in the four
+ * days before this policy were 0 real losses (12 the window class above, 1 a
+ * late write), and each one cost a notification and an AI session.
  */
 export function armStreamConvergenceCheck(sessionId: string, streamedTextMsgIds: string[]): void {
   if (streamedTextMsgIds.length === 0) return
+  scheduleCheck(sessionId, streamedTextMsgIds, CHECK_DELAY_MS, false)
+}
+
+function scheduleCheck(sessionId: string, streamedTextMsgIds: string[], delayMs: number, confirming: boolean): void {
   const timer = setTimeout(() => {
-    void runCheck(sessionId, streamedTextMsgIds).catch((err) => {
+    void runCheck(sessionId, streamedTextMsgIds, confirming).catch((err) => {
       log.obs.warn('stream-convergence check failed', {
         sessionId, error: err instanceof Error ? err.message : String(err),
       })
     })
-  }, CHECK_DELAY_MS)
+  }, delayMs)
   timer.unref?.()
 }
 
-async function runCheck(sessionId: string, streamedTextMsgIds: string[]): Promise<void> {
+async function runCheck(sessionId: string, streamedTextMsgIds: string[], confirming: boolean): Promise<void> {
   const { getSessionByClaudeId } = await import('../session-tracker.js')
   const record = await getSessionByClaudeId(sessionId)
   if (!record) return // session archived/deleted since — nothing to verify against
@@ -133,16 +151,20 @@ async function runCheck(sessionId: string, streamedTextMsgIds: string[]): Promis
   const windowed = isWindowedHistory(messages)
   const diff = diffStreamedVsPersisted(streamedTextMsgIds, persisted, { windowed })
   if (diff.missing.length === 0) {
-    log.obs.debug('stream-convergence: converged', {
-      sessionId, checked: diff.checked, windowed, unverifiable: diff.unverifiable,
-    })
+    if (confirming) {
+      // The first look missed the whole turn; a minute later every id is there.
+      log.obs.info('stream-convergence: converged on the second read (late write, not a loss)', {
+        sessionId, checked: diff.checked, windowed,
+      })
+    } else {
+      log.obs.debug('stream-convergence: converged', {
+        sessionId, checked: diff.checked, windowed, unverifiable: diff.unverifiable,
+      })
+    }
     return
   }
 
-  // The whole turn vanishing is the P0 class; a partial miss may be a parse
-  // edge — both are case files, severity tells them apart.
-  const fullLoss = diff.missing.length === diff.checked
-  log.obs.error('stream-convergence VIOLATION: streamed message(s) missing from persisted history', {
+  const detail = {
     sessionId,
     missing: diff.missing,
     checked: diff.checked,
@@ -150,7 +172,21 @@ async function runCheck(sessionId: string, streamedTextMsgIds: string[]): Promis
     windowed,
     persistedCount: persisted.size,
     host: record.host ?? '__local__',
-  })
+  }
+  // The whole turn vanishing is the P0 class; a partial miss has only ever been
+  // a parse edge. Only the former can become a user-facing card, and only once
+  // a second read has confirmed it (see armStreamConvergenceCheck).
+  const fullLoss = diff.missing.length === diff.checked
+  if (!fullLoss) {
+    log.obs.warn('stream-convergence: streamed message(s) missing from persisted history (partial, case file only)', detail)
+  } else if (!confirming) {
+    log.obs.warn('stream-convergence: whole turn missing from persisted history — re-reading before alarming', detail)
+    scheduleCheck(sessionId, streamedTextMsgIds, CONFIRM_DELAY_MS, true)
+    return
+  } else {
+    // `error` is what the log bridge turns into the notification card.
+    log.obs.error('stream-convergence VIOLATION: streamed message(s) missing from persisted history', detail)
+  }
 
   const now = Date.now()
   const last = lastIncidentAt.get(sessionId) ?? 0

@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   windowedArrays: new WeakSet<object>(),
   createIncident: vi.fn(),
   obsError: vi.fn(),
+  obsWarn: vi.fn(),
+  obsInfo: vi.fn(),
   obsDebug: vi.fn(),
 }))
 
@@ -38,8 +40,8 @@ vi.mock('../../../src/logging/index.js', () => ({
     obs: {
       error: mocks.obsError,
       debug: mocks.obsDebug,
-      warn: vi.fn(),
-      info: vi.fn(),
+      warn: mocks.obsWarn,
+      info: mocks.obsInfo,
     },
   },
 }))
@@ -169,6 +171,8 @@ describe('runCheck honours a windowed history parse', () => {
     mocks.readSessionHistory.mockReset()
     mocks.createIncident.mockReset().mockResolvedValue(undefined)
     mocks.obsError.mockReset()
+    mocks.obsWarn.mockReset()
+    mocks.obsInfo.mockReset()
     mocks.obsDebug.mockReset()
   })
   afterEach(() => {
@@ -197,14 +201,16 @@ describe('runCheck honours a windowed history parse', () => {
     }))
   })
 
-  it('the same parse NOT marked windowed is a full parse: the early ids ARE missing', async () => {
+  it('the same parse NOT marked windowed is a full parse: the early ids ARE missing (partial = warn + case file, no card)', async () => {
     const messages = ['m4', 'm5', 'm6'].map((msgId) => ({ role: 'assistant', text: 'x', timestamp: 't', msgId }))
     mocks.readSessionHistory.mockResolvedValue(messages)
 
     await runArmed('sid-full-miss', ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'])
 
-    expect(mocks.obsError).toHaveBeenCalledTimes(1)
-    expect(mocks.obsError.mock.calls[0][1]).toMatchObject({
+    expect(mocks.obsError).not.toHaveBeenCalled()
+    expect(mocks.obsWarn).toHaveBeenCalledTimes(1)
+    expect(mocks.obsWarn.mock.calls[0][0]).toMatch(/partial, case file only/)
+    expect(mocks.obsWarn.mock.calls[0][1]).toMatchObject({
       sessionId: 'sid-full-miss', missing: ['m1', 'm2', 'm3'], checked: 6, unverifiable: 0, windowed: false,
       host: 'remote-a',
     })
@@ -212,17 +218,80 @@ describe('runCheck honours a windowed history parse', () => {
     expect(mocks.createIncident.mock.calls[0][0]).toMatchObject({ severity: 'warn', label: 'stream-convergence' })
   })
 
-  it('a windowed parse with a loss AFTER the anchor still opens a case file', async () => {
+  it('a windowed parse with a loss AFTER the anchor still opens a case file (warn, no card)', async () => {
     const messages = ['m3', 'm5'].map((msgId) => ({ role: 'assistant', text: 'x', timestamp: 't', msgId }))
     mocks.windowedArrays.add(messages)
     mocks.readSessionHistory.mockResolvedValue(messages)
 
     await runArmed('sid-window-loss', ['m1', 'm2', 'm3', 'm4', 'm5'])
 
-    expect(mocks.obsError).toHaveBeenCalledTimes(1)
-    expect(mocks.obsError.mock.calls[0][1]).toMatchObject({
+    expect(mocks.obsError).not.toHaveBeenCalled()
+    expect(mocks.obsWarn).toHaveBeenCalledTimes(1)
+    expect(mocks.obsWarn.mock.calls[0][1]).toMatchObject({
       missing: ['m4'], checked: 3, unverifiable: 2, windowed: true,
     })
     expect(mocks.createIncident).toHaveBeenCalledTimes(1)
+    expect(mocks.createIncident.mock.calls[0][0]).toMatchObject({ severity: 'warn' })
+  })
+
+  describe('a WHOLE turn missing is the only thing that can reach the user, and only after a second read', () => {
+    const none = [{ role: 'assistant', text: 'x', timestamp: 't', msgId: 'older' }]
+
+    it('first look: warn + re-arm, no card, no case file yet', async () => {
+      mocks.readSessionHistory.mockResolvedValue(none)
+
+      await runArmed('sid-full-loss', ['m1', 'm2'])
+
+      expect(mocks.obsError).not.toHaveBeenCalled()
+      expect(mocks.createIncident).not.toHaveBeenCalled()
+      expect(mocks.obsWarn).toHaveBeenCalledTimes(1)
+      expect(mocks.obsWarn.mock.calls[0][0]).toMatch(/re-reading before alarming/)
+      expect(vi.getTimerCount()).toBe(1) // the confirming read
+    })
+
+    it('still missing a minute later: the error card and an error-severity case file', async () => {
+      mocks.readSessionHistory.mockResolvedValue(none)
+
+      await runArmed('sid-full-loss-confirmed', ['m1', 'm2'])
+      await vi.advanceTimersByTimeAsync(60_000)
+      for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
+
+      expect(mocks.readSessionHistory).toHaveBeenCalledTimes(2)
+      expect(mocks.obsError).toHaveBeenCalledTimes(1)
+      expect(mocks.obsError.mock.calls[0][1]).toMatchObject({
+        sessionId: 'sid-full-loss-confirmed', missing: ['m1', 'm2'], checked: 2,
+      })
+      expect(mocks.createIncident).toHaveBeenCalledTimes(1)
+      expect(mocks.createIncident.mock.calls[0][0]).toMatchObject({ severity: 'error', label: 'stream-convergence' })
+    })
+
+    it('present a minute later (a late write): info line, no card, no case file', async () => {
+      mocks.readSessionHistory
+        .mockResolvedValueOnce(none)
+        .mockResolvedValueOnce(['m1', 'm2'].map((msgId) => ({ role: 'assistant', text: 'x', timestamp: 't', msgId })))
+
+      await runArmed('sid-late-write', ['m1', 'm2'])
+      await vi.advanceTimersByTimeAsync(60_000)
+      for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
+
+      expect(mocks.obsError).not.toHaveBeenCalled()
+      expect(mocks.createIncident).not.toHaveBeenCalled()
+      expect(mocks.obsInfo).toHaveBeenCalledTimes(1)
+      expect(mocks.obsInfo.mock.calls[0][0]).toMatch(/second read/)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('a windowed parse holding NONE of the turn takes the same confirmed path', async () => {
+      mocks.windowedArrays.add(none)
+      mocks.readSessionHistory.mockResolvedValue(none)
+
+      await runArmed('sid-window-none', ['m1', 'm2', 'm3'])
+      expect(mocks.obsError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(60_000)
+      for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
+
+      expect(mocks.obsError).toHaveBeenCalledTimes(1)
+      expect(mocks.obsError.mock.calls[0][1]).toMatchObject({ missing: ['m1', 'm2', 'm3'], checked: 3, windowed: true })
+    })
   })
 })
