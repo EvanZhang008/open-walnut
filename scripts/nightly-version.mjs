@@ -15,10 +15,25 @@
  *
  * Nothing is committed: CI sets the version in its working copy with
  * `npm version --no-git-tag-version` and publishes `--tag nightly`.
+ *
+ * The base is the newer of package.json and the latest stable on npm
+ * (WALNUT_LATEST_STABLE): a stable release bumps main with a commit CI never
+ * runs, so the newest green commit can still name the version before it, and a
+ * nightly must never sort below the stable it follows.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+/** The newer of two x.y.z versions (a missing or malformed one loses). */
+export function newerBase(a, b) {
+  const parse = (v) => /^(\d+)\.(\d+)\.(\d+)$/.exec(v ?? '')?.slice(1).map(Number)
+  const [pa, pb] = [parse(a), parse(b)]
+  if (!pb) return a
+  if (!pa) return b
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] > pb[i] ? a : b
+  return a
+}
 
 export function nightlyVersion(baseVersion, date, run) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/.exec(baseVersion)
@@ -33,5 +48,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
   const run = process.env.GITHUB_RUN_NUMBER ?? process.argv[2] ?? '0'
-  process.stdout.write(`${nightlyVersion(pkg.version, new Date(), run)}\n`)
+  const base = newerBase(pkg.version, process.env.WALNUT_LATEST_STABLE)
+  process.stdout.write(`${nightlyVersion(base, new Date(), run)}\n`)
 }

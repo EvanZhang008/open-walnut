@@ -7,7 +7,7 @@ an install finds out and updates.
 
 | Channel | npm dist-tag | What it is | How it is cut |
 |---|---|---|---|
-| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | `npm run release -- patch\|minor\|major` on a clean, pushed `main` |
+| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, weekly: the newest nightly that has been out 48 hours. By hand: `npm run release -- patch\|minor\|major` |
 | nightly | `nightly` | The newest commit on `main` that CI passed | GitHub Actions, twice a day, when that commit is not the last nightly already |
 
 `npm install -g open-walnut` gives the stable channel. `npm install -g open-walnut@nightly`
@@ -15,7 +15,51 @@ switches an install to nightly; the installed version (`X.Y.Z-nightly.YYYYMMDD.N
 the install knows which channel it follows, so it keeps following nightly until `@latest`
 is installed again. Pre-1.0, a minor bump may carry breaking changes (see CHANGELOG).
 
-## Cutting a stable release
+## Automatic stable releases
+
+Nobody has to cut a stable release. Every Tuesday at 16:47 UTC, jobs `promote-*` of the
+same workflow promote a nightly that users on the nightly channel have run for two days:
+
+1. **Plan** (`scripts/stable-promote.mjs plan`). The candidate is the newest nightly
+   published at least 48 hours ago; the registry records each version's commit as
+   `gitHead`. The job does nothing, and says why in its log, when there is no such nightly,
+   when it is the code `latest` already ships, when it does not descend from that release,
+   when CI did not pass on it, or when nothing since the last release is something a user
+   would notice. That last test reads the commit subjects (Conventional Commits): any `feat`
+   makes the next minor, any `fix` or `perf` the next patch, and a written entry under
+   `## [Unreleased]` also counts as a patch. `docs`, `test`, `chore` and the like alone
+   release nothing. Pre-1.0 nothing is ever a major.
+2. **Smoke** (Linux and macOS, in parallel). Each runner installs that exact nightly from
+   npm the way the updater does (npm 12, the same `--allow-scripts` list), starts it on a
+   fresh HOME and requires `/api/system/health` to answer. Every npm install updates itself
+   on restart and nothing rolls a broken update back, so a release must start on a machine
+   that has never run Walnut.
+3. **Publish.** It checks out the candidate, installs with `npm ci`, sets the version and
+   runs `npm publish --provenance --access public` (`prepublishOnly` builds and checks the
+   tarball as for any publish), tags `vX.Y.Z` on the candidate, and opens the GitHub
+   Release.
+4. **Roll main.** A `release: X.Y.Z` commit on `main` moves the released entries from
+   Unreleased under `## [X.Y.Z] - date`, keeps the entries written since the candidate, and
+   sets the version in `package.json` and `package-lock.json`. When the push loses a race
+   three times the job warns and stops: the package is out, and the next nightly still
+   builds above it (see Nightlies).
+
+The notes are the Unreleased section as it stood at the candidate. When nobody wrote one,
+they are the `feat` subjects (Added) and the `fix`/`perf` subjects (Fixed), so a
+user-facing CHANGELOG entry is still the better habit. A failed run is the only thing that
+needs a person: GitHub mails it, and nothing was published.
+
+Tag and commit are pushed with the job's own token, which starts no workflow, so the tag
+cannot publish a second time through job `stable` and the release commit gets no CI run of
+its own (it changes only the version files and CHANGELOG).
+
+To promote now instead of waiting for Tuesday: Actions, Release, Run workflow, channel
+`stable` (the same plan and smoke run). To pause automatic releases, disable the Release
+workflow's schedule or the workflow itself in the Actions tab; nightlies stop with it.
+
+## Cutting a stable release by hand
+
+For a release that should not wait for the schedule, or an exact version:
 
 ```bash
 npm run release -- patch          # or minor, major, or an exact 0.6.0
@@ -44,7 +88,7 @@ never ship a stale or partial `dist/`. The job then creates a GitHub Release who
 are the version's CHANGELOG section.
 
 So the CHANGELOG discipline is the release discipline: write the user-facing entry under
-`## [Unreleased]` with the change, and the release is a one-liner later.
+`## [Unreleased]` with the change, and the next release, automatic or by hand, carries it.
 
 ## Nightlies
 
@@ -55,12 +99,13 @@ when there is none among the last 30 runs, when that commit is already the `nigh
 or when it is not a descendant of that tag (GitHub's runs list can show a finished run as
 still running for a minute or two, so the newest green may be an older commit, and a
 nightly must never move installs backwards). Otherwise it checks that commit out, installs, sets the version with
-`scripts/nightly-version.mjs` (next patch of `package.json`, `-nightly.<UTC day>.<run
-number>`), publishes under `--tag nightly`, and moves the `nightly` tag to the commit. It
+`scripts/nightly-version.mjs` (next patch of the newer of `package.json` and the `latest`
+version on npm, `-nightly.<UTC day>.<run number>`; the release commit an automatic stable
+pushes gets no CI run, so the newest green commit can still name the previous version), publishes under `--tag nightly`, and moves the `nightly` tag to the commit. It
 does not rerun the tests: CI already ran them on that exact commit, and a red `main` simply
 means the nightly stays on the last green one. The version bump is never committed: a
-nightly's version lives in the registry only, and `package.json` on `main` keeps naming the
-last stable release.
+nightly's version lives in the registry only, and `package.json` on `main` names the last
+stable release.
 
 ## What "CI passed" means
 

@@ -87,9 +87,10 @@ same right away, `open-walnut update --check` only reports, and `open-walnut doc
 the same line. A checkout you run from source is never asked to update (pull and build it
 yourself), and `WALNUT_NO_UPDATE_CHECK=1` turns the check off.
 
-Two channels are published: `latest` is a tagged release, and `nightly` is the newest commit
-on `main` that CI passed, twice a day. `npm install -g open-walnut@nightly` switches an
-install to the nightly channel; it then follows nightly until you install `@latest` again.
+Two channels are published: `nightly` is the newest commit on `main` that CI passed, twice a
+day, and `latest` is a tagged release, promoted each week from a nightly that has been out two
+days. `npm install -g open-walnut@nightly` switches an install to the nightly channel; it
+then follows nightly until you install `@latest` again.
 
 ### Set Up with Claude Code
 

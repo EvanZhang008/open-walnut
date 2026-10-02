@@ -2,10 +2,14 @@ name: Release
 
 # Two channels, one workflow (docs/reference/releasing.md):
 #
-#   stable   a `vX.Y.Z` tag, cut locally by `npm run release -- patch|minor|major`
-#            (scripts/release.mjs: CHANGELOG rolled, version bumped, one commit,
-#            one tag). Published as dist-tag `latest`, plus a GitHub Release whose
-#            notes are that version's CHANGELOG section.
+#   stable   automatic, weekly (jobs `promote-*`): the newest nightly that has been
+#            out 48 hours, when it carries something new and installs and starts on
+#            fresh Linux and macOS runners, becomes the next minor (any feat) or
+#            patch (fix/perf, or a CHANGELOG entry). Published as dist-tag `latest`,
+#            tagged `vX.Y.Z`, a GitHub Release with its notes, then a
+#            `release: X.Y.Z` commit on main rolls CHANGELOG and package.json
+#            (scripts/stable-promote.mjs). By hand, a `vX.Y.Z` tag cut with
+#            `npm run release -- patch|minor|major` publishes through job `stable`.
 #   nightly  on a schedule (and by hand): the newest commit on main that CI
 #            passed, when it is not the last nightly already. Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, then the
@@ -29,10 +33,17 @@ on:
   push:
     tags: ['v*.*.*']
   schedule:
-    # Twice a day, off the hour (GitHub drops exact-hour crons under load).
-    - cron: '17 5,17 * * *'
+    # Off the hour (GitHub drops exact-hour crons under load). The two strings are
+    # what the jobs below compare github.event.schedule against: keep them in step.
+    - cron: '17 5,17 * * *'   # nightly, twice a day
+    - cron: '47 16 * * 2'     # stable promotion, Tuesdays
   workflow_dispatch:
     inputs:
+      channel:
+        description: 'nightly: publish main now. stable: promote the soaked nightly now.'
+        type: choice
+        options: [nightly, stable]
+        default: nightly
       force:
         description: 'Publish a nightly even when main has not moved since the last one'
         type: boolean
@@ -93,7 +104,7 @@ jobs:
 
   nightly:
     name: Publish nightly from main
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'schedule' && github.event.schedule == '17 5,17 * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -155,6 +166,8 @@ jobs:
           # The version stamp below is the only edit; the build must not call itself dirty.
           WALNUT_VERSION_STAMPED: '1'
         run: |
+          WALNUT_LATEST_STABLE="$(npm view open-walnut@latest version 2>/dev/null || true)"
+          export WALNUT_LATEST_STABLE
           version="$(node scripts/nightly-version.mjs)"
           echo "publishing open-walnut@$version from ${{ steps.pick.outputs.sha }}"
           npm version "$version" --no-git-tag-version
@@ -167,3 +180,146 @@ jobs:
           git push --force origin refs/tags/nightly
       - if: steps.pick.outputs.publish == 'true'
         run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from ${{ steps.pick.outputs.sha }}"
+
+  # Automatic stable: plan, then a fresh-machine install of the soaked nightly, then
+  # publish. A red smoke stops the release (GitHub mails the failed run): nothing
+  # ships that a fresh install could not start.
+  promote-plan:
+    name: Pick the nightly to promote
+    if: (github.event_name == 'schedule' && github.event.schedule == '47 16 * * 2') || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      nightly: ${{ steps.plan.outputs.nightly }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: The nightly that has been out 48 hours, if it carries something new
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+      - if: steps.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes.md
+
+  promote-smoke:
+    name: ${{ needs.promote-plan.outputs.nightly }} installs and starts (${{ matrix.os }})
+    needs: promote-plan
+    if: needs.promote-plan.outputs.publish == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # main, for the script and the allow list (the candidate may predate the script).
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm install -g npm@12
+      # The updater's own command (src/core/self-update/install-kind.ts), run outside
+      # the checkout so the repo's .npmrc plays no part, on a HOME nothing ran in.
+      - name: Install it the way the updater does, start it on a fresh HOME, require it to answer
+        env:
+          NIGHTLY: ${{ needs.promote-plan.outputs.nightly }}
+        run: |
+          allow="$(node scripts/stable-promote.mjs allow-scripts)"
+          cd "$RUNNER_TEMP"
+          npm install -g "open-walnut@$NIGHTLY" --allow-scripts="$allow"
+          open-walnut --version | tee version.txt
+          grep -qF "$NIGHTLY" version.txt || { echo "::error::installed open-walnut does not report $NIGHTLY"; exit 1; }
+          mkdir -p home
+          HOME="$RUNNER_TEMP/home" open-walnut web --port 3457 > start.log 2>&1 &
+          start_pid=$!
+          for i in $(seq 1 300); do
+            if curl -fsS --max-time 2 http://127.0.0.1:3457/api/system/health > health.json 2>/dev/null; then
+              echo "$NIGHTLY answered after ${i}s"; cat health.json; echo
+              curl -fsS -o /dev/null -w 'GET / -> %{http_code}\n' http://127.0.0.1:3457/
+              # This VM is ours alone; never a pid <= 1.
+              for p in $(lsof -tiTCP:3457 -sTCP:LISTEN 2>/dev/null) "$start_pid"; do
+                [ "$p" -gt 1 ] 2>/dev/null && kill -TERM "$p" 2>/dev/null || true
+              done
+              exit 0
+            fi
+            if ! kill -0 "$start_pid" 2>/dev/null; then
+              echo "::error::open-walnut web exited before serving"; tail -n 60 start.log; exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::$NIGHTLY never answered within 300s"; tail -n 60 start.log
+          [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
+          exit 1
+
+  promote:
+    name: Promote ${{ needs.promote-plan.outputs.nightly }} to ${{ needs.promote-plan.outputs.version }}
+    needs: [promote-plan, promote-smoke]
+    if: needs.promote-plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.promote-plan.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm install -g npm@12
+      - run: npm ci
+      # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
+      - name: Version it and publish it as latest
+        env:
+          WALNUT_VERSION_STAMPED: '1'
+          VERSION: ${{ needs.promote-plan.outputs.version }}
+        run: |
+          npm version "$VERSION" --no-git-tag-version
+          npm publish --provenance --access public
+      # Pushed with the job's token, so neither the tag nor the commit below starts a
+      # workflow: the tag cannot publish a second time through job `stable`.
+      - name: Tag it and open the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.promote-plan.outputs.version }}
+          SHA: ${{ needs.promote-plan.outputs.sha }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "v$VERSION" -m "Open Walnut $VERSION" "$SHA"
+          git push origin "refs/tags/v$VERSION"
+          gh release create "v$VERSION" --title "Open Walnut $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      # The package is out; this only keeps main's CHANGELOG and version in step.
+      - name: Roll CHANGELOG and package.json on main
+        env:
+          VERSION: ${{ needs.promote-plan.outputs.version }}
+        run: |
+          git checkout --quiet -- .
+          for attempt in 1 2 3; do
+            git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+            git checkout --quiet -B main origin/main
+            node scripts/stable-promote.mjs roll --version "$VERSION" --notes "$RUNNER_TEMP/notes.md"
+            git commit --quiet -am "release: $VERSION"
+            if git push --quiet origin main; then echo "main now says $VERSION"; exit 0; fi
+            echo "main moved during the push; trying again ($attempt)"
+          done
+          echo "::warning::open-walnut@$VERSION is published, but main's CHANGELOG and package.json were not rolled"

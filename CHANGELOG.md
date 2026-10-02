@@ -6,6 +6,14 @@ breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **Stable releases are automatic.** Every Tuesday the newest nightly that has been out for
+  two days becomes the next stable release when it carries a feature or a fix and installs
+  and starts on fresh Linux and macOS machines. A feature makes the next minor version, a fix
+  the next patch, and the notes come from this file (or the commit titles when nobody wrote
+  any). `npm run release` still cuts one by hand.
+
 ### Fixed
 
 - **A published build no longer calls itself dirty.** `open-walnut --version` on 0.6.0 reads

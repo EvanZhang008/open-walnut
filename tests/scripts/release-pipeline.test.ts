@@ -9,8 +9,10 @@
  * - scripts/ci-gate.mjs: what counts as "CI passed" on a commit, which commit a
  *   release tag is judged by, and which commit the nightly publishes.
  * - .github/workflows/release.yml: parses, publishes with provenance through
- *   OIDC (no token), gates the tag on package.json and on CI, and publishes the
- *   newest green commit as the nightly.
+ *   OIDC (no token), gates the tag on package.json and on CI, publishes the
+ *   newest green commit as the nightly, and promotes a soaked nightly to stable
+ *   once a week after a fresh-machine install of it (the plan itself is
+ *   tests/scripts/stable-promote.test.ts).
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -18,7 +20,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
-import { nightlyVersion } from '../../scripts/nightly-version.mjs'
+import { newerBase, nightlyVersion } from '../../scripts/nightly-version.mjs'
 import { pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
@@ -126,6 +128,28 @@ describe('nightlyVersion', () => {
     // After the 0.5.2 release the next nightly is a 0.5.3 prerelease, above 0.5.2.
     expect(compareVersions(nightlyVersion('0.5.2', new Date('2026-10-03T00:00:00Z'), 1), '0.5.2')).toBeGreaterThan(0)
   })
+
+  it('builds on the newer of package.json and the latest stable, so it never sorts below a release main has not caught up with', () => {
+    expect(newerBase('0.6.0', '0.7.0')).toBe('0.7.0')
+    expect(newerBase('0.7.0', '0.6.9')).toBe('0.7.0')
+    expect(newerBase('0.6.10', '0.6.9')).toBe('0.6.10')
+    expect(newerBase('0.6.0', '0.6.0')).toBe('0.6.0')
+    // npm unreachable or answering something odd: package.json alone.
+    expect(newerBase('0.6.0', undefined)).toBe('0.6.0')
+    expect(newerBase('0.6.0', '')).toBe('0.6.0')
+    expect(newerBase('0.6.0', '0.7.0-nightly.1')).toBe('0.6.0')
+    const nightly = nightlyVersion(newerBase('0.6.0', '0.7.0'), new Date('2026-10-07T00:00:00Z'), 1)
+    expect(nightly).toBe('0.7.1-nightly.20261007.1')
+    expect(compareVersions(nightly, '0.7.0')).toBeGreaterThan(0)
+  })
+
+  it('runs as the workflow calls it, taking the latest stable from the environment', () => {
+    const script = path.resolve(__dirname, '../../scripts/nightly-version.mjs')
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as { version: string }
+    const run = (latest: string) => execFileSync(process.execPath, [script], { encoding: 'utf8', env: { ...process.env, GITHUB_RUN_NUMBER: '3', WALNUT_LATEST_STABLE: latest } }).trim()
+    expect(run('99.0.0')).toMatch(/^99\.0\.1-nightly\.\d{8}\.3$/)
+    expect(run('')).toMatch(new RegExp(`^${nextVersion(pkg.version, 'patch').replace(/\./g, '\\.')}-nightly\\.\\d{8}\\.3$`))
+  })
 })
 
 describe('releaseNotes', () => {
@@ -220,10 +244,18 @@ describe('release.yml', () => {
   const runs = (job: string) => doc.jobs[job]!.steps.map((s) => s.run ?? '').join('\n')
   const stepIndex = (job: string, needle: string) => doc.jobs[job]!.steps.findIndex((s) => (s.run ?? '').includes(needle))
 
-  it('runs on release tags, a schedule and by hand', () => {
+  it('runs on release tags, two schedules and by hand, each job on its own', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
-    expect(doc.on.schedule).toEqual([{ cron: '17 5,17 * * *' }])
-    expect(doc.on).toHaveProperty('workflow_dispatch')
+    expect(doc.on.schedule).toEqual([{ cron: '17 5,17 * * *' }, { cron: '47 16 * * 2' }])
+    const dispatch = doc.on.workflow_dispatch as { inputs: Record<string, { options?: string[]; default?: unknown }> }
+    expect(dispatch.inputs.channel).toMatchObject({ options: ['nightly', 'stable'], default: 'nightly' })
+    expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17 5,17 * * *'")
+    expect(doc.jobs.nightly!.if).toContain("inputs.channel != 'stable'")
+    expect(doc.jobs['promote-plan']!.if).toContain("github.event.schedule == '47 16 * * 2'")
+    expect(doc.jobs['promote-plan']!.if).toContain("inputs.channel == 'stable'")
+    // Every schedule a job compares against is one the workflow has.
+    const crons = (doc.on.schedule as Array<{ cron: string }>).map((s) => s.cron)
+    for (const [, m] of text.matchAll(/github\.event\.schedule == '([^']+)'/g)) expect(crons).toContain(m)
   })
 
   it('publishes through OIDC with provenance and never a stored token', () => {
@@ -263,6 +295,40 @@ describe('release.yml', () => {
     expect(runs('stable')).toContain('node scripts/release-notes.mjs "$version" > release-notes.md')
     expect(text).not.toContain('node -e')
     expect(stepIndex('stable', 'release-notes.mjs')).toBeGreaterThan(stepIndex('stable', 'npm publish'))
+  })
+
+  it('a nightly after a stable release builds on that release', () => {
+    const publish = doc.jobs.nightly!.steps.find((s) => s.name?.includes('publish it'))!
+    expect(publish.run).toContain('WALNUT_LATEST_STABLE="$(npm view open-walnut@latest version')
+    expect(publish.run!.indexOf('export WALNUT_LATEST_STABLE')).toBeLessThan(publish.run!.indexOf('node scripts/nightly-version.mjs'))
+  })
+
+  it('the weekly stable installs the soaked nightly on fresh Linux and macOS before publishing it', () => {
+    const jobs = doc.jobs as Record<string, { needs?: string | string[]; if?: string; strategy?: { matrix: { os: string[] } }; steps: Array<{ run?: string; name?: string; uses?: string; with?: Record<string, string>; env?: Record<string, string> }> }>
+    expect(runs('promote-plan')).toContain('node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"')
+    expect(jobs['promote-smoke']!.needs).toBe('promote-plan')
+    expect(jobs['promote-smoke']!.if).toBe("needs.promote-plan.outputs.publish == 'true'")
+    expect(jobs['promote-smoke']!.strategy!.matrix.os).toEqual(['ubuntu-latest', 'macos-latest'])
+    const smoke = runs('promote-smoke')
+    expect(smoke).toContain('npm install -g npm@12')
+    expect(smoke).toContain('node scripts/stable-promote.mjs allow-scripts')
+    expect(smoke).toContain('npm install -g "open-walnut@$NIGHTLY" --allow-scripts="$allow"')
+    expect(smoke).toContain('HOME="$RUNNER_TEMP/home" open-walnut web')
+    expect(smoke).toContain('/api/system/health')
+    // Publishing waits for both smokes; a red one stops it.
+    expect(jobs.promote!.needs).toEqual(['promote-plan', 'promote-smoke'])
+    expect(jobs.promote!.if).toBe("needs.promote-plan.outputs.publish == 'true'")
+    const checkout = jobs.promote!.steps.find((s) => s.uses?.startsWith('actions/checkout'))
+    expect(checkout?.with?.ref).toBe('${{ needs.promote-plan.outputs.sha }}')
+    const publish = stepIndex('promote', 'npm publish --provenance --access public')
+    const tag = stepIndex('promote', 'git tag -a "v$VERSION"')
+    const roll = stepIndex('promote', 'node scripts/stable-promote.mjs roll')
+    expect(publish).toBeGreaterThan(stepIndex('promote', 'npm ci'))
+    expect(tag).toBeGreaterThan(publish)
+    expect(roll).toBeGreaterThan(tag)
+    expect(jobs.promote!.steps[publish]!.env?.WALNUT_VERSION_STAMPED).toBe('1')
+    expect(runs('promote')).toContain('gh release create "v$VERSION"')
+    expect(runs('promote')).toContain('git commit --quiet -am "release: $VERSION"')
   })
 
   it('package.json exposes the release command', () => {
