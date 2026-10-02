@@ -577,7 +577,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
 
   // Vector backfill: paced batches so a fresh index (~12k docs) embeds over
   // minutes of idle capacity, never in one event-loop-adjacent burst. The
-  // heavy work happens in the embed worker thread; the host side rides the
+  // heavy work happens in the embed worker process; the host side rides the
   // keyset cursor (one index walk per DRAIN, not a full table scan per batch
   // — the batches run on the production server's one event loop). A fresh
   // pass (cursor null) starts after each drain: upsert() drops a changed

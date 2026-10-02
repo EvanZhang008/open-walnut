@@ -1,12 +1,14 @@
 /**
- * hybrid-search embedding worker (worker_threads script).
+ * hybrid-search embedding worker (a child process the host forks over IPC).
  *
- * Lives in its own thread because model load (~10s cold) and tokenization are
+ * Lives in its own process because model load (~10s cold) and tokenization are
  * synchronous JS — running them on the host thread would freeze every route
  * in a web process (the exact incident class that killed the old engine's
  * reranker). ONNX inference itself runs in onnxruntime's native pool, but the
- * thread boundary makes the whole path unable to hurt the caller.
+ * process boundary makes the whole path unable to hurt the caller, a forced
+ * stop included (embedder.ts says why it is not a worker thread).
  *
+ * Config arrives as JSON in the EMBED_WORKER_CONFIG_ENV variable.
  * Protocol (host side: embedder.ts):
  *   in  : { id, texts: string[], recallK? }  texts arrive prefixed + truncated
  *   out : { id, buf: ArrayBuffer, dims, recall? }  Int8Array rows, one per text
@@ -23,7 +25,6 @@
  * connection and caches the matrix briefly (a recall lane tolerates staleness).
  */
 
-import { parentPort, workerData } from 'node:worker_threads';
 import { createRequire } from 'node:module';
 
 const requireModule = createRequire(import.meta.url);
@@ -48,7 +49,14 @@ interface Job {
   recallK?: number;
 }
 
-const config = (workerData ?? {}) as WorkerConfig;
+// Twin of EMBED_WORKER_CONFIG_ENV in embedder.ts (this entry imports nothing
+// from the host side, so its bundle stays the worker alone).
+const config = JSON.parse(process.env.HYBRID_SEARCH_EMBED_WORKER_CONFIG ?? '{}') as WorkerConfig;
+
+/** A reply to the host; dropped when the host has gone. */
+function reply(msg: object): void {
+  if (process.connected) process.send?.(msg, undefined, undefined, () => {});
+}
 
 /**
  * onnxruntime session thread caps. Left to its default, ort-node sizes its
@@ -184,8 +192,8 @@ function loadMatrix(): VecMatrix | null {
   if (!config.dbPath) return null;
   if (matrix && Date.now() - matrix.loadedAt < MATRIX_TTL_MS) return matrix;
   try {
-    // Own READONLY connection: WAL supports cross-thread readers, and this
-    // worker must never be able to write or lock the host's handle.
+    // Own READONLY connection: WAL supports readers in other processes, and
+    // this worker must never be able to write or lock the host's handle.
     const Database = requireModule('better-sqlite3') as typeof import('better-sqlite3');
     const db = new Database(config.dbPath, { readonly: true, fileMustExist: true });
     try {
@@ -244,23 +252,31 @@ function recallTopK(queryVec: Int8Array, k: number): Array<{ docId: number; cos:
 }
 
 /**
- * How this worker ends. worker.terminate() (or the process exiting) while
- * onnxruntime is inside a run aborts the WHOLE process: "libc++abi: terminating
- * due to uncaught exception of type Napi::Error", exit 134. That was the
- * production server dying on 2026-09-29 when the passage lane's idle reaper
- * fired after a wake with a backfill embed in flight. Ending the thread while
- * no run is active is safe, so the host sends { stop: true } and the worker
- * exits on its own once its jobs have finished.
+ * How this worker ends. Exiting while onnxruntime is inside a run aborts the
+ * process ("libc++abi: terminating due to uncaught exception of type
+ * Napi::Error", exit 134); when this was a worker thread, that took the host
+ * with it (the production server, 2026-09-29). So the worker still ends only
+ * between runs: the host sends { stop: true }, and a host that died without
+ * killing its workers on the way out (embedder.ts) closes the IPC channel;
+ * either way the worker exits once its jobs have finished. A run that never
+ * finishes is the host's to kill or, with the host gone, ends at
+ * ORPHAN_EXIT_MS.
  */
 let activeJobs = 0;
 let stopping = false;
+const ORPHAN_EXIT_MS = 30_000;
 
 function exitIfDrained(): void {
-  // process.exit in a worker ends this thread only.
   if (stopping && activeJobs === 0) process.exit(0);
 }
 
-parentPort?.on('message', (msg: Job | { stop: true }) => {
+process.on('disconnect', () => {
+  stopping = true;
+  exitIfDrained();
+  setTimeout(() => process.exit(0), ORPHAN_EXIT_MS).unref();
+});
+
+process.on('message', (msg: Job | { stop: true }) => {
   if ('stop' in msg) {
     stopping = true;
     exitIfDrained();
@@ -268,7 +284,7 @@ parentPort?.on('message', (msg: Job | { stop: true }) => {
   }
   const job = msg;
   if (stopping) {
-    parentPort?.postMessage({ id: job.id, error: 'embed worker stopping' });
+    reply({ id: job.id, error: 'embed worker stopping' });
     return;
   }
   activeJobs++;
@@ -284,9 +300,9 @@ parentPort?.on('message', (msg: Job | { stop: true }) => {
       const recall = job.recallK
         ? recallTopK(out.subarray(0, dims), job.recallK)
         : undefined;
-      parentPort?.postMessage({ id: job.id, buf: out.buffer, dims, recall }, [out.buffer]);
+      reply({ id: job.id, buf: out.buffer, dims, recall });
     } catch (err) {
-      parentPort?.postMessage({
+      reply({
         id: job.id,
         error: err instanceof Error ? err.message : String(err),
       });

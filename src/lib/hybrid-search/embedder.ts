@@ -2,13 +2,21 @@
  * Host-side handle for the embedding worker: lazy spawn, one in-flight map,
  * deadline-aware query embedding, crash containment.
  *
+ * The worker is a CHILD PROCESS, not a worker thread. Ending a thread while
+ * onnxruntime is inside a run aborts the whole host process (Napi::Error,
+ * exit 134): the production server on 2026-09-29, and a CI test process on
+ * 2026-10-02 when a model load outlived the stop grace. Killing a child process
+ * can only end that child, so a forced stop is always safe.
+ *
  * Failure philosophy: embedding is an ENHANCEMENT. Every failure mode here —
  * model missing, worker crash, deadline blown — degrades to `null`, and the
  * caller returns keyword results as-is. Nothing in this file may throw into
  * the search path.
  */
 
-import { Worker } from 'node:worker_threads';
+import { fork, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { LogFn } from './index.js';
 
 export interface EmbedderRuntimeConfig {
@@ -26,7 +34,7 @@ export interface EmbedderRuntimeConfig {
    *  caller must pass where its build put the worker entry. */
   workerPath?: string | URL;
   /** Index db file for the worker's own READONLY connection (semantic recall
-   *  lane). Omitted for :memory: indexes — a worker thread can't see them. */
+   *  lane). Omitted for :memory: indexes — another process can't see them. */
   dbPath?: string;
   /** How long a cached reply may still serve its RECALL list (default 20s).
    *  Test seam / tuning knob; the cached VECTOR has no expiry. */
@@ -71,6 +79,17 @@ const MAX_CONSECUTIVE_CRASHES = 3;
  *  forced. One passage embeds in well under this even on a loaded machine. */
 export const WORKER_STOP_GRACE_MS = 10_000;
 
+/** Environment variable carrying the worker's config (JSON) into the child. */
+export const EMBED_WORKER_CONFIG_ENV = 'HYBRID_SEARCH_EMBED_WORKER_CONFIG';
+
+interface WorkerMessage {
+  id: number;
+  buf?: ArrayBuffer;
+  dims?: number;
+  error?: string;
+  recall?: RecallHit[];
+}
+
 /**
  * Query-embedding LRU (per embedder instance, i.e. per index handle).
  *
@@ -111,6 +130,23 @@ interface Pending {
   count: number;
 }
 
+/**
+ * Workers alive in this process. A host that exits takes them with it: an
+ * orphaned worker would otherwise finish whatever batch it was in (minutes, on
+ * a loaded machine) for an answer nobody will read. Killing a child process
+ * cannot reach the host, and the host is exiting anyway.
+ */
+const liveWorkers = new Set<ChildProcess>();
+let exitHookArmed = false;
+function trackWorker(w: ChildProcess): void {
+  liveWorkers.add(w);
+  if (exitHookArmed) return;
+  exitHookArmed = true;
+  process.once('exit', () => {
+    for (const child of liveWorkers) child.kill('SIGKILL');
+  });
+}
+
 export function cosineInt8(a: Int8Array, b: Int8Array): number {
   let dot = 0;
   let na = 0;
@@ -148,36 +184,59 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
   const stopGraceMs = options.stopGraceMs ?? WORKER_STOP_GRACE_MS;
   let disposed = false;
 
-  function makeLane(role: string): Lane {
-    let worker: Worker | null = null;
+  /** holdOpen: a job in flight keeps the host process alive. The passage lane
+   *  does (its callers await every job); the query lane does not, because its
+   *  caller's deadline timer already holds the host for as long as it waits,
+   *  and a one-shot CLI that gave up on a query must not then wait for the
+   *  model to load. */
+  function makeLane(role: string, holdOpen: boolean): Lane {
+    let worker: ChildProcess | null = null;
     let nextId = 1;
     let crashes = 0;
     // Workers asked to stop. A stopping worker can outlive the next one's
     // spawn (it finishes its run first), so its exit must neither clear the
     // new worker's slot nor count as a crash.
-    const stopped = new WeakSet<Worker>();
+    const stopped = new WeakSet<ChildProcess>();
+    // Settles once a worker is gone for good (closed, or never started).
+    const closedOf = new WeakMap<ChildProcess, Promise<void>>();
     const pending = new Map<number, Pending>();
 
     function failAllPending(reason: string): void {
       for (const [, p] of pending) p.reject(new Error(reason));
       pending.clear();
+      if (worker) hold(worker, false);
     }
 
-    function getWorker(): Worker | null {
+    /** An idle worker never keeps the host alive (see holdOpen). */
+    function hold(w: ChildProcess, on: boolean): void {
+      if (on) { w.ref(); w.channel?.ref(); } else { w.unref(); w.channel?.unref(); }
+    }
+
+    function getWorker(): ChildProcess | null {
       if (disposed || crashes >= MAX_CONSECUTIVE_CRASHES) return null;
       if (worker) return worker;
       const scriptPath = config.workerPath ?? new URL('./embed-worker.js', import.meta.url);
-      let w: Worker;
+      const workerConfig = {
+        modelId: config.modelId,
+        dims: config.dims,
+        dtype: config.dtype,
+        cacheDir: config.cacheDir,
+        pooling: config.pooling,
+        dbPath: config.dbPath,
+      };
+      let w: ChildProcess;
       try {
-        w = new Worker(scriptPath, {
-          workerData: {
-            modelId: config.modelId,
-            dims: config.dims,
-            dtype: config.dtype,
-            cacheDir: config.cacheDir,
-            pooling: config.pooling,
-            dbPath: config.dbPath,
-          },
+        const file = scriptPath instanceof URL || scriptPath.startsWith('file:') ? fileURLToPath(scriptPath) : scriptPath;
+        // Not built: no process to start (it would only print a stack and exit).
+        if (!fs.existsSync(file)) throw new Error(`no worker script at ${file}`);
+        w = fork(file, [], {
+          // 'advanced' carries the ArrayBuffer replies; JSON would not.
+          serialization: 'advanced',
+          // The worker is compiled JS: a host's loader or inspector flags
+          // (tsx, vitest, --inspect) must not follow it.
+          execArgv: [],
+          env: { ...process.env, [EMBED_WORKER_CONFIG_ENV]: JSON.stringify(workerConfig) },
+          stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
         });
       } catch (err) {
         crashes++;
@@ -189,14 +248,9 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         return null;
       }
       worker = w;
-      w.unref();
-      w.on('message', (msg: {
-        id: number;
-        buf?: ArrayBuffer;
-        dims?: number;
-        error?: string;
-        recall?: RecallHit[];
-      }) => {
+      let markClosed!: () => void;
+      closedOf.set(w, new Promise<void>((resolve) => { markClosed = resolve; }));
+      w.on('message', (msg: WorkerMessage) => {
         // Only a SUCCESSFUL reply proves health. Resetting on error replies (or
         // counting any reply) lets a worker that answers a few batches and then
         // dies on a poison input reload the model forever without ever tripping
@@ -205,6 +259,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         const p = pending.get(msg.id);
         if (!p) return; // terminated: failAllPending already settled it
         pending.delete(msg.id);
+        if (pending.size === 0 && worker === w) hold(w, false);
         if (msg.error !== undefined || !msg.buf || !msg.dims) {
           p.reject(new Error(msg.error ?? 'embed worker returned no data'));
           return;
@@ -216,24 +271,39 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         }
         p.resolve({ rows, recall: msg.recall ?? [] });
       });
-      w.on('error', (err) => {
-        log('warn', 'hybrid-search: embed worker error', {
-          role,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-      w.on('exit', (code) => {
+      let gone = false;
+      const onGone = (code: number | null, signal: NodeJS.Signals | null): void => {
+        if (gone) return;
+        gone = true;
+        liveWorkers.delete(w);
+        markClosed();
         if (worker === w) worker = null;
         if (disposed || stopped.has(w)) return;
         crashes++;
-        failAllPending(`embed worker exited (code ${code})`);
+        failAllPending(`embed worker exited (${signal ?? `code ${code}`})`);
         if (crashes >= MAX_CONSECUTIVE_CRASHES) {
           log('error', 'hybrid-search: embed worker crashed repeatedly — semantic lane disabled for this process', {
             role,
             crashes,
           });
         }
+      };
+      w.on('error', (err) => {
+        log('warn', 'hybrid-search: embed worker error', {
+          role,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // A process that never started emits no exit of its own.
+        if (w.pid === undefined) onGone(null, null);
       });
+      // 'close' comes after the IPC channel has delivered every message the
+      // worker sent before it exited; 'exit' can come before them.
+      w.on('close', onGone);
+      // An idle worker keeps no host alive: a one-shot CLI exits when its own
+      // work is done, and the worker follows (it exits when its channel
+      // closes, embed-worker.ts).
+      hold(w, false);
+      trackWorker(w);
       return w;
     }
 
@@ -244,7 +314,13 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         const id = nextId++;
         const promise = new Promise<WorkerReply>((resolve, reject) => {
           pending.set(id, { resolve, reject, count: texts.length });
-          w.postMessage({ id, texts, ...(recallK ? { recallK } : {}) });
+          if (holdOpen) hold(w, true);
+          w.send({ id, texts, ...(recallK ? { recallK } : {}) }, (err) => {
+            if (!err || !pending.has(id)) return;
+            pending.delete(id);
+            if (pending.size === 0 && worker === w) hold(w, false);
+            reject(err);
+          });
         });
         return { id, promise };
       },
@@ -257,18 +333,26 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         stopped.add(w);
         worker = null;
         failAllPending('embed worker terminated');
-        // Never worker.terminate() a run in flight: it aborts the whole process
-        // (embed-worker.ts). The worker finishes its run and exits on its own;
-        // only a run that outlives the grace is forced. The timer stays ref'd
-        // so a shutdown that awaits this cannot exit under a live run.
-        const exited = new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => resolve(false), stopGraceMs);
-          w.once('exit', () => { clearTimeout(timer); resolve(true); });
-        });
-        w.postMessage({ stop: true });
-        if (await exited) return;
-        log('warn', 'hybrid-search: embed worker did not stop in time — forcing it', { role, graceMs: stopGraceMs });
-        await w.terminate();
+        // The worker finishes its run and exits on its own, so a model load or
+        // an inference is never cut short for nothing; only a run that outlives
+        // the grace is killed, which ends the worker process and nothing else.
+        // The worker is ref'd again from here on, so a shutdown that awaits
+        // this cannot exit before the worker has (the unref'd handles would
+        // let a one-shot host's loop end with this promise still pending).
+        hold(w, true);
+        const closed = closedOf.get(w) ?? Promise.resolve();
+        // A worker already gone answers through its callback; nothing to do.
+        w.send({ stop: true }, () => {});
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const exited = await Promise.race([
+          closed.then(() => true),
+          new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), stopGraceMs); }),
+        ]);
+        clearTimeout(timer);
+        if (exited) return;
+        log('warn', 'hybrid-search: embed worker did not stop in time — killing it', { role, graceMs: stopGraceMs });
+        w.kill('SIGKILL');
+        await closed;
       },
     };
   }
@@ -277,8 +361,8 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
   // every later query hits a warm, never-contended worker. The passage lane
   // holds a SECOND model copy, so it exists only while embedding work exists —
   // reaped after idle, steady-state RAM is one model, not two.
-  const queryLane = makeLane('query');
-  const passageLane = makeLane('passage');
+  const queryLane = makeLane('query', false);
+  const passageLane = makeLane('passage', true);
   const PASSAGE_IDLE_KILL_MS = options.passageIdleMs ?? 5 * 60_000;
   let passageIdleTimer: ReturnType<typeof setTimeout> | undefined;
   function armPassageReaper(): void {

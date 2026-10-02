@@ -26,6 +26,10 @@ breaking changes).
   subfolder at a time, and a folder that vanished while it was being read (each note save
   makes and removes a short-lived lock folder) was an error nobody handled, so the server
   exited. Those errors are now logged and watching carries on.
+- **Stopping the search model can no longer crash the server.** The model ran on a thread
+  inside the server, and ending that thread in the middle of a model run (an idle stop
+  firing after the Mac woke, a shutdown, the server exiting) aborted the whole server. It
+  now runs in a process of its own, which is the only thing a forced stop can end.
 - **A published build no longer calls itself dirty.** `open-walnut --version` on 0.6.0 reads
   `33eb1cb+dirty` because the release rewrote a stale `web/package-lock.json` while it built.
   The lockfile is current again, CI and the release jobs install with `npm ci` (which never

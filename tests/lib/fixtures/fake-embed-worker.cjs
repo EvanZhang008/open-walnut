@@ -5,7 +5,10 @@
  * workerData carries a dbPath, it runs the same level-0 KNN the real worker
  * does — against that fixed query vector.
  */
-const { parentPort, workerData } = require('node:worker_threads');
+// The host forks this as a child process (embedder.ts) with its config in
+// this variable, and talks to it over IPC.
+const workerData = JSON.parse(process.env.HYBRID_SEARCH_EMBED_WORKER_CONFIG || '{}');
+const send = (msg) => { if (process.connected) process.send(msg, undefined, undefined, () => {}); };
 const DIMS = 4;
 
 function recallTopK(k) {
@@ -33,11 +36,11 @@ function recallTopK(k) {
   }
 }
 
-parentPort.on('message', (msg) => {
+process.on('message', (msg) => {
   // The host's stop request (embedder.ts terminate): nothing runs here, so exit.
   if (msg && msg.stop) process.exit(0);
   const { id, texts, recallK } = msg;
   const buf = new Int8Array(texts.length * DIMS);
   for (let i = 0; i < texts.length; i++) buf[i * DIMS] = 127;
-  parentPort.postMessage({ id, buf: buf.buffer, dims: DIMS, recall: recallK ? recallTopK(recallK) : undefined });
+  send({ id, buf: buf.buffer, dims: DIMS, recall: recallK ? recallTopK(recallK) : undefined });
 });
