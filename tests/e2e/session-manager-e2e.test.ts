@@ -17,9 +17,11 @@
  *  10. Health API: daemon status, session counts
  *
  * What's real: Express server, WebSocket, event bus, session tracker, SessionManager,
- *   RemoteSessionManager, DaemonConnection, health monitor.
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs),
- *   SSH (bypassed via directWsUrl for remote sessions).
+ *   RemoteSessionManager, DaemonConnection, health monitor, and the session daemon
+ *   (the JS twin, which serves both local and remote sessions as in production).
+ * What's mocked: constants.js (temp dir), Claude CLI (a `claude` on the daemon's PATH
+ *   that runs mock-claude.mjs), SSH (bypassed via directWsUrl for remote sessions; `ssh`
+ *   itself is a refusing stand-in, so readers that still dial the host stay off it).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -31,10 +33,10 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { startDaemonTwin, type DaemonTwin } from '../helpers/daemon-twin.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -42,7 +44,8 @@ const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs
 
 let server: HttpServer
 let port: number
-let daemon: MockDaemon
+let daemon: DaemonTwin | null = null
+const savedEnv: Record<string, string | undefined> = {}
 
 function apiUrl(p: string): string { return `http://localhost:${port}${p}` }
 function wsUrl(): string { return `ws://localhost:${port}/ws` }
@@ -179,13 +182,24 @@ function seedTask(id: string, title: string) {
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  await fs.mkdir(WALNUT_HOME, { recursive: true })
 
-  // Start MockDaemon for remote session tests
-  daemon = await createMockDaemon()
+  // Hermetic environment: the health monitor and history reader dial a configured
+  // host through the regular SSH pool, so `ssh` is a refusing stand-in (the host
+  // here is `localhost`, whose daemon could be the user's own). The server's local
+  // daemon expands ~ to the test home, where the mock CLI writes its transcript.
+  const shimDir = path.join(WALNUT_HOME, 'bin-shim')
+  await fs.mkdir(shimDir, { recursive: true })
+  await fs.writeFile(path.join(shimDir, 'ssh'), '#!/bin/sh\necho "ssh: disabled in this test" >&2\nexit 255\n', { mode: 0o755 })
+  for (const k of ['PATH', 'WALNUT_HOME_OVERRIDE', 'MOCK_CLAUDE_TRANSCRIPT_DIR']) savedEnv[k] = process.env[k]
+  process.env.PATH = `${shimDir}:${process.env.PATH}`
+  process.env.WALNUT_HOME_OVERRIDE = WALNUT_HOME
+  process.env.MOCK_CLAUDE_TRANSCRIPT_DIR = path.join(CLAUDE_HOME, 'projects')
 
-  // Wire mock CLI + daemon URL
+  // The real daemon serves local and remote sessions alike
+  daemon = await startDaemonTwin({ home: WALNUT_HOME, mockCli: MOCK_CLI })
   sessionRunner.setCliCommand(MOCK_CLI)
-  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
+  sessionRunner.setTestDaemonUrl(daemon.url)
 
   // Seed tasks
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -213,7 +227,7 @@ beforeAll(async () => {
     'hosts:',
     '  mock-remote:',
     '    hostname: localhost',
-    '    use_daemon: true',
+    '    user: testuser',
   ].join('\n'))
 
   // Start server
@@ -226,11 +240,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   sessionRunner.setTestDaemonUrl(undefined)
-  stopServer()
-  await daemon.stop()
-  await delay(500)
+  await stopServer()
+  // Up to ~8s: the isolated-dir daemon reaps its live CLIs on the way out
+  await daemon?.stop()
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
-}, 15000)
+})
 
 
 // ═══════════════════════════════════════════════════════════════════
@@ -340,6 +358,14 @@ describe('Remote multi-turn conversation', () => {
       const taskSessions = await fetch(apiUrl(`/api/sessions/task/mgr-remote-001`))
       const taskBody = await taskSessions.json() as { sessions: unknown[] }
       expect(taskBody.sessions.length).toBe(1)
+
+      // The task links the remote session (ssh-session's hosts refuse SSH, so this is
+      // where a remote session's task link is covered)
+      await vi.waitFor(async () => {
+        const taskRes = await fetch(apiUrl('/api/tasks/mgr-remote-001'))
+        const { task } = await taskRes.json() as { task: { session_ids?: string[] } }
+        expect(task.session_ids ?? []).toContain(sessionId)
+      }, { timeout: 15_000, interval: 200 })
     } finally {
       ws.close()
     }
@@ -886,10 +912,12 @@ describe('Session history', () => {
   it('local session history contains JSONL messages', async () => {
     const ws = await connectWs()
     try {
+      // snapshot-clean-turn makes the mock CLI write the canonical transcript
+      // (~/.claude/projects/<cwd>/<sid>.jsonl) that the history reader serves.
       const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-007',
-        message: 'history test message',
+        message: 'snapshot-clean-turn:history test message',
       })
       const result = await resultPromise
       const sessionId = result.data!.sessionId as string
@@ -898,11 +926,10 @@ describe('Session history', () => {
 
       // Fetch history via REST API
       const histRes = await fetch(apiUrl(`/api/sessions/${sessionId}/history`))
-      if (histRes.ok) {
-        const histBody = await histRes.json() as { messages: unknown[] }
-        // Should have some messages (init, assistant, result at minimum)
-        expect(histBody.messages.length).toBeGreaterThanOrEqual(1)
-      }
+      expect(histRes.status).toBe(200)
+      const histBody = await histRes.json() as { messages: unknown[] }
+      // Should have some messages (init, assistant, result at minimum)
+      expect(histBody.messages.length).toBeGreaterThanOrEqual(1)
     } finally {
       ws.close()
     }

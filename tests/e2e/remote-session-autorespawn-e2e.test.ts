@@ -26,6 +26,8 @@ import { RemoteSessionManager } from '../../src/providers/remote-session-manager
 import type { SshTarget } from '../../src/providers/session-io.js'
 
 const fakeSshTarget: SshTarget = { hostname: 'localhost' }
+// The shim ignores its args; these are the real CLI's, for a realistic spawn record.
+const CLI_ARGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json']
 
 interface DaemonProc {
   proc: ChildProcess
@@ -43,9 +45,32 @@ async function writeDaemonScript(): Promise<string> {
   return p
 }
 
+/**
+ * RemoteSessionManager always launches `claude` (it prepends it to the args),
+ * so the daemon must find a stand-in, never the machine's real CLI (CI has
+ * none; a dev box would run the real one). A fake HOME holds a `claude` that
+ * just stays alive like the long-running CLI; PATH is pinned to system dirs and
+ * SHELL=/bin/sh so neither the real rc files nor the real claude are reached.
+ */
+function fakeHomeWithClaude(daemonDir: string): string {
+  const home = path.join(daemonDir, 'home')
+  const bin = path.join(home, '.local', 'bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  return home
+}
+
 async function spawnDaemon(daemonDir: string): Promise<DaemonProc> {
-  const env = { ...process.env, WALNUT_DAEMON_DIR: daemonDir }
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: fakeHomeWithClaude(daemonDir),
+    SHELL: '/bin/sh',
+    PATH: '/usr/bin:/bin',
+    WALNUT_DAEMON_DIR: daemonDir,
+  }
+  for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME']) delete env[k]
+  // execPath, not 'node': spawn resolves the command on env.PATH, pinned above.
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env, stdio: ['ignore', 'pipe', 'pipe'], detached: false,
   })
   const port = await new Promise<number>((resolve, reject) => {
@@ -84,6 +109,13 @@ afterAll(async () => {
 describe('RemoteSessionManager → real daemon full chain', () => {
   let daemon: DaemonProc
   let daemonDir: string
+  let transports: RemoteSessionManager[] = []
+
+  function newTransport(sid: string): RemoteSessionManager {
+    const t = new RemoteSessionManager(sid, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
+    transports.push(t)
+    return t
+  }
 
   beforeEach(async () => {
     daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-daemon-data-'))
@@ -91,20 +123,26 @@ describe('RemoteSessionManager → real daemon full chain', () => {
   })
 
   afterEach(async () => {
+    // Close each transport's private connection BEFORE the daemon goes away:
+    // a live one would treat the daemon's exit as a dropped link and start an
+    // SSH reconnect loop against the stand-in hostname.
+    for (const t of transports) (t as unknown as { conn: { disconnect(): void } | null }).conn?.disconnect()
+    transports = []
     await stopDaemon(daemon)
     try { await fsp.rm(daemonDir, { recursive: true, force: true }) } catch {}
+    try { await fsp.rm(`${daemonDir}-streams`, { recursive: true, force: true }) } catch {}
   })
 
   // ─────────────────────────────────────────────────────────────────────
   it('external SIGKILL on session process → onExit fires via session_state', async () => {
     const sid = `full-chain-${Date.now()}`
-    const transport = new RemoteSessionManager(sid, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
+    const transport = newTransport(sid)
 
     const lines: string[] = []
     let exitCode: number | null = null
 
     const result = await transport.start({
-      args: ['/bin/sleep', '60'],
+      args: CLI_ARGS,
       cwd: '/tmp',
       message: 'init\n',
       onOutput: (ev) => { lines.push(ev.line) },
@@ -130,11 +168,11 @@ describe('RemoteSessionManager → real daemon full chain', () => {
   // ─────────────────────────────────────────────────────────────────────
   it('writeMessage to dead session returns false (strict ack, no silent drop)', async () => {
     const sid = `strict-ack-${Date.now()}`
-    const transport = new RemoteSessionManager(sid, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
+    const transport = newTransport(sid)
 
     let exitCalled = false
     const result = await transport.start({
-      args: ['/bin/sleep', '60'],
+      args: CLI_ARGS,
       cwd: '/tmp',
       message: 'init\n',
       onOutput: () => {},
@@ -158,10 +196,10 @@ describe('RemoteSessionManager → real daemon full chain', () => {
   // ─────────────────────────────────────────────────────────────────────
   it('writeMessage on healthy session returns true', async () => {
     const sid = `happy-path-${Date.now()}`
-    const transport = new RemoteSessionManager(sid, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
+    const transport = newTransport(sid)
 
     const result = await transport.start({
-      args: ['/bin/sleep', '60'],
+      args: CLI_ARGS,
       cwd: '/tmp',
       message: 'init\n',
       onOutput: () => {},

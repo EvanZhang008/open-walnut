@@ -2,11 +2,17 @@
 /**
  * Standalone MockDaemon process — runs outside vitest's module system.
  * Prints the port on stdout, then handles WebSocket commands.
- * Used by remote-session-e2e.test.ts to avoid vitest module isolation issues.
+ * Used by the session e2e files that want the daemon in a separate process.
+ *
+ * Session commands answer with the real daemon's reply shapes (daemon-core.ts
+ * handleSendCommand / handleSendRawCommand, daemon-standalone cmdStop), the same
+ * ones tests/helpers/mock-daemon.ts mirrors. It does not answer `hello`, so the
+ * server treats it as a daemon without the optional capabilities: no snapshots,
+ * and session status comes from the server's own (legacy) path.
  *
  * Usage: node mock-daemon-process.mjs
  * Prints: PORT=<number>\n
- * Stop: kill the process or send SIGTERM
+ * Stop: kill the process or send SIGTERM. It also exits when its parent dies.
  */
 
 import { WebSocketServer, WebSocket } from 'ws'
@@ -44,8 +50,14 @@ wss.on('connection', (ws) => {
 // Signal port to parent
 process.stdout.write(`PORT=${port}\n`)
 
+// A SIGKILLed test run must not leave this daemon (and its mock CLIs) behind.
+const parentPid = process.ppid
+setInterval(() => {
+  try { process.kill(parentPid, 0) } catch { shutdown() }
+}, 2000).unref()
+
 // Cleanup on exit
-process.on('SIGTERM', () => {
+function shutdown() {
   for (const [, s] of sessions) {
     if (s.pollTimer) clearInterval(s.pollTimer)
     if (s.proc && s.exitCode === null) try { s.proc.kill('SIGTERM') } catch {}
@@ -54,7 +66,8 @@ process.on('SIGTERM', () => {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
     process.exit(0)
   })
-})
+}
+process.on('SIGTERM', shutdown)
 
 function handleMessage(ws, raw) {
   let cmd
@@ -65,6 +78,8 @@ function handleMessage(ws, raw) {
     case 'start': return cmdStart(ws, id, cmd)
     case 'attach': return cmdAttach(ws, id, cmd)
     case 'send': return cmdSend(ws, id, cmd)
+    case 'sendRaw': return cmdSendRaw(ws, id, cmd)
+    case 'appendUserMarker': return cmdAppendUserMarker(ws, id, cmd)
     case 'stop': return cmdStop(ws, id, cmd)
     case 'status': return cmdStatus(ws, id, cmd)
     case 'ping': return sendOk(ws, id, { pong: true })
@@ -81,6 +96,9 @@ function cmdStart(ws, id, cmd) {
   const cwd = cmd.cwd || tmpDir
   const message = cmd.message || ''
   const resume = cmd.resume ?? false
+
+  // The real daemon refuses a cwd that does not exist on its host
+  if (!fs.existsSync(cwd)) return sendError(ws, id, `start: cwd does not exist on this host (mock): ${cwd}`)
 
   const streamsDir = path.join(tmpDir, 'streams')
   const pipePath = path.join(streamsDir, `${sid}.pipe`)
@@ -103,25 +121,11 @@ function cmdStart(ws, id, cmd) {
   const outputFd = fs.openSync(jsonlPath, resume ? 'a' : 'w')
   const stderrFd = fs.openSync(jsonlPath + '.err', resume ? 'a' : 'w')
 
-  const cliArgs = ['-p', '--output-format', 'stream-json', '--verbose']
-  if (resume && sid) cliArgs.push('--resume', sid)
-
-  // Forward CLI flags from the transport's args array (e.g. --model, --permission-mode)
-  if (Array.isArray(cmd.args)) {
-    for (let i = 0; i < cmd.args.length; i++) {
-      const arg = cmd.args[i]
-      if (arg === '--model' || arg === '--permission-mode' || arg === '--append-system-prompt') {
-        if (cmd.args[i + 1]) {
-          cliArgs.push(arg, cmd.args[++i])
-        }
-      } else if (arg === '--dangerously-skip-permissions' || arg === '--allow-dangerously-skip-permissions') {
-        // Forward either spelling — see tests/providers/mock-claude.mjs for why
-        // Walnut spawns the `--allow-` form.
-        cliArgs.push(arg)
-      }
-    }
-  }
-
+  // Like the real daemon, run the transport's args verbatim (args[0] is the
+  // `claude` the mock CLI stands in for): every flag reaches the CLI, including
+  // --session-id, --input-format and --resume.
+  const cliArgs = Array.isArray(cmd.args) ? cmd.args.slice(1) : ['-p', '--output-format', 'stream-json', '--verbose']
+  if (resume && sid && !cliArgs.includes('--resume')) cliArgs.push('--resume', sid)
   if (message) cliArgs.push(message)
 
   const proc = spawn(process.execPath, [MOCK_CLI, ...cliArgs], {
@@ -130,8 +134,14 @@ function cmdStart(ws, id, cmd) {
     env: { ...process.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
   })
 
+  // A spawn that fails (ENOENT) ends this session, never the daemon
   proc.on('error', (err) => {
     process.stderr.write(`[MockDaemon] spawn error for sid=${sid}: ${err.message}\n`)
+    session.exitCode = 1
+    if (session.pollTimer) clearInterval(session.pollTimer)
+    session.pollTimer = null
+    sendEvent(ws, 'exit', { sid, code: 1, error: err.message })
+    markExited()
   })
 
   process.stderr.write(`[MockDaemon] spawned mock-claude pid=${proc.pid} sid=${sid} cli=${MOCK_CLI} args=${JSON.stringify(cliArgs)}\n`)
@@ -143,15 +153,22 @@ function cmdStart(ws, id, cmd) {
   // For resume, start polling from current file size to avoid replaying old events.
   // Without this, the previous turn's result gets re-sent, causing duplicate SESSION_RESULT.
   const initialOffset = resume ? (() => { try { return fs.statSync(jsonlPath).size } catch { return 0 } })() : 0
-  const session = { proc, pid: proc.pid, pipePath, jsonlPath, pollTimer: null, offset: initialOffset, exitCode: null }
+  let markExited
+  const exited = new Promise((resolve) => { markExited = resolve })
+  const session = { proc, pid: proc.pid, pipePath, jsonlPath, pollTimer: null, offset: initialOffset, exitCode: null, exited }
 
   proc.on('exit', (code) => {
     session.exitCode = code ?? 1
     setTimeout(() => {
-      pollJsonl(ws, sid, session)
       if (session.pollTimer) clearInterval(session.pollTimer)
       session.pollTimer = null
-      sendEvent(ws, 'exit', { sid, code: session.exitCode })
+      // The real daemon's generation guard: a process a newer start replaced
+      // (a cold --resume) must not report its exit as the new process's
+      if (sessions.get(sid) === session) {
+        pollJsonl(ws, sid, session)
+        sendEvent(ws, 'exit', { sid, code: session.exitCode })
+      }
+      markExited()
     }, 100)
   })
 
@@ -195,24 +212,96 @@ function cmdAttach(ws, id, cmd) {
   sendOk(ws, id, { pid: session.pid, alive: session.exitCode === null })
 }
 
+// Strict-ack replies, as daemon-core's handleSendCommand: a delivery problem is
+// {ok:false, reason} inside a successful envelope, never a protocol error.
 function cmdSend(ws, id, cmd) {
-  const session = sessions.get(cmd.sid)
-  if (!session) return sendError(ws, id, `session not found: ${cmd.sid}`)
-  try {
-    const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: cmd.message } })
-    const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-    fs.writeSync(fd, Buffer.from(payload + '\n'))
-    fs.closeSync(fd)
-    sendOk(ws, id, {})
-  } catch (err) { sendError(ws, id, `write failed: ${err.message}`) }
+  if (!cmd.sid || !cmd.message) return sendError(ws, id, 'send: missing sid or message')
+  const payload = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: cmd.message },
+    ...(typeof cmd.uuid === 'string' ? { uuid: cmd.uuid } : {}),
+  })
+  writeFifo(ws, id, cmd.sid, payload + '\n', 'send')
 }
 
+/** daemon-core handleSendRawCommand: a complete JSON line (control_request /
+ *  control_response) written verbatim, with the same strict-ack replies. */
+function cmdSendRaw(ws, id, cmd) {
+  if (!cmd.sid || !cmd.raw) return sendError(ws, id, 'sendRaw: missing sid or raw')
+  writeFifo(ws, id, cmd.sid, cmd.raw.endsWith('\n') ? cmd.raw : cmd.raw + '\n', 'sendRaw')
+}
+
+function writeFifo(ws, id, sid, line, what) {
+  const session = sessions.get(sid)
+  if (!session) return sendOk(ws, id, { ok: false, reason: 'not_found' })
+  if (session.exitCode !== null) return sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: reapExitCode(session) })
+  try {
+    const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    try { fs.writeSync(fd, Buffer.from(line)) } finally { fs.closeSync(fd) }
+    sendOk(ws, id, { ok: true })
+  } catch (err) {
+    // A readerless FIFO means the CLI is gone: the real daemon reaps it and
+    // answers with reapSession's normalized exit code.
+    if (err.code === 'ENXIO') return sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
+    if (err.code === 'EAGAIN') return sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
+    sendError(ws, id, `${what} failed: ${err.message}`)
+  }
+}
+
+/** reapSession's exit-code normalization (daemon-core isTurnCompleteExit): a CLI
+ *  whose stream ends in a completed, non-error turn exited cleanly (0). */
+function reapExitCode(session) {
+  const code = session.exitCode ?? -1
+  if (code === 0) return 0
+  try {
+    const stat = fs.statSync(session.jsonlPath)
+    const len = Math.min(stat.size, 8192)
+    const buf = Buffer.alloc(len)
+    const fd = fs.openSync(session.jsonlPath, 'r')
+    try { fs.readSync(fd, buf, 0, len, stat.size - len) } finally { fs.closeSync(fd) }
+    const lines = buf.toString('utf-8').split('\n').map((l) => l.trim()).filter(Boolean)
+    const last = JSON.parse(lines[lines.length - 1] ?? '')
+    const failed = last.subtype === 'error_max_turns' || last.subtype === 'error_during_execution'
+    return last.type === 'result' && !failed ? 0 : code
+  } catch { return code }
+}
+
+/** daemon-core handleAppendUserMarker: the walnut-injected turn-start marker. */
+function cmdAppendUserMarker(ws, id, cmd) {
+  const { sid, message, messageId } = cmd
+  if (!sid || !message || !messageId) return sendError(ws, id, 'appendUserMarker: missing sid, message, or messageId')
+  const session = sessions.get(sid)
+  if (!session) return sendOk(ws, id, { ok: false, reason: 'not_found' })
+  try {
+    fs.appendFileSync(session.jsonlPath, JSON.stringify({
+      type: 'user',
+      subtype: 'walnut-injected',
+      message: { role: 'user', content: message },
+      walnutMessageId: messageId,
+      timestamp: new Date().toISOString(),
+    }) + '\n')
+    sendOk(ws, id, { ok: true, size: fs.statSync(session.jsonlPath).size })
+  } catch (err) { sendError(ws, id, `appendUserMarker failed: ${err.message}`) }
+}
+
+// daemon-standalone stopSessionProcess: SIGINT, SIGTERM at 5s, and `stopped:true`
+// only once the process is gone (here: after its exit event went out), an error
+// at 7s. A session already gone is a confirmed no-op. RemoteSessionManager.stop()
+// reads anything without `stopped:true` as "the daemon did not confirm".
 function cmdStop(ws, id, cmd) {
   const session = sessions.get(cmd.sid)
-  if (!session?.proc) return sendOk(ws, id, {})
+  if (!session?.proc) return sendOk(ws, id, { stopped: true, noop: true, reason: session ? 'already_exited' : 'not_in_registry' })
+  if (session.exitCode !== null) return sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' })
   try { session.proc.kill('SIGINT') } catch {}
-  setTimeout(() => { if (session.exitCode === null && session.proc) try { session.proc.kill('SIGTERM') } catch {} }, 2000)
-  sendOk(ws, id, {})
+  const term = setTimeout(() => { if (session.exitCode === null) try { session.proc.kill('SIGTERM') } catch {} }, 5000)
+  let giveUp
+  const timedOut = new Promise((resolve) => { giveUp = setTimeout(() => resolve(false), 7000) })
+  void Promise.race([session.exited.then(() => true), timedOut]).then((gone) => {
+    clearTimeout(term)
+    clearTimeout(giveUp)
+    if (gone) sendOk(ws, id, { stopped: true })
+    else sendError(ws, id, 'stop: process did not exit after SIGTERM')
+  })
 }
 
 function cmdStatus(ws, id, cmd) {

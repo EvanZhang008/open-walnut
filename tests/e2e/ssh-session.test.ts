@@ -1,14 +1,22 @@
 /**
- * E2E tests for SSH remote session invocation — real server + mock SSH.
+ * E2E tests for dialing a configured SSH host: real server + a recording `ssh`.
  *
- * What's real: Express server, WebSocket connections, event bus, session-tracker
- * persistence, task-manager linking, config resolution, REST endpoints.
- * What's mocked: constants.js (temp dir), ssh binary (mock-ssh.mjs via PATH override).
+ * Since 08182ce3 (2026-03-22) every session on a configured host runs through the
+ * session daemon: Walnut opens an SSH ControlMaster to user@hostname, deploys and
+ * starts the daemon there, and talks to it through a tunnel. The old transport
+ * (`ssh host claude -p ...` read over stdout, built by buildRemoteCommand) was
+ * removed in that commit, and with it the tests that asserted its remote command.
  *
- * Tests verify the full pipeline:
- *   WS RPC session:start { host } → SessionRunner.handleStart → config.hosts lookup →
- *   ClaudeCodeSession.send(sshTarget) → spawn('ssh', ...) → mock SSH → JSONL stream →
- *   bus events → WS broadcast → REST API confirms persistence with host field.
+ * These tests pin the SSH half: the host string and options Walnut dials with, and
+ * that a host it cannot reach fails the start cleanly. The `ssh` on PATH records
+ * every invocation and refuses like an unreachable host (exit 255), so nothing
+ * leaves this machine. A session's result, record and task link over a working
+ * daemon are covered by remote-session-e2e and session-manager-e2e.
+ *
+ * What's real: Express server, WebSocket connections, event bus, session runner,
+ *   config hosts lookup, DaemonConnection's SSH dialing, REST endpoints.
+ * What's mocked: constants.js (temp dir), the ssh binary (a recorder via PATH
+ *   override). No Claude CLI runs: nothing can be spawned on a host that refuses SSH.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -25,18 +33,50 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 
-// Path to the real mock SSH script
-const MOCK_SSH_SCRIPT = path.resolve(import.meta.dirname, '../providers/mock-ssh.mjs')
-// Path to the mock claude script (used as cliCommand for the SessionRunner for non-SSH paths)
+// Every start here names a host that refuses SSH, so no CLI is ever spawned (the
+// last test checks that no session ran on this machine)
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
 // ── Helpers ──
 
 let server: HttpServer
 let port: number
-/** Directory containing the mock 'ssh' wrapper script */
+/** Directory containing the recording 'ssh' */
 let mockSshBinDir: string
+/** One JSON line per ssh invocation: its argv */
+let sshRecordFile: string
 let originalPath: string | undefined
+
+function sshCalls(): string[][] {
+  let text = ''
+  try { text = fsp.readFileSync(sshRecordFile, 'utf-8') } catch { return [] }
+  return text.split('\n').filter(Boolean).map((l) => JSON.parse(l) as string[])
+}
+
+/** Connections opened to a host. Skips `ssh -G` (a local config query) and
+ *  `ssh -O` (a command to the local ControlMaster socket): neither dials. */
+function sshDialsTo(userAtHost: string): string[][] {
+  return sshCalls().filter((argv) => argv.includes(userAtHost) && !argv.includes('-G') && !argv.includes('-O'))
+}
+
+/** The values of every `-o <option>` pair in an ssh argv. */
+function sshOptions(argv: string[]): string[] {
+  return argv.flatMap((a, i) => (a === '-o' && i + 1 < argv.length ? [argv[i + 1]] : []))
+}
+
+/** Resolves with the first `eventName` event for `taskId`; never rejects. */
+function nextTaskEvent(ws: WebSocket, eventName: string, taskId: string): Promise<WsEvent> {
+  return new Promise((resolve) => {
+    const handler = (raw: WebSocket.RawData) => {
+      const frame = JSON.parse(raw.toString()) as WsEvent
+      if (frame.type === 'event' && frame.name === eventName && frame.data?.taskId === taskId) {
+        ws.off('message', handler)
+        resolve(frame)
+      }
+    }
+    ws.on('message', handler)
+  })
+}
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -61,21 +101,6 @@ interface WsEvent {
   [key: string]: unknown
 }
 
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
-}
-
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
   return new Promise((resolve, reject) => {
     const id = `rpc-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -97,34 +122,31 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-/** Poll a check function until it returns true (or throw after timeoutMs). */
-async function pollUntil(check: () => Promise<boolean>, intervalMs = 100, timeoutMs = 10000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await check()) return
-    await delay(intervalMs)
-  }
-  throw new Error(`pollUntil timed out after ${timeoutMs}ms`)
-}
-
 // ── Setup / Teardown ──
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
-  // 1. Create a mock 'ssh' wrapper script that delegates to mock-ssh.mjs.
-  //    We place it in a temp bin directory and prepend that directory to PATH
-  //    so spawn('ssh', ...) finds our mock instead of the real ssh binary.
+  // 1. A recording 'ssh' first on PATH, so spawn('ssh', ...) finds it instead of
+  //    the real binary. It answers every call like a host that refuses SSH.
   mockSshBinDir = path.join(os.tmpdir(), `mock-ssh-bin-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   await fs.mkdir(mockSshBinDir, { recursive: true })
-  const mockSshWrapper = path.join(mockSshBinDir, 'ssh')
-  await fs.writeFile(mockSshWrapper, `#!/bin/sh\nexec node "${MOCK_SSH_SCRIPT}" "$@"\n`, { mode: 0o755 })
+  sshRecordFile = path.join(mockSshBinDir, 'calls.jsonl')
+  const recorder = path.join(mockSshBinDir, 'ssh-recorder.mjs')
+  await fs.writeFile(recorder, [
+    "import fs from 'node:fs'",
+    `fs.appendFileSync(${JSON.stringify(sshRecordFile)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
+    "process.stderr.write('ssh: connect to host port 22: Connection refused\\n')",
+    'process.exit(255)',
+  ].join('\n') + '\n')
+  await fs.writeFile(path.join(mockSshBinDir, 'ssh'),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(recorder)} "$@"\n`, { mode: 0o755 })
 
   // Prepend mock bin dir to PATH
   originalPath = process.env.PATH
   process.env.PATH = `${mockSshBinDir}:${process.env.PATH}`
 
-  // 2. Wire mock CLI into session runner for non-SSH sessions
+  // 2. Wire mock CLI into session runner
   const { sessionRunner } = await import('../../src/providers/claude-code-session.js')
   sessionRunner.setCliCommand(MOCK_CLI)
 
@@ -250,14 +272,21 @@ afterAll(async () => {
   }
 })
 
-// ── SSH session via WS RPC ──
+// ── Dialing a configured host ──
+
+/** The outcome of the first test's start: settled by session:error or session:result. */
+let refusedStart: Promise<WsEvent> | null = null
+let refusedStartWs: WebSocket | null = null
 
 describe('SSH session start via WS RPC', () => {
-  it('session:start with host spawns SSH and produces session:result', async () => {
+  it('session:start with host dials user@hostname over SSH in batch mode', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    refusedStartWs = ws
+    refusedStart = Promise.race([
+      nextTaskEvent(ws, 'session:error', 'ssh-task-001'),
+      nextTaskEvent(ws, 'session:result', 'ssh-task-001'),
+    ])
 
-    // Start a session with explicit host
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'ssh-task-001',
       message: 'hello from ssh e2e',
@@ -267,172 +296,61 @@ describe('SSH session start via WS RPC', () => {
     })
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
-    // Wait for the session to complete
-    const resultEvent = await resultPromise
-    const rd = resultEvent.data as {
-      sessionId: string
-      taskId: string
-      result: string
-      isError: boolean
+    await vi.waitFor(() => expect(sshDialsTo('testuser@localhost').length).toBeGreaterThan(0),
+      { timeout: 20_000, interval: 100 })
+    for (const argv of sshDialsTo('testuser@localhost')) {
+      expect(sshOptions(argv)).toEqual(expect.arrayContaining(['BatchMode=yes', 'StrictHostKeyChecking=no']))
+      // The removed stdout transport ran the CLI as the remote command
+      expect(argv.some((a) => /\bclaude\b[^|;&]*\s'?(-p|--print)'?(\s|$)/.test(a))).toBe(false)
     }
-
-    expect(rd.taskId).toBe('ssh-task-001')
-    expect(rd.isError).toBe(false)
-    expect(rd.sessionId).toBeTruthy()
-    expect(rd.result).toContain('Remote session completed successfully')
-
-    ws.close()
-    await delay(50)
   })
 
-  it('session record persists with host field', async () => {
-    // The previous test started a session for ssh-task-001. Check the session record.
-    await delay(1000)
+  it('a host that refuses SSH fails the start with session:error, and no session completes', async () => {
+    expect(refusedStart).not.toBeNull()
+    const outcome = await refusedStart!
+    refusedStartWs?.close()
+    expect(outcome.name).toBe('session:error')
+    expect(outcome.data?.taskId).toBe('ssh-task-001')
+    expect(typeof outcome.data?.error).toBe('string')
+    expect((outcome.data!.error as string).length).toBeGreaterThan(0)
 
     const res = await fetch(apiUrl('/api/sessions/task/ssh-task-001'))
     expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      sessions: Array<{
-        taskId: string
-        claudeSessionId: string
-        host?: string
-      }>
+    const body = (await res.json()) as { sessions: Array<{ host?: string; process_status?: string }> }
+    const onHost = body.sessions.filter((s) => s.host === 'test-host')
+    for (const s of onHost) {
+      expect(s.process_status).not.toBe('stopped')
+      expect(s.process_status).not.toBe('running')
     }
-    expect(body.sessions.length).toBeGreaterThanOrEqual(1)
-
-    // Find the session that has a host field
-    const sshSession = body.sessions.find((s) => s.host === 'test-host')
-    expect(sshSession).toBeDefined()
-    expect(sshSession!.claudeSessionId).toBeTruthy()
-    expect(sshSession!.host).toBe('test-host')
-  })
-
-  it('SSH was spawned with correct arguments (verified via stderr file)', async () => {
-    // The session from the first test should have a stderr file (.err) containing
-    // the SSH arguments written by mock-ssh.mjs.
-    const res = await fetch(apiUrl('/api/sessions/task/ssh-task-001'))
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      sessions: Array<{
-        claudeSessionId: string
-        host?: string
-        outputFile?: string
-      }>
-    }
-
-    const sshSession = body.sessions.find((s) => s.host === 'test-host')
-    expect(sshSession).toBeDefined()
-
-    // Read the stderr file written by mock-ssh.mjs
-    // The output file is the JSONL path; stderr is at .err
-    const outputFile = sshSession!.outputFile
-    expect(outputFile).toBeTruthy()
-    const stderrFile = outputFile + '.err'
-
-    let stderrContent: string
-    try {
-      stderrContent = fsp.readFileSync(stderrFile, 'utf-8')
-    } catch {
-      // The stderr file might have been renamed along with the JSONL file.
-      // Try the session ID-based path.
-      const sessionDir = path.dirname(outputFile!)
-      const stderrBySessionId = path.join(sessionDir, `${sshSession!.claudeSessionId}.jsonl.err`)
-      stderrContent = fsp.readFileSync(stderrBySessionId, 'utf-8')
-    }
-
-    // Verify SSH was called (not claude directly)
-    expect(stderrContent).toContain('SSH_ARGS:')
-    expect(stderrContent).toContain('REMOTE_CMD:')
-    expect(stderrContent).toContain('HOST_ARG:')
-
-    // Parse the remote command from stderr
-    const remoteCmdMatch = stderrContent.match(/REMOTE_CMD:(.+)/)
-    expect(remoteCmdMatch).toBeTruthy()
-    const remoteCmd = remoteCmdMatch![1]
-
-    // Verify remote command includes cd and CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
-    expect(remoteCmd).toContain("cd '/tmp/test-ssh'")
-    expect(remoteCmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
-    expect(remoteCmd).toContain('claude')
-
-    // Verify host argument includes user@hostname
-    const hostArgMatch = stderrContent.match(/HOST_ARG:(.+)/)
-    expect(hostArgMatch).toBeTruthy()
-    expect(hostArgMatch![1]).toBe('testuser@localhost')
-
-    // Verify SSH options were passed
-    const sshArgsMatch = stderrContent.match(/SSH_ARGS:(.+)/)
-    expect(sshArgsMatch).toBeTruthy()
-    const sshArgs = JSON.parse(sshArgsMatch![1]) as string[]
-    expect(sshArgs).toContain('-o')
-    expect(sshArgs).toContain('BatchMode=yes')
-    expect(sshArgs).toContain('StrictHostKeyChecking=no')
-  })
+  }, 90_000)
 })
 
 // ── SSH session with port ──
 
 describe('SSH session with custom port', () => {
-  it('session:start with port-host includes -p flag in SSH args', async () => {
+  it('session:start with port-host dials admin@remotebox.example.com with -p 2222', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
-
-    const rpcRes = await sendWsRpc(ws, 'session:start', {
-      taskId: 'ssh-task-002',
-      message: 'port test via ssh',
-      project: 'RemoteProject',
-      host: 'port-host',
-      cwd: '/tmp/test-ssh-port',
-    })
-    expect((rpcRes as Record<string, unknown>).ok).toBe(true)
-
-    const resultEvent = await resultPromise
-    const rd = resultEvent.data as { isError: boolean; sessionId: string }
-    expect(rd.isError).toBe(false)
-
-    // Verify the session record has the correct host
-    await delay(500)
-    const res = await fetch(apiUrl('/api/sessions/task/ssh-task-002'))
-    const body = (await res.json()) as {
-      sessions: Array<{
-        claudeSessionId: string
-        host?: string
-        outputFile?: string
-      }>
-    }
-    const portSession = body.sessions.find((s) => s.host === 'port-host')
-    expect(portSession).toBeDefined()
-
-    // Read stderr to verify -p 2222 was passed
-    const outputFile = portSession!.outputFile
-    expect(outputFile).toBeTruthy()
-
-    let stderrContent: string
     try {
-      const stderrFile = outputFile + '.err'
-      stderrContent = fsp.readFileSync(stderrFile, 'utf-8')
-    } catch {
-      const sessionDir = path.dirname(outputFile!)
-      const stderrBySessionId = path.join(sessionDir, `${portSession!.claudeSessionId}.jsonl.err`)
-      stderrContent = fsp.readFileSync(stderrBySessionId, 'utf-8')
+      const rpcRes = await sendWsRpc(ws, 'session:start', {
+        taskId: 'ssh-task-002',
+        message: 'port test via ssh',
+        project: 'RemoteProject',
+        host: 'port-host',
+        cwd: '/tmp/test-ssh-port',
+      })
+      expect((rpcRes as Record<string, unknown>).ok).toBe(true)
+
+      await vi.waitFor(() => expect(sshDialsTo('admin@remotebox.example.com').length).toBeGreaterThan(0),
+        { timeout: 20_000, interval: 100 })
+      for (const argv of sshDialsTo('admin@remotebox.example.com')) {
+        const portIdx = argv.indexOf('-p')
+        expect(portIdx).toBeGreaterThan(-1)
+        expect(argv[portIdx + 1]).toBe('2222')
+        expect(sshOptions(argv)).toEqual(expect.arrayContaining(['BatchMode=yes', 'StrictHostKeyChecking=no']))
+      }
+    } finally {
+      ws.close()
     }
-
-    const sshArgsMatch = stderrContent.match(/SSH_ARGS:(.+)/)
-    expect(sshArgsMatch).toBeTruthy()
-    const sshArgs = JSON.parse(sshArgsMatch![1]) as string[]
-
-    // Verify port flag: -p 2222
-    const portIdx = sshArgs.indexOf('-p')
-    expect(portIdx).toBeGreaterThan(-1)
-    expect(sshArgs[portIdx + 1]).toBe('2222')
-
-    // Verify user@hostname
-    const hostArgMatch = stderrContent.match(/HOST_ARG:(.+)/)
-    expect(hostArgMatch).toBeTruthy()
-    expect(hostArgMatch![1]).toBe('admin@remotebox.example.com')
-
-    ws.close()
-    await delay(50)
   })
 })
 
@@ -476,68 +394,14 @@ describe('SSH session error handling', () => {
     )
     expect(nonexistentHostSessions).toHaveLength(0)
 
-    ws.close()
-    await delay(50)
-  })
-})
-
-// ── Task links to SSH session ──
-
-describe('SSH session task linking', () => {
-  it('task has session_ids populated after SSH session completes', async () => {
-    const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
-
-    await sendWsRpc(ws, 'session:start', {
-      taskId: 'ssh-task-001',
-      message: 'task linking test',
-      project: 'RemoteProject',
-      host: 'test-host',
-      cwd: '/tmp/test-ssh',
-    })
-
-    await resultPromise
-
-    // Poll until session_ids is populated on the task
-    let taskBody: { task: { session_ids?: string[]; exec_session_id?: string } } | undefined
-    await pollUntil(async () => {
-      const taskRes = await fetch(apiUrl('/api/tasks/ssh-task-001'))
-      if (taskRes.status !== 200) return false
-      taskBody = (await taskRes.json()) as { task: { session_ids?: string[]; exec_session_id?: string } }
-      return (taskBody.task.session_ids?.length ?? 0) > 0
-    })
-
-    expect(taskBody).toBeDefined()
-    expect(taskBody!.task.session_ids!.length).toBeGreaterThan(0)
+    // Nothing in this file ran a session on this machine (a local session would
+    // reach the local daemon and its real `claude`)
+    const allRes = await fetch(apiUrl('/api/sessions'))
+    expect(allRes.status).toBe(200)
+    const all = (await allRes.json()) as { sessions: Array<{ host?: string | null }> }
+    for (const s of all.sessions) expect(['test-host', 'port-host']).toContain(s.host)
 
     ws.close()
     await delay(50)
-  })
-})
-
-// ── Verify remote command structure (buildRemoteCommand) ──
-
-describe('Remote command structure', () => {
-  it('buildRemoteCommand produces correct cd + env + claude command', async () => {
-    // Import the exported helper directly for a unit-level check
-    const { buildRemoteCommand, shellQuote } = await import('../../src/providers/claude-code-session.js')
-
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', 'hello world']
-    const cmd = buildRemoteCommand(args, '/home/user/project')
-
-    expect(cmd).toContain("cd '/home/user/project'")
-    expect(cmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
-    expect(cmd).toContain('claude')
-    expect(cmd).toContain("'-p'")
-    expect(cmd).toContain("'hello world'")
-
-    // Without cwd
-    const cmdNoCwd = buildRemoteCommand(args)
-    expect(cmdNoCwd).not.toContain('cd ')
-    expect(cmdNoCwd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude')
-
-    // shellQuote handles single quotes
-    expect(shellQuote("it's")).toBe("'it'\\''s'")
-    expect(shellQuote('simple')).toBe("'simple'")
   })
 })

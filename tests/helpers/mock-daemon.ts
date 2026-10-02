@@ -577,7 +577,11 @@ export class MockDaemon {
       // so writeRaw() resolves false and callers take their no-FIFO fallback
       // exactly like production.
       const code = (err as NodeJS.ErrnoException).code
-      if (code === 'ENXIO') return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
+      // A readerless FIFO means the CLI is gone. The real daemon reaps it here and
+      // answers with reapSession's normalized code: 0 when the stream ends in a
+      // completed turn (the mock CLI exits right after its result, so a control
+      // request sent at turn end races that exit), never a blanket -1.
+      if (code === 'ENXIO') return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
       if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
       this.sendError(ws, id, `sendRaw write failed: ${(err as Error).message}`)
     }
@@ -1014,6 +1018,29 @@ export class MockDaemon {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ ev, ...data }))
     }
+  }
+}
+
+/**
+ * The exit code daemon-core's reapSession reports for a dead CLI: its own code
+ * (-1 while the death is only seen as a readerless FIFO), normalized to 0 when
+ * the stream file's last line is a completed turn's `result` (isTurnCompleteExit).
+ */
+function reapExitCode(session: DaemonSession): number {
+  const code = session.exitCode ?? -1
+  if (code === 0) return 0
+  try {
+    const stat = fs.statSync(session.jsonlPath)
+    const len = Math.min(stat.size, 8192)
+    const buf = Buffer.alloc(len)
+    const fd = fs.openSync(session.jsonlPath, 'r')
+    try { fs.readSync(fd, buf, 0, len, stat.size - len) } finally { fs.closeSync(fd) }
+    const lines = buf.toString('utf-8').split('\n').map((l) => l.trim()).filter(Boolean)
+    const last = JSON.parse(lines[lines.length - 1] ?? '') as { type?: string; subtype?: string }
+    const failed = last.subtype === 'error_max_turns' || last.subtype === 'error_during_execution'
+    return last.type === 'result' && !failed ? 0 : code
+  } catch {
+    return code
   }
 }
 

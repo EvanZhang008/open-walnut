@@ -12,7 +12,7 @@
  *   - Claude CLI replaced by `cat` (long-lived, reads stdin FIFO, writes to output)
  *   - No SSH — we talk to 127.0.0.1:<port> directly
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -267,6 +267,12 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
   })
 
   // ─────────────────────────────────────────────────────────────────
+  // The restart here is a CRASH (SIGKILL, the shape an OOM kill takes): no exit
+  // path runs, so the CLI must survive and the successor must adopt it from
+  // sessions.json. A clean SIGTERM is a different contract on a test dir: an
+  // isolated-dir daemon reaps its CLI groups on exit, since no successor will
+  // ever adopt them (only the production dir and the managed service keep
+  // them); the next test pins that.
   it('Phase C — registry persists across daemon restart, live session gets adopted', async () => {
     const ws1 = await connectWs(daemon!.port)
     const sid = `e2e-reconcile-live-${Date.now()}`
@@ -286,8 +292,10 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
     expect(registryContent.sessions[sid]).toBeTruthy()
     expect(registryContent.sessions[sid].pid).toBe(pid)
 
-    // Stop daemon via SIGTERM (should NOT kill session)
-    await stopDaemon(daemon!)
+    // Crash the daemon (it never runs cleanup, so it cannot touch the session)
+    const exited = new Promise<void>((resolve) => daemon!.proc.once('exit', () => resolve()))
+    daemon!.proc.kill('SIGKILL')
+    await exited
 
     // Session process must still be alive
     let stillAlive = false
@@ -315,6 +323,25 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
     // Cleanup: kill the orphan sleep ourselves
     try { process.kill(pid, 'SIGKILL') } catch {}
   })
+
+  // ─────────────────────────────────────────────────────────────────
+  it('Phase C: a clean SIGTERM on an isolated dir ends the live session (nothing will adopt it)', async () => {
+    const ws1 = await connectWs(daemon!.port)
+    const sid = `e2e-isolated-exit-${Date.now()}`
+    const started = await sendCmd(ws1, {
+      cmd: 'start', sid, args: ['/bin/sleep', '60'], cwd: '/tmp', message: 'init\n',
+    })
+    const pid = started.pid as number
+    expect(pid).toBeGreaterThan(0)
+    ws1.close()
+
+    // Wait for the daemon's own exit (its reap ladder can outlast stopDaemon's
+    // 3s grace), then the session's group must be gone.
+    const exited = new Promise<void>((resolve) => daemon!.proc.once('exit', () => resolve()))
+    daemon!.proc.kill('SIGTERM')
+    await exited
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000, interval: 50 })
+  }, 30_000)
 
   // ─────────────────────────────────────────────────────────────────
   it('Phase C — dead session in registry gets reaped on reconcile', async () => {

@@ -1,11 +1,15 @@
 /**
- * Full server E2E tests for remote sessions via MockDaemon.
+ * Full server E2E tests for remote sessions against the REAL session daemon.
  *
- * Tests the complete flow: WebSocket RPC → SessionRunner → RemoteSessionManager → MockDaemon → mock-claude.
+ * Tests the complete flow: WebSocket RPC → SessionRunner → RemoteSessionManager → daemon → mock-claude.
  * Verifies session:start, session:send, session records, health API, and error recovery.
  *
- * What's real: Express server, WebSocket, event bus, session runner, session tracker, RemoteSessionManager.
- * What's mocked: SSH (bypassed via directWsUrl), Claude CLI (mock-claude.mjs via MockDaemon).
+ * What's real: Express server, WebSocket, event bus, session runner, session tracker,
+ *   RemoteSessionManager, and the daemon (the JS twin, so its reaps, exit-code
+ *   normalization and snapshots are the production ones).
+ * What's mocked: SSH (bypassed via directWsUrl; `ssh` itself is a refusing stand-in, so
+ *   the readers that still dial the host directly never reach a real machine), Claude
+ *   CLI (a `claude` on the daemon's PATH that runs mock-claude.mjs).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -17,18 +21,17 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
+import { WALNUT_HOME, TASKS_FILE, CLAUDE_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { startDaemonTwin, type DaemonTwin } from '../helpers/daemon-twin.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
-const MOCK_DAEMON_SCRIPT = path.resolve(import.meta.dirname, '../helpers/mock-daemon-process.mjs')
 
 let server: HttpServer
 let port: number
-let daemonProc: ChildProcess | null = null
-let daemonPort: number
+let daemon: DaemonTwin | null = null
+const savedEnv: Record<string, string | undefined> = {}
 
 // ── WS Helpers (same pattern as other E2E tests) ──
 
@@ -114,25 +117,23 @@ beforeAll(async () => {
     ].join('\n') + '\n',
   )
 
-  // 4. Start MockDaemon as subprocess (avoids vitest module isolation issues with ws)
-  daemonPort = await new Promise<number>((resolve, reject) => {
-    daemonProc = spawn(process.execPath, [MOCK_DAEMON_SCRIPT], { stdio: ['pipe', 'pipe', 'inherit'] })
-    let buf = ''
-    daemonProc.stdout!.on('data', (chunk: Buffer) => {
-      buf += chunk.toString()
-      const match = buf.match(/PORT=(\d+)/)
-      if (match) resolve(parseInt(match[1], 10))
-    })
-    daemonProc.on('error', reject)
-    daemonProc.on('exit', (code) => {
-      if (!buf.includes('PORT=')) reject(new Error(`MockDaemon exited with code ${code}`))
-    })
-    setTimeout(() => reject(new Error('MockDaemon startup timeout')), 10000)
-  })
+  // 4. Hermetic environment. Session start/send go to the daemon below, but the
+  //    health monitor and history reader dial a configured host through the regular
+  //    SSH pool: a refusing `ssh` stand-in keeps them off any real machine (here the
+  //    host is `localhost`, whose daemon could be the user's own). The server's local
+  //    daemon expands ~ to the test home, where the mock CLI writes its transcript.
+  const shimDir = path.join(WALNUT_HOME, 'bin-shim')
+  await fs.mkdir(shimDir, { recursive: true })
+  await fs.writeFile(path.join(shimDir, 'ssh'), '#!/bin/sh\necho "ssh: disabled in this test" >&2\nexit 255\n', { mode: 0o755 })
+  for (const k of ['PATH', 'WALNUT_HOME_OVERRIDE', 'MOCK_CLAUDE_TRANSCRIPT_DIR']) savedEnv[k] = process.env[k]
+  process.env.PATH = `${shimDir}:${process.env.PATH}`
+  process.env.WALNUT_HOME_OVERRIDE = WALNUT_HOME
+  process.env.MOCK_CLAUDE_TRANSCRIPT_DIR = path.join(CLAUDE_HOME, 'projects')
 
-  // 5. Configure session runner
-  sessionRunner.setCliCommand(MOCK_CLI)        // for local sessions
-  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemonPort}`)  // for remote sessions
+  // 5. The real daemon stands in for the remote host's (and serves local sessions too)
+  daemon = await startDaemonTwin({ home: WALNUT_HOME, mockCli: MOCK_CLI })
+  sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(daemon.url)
 
   // 6. Start server
   server = await startServer({ port: 0, dev: true })
@@ -146,9 +147,10 @@ beforeAll(async () => {
 afterAll(async () => {
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
-  if (daemonProc) {
-    daemonProc.kill('SIGTERM')
-    daemonProc = null
+  await daemon?.stop()
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
   }
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -704,11 +706,13 @@ describe('Session status during follow-up execution', () => {
   it('follow-up sets process_status to running, then to idle (remote session)', async () => {
     const ws = await connectWs()
     try {
-      // Start a session
+      // Start a session. snapshot-clean-turn keeps the mock CLI alive after its
+      // result, like the real stream-json CLI: a one-shot mock exits at its result,
+      // and the daemon then (correctly) reports the dead CLI as 'stopped', not idle.
       const startResult = waitForWsEvent(ws, 'session:result', 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
-        message: 'slow:2000 status lifecycle test',
+        message: 'slow:2000 snapshot-clean-turn:status lifecycle test',
         host: 'mock-remote',
       })
       const result1 = await startResult
@@ -725,7 +729,7 @@ describe('Session status during follow-up execution', () => {
         await new Promise(r => setTimeout(r, 300))
       }
 
-      // Send a slow follow-up (2s delay) and capture status transitions
+      // Send a follow-up to the live CLI and capture status transitions
       const statusChanges: Array<{ process_status: string }> = []
       const statusHandler = (data: WebSocket.Data) => {
         try {
@@ -741,24 +745,22 @@ describe('Session status during follow-up execution', () => {
       ws.on('message', statusHandler)
 
       const followUpResult = waitForWsEvent(ws, 'session:result', 30000)
-      await sendWsRpc(ws, 'session:send', { sessionId, message: 'slow:2000 status follow-up' })
+      await sendWsRpc(ws, 'session:send', { sessionId, message: 'snapshot-clean-turn:status follow-up' })
       await followUpResult
 
       // Wait a bit for final status events to settle
       await new Promise(r => setTimeout(r, 2000))
       ws.removeListener('message', statusHandler)
 
-      // Status should have gone through: running → idle (remote session result)
-      // Remote sessions go idle after result (not stopped) to allow follow-up messages.
+      // Status should have gone through: running → idle (the CLI is still alive
+      // after its result, so the session waits for the next message).
       const runningEvents = statusChanges.filter(s => s.process_status === 'running')
       const idleEvents = statusChanges.filter(s => s.process_status === 'idle')
 
       // Must have at least one running transition
       expect(runningEvents.length).toBeGreaterThanOrEqual(1)
 
-      // Remote sessions should transition to idle (may also later transition to stopped
-      // when the mock process exits, but idle should appear first)
-      expect(idleEvents.length).toBeGreaterThanOrEqual(1)
+      expect(idleEvents.length, JSON.stringify(statusChanges)).toBeGreaterThanOrEqual(1)
     } finally {
       ws.close()
     }
@@ -773,12 +775,13 @@ describe('Session history API', () => {
   it('GET /api/sessions/:id/history returns messages for a local session', async () => {
     const ws = await connectWs()
     try {
-      // Use a LOCAL session (no host) — local sessions tail the output file directly,
-      // avoiding the daemon JSONL relay race condition that can cause missing events.
+      // A LOCAL session (no host). History is read from the CLI's canonical
+      // transcript (~/.claude/projects), which the mock CLI writes only in its
+      // snapshot-clean-turn mode (the real long-running FIFO CLI's turn shape).
       const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
-        message: 'history api test',
+        message: 'snapshot-clean-turn:history api test',
         cwd: '/tmp',
       })
       const result = await resultPromise
