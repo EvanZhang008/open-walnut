@@ -36,7 +36,7 @@ import {
 import {
   expireOrphanedPermissionNotifications, expireStaleErrorNotifications,
   unresolvedErrorRecoveryKeys,
-  KEYLESS_ERROR_DEBRIS_MS, RESOLVED_ERROR_RETENTION_MS,
+  KEYLESS_ERROR_DEBRIS_MS, RESOLVED_ERROR_RETENTION_MS, QUIET_ROUTE_ERROR_MS,
 } from '../../../src/core/notifications/permission-expiry.js';
 import { addTask, completeTask, _resetForTesting as _resetTasksForTesting } from '../../../src/core/task-manager.js';
 import {
@@ -338,6 +338,24 @@ describe('expireStaleErrorNotifications', () => {
     expect(await resolvedOfKey('logerr:web:oldhash2')).toBe('expired');
     expect(await resolvedOfKey('logerr:web:freshhash')).toBeUndefined();
     expect(await resolvedOfKey('logerr:web:keyed')).toBeUndefined();
+  });
+
+  it('QUIET ROUTES: a route card nobody has seen repeat in a week is expired; a recent one and a plugin one are not', async () => {
+    // A route card retires on that route's next answer, which needs a caller: the
+    // voice-transcribe 507 sat for a week because nobody used voice input.
+    await seedError('error:route-old', { ageMs: QUIET_ROUTE_ERROR_MS + 60_000, recoveryKey: 'route:POST /api/stt/transcribe' });
+    await seedError('error:route-recent', { ageMs: QUIET_ROUTE_ERROR_MS - 3600_000, recoveryKey: 'route:GET /api/x' });
+    // A repeat folded in yesterday keeps a week-old first sighting alive.
+    await seedError('error:route-repeating', { ageMs: QUIET_ROUTE_ERROR_MS + 3600_000, recoveryKey: 'route:GET /api/y' });
+    await seedError('error:route-repeating', { ageMs: 24 * 3600_000, recoveryKey: 'route:GET /api/y' });
+    await seedError('error:plugin-old', { ageMs: 30 * 24 * 3600_000, recoveryKey: 'plugin:plugin-a' });
+
+    const out = await expireStaleErrorNotifications();
+    expect(out.keylessDebris).toBe(1);
+    expect(await resolvedOfKey('error:route-old')).toBe('expired');
+    expect(await resolvedOfKey('error:route-recent')).toBeUndefined();
+    expect(await resolvedOfKey('error:route-repeating')).toBeUndefined();
+    expect(await resolvedOfKey('error:plugin-old')).toBeUndefined();
   });
 
   it('never re-badges the bell — a settle is not news', async () => {

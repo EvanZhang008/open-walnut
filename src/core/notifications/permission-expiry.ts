@@ -30,7 +30,7 @@
 
 import {
   listNotifications, resolvePermissionNotification,
-  expireErrorNotifications, expireKeylessErrorNotifications,
+  expireErrorNotifications, expireKeylessErrorNotifications, expireQuietErrorNotifications,
   pruneResolvedErrorNotifications,
   type NotificationRecord,
 } from './store.js';
@@ -116,6 +116,16 @@ export async function expireOrphanedPermissionNotifications(): Promise<number> {
  * ever resolve it" is the honest reading.
  */
 export const KEYLESS_ERROR_DEBRIS_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * A `route:` card whose last occurrence is older than this is expired.
+ *
+ * A route card retires when that route answers again, which needs someone to
+ * call it: a 507 on the voice-transcribe route from a full disk sat for a week
+ * because nobody used voice input in that week. A failure nobody has seen repeat
+ * in seven days is not a live error; the next one raises a fresh card.
+ */
+export const QUIET_ROUTE_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * RESOLVED error records older than this leave the feed entirely.
@@ -246,8 +256,10 @@ export async function expireStaleErrorNotifications(
       }
     }
 
-    // ── 2. Pre-lifecycle debris ──
+    // ── 2. Pre-lifecycle debris, and route failures nobody has seen in a week ──
     const { expired: debris } = await expireKeylessErrorNotifications(KEYLESS_ERROR_DEBRIS_MS, now);
+    const { expired: quietRoutes } = await expireQuietErrorNotifications('route:', QUIET_ROUTE_ERROR_MS, now);
+    debris.push(...quietRoutes);
     keylessDebris = debris.length;
     if (keylessDebris > 0) {
       log.notif.info('expired pre-lifecycle error debris (keyless, unresolvable)', {

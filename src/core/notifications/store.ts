@@ -759,6 +759,42 @@ export async function expireKeylessErrorNotifications(
 }
 
 /**
+ * Stamp `expired` on unresolved error records whose key matches `keyPrefix` and
+ * whose LATEST occurrence is older than `olderThanMs`.
+ *
+ * For conditions that recover only when someone exercises them again (a route
+ * card retires on that route's next answer): a failure nobody has seen repeat
+ * for that long is not a live error, and the next occurrence raises a fresh card.
+ */
+export async function expireQuietErrorNotifications(
+  keyPrefix: string,
+  olderThanMs: number,
+  now = Date.now(),
+): Promise<{ expired: NotificationRecord[] }> {
+  const cutoff = now - olderThanMs;
+  const snapshot = await readStoreOrNull();
+  if (snapshot && !snapshot.notifications.some(
+    n => n.kind === 'operation-error' && !n.resolved && !!n.recoveryKey?.startsWith(keyPrefix)
+      && (n.lastTimestamp ?? n.timestamp) <= cutoff,
+  )) {
+    return { expired: [] };
+  }
+  return withWriteLock(() => withStore((store) => {
+    const expired: NotificationRecord[] = [];
+    for (const rec of store.notifications) {
+      if (rec.kind !== 'operation-error' || rec.resolved) continue;
+      if (!rec.recoveryKey?.startsWith(keyPrefix)) continue;
+      if ((rec.lastTimestamp ?? rec.timestamp) > cutoff) continue;
+      rec.resolved = 'expired';
+      rec.resolvedAt = now;
+      rec.severity = 'info';
+      expired.push({ ...rec });
+    }
+    return { expired };
+  }));
+}
+
+/**
  * Drop RESOLVED error records older than `olderThanMs` from the feed entirely.
  *
  * A recovered/expired error is a settled receipt: worth seeing for a day or two
