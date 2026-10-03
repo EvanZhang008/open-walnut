@@ -104,6 +104,7 @@ import { notesV2Router } from './routes/notes-v2.js'
 import { repositoriesRouter } from './routes/repositories.js'
 import { audioRouter } from './routes/audio.js'
 import { sttRouter } from './routes/stt.js'
+import { subscriptionLimitsRouter } from './routes/subscription-limits.js'
 import { migrateGlobalNotes } from '../core/notes-migration.js'
 import { authMiddleware } from './middleware/auth.js'
 import { pushRouter } from './routes/push.js'
@@ -1730,6 +1731,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
+  // Claude subscription limit readings per host (live: host:subscription-limits).
+  app.use('/api/subscription-limits', subscriptionLimitsRouter)
   // /api/search-index (canonical) + /api/qmd (legacy alias, one release).
   app.use(['/api/search-index', '/api/qmd'], searchIndexRouter)
   app.use('/api/push', pushRouter)

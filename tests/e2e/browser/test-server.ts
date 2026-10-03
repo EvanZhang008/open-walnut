@@ -2954,6 +2954,23 @@ await fs.writeFile(
         title: 'Normal: fix the bug',
       },
       {
+        // subscription-limit-window.spec.ts: a session on a host that never
+        // reported a limit reading (a Bedrock or API-key sign-in never does), so
+        // its model popover and pill must show no limit at all.
+        claudeSessionId: 'pw-limits-remote-session',
+        taskId: 'pw-task-001',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        host: 'fixture-remote',
+        model: 'claude-opus-5-5',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 200_000).toISOString(),
+        lastActiveAt: new Date(Date.now() - 190_000).toISOString(),
+        messageCount: 1,
+        title: 'Limits: a host with no readings',
+      },
+      {
         claudeSessionId: 'pw-question-recovery-session',
         taskId: 'pw-task-question-recovery',
         project: 'Walnut',

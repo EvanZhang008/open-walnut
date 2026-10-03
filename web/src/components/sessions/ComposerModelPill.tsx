@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ModelPicker, acpModelDisplayName } from './ModelPicker';
 import { SessionSpeedReadout } from './SessionSpeedReadout';
+import { SubscriptionLimitPillHint, SubscriptionLimitReadout } from './SubscriptionLimitReadout';
 import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import type { SessionEffort } from '@open-walnut/core';
 import { setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
@@ -289,6 +290,7 @@ export function ComposerModelPill({
           </span>
         ),
       )}
+      {!pending && sessionId && <SubscriptionLimitPillHint host={session?.host} sessionId={sessionId} />}
       {!fit.condensed && modelSupportsEffort(rawModel) && (() => {
         // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
         // get_settings) — falling back to the requested level. When the CLI
@@ -351,7 +353,7 @@ export function ComposerModelPill({
             : undefined}
           anchorRef={pillRef}
           speedReadout={!pending && sessionId
-            ? <SessionSpeedReadout sessionId={sessionId} session={session} />
+            ? <><SessionSpeedReadout sessionId={sessionId} session={session} />{!engineUi.isAcp && <SubscriptionLimitReadout host={session?.host} />}</>
             : undefined}
         />
       )}

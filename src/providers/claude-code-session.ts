@@ -66,6 +66,7 @@ import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-re
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
+import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { compactOpenItemsHooks } from './compact-open-items-hook.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
@@ -386,7 +387,13 @@ interface StreamControlCancelRequestEvent {
   request_id?: string
 }
 
-type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent | StreamCommandLifecycleEvent | StreamControlCancelRequestEvent
+/** rate_limit_event: the subscription usage window (core/sessions/subscription-limits-model.ts reads it). */
+interface StreamRateLimitEvent {
+  type: 'rate_limit_event'
+  rate_limit_info?: unknown
+}
+
+type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent | StreamCommandLifecycleEvent | StreamControlCancelRequestEvent | StreamRateLimitEvent
 
 /**
  * Map a CLI permissionMode string (JSONL/stream system events) to our internal
@@ -6655,6 +6662,13 @@ export class ClaudeCodeSession {
           break
         }
 
+        break
+      }
+
+      case 'rate_limit_event': {
+        // The host's subscription usage window (claude.ai sign-in only). A
+        // host-level reading, never a chat row; a replayed line is old news.
+        if (this._isReplayedByOffset() !== true) noteRateLimitEvent(this._host, this.claudeSessionId, event)
         break
       }
 

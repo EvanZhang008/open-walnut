@@ -1,0 +1,96 @@
+/* Claude subscription limits: the block in the Switch Model popover (under the
+   turn speed row) and the dot on the composer's model pill. Owned by
+   components/sessions/SubscriptionLimitReadout.tsx. One line per window; each
+   slot is unbreakable, so a narrow popover wraps whole slots, never a number. */
+
+.subscription-limit-readout {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-subtle, rgba(128, 128, 128, 0.08));
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.subscription-limit-kicker {
+  opacity: 0.75;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.subscription-limit-host {
+  white-space: nowrap;
+}
+
+.subscription-limit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  white-space: nowrap;
+}
+
+.subscription-limit-label {
+  color: var(--fg);
+  flex: 0 0 auto;
+}
+
+.subscription-limit-value {
+  color: var(--fg);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.subscription-limit-stat {
+  flex: 0 0 auto;
+}
+
+/* The dot separator lives in CSS so the DOM holds only the values. */
+.subscription-limit-stat::before {
+  content: "·";
+  margin-right: 6px;
+  opacity: 0.55;
+}
+
+.subscription-limit-age {
+  opacity: 0.7;
+}
+
+.subscription-limit-row.is-warning .subscription-limit-value {
+  color: var(--warning, #e6a700);
+}
+
+.subscription-limit-row.is-rejected .subscription-limit-value,
+.subscription-limit-overage.is-rejected {
+  color: var(--danger, #ff3b30);
+}
+
+.subscription-limit-overage.is-warning {
+  color: var(--warning, #e6a700);
+}
+
+.subscription-limit-row.is-reset .subscription-limit-label {
+  color: var(--fg-muted);
+}
+
+/* The pill's dot: present only while a limit warns or is reached. */
+.composer-limit-hint {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.composer-limit-hint.is-warning {
+  background: var(--warning, #e6a700);
+}
+
+.composer-limit-hint.is-rejected {
+  background: var(--danger, #ff3b30);
+}

@@ -36,6 +36,7 @@ export const TOP_LEVEL_HANDLING = {
     'tool',         // tool_result
     'result',       // turn end
     'stream_event', // SSE partial events (new)
+    'rate_limit_event', // subscription usage window → per-host store, never a chat row
   ]),
   drop: {} as Record<string, string>, // reason by type
 } as const

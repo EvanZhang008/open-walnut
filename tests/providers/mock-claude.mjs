@@ -703,6 +703,48 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.-1.5. "rate-limit-event:<json>" — the subscription limit line(s) the
+    //          real CLI writes for a claude.ai sign-in, then one clean turn, then
+    //          STAY ALIVE like snapshot-clean-turn (multi-turn included). <json> is
+    //          one rate_limit_info object or an array (one line each). `resetsIn`
+    //          / `overageResetsIn` are seconds from now (negative = already
+    //          passed) and become the epoch-SECOND resetsAt the CLI sends, inside
+    //          unifiedWindows entries too.
+    if (effectiveMessage.startsWith('rate-limit-event:')) {
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const nowSec = Math.floor(Date.now() / 1000);
+      const absolute = (o) => {
+        if (!o || typeof o !== 'object') return o;
+        const out = {};
+        for (const [k, v] of Object.entries(o)) {
+          if (k === 'resetsIn' && typeof v === 'number') out.resetsAt = nowSec + v;
+          else if (k === 'overageResetsIn' && typeof v === 'number') out.overageResetsAt = nowSec + v;
+          else if (k === 'unifiedWindows' && v && typeof v === 'object') out.unifiedWindows = Object.fromEntries(Object.entries(v).map(([wk, wv]) => [wk, absolute(wv)]));
+          else out[k] = v;
+        }
+        return out;
+      };
+      let infos = [];
+      try {
+        const parsed = JSON.parse(effectiveMessage.split('\n')[0].slice('rate-limit-event:'.length));
+        infos = Array.isArray(parsed) ? parsed : [parsed];
+      } catch { /* not JSON: the turn still runs, with no limit line */ }
+      const body = () => {
+        infos.forEach((info, i) => emit({ type: 'rate_limit_event', rate_limit_info: absolute(info), uuid: `mock-rl-${process.pid}-${++snapshotTurnSeq}-${i}`, session_id: sid }));
+        const text = `Rate limit lines sent: ${infos.length}.`;
+        emit({ type: 'assistant', message: { id: 'msg_rate_limit_' + (++snapshotTurnSeq) + '_' + process.pid, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      // Same think time as snapshot-clean-turn, for the same turn-start ordering reason.
+      const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
+      if (THINK_MS > 0) setTimeout(body, THINK_MS);
+      else body();
+      return;
+    }
+
     // 2a.-1.4. "file-edit-turn:<json>" — a turn that REALLY edits files the way
     //          the CLI's Edit/Write tools do, then STAYS ALIVE like
     //          snapshot-clean-turn (multi-turn included). <json> (first line only)

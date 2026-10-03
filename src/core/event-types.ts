@@ -383,6 +383,9 @@ export interface SessionUnknownEventPayload {
   snippet: string;
 }
 
+/** One host's Claude subscription limit readings (GET /api/subscription-limits returns the same frames). */
+export type HostSubscriptionLimitsEvent = import('./sessions/subscription-limits.js').HostLimitFrame;
+
 export interface SessionStatusChangedEvent extends SessionStatusSnapshot {
   /** Canonical versioned wire contract. Top-level fields are compatibility mirrors. */
   status: SessionStatusSnapshot;
@@ -1259,6 +1262,7 @@ export interface EventPayloadMap {
   'session:tool-use': SessionToolUseEvent;
   'session:tool-result': SessionToolResultEvent;
   'session:unknown-event': SessionUnknownEventPayload;
+  'host:subscription-limits': HostSubscriptionLimitsEvent;
   'session:status-changed': SessionStatusChangedEvent;
   'session:messages-delivered': SessionMessagesDeliveredEvent;
   'session:queued-cancelled': SessionQueuedCancelledEvent;

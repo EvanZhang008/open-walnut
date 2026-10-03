@@ -29367,7 +29367,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   .cron-menu,
   .agent-menu,
   .vd-panel,
-  .model-picker,
   .session-fork-popover,
   .stt-dropdown-menu,
   .dp-popover,
@@ -29379,7 +29378,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   /* The folder picker stays opaque (its base rule). WebKit limits a backdrop
      blur to the nearest backdrop root, so inside the draft column the Start
      Task card behind the picker showed through the 80% glass unblurred
-     (2026-09-30, seen in the Mac app's engine); the path list has to be read. */
+     (2026-09-30, seen in the Mac app's engine); the path list has to be read.
+     The Switch Model popover stays opaque for the same reason: in WebKit the
+     chat behind it read through its title and its usage-limit rows. */
 
   /* Higher-specificity dark override earlier in the file would otherwise
      repaint this one opaque. */

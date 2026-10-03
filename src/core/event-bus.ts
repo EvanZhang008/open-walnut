@@ -71,6 +71,9 @@ export const EventNames = {
   SESSION_TOOL_USE: 'session:tool-use',
   SESSION_TOOL_RESULT: 'session:tool-result',
   SESSION_UNKNOWN_EVENT: 'session:unknown-event',
+  // A host's Claude subscription limit reading moved (one frame per host,
+  // src/core/sessions/subscription-limits.ts). About a host, never a session.
+  HOST_SUBSCRIPTION_LIMITS: 'host:subscription-limits',
   SESSION_STATUS_CHANGED: 'session:status-changed',
   SESSION_MESSAGES_DELIVERED: 'session:messages-delivered',
   SESSION_QUEUED_CANCELLED: 'session:queued-cancelled',
