@@ -64,6 +64,8 @@ import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createProcSampler, type ProcSampleRoot } from './proc-sample-core.js'
+import { createTurnSnapshots } from './turn-snapshot-core.js'
+import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createOfflineHost, type HostSlice } from './offline-host-core.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
@@ -1837,6 +1839,13 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // 'proc-sample-v1': what each session costs this host. NOT in
     // BRIDGE_ALLOWED_COMMANDS: it names host processes. Keep in sync with daemon-source.ts.
     case 'proc.sample': return cmdProcSample(ws, id as number)
+    // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
+    // BRIDGE_ALLOWED_COMMANDS: they read and write host files. Keep in sync with daemon-source.ts.
+    case 'turns.list':
+    case 'turns.diff':
+    case 'turns.restore':
+    case 'turns.guard':
+    case 'turns.configure': return cmdTurns(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id as number, cmd)
@@ -3366,6 +3375,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
 
   sessionData.cronMetadataOrigin = { identity: cronProcess(sessionData).identity, offset: cronStartOffset, startedAt: cronStartedAt, fresh: !resume }
   sessions.set(sid, sessionData)
+  // The tree before this session's first recorded turn, when it has none yet.
+  try { turnSnapshots.onTurnStart(sid, cwd) } catch { /* never the spawn's problem */ }
   cronMetadata.configure(sid, cronProcess(sessionData), cronMetadataConfig)
   cronMetadata.state(sid, cronProcess(sessionData), false, !resume)
   // Write-ahead: flush registry before returning ok to caller so a crash-after-
@@ -4596,6 +4607,8 @@ function ensureWatcher(sid: string) {
           }
           // A reply request this host owns ends with this turn (offline-host-core.ts).
           void offlineHost.onResult(sid, line, v).catch(() => {})
+          // The working tree as this turn left it (turn-snapshot-core.ts): returns at once.
+          try { turnSnapshots.onTurnEnd(sid, s.cwd, v) } catch { /* never the tailer's problem */ }
         }
 
         // ── L2: materialize daemon-authoritative task state ──
@@ -7094,6 +7107,57 @@ async function cmdTranscriptRewindProbe(ws: ServerWebSocket<WsData>, id: number,
     sendOk(ws, id, { found: true, ...output } as unknown as Record<string, unknown>)
   } catch (err) {
     sendError(ws, id, 'transcript.rewindProbe failed: ' + (err as Error).message)
+  }
+}
+
+// ── Per-turn working-tree snapshots + the rewind guard ('turn-snapshot-v1') ──
+// PARITY: keep in sync with daemon-source.ts cmdTurns. The git work lives in
+// turn-snapshot-core.ts, the guard's verdict in turn-guard-core.ts; both are
+// shared with the source twin. The tailer calls onTurnEnd at every result line
+// and onTurnStart at spawn; both return at once.
+const turnSnapshots = createTurnSnapshots({
+  execFile: execFileCb as unknown as import('./turn-snapshot-core.js').TurnSnapshotExecFile,
+  fs: fs.promises as unknown as import('./turn-snapshot-core.js').TurnSnapshotFs,
+  path,
+  env: process.env,
+  tmpDir: path.join(DAEMON_DIR, 'turn-snapshots'),
+  settingsPath: path.join(DAEMON_DIR, 'turn-snapshots.json'),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
+  forceDisabled: process.env.WALNUT_TURN_SNAPSHOTS === '0',
+})
+const turnGuard = createTurnGuard({
+  compare: (sid, cwd, files, budgetMs) => turnSnapshots.compareToLatest(sid, cwd, files, budgetMs),
+  repoRootOf: (cwd) => turnSnapshots.repoRootOf(cwd),
+  sessionOps: async (sid, cwd) => (await computeChangesCached(sid, cwd))?.output.fileMap ?? null,
+  realpath: (p) => fs.promises.realpath(p),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+async function cmdTurns(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  const cwd = typeof cmd.cwd === 'string' ? cmd.cwd : ''
+  try {
+    switch (cmd.cmd) {
+      case 'turns.configure':
+        return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }))
+      case 'turns.list':
+        return sendOk(ws, id, await turnSnapshots.list(sid, cwd) as unknown as Record<string, unknown>)
+      case 'turns.diff':
+        return sendOk(ws, id, await turnSnapshots.fileDiff(sid, cwd, Number(cmd.n), String(cmd.path ?? ''),
+          cmd.against === 'worktree' ? 'worktree' : 'previous') as unknown as Record<string, unknown>)
+      case 'turns.restore':
+        return sendOk(ws, id, await turnSnapshots.restore({
+          sid, cwd, n: Number(cmd.n), dryRun: cmd.dryRun === true,
+          ...(Array.isArray(cmd.paths) ? { paths: (cmd.paths as unknown[]).map(String) } : {}),
+        }) as unknown as Record<string, unknown>)
+      case 'turns.guard':
+        return sendOk(ws, id, await turnGuard.guard({ sid, cwd, files: cmd.files, siblings: cmd.siblings }) as unknown as Record<string, unknown>)
+    }
+    sendError(ws, id, 'turns: unknown command')
+  } catch (err) {
+    const code = (err as { code?: unknown }).code
+    sendError(ws, id, String(cmd.cmd) + ' failed: ' + (err as Error).message, typeof code === 'string' ? { code } : undefined)
   }
 }
 

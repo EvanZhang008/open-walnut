@@ -3872,10 +3872,17 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
 const WIRE_MOCK_DAEMON = process.env.PW_NO_MOCK_DAEMON !== '1'
 const { createMockDaemon } = await import('../../helpers/mock-daemon.js')
 const { sessionRunner } = await import('../../../src/providers/claude-code-session.js')
+// Per-turn snapshots (turn-snapshots.spec.ts): the daemon snapshots ONLY the git
+// repos a spec makes under this root, and a snapshot-write-turn turn is filed in
+// the session transcript (the rewind guard reads its ops, the rewind its uuids).
+const TURN_SNAPSHOT_ROOT = path.join(tmpBase, 'turn-repos')
+fsSync.mkdirSync(TURN_SNAPSHOT_ROOT, { recursive: true })
+process.env.MOCK_CLAUDE_TURN_TRANSCRIPT_DIR = path.join(tmpBase, '.claude', 'projects')
 const mockDaemon = WIRE_MOCK_DAEMON
   ? await createMockDaemon({
       streamsDir: path.join(process.env.WALNUT_DAEMON_DIR!, 'streams'),
       acpStreamsDir: process.env.WALNUT_STREAMS_DIR,
+      turnSnapshotRoot: TURN_SNAPSHOT_ROOT,
     })
   : null
 const MOCK_CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')

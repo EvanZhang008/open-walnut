@@ -22,6 +22,9 @@ import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-da
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
 import { createProcSampler, type ProcSampleExecFile, type ProcSampleRoot } from '../../src/providers/proc-sample-core.js'
+import { createTurnSnapshots, type TurnSnapshotExecFile, type TurnSnapshotFs } from '../../src/providers/turn-snapshot-core.js'
+import { createTurnGuard } from '../../src/providers/turn-guard-core.js'
+import { computeHostLocalChanges } from '../../src/providers/session-changes-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -46,6 +49,12 @@ export interface MockDaemonOptions {
   streamsDir?: string
   /** Reuse a fixture's durable ACP journals across daemon attach/restart. */
   acpStreamsDir?: string
+  /**
+   * Per-turn snapshots (turn-snapshot-core.ts) for repositories under this
+   * root ONLY. Unset (every other test): the real core runs switched off, so
+   * no test session ever writes hidden refs into a real repository.
+   */
+  turnSnapshotRoot?: string
 }
 
 /**
@@ -87,6 +96,7 @@ export class MockDaemon {
   /** Bridge liveness reported by `bridge.configure` replies (Mac-side visibility tests). */
   private _bridgeConnected = false
   private readonly streamsDir: string
+  private readonly turnSnapshotRoot: string | null
   /** Real ACP supervision (same module the standalone daemon embeds) so tests
    *  can drive acp* sessions through MockDaemon with real workers + mock agent. */
   private _acp: ReturnType<typeof createAcpDaemon<WebSocket>>
@@ -96,6 +106,7 @@ export class MockDaemon {
   constructor(options: MockDaemonOptions = {}) {
     this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-daemon-'))
     this.streamsDir = options.streamsDir ?? path.join(this.tmpDir, 'streams')
+    this.turnSnapshotRoot = options.turnSnapshotRoot ?? null
     fs.mkdirSync(this.streamsDir, { recursive: true })
     this._acp = createAcpDaemon<WebSocket>({
       streamsDir: options.acpStreamsDir ?? this.streamsDir,
@@ -281,6 +292,9 @@ export class MockDaemon {
       // proc.sample (proc-sample-v1): the REAL sampler over the real ps, with the
       // mock CLI processes as roots, so the Machine readout shows live numbers.
       case 'proc.sample': return this.cmdProcSample(ws, id)
+      // 'turn-snapshot-v1': the REAL snapshot and guard cores, pinned to turnSnapshotRoot.
+      case 'turns.list': case 'turns.diff': case 'turns.restore': case 'turns.guard':
+      case 'turns.configure': return this.cmdTurns(ws, id, cmd)
       // ── ACP command family: forwarded to the REAL createAcpDaemon module
       //    (same code the standalone daemon embeds) — real workers, mock agent.
       case 'acpStart': {
@@ -454,6 +468,7 @@ export class MockDaemon {
     })
 
     this.sessions.set(sid, session)
+    this.turnHooksOnStart(sid, cwd, !!message)
     // Like the real daemon's registry, a fresh spawn (a cold --resume) replaces the dead entry.
     this._deadSessions.delete(sid)
 
@@ -546,6 +561,7 @@ export class MockDaemon {
       fs.writeSync(fd, Buffer.from(payload + '\n'))
       fs.closeSync(fd)
       this._fifoWrites.push({ sid, message, timestamp: Date.now() })
+      this._turnActive.add(sid)
       this.sendOk(ws, id, { ok: true })
     } catch (err) {
       this.sendError(ws, id, `write failed: ${(err as Error).message}`)
@@ -833,6 +849,73 @@ export class MockDaemon {
     this.sendOk(ws, id, { sessions: list })
   }
 
+  // ── Per-turn snapshots ('turn-snapshot-v1'), the real cores ──
+  private _turnCwd = new Map<string, string>()
+  private _turnActive = new Set<string>()
+  private _turnsCore: ReturnType<typeof createTurnSnapshots> | null = null
+  private _turnGuard: ReturnType<typeof createTurnGuard> | null = null
+  private turns(): { core: ReturnType<typeof createTurnSnapshots>; guard: ReturnType<typeof createTurnGuard> } {
+    if (!this._turnsCore) {
+      const root = this.turnSnapshotRoot ? fs.realpathSync(this.turnSnapshotRoot) : null
+      this._turnsCore = createTurnSnapshots({
+        execFile: execFile as unknown as TurnSnapshotExecFile,
+        fs: fs.promises as unknown as TurnSnapshotFs,
+        path,
+        env: process.env,
+        tmpDir: this.tmpDir,
+        settingsPath: path.join(this.tmpDir, 'turn-snapshots.json'),
+        turnActive: (sid) => this._turnActive.has(sid),
+        allowRepo: (repoRoot) => !!root && (repoRoot === root || repoRoot.startsWith(root + path.sep)),
+        forceDisabled: !root,
+      })
+      const claudeHome = path.join(process.env.HOME || os.homedir(), '.claude')
+      this._turnGuard = createTurnGuard({
+        compare: (sid, cwd, files, budget) => this._turnsCore!.compareToLatest(sid, cwd, files, budget),
+        repoRootOf: (cwd) => this._turnsCore!.repoRootOf(cwd),
+        sessionOps: async (sid, cwd) => (await computeHostLocalChanges({ sessionId: sid, cwd, claudeHome }))?.fileMap ?? null,
+        realpath: (p) => fs.promises.realpath(p),
+      })
+    }
+    return { core: this._turnsCore, guard: this._turnGuard! }
+  }
+
+  private turnHooksOnStart(sid: string, cwd: string, withMessage: boolean): void {
+    this._turnCwd.set(sid, cwd)
+    if (withMessage) this._turnActive.add(sid)
+    if (this.turnSnapshotRoot) this.turns().core.onTurnStart(sid, cwd)
+  }
+
+  private turnHooksOnResult(sid: string, v: number): void {
+    this._turnActive.delete(sid)
+    const cwd = this._turnCwd.get(sid)
+    if (cwd && this.turnSnapshotRoot) this.turns().core.onTurnEnd(sid, cwd, v)
+  }
+
+  private cmdTurns(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    const { core, guard } = this.turns()
+    const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+    const cwd = typeof cmd.cwd === 'string' ? cmd.cwd : ''
+    const run = async (): Promise<unknown> => {
+      switch (cmd.cmd) {
+        case 'turns.configure': return core.configure({ enabled: cmd.enabled, keep: cmd.keep })
+        case 'turns.list': return core.list(sid, cwd)
+        case 'turns.diff': return core.fileDiff(sid, cwd, Number(cmd.n), String(cmd.path ?? ''), cmd.against === 'worktree' ? 'worktree' : 'previous')
+        case 'turns.restore': return core.restore({
+          sid, cwd, n: Number(cmd.n), dryRun: cmd.dryRun === true,
+          ...(Array.isArray(cmd.paths) ? { paths: (cmd.paths as unknown[]).map(String) } : {}),
+        })
+        default: return guard.guard({ sid, cwd, files: cmd.files, siblings: cmd.siblings })
+      }
+    }
+    run().then(
+      (r) => this.sendOk(ws, id, r as Record<string, unknown>),
+      (err: Error & { code?: unknown }) => {
+        if (ws.readyState !== WebSocket.OPEN) return
+        ws.send(JSON.stringify({ id, ok: false, error: `${String(cmd.cmd)} failed: ${err.message}`, ...(typeof err.code === 'string' ? { code: err.code } : {}) }))
+      },
+    )
+  }
+
   // ── JSONL Polling ──
 
   private pollJsonl(ws: WebSocket, sid: string, session: DaemonSession): void {
@@ -854,6 +937,7 @@ export class MockDaemon {
         session.offset += Buffer.byteLength(line, 'utf-8') + 1
         if (line.trim()) {
           this.sendEvent(ws, 'jsonl', { sid, line, v: session.offset })
+          if (line.includes('"type":"result"')) this.turnHooksOnResult(sid, session.offset)
         }
       }
     } catch { /* file not ready yet */ }

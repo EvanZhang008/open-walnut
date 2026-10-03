@@ -1158,6 +1158,19 @@ export interface Config {
      *  resolveEffectiveOutputMode() in core/sessions/output-mode.ts. */
     output_mode?: SessionOutputMode;
 
+    /** Per-turn working-tree snapshots: at every turn end of a session whose
+     *  cwd is in a git repository, the session daemon records the tree under a
+     *  hidden ref (refs/walnut/turns/<sessionId>/<n>) without touching the
+     *  index, HEAD, branches or files. Backs the Changed tab's Turns view, its
+     *  restore, and the rewind guard. Pushed to every connected daemon on
+     *  connect and on change (src/core/turn-snapshots/settings-push.ts). */
+    turn_snapshots?: {
+      /** Default true. `false` stops new snapshots (existing refs stay). */
+      enabled?: boolean;
+      /** Snapshots kept per session, oldest deleted first. Default 100. */
+      keep?: number;
+    };
+
     /** Auto-retry a turn that died to a TRANSIENT upstream failure (API timeout,
      *  stalled stream, mid-response 5xx). Enforced by the SESSION DAEMON, so it
      *  keeps retrying while this Mac is asleep or the SSH tunnel is down — the

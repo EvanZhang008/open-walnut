@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { previewRewind, rewindSession, type RewindPreview, type RewindResult } from '@/api/sessions';
+import { fetchRewindGuard, type RewindGuardResult } from '@/api/session-turns';
+import { RewindGuardStep } from './RewindGuardStep';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { log } from '@/utils/log';
 
@@ -42,6 +44,8 @@ interface SessionRewindDialogProps {
 }
 
 const MAX_FILE_ROWS = 6;
+/** How long a prefetched guard answer stands in for a fresh one at confirm. */
+const GUARD_FRESH_MS = 20_000;
 
 function splitPath(p: string): { dir: string; base: string } {
   const i = p.lastIndexOf('/');
@@ -84,6 +88,12 @@ export function SessionRewindDialog({
   const [intoCopy, setIntoCopy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The rewind guard (RewindGuardStep): files someone else changed after this
+  // session wrote them. Asked once the preview names the files; null = none.
+  const guardRef = useRef<{ ask: Promise<RewindGuardResult | null>; at: number; files: string[] } | null>(null);
+  const [guard, setGuard] = useState<RewindGuardResult | null>(null);
+  const [guardStep, setGuardStep] = useState(false);
+  const [checkingGuard, setCheckingGuard] = useState(false);
   useModalOverlay(onClose);
 
   useEffect(() => {
@@ -97,12 +107,22 @@ export function SessionRewindDialog({
     return () => { live = false; };
   }, [sessionId, msgId]);
 
-  const confirm = useCallback(() => {
+  useEffect(() => {
+    const files = preview?.canRewind ? preview.filesChanged ?? [] : [];
+    if (!files.length) { guardRef.current = null; return; }
+    let live = true;
+    const ask = fetchRewindGuard(sessionId, files);
+    guardRef.current = { ask, at: Date.now(), files };
+    void ask.then((g) => { if (live) setGuard(g); });
+    return () => { live = false; };
+  }, [sessionId, preview]);
+
+  const commit = useCallback((withFiles: boolean) => {
     setBusy(true);
     setError(null);
     rewindSession(sessionId, msgId, {
       mode: intoCopy ? 'fork' : 'in-place',
-      restoreFiles,
+      restoreFiles: withFiles,
       // "Into a copy" is the escape hatch for keeping THIS conversation, so it
       // must not archive it. (The fork path archives by default because it used
       // to BE the rewind: back then the source really was the abandoned branch.)
@@ -110,7 +130,7 @@ export function SessionRewindDialog({
     })
       .then((result) => {
         log.info('session', 'rewind committed', {
-          sessionId, msgId, mode: result.mode, rewoundId: result.sessionId, restoreFiles,
+          sessionId, msgId, mode: result.mode, rewoundId: result.sessionId, restoreFiles: withFiles,
         });
         onRewound(result);
       })
@@ -118,7 +138,27 @@ export function SessionRewindDialog({
         setBusy(false);
         setError(err instanceof Error ? err.message : String(err));
       });
-  }, [sessionId, msgId, intoCopy, restoreFiles, onRewound]);
+  }, [sessionId, msgId, intoCopy, onRewound]);
+
+  // With files: wait for the guard; a file someone else changed since this
+  // session wrote it asks first (RewindGuardStep). No conflict = as before.
+  const confirm = useCallback(() => {
+    const asked = guardRef.current;
+    if (!restoreFiles || !asked) { commit(restoreFiles); return; }
+    // An answer from long ago may miss an edit made while the dialog sat open.
+    const ask = Date.now() - asked.at > GUARD_FRESH_MS ? fetchRewindGuard(sessionId, asked.files) : asked.ask;
+    setCheckingGuard(true);
+    void ask.then((g) => {
+      setCheckingGuard(false);
+      if (g && g.conflicts.length > 0) {
+        setGuard(g);
+        setGuardStep(true);
+        log.info('session', 'rewind guard found changed files', { sessionId, msgId, conflicts: g.conflicts.length });
+        return;
+      }
+      commit(true);
+    });
+  }, [restoreFiles, commit, sessionId, msgId]);
 
   const filesAvailable = !!preview?.canRewind;
   const filesReason = preview?.filesUnavailableReason === 'session_not_live'
@@ -133,7 +173,21 @@ export function SessionRewindDialog({
 
   const confirmLabel = busy
     ? 'Rewinding…'
+    : checkingGuard ? 'Checking files…'
     : `${intoCopy ? 'Rewind into a copy' : 'Rewind'}${restoreFiles ? ' + files' : ''}`;
+
+  if (guardStep && guard) {
+    return (
+      <RewindGuardStep
+        guard={guard}
+        busy={busy}
+        error={error}
+        onConversationOnly={() => commit(false)}
+        onRestoreAnyway={() => commit(true)}
+        onCancel={onClose}
+      />
+    );
+  }
 
   return createPortal(
     <div
@@ -214,7 +268,7 @@ export function SessionRewindDialog({
 
         <div className="app-modal-actions">
           <button type="button" className="app-modal-btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="button" className="app-modal-btn primary" onClick={confirm} disabled={busy || !preview}>
+          <button type="button" className="app-modal-btn primary" onClick={confirm} disabled={busy || checkingGuard || !preview}>
             {confirmLabel}
           </button>
         </div>

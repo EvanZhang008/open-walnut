@@ -30,7 +30,7 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
 import { SessionWebView, type WebViewRequest } from './SessionWebView';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
-import { SessionDiffView } from './SessionDiffView';
+import { SessionChangedTab } from './SessionChangedTab';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { BoardTaskPeek } from '@/components/board/BoardTaskPeek';
@@ -2296,7 +2296,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 {splitOpen && sessionId && activeView !== 'code' && (
                   <div className="session-panel-diff-col">
                     {activeView === 'changed' && (
-                      <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} onOpenFile={handleFileOpen} />
+                      <SessionChangedTab sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} onOpenFile={handleFileOpen} />
                     )}
                     {activeView === 'files' && (
                       <SessionFileExplorer

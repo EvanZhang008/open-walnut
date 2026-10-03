@@ -105,3 +105,13 @@ if (!process.env.WALNUT_SPAWN_JOURNAL || !process.env.WALNUT_SPAWN_JOURNAL.inclu
 if (process.env.WALNUT_SEARCH_V2_SEMANTIC === undefined) {
   process.env.WALNUT_SEARCH_V2_SEMANTIC = '0'
 }
+
+// Session daemons snapshot the working tree at every turn end of a session in
+// a git repo (turn-snapshot-core.ts), writing hidden refs into that repo. A test
+// daemon whose session runs in this checkout (or any real repo) must never do
+// that, so test daemons inherit the kill switch. The snapshot tests drive the
+// core directly against temp repos, and the browser fixture opts in for one
+// temp root of its own.
+if (process.env.WALNUT_TURN_SNAPSHOTS === undefined) {
+  process.env.WALNUT_TURN_SNAPSHOTS = '0'
+}

@@ -103,6 +103,8 @@ SOURCES=(
   src/providers/claude-check-core.ts
   src/providers/fs-ls-core.ts
   src/providers/proc-sample-core.ts
+  src/providers/turn-snapshot-core.ts
+  src/providers/turn-guard-core.ts
   src/providers/git-attribution-core.ts
   src/providers/git-commit-core.ts
   src/providers/offline-host-core.ts

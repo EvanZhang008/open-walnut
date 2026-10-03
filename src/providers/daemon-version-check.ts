@@ -140,6 +140,9 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/fs-ls-core.ts',
   // proc.sample (what each session costs the host): same import-or-inline rule.
   'src/providers/proc-sample-core.ts',
+  // Per-turn snapshots and the rewind guard: same import-or-inline rule.
+  'src/providers/turn-snapshot-core.ts',
+  'src/providers/turn-guard-core.ts',
   // Session commit (git.commitPlan / commitStart / commitJob): same import-or-inline rule.
   'src/providers/git-attribution-core.ts',
   'src/providers/git-commit-core.ts',

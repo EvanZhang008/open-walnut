@@ -22,6 +22,7 @@ import { requestLogger, setRouteRecoveryPublisher, seedFailingRoutes } from './m
 import { tasksRouter } from './routes/tasks.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { sessionsRouter } from './routes/sessions.js'
+import { sessionTurnsRouter } from './routes/session-turns.js'
 import { sessionCommitRouter } from './routes/session-commit.js'
 import { searchRouter } from './routes/search.js'
 import { searchAgentRouter } from './routes/search-agent.js'
@@ -1522,7 +1523,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/cron', routinesRouter)
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)
+  // Per-turn snapshots + the rewind guard (routes/session-turns.ts); the
+  // settings ride every daemon connect and config change.
+  app.use('/api/sessions', sessionTurnsRouter)
   app.use('/api/sessions', sessionCommitRouter) // commit / push / PR from the Changed tab
+  void import('../core/turn-snapshots/settings-push.js').then((m) => m.startTurnSnapshotSettingsSync()).catch(() => {})
   app.use('/api/sessions', sessionsRouter)
   // Agent search mounts BEFORE /api/search so Express never routes it there.
   app.use('/api/search/agent', searchAgentRouter)
@@ -5430,6 +5435,7 @@ export async function stopServer(): Promise<void> {
     unsubscribeHostRecovery()
     unsubscribeHostRecovery = null
   }
+  try { (await import('../core/turn-snapshots/settings-push.js')).stopTurnSnapshotSettingsSync() } catch { /* never started */ }
   if (notificationReconcileTimer) {
     clearInterval(notificationReconcileTimer)
     notificationReconcileTimer = null

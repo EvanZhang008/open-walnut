@@ -233,6 +233,15 @@ if (inputFormat === 'stream-json') {
     {
       try {
         const parsed = JSON.parse(line);
+        // The user line a snapshot-write-turn turn files under (its rewind point).
+        if (parsed.type === 'user' && typeof parsed.uuid === 'string') writeTurnUuidNext = parsed.uuid;
+        if (parsed.type === 'control_request' && parsed.request?.subtype === 'rewind_files') {
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: answerRewindFiles(parsed.request) },
+          }) + '\n');
+          return;
+        }
         if (parsed.type === 'control_request' && parsed.request?.subtype === 'interrupt') {
           // CLI 2.1.258 (live probe): the ACK is immediate and unconditional —
           // an idle CLI answers it too and emits nothing else. Only a mode with a
@@ -310,6 +319,81 @@ if (inputFormat === 'stream-json') {
       } catch { /* not JSON — ignore */ }
     }
   }
+}
+
+// ── snapshot-write-turn support: file checkpoints + the transcript a Write files ──
+// The real CLI backs a file up before a turn first edits it and answers
+// `rewind_files` from those backups; the turn's Write is filed in the session
+// transcript as tool_use + tool_result (with toolUseResult). Only the
+// snapshot-write-turn mode uses any of this.
+const writeTurnCheckpoints = new Map(); // user uuid -> Map(abs path -> content | null)
+const writeTurnTracked = new Set();
+let writeTurnUuidNext = null;
+let writeTurnCount = 0;
+function readOrNull(abs) {
+  try { return fs.readFileSync(abs, 'utf8'); } catch { return null; }
+}
+function writeTurnUserUuid() {
+  const u = writeTurnUuidNext ?? (writeTurnCount === 0 ? lastInputUserUuid : null) ?? randomUUID();
+  writeTurnUuidNext = null;
+  writeTurnCount++;
+  return u;
+}
+function writeTurnCheckpoint(uuid) {
+  const cp = new Map();
+  for (const abs of writeTurnTracked) cp.set(abs, readOrNull(abs));
+  writeTurnCheckpoints.set(uuid, cp);
+}
+function writeTurnWrite(abs, content) {
+  const before = readOrNull(abs);
+  for (const cp of writeTurnCheckpoints.values()) if (!cp.has(abs)) cp.set(abs, before);
+  writeTurnTracked.add(abs);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content);
+  return before;
+}
+function answerRewindFiles(request) {
+  const cp = writeTurnCheckpoints.get(request.user_message_id);
+  if (!cp) return { canRewind: false, error: 'No file checkpoint found for this message.' };
+  const filesChanged = [];
+  let insertions = 0;
+  let deletions = 0;
+  for (const [abs, was] of cp) {
+    const now = readOrNull(abs);
+    if (now === was) continue;
+    filesChanged.push(abs);
+    const wasLines = new Set((was ?? '').split('\n').filter(Boolean));
+    const nowLines = new Set((now ?? '').split('\n').filter(Boolean));
+    for (const l of wasLines) if (!nowLines.has(l)) insertions++;
+    for (const l of nowLines) if (!wasLines.has(l)) deletions++;
+    if (request.dry_run !== true) {
+      if (was === null) { try { fs.unlinkSync(abs); } catch { /* already gone */ } }
+      else fs.writeFileSync(abs, was);
+    }
+  }
+  return { canRewind: true, filesChanged, insertions, deletions };
+}
+function persistWriteTurn(sid, prompt, userUuid, lines) {
+  const root = process.env.MOCK_CLAUDE_TURN_TRANSCRIPT_DIR;
+  if (!root || !sid) return;
+  const cwd = process.cwd();
+  const dir = path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  const file = path.join(dir, `${sid}.jsonl`);
+  fs.mkdirSync(dir, { recursive: true });
+  let parent = null;
+  try {
+    const prior = fs.readFileSync(file, 'utf8').trim().split('\n');
+    parent = JSON.parse(prior[prior.length - 1]).uuid ?? null;
+  } catch { /* first turn of this transcript */ }
+  const shared = { sessionId: sid, cwd, timestamp: new Date().toISOString(), isSidechain: false, userType: 'external' };
+  const rows = [{ ...shared, type: 'user', uuid: userUuid, parentUuid: parent, message: { role: 'user', content: prompt } }];
+  let prev = userUuid;
+  for (const line of lines) {
+    const uuid = randomUUID();
+    rows.push({ ...shared, ...line, uuid, parentUuid: prev });
+    prev = uuid;
+  }
+  fs.appendFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
 
 const outputSessionId = sessionId || 'mock-session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -755,6 +839,59 @@ if (outputFormat === 'stream-json') {
       if (THINK_MS > 0) setTimeout(body, THINK_MS);
       else body();
       // Do NOT exit: stream-json FIFO mode stays alive between turns.
+      return;
+    }
+
+    // 2a.-0.95. "snapshot-write-turn:<relpath>:<content>" — a turn that WRITES
+    //          <relpath> (under the cwd) with <content> + newline through a Write
+    //          tool call, then STAYS ALIVE like snapshot-clean-turn (multi-turn
+    //          too). The per-turn snapshot and rewind guard specs drive files
+    //          with it. With MOCK_CLAUDE_TURN_TRANSCRIPT_DIR set the turn is also
+    //          filed in the session transcript the way the real CLI files a Write,
+    //          and the turn's file checkpoint answers `rewind_files`. The write
+    //          waits MOCK_SNAPSHOT_WRITE_DELAY_MS (default 1000), so the daemon's
+    //          baseline snapshot at spawn is taken before it.
+    if (effectiveMessage.startsWith('snapshot-write-turn:')) {
+      const spec = effectiveMessage.split('\n')[0].slice('snapshot-write-turn:'.length);
+      const colon = spec.indexOf(':');
+      const rel = colon >= 0 ? spec.slice(0, colon) : spec;
+      const content = (colon >= 0 ? spec.slice(colon + 1) : 'written') + '\n';
+      const prompt = effectiveMessage.split('\n')[0];
+      const sid = outputSessionId;
+      const userUuid = writeTurnUserUuid();
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const body = () => {
+        const abs = path.resolve(process.cwd(), rel);
+        const seq = ++snapshotTurnSeq;
+        const toolId = `toolu_mock_write_${seq}_${process.pid}`;
+        const text = `Wrote ${rel}.`;
+        if (!abs.startsWith(process.cwd() + path.sep)) {
+          emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: 'Refused a path outside the folder.', session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+          emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+          armSnapshotNextTurn();
+          return;
+        }
+        writeTurnCheckpoint(userUuid);
+        const original = writeTurnWrite(abs, content);
+        const useMsg = { id: `msg_mock_write_${seq}_${process.pid}`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'tool_use', id: toolId, name: 'Write', input: { file_path: abs, content } }], stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 } };
+        const resultMsg = { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: `File ${original === null ? 'created' : 'updated'} successfully at: ${abs}` }] };
+        const toolUseResult = original === null
+          ? { type: 'create', filePath: abs, content }
+          : { type: 'update', filePath: abs, content, originalFile: original };
+        const textMsg = { id: `msg_mock_write_text_${seq}_${process.pid}`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } };
+        emit({ type: 'assistant', message: useMsg, session_id: sid, parent_tool_use_id: null });
+        emit({ type: 'user', message: resultMsg, session_id: sid, parent_tool_use_id: null, tool_use_result: toolUseResult });
+        emit({ type: 'assistant', message: textMsg, session_id: sid, parent_tool_use_id: null });
+        persistWriteTurn(sid, prompt, userUuid, [
+          { type: 'assistant', message: useMsg },
+          { type: 'user', message: resultMsg, toolUseResult },
+          { type: 'assistant', message: textMsg },
+        ]);
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 2, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      setTimeout(body, Number(process.env.MOCK_SNAPSHOT_WRITE_DELAY_MS ?? 1000));
       return;
     }
 

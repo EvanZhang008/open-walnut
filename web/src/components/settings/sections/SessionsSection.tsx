@@ -90,6 +90,11 @@ export function SessionsSection({ config, onSave }: Props) {
     (v) => saveSession({ output_mode: v }, 'sessions.output-mode'),
     { rowKey: 'sessions.output-mode' },
   );
+  const turnSnapshots = useOptimisticSetting<boolean>(
+    config.session?.turn_snapshots?.enabled !== false,
+    (v) => saveSession({ turn_snapshots: { ...(config.session?.turn_snapshots ?? {}), enabled: v } }, 'sessions.turn-snapshots'),
+    { rowKey: 'sessions.turn-snapshots' },
+  );
 
   return (
     <SettingsSection id="sessions" title="Sessions">
@@ -184,6 +189,19 @@ export function SessionsSection({ config, onSave }: Props) {
               options={OUTPUT_OPTIONS}
               onChange={output.set}
             />
+          }
+        />
+      </SettingsGroup>
+
+      <SettingsGroup heading="Files">
+        <SettingsRow
+          anchor="turn-snapshots-row"
+          label="Snapshot files after each turn"
+          help="Records a git repo's files in a hidden ref when a turn ends, so the Changed tab can show and restore any turn."
+          htmlFor="turn-snapshots"
+          error={turnSnapshots.error}
+          control={
+            <ToggleSwitch id="turn-snapshots" checked={turnSnapshots.value} busy={turnSnapshots.busy} onChange={turnSnapshots.set} />
           }
         />
       </SettingsGroup>

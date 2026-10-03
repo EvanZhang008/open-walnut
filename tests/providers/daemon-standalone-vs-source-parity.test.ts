@@ -660,6 +660,46 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src.slice(start, end)).not.toMatch(/proc\.sample/)
     }
   })
+  // turns.* (turn-snapshot-core.ts + turn-guard-core.ts): the binary twin imports
+  // both factories, the source twin inlines them; both snapshot at every result
+  // line and at spawn. A daemon without it keeps working (no Turns view, no guard).
+  it("both twins dispatch turns.*; 'turn-snapshot-v1' advertised but NOT required, not bridge-reachable", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      for (const c of ['turns.list', 'turns.diff', 'turns.restore', 'turns.guard', 'turns.configure']) {
+        expect(src).toContain(`case '${c}':`)
+      }
+      expect(src).toMatch(/return cmdTurns\(ws, id/)
+      expect(src).toMatch(/async function cmdTurns\(/)
+      // The two hooks the tailer and the spawn path call.
+      expect(src).toMatch(/turnSnapshots\.onTurnEnd\(sid, s\.cwd, v\)/)
+      expect(src).toMatch(/turnSnapshots\.onTurnStart\(sid, cwd\)/)
+      // The kill switch and the guard's transcript facts.
+      expect(src).toMatch(/forceDisabled: process\.env\.WALNUT_TURN_SNAPSHOTS === '0'/)
+      expect(src).toMatch(/computeChangesCached\(sid, cwd\)/)
+      const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      const end = src.indexOf('])', start)
+      expect(src.slice(start, end)).not.toMatch(/turns\./)
+    }
+    expect(templateSrc).toMatch(/\(__CREATE_TURN_SNAPSHOTS__\)\(\{/)
+    expect(templateSrc).toMatch(/\(__CREATE_TURN_GUARD__\)\(\{/)
+    expect(standaloneSrc).toMatch(/createTurnSnapshots\(\{/)
+    expect(standaloneSrc).toMatch(/createTurnGuard\(\{/)
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'turn-snapshot-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'turn-snapshot-v1'/)
+    // Both cores are part of the daemon version hash, in the build script's order.
+    const versionSrc = readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts'))
+    const buildSrc = readFile(path.join(ROOT, 'scripts/build-daemon.sh'))
+    for (const f of ['src/providers/turn-snapshot-core.ts', 'src/providers/turn-guard-core.ts']) {
+      expect(versionSrc).toContain(`'${f}'`)
+      expect(buildSrc).toContain(f)
+    }
+  })
   it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
     // Every sidecar-gated capability must be excluded from the STATIC caps
     // literal (a source deploy that advertised one before its sidecar loaded

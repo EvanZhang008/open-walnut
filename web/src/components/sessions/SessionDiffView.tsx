@@ -109,6 +109,8 @@ interface SessionDiffViewProps {
   /** Open a file in the Files tab at a line (reference-panel jumps). `term`
    *  is the symbol the jump was for — flashed at the landing line. */
   onOpenFile?: (path: string, line?: number, term?: string) => void;
+  /** Leads the toolbar (the Changed tab's Files | Turns switch, SessionChangedTab). */
+  toolbarLeadingSlot?: ReactNode;
 }
 
 /** An in-progress inline comment anchored to a line range within one file. */
@@ -131,7 +133,7 @@ interface CommentDraft {
  *  at the SessionDiffView level — surviving file switches — until the user
  *  submits the whole review in bulk or discards it. `id` is monotonic so removal
  *  is stable; `anchorKey`+`filePath` locate the inline card under its line. */
-interface PendingComment {
+export interface PendingComment {
   id: number;
   filePath: string;
   anchorKey: string;
@@ -695,7 +697,7 @@ function AiFileSummary({ sessionId, change }: { sessionId: string; change: Sessi
 // (jump history, search status, reference panel) and an unmemoized whale table
 // re-reconciled for ~1s each time — measured as a 1s reference-jump stall. All
 // props are stable identities (useMemo'd change/pending, useCallback'd handlers).
-const FileDiffPane = memo(function FileDiffPane({
+export const FileDiffPane = memo(function FileDiffPane({
   change, viewType, rendered, sessionCwd, sessionHost, pending, sessionId, aiSummaryOn,
   onAddComment, onSendNow, onCopyComment, onRemoveComment,
 }: {
@@ -1437,7 +1439,7 @@ function rememberChanges(key: string, res: SessionChangesResult): void {
   }
 }
 
-export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot, onOpenFile }: SessionDiffViewProps) {
+export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot, onOpenFile, toolbarLeadingSlot }: SessionDiffViewProps) {
   const [data, setData] = useState<SessionChangesResult | null>(() => {
     const mem = loadDiffMemory(sessionId);
     return lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null;
@@ -2235,6 +2237,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // re-entry would replay the same doomed fetch with no way out.
   const toolbar = (
       <div className="session-diff-toolbar">
+        {toolbarLeadingSlot}
         {/* VS Code-style layout toggle — same control as the Files tab. */}
         <button
           type="button"

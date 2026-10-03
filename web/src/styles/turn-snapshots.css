@@ -1,0 +1,172 @@
+/* ── Changed tab: Files | Turns switch, the Turns view, the restore confirm ──
+   Components: SessionChangedTab.tsx, SessionTurnsView.tsx, TurnRestoreDialog.tsx.
+   The view reuses the Files view's skeleton (.session-diff-toolbar / -body /
+   -tree / -main), so the two read as one tab. */
+
+.changed-view-switch { flex: none; }
+.changed-view-switch .session-diff-viewtoggle-btn { padding: 3px 9px; }
+
+.session-turns-view .turns-toolbar { justify-content: flex-start; }
+.session-turns-view .turns-toolbar .session-diff-toolbar-title { flex: 1 1 auto; min-width: 0; }
+
+.turns-empty p { margin: 0 0 6px; }
+
+.turns-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--fg-secondary, var(--fg-muted));
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--warning, #d97706) 7%, transparent);
+  flex: 0 0 auto;
+}
+.turns-strip-ok { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--fg); }
+.turns-strip > span { flex: 1 1 auto; min-width: 0; }
+.turns-strip-close {
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.turns-strip-close:hover { color: var(--fg); }
+
+/* The turn list: a fixed share of the body, like the Files view's tree. */
+.session-diff-tree.turns-list {
+  width: clamp(190px, 34%, 320px);
+  padding: 4px 4px 24px;
+}
+.turns-item { border-radius: 6px; }
+.turns-item + .turns-item { margin-top: 1px; }
+.turns-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title time" "files files" "note note";
+  row-gap: 1px;
+  column-gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+}
+.turns-row:hover { background: var(--bg-hover, color-mix(in srgb, var(--fg) 6%, transparent)); }
+.turns-item.is-selected > .turns-row { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.turns-row-title {
+  grid-area: title;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turns-kind-start, .turns-kind-pre-restore, .turns-kind-restored { color: var(--fg-secondary, var(--fg-muted)); }
+.turns-row-time { grid-area: time; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.turns-row-files { grid-area: files; font-size: 11px; color: var(--fg-muted); }
+.turns-row-note { grid-area: note; font-size: 10.5px; color: var(--warning, #d97706); }
+
+.turns-files { padding: 2px 0 6px 10px; }
+.turns-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.turns-file:hover { background: var(--bg-hover, color-mix(in srgb, var(--fg) 6%, transparent)); }
+.turns-file.is-selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.turns-file-status { flex: none; width: 12px; font-weight: 700; text-align: center; }
+.turns-file-status.is-added { color: var(--success, #16a34a); }
+.turns-file-status.is-deleted { color: var(--error, #dc2626); }
+.turns-file-status.is-modified { color: var(--warning, #d97706); }
+.turns-file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turns-file-add { flex: none; color: var(--success, #16a34a); }
+.turns-file-del { flex: none; color: var(--error, #dc2626); }
+.turns-file-more { padding: 3px 6px; font-size: 11px; color: var(--fg-muted); }
+
+.turns-main { display: flex; flex-direction: column; }
+.turns-main-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary, var(--card-bg));
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.turns-main-title { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.turns-main-time { font-size: 11px; color: var(--fg-muted); flex: 1 1 auto; }
+.turns-restore-btn { flex: none; }
+.turns-review-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.turns-review-bar > span { flex: 1 1 auto; }
+
+/* Restore confirm */
+.app-modal.turn-restore-dialog { width: min(480px, calc(100vw - 48px)); }
+.turn-restore-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.turn-restore-group-head { font-size: 12px; font-weight: 600; color: var(--fg-secondary, var(--fg-muted)); margin-bottom: 2px; }
+.rewind-dialog-files.turn-restore-files { margin: 0; }
+.turn-restore-running { margin-top: 10px; color: var(--warning, #d97706); }
+
+/* Rewind guard step (SessionRewindDialog) */
+.rewind-guard-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.rewind-guard-file { display: flex; flex-direction: column; min-width: 0; }
+.rewind-guard-file-path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rewind-guard-file-writer { font-size: 12px; color: var(--warning, #d97706); }
+.rewind-guard-actions { flex-wrap: wrap; }

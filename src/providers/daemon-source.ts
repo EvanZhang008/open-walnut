@@ -54,6 +54,8 @@ import { createFsLs } from './fs-ls-core.js'
 import { createProcSampler } from './proc-sample-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore } from './git-commit-core.js'
+import { createTurnSnapshots } from './turn-snapshot-core.js'
+import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 
@@ -205,6 +207,8 @@ export function getDaemonSource(): string {
     ['__CREATE_PROC_SAMPLER__', createProcSampler.toString()],
     ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
     ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
+    ['__CREATE_TURN_SNAPSHOTS__', createTurnSnapshots.toString()],
+    ['__CREATE_TURN_GUARD__', createTurnGuard.toString()],
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
     ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
     ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
@@ -367,6 +371,25 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         const gc = createCommit({ spawn: () => { throw new Error('unused') }, fs: fs as never, path, tmpdir: () => '/tmp', env: {}, attribution: at })
         if (gc.job('none') !== null || gc.cleanMessage('  x  \n\n\n\ny\n') !== '  x\n\ny\n') throw new Error('git commit core did not build')
       }
+    }
+    // Turn snapshot smoke: the ref-record and diff parsers and the path rule ride
+    // this text, so a reconstructed copy must read a record (with its JSON body),
+    // a name-status pair, and refuse a path that climbs out of the repository.
+    // The guard's verdict table rides it too: a fresh snapshot that differs is a
+    // conflict, and an edit whose new text is gone is a difference.
+    const createSnapshots = reconstructed['__CREATE_TURN_SNAPSHOTS__'] as typeof createTurnSnapshots | undefined
+    if (createSnapshots) {
+      const ts = createSnapshots({})
+      const recs = ts.parseRefRecords('refs/walnut/turns/s1/3\u0000' + 'a'.repeat(40) + '\u0000' + 'b'.repeat(40) + '\u00001700000000\u0000{"kind":"turn","files":[["M","x.ts",1,2]]}\n\u0000\n')
+      if (recs.length !== 1 || recs[0].n !== 3 || recs[0].files[0]?.path !== 'x.ts' || recs[0].files[0]?.deletions !== 2) throw new Error('turn snapshots misread a ref record')
+      if (ts.parseNameStatusZ('M\u0000a b.ts\u0000D\u0000c.ts\u0000').length !== 2) throw new Error('turn snapshots misread a name-status list')
+      if (ts.validRel('../etc/passwd') || ts.validRel('.git/config') || !ts.validRel('src/a.ts')) throw new Error('turn snapshots accepted a path outside the repository')
+    }
+    const createGuard = reconstructed['__CREATE_TURN_GUARD__'] as typeof createTurnGuard | undefined
+    if (createGuard) {
+      const g = createGuard({})
+      if (g.guardVerdict('differs', false, 'same') !== 'conflict' || g.guardVerdict('same', false, 'differs') !== 'suspect') throw new Error('turn guard verdict table changed')
+      if (g.opVerdict({ kind: 'edit', newString: 'gone' }, { path: '/r/a.ts', exists: true, text: 'kept\r\n' }) !== 'differs') throw new Error('turn guard misjudged an edit')
     }
     // host.fix smoke: the package-manager table and the sudo refusal reader ride
     // this text, so a reconstructed copy must still build apk's argv and read
@@ -2803,6 +2826,13 @@ function dispatchCommand(ws, id, cmd) {
     // 'proc-sample-v1': what each session costs this host. NOT in
     // BRIDGE_ALLOWED_COMMANDS: it names host processes. Keep in sync with daemon-standalone.ts.
     case 'proc.sample': return cmdProcSample(ws, id);
+    // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
+    // BRIDGE_ALLOWED_COMMANDS: they read and write host files. Keep in sync with daemon-standalone.ts.
+    case 'turns.list':
+    case 'turns.diff':
+    case 'turns.restore':
+    case 'turns.guard':
+    case 'turns.configure': return cmdTurns(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id, cmd);
@@ -4230,6 +4260,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
 
   sessionData.cronMetadataOrigin = { identity: cronProcess(sessionData).identity, offset: cronStartOffset, startedAt: cronStartedAt, fresh: !resume };
   sessions.set(sid, sessionData);
+  // The tree before this session's first recorded turn, when it has none yet.
+  try { turnSnapshots.onTurnStart(sid, cwd); } catch (err) { /* never the spawn's problem */ }
   cronMetadata.configure(sid, cronProcess(sessionData), cronMetadataConfig);
   cronMetadata.state(sid, cronProcess(sessionData), false, !resume);
   // Write-ahead: a service that cannot record the spawn must not report success,
@@ -5884,6 +5916,8 @@ function ensureWatcher(sid) {
           }
           // A reply request this host owns ends with this turn (offline-host-core.ts).
           offlineHost.onResult(sid, line, v).catch(function () {});
+          // The working tree as this turn left it (turn-snapshot-core.ts): returns at once.
+          try { turnSnapshots.onTurnEnd(sid, s.cwd, v); } catch (err) { /* never the tailer's problem */ }
         }
 
         // ── L2: materialize daemon-authoritative task state ──
@@ -8632,6 +8666,60 @@ async function cmdTranscriptRewindProbe(ws, id, cmd) {
     sendOk(ws, id, Object.assign({ found: true }, output));
   } catch (err) {
     sendError(ws, id, 'transcript.rewindProbe failed: ' + err.message);
+  }
+}
+
+// ── Per-turn working-tree snapshots + the rewind guard ('turn-snapshot-v1') ──
+// PARITY: keep in sync with daemon-standalone.ts cmdTurns. The git work and the
+// guard's verdict are turn-snapshot-core.ts / turn-guard-core.ts, injected as
+// text. Without the changes sidecar the guard has no transcript facts and
+// judges by the snapshots alone.
+const turnSnapshots = (__CREATE_TURN_SNAPSHOTS__)({
+  execFile: execFile,
+  fs: fs.promises,
+  path: path,
+  env: process.env,
+  tmpDir: path.join(DAEMON_DIR, 'turn-snapshots'),
+  settingsPath: path.join(DAEMON_DIR, 'turn-snapshots.json'),
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  turnActive: function (sid) { const s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
+  forceDisabled: process.env.WALNUT_TURN_SNAPSHOTS === '0',
+});
+const turnGuard = (__CREATE_TURN_GUARD__)({
+  compare: function (sid, cwd, files, budgetMs) { return turnSnapshots.compareToLatest(sid, cwd, files, budgetMs); },
+  repoRootOf: function (cwd) { return turnSnapshots.repoRootOf(cwd); },
+  sessionOps: changesCore ? async function (sid, cwd) {
+    const entry = await computeChangesCached(sid, cwd);
+    return entry && entry.output ? entry.output.fileMap : null;
+  } : undefined,
+  realpath: function (p) { return fs.promises.realpath(p); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
+async function cmdTurns(ws, id, cmd) {
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+  const cwd = typeof cmd.cwd === 'string' ? cmd.cwd : '';
+  try {
+    switch (cmd.cmd) {
+      case 'turns.configure':
+        return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }));
+      case 'turns.list':
+        return sendOk(ws, id, await turnSnapshots.list(sid, cwd));
+      case 'turns.diff':
+        return sendOk(ws, id, await turnSnapshots.fileDiff(sid, cwd, Number(cmd.n), String(cmd.path == null ? '' : cmd.path),
+          cmd.against === 'worktree' ? 'worktree' : 'previous'));
+      case 'turns.restore': {
+        const input = { sid: sid, cwd: cwd, n: Number(cmd.n), dryRun: cmd.dryRun === true };
+        if (Array.isArray(cmd.paths)) input.paths = cmd.paths.map(String);
+        return sendOk(ws, id, await turnSnapshots.restore(input));
+      }
+      case 'turns.guard':
+        return sendOk(ws, id, await turnGuard.guard({ sid: sid, cwd: cwd, files: cmd.files, siblings: cmd.siblings }));
+    }
+    sendError(ws, id, 'turns: unknown command');
+  } catch (err) {
+    const code = err && err.code;
+    sendError(ws, id, String(cmd.cmd) + ' failed: ' + (err && err.message), typeof code === 'string' ? { code: code } : undefined);
   }
 }
 
