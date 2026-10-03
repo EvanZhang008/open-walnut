@@ -10,6 +10,7 @@
  */
 
 import { SessionControlError } from '../sessions/session-controls.js'
+import { engineCaps } from '../agents/engine-registry.js'
 import { log } from '../../logging/index.js'
 import type { SessionRecord } from '../types.js'
 import type {
@@ -200,7 +201,7 @@ export async function siblingSessions(record: SessionRecord, now = Date.now()): 
     if ((isRemoteHost(r.host) ? r.host : '__local__') !== host) continue
     // Only Claude Code transcripts carry the ops the daemon reads.
     if (r.provider && r.provider !== 'cli') continue
-    if (r.engine && r.engine !== 'claude') continue
+    if (engineCaps(r.engine).historySource !== 'provider-jsonl') continue
     const at = Date.parse(r.lastActiveAt ?? '') || 0
     if (now - at > SIBLING_MAX_AGE_MS) continue
     const score = sharedSegments(r.cwd, cwd)
