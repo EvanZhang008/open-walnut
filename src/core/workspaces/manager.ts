@@ -120,7 +120,7 @@ const realDeps: WorkspaceManagerDeps = {
 let ownHome: Promise<string> | null = null
 let deps: WorkspaceManagerDeps = realDeps
 
-/** The live deps, for cleanup.ts. */
+/** The live deps, for cleanup.ts and launch.ts. */
 export function managerDeps(): WorkspaceManagerDeps {
   return deps
 }

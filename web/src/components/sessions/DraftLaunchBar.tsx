@@ -295,8 +295,9 @@ export function DraftLaunchBar({
           facts ('Ask Walnut' / WALNUT_HOME), and a read-only pill in the
           folder pill's usual slot read as "runs in that folder" (user). */}
       {/* The "Isolated workspace" body, right above the folder it isolates: nothing
-          while off (the switch is in More), so a folder pick never grows the bar. */}
-      {!isWalnut && !isFork && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} />}
+          while off (the switch is in More), so a folder pick never grows the bar.
+          A bound draft has no More: its inline toggle shows from the first paint. */}
+      {!isWalnut && !isFork && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} />}
 
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">

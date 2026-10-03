@@ -7,7 +7,26 @@
   gap: 4px;
   min-width: 0;
 }
-/* The switch is a row of the draft's More menu (DraftWorkspaceMenuItem). */
+/* A bound draft's inline toggle (it has no More menu). */
+.draft-workspace-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.draft-workspace-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.draft-workspace-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.draft-workspace-toggle.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+/* A new draft's switch is a row of its More menu (DraftWorkspaceMenuItem). */
 .draft-workspace-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .draft-workspace-menu-hint { font-size: 11px; color: var(--fg-muted); }
 /* While on: one quiet pill leads the body, its × turns the option off. */

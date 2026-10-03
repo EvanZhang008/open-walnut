@@ -20,7 +20,7 @@ import { QuickStartError } from '../sessions/quick-start.js'
 import { WorkspaceError } from './daemon-client.js'
 import { findProvider, validateInputs } from './registry.js'
 import { belongsToWorkspace, isLaunchReady, needsCreation } from './decisions.js'
-import { deferStart, recordRequestFailure, requestWorkspace } from './manager.js'
+import { deferStart, managerDeps, recordRequestFailure, requestWorkspace } from './manager.js'
 
 function normHost(host: string | undefined | null): string {
   return !host || host === 'local' ? '__local__' : host
@@ -93,8 +93,7 @@ export async function deferTaskStart(task: Task, params: {
 
 /** The phone's launch on an existing task: a ready workspace is where it runs; a phone does not wait for one. */
 export async function mobileWorkspacePlace(taskId: string, cwd: string, host: string | undefined): Promise<{ cwd: string; host: string | undefined } | null> {
-  const { getTask } = await import('../task-manager.js')
-  const task = await getTask(taskId).catch(() => null)
+  const task = await managerDeps().getTask(taskId)
   const ws = task?.workspace
   if (!ws || !belongsToWorkspace(ws, cwd)) return null
   if (!isLaunchReady(ws)) {
@@ -127,10 +126,8 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
   const asked = body.workspace && typeof body.workspace === 'object' ? body.workspace as Record<string, unknown> : null
   const refuse = (status: number, error: string, code: string) => ({ refuse: { status, body: { error, code } } })
   let existing: Task | null = null
-  if (ctx.existingTaskId) {
-    const { getTask } = await import('../task-manager.js')
-    existing = await getTask(ctx.existingTaskId).catch(() => null)
-  }
+  // A bound draft's Start (▶ on an existing task): the task's own row decides.
+  if (ctx.existingTaskId) existing = await managerDeps().getTask(ctx.existingTaskId)
   const ws = existing?.workspace
   const begin = (request: { provider: string; inputs?: unknown } | null): QuickStartWorkspacePlan => ({
     defer: true,

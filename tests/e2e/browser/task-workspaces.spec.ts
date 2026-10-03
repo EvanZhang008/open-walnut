@@ -1,6 +1,7 @@
 /**
  * Task workspaces in the browser: the draft's "Isolated workspace" option (a
- * row of the draft's More menu; on, its body sits above the folder row), the
+ * row of a new draft's More menu; on, its body sits above the folder row; a
+ * bound draft's inline toggle, there from its first paint), the
  * column that waits for the workspace, the session that starts inside it, and
  * the cleanup when the task completes. Real UI, real server, the MockDaemon
  * running the REAL workspace core (real `git worktree`, the real fake
@@ -375,6 +376,76 @@ test('a plugin provider: a multi-repo workspace shows its progress, fails with R
     fs.rmSync(failKnob, { force: true })
     fs.rmSync(delayKnob, { force: true })
   }
+  expect(audit.errors).toEqual([])
+  expect(audit.failed).toEqual([])
+})
+
+test('a bound draft (▶ Start of an existing task) offers the option inline from its first paint, and its session runs in the worktree', async ({ page }) => {
+  test.setTimeout(180_000)
+  const audit = watchErrors(page)
+  const proj = test.info().project.name
+  const repo = inHome(path.join(home, 'ws-fixture', 'app'))
+  const worktrees = path.join(home, '.open-walnut-worktrees', 'app')
+  // A title-only task with its own folder: its ▶ opens a bound draft that knows the folder.
+  // In Focus: the home panel's default view, where its card carries the ▶.
+  const created = await page.request.post('/api/tasks', { data: { title: `Bound workspace ${proj} ${Date.now().toString(36)}`, source: 'local', project: 'app', cwd: repo, focus_tier: 'focus' } })
+  expect(created.ok(), await created.text()).toBe(true)
+  const taskId = ((await created.json()) as { task: { id: string } }).task.id
+  await openHome(page)
+
+  // Record what the bound draft held the first time it was in the DOM: the
+  // option must be there then, never inserted by a later commit.
+  await page.evaluate(() => {
+    const w = window as unknown as { __boundDraftFirst?: boolean[] }
+    w.__boundDraftFirst = []
+    const look = () => {
+      const panel = document.querySelector('.main-page-session-column .draft-session-panel .draft-bound-task')?.closest('.draft-session-panel')
+      if (panel) w.__boundDraftFirst!.push(!!panel.querySelector('[data-testid="draft-workspace-toggle"]'))
+    }
+    new MutationObserver(look).observe(document.body, { childList: true, subtree: true })
+  })
+  const row = await taskCard(page, taskId)
+  await row.hover()
+  await row.locator('.task-start-btn').click()
+  const draft = draftPanel(page)
+  await expect(draft.locator('.draft-bound-task')).toBeVisible()
+  const toggle = draft.getByTestId('draft-workspace-toggle')
+  await expect(toggle).toBeVisible()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  const seen = await page.evaluate(() => (window as unknown as { __boundDraftFirst?: boolean[] }).__boundDraftFirst ?? [])
+  expect(seen.length, 'the observer saw the bound draft').toBeGreaterThan(0)
+  expect(seen.every(Boolean), `the option was in the bound draft from its first commit: ${seen.join(',')}`).toBe(true)
+  // No More menu on a bound draft, so the option is not there either.
+  await expect(draft.locator('.draft-launch-bar button.draft-more-btn')).toHaveCount(0)
+  await shot(page, 'bound-draft-off', draft.locator('.session-panel-input'), 8)
+
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  const body = draft.getByTestId('draft-workspace-row')
+  await expect(body.getByTestId('draft-workspace-loading')).toHaveCount(0, { timeout: 30_000 })
+  await expect(body.getByTestId('draft-workspace-provider-git-worktree')).toHaveAttribute('aria-checked', 'true')
+  // The inline toggle is the switch here: no second "on" pill.
+  await expect(body.getByTestId('draft-workspace-on')).toHaveCount(0)
+  await shot(page, 'bound-draft-on', draft.locator('.session-panel-input'), 8)
+
+  const started = await launch(page, `Bound task turn ${proj}`)
+  expect(started.taskId).toBe(taskId)
+  expect(started.body.preparing).toBe(true)
+  expect(started.body.sessionId).toBeFalsy()
+  const ws = await waitWorkspace(page, taskId, 'ready')
+  expect(path.dirname(ws.root!)).toBe(worktrees)
+  expect(ws.cwd).toBe(ws.root)
+  expect(git(ws.root!, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(ws.branch)
+
+  await expect.poll(async () => (await sessionsOf(page, taskId)).length, { timeout: 30_000 }).toBe(1)
+  const [s] = await sessionsOf(page, taskId)
+  expect(s.cwd).toBe(ws.cwd)
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${s.claudeSessionId}"]`)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  await expect(panel.getByText(`Bound task turn ${proj}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('[data-testid="workspace-preparing-panel"]')).toHaveCount(0)
+  // Still one task: the Start reused it.
+  expect((await readTask(page, taskId)).workspace?.state).toBe('ready')
   expect(audit.errors).toEqual([])
   expect(audit.failed).toEqual([])
 })

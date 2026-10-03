@@ -516,6 +516,41 @@ describe('start paths', () => {
     const plan = await workspaceLaunchPlan({ workspace: { provider: 'git-worktree', inputs: { baseRef: 'dev' } } }, { cwd: '/r/repo', isWalnutAgent: false })
     expect(plan?.defer).toBe(true)
   })
+
+  it('a bound draft\'s Start on an existing task makes the workspace on THAT task and starts once it is ready', async () => {
+    const f = fake()
+    const task = addTask(f, { id: 'e1', title: 'Tidy logs', phase: 'TODO' as never })
+    const plan = await workspaceLaunchPlan({ workspace: { provider: 'git-worktree', inputs: { baseRef: 'dev' } } }, { cwd: '/r/repo', existingTaskId: 'e1', isWalnutAgent: false })
+    expect(plan).toMatchObject({ defer: true })
+    expect(plan!.cwd).toBeUndefined()
+    const answer = await plan!.begin!(task, { message: 'tidy them' })
+    expect(answer).toMatchObject({ taskId: 'e1', preparing: true })
+    expect(f.tasks.size).toBe(1)
+    expect(f.tasks.get('e1')!.workspace).toMatchObject({
+      state: 'creating', provider: 'git-worktree', anchor: '/r/repo', inputs: { baseRef: 'dev' }, home: HOME_A,
+      pending_start: { via: 'quick-start', message: 'tidy them' },
+    })
+    expect(f.launched).toEqual([])
+    await finishJob(f, 'e1', { state: 'done', result: { root: '/w/repo/e1', cwd: '/w/repo/e1', branch: 'walnut/e1', sourceRepo: '/r/repo', repos: [{ path: '/w/repo/e1' }] } })
+    expect(f.calls.find((c) => c.cmd === 'workspace.create')!.params).toMatchObject({ anchor: '/r/repo', baseRef: 'dev' })
+    expect(f.tasks.get('e1')!.workspace).toMatchObject({ state: 'ready', root: '/w/repo/e1' })
+    expect(f.launched).toEqual([{ taskId: 'e1', cwd: '/w/repo/e1', via: 'quick-start' }])
+  })
+
+  it('an existing task\'s ready workspace is where its Start runs, asked for or not; a removed one is made again', async () => {
+    const f = fake()
+    addTask(f, { id: 'e2', workspace: { ...gitWs } })
+    const asked = { workspace: { provider: 'git-worktree' } }
+    expect(await workspaceLaunchPlan(asked, { cwd: '/r/repo', existingTaskId: 'e2', isWalnutAgent: false })).toEqual({ cwd: gitWs.cwd })
+    expect(await workspaceLaunchPlan({}, { cwd: '/r/repo', existingTaskId: 'e2', isWalnutAgent: false })).toEqual({ cwd: gitWs.cwd })
+    expect(await workspaceLaunchPlan(asked, { cwd: '/r/repo', host: 'devbox', existingTaskId: 'e2', isWalnutAgent: false }))
+      .toMatchObject({ refuse: { status: 409, body: { code: 'host-mismatch' } } })
+    const removed = addTask(f, { id: 'e3', workspace: { ...gitWs, state: 'removed', name: 'fix-parser-e3' } })
+    const again = await workspaceLaunchPlan(asked, { cwd: '/r/repo', existingTaskId: 'e3', isWalnutAgent: false })
+    expect(again).toMatchObject({ defer: true })
+    expect(await again!.begin!(removed, { message: 'again' })).toMatchObject({ taskId: 'e3', preparing: true })
+    expect(f.tasks.get('e3')!.workspace).toMatchObject({ state: 'creating', name: 'fix-parser-e3', pending_start: { message: 'again' } })
+  })
 })
 
 describe('watch', () => {
