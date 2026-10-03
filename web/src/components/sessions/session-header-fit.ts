@@ -9,9 +9,13 @@
  * and of every item's natural width, never of what is currently shown, so a
  * resize cannot make it oscillate.
  *
- * Tool row: items leave in priority order. Window buttons go first (into the
- * kebab menu), then the view chips (into a "..." menu), the activity time just
- * hides (the kebab shows it). Close never leaves; Plan, when present, leaves last.
+ * Tool row: items leave in priority order into the row's own "..." menu: the
+ * window buttons first (Open in new tab, Pin, Locate), the activity time just
+ * hides (the kebab shows it), then the view chips (Terminal before Board before
+ * Files before Changed); Fork and Plan leave last. Expand and Close never leave:
+ * a cramped column is the moment to go full screen, and the user asked for both
+ * to stay whatever the width (2026-10-03). Nothing from this row goes into the
+ * title row's kebab, which is the task's menu.
  *
  * Title row: the title keeps TITLE_MIN_WIDTH for its text. The pills beside it
  * step down together: full words → the status badge shrinks to its dot → every
@@ -34,10 +38,8 @@ export interface ToolRowItem {
 export interface ToolRowFit {
   /** Ids shown on the row, in the caller's order (fixed items included). */
   visible: string[];
-  /** Hidden chips, listed in the "..." menu, in the caller's order. */
+  /** Hidden chips and window buttons, listed in the "..." menu, in the caller's order. */
   inMore: string[];
-  /** Hidden window buttons, listed in the kebab menu, in the caller's order. */
-  inKebab: string[];
   /** Hidden info items (the time); nowhere, their facts live elsewhere. */
   dropped: string[];
 }
@@ -49,7 +51,7 @@ export interface ToolRowOptions {
   windowGap: number;
   /** The least room kept between the two groups (`.session-meta-row-2`). */
   groupGap: number;
-  /** The "..." button, priced only while a chip is hidden. */
+  /** The "..." button, priced only while a chip or a window button is hidden. */
   moreWidth: number;
 }
 
@@ -58,23 +60,23 @@ export const ASSUMED_TOOL_WIDTH = 44;
 
 const widthOf = (item: ToolRowItem) => (item.width == null || item.width <= 0 ? ASSUMED_TOOL_WIDTH : item.width);
 
-/** The row's cost with `items` on it; the "..." button is added only when a chip is off. */
-function toolRowWidth(items: ToolRowItem[], chipHidden: boolean, opts: ToolRowOptions): number {
+/** The row's cost with `items` on it; the "..." button (in the chip group) is added only when `moreShown`. */
+function toolRowWidth(items: ToolRowItem[], moreShown: boolean, opts: ToolRowOptions): number {
   const left = items.filter((i) => i.kind === 'chip' || i.kind === 'info');
   const right = items.filter((i) => i.kind === 'window' || i.kind === 'fixed');
-  const leftSlots = left.length + (chipHidden ? 1 : 0);
+  const leftSlots = left.length + (moreShown ? 1 : 0);
   const leftWidth = left.reduce((sum, i) => sum + widthOf(i), 0)
-    + (chipHidden ? opts.moreWidth : 0)
+    + (moreShown ? opts.moreWidth : 0)
     + Math.max(0, leftSlots - 1) * opts.chipGap;
   const rightWidth = right.reduce((sum, i) => sum + widthOf(i), 0) + Math.max(0, right.length - 1) * opts.windowGap;
-  const groups = (left.length + (chipHidden ? 1 : 0) > 0 ? 1 : 0) + (right.length > 0 ? 1 : 0);
+  const groups = (leftSlots > 0 ? 1 : 0) + (right.length > 0 ? 1 : 0);
   return leftWidth + rightWidth + (groups === 2 ? opts.groupGap : 0);
 }
 
 export function fitToolRow(items: ToolRowItem[], availableWidth: number, opts: ToolRowOptions): ToolRowFit {
   const order = items.map((i) => i.id);
   const byOrder = (set: Set<string>) => order.filter((id) => set.has(id));
-  const all = { visible: [...order], inMore: [], inKebab: [], dropped: [] };
+  const all = { visible: [...order], inMore: [], dropped: [] };
   // A row that has not been laid out reports no width; the hooks skip those
   // frames, so a non-positive width here is a real "no room".
   const room = Math.max(1, availableWidth);
@@ -91,19 +93,18 @@ export function fitToolRow(items: ToolRowItem[], availableWidth: number, opts: T
   // one; here the 22px time and the 22px buttons would trade places as the
   // column shrank.)
   const kept: ToolRowItem[] = [...fixed, ...movable.slice(0, 1)];
-  const chips = movable.filter((i) => i.kind === 'chip');
+  const listed = movable.filter((i) => i.kind !== 'info');
   for (const item of movable.slice(1)) {
     const next = [...kept, item];
-    const chipHidden = chips.some((c) => !next.includes(c));
-    if (toolRowWidth(next, chipHidden, opts) > room) break;
+    const moreShown = listed.some((c) => !next.includes(c));
+    if (toolRowWidth(next, moreShown, opts) > room) break;
     kept.push(item);
   }
   const keptIds = new Set(kept.map((i) => i.id));
   const hidden = items.filter((i) => !keptIds.has(i.id));
   return {
     visible: byOrder(keptIds),
-    inMore: byOrder(new Set(hidden.filter((i) => i.kind === 'chip').map((i) => i.id))),
-    inKebab: byOrder(new Set(hidden.filter((i) => i.kind === 'window').map((i) => i.id))),
+    inMore: byOrder(new Set(hidden.filter((i) => i.kind === 'chip' || i.kind === 'window').map((i) => i.id))),
     dropped: byOrder(new Set(hidden.filter((i) => i.kind === 'info').map((i) => i.id))),
   };
 }

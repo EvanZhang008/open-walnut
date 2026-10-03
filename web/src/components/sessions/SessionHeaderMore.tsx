@@ -1,11 +1,13 @@
 /**
- * The two places a narrow session header's hidden tool row items go.
+ * Where a narrow session header's hidden items go. Each row keeps its own: the
+ * tool row's overflow stays on the tool row, the title row's on the title row
+ * (2026-10-03: window buttons in the task kebab read as task actions and confused).
  *
  * `SessionHeaderMoreMenu` is the "..." chip on the tool row and its menu: one row
- * per hidden view chip (Changed, Files, Board, Terminal, Fork, the heavy pill).
- * `HiddenWindowRows` is the kebab's leading section: one row per hidden window
- * button (Locate task, Pin panel, Open in new tab, Expand). `HiddenPillRows`
- * follows it: one row per title-row pill that did not fit even as a letter.
+ * per hidden view chip (Changed, Files, Board, Terminal, Fork, the heavy pill),
+ * then, after a divider, one per hidden window button (Open in new tab, Pin panel,
+ * Locate task). `HiddenPillRows` is the kebab's leading section: one row per
+ * title-row pill that did not fit even as a letter.
  *
  * Both proxy to the REAL element, which stays mounted under `data-hidden="true"`
  * (see useSessionHeaderFit.ts): a click on a row is `.click()` on it, and a
@@ -15,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { ICON_EXPAND, ICON_LOCATE, ICON_LOCK, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_LOCATE, ICON_LOCK, ICON_NEW_TAB } from '../common/Icons';
 import { TOOL_ITEMS } from './useSessionHeaderFit';
 import { TITLE_PILL_SELECTOR } from './session-header-fit';
 
@@ -49,7 +51,6 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
   else if (id === 'lock') value = button.getAttribute('aria-pressed') === 'true' ? 'Pinned' : '';
-  else if (id === 'expand') value = /collapse/i.test(label) ? 'Full screen' : '';
   else if (id === 'resources') value = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
   return { value, label, disabled };
 }
@@ -72,7 +73,7 @@ function useItemState(rowRef: RefObject<HTMLElement | null>, id: string): ItemSt
 interface MoreMenuProps {
   /** `.session-meta-row-2`, where the hidden items live. */
   rowRef: RefObject<HTMLElement | null>;
-  /** Hidden chip ids, in row order. Renders nothing when empty. */
+  /** Hidden chip and window button ids, in row order. Renders nothing when empty. */
   ids: string[];
 }
 
@@ -118,6 +119,8 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
   }, [rowRef]);
 
   if (ids.length === 0) return null;
+  const views = ids.filter((id) => TOOL_ITEMS[id]?.kind !== 'window');
+  const windows = ids.filter((id) => TOOL_ITEMS[id]?.kind === 'window');
   return (
     <>
       <button
@@ -129,7 +132,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`More views (${ids.length})`}
+        aria-label={`More (${ids.length})`}
         title={`More: ${ids.map((id) => TOOL_ITEMS[id]?.name ?? id).join(', ')}`}
       >
         <span aria-hidden="true">···</span>
@@ -145,7 +148,9 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
           onPointerDown={(e) => e.stopPropagation()}
           data-testid="session-header-more-menu"
         >
-          {ids.map((id) => <MoreRow key={id} id={id} rowRef={rowRef} onChoose={choose} />)}
+          {views.map((id) => <MoreRow key={id} id={id} rowRef={rowRef} onChoose={choose} />)}
+          {views.length > 0 && windows.length > 0 && <div className="task-kebab-divider" />}
+          {windows.map((id) => <WindowRow key={id} id={id} rowRef={rowRef} onChoose={choose} />)}
         </div>,
         document.body,
       )}
@@ -177,45 +182,29 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
   );
 }
 
-interface HiddenWindowRowsProps {
-  rowRef: RefObject<HTMLElement | null>;
-  /** Hidden window button ids, in row order. Renders nothing when empty. */
-  ids: string[];
-  onAfterAction?: () => void;
-}
-
-/** Kebab rows for the window buttons the tool row had no room for. */
-export function HiddenWindowRows({ rowRef, ids, onAfterAction }: HiddenWindowRowsProps) {
-  if (ids.length === 0) return null;
-  return (
-    <>
-      {ids.map((id) => <WindowRow key={id} id={id} rowRef={rowRef} onAfterAction={onAfterAction} />)}
-      <div className="task-kebab-divider" />
-    </>
-  );
-}
-
-function WindowRow({ id, rowRef, onAfterAction }: { id: string; rowRef: RefObject<HTMLElement | null>; onAfterAction?: () => void }) {
+/** A hidden window button's row in the "..." menu, with the button's icon and its live label. */
+function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
   const { value, label: ariaLabel } = useItemState(rowRef, id);
   // Locate reads as the real button does ("Find on Home" off the home page).
   const label = id === 'lock' && value === 'Pinned' ? 'Unpin panel'
-    : id === 'expand' && value ? 'Collapse back'
     : id === 'locate' && ariaLabel ? ariaLabel
     : TOOL_ITEMS[id]?.name ?? id;
   return (
     <button
       type="button"
       className="task-kebab-item"
-      onClick={(e) => { e.stopPropagation(); onAfterAction?.(); activate(rowRef.current, id); }}
-      data-testid={`session-header-kebab-${id}`}
+      role="menuitem"
+      onClick={(e) => { e.stopPropagation(); onChoose(id); }}
+      data-testid={`session-header-more-item-${id}`}
+      data-state={value || undefined}
     >
       <span className="task-kebab-icon" aria-hidden="true">{WINDOW_ICONS[id] ?? null}</span>
-      {label}
+      <span className="session-header-more-name">{label}</span>
     </button>
   );
 }
 
-const WINDOW_ICONS: Record<string, ReactNode> = { locate: ICON_LOCATE, lock: ICON_LOCK, popout: ICON_NEW_TAB, expand: ICON_EXPAND };
+const WINDOW_ICONS: Record<string, ReactNode> = { locate: ICON_LOCATE, lock: ICON_LOCK, popout: ICON_NEW_TAB };
 
 interface HiddenPillRowsProps {
   /** `.session-panel-title-meta`, where the pills live. */

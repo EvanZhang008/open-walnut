@@ -106,7 +106,7 @@ import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITL
 import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
-import { HiddenPillRows, HiddenWindowRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
+import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
 import '@/styles/session-header-fit.css';
 
 /**
@@ -2129,7 +2129,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   // The strip's own control leads the menu (PanelCountRow explains).
                   leadingSection={(close) => (
                     <>
-                      <HiddenWindowRows rowRef={toolRowRef} ids={toolFit.inKebab} onAfterAction={close} />
                       <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
                       <PanelCountRow onAfterAction={close} />
                     </>

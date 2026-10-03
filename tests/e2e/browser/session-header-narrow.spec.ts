@@ -163,23 +163,27 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.titleRow.overflowBy, `${label}: the title row runs past the panel`).toBeLessThanOrEqual(0)
   expect(state.titleRow.pillsStartAfterTitle, `${label}: a pill overlaps the title`).toBe(true)
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
+  expect(state.toolRow.visible, `${label}: expand must stay`).toContain('expand')
 }
 
-async function shootHeader(panel: Locator, name: string): Promise<void> {
+/** The header alone, or the header plus `below` px of the page under it (an open menu). */
+async function shootHeader(panel: Locator, name: string, below = 0): Promise<void> {
   const box = await panel.locator('.session-panel-header').boundingBox()
   if (!box) return
   const engine = panel.page().context().browser()?.browserType().name() ?? 'browser'
   await panel.page().screenshot({
     path: `${SHOT_DIR}/${engine}-${name}.png`, animations: 'disabled',
-    clip: { x: box.x - 1, y: box.y - 1, width: Math.min(box.width + 2, 640), height: box.height + 2 },
+    clip: { x: box.x - 1, y: box.y - 1, width: Math.min(box.width + 2, 640), height: box.height + 2 + below },
   })
 }
 
-/** The order items leave the tool row; the hidden set must always be a suffix of it. */
-const LEAVE_ORDER = ['popout', 'lock', 'locate', 'expand', 'resources', 'time', 'terminal', 'board', 'files', 'changed', 'fork']
-const WINDOW_BUTTONS = ['locate', 'popout', 'expand', 'lock']
+/** The order items leave the tool row; the hidden set must always be a suffix of it. Expand and Close never leave. */
+const LEAVE_ORDER = ['popout', 'lock', 'locate', 'resources', 'time', 'terminal', 'board', 'files', 'changed', 'fork']
+const WINDOW_BUTTONS = ['locate', 'popout', 'lock']
 /** The chips a "..." row stands in for (the heavy pill is one too, when a session wears it). */
 const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal', 'resources']
+/** Everything the "..." menu lists: the time is the one hidden item it does not. */
+const LISTED = [...VIEW_CHIPS, ...WINDOW_BUTTONS]
 
 /** The rules every width must obey, whatever the exact pixel widths of the chips. */
 function expectRules(state: HeaderState, label: string) {
@@ -193,7 +197,8 @@ function expectRules(state: HeaderState, label: string) {
   }
   const chipHidden = VIEW_CHIPS.some((id) => hidden.has(id))
   if (chipHidden) for (const id of WINDOW_BUTTONS) expect(hidden.has(id), `${label}: ${id} stays while a chip is hidden`).toBe(true)
-  expect(state.moreVisible, `${label}: the "..." chip shows exactly when a chip is hidden`).toBe(chipHidden)
+  const listedHidden = LISTED.some((id) => hidden.has(id))
+  expect(state.moreVisible, `${label}: the "..." chip shows exactly when it has something to list`).toBe(listedHidden)
   expect(state.statusLabelVisible, `${label}: the status word shows only at the full level`).toBe(state.titleRow.fit === 'full')
   const letters = state.titleRow.fit === 'letters'
   for (const [kind, text] of Object.entries(state.letters)) {
@@ -245,10 +250,9 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
     previous = state
     await shootHeader(panel, String(width))
   }
-  // The window buttons are the first to go (400px has room for the chips, not for five buttons too),
-  // and Expand, the way out of a cramped column, is the last of them.
+  // The movable window buttons are the first to go (400px has room for the chips, not for five
+  // buttons too); Expand and Close stay at every width.
   expect(states[400].toolRow.hidden).toContain('popout')
-  expect(states[400].toolRow.visible).toContain('expand')
   expect(['changed', 'files', 'board', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
   // 240px cannot hold five chips; 180px holds Fork and little else.
   expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['terminal', ...WINDOW_BUTTONS]))
@@ -261,14 +265,21 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await expect(meta.locator('[data-testid="task-trigger-pill"]')).toHaveText('TRIGGER')
   expect(states[180].titleRow.titleWidth).toBeGreaterThanOrEqual(40)
 
-  // 180px: the "..." menu names every hidden view and opens one. Opening a view
-  // takes the panel full screen (wide): the Files chip is back on the row, marked open.
+  // 180px: the "..." menu names every hidden view, then the hidden window buttons (the
+  // tool row's overflow stays on the tool row; the kebab below is the task's menu). Opening
+  // a view takes the panel full screen (wide): the Files chip is back on the row, marked open.
   await panel.getByTestId('session-header-more-btn').click()
   const more = page.getByTestId('session-header-more-menu')
   for (const id of states[180].toolRow.hidden.filter((h) => VIEW_CHIPS.includes(h))) {
     await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveText(id[0]!.toUpperCase() + id.slice(1))
   }
-  await shootHeader(panel, '180-more')
+  await expect(more.getByTestId('session-header-more-item-locate')).toHaveText(/Locate task/)
+  await expect(more.getByTestId('session-header-more-item-lock')).toHaveText(/Pin panel/)
+  await expect(more.getByTestId('session-header-more-item-popout')).toHaveText(/Open in new tab/)
+  await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
+  const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
+  expect(moreRows.slice(-3), 'window buttons come after the views').toEqual(['locate', 'lock', 'popout'])
+  await shootHeader(panel, '180-more', 220)
   await more.getByTestId('session-header-more-item-files').click()
   await expect(more).toHaveCount(0)
   await expect(panel.locator('[data-header-id="files"]')).toHaveClass(/session-action-chip-active/, { timeout: 10_000 })
@@ -278,17 +289,18 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   const back180 = await settleAt(page, panel, 180)
   expect(back180.toolRow.hidden).toEqual(states[180].toolRow.hidden)
 
-  // The kebab lists the hidden window buttons and any pill that did not fit even as a letter.
+  // The kebab lists only the title row's own overflow: any pill that did not fit even as a
+  // letter. No window button from the row above.
   await meta.locator('.task-kebab-btn').click()
   const kebab = page.locator('.task-kebab-menu').last()
-  await expect(kebab.getByTestId('session-header-kebab-locate')).toHaveText(/Locate task/)
-  await expect(kebab.getByTestId('session-header-kebab-expand')).toHaveText(/Expand/)
+  await expect(kebab.locator('[data-testid^="session-header-kebab-pill-"]').first()).toBeVisible()
+  await expect(kebab.getByText(/Locate task|Pin panel|Open in new tab/)).toHaveCount(0)
   const hiddenPills180 = states[180].titleRow.hiddenPills.split(' ').filter(Boolean)
   expect(hiddenPills180, '180px cannot hold three letter pills beside a title').toContain('trigger')
   for (const kind of hiddenPills180) {
     await expect(kebab.getByTestId(`session-header-kebab-pill-${kind}`)).toBeVisible()
   }
-  await shootHeader(panel, '180-kebab')
+  await shootHeader(panel, '180-kebab', 220)
   // A hidden pill's row brings the pill back and opens it: the Trigger flyout anchors to a real box.
   await kebab.getByTestId('session-header-kebab-pill-trigger').click()
   await expect(page.getByTestId('trigger-jobs-flyout')).toBeVisible({ timeout: 10_000 })
@@ -297,12 +309,13 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('trigger-jobs-flyout')).toHaveCount(0, { timeout: 10_000 })
 
-  // 320px: the window buttons are in the kebab while the pills are still on the row.
-  // Expand from there goes full screen, where the whole header comes back; Escape returns.
+  // 320px: the movable window buttons are in the "..." menu while the pills are still on the
+  // row; Expand is still a button. It goes full screen, where the whole header comes back;
+  // Escape returns to the same narrow shape.
   const at320 = await settleAt(page, panel, 320)
-  expect(at320.toolRow.hidden).toEqual(expect.arrayContaining(['popout', 'lock', 'locate', 'expand']))
-  await meta.locator('.task-kebab-btn').click()
-  await page.locator('.task-kebab-menu').last().getByTestId('session-header-kebab-expand').click()
+  expect(at320.toolRow.hidden).toEqual(expect.arrayContaining(['popout', 'lock', 'locate']))
+  expect(at320.toolRow.visible).toContain('expand')
+  await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
   await expect(panel.getByRole('button', { name: 'Collapse session', exact: true })).toBeVisible({ timeout: 10_000 })
   const full = await settleAt(page, panel, 320)
   expect(full.toolRow.hidden, 'full screen is wide: nothing hidden').toEqual([])

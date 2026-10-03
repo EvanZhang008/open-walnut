@@ -31,11 +31,11 @@ const FIT_SLACK = 1;
 
 export interface ToolRowState {
   hidden: Set<string>;
+  /** What the row's "..." menu lists: hidden chips, then hidden window buttons. */
   inMore: string[];
-  inKebab: string[];
 }
 
-const NO_TOOL_FIT: ToolRowState = { hidden: new Set(), inMore: [], inKebab: [] };
+const NO_TOOL_FIT: ToolRowState = { hidden: new Set(), inMore: [] };
 
 /** Priority (1 leaves last) and kind of every tool row item, by its `data-header-id`. */
 export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; name: string }> = {
@@ -47,21 +47,22 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   terminal: { kind: 'chip', priority: 6, name: 'Terminal' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
   resources: { kind: 'chip', priority: 8, name: 'Heavy' },
-  // A cramped column is the moment to go full screen, so Expand is the last
-  // window button to leave; Locate, the way back to the task from the Ask and
-  // Mail drawers, is next.
-  expand: { kind: 'window', priority: 9, name: 'Expand' },
-  locate: { kind: 'window', priority: 10, name: 'Locate task' },
-  lock: { kind: 'window', priority: 11, name: 'Pin panel' },
-  popout: { kind: 'window', priority: 12, name: 'Open in new tab' },
+  // Locate, the way back to the task from the Ask and Mail drawers, is the last
+  // of the three movable window buttons to leave.
+  locate: { kind: 'window', priority: 9, name: 'Locate task' },
+  lock: { kind: 'window', priority: 10, name: 'Pin panel' },
+  popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
+  // Expand and Close stay at every width: a cramped column is the moment to go
+  // full screen (the user: "at the very least keep close and expand", 2026-10-03).
+  expand: { kind: 'fixed', priority: 0, name: 'Expand' },
   close: { kind: 'fixed', priority: 0, name: 'Close' },
 };
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((id, i) => id === b[i]);
 
 /**
- * The tool row (`.session-meta-row-2`): which `[data-header-id]` items stay,
- * which go to the "..." menu, which to the kebab. Pass the row's ref; the hook
+ * The tool row (`.session-meta-row-2`): which `[data-header-id]` items stay and
+ * which go to the row's "..." menu. Pass the row's ref; the hook
  * finds the items itself, so a chip the session does not offer (no Board without
  * a task, no Terminal on a host without SSH) simply is not there.
  */
@@ -94,11 +95,11 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
     const fit = fitToolRow(items, rowWidth - FIT_SLACK, {
       chipGap: CHIP_GAP, windowGap: WINDOW_GAP, groupGap: GROUP_GAP, moreWidth,
     });
-    const hidden = [...fit.inMore, ...fit.inKebab, ...fit.dropped];
+    const hidden = [...fit.inMore, ...fit.dropped];
     setState((prev) => {
       const prevHidden = [...prev.hidden];
-      if (sameList(prevHidden, hidden) && sameList(prev.inMore, fit.inMore) && sameList(prev.inKebab, fit.inKebab)) return prev;
-      return { hidden: new Set(hidden), inMore: fit.inMore, inKebab: fit.inKebab };
+      if (sameList(prevHidden, hidden) && sameList(prev.inMore, fit.inMore)) return prev;
+      return { hidden: new Set(hidden), inMore: fit.inMore };
     });
   }, [rowRef]);
 
