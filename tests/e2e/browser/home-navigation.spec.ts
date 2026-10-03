@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
-import { addFilter, closeFilterMenu, displayButton, filterChip, removeFilterChip } from './filter-bar-helpers';
+import { addFilter, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
@@ -68,9 +68,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await expect(page.locator('.todo-section-tabs, .task-view-row')).toHaveCount(0);
   await expect(page.getByTestId('tier-view-bar')).toHaveCount(0);
   expect(await homeToolbar(page).evaluate(bar => [...bar.children].map(child => child.className.split(' ')[0])))
-    .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'tp-btn', 'todo-panel-hide']);
-  // Filter before Display, each named by its aria-label.
-  expect(await homeToolbar(page).locator(':scope > .tp-btn').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Filter', 'Display']);
+    .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'todo-panel-hide']);
+  // One menu button, Display, named by its aria-label (it holds the filters too).
+  expect(await homeToolbar(page).locator(':scope > .tp-btn').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Display']);
   await expect(homeToolbar(page).locator('.todo-search-input')).toBeVisible();
   // One base colour: the task column is the page background, not the grey secondary band.
   expect(await page.locator('.main-page-todo').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
@@ -79,19 +79,19 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   expect(await bottomOf('.sidebar-header')).toBe(await bottomOf('#home-task-navigation .todo-panel-toolbar'));
   await expect(homeToolbar(page).locator('.new-launcher-label')).toBeVisible();
   // One quiet toolbar, no accent colour: New task wears the search field's outline, and the
-  // filter icon is the same grey glyph as the hide button.
+  // Display icon is the same grey glyph as the hide button.
   const look = (selector: string) => homeToolbar(page).locator(selector).first().evaluate(el => {
     const s = getComputedStyle(el);
     return { background: s.backgroundColor, border: `${s.borderTopWidth} ${s.borderTopColor}`, color: s.color };
   });
-  const [searchLook, createLook, filterLook, displayLook, hideLook] = await Promise.all(
-    ['.todo-search-bar', '.new-launcher-btn', '.fb-filter-btn', '.dm-display-btn', '.todo-panel-hide'].map(look));
+  const [searchLook, createLook, displayLook, hideLook] = await Promise.all(
+    ['.todo-search-bar', '.new-launcher-btn', '.dm-display-btn', '.todo-panel-hide'].map(look));
   expect(createLook.background).toBe(searchLook.background);
   expect(createLook.border).toBe(searchLook.border);
   expect(createLook.color).toBe('rgb(29, 29, 31)');
-  // Filter and Display carry words now, so they read in the secondary grey (the hide
-  // button is a bare icon in the muted one); neither wears the accent at rest.
-  expect(displayLook.color).toBe(filterLook.color);
+  // Display carries a word, so it reads in the secondary grey (the hide button is a bare
+  // icon in the muted one); it shares the hide button's background and never wears the
+  // accent at rest.
   expect(displayLook.background).toBe(hideLook.background);
   expect(displayLook.color).not.toBe('rgb(0, 122, 255)');
 
@@ -185,24 +185,27 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await project.locator('.todo-group-name-btn').click();
   await expect(row).toBeVisible();
 
-  // Display owns views and layout; Filter owns which tasks show. Display opens under its
+  // Display holds the filters, the views and the layout in one menu. It opens under its
   // button, right edges aligned (useMenuPlacement), unless its left edge would leave the
-  // task panel (F11: it then starts at the panel's left edge, never over the rail), and
-  // fits without scrolling.
+  // task panel (F11: it then starts at the panel's left edge, never over the rail). It is
+  // capped at 520px (or the room below), and here its body fits without scrolling.
   await openViewMenu(page);
-  const menuBox = (await page.locator('.dm-menu').boundingBox())!;
+  const menuBox = (await page.locator('.fb-menu').boundingBox())!;
   const displayBox = (await displayButton(page).boundingBox())!;
   const panelLeftX = Math.max(8, await leftOf(page.locator('.todo-panel').first()));
   const alignedRight = Math.max(displayBox.x + displayBox.width, panelLeftX + menuBox.width);
   expect(Math.abs(menuBox.x + menuBox.width - alignedRight)).toBeLessThanOrEqual(1);
   expect(menuBox.x).toBeGreaterThanOrEqual(panelLeftX - 1);
   expect(menuBox.y).toBeGreaterThan(displayBox.y);
-  expect(await page.locator('.dm-menu').evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+  expect(menuBox.height).toBeLessThanOrEqual(520.5);
+  expect(await page.locator('.fb-menu .fb-menu-body').evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
   await closeViewMenu(page);
-  // A date condition is a chip in the filter row with a badge on Filter; Display carries no dot.
+  // A date condition is a chip in the filter row with a count badge on Display, which
+  // carries no dot.
   await addFilter(page, 'date', 'Any date');
   await expect(filterChip(page, 'date')).toBeVisible();
   await expect(page.getByTestId('filter-badge')).toHaveText('1');
+  await expect(displayButton(page)).toHaveClass(/is-active/);
   await expect(displayButton(page).locator('.vd-dot')).toHaveCount(0);
   await closeFilterMenu(page);
   await removeFilterChip(page, 'date');
@@ -687,11 +690,12 @@ test('the tab bar is one switch, in the Display menu and in every heading menu',
   const tabs = page.locator('.todo-section-tabs');
   await expect(tabs).toHaveCount(0);
 
-  // The Display menu: one switch row right under the views, never a chip.
+  // The Display menu: one switch row right under the View row, never a chip.
   await openViewMenu(page);
-  const panelSwitch = page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' });
+  const panelSwitch = page.locator('.fb-menu').getByRole('switch', { name: 'Show tab bar' });
   await expect(panelSwitch).not.toBeChecked();
-  await expect(page.locator('.dm-menu [data-view-option="quick-views"]')).toHaveAttribute('role', 'switch');
+  await expect(page.locator('.fb-menu [data-view-option="quick-views"]')).toHaveAttribute('role', 'switch');
+  await expect(page.locator('.fb-menu [data-view-option="view"] + [data-view-option="quick-views"]')).toHaveCount(1);
   await panelSwitch.click();
   await expect(panelSwitch).toBeChecked();
   await expect(tabs).toBeVisible();
@@ -790,7 +794,7 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await boot(page, baseURL!);
   await expect(navigation(page).locator('[data-task-id="tabs-focus"]')).toBeVisible({ timeout: 30_000 });
   await openViewMenu(page);
-  await page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' }).click();
+  await page.locator('.fb-menu').getByRole('switch', { name: 'Show tab bar' }).click();
   await closeViewMenu(page);
   const bar = page.locator('.todo-section-tabs');
   const tabs = bar.locator('[role="tab"]');
@@ -855,7 +859,7 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await expect(displayButton(page)).toBeFocused();
   await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true }).first()).toBeVisible();
   await openViewMenu(page);
-  const panelSwitch = page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' });
+  const panelSwitch = page.locator('.fb-menu').getByRole('switch', { name: 'Show tab bar' });
   await expect(panelSwitch).not.toBeChecked();
   await panelSwitch.click();
   await closeViewMenu(page);
@@ -903,7 +907,7 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await expect.poll(() => sessionColumnOrder(page)).toEqual(seededColumns);
   const showTabBar = async () => {
     await openViewMenu(page);
-    await page.locator('.dm-menu').getByRole('switch', { name: 'Show tab bar' }).click();
+    await page.locator('.fb-menu').getByRole('switch', { name: 'Show tab bar' }).click();
     await closeViewMenu(page);
   };
   await showTabBar();
@@ -1050,9 +1054,12 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
   const line = `Scratchpad line ${test.info().project.name} ${Date.now()}`;
   try {
     await boot(page, baseURL!);
-    // No longer a view of the task panel.
+    // No longer a view of the task panel: on neither page of the Display menu.
     await openViewMenu(page);
-    await expect(page.locator('.dm-menu [data-view-option="notes"], .dm-views-flyout [data-view-option="notes"]')).toHaveCount(0);
+    await expect(page.locator('.fb-menu [data-view-option="notes"]')).toHaveCount(0);
+    const views = await openViewsPage(page);
+    await expect(views.locator('.dm-view[data-view-option="all"]')).toHaveCount(1);
+    await expect(views.locator('[data-view-option="notes"]')).toHaveCount(0);
     await closeViewMenu(page);
 
     const toggle = page.getByTestId('sidebar-toggle-scratchpad');

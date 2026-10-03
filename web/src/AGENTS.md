@@ -103,27 +103,35 @@ show inline after the open ones, other completed hits that show the query fold i
   `settings-anchor-flash-strong`). The Panels 1-5/Auto row is also the FIRST row of the session
   kebab (`leadingSection` of `TaskQuickActions`, above Task detail), not a line between the view
   toggles.
-- **The home task panel has ONE filter concept and two toolbar buttons** (2026-10-02, the new-user
-  redesign: "what is pinned, focus, satellite? filter is filter"; the same day: "so ugly, process is
-  super long, better a small search thing, only show few most used"). **Filter** (funnel, count badge,
-  `components/tasks/FilterMenu.tsx`) is a SMALL two-page menu, 272px, one search box on top: page one
-  (`FilterHome.tsx`) is the few picks the user makes most (`Most used`, ranked by `RecentEntry.uses`,
-  `filter-home-model.ts`) and one row per property with its value at the right (Status, Project,
-  Date, Source; Priority, Blocked, Tags, Sprint, Time window folded behind `More filters` unless set);
-  a property row opens page two (`FilterValuesPage.tsx`), that property's values as a checklist
-  (`FilterValueList.tsx`, shared with the chip menus: a plain click TOGGLES a multi-select row, a
-  single-select pick closes the menu). Typing searches every value on page one and filters the rows
-  on page two. Never bring the wall back: a first page is a handful of 28px rows, not every value of
-  every property. What it sets shows as chips in the filter row under the toolbar (`FilterBar.tsx`,
-  one chip per dimension; the count and `Clear` in the row's tail at the top right), the one place
-  that says "a filter is on". There is ONE Status
-  (To Do, In Progress, Need Action, Waiting, Complete; the default is the three open ones), never a
-  Status AND a Phase. **Display** (sliders, `DisplayMenu.tsx`) holds how the list is laid out: the
-  View rows (All, Pinned, the rest behind `More views`, same list and order as the tab bar), Show tab
-  bar, Session columns, Sort, Group, Collapse all. Tier names never sit at the first level of either.
-  State lives in `useHomeFilters.ts` (`FilterState`, persisted under `walnut-todo-filters`, chips
-  derived by `filter-bar-dims.ts`, the list predicate in `filter-predicate.ts`); `/tasks` keeps
-  `ViewDropdown` for now with the same one-Status section. Every popover and flyout here is placed by
+- **The home task panel has ONE filter concept and ONE toolbar button** (2026-10-02, the new-user
+  redesign: "what is pinned, focus, satellite? filter is filter"; "so ugly, process is super long,
+  better a small search thing"; 2026-10-03: "no need for two buttons, one button: Display, with the
+  filter inside it; filter, sort and group are strongly related; the view does not have to show in
+  full, two clicks is fine; Show tab bar and Session columns must show"). **Display** (sliders, the
+  active-filter count as a badge, `components/tasks/DisplayMenu.tsx` for the button, `FilterMenu.tsx`
+  `PanelMenu` for the menu) is a SMALL two-page menu, 320px, one search box on top. Page one, top to
+  bottom: `Filter` (`FilterHome.tsx`: one row per property with its value at the right, Status,
+  Project, Date, Source; Priority, Blocked, Tags, Sprint, Time window folded behind `More filters`
+  unless set; `Clear` in the title while something is set), then the display rows
+  (`DisplaySections.tsx`): Sort and Group, then View (one row, the current view's name at the right),
+  Show tab bar, Session columns, and last the rows only some views have (Collapse all, Tier layout,
+  Recent order). A property row opens page two (`FilterValuesPage.tsx`), that property's values as a
+  checklist (`FilterValueList.tsx`, shared with the chip menus: a plain click TOGGLES a multi-select
+  row, a single-select pick closes the menu); the View row opens the view list (`DisplayViewsPage`,
+  the bar's tabs above a hairline, the rest below, a pick closes the menu). Typing searches every
+  filter value AND every view on page one (hits ranked by `RecentEntry.uses`, `filter-home-model.ts`
+  `rankByUse`) and filters the rows on page two. Never bring the wall back: a first page is a
+  handful of 28px rows, not every value of every property, and never a `Most used` block (it was
+  the first thing dropped). What the filter sets shows as chips in the filter row under the toolbar
+  (`FilterBar.tsx`, one chip per dimension; the count and `Clear` in the row's tail at the top
+  right), the one place that says "a filter is on". There is ONE Status (To Do, In Progress, Need
+  Action, Waiting, Complete; the default is the three open ones), never a Status AND a Phase. Tier
+  names never sit at the first level. Open state is the filter controller's (`useHomeFilters.ts`
+  `menuOpen`, `buttonRef`): the F shortcut, the board's "Filter to this project", the row's view
+  item and the strip's "Adjust panels" hint all open the same menu. State lives in
+  `useHomeFilters.ts` (`FilterState`, persisted under `walnut-todo-filters`, chips derived by
+  `filter-bar-dims.ts`, the list predicate in `filter-predicate.ts`); `/tasks` keeps `ViewDropdown`
+  for now with the same one-Status section. Every popover and flyout here is placed by
   `useMenuPlacement` and closed through `hooks/useOverlayLayer.ts` (one outside-press/Escape layer per
   open overlay, child portals exempt). Specs: `tests/e2e/browser/filter-bar*.spec.ts`,
   `display-menu.spec.ts`, `todo-search-and-filters.spec.ts`; helpers in `filter-bar-helpers.ts`.

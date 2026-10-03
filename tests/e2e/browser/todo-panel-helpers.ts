@@ -7,7 +7,7 @@
  *   • SECTION tab (`.todo-section-tabs`): which region owns the panel. Defaults
  *     to `Focus`, where the main task list (`.todo-panel-item` rows) is NOT
  *     mounted at all. `All` is the stacked view where every region renders.
- *   • PROJECT filter (the Filter popover's Project row, `.fb-menu
+ *   • PROJECT filter (the Display menu's Project row, `.fb-menu
  *     [data-filter-dim="project"]`): which project is in scope. Defaults to no
  *     project chip (every project). `Inbox` is the value for tasks with no
  *     project. The filter row `.fb-row` shows the chip while one is set.
@@ -71,7 +71,8 @@ export async function selectSection(
       return
     }
   }
-  // Without the tab (bar off, the tab taken off it, or Projects) the view is chosen in Display (More views aware).
+  // Without the tab (bar off, the tab taken off it, or Projects) the view is chosen on
+  // Display's View page; the pick closes the menu, so the close below is a no-op then.
   await chooseDisplayOption(page, SECTION_KEYS[name])
   await closeDisplayMenu(page)
 }
@@ -96,7 +97,7 @@ export async function showAllSections(page: Page): Promise<void> {
 }
 
 /**
- * Scope the panel to one project through the Filter popover. 'All' removes the
+ * Scope the panel to one project through the Display menu's Project page. 'All' removes the
  * Project chip, 'Inbox' is the no-project bucket, anything else a project name.
  * A plain click replaces (6.2), so this always leaves exactly that one project.
  */

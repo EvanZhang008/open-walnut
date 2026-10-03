@@ -13,7 +13,7 @@ import { test, expect } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
 import { MIA, MIA_PINS, stubBoard } from './filter-bar-fixtures'
 import { openHome } from './home-navigation-helpers'
-import { addFilter, displayButton, filterChip, filterRow, openDisplayMenu, removeFilterChip, setStatus } from './filter-bar-helpers'
+import { addFilter, chooseDisplayOption, displayButton, displayMenu, filterChip, filterRow, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { SHOTS, runStamp, boot, seed, cleanup, row, card, anyRow, tab, tabCount, footer, hitIds, selectTab, filterProjects, panelClip } from './filter-bar-board-helpers'
 
 test.setTimeout(150_000)
@@ -50,18 +50,16 @@ test.describe('one predicate for every view', () => {
       expect(await tabCount(page, 'Pinned')).toBe(1)
       expect(await hitIds(page)).toEqual([gardenIds[0]])
 
-      // Focus through Display (the tab bar has only All and Pinned for a new user).
-      await openDisplayMenu(page)
-      const more = page.locator('.dm-menu').getByRole('button', { name: /^More views/ })
-      await more.click()
-      await page.locator('.dm-views-flyout [data-view-option="focus"]').click()
-      await page.keyboard.press('Escape')
+      // Focus through Display's View page (the tab bar has only All and Pinned for a new
+      // user); the pick closes the menu.
+      await chooseDisplayOption(page, 'focus')
+      await expect(displayMenu(page)).toHaveCount(0)
       await expect(card(page, gardenIds[0])).toBeVisible()
       await expect(card(page, homeIds[0])).toHaveCount(0)
       await expect(page.getByTestId('filter-count')).toHaveText('1 task')
 
       // Two projects: the pin area is scoped the same way; the bookmark clears.
-      await selectTab(page, 'All').catch(async () => { await openDisplayMenu(page); await page.locator('.dm-menu [data-view-option="all"]').click(); await page.keyboard.press('Escape') })
+      await selectTab(page, 'All').catch(() => chooseDisplayOption(page, 'all'))
       await addFilter(page, 'project', home, { add: true })
       await expect(filterChip(page, 'project')).toContainText(garden)
       await expect(filterChip(page, 'project')).toContainText(home)

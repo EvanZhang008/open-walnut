@@ -16,7 +16,7 @@ const FILES = [
   'components/tasks/FilterValuesPage.tsx', 'components/tasks/FilterValueList.tsx', 'components/tasks/FilterTimeControls.tsx',
   'components/tasks/FilterSearchResults.tsx', 'components/tasks/filter-dim-icons.tsx', 'components/tasks/filter-home-model.ts',
   'components/tasks/FilterChipMenu.tsx', 'components/tasks/FilterOverflowMenu.tsx',
-  'components/tasks/DisplayMenu.tsx', 'components/tasks/DisplayViewsFlyout.tsx', 'components/tasks/DisplaySortRows.tsx',
+  'components/tasks/DisplayMenu.tsx', 'components/tasks/DisplaySections.tsx', 'components/tasks/DisplaySortRows.tsx',
   'components/tasks/TodoSectionTabs.tsx', 'components/tasks/TodoFilterFooter.tsx',
   'components/tasks/TodoProjectsMiniBar.tsx', 'components/tasks/TodoFilterEmpty.tsx',
   'components/tasks/filter-bar-model.ts', 'components/tasks/filter-bar-dims.ts', 'components/tasks/filter-recent.ts',

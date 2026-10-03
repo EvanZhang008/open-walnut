@@ -22,6 +22,7 @@ import { test, expect } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
 import { isolateUiPrefs, openListProject, selectProject, selectSection, showMoreUntil } from './todo-panel-helpers'
 import { closeViewMenu, openViewMenu } from './home-navigation-helpers'
+import { openViewsPage, viewRow } from './filter-bar-helpers'
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
@@ -241,11 +242,13 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('.todo-panel-list')).toHaveCount(0)
     await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
 
-    // The view survives a reload, and the Display menu offers it by name.
+    // The view survives a reload, and the Display menu offers it by name: the View row
+    // reads Pinned and its View page has Pinned pressed.
     await page.reload()
     await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
     await openViewMenu(page)
-    await expect(page.locator('.dm-menu [data-view-option="pinned"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(viewRow(page).locator('.fb-prop-summary')).toHaveText('Pinned')
+    await expect((await openViewsPage(page)).locator('.dm-view[data-view-option="pinned"]')).toHaveAttribute('aria-pressed', 'true')
     await closeViewMenu(page)
 
     // The tiers wait in the bar's menu: two more and the bar is crowded, so only the active

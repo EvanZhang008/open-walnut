@@ -1,38 +1,20 @@
 /*
- * display-menu: the task panel's Display menu (.dm-*): DisplayMenu.tsx,
- * DisplaySortRows.tsx, DisplayViewsFlyout.tsx. Shared primitives (.tp-btn,
- * .tp-pop, .tp-seg, focus ring) come from filter-toolbar-base.css. Existing
- * tokens only, both themes.
+ * display-menu: the display rows of the task panel's menu (.dm-*):
+ * DisplaySections.tsx, DisplaySortRows.tsx. The menu shell (.fb-menu, the
+ * search box, the pages) is in filter-bar.css; shared primitives (.tp-btn,
+ * .tp-pop, .tp-seg, focus ring) in filter-toolbar-base.css. Existing tokens
+ * only, both themes.
  */
 
-/* Fixed-height scroll box: DisplayMenu writes `height` once at open; the
-   placement hook adds `maxHeight`. Width is set inline (320px, viewport - 16). */
-.dm-menu {
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  padding: 4px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  font-size: 13px;
-}
+/* Each section sits under a hairline: the filter rows come first on the page. */
+.dm-section { display: flex; flex-direction: column; margin-top: 4px; padding: 6px 0 2px; border-top: 1px solid var(--border); }
 
-.dm-section { display: flex; flex-direction: column; padding: 2px 0; }
-.dm-section + .dm-section { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
-.dm-heading {
-  /* Small, muted, sentence case: the same voice as the Filter menu's group titles. */
-  padding: 4px 8px 2px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--tp-muted);
-}
-
-/* View rows (and the flyout's rows): a check slot, then the name. */
-.dm-view, .dm-flyout-item {
+/* View rows on the View page: the check slot, then the name (the same rhythm as .fb-opt-body). */
+.dm-view {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-height: 28px;
   padding: 0 8px;
   border: none;
@@ -40,18 +22,15 @@
   background: transparent;
   color: var(--fg);
   font: inherit;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+  box-sizing: border-box;
 }
-.dm-view:hover, .dm-flyout-item:hover { background: var(--bg-hover); }
+.dm-view:hover { background: var(--bg-hover); }
 /* Selected: the accent check alone; no tinted band, so one list never reads as two. */
-.dm-view[aria-pressed='true'], .dm-flyout-item[aria-checked='true'] { color: var(--fg); }
-.dm-check { display: inline-flex; width: 14px; flex-shrink: 0; justify-content: center; color: var(--accent-text); }
-.dm-check svg { width: 12px; height: 12px; }
+.dm-view[aria-pressed='true'] { color: var(--fg); }
 .dm-view-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dm-more-chevron { display: inline-flex; color: var(--fg-muted); }
-.dm-more-chevron svg { width: 12px; height: 12px; }
-.dm-more-views[aria-expanded='true'] { background: var(--bg-hover); }
 
 /* Setting rows: name on the left, its control on the right. */
 .dm-row {
@@ -151,44 +130,18 @@
 }
 .dm-text-btn:hover { background: var(--bg-elevated); }
 
-/* More views flyout: its own portal, scrolls inside (the hook sets maxHeight). */
-.dm-views-flyout {
-  display: flex;
-  flex-direction: column;
-  min-width: 200px;
-  max-width: 280px;
-  padding: 4px;
-  box-sizing: border-box;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  font-size: 13px;
-}
-/* Tier views above, Recent and Projects below (F12). */
+/* The View page: the bar's tabs above, the rest below a hairline (F12). */
 .dm-flyout-sep { flex: none; height: 1px; margin: 4px 2px; background: var(--border); }
 
-/* One focus ring, both themes (spec 5.9). */
-.dm-view:focus-visible, .dm-flyout-item:focus-visible, .dm-switch-row:focus-visible,
+/* One focus ring, both themes (spec 5.9), inset like the filter rows'. */
+.dm-view:focus-visible, .dm-switch-row:focus-visible,
 .dm-action:focus-visible, .dm-text-btn:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dm-menu, .dm-views-flyout { animation-duration: 0ms; }
   .dm-switch-track, .dm-switch-track::after { transition-duration: 0ms; }
-}
-
-/* A view with no view-specific rows keeps the slot's room but drops its divider. */
-.dm-section.dm-context:empty { border-top-color: transparent; }
-
-/* Opened with the pointer: the first focused row draws no ring until a key is pressed (F29). */
-.dm-menu[data-pointer-open] .dm-view:focus-visible,
-.dm-menu[data-pointer-open] .dm-view:focus { outline: none; }
-/* After a key, the focused control shows the ring in every engine (WebKit skips
-   :focus-visible on a focus moved by script after a click). */
-.dm-menu[data-keyed] :is(.dm-view, .dm-switch-row, .dm-action, .dm-text-btn, .tp-seg-btn, .tp-switch):focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* A `view-dropdown:reveal` landing (view-dropdown-reveal.ts): the row the user was sent to

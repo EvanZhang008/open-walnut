@@ -89,7 +89,7 @@ describe('visibleTabBarTabs', () => {
 
 const TIER_WORDS = /tier|focus|satellite|backlog|parked/i
 
-describe('view titles (one source for Display, the flyout and the tabs)', () => {
+describe('view titles (one source for Display, the View page and the tabs)', () => {
   it('words All and Pinned without any tier name', () => {
     expect(viewTitle('all')).toBe('All: every open task on your board')
     expect(viewTitle('pinned')).toBe('Pinned: tasks you pinned to keep in front of you')
@@ -120,21 +120,21 @@ describe('view titles (one source for Display, the flyout and the tabs)', () => 
 })
 
 describe('displayViewLayers', () => {
-  it('puts only All and Pinned on the first layer by default, everything else in More views', () => {
+  it('puts only All and Pinned on the first layer by default, everything else in the second layer of the View page', () => {
     const { first, more } = displayViewLayers([], DEFAULT_HIDDEN_TABS)
     expect(ids(first)).toEqual(['all', 'pinned'])
     expect(ids(more)).toEqual(['focus', 'satellite', 'wait', 'recent', 'tasks'])
     expect(first.map((v) => `${v.label} ${v.title}`).join(' ')).not.toMatch(TIER_WORDS)
   })
 
-  it('follows the bar: a tab the user keeps moves to the first layer in bar order, and leaves More views', () => {
+  it('follows the bar: a tab the user keeps moves to the first layer in bar order, and leaves the second layer', () => {
     const hidden = DEFAULT_HIDDEN_TABS.filter((id) => id !== 'focus')
     const { first, more } = displayViewLayers(customs, hidden)
     expect(ids(first)).toEqual(['all', 'pinned', 'focus', 'ct_a', 'ct_b'])
     expect(ids(more)).toEqual(['satellite', 'wait', 'recent', 'tasks'])
   })
 
-  it('caps the first layer so 30 custom tiers spill into the flyout, keeping menu order', () => {
+  it('caps the first layer so 30 custom tiers spill into the second layer of the View page, keeping menu order', () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ id: `ct_${i}`, label: `Tier ${i}` }))
     const { first, more } = displayViewLayers(many, DEFAULT_HIDDEN_TABS)
     expect(first).toHaveLength(DISPLAY_FIRST_LAYER_LIMIT)

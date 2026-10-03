@@ -2,7 +2,7 @@
  * FilterBar: the filter row under the home toolbar (`.fb-row`, spec 6.4).
  * One chip per non-default dimension (body opens the chip menu, x removes),
  * `Clear`, and the right-aligned count. Rendered only while there is something
- * to say: a chip, the open Filter popover (placeholder `No filters yet`), a
+ * to say: a chip, the open panel menu (placeholder `No filters yet`), a
  * view name with the tab bar hidden, or search mode.
  *
  * Layout promises: at most two chip lines, the rest behind a `+N` chip
@@ -42,7 +42,7 @@ export function countLines(box: HTMLElement): number {
   return lines;
 }
 
-/** Where focus goes after a removal (6.4): next chip's x, previous chip's x, the Filter button. */
+/** Where focus goes after a removal (6.4): next chip's x, previous chip's x, the Display button. */
 function focusAfterRemoval(c: FilterBarController, order: (FilterDim | undefined)[]): void {
   for (const dim of order) {
     if (!dim) continue;

@@ -41,7 +41,7 @@ const hintToast = (page: Page) => page.locator('.notification-toast', { hasText:
 
 /** The task panel's Display menu (the sliders button beside New task) and its Session columns row. */
 const viewTrigger = (page: Page) => page.locator('.todo-panel .todo-panel-toolbar button[aria-label="Display"]')
-const viewMenu = (page: Page) => page.locator('.dm-menu')
+const viewMenu = (page: Page) => page.locator('.fb-menu')
 const panelsGroup = (page: Page) => viewMenu(page).locator('.dm-row[data-view-option="session-panels"]')
 const panelsSeg = (page: Page) => panelsGroup(page).locator('.dm-seg[aria-label="Session columns"]')
 
@@ -72,19 +72,25 @@ async function savedCount(page: Page): Promise<string | undefined> {
 
 /**
  * The menu sits under its own trigger (the sliders button), not at a spot measured while the
- * task panel was still sliding open: top within a few px below the trigger, and overlapping it
+ * task panel was still sliding open. The filter row opens with the menu, right under the
+ * toolbar, and the menu hangs under that row: the row's top within a few px below the trigger,
+ * the menu's top within a few px below the row, and the menu overlapping the trigger
  * horizontally (the panel-left placement runs from the task panel's edge across the trigger).
  */
 async function expectMenuUnderTrigger(page: Page): Promise<void> {
   // The menu slides in from 4px up over 120ms (`tp-pop-in`): measure the resting box.
   await expect.poll(() => viewMenu(page).evaluate((el) => el.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0)
   const trigger = await viewTrigger(page).boundingBox()
+  const row = await page.locator('.todo-panel .fb-row').boundingBox()
   const menu = await viewMenu(page).boundingBox()
   expect(trigger).not.toBeNull()
+  expect(row).not.toBeNull()
   expect(menu).not.toBeNull()
   expect(trigger!.width).toBeGreaterThan(0)
-  expect(menu!.y).toBeGreaterThanOrEqual(trigger!.y + trigger!.height)
-  expect(menu!.y).toBeLessThan(trigger!.y + trigger!.height + 12)
+  expect(row!.y).toBeGreaterThanOrEqual(trigger!.y + trigger!.height)
+  expect(row!.y).toBeLessThan(trigger!.y + trigger!.height + 16)
+  expect(menu!.y).toBeGreaterThanOrEqual(row!.y + row!.height)
+  expect(menu!.y).toBeLessThan(row!.y + row!.height + 12)
   expect(menu!.x).toBeLessThanOrEqual(trigger!.x)
   expect(menu!.x + menu!.width).toBeGreaterThan(trigger!.x)
 }

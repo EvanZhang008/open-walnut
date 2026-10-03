@@ -1,14 +1,16 @@
 /**
- * filter-home-model (the Filter menu's first page): each property row's value
- * in the chip's words (`dimSummary`), which rows show and which fold behind
- * `More filters` (`homeRows`), and the `Most used` ranking (`mostUsed`), plus
- * the use count `pushRecent` keeps so that ranking has something to rank by.
+ * filter-home-model (the filter half of the panel menu's first page): each
+ * property row's value in the chip's words (`dimSummary`), which rows show and
+ * which fold behind `More filters` (`homeRows`), and the ranking of search
+ * hits: by use (`useCount`, `rankByUse`), then by how well the label answers
+ * the text (`matchScore`, `rankByMatch`), plus the use count `pushRecent` keeps
+ * so the use ranking has something to rank by.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TaskPhase } from '../../src/core/types';
-import { DEFAULT_FILTER_STATE as S0, FILTER_DIMS, type FilterLists, type FilterState, type RecentEntry } from '../../web/src/components/tasks/filter-bar-types';
+import { DEFAULT_FILTER_STATE as S0, FILTER_DIMS, type FilterDim, type FilterLists, type FilterState, type RecentEntry } from '../../web/src/components/tasks/filter-bar-types';
 import { buildFilterChips } from '../../web/src/components/tasks/filter-bar-model';
-import { MOST_USED_LIMIT, dimSummary, homeRows, mostUsed } from '../../web/src/components/tasks/filter-home-model';
+import { dimSummary, homeRows, matchScore, rankByMatch, rankByUse, useCount } from '../../web/src/components/tasks/filter-home-model';
 import { LS_FILTER_RECENT_KEY, RECENT_STORE_LIMIT, pushRecent, readRecent } from '../../web/src/components/tasks/filter-bar-persist';
 import { validRecent } from '../../web/src/components/tasks/filter-recent';
 
@@ -111,34 +113,88 @@ describe('homeRows: shown rows and the More filters fold', () => {
   });
 });
 
-describe('mostUsed: the Most used rows', () => {
+describe('useCount and rankByUse: search hits ranked by how often they were picked', () => {
   const e = (value: string, uses?: number): RecentEntry => (uses ? { dim: 'project', value, uses } : { dim: 'project', value });
+  const byUse = (recent: readonly RecentEntry[], values: string[]) =>
+    rankByUse(values, (v) => useCount(recent, 'project', v));
 
-  it('ranks by uses, ties keep the newest-first input order, and caps at 4', () => {
-    expect(MOST_USED_LIMIT).toBe(4);
+  it('ranks the values used most first, and ties keep their input order', () => {
     const recent = [e('A'), e('B', 3), e('C'), e('D', 2), e('E'), e('F', 3)];
-    expect(mostUsed(recent).map((x) => x.value)).toEqual(['B', 'F', 'D', 'A']);
-    expect(mostUsed(recent, 2).map((x) => x.value)).toEqual(['B', 'F']);
+    expect(byUse(recent, ['A', 'B', 'C', 'D', 'E', 'F'])).toEqual(['B', 'F', 'D', 'A', 'C', 'E']);
+    expect(byUse(recent, ['F', 'E', 'D', 'C', 'B', 'A'])).toEqual(['F', 'B', 'D', 'E', 'C', 'A']);
   });
 
-  it('absent uses counts as one; no history gives no rows; the input is not reordered', () => {
+  it('a value never picked counts 0 and sinks below every picked one; absent uses counts as one', () => {
     const recent = [e('A'), e('B', 1), e('C', 2)];
-    expect(mostUsed(recent).map((x) => x.value)).toEqual(['C', 'A', 'B']);
-    expect(recent.map((x) => x.value)).toEqual(['A', 'B', 'C']);
-    expect(mostUsed([])).toEqual([]);
+    expect(useCount(recent, 'project', 'A')).toBe(1);
+    expect(useCount(recent, 'project', 'B')).toBe(1);
+    expect(useCount(recent, 'project', 'C')).toBe(2);
+    expect(useCount(recent, 'project', 'Z')).toBe(0);
+    expect(useCount([], 'project', 'A')).toBe(0);
+    expect(byUse(recent, ['Z', 'A', 'B', 'C'])).toEqual(['C', 'A', 'B', 'Z']);
   });
 
-  it('mixes properties: a status set picked twice outranks a newer project', () => {
-    const recent: RecentEntry[] = [
-      { dim: 'project', value: 'Home' },
-      { dim: 'status', value: ['TODO', 'COMPLETE'], uses: 2 },
-      { dim: 'date', value: 'overdue' },
-    ];
-    expect(mostUsed(recent).map((x) => x.dim)).toEqual(['status', 'project', 'date']);
+  it('the count is per property: the same value on another property is not counted', () => {
+    const recent: RecentEntry[] = [{ dim: 'source', value: 'Home', uses: 4 }, { dim: 'date', value: 'overdue', uses: 2 }];
+    expect(useCount(recent, 'project', 'Home')).toBe(0);
+    expect(useCount(recent, 'source', 'Home')).toBe(4);
+    expect(useCount(recent, 'date', 'overdue')).toBe(2);
+    // A status set is one pick of the whole set, never a use of a single status.
+    expect(useCount([{ dim: 'status', value: ['TODO', 'COMPLETE'], uses: 3 }], 'status', 'TODO')).toBe(0);
+  });
+
+  it('the input is not reordered; no items give no rows', () => {
+    const values = ['A', 'B', 'C'];
+    expect(byUse([e('C', 2)], values)).toEqual(['C', 'A', 'B']);
+    expect(values).toEqual(['A', 'B', 'C']);
+    expect(rankByUse([], () => 1)).toEqual([]);
   });
 });
 
-describe('pushRecent: the use count behind Most used', () => {
+describe('matchScore and rankByMatch: the label the text names outright comes first', () => {
+  it('scores 2 for the whole label, 1 for its start, 0 inside or through a keyword, case and spaces aside', () => {
+    expect(matchScore('Recent', 'recent')).toBe(2);
+    expect(matchScore(' Recent ', '  RECENT')).toBe(2);
+    expect(matchScore('Waiting', 'wait')).toBe(1);
+    expect(matchScore('Updated in 24h', 'up')).toBe(1);
+    expect(matchScore('In Progress', 'progress')).toBe(0);
+    // A keyword hit (doing finds In Progress) has no label match at all.
+    expect(matchScore('In Progress', 'doing')).toBe(0);
+  });
+
+  it('an empty or blank text scores 0 for every label', () => {
+    expect(matchScore('Recent', '')).toBe(0);
+    expect(matchScore('Recent', '   ')).toBe(0);
+    expect(matchScore('', '')).toBe(0);
+  });
+
+  it('exact beats prefix beats inside; ties keep their input order', () => {
+    const labels = ['Created in 7d', 'Recently done', 'Updated recently', 'Recent', 'Recent tasks', 'Not recent'];
+    expect(rankByMatch(labels, (l) => l, 'recent')).toEqual([
+      'Recent', 'Recently done', 'Recent tasks', 'Created in 7d', 'Updated recently', 'Not recent',
+    ]);
+    expect(labels[0]).toBe('Created in 7d');
+  });
+
+  it('an empty text leaves the order alone, so the use ranking stands', () => {
+    const items = [{ label: 'Home' }, { label: 'Garden' }, { label: 'Shed' }];
+    expect(rankByMatch(items, (x) => x.label, '')).toEqual(items);
+    expect(rankByMatch(items, (x) => x.label, '  ')).toEqual(items);
+    expect(rankByMatch([], (x: string) => x, 'home')).toEqual([]);
+  });
+
+  it('runs after the use ranking: a used hit that only matches inside drops below the named label', () => {
+    const recent: RecentEntry[] = [{ dim: 'project', value: 'Old recent work', uses: 5 }];
+    const hits: { dim: FilterDim; value: string }[] = [
+      { dim: 'project', value: 'Recent hires' }, { dim: 'project', value: 'Old recent work' }, { dim: 'project', value: 'Recent' },
+    ];
+    const used = rankByUse(hits, (h) => useCount(recent, h.dim, h.value));
+    expect(used.map((h) => h.value)).toEqual(['Old recent work', 'Recent hires', 'Recent']);
+    expect(rankByMatch(used, (h) => h.value, 'recent').map((h) => h.value)).toEqual(['Recent', 'Recent hires', 'Old recent work']);
+  });
+});
+
+describe('pushRecent: the use count behind the search ranking', () => {
   it('a first pick is stored without uses; the same pick again counts 2, then 3, and moves to the top', () => {
     pushRecent([{ dim: 'project', value: 'Garden' }]);
     expect(readRecent()).toEqual([{ dim: 'project', value: 'Garden' }]);
@@ -205,7 +261,13 @@ describe('pushRecent: the use count behind Most used', () => {
     pushRecent([{ dim: 'project', value: 'Garden' }]);
     pushRecent([{ dim: 'project', value: 'Home' }]);
     pushRecent([{ dim: 'source', value: 'ms-todo' }]);
-    const ranked = mostUsed(validRecent(readRecent(), l, RECENT_STORE_LIMIT));
-    expect(ranked.map((x) => x.value)).toEqual(['Garden', 'ms-todo', 'Home']);
+    const recent = validRecent(readRecent(), l, RECENT_STORE_LIMIT);
+    // The hits in the order a search lists them: picked once keep it, never picked go last.
+    const items: { dim: FilterDim; value: string }[] = [
+      { dim: 'project', value: 'Home' }, { dim: 'project', value: 'Shed' },
+      { dim: 'project', value: 'Garden' }, { dim: 'source', value: 'ms-todo' },
+    ];
+    const ranked = rankByUse(items, (x) => useCount(recent, x.dim, x.value));
+    expect(ranked.map((x) => x.value)).toEqual(['Garden', 'Home', 'ms-todo', 'Shed']);
   });
 });

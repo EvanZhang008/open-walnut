@@ -1,18 +1,19 @@
 /**
- * The Filter menu's two pages on Mia's board (spec 6.2, 6.3): page one lists
- * the properties (and the picks made most), page two one property's values.
- * Moving between them by pointer and keys (ArrowDown/Up, ArrowRight, Enter,
- * Backspace, Back, Escape), the search box filtering page two, what a pick
- * does to the menu (a multi-select pick keeps it, a single-select pick closes
- * it), the footer, the `Most used` ranking, and the chip menus that share the
- * same rows. Stubbed board (filter-bar-fixtures.ts); prefs isolated per test.
+ * The panel menu's two pages on Mia's board (spec 6.2, 6.3): page one lists
+ * the properties, then the display rows; page two one property's values, or
+ * the views. Moving between them by pointer and keys (ArrowDown/Up through
+ * every row, ArrowRight, Enter, Backspace, Back, ArrowLeft, Escape), the search
+ * box filtering page two, what a pick does to the menu (a multi-select pick
+ * keeps it, a single-select pick closes it), Clear in the Filter title, the
+ * search hits ranked by use, and the chip menus that share the same rows.
+ * Stubbed board (filter-bar-fixtures.ts); prefs isolated per test.
  */
 import { expect, test, type Locator } from '@playwright/test'
 import {
   addFilter, closeFilterMenu, filterButton, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterSearch,
-  filterValue, openFilterMenu, openFilterPage, removeFilterChip, setStatus,
+  filterValue, openFilterMenu, openFilterPage, removeFilterChip, setStatus, viewRow, viewsPage,
 } from './filter-bar-helpers'
-import { MIA, MIA_PINS, box, openHome, row, stubBoard } from './filter-bar-fixtures'
+import { MIA, MIA_PINS, openHome, row, stubBoard } from './filter-bar-fixtures'
 
 test.describe.configure({ timeout: 120_000 })
 
@@ -26,7 +27,7 @@ test.beforeEach(async ({ page }) => {
   await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
 })
 
-test('keys: ArrowDown/Up walk the rows, ArrowRight and Enter open a page, Backspace and Back return, Escape clears then closes', async ({ page }) => {
+test('keys: ArrowDown/Up walk every row, ArrowRight and Enter open a page, Backspace, Back and ArrowLeft return, Escape clears then closes', async ({ page }) => {
   await openFilterMenu(page)
   const search = filterSearch(page)
   await expect(search).toBeFocused()
@@ -60,7 +61,7 @@ test('keys: ArrowDown/Up walk the rows, ArrowRight and Enter open a page, Backsp
   await page.keyboard.press('Backspace')
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
   await expect(filterDimRow(page, 'project')).toBeFocused()
-  await expect(search).toHaveAttribute('placeholder', 'Search filters')
+  await expect(search).toHaveAttribute('placeholder', 'Search filters and views')
   // Enter on a focused property row opens it too; the Back button returns.
   await page.keyboard.press('ArrowDown')
   await expect(filterDimRow(page, 'date')).toBeFocused()
@@ -70,6 +71,32 @@ test('keys: ArrowDown/Up walk the rows, ArrowRight and Enter open a page, Backsp
   await filterMenu(page).getByRole('button', { name: 'Back to all filters' }).click()
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
   await expect(filterDimRow(page, 'date')).toBeFocused()
+  // ArrowDown walks on past the filter rows into the display rows, one stop per segmented row.
+  const activeSeg = (key: string) => filterMenu(page).locator(`[data-view-option="${key}"] .tp-seg-btn[tabindex="0"]`)
+  await page.keyboard.press('ArrowDown')
+  await expect(filterMenu(page).getByRole('button', { name: /^More filters/ })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(activeSeg('sort')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(activeSeg('group')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(viewRow(page)).toBeFocused()
+  // ArrowRight on the View row opens the View page on the current view; ArrowLeft returns to the row.
+  await page.keyboard.press('ArrowRight')
+  await expect(filterMenu(page)).toHaveAttribute('data-page', 'view')
+  await expect(viewsPage(page).locator('.fb-page-title')).toHaveText('View')
+  await expect(search).toHaveAttribute('placeholder', 'Search views')
+  await expect(viewsPage(page).locator('.dm-view[data-view-option="all"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(viewsPage(page).locator('.dm-view[data-view-option="all"]')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(viewsPage(page).locator('.dm-view[data-view-option="pinned"]')).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
+  await expect(viewRow(page)).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(filterMenu(page).locator('[data-view-option="quick-views"]')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(activeSeg('session-panels')).toBeFocused()
   // Typing on page two filters its rows; Backspace with text left only deletes.
   await openFilterPage(page, 'status')
   await search.fill('progress')
@@ -92,7 +119,7 @@ test('keys: ArrowDown/Up walk the rows, ArrowRight and Enter open a page, Backsp
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
 })
 
-test('Enter in the search box picks the first row; a multi-select pick keeps the menu; open Filter is grey, never the accent; outside click closes', async ({ page }) => {
+test('Enter in the search box picks the first row; a multi-select pick keeps the menu; the open Display button is grey, never the accent; outside click closes', async ({ page }) => {
   await openFilterPage(page, 'project')
   await filterSearch(page).fill('hom')
   await expect(filterPage(page, 'project').locator('.fb-opt-body')).toHaveCount(1)
@@ -102,7 +129,7 @@ test('Enter in the search box picks the first row; a multi-select pick keeps the
   await expect(filterValue(page, 'project', 'Home')).toHaveAttribute('aria-pressed', 'true')
   // The property is set: Reset appears in the page head.
   await expect(filterPage(page, 'project').locator('.fb-page-head .fb-page-reset')).toHaveText('Reset')
-  // The Filter button: is-active with its badge; while open, a grey fill and a hairline.
+  // The Display button: is-active with its badge; while open, a grey fill and a hairline.
   await expect(filterButton(page)).toHaveClass(/is-active/)
   await expect(filterButton(page)).toHaveAttribute('aria-expanded', 'true')
   await expect(filterButton(page).locator('.tp-badge[data-testid="filter-badge"]')).toHaveText('1')
@@ -125,7 +152,7 @@ test('Enter in the search box picks the first row; a multi-select pick keeps the
   await expect(filterChip(page, 'project')).toBeVisible()
 })
 
-test('single-select picks close the menu and return focus; Time presets keep their page with the basis; Reset and Clear filters', async ({ page }) => {
+test('single-select picks close the menu and return focus; Time presets keep their page with the basis; Reset, and Clear in the Filter title', async ({ page }) => {
   await openFilterPage(page, 'blocked')
   await expect(filterPage(page, 'blocked').locator('.fb-check-box, .fb-only')).toHaveCount(0)
   await filterValue(page, 'blocked', 'Blocked').click()
@@ -150,13 +177,14 @@ test('single-select picks close the menu and return focus; Time presets keep the
   await expect(filterChip(page, 'time')).toHaveCount(0)
   await expect(filterChip(page, 'blocked')).toHaveCount(1)
   await expect(time.locator('.fb-page-reset, .fb-custom-time')).toHaveCount(0)
-  // The footer's Clear filters clears everything and keeps the menu open on the search box.
+  // Clear in the Filter title clears everything and keeps the menu open on the search box.
   await openFilterMenu(page)
-  const foot = filterMenu(page).locator('.fb-menu-foot')
-  await expect(foot.locator('.fb-menu-count')).toHaveText(/^\d+ tasks?$/)
-  await foot.getByRole('button', { name: 'Clear filters' }).click()
+  await expect(page.getByTestId('filter-count')).toHaveText(/^\d+ tasks?$/)
+  const clear = filterMenu(page).locator('.fb-home .fb-group-title .fb-group-action')
+  await expect(clear).toHaveText('Clear')
+  await clear.click()
   await expect(filterRow(page).locator('.fb-chip')).toHaveCount(0)
-  await expect(foot).toHaveCount(0)
+  await expect(clear).toHaveCount(0)
   await expect(filterMenu(page)).toBeVisible()
   await expect(filterSearch(page)).toBeFocused()
 })
@@ -171,12 +199,19 @@ test('a short page focuses its first selected row', async ({ page }) => {
   await expect(filterValue(page, 'date', 'No dates')).toBeFocused()
 })
 
-test('Most used: a pick made twice ranks first after newer picks; ties newest first; a click toggles it', async ({ page }) => {
+test('search ranking: a value picked more often leads its hits; ties keep the list order; a click from the search counts too', async ({ page }) => {
+  const search = filterSearch(page)
+  // `project` names the property, so every project value is a hit.
+  const projectHits = page.locator('.fb-search-results [role="option"][data-filter-dim="project"]')
+  const hitFor = (name: string) => projectHits.and(page.locator(`[data-filter-value="${name}"]`))
+  // No history: the values in list order.
   await openFilterMenu(page)
-  await expect(filterMenu(page).locator('[data-section="most-used"], .fb-group-title')).toHaveCount(0)
+  await search.fill('project')
+  await expect(projectHits).toHaveCount(2)
+  expect(await attrs(projectHits, 'data-filter-value')).toEqual(['Garden', 'Home'])
   await closeFilterMenu(page)
-  // Garden twice (in two menu opens), then Home, then Overdue: each pick closes and is removed.
-  for (const name of ['Garden', 'Garden', 'Home']) {
+  // Home twice (in two menu opens), then Garden, then Overdue: each pick closes and is removed.
+  for (const name of ['Home', 'Home', 'Garden']) {
     await addFilter(page, 'project', name)
     await removeFilterChip(page, 'project')
   }
@@ -184,36 +219,31 @@ test('Most used: a pick made twice ranks first after newer picks; ties newest fi
   await removeFilterChip(page, 'date')
   expect(await storedRecent(page)).toEqual([
     { dim: 'date', value: 'overdue' },
-    { dim: 'project', value: 'Home' },
-    { dim: 'project', value: 'Garden', uses: 2 },
+    { dim: 'project', value: 'Garden' },
+    { dim: 'project', value: 'Home', uses: 2 },
   ])
+  // Home, picked twice, now leads although Garden was picked later and comes first in the list.
   await openFilterMenu(page)
-  const group = filterMenu(page).locator('.fb-group[data-section="most-used"]')
-  await expect(group.locator('.fb-group-title')).toHaveText('Most used')
-  await expect(filterMenu(page).locator('.fb-group[data-section="properties"] .fb-group-title')).toHaveText('Filter by')
-  const quick = group.locator('.fb-item.fb-quick')
-  await expect(quick).toHaveCount(3)
-  expect(await attrs(quick, 'data-filter-value')).toEqual(['Project: Garden', 'Date: Overdue', 'Project: Home'])
-  expect(await attrs(quick, 'data-recent-dim')).toEqual(['project', 'date', 'project'])
-  // Most used sits above the properties.
-  expect((await box(quick.first())).y).toBeLessThan((await box(filterDimRow(page, 'status'))).y)
-  const garden = quick.first()
-  await expect(garden).toHaveAttribute('aria-pressed', 'false')
-  await garden.click()
-  await expect(garden).toHaveAttribute('aria-pressed', 'true')
-  await expect(filterChip(page, 'project').locator('.fb-chip-val')).toHaveText('Garden')
-  await expect(filterMenu(page)).toBeVisible()
-  await garden.click()
-  await expect(garden).toHaveAttribute('aria-pressed', 'false')
+  await search.fill('project')
+  await expect(projectHits).toHaveCount(2)
+  expect(await attrs(projectHits, 'data-filter-value')).toEqual(['Home', 'Garden'])
+  // A click toggles a hit; the menu stays open.
+  await hitFor('Home').click()
+  await expect(hitFor('Home')).toHaveClass(/is-selected/)
+  await expect(filterChip(page, 'project').locator('.fb-chip-val')).toHaveText('Home')
+  await hitFor('Home').click()
+  await expect(hitFor('Home')).not.toHaveClass(/is-selected/)
   await expect(filterChip(page, 'project')).toHaveCount(0)
-  // Its own click counted: Garden has three uses now and still leads.
-  expect((await storedRecent(page)).find((e) => e.value === 'Garden')?.uses).toBe(3)
+  await expect(filterMenu(page)).toBeVisible()
+  // Its own click counted: Home has three uses now and still leads.
+  expect((await storedRecent(page)).find((e) => e.value === 'Home')?.uses).toBe(3)
   await closeFilterMenu(page)
   await openFilterMenu(page)
-  await expect(quick.first()).toHaveAttribute('data-filter-value', 'Project: Garden')
+  await search.fill('project')
+  await expect(projectHits.first()).toHaveAttribute('data-filter-value', 'Home')
 })
 
-test('chip menu: plain clicks toggle; it stays open over the Filter menu; the last status stays on; removing the last value closes it', async ({ page }) => {
+test('chip menu: plain clicks toggle; it stays open over the panel menu; the last status stays on; removing the last value closes it', async ({ page }) => {
   await addFilter(page, 'project', 'Garden')
   const val = filterChip(page, 'project').locator('.fb-chip-val')
   await filterChip(page, 'project').locator('.fb-chip-body').click()
@@ -231,7 +261,7 @@ test('chip menu: plain clicks toggle; it stays open over the Filter menu; the la
   await page.keyboard.press('Escape')
   await expect(cm).toHaveCount(0)
   await expect(filterChip(page, 'project').locator('.fb-chip-body')).toBeFocused()
-  // With the Filter menu open, a chip menu opens over it; a press inside keeps both; Escape takes the top one.
+  // With the panel menu open, a chip menu opens over it; a press inside keeps both; Escape takes the top one.
   await openFilterMenu(page)
   await filterChip(page, 'project').locator('.fb-chip-body').click()
   await expect(cm).toBeVisible()

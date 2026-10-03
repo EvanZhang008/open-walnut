@@ -1,18 +1,24 @@
 /**
- * Playwright helpers for the home task panel's Filter bar and Display menu.
+ * Playwright helpers for the home task panel's ONE toolbar menu (Display) and
+ * the filter row under it.
  *
- * DOM contract (spec section 6): Filter button `aria-label="Filter"`; the menu
- * `.fb-menu` (`data-page="home"` or the open property's dim) with one search box
- * (`Search filters`); page one `.fb-home` with `Most used` rows
- * `.fb-quick[data-recent-dim]` and property rows `.fb-prop[data-filter-dim]`
- * (value summary in `.fb-prop-summary`), the folded properties behind the
- * `More filters` row; page two `.fb-page[data-filter-dim]` with a `Back to all
- * filters` button and value rows `.fb-opt-body[data-filter-value="<visible text>"]`
- * (Date values also carry `data-date-value`, `aria-pressed` = selected). The
- * filter row `.fb-row` has chips `[data-chip-dim]` with remove buttons
+ * DOM contract (spec section 6): one button, `aria-label="Display"` (the
+ * active-filter count in `[data-testid="filter-badge"]`); the menu `.fb-menu`
+ * (`data-page="home"`, the open property's dim, or `view`) with one search box
+ * (`Search filters`). Page one: `.fb-home` with the `Filter` title (Clear in it
+ * while something is set) and property rows `.fb-prop[data-filter-dim]` (value
+ * summary in `.fb-prop-summary`), the folded properties behind the `More
+ * filters` row; then the display rows: Sort / Group (`.dm-section.dm-order`),
+ * `[data-view-group="Show"]` with the View row `[data-view-option="view"]`
+ * (the current view in `.fb-prop-summary`), `[data-view-option="quick-views"]`
+ * (Show tab bar) and the Session columns row; last the view-specific rows
+ * (`collapse`, tier layout, recent order). Page two for a property:
+ * `.fb-page[data-filter-dim]` with a `Back to all filters` button and value rows
+ * `.fb-opt-body[data-filter-value="<visible text>"]` (Date values also carry
+ * `data-date-value`, `aria-pressed` = selected); for View:
+ * `.fb-page[data-filter-dim="view"]` with `.dm-view[data-view-option]` rows.
+ * The filter row `.fb-row` has chips `[data-chip-dim]` with remove buttons
  * `.fb-chip-x`, the count `[data-testid="filter-count"]` and Clear in its tail.
- * Display button `aria-label="Display"`, menu `.dm-menu` with
- * `[data-view-option]` rows, `More views` in `.dm-views-flyout`.
  *
  * Every spec that changes a filter must call isolateUiPrefs in beforeEach:
  * `walnut-todo-filters` is mirrored by ui-prefs-sync and would leak between files.
@@ -30,12 +36,15 @@ const DATE_IDS: Record<string, string> = {
 }
 
 const TOOLBAR = '#home-task-navigation .todo-panel-toolbar'
-export const filterButton = (page: Page) => page.locator(TOOLBAR).getByRole('button', { name: 'Filter', exact: true })
+/** The one toolbar button; `filterButton` is the same button under its older name. */
 export const displayButton = (page: Page) => page.locator(TOOLBAR).getByRole('button', { name: 'Display', exact: true })
+export const filterButton = displayButton
 export const filterMenu = (page: Page) => page.locator('.fb-menu')
-export const displayMenu = (page: Page) => page.locator('.dm-menu')
+/** The same menu; the display rows live on its first page. */
+export const displayMenu = filterMenu
 export const filterRow = (page: Page) => page.locator('.fb-row')
-export const viewsFlyout = (page: Page) => page.locator('.dm-views-flyout')
+/** Page two while it shows the views. */
+export const viewsPage = (page: Page) => page.locator('.fb-menu .fb-page[data-filter-dim="view"]')
 export const filterChip = (page: Page, dim: FilterDimKey) => page.locator(`.fb-row [data-chip-dim="${dim}"]`)
 /** The property row on page one. */
 export const filterDimRow = (page: Page, dim: FilterDimKey) => page.locator(`.fb-menu .fb-prop[data-filter-dim="${dim}"]`)
@@ -47,7 +56,7 @@ function cssString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
-/** Open the Filter menu on its first page (no-op when open; goes back from a property page). */
+/** Open the menu on its first page (no-op when open; goes back from a property or the View page). */
 export async function openFilterMenu(page: Page): Promise<void> {
   if (!(await filterMenu(page).isVisible())) await filterButton(page).click()
   await expect(filterMenu(page)).toBeVisible()
@@ -192,39 +201,42 @@ export async function filterRowCount(page: Page): Promise<number | null> {
   return m ? Number(m[0]) : null
 }
 
-/** Open the Display menu (no-op when open). */
+/** Open the menu on its first page with the display rows in view (the same menu as openFilterMenu). */
 export async function openDisplayMenu(page: Page): Promise<void> {
-  if (!(await displayMenu(page).isVisible())) await displayButton(page).click()
-  await expect(displayMenu(page).locator('[data-view-group="Show"]')).toBeVisible()
-  await settled(displayMenu(page))
+  await openFilterMenu(page)
+  await expect(displayMenu(page).locator('[data-view-option="quick-views"]')).toBeVisible()
 }
 
-/** Close the Display menu (its More views flyout first). */
+/** Close the menu from any page. */
 export async function closeDisplayMenu(page: Page): Promise<void> {
-  if (await viewsFlyout(page).isVisible()) {
-    await page.keyboard.press('Escape')
-    await expect(viewsFlyout(page)).toHaveCount(0)
-  }
-  if ((await displayMenu(page).count()) === 0) return
-  await page.keyboard.press('Escape')
-  await expect(displayMenu(page)).toHaveCount(0)
+  await closeFilterMenu(page)
 }
 
-/** The `More views` row of the open Display menu. */
-export const moreViewsRow = (page: Page) => displayMenu(page).getByRole('button', { name: /^More views/ })
+/** The View row of the open menu's first page; it opens the View page. */
+export const viewRow = (page: Page) => displayMenu(page).locator('[data-view-option="view"]')
+
+/** Open the View page (page two with every view) from wherever the menu is. */
+export async function openViewsPage(page: Page): Promise<Locator> {
+  if ((await viewsPage(page).count()) > 0) return viewsPage(page)
+  await openDisplayMenu(page)
+  await viewRow(page).click()
+  await expect(viewsPage(page)).toBeVisible()
+  return viewsPage(page)
+}
 
 /**
- * Click one Display option by its `data-view-option` key, opening the More
- * views flyout when the key lives there. With `choice`, clicks that segment
- * (`[data-choice]`) of a choice row. Leaves the menu open.
+ * Click one display option by its `data-view-option` key: a row on page one, or
+ * a view on the View page when the key is a view id (that pick closes the
+ * menu). With `choice`, clicks that segment (`[data-choice]`) of a choice row.
+ * Leaves the menu open otherwise.
  */
 export async function chooseDisplayOption(page: Page, key: string, choice?: string): Promise<void> {
   await openDisplayMenu(page)
   let target = displayMenu(page).locator(`[data-view-option="${cssString(key)}"]`)
   if ((await target.count()) === 0) {
-    if (!(await viewsFlyout(page).isVisible())) await moreViewsRow(page).click()
-    await expect(viewsFlyout(page)).toBeVisible()
-    target = viewsFlyout(page).locator(`[data-view-option="${cssString(key)}"]`)
+    await openViewsPage(page)
+    target = viewsPage(page).locator(`.dm-view[data-view-option="${cssString(key)}"]`)
+    await expect(target).toBeVisible()
   }
   if (choice !== undefined) await target.first().locator(`[data-choice="${cssString(choice)}"]`).click()
   else await target.first().click()

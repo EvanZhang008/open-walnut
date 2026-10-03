@@ -124,7 +124,7 @@ export type FacetCounts = Partial<Record<FilterDim, Record<string, number>>>;
 export interface RecentEntry {
   dim: FilterDim;
   value: string | string[];
-  /** How many times the user made this pick (absent = once). Ranks `Most used`. */
+  /** How many times the user made this pick (absent = once). Ranks the search hits. */
   uses?: number;
 }
 

@@ -7,7 +7,9 @@ import { test, expect, type Page } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
 import { draftComposer, openDraft } from './draft-helpers'
 import { openHome } from './home-navigation-helpers'
-import { closeFilterMenu, filterChip, filterMenu, filterRow, openDisplayMenu, openFilterMenu } from './filter-bar-helpers'
+import {
+  chooseDisplayOption, closeFilterMenu, filterChip, filterMenu, filterRow, openFilterMenu, openFilterPage, openViewsPage, viewRow,
+} from './filter-bar-helpers'
 import { panelClip, SHOTS, QUICK_VIEWS_KEY, runStamp, boot, seed, cleanup, row, card, anyRow, tab, selectTab, filterProjects, type Seed } from './filter-bar-board-helpers'
 
 test.setTimeout(150_000)
@@ -58,11 +60,9 @@ test.describe('board entry points', () => {
       expect((await page.request.delete(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
       await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0, { timeout: 15_000 })
       // Switching to a tier view marks the board as one that uses tiers; from then on
-      // two tiers with tasks draw their headings.
-      await openDisplayMenu(page)
-      await page.locator('.dm-menu').getByRole('button', { name: /^More views/ }).click()
-      await page.locator('.dm-views-flyout [data-view-option="satellite"]').click()
-      await page.keyboard.press('Escape')
+      // two tiers with tasks draw their headings. The pick on the View page closes the menu.
+      await chooseDisplayOption(page, 'satellite')
+      await expect(filterMenu(page)).toHaveCount(0)
       expect(await page.evaluate(() => localStorage.getItem('walnut-todo-tier-used'))).toBe('1')
       await selectTab(page, 'Pinned')
       await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Focus' })).toBeVisible({ timeout: 15_000 })
@@ -126,7 +126,7 @@ function filtersRecord(over: Record<string, unknown>): string {
 }
 
 test.describe('shortcuts, menus and overlays', () => {
-  test('the project heading filters to itself; F opens Filter in Search filters (C65)', async ({ page, baseURL }) => {
+  test('the project heading filters to itself; F opens the Display menu in Search filters (C65)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
     const ids = await seed(page, garden, [{ title: `g one ${stamp}` }])
@@ -141,7 +141,7 @@ test.describe('shortcuts, menus and overlays', () => {
       await expect(filterChip(page, 'project')).toContainText(garden)
       await expect(page.getByTestId('filter-badge')).toHaveText('1')
 
-      // F with focus on the list (not in a text field) opens Filter in its search box.
+      // F with focus on the list (not in a text field) opens the Display menu in its search box.
       await page.locator('.todo-section-tabs').click({ position: { x: 2, y: 2 } })
       await page.keyboard.press('f')
       await expect(filterMenu(page)).toBeVisible()
@@ -159,7 +159,7 @@ test.describe('shortcuts, menus and overlays', () => {
     }
   })
 
-  test('Escape and the closing click stop at the Filter and Display overlays (C69)', async ({ page, baseURL }) => {
+  test('Escape and the closing click stop at the Display menu, on page one and on a page two (C69)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
     const ids = await seed(page, garden, [{ title: `g one ${stamp}` }, { title: `g two ${stamp}` }])
@@ -171,11 +171,12 @@ test.describe('shortcuts, menus and overlays', () => {
       await row(page, ids[0]).locator('.task-kebab-btn').click()
       await page.locator('.task-kebab-menu').getByText('Select…').click()
       await expect(page.locator('.task-selection-bar')).toBeVisible()
-      for (const open of [() => openFilterMenu(page), () => openDisplayMenu(page)]) {
+      // One menu, three places to be in it: page one, a property's page, the View page.
+      const opens = [() => openFilterMenu(page), () => openFilterPage(page, 'status'), () => openViewsPage(page)]
+      for (const open of opens) {
         await open()
         await page.keyboard.press('Escape')
         await expect(filterMenu(page)).toHaveCount(0)
-        await expect(page.locator('.dm-menu')).toHaveCount(0)
         await expect(page.locator('.task-selection-bar')).toBeVisible()
       }
       await page.locator('.task-selection-clear-btn').click({ timeout: 10_000 })
@@ -185,11 +186,10 @@ test.describe('shortcuts, menus and overlays', () => {
       // The Project chip's bookmark lands in the URL asynchronously: let it settle first.
       await expect(page).toHaveURL(/[?&]proj=/)
       const urlBefore = page.url()
-      for (const open of [() => openFilterMenu(page), () => openDisplayMenu(page)]) {
+      for (const open of opens) {
         await open()
         await row(page, ids[1]).locator('.todo-item-title').first().click({ position: { x: 4, y: 6 }, timeout: 10_000 })
         await expect(filterMenu(page)).toHaveCount(0)
-        await expect(page.locator('.dm-menu')).toHaveCount(0)
         expect(page.url()).toBe(urlBefore)
         await expect(row(page, ids[1])).not.toHaveClass(/task-focused/)
       }
@@ -205,12 +205,13 @@ test.describe('shortcuts, menus and overlays', () => {
       scope: getComputedStyle(document.querySelector('.fb-toolbar-scope')!).containerType,
     }))
     expect(types).toEqual({ panel: 'normal', scope: 'inline-size' })
-    // Toolbar order: Search, New, Filter, Display, Hide panel (C2); no View options (C1).
+    // Toolbar order: Search, New, Display, Hide panel (C2); Display is the one menu button,
+    // with no Filter button beside it and no View options (C1).
     const order = await page.locator('.todo-panel-toolbar').evaluate((bar) =>
       [...bar.querySelectorAll('input.todo-search-input, button')].map((el) => el.getAttribute('aria-label') || el.className))
     const at = (label: string) => order.indexOf(label)
-    expect(at('Filter')).toBeGreaterThan(-1)
-    expect(at('Filter')).toBeLessThan(at('Display'))
+    expect(at('Filter')).toBe(-1)
+    expect(order.filter((label) => label === 'Display')).toHaveLength(1)
     expect(at('Display')).toBeLessThan(at('Hide task panel'))
     await expect(page.locator('.todo-panel button[aria-label="View options"], .vd-panel, .vd-rail, [data-rail-section]')).toHaveCount(0)
   })
@@ -218,16 +219,18 @@ test.describe('shortcuts, menus and overlays', () => {
   test('with the tab bar off, a non-All view shows as View: <name> in the filter row (C70 wiring)', async ({ page, baseURL }) => {
     await boot(page, baseURL!, { [QUICK_VIEWS_KEY]: 'false' })
     await expect(filterRow(page)).toHaveCount(0)
-    await openDisplayMenu(page)
-    await page.locator('.dm-menu [data-view-option="pinned"]').click()
-    await page.keyboard.press('Escape')
+    // A view pick on the View page closes the menu by itself.
+    await chooseDisplayOption(page, 'pinned')
+    await expect(filterMenu(page)).toHaveCount(0)
     const item = filterRow(page).locator('.fb-view-item')
     await expect(item).toContainText('Pinned')
     await expect(page.getByTestId('filter-badge')).toHaveCount(0)
+    // The item opens the same menu, whose View row names the view.
     await item.click()
-    await expect(page.locator('.dm-menu')).toBeVisible()
-    await page.locator('.dm-menu [data-view-option="all"]').click()
-    await page.keyboard.press('Escape')
+    await expect(filterMenu(page)).toBeVisible()
+    await expect(viewRow(page).locator('.fb-prop-summary')).toHaveText('Pinned')
+    await chooseDisplayOption(page, 'all')
+    await expect(filterMenu(page)).toHaveCount(0)
     await expect(filterRow(page)).toHaveCount(0)
   })
 })

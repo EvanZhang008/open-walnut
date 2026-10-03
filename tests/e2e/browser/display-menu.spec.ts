@@ -1,17 +1,19 @@
 /**
- * E2E: the home task panel's Display menu (spec 3.3, 6.5; checklist C1, C12 to C15, C18, C19,
- * C29b, C32, C36, C37, C42, C52, C56, C58, C64, C70). Display lays the list out, Filter picks
- * which tasks show. The first layer is the tabs kept on the bar (All + Pinned for a new user,
- * no tier word); other views wait in a portalled More views flyout; the menu never changes
- * height while open; Sort never drops a project's own order without asking. Each test seeds
- * its own tasks through the API (or stubs one read) from isolated UI prefs.
+ * E2E: the home task panel's one menu under Display (spec 3.3, 6.5; checklist C1, C12 to C15,
+ * C18, C19, C29b, C32, C36, C37, C42, C52, C56, C58, C64, C70). Page one holds the filter rows,
+ * then Sort, Group, the View row, Show tab bar and Session columns, then the rows only some views
+ * have. The View row opens the View page: the tabs kept on the bar first (All + Pinned for a new
+ * user, no tier word), a hairline, then every other view; a pick there switches the list and
+ * closes the menu. Rows every view has sit at the same place in every view; Sort never drops a
+ * project's own order without asking. Each test seeds its own tasks through the API (or stubs
+ * one read) from isolated UI prefs.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
 import {
-  displayButton, displayMenu, filterRow, moreViewsRow, openDisplayMenu, closeDisplayMenu,
-  openFilterMenu, closeFilterMenu, setStatus, viewsFlyout,
+  displayButton, displayMenu, filterRow, filterSearch, openDisplayMenu, closeDisplayMenu,
+  openViewsPage, setStatus, viewRow, viewsPage,
 } from './filter-bar-helpers'
 
 const SHOTS = '/tmp/filterbar/shots'
@@ -54,21 +56,33 @@ test.afterEach(async ({ request }) => {
   for (const id of cleanup.splice(0)) for (const url of [`/api/focus/tasks/${id}`, `/api/tasks/${id}`]) await request.delete(url).catch(() => {})
 })
 
-const viewRows = (page: Page) => displayMenu(page).locator('[data-view-group="Show"] .dm-view[data-view-option]')
 const tab = (page: Page, name: string) => page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
+/** A row (or a segment) of the menu's open page, by its `data-view-option` key. */
 const option = (page: Page, key: string) => displayMenu(page).locator(`[data-view-option="${key}"]`)
-const flyoutItem = (page: Page, key: string) => viewsFlyout(page).locator(`[data-view-option="${key}"]`)
-const openMoreViews = async (page: Page) => {
-  if (!(await viewsFlyout(page).isVisible())) await moreViewsRow(page).click()
-  await expect(viewsFlyout(page)).toBeVisible()
+/** One view on the View page. */
+const viewChoice = (page: Page, key: string) => viewsPage(page).locator(`.dm-view[data-view-option="${key}"]`)
+/** The View row's value: the current view's name. */
+const viewSummary = (page: Page) => viewRow(page).locator('.fb-prop-summary')
+
+/** The View page's views in order: the bar's tabs above the hairline, the rest below it. */
+async function viewLayers(page: Page): Promise<{ first: string[]; more: string[] }> {
+  return viewsPage(page).locator('.dm-views').evaluate((list) => {
+    const layers = { first: [] as string[], more: [] as string[] }
+    let below = false
+    for (const el of Array.from(list.children)) {
+      if (el.classList.contains('dm-flyout-sep')) below = true
+      else if (el.matches('.dm-view[data-view-option]')) (below ? layers.more : layers.first).push(el.getAttribute('data-view-option')!)
+    }
+    return layers
+  })
 }
 
-/** Pick a view from More views; the flyout closes, the Display menu stays. */
-async function pickMoreView(page: Page, key: string) {
-  await openMoreViews(page)
-  await flyoutItem(page, key).click()
-  await expect(viewsFlyout(page)).toHaveCount(0)
-  await expect(displayMenu(page)).toBeVisible()
+/** Pick a view on the View page: the menu closes and focus returns to Display. */
+async function pickView(page: Page, key: string) {
+  await openViewsPage(page)
+  await viewChoice(page, key).click()
+  await expect(displayMenu(page)).toHaveCount(0)
+  await expect(displayButton(page)).toBeFocused()
 }
 const box = async (locator: Locator) => { const b = await locator.boundingBox(); expect(b).not.toBeNull(); return b! }
 
@@ -77,112 +91,149 @@ async function insideViewport(page: Page, locator: Locator): Promise<void> {
   expect([b.x >= 0, b.y >= 0, b.x + b.width <= vp.width + 0.5, b.y + b.height <= vp.height + 0.5]).toEqual([true, true, true, true])
 }
 
-test('the first layer is the bar: All and Pinned for a new user, every other view in More views', async ({ page, baseURL }) => {
+test('one menu: the filter rows, then the display rows; the View page lists the bar first, every other view below', async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await boot(page, baseURL!)
-  // C1: the old popover is gone from the home panel, before and after both new menus open.
+  // C1: the old popover is gone from the home panel, and Display is the toolbar's one menu button.
   const toolbar = page.locator('#home-task-navigation .todo-panel-toolbar')
   await expect(toolbar.getByRole('button', { name: 'View options' })).toHaveCount(0)
+  await expect(toolbar.getByRole('button', { name: 'Filter', exact: true })).toHaveCount(0)
   const btn = displayButton(page)
-  expect(await btn.evaluate((el) => [el.title, el.getAttribute('aria-haspopup'), el.getAttribute('aria-expanded')]))
-    .toEqual(['Display: view, sort, group, layout', 'dialog', 'false'])
+  expect(await btn.evaluate((el) => [el.getAttribute('title'), el.getAttribute('aria-haspopup'), el.getAttribute('aria-expanded')]))
+    .toEqual(['Display: sort, group, layout', 'dialog', 'false'])
   await expect(btn.locator('.vd-dot')).toHaveCount(0)
   await openDisplayMenu(page)
   await expect(btn).toHaveAttribute('aria-expanded', 'true')
   const menu = displayMenu(page)
-  expect(await menu.evaluate((el) => [el.getAttribute('role'), el.getAttribute('aria-label')])).toEqual(['dialog', 'Display options'])
+  expect(await menu.evaluate((el) => [el.getAttribute('role'), el.getAttribute('aria-label'), el.getAttribute('data-page')]))
+    .toEqual(['dialog', 'Filter and display', 'home'])
   expect(await menu.evaluate((el) => el.parentElement === document.body)).toBe(true)
   expect((await box(menu)).width).toBeLessThanOrEqual(320.5)
-  // C13 / C13b: All and Pinned, titled, and no tier word anywhere the first layer shows.
-  await expect(viewRows(page)).toHaveCount(2)
-  expect(await viewRows(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')))).toEqual(['all', 'pinned'])
-  const titles = await viewRows(page).evaluateAll((els) => els.map((el) => el.getAttribute('title') ?? ''))
-  expect(titles.every((t) => t !== '' && !/\b(tier|focus|satellite|backlog|parked)\b/i.test(t))).toBe(true)
+  // Focus starts in the one search box, which searches filters and views alike.
+  await expect(filterSearch(page)).toBeFocused()
+  await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search filters and views')
+  // Page one, top to bottom: the filter rows, Sort and Group, View / Show tab bar / Session
+  // columns, then the rows only some views have (All: Collapse all).
+  const sections = await menu.locator('.fb-home, .dm-section').evaluateAll((els) =>
+    els.map((el) => (el.classList.contains('fb-home') ? 'filters' : [...el.classList].find((c) => c !== 'dm-section'))))
+  expect(sections).toEqual(['filters', 'dm-order', 'dm-settings', 'dm-context'])
+  expect(await menu.locator('.dm-settings > [data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option'))))
+    .toEqual(['view', 'quick-views', 'session-panels'])
+  // C13 / C13b: no view sits on page one; the View row names the current one, and no tier
+  // word shows anywhere on the page.
+  for (const key of ['all', 'pinned', 'focus', 'tasks']) await expect(option(page, key)).toHaveCount(0)
+  expect(await viewRow(page).evaluate((el) => [el.getAttribute('aria-haspopup'), el.getAttribute('title')]))
+    .toEqual(['true', 'View: All, Pinned and the other views'])
+  await expect(viewRow(page).locator('.fb-item-text')).toHaveText('View')
+  await expect(viewSummary(page)).toHaveText('All')
   expect(await menu.innerText()).not.toMatch(TIER_WORDS)
-  await expect(menu.locator('[data-view-group="Show"] .dm-heading')).toHaveText('View')
-  // Focus starts on the selected View row.
-  await expect(option(page, 'all')).toBeFocused()
   // C12: no native checkbox; the tab bar switch is a role="switch".
   await expect(menu.locator('input[type="checkbox"]')).toHaveCount(0)
-  expect(await option(page, 'quick-views').evaluate((el) => [el.getAttribute('role'), el.getAttribute('aria-checked'), el.title]))
+  expect(await option(page, 'quick-views').evaluate((el) => [el.getAttribute('role'), el.getAttribute('aria-checked'), el.getAttribute('title')]))
     .toEqual(['switch', 'true', 'All, Pinned and the other views as tabs across the top'])
   for (const key of ['session-panels', 'sort', 'group', 'collapse']) await expect(option(page, key)).toHaveCount(1)
   await expect(option(page, 'session-panels').locator('[data-choice]')).toHaveCount(6)
   await menu.screenshot({ path: `${SHOTS}/display-menu-light.png` })
-  // C13 / C15: More views is a portalled flyout holding the rest, each with its sentence.
-  expect(await moreViewsRow(page).evaluate((el) => [el.getAttribute('aria-haspopup'), el.getAttribute('aria-expanded')])).toEqual(['menu', 'false'])
-  await openMoreViews(page)
-  await expect(moreViewsRow(page)).toHaveAttribute('aria-expanded', 'true')
-  await expect(menu.locator('.dm-views-flyout')).toHaveCount(0)
-  const keys = await viewsFlyout(page).locator('[data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')!))
-  const builtIn = keys.filter((k) => !k.startsWith('ct_'))
-  expect(builtIn).toEqual(['focus', 'satellite', 'wait', 'recent', 'tasks'])
-  expect(await viewsFlyout(page).locator('[data-view-option]').evaluateAll((els) => els.every((el) => !!el.getAttribute('title')))).toBe(true)
-  await expect(flyoutItem(page, 'tasks')).toHaveAttribute('title', 'Projects: every task grouped by project, with filters applied')
-  const [a, b] = [await box(menu), await box(viewsFlyout(page))]
-  const x = Math.max(0, Math.min(a.x, b.x) - 8), y = Math.max(0, Math.min(a.y, b.y) - 8)
-  const right = Math.min(1280, Math.max(a.x + a.width, b.x + b.width) + 8), bottom = Math.max(a.y + a.height, b.y + b.height) + 8
-  await page.screenshot({ path: `${SHOTS}/display-more-views.png`, clip: { x, y, width: right - x, height: bottom - y } })
+
+  // C13 / C15: the View row opens the View page: All and Pinned (the bar's tabs) above a
+  // hairline, every other view below it, each with its sentence.
+  await viewRow(page).click()
+  await expect(viewsPage(page)).toBeVisible()
+  await expect(menu).toHaveAttribute('data-page', 'view')
+  await expect(viewsPage(page).locator('.fb-page-title')).toHaveText('View')
+  await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search views')
+  const layers = await viewLayers(page)
+  expect(layers.first).toEqual(['all', 'pinned'])
+  expect(layers.more.filter((k) => !k.startsWith('ct_'))).toEqual(['focus', 'satellite', 'wait', 'recent', 'tasks'])
+  await expect(viewsPage(page).locator('.dm-flyout-sep')).toHaveCount(1)
+  const titles = await viewsPage(page).locator('.dm-view').evaluateAll((els) => els.map((el) => el.getAttribute('title') ?? ''))
+  expect(titles.every((t) => t !== '')).toBe(true)
+  for (const key of layers.first) expect(await viewChoice(page, key).getAttribute('title')).not.toMatch(TIER_WORDS)
+  await expect(viewChoice(page, 'tasks')).toHaveAttribute('title', 'Projects: every task grouped by project, with filters applied')
+  // The current view is pressed, checked and takes focus.
+  await expect(viewChoice(page, 'all')).toHaveAttribute('aria-pressed', 'true')
+  await expect(viewChoice(page, 'all').locator('.fb-check svg')).toHaveCount(1)
+  await expect(viewChoice(page, 'all')).toBeFocused()
+  await menu.screenshot({ path: `${SHOTS}/display-views-page.png` })
+  // Back returns to page one with focus on the View row.
+  await viewsPage(page).getByRole('button', { name: 'Back to all filters' }).click()
+  await expect(menu).toHaveAttribute('data-page', 'home')
+  await expect(viewRow(page)).toBeFocused()
   await closeDisplayMenu(page)
   await expect(btn).toBeFocused()
-
-  await openFilterMenu(page)
-  await closeFilterMenu(page)
   await expect(page.locator('.vd-panel, .vd-rail, [data-rail-section]')).toHaveCount(0)
 })
 
-test('a view picked in Display switches the list and the tab bar, and the menu stays open', async ({ page, baseURL }) => {
+test('a view picked on the View page switches the list and the tab bar, closes the menu, and the View row names it', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
-  await openDisplayMenu(page)
-  // C14: Pinned from the first layer: the tab follows, the menu stays.
-  await option(page, 'pinned').click()
-  await expect(option(page, 'pinned')).toHaveAttribute('aria-pressed', 'true')
-  await expect(option(page, 'all')).toHaveAttribute('aria-pressed', 'false')
+  // C14: Pinned from the View page: the tab follows, the menu closes, focus is back on Display.
+  await pickView(page, 'pinned')
   await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
-  await expect(displayMenu(page)).toBeVisible()
+  await openDisplayMenu(page)
+  await expect(viewSummary(page)).toHaveText('Pinned')
+  await openViewsPage(page)
+  await expect(viewChoice(page, 'pinned')).toHaveAttribute('aria-pressed', 'true')
+  await expect(viewChoice(page, 'all')).toHaveAttribute('aria-pressed', 'false')
 
-  // Focus from More views: the flyout closes, Display stays, the row names where you are.
-  await pickMoreView(page, 'focus')
-  await expect(moreViewsRow(page)).toContainText('More views (Focus)')
+  // Focus, from below the hairline: the bar draws its tab while it is the view.
+  await viewChoice(page, 'focus').click()
+  await expect(displayMenu(page)).toHaveCount(0)
   await expect(tab(page, 'Focus')).toHaveAttribute('aria-selected', 'true')
-  await expect(viewRows(page).locator('[aria-pressed="true"]')).toHaveCount(0)
-  // C15: a tier view adds Tier layout, last; both keys pick.
+  await openDisplayMenu(page)
+  await expect(viewSummary(page)).toHaveText('Focus')
+  // C15: a tier view adds Tier layout, last; both keys pick and the menu stays open.
   for (const key of ['tier-custom', 'tier-project']) {
     await option(page, key).click()
     await expect(option(page, key)).toHaveAttribute('aria-pressed', 'true')
   }
+  await expect(displayMenu(page)).toBeVisible()
   await expect(option(page, 'recent-updated')).toHaveCount(0)
+  await closeDisplayMenu(page)
 
   // Recent swaps the last row for Recent order.
-  await pickMoreView(page, 'recent')
-  await expect(moreViewsRow(page)).toContainText('More views (Recent)')
+  await pickView(page, 'recent')
+  await openDisplayMenu(page)
+  await expect(viewSummary(page)).toHaveText('Recent')
   await expect(option(page, 'tier-project')).toHaveCount(0)
   for (const key of ['recent-created', 'recent-updated']) {
     await option(page, key).click()
     await expect(option(page, key)).toHaveAttribute('aria-pressed', 'true')
   }
+  await closeDisplayMenu(page)
 
-  // Every other built-in view key picks from the flyout too.
-  for (const [key, label] of [['satellite', 'Satellite'], ['wait', 'Parked'], ['tasks', 'Projects']] as const) {
-    await pickMoreView(page, key)
-    await expect(moreViewsRow(page)).toContainText(`More views (${label})`)
+  // Every other built-in view picks from the View page too.
+  for (const [key, label] of [['satellite', 'Satellite'], ['tasks', 'Projects']] as const) {
+    await pickView(page, key)
+    await openDisplayMenu(page)
+    await expect(viewSummary(page)).toHaveText(label)
+    await closeDisplayMenu(page)
   }
-  await openMoreViews(page)
-  await expect(flyoutItem(page, 'tasks')).toHaveAttribute('aria-checked', 'true')
-  await page.keyboard.press('Escape')
-  await expect(viewsFlyout(page)).toHaveCount(0)
+  await openViewsPage(page)
+  await expect(viewChoice(page, 'tasks')).toHaveAttribute('aria-pressed', 'true')
+  await closeDisplayMenu(page)
   // Projects is not a tab: nothing on the bar is selected.
   await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
 
-  // Back to All; the last row is gone and the View row is checked again.
-  await option(page, 'all').click()
-  await expect(option(page, 'all')).toHaveAttribute('aria-pressed', 'true')
-  await expect(moreViewsRow(page)).toHaveText(/^\s*More views\s*$/)
+  // Search on page one finds views as well as filter values: `View  Parked`, one click picks it.
+  await openDisplayMenu(page)
+  await filterSearch(page).fill('Parked')
+  const hit = displayMenu(page).locator('.fb-hit[data-view-option="wait"]')
+  await expect(hit.locator('.fb-hit-dim')).toHaveText('View')
+  await expect(hit.locator('.fb-hit-value')).toHaveText('Parked')
+  await hit.click()
+  await expect(displayMenu(page)).toHaveCount(0)
+  await expect(tab(page, 'Parked')).toHaveAttribute('aria-selected', 'true')
+
+  // Back to All: the last row is Collapse all again and the View row says All.
+  await pickView(page, 'all')
   await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
+  await openDisplayMenu(page)
+  await expect(viewSummary(page)).toHaveText('All')
+  await expect(option(page, 'collapse')).toHaveCount(1)
   await closeDisplayMenu(page)
 })
 
-test('the menu keeps its height and every row in place while the view changes (30 custom tiers)', async ({ page, baseURL }) => {
+test('page one keeps its height and every row in place in every view; the View page scrolls the long tail (30 custom tiers)', async ({ page, baseURL }) => {
   // The server caps custom tiers at 20; the client must still hold 30, so the read is stubbed.
   const tiers = Array.from({ length: 30 }, (_, i) => ({ id: `ct_pw_display_${i}`, label: `Lane ${i + 1}` }))
   await page.route('**/api/focus/tiers', async (route) => {
@@ -192,43 +243,50 @@ test('the menu keeps its height and every row in place while the view changes (3
   await page.setViewportSize({ width: 1280, height: 720 })
   await boot(page, baseURL!)
   await openDisplayMenu(page)
-  // The bar keeps all 30, but the menu's first layer is capped; the rest wait in the flyout.
-  expect(await viewRows(page).count()).toBeLessThanOrEqual(6)
   const height = async () => (await box(displayMenu(page))).height
   // Rows every view has (Session columns, Sort, Group: C29b) and the top of the slot the view
-  // rows (Collapse all, Tier layout, Recent order) share never move while the view changes.
+  // rows (Collapse all, Tier layout, Recent order) share sit at the same place in every view.
   const ys = async () => { const top = (await box(displayMenu(page))).y; return Promise.all([option(page, 'session-panels'), option(page, 'sort'), option(page, 'group'), displayMenu(page).locator('.dm-context')]
     .map(async (l) => Math.round((await box(l)).y - top))) }
+  await expect(option(page, 'sort')).toBeVisible()
   const h0 = await height()
   const y0 = await ys()
-  await expect(option(page, 'sort')).toBeVisible()
   const steady = async () => {
     expect(Math.abs((await height()) - h0)).toBeLessThan(0.5)
     for (const [i, y] of (await ys()).entries()) expect(Math.abs(y - y0[i])).toBeLessThanOrEqual(1)
   }
-  await pickMoreView(page, 'focus')
-  await expect(option(page, 'tier-project')).toBeVisible()
-  await steady()
-  await pickMoreView(page, 'recent')
-  await expect(option(page, 'recent-updated')).toBeVisible()
-  await steady()
-  await option(page, 'all').click()
-  await expect(option(page, 'recent-updated')).toHaveCount(0)
-  await expect(option(page, 'sort')).toBeVisible()
-  await steady()
+  await closeDisplayMenu(page)
+  for (const [key, row] of [['focus', 'tier-project'], ['recent', 'recent-updated'], ['all', 'collapse']] as const) {
+    await pickView(page, key)
+    await openDisplayMenu(page)
+    await expect(option(page, row)).toBeVisible()
+    await steady()
+    await closeDisplayMenu(page)
+  }
 
-  // The flyout holds the long tail: in the viewport, scrolling inside, menu height unchanged.
-  await openMoreViews(page)
-  await expect(flyoutItem(page, 'ct_pw_display_29')).toHaveCount(1)
-  await insideViewport(page, viewsFlyout(page))
+  // The bar keeps all 30, but the View page's first layer is capped; the long tail is below
+  // the hairline, inside a menu capped at 520px whose body scrolls.
+  await openViewsPage(page)
+  const layers = await viewLayers(page)
+  expect(layers.first.length).toBeLessThanOrEqual(6)
+  expect(layers.more).toContain('ct_pw_display_29')
+  expect((await box(displayMenu(page))).height).toBeLessThanOrEqual(520.5)
   await insideViewport(page, displayMenu(page))
-  expect(await viewsFlyout(page).evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
-  expect(Math.abs((await height()) - h0)).toBeLessThan(0.5)
-  // C19: a click in the flyout never closes the menu behind it (it picks and closes only itself).
-  await flyoutItem(page, 'ct_pw_display_29').scrollIntoViewIfNeeded()
-  await flyoutItem(page, 'ct_pw_display_29').click()
-  await expect(moreViewsRow(page)).toContainText('More views (Lane 30)')
-  expect(Math.abs((await height()) - h0)).toBeLessThan(0.5)
+  expect(await displayMenu(page).locator('.fb-menu-body').evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+  // The search box narrows the list, and says so when nothing is left.
+  await filterSearch(page).fill('Lane 30')
+  await expect(viewsPage(page).locator('.dm-view')).toHaveCount(1)
+  await filterSearch(page).fill('no such lane')
+  await expect(viewsPage(page).locator('.dm-view')).toHaveCount(0)
+  await expect(viewsPage(page).locator('.fb-empty')).toHaveText('No view matches "no such lane"')
+  await filterSearch(page).fill('')
+  // C19: a pick in the long tail lands; page one is the same size in that view too.
+  await viewChoice(page, 'ct_pw_display_29').scrollIntoViewIfNeeded()
+  await viewChoice(page, 'ct_pw_display_29').click()
+  await expect(displayMenu(page)).toHaveCount(0)
+  await openDisplayMenu(page)
+  await expect(viewSummary(page)).toHaveText('Lane 30')
+  await steady()
   await closeDisplayMenu(page)
 })
 
@@ -251,9 +309,7 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   // Touch A last, so Updated and Created disagree about the top row.
   expect((await page.request.patch(`/api/tasks/${ids[0]}`, { data: { title: `sort a touched ${stamp}` } })).ok()).toBe(true)
   await boot(page, baseURL!, { 'walnut-todo-project-sort': JSON.stringify({ [project]: 'priority', [other]: 'date' }) })
-  await openDisplayMenu(page)
-  await pickMoreView(page, 'tasks')
-  await closeDisplayMenu(page)
+  await pickView(page, 'tasks')
   await openListProject(page, project)
   await expect.poll(() => rowOrder(page, ids)).toHaveLength(3)
 
@@ -340,21 +396,22 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true }).first()).toBeVisible()
   await openDisplayMenu(page)
   await expect(option(page, 'quick-views')).toHaveAttribute('aria-checked', 'false')
-  // On All with no chip the row does not exist at all.
+  // The open menu hangs under the row (`No filters yet`); shut, on All with no chip, the row does not exist at all.
+  await closeDisplayMenu(page)
   await expect(filterRow(page)).toHaveCount(0)
 
   // C70: Pinned while the bar is off: the row leads with the view, which is not a chip.
-  await option(page, 'pinned').click()
+  await pickView(page, 'pinned')
   const viewItem = filterRow(page).locator('.fb-view-item')
   await expect(viewItem).toHaveText(/View:\s*Pinned/)
   await expect(viewItem).toHaveAttribute('aria-label', 'View: Pinned, change in Display')
   await expect(viewItem.locator('.fb-chip-x')).toHaveCount(0)
   await expect(page.getByTestId('filter-badge')).toHaveCount(0)
-  await closeDisplayMenu(page)
   await expect(displayButton(page)).toHaveAttribute('title', /Pinned/)
+  // The view item opens the same menu, whose View row names the view.
   await viewItem.click()
   await expect(displayMenu(page)).toBeVisible()
-  await expect(option(page, 'pinned')).toHaveAttribute('aria-pressed', 'true')
+  await expect(viewSummary(page)).toHaveText('Pinned')
   await closeDisplayMenu(page)
   // Clear removes chips (the badge counts them, never the view item), never the view.
   await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
@@ -363,9 +420,7 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   await expect(page.getByTestId('filter-badge')).toHaveCount(0)
   await expect(viewItem).toHaveText(/View:\s*Pinned/)
   // Back to All with no chip: the row leaves the DOM.
-  await openDisplayMenu(page)
-  await option(page, 'all').click()
-  await closeDisplayMenu(page)
+  await pickView(page, 'all')
   await expect(filterRow(page)).toHaveCount(0)
 
   // C56: searching a finished task with the bar off: the row offers it, one click shows it.
@@ -377,22 +432,23 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   await page.locator('#home-task-navigation .todo-search-bar input').fill('')
 })
 
-test('a view put on the bar joins the first layer in bar order and leaves More views', async ({ page, baseURL }) => {
+test('a view put on the bar moves above the hairline on the View page, in bar order', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
   await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
   await page.getByRole('button', { name: 'Tab bar options' }).click()
   await page.locator('.wn-context-menu').getByRole('menuitemcheckbox', { name: 'Focus', exact: true }).click()
   await page.keyboard.press('Escape')
-  await openDisplayMenu(page)
-  // C64: All, Pinned, Focus, the order the bar draws them.
-  const keys = await viewRows(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')!))
-  expect(keys.filter((k) => !k.startsWith('ct_'))).toEqual(['all', 'pinned', 'focus'])
-  await option(page, 'focus').click()
-  await expect(option(page, 'focus')).toHaveAttribute('aria-pressed', 'true')
+  await openViewsPage(page)
+  // C64: All, Pinned, Focus, the order the bar draws them; Focus is no longer below the hairline.
+  const layers = await viewLayers(page)
+  expect(layers.first.filter((k) => !k.startsWith('ct_'))).toEqual(['all', 'pinned', 'focus'])
+  expect(layers.more).not.toContain('focus')
+  expect(layers.more).toContain('satellite')
+  await viewChoice(page, 'focus').click()
+  await expect(displayMenu(page)).toHaveCount(0)
   await expect(tab(page, 'Focus')).toHaveAttribute('aria-selected', 'true')
-  await openMoreViews(page)
-  await expect(flyoutItem(page, 'focus')).toHaveCount(0)
-  await expect(flyoutItem(page, 'satellite')).toHaveCount(1)
+  await openViewsPage(page)
+  await expect(viewChoice(page, 'focus')).toHaveAttribute('aria-pressed', 'true')
   await closeDisplayMenu(page)
 })
 
@@ -419,11 +475,15 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   // C42: no motion when the system asks for none.
   expect(await displayMenu(page).evaluate((el) => getComputedStyle(el).animationDuration)).toMatch(/^0s$|^0ms$/)
   expect(await option(page, 'quick-views').locator('.dm-switch-track').evaluate((el) => getComputedStyle(el).transitionDuration)).toMatch(/^0s/)
-  // C32: Up/Down walk the View rows; the focused row shows the ring.
-  await expect(option(page, 'all')).toBeFocused()
+  // C32: focus starts in the search box; Down enters the rows, Up from the first row returns
+  // to the box, and the focused row shows the ring.
+  const status = displayMenu(page).locator('.fb-prop[data-filter-dim="status"]')
+  await expect(filterSearch(page)).toBeFocused()
   await page.keyboard.press('ArrowDown')
-  await expect(option(page, 'pinned')).toBeFocused()
-  expect(await option(page, 'pinned').evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
+  await expect(status).toBeFocused()
+  expect(await status.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
+  await page.keyboard.press('ArrowUp')
+  await expect(filterSearch(page)).toBeFocused()
   // Segments (All has Group): Left/Right move AND pick (roving tabindex), the ring follows.
   const group = option(page, 'group')
   await group.locator('[data-choice="project"]').focus()
@@ -434,26 +494,38 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-pressed', 'true')
   expect(await group.locator('[data-choice]').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual([0, -1])
   expect(await group.locator('[data-choice="project"]').evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
-  // Enter on a View row picks it.
-  await option(page, 'pinned').focus()
-  await page.keyboard.press('Enter')
-  await expect(option(page, 'pinned')).toHaveAttribute('aria-pressed', 'true')
+  // Down from Group (its active segment) is the View row; Right opens the View page on the current view.
   await page.keyboard.press('ArrowDown')
-  await expect(moreViewsRow(page)).toBeFocused()
+  await expect(viewRow(page)).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(viewsPage(page)).toBeVisible()
+  await expect(viewChoice(page, 'all')).toBeFocused()
+  // Up/Down walk the views with the ring; Left goes back to the View row.
+  await page.keyboard.press('ArrowDown')
+  await expect(viewChoice(page, 'pinned')).toBeFocused()
+  expect(await viewChoice(page, 'pinned').evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
+  await page.keyboard.press('ArrowLeft')
+  await expect(displayMenu(page)).toHaveAttribute('data-page', 'home')
+  await expect(viewRow(page)).toBeFocused()
+  // Enter on a view picks it: the menu closes and focus is back on Display.
+  await page.keyboard.press('ArrowRight')
+  await expect(viewChoice(page, 'all')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(viewChoice(page, 'pinned')).toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(viewsFlyout(page)).toBeVisible()
-  await expect(viewsFlyout(page).locator('[data-view-option]').first()).toBeFocused()
-  await page.keyboard.press('Escape')
-  await expect(viewsFlyout(page)).toHaveCount(0)
-  await expect(moreViewsRow(page)).toBeFocused()
+  await expect(displayMenu(page)).toHaveCount(0)
+  await expect(displayButton(page)).toBeFocused()
+  await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
 
-  // C36: the selected View row keeps its check and >= 4.5:1 text in light and dark.
+  // C36: the selected view keeps its check and >= 4.5:1 text in light and dark.
+  await openViewsPage(page)
   for (const theme of ['light', 'dark'] as const) {
     await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
-    const selected = option(page, 'pinned')
-    await expect(selected.locator('.dm-check svg')).toHaveCount(1)
+    const selected = viewChoice(page, 'pinned')
+    await expect(selected).toHaveAttribute('aria-pressed', 'true')
+    await expect(selected.locator('.fb-check svg')).toHaveCount(1)
     expect(await contrastOf(selected.locator('.dm-view-label'))).toBeGreaterThanOrEqual(4.5)
-    expect(await contrastOf(option(page, 'all').locator('.dm-view-label'))).toBeGreaterThanOrEqual(4.5)
+    expect(await contrastOf(viewChoice(page, 'all').locator('.dm-view-label'))).toBeGreaterThanOrEqual(4.5)
     await displayMenu(page).screenshot({ path: `${SHOTS}/display-menu-${theme}-focus.png` })
   }
   await page.keyboard.press('Escape')
@@ -461,15 +533,16 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   await expect(displayButton(page)).toBeFocused()
 })
 
-test('Display and its flyout stay inside the viewport, never drag a row, and the label follows the panel width', async ({ page, baseURL }) => {
+test('Display stays inside the viewport on both pages, never drags a row, and the label follows the panel width', async ({ page, baseURL }) => {
   const [pin] = await seedProject(page, `Display Drag ${Date.now()}`, [{ title: `drag probe ${Date.now()}` }])
   expect((await page.request.post(`/api/focus/tasks/${pin}`)).ok()).toBe(true)
   await boot(page, baseURL!)
   for (const size of [{ width: 1280, height: 720 }, { width: 900, height: 600 }]) {
     await page.setViewportSize(size)
     await openDisplayMenu(page)
-    await openMoreViews(page)
-    for (const el of [displayMenu(page), viewsFlyout(page)]) await insideViewport(page, el)
+    await insideViewport(page, displayMenu(page))
+    await openViewsPage(page)
+    await insideViewport(page, displayMenu(page))
     await closeDisplayMenu(page)
   }
   // C19: a press-and-move inside the menu over the list never starts a row drag.
@@ -478,7 +551,8 @@ test('Display and its flyout stay inside the viewport, never drag a row, and the
   const row = page.locator(`#home-task-navigation [data-task-id="${pin}"]`).first()
   await expect(row).toBeVisible({ timeout: 15_000 })
   const before = await row.evaluate((el) => getComputedStyle(el).transform)
-  const m = await box(displayMenu(page).locator('.dm-heading'))
+  // The press starts on the menu's `Filter` title, a spot with no control under it.
+  const m = await box(displayMenu(page).locator('.fb-group-title'))
   await page.mouse.move(m.x + 10, m.y + 4)
   await page.mouse.down()
   await page.mouse.move(m.x + 40, m.y + 60, { steps: 6 })

@@ -109,7 +109,6 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { type SortBy, type GroupBy } from './ViewDropdown';
-import { FilterButton } from './FilterMenu';
 import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
 import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
@@ -7714,8 +7713,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const viewItemLabel = (!quickViews || effectiveSection === 'tasks') && effectiveSection !== 'all'
     ? (allViews(customTiers ?? []).find((v) => v.id === effectiveSection)?.label ?? effectiveSection)
     : null;
-  const [displayOpen, setDisplayOpen] = useState(false);
-  const displayButtonRef = useRef<HTMLButtonElement | null>(null);
   const filterBar = useMemo<FilterBarController>(() => ({
     state: homeFilters.state, lists: homeFilters.lists, chips: homeFilters.chips, facets: homeFilters.facets,
     recent: homeFilters.recent, apply: homeFilters.apply, clearAll: homeFilters.clearAll,
@@ -7730,7 +7727,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         : null,
     },
     viewItem: viewItemLabel ? { label: viewItemLabel } : null,
-    openDisplay: () => { homeFilters.setMenuOpen(false); setDisplayOpen(true); },
+    openDisplay: () => homeFilters.setMenuOpen(true),
   }), [homeFilters, filterCount, archiveLoading, isSearchMode, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
   const footerTasks = useMemo(() => footerScope(tasks, effectiveSection, {
     pinned: pinnedTaskIds, focus: focusTaskIds, wait: waitTaskIds, custom: customTierIds,
@@ -7748,10 +7745,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // D8: Sort and Group only reorder the Projects list, which only All and
   // Projects draw (search ranks by relevance), so the rows show only there.
   const listOrderApplies = (effectiveSection === 'all' || effectiveSection === 'tasks') && !isSearchMode;
+  // One toolbar button: the menu's open state and anchor are the filter controller's.
   const displayProps: DisplayMenuProps = {
-    open: displayOpen,
-    onOpenChange: setDisplayOpen,
-    buttonRef: displayButtonRef,
+    open: homeFilters.menuOpen,
+    onOpenChange: homeFilters.setMenuOpen,
+    buttonRef: homeFilters.buttonRef,
     section: effectiveSection,
     onSectionChange: (id: string) => handleSectionChange(id as TodoSection),
     customTiers: customTiers ?? [],
@@ -7761,8 +7759,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (next) return;
       // C56: hiding the bar from Display reads like hiding it from its own menu:
       // the menu closes, focus lands on Display (where the bar comes back), a toast says so.
-      setDisplayOpen(false);
-      requestAnimationFrame(() => displayButtonRef.current?.focus({ preventScroll: true }));
+      homeFilters.setMenuOpen(false);
+      requestAnimationFrame(() => homeFilters.buttonRef.current?.focus({ preventScroll: true }));
       notify({ kind: 'sort', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden' });
     },
     viewTitleHint: viewItemLabel,
@@ -7857,8 +7855,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           resultCount={searchResultCount}
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
-        <FilterButton controller={filterBar} />
-        <DisplayButton {...displayProps} />
+        <DisplayButton {...displayProps} filters={filterBar} />
         <button
           type="button"
           className="todo-panel-hide"

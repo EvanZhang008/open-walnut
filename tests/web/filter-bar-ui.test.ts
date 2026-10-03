@@ -1,6 +1,6 @@
 /**
- * Static render tests for the Filter bar UI (FilterButton, FilterHome,
- * FilterValuesPage, FilterBar, FilterSearchResults) against a fake
+ * Static render tests for the Filter bar UI (the toolbar's DisplayButton,
+ * FilterHome, FilterValuesPage, FilterBar, FilterSearchResults) against a fake
  * FilterBarController. The portalled menu itself (two pages, focus, Escape)
  * is covered by tests/e2e/browser/filter-bar*.spec.ts; here every page-level
  * and row-level contract is pinned without a browser.
@@ -11,21 +11,27 @@ import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.no
 import { parseHTML } from 'linkedom'
 import type { TaskPhase } from '../../src/core/types'
 import type {
+  DisplayMenuProps,
   FilterBarController,
   FilterDim,
   FilterLists,
   FilterState,
-  RecentEntry,
 } from '../../web/src/components/tasks/filter-bar-types'
 import { buildFilterChips, clearedState, dimValues } from '../../web/src/components/tasks/filter-bar-model'
 import { searchFilterDims } from '../../web/src/components/tasks/filter-bar-search'
-import { FilterButton, badgeText, filterCountText, searchPlaceholder } from '../../web/src/components/tasks/FilterMenu'
+import { filterCountText, searchPlaceholder } from '../../web/src/components/tasks/FilterMenu'
+import { DisplayButton, displayButtonTitle } from '../../web/src/components/tasks/DisplayMenu'
+import { badgeText } from '../../web/src/components/tasks/filter-home-model'
 import { FilterHome, takeHomeSnapshot } from '../../web/src/components/tasks/FilterHome'
 import { FilterValuesPage } from '../../web/src/components/tasks/FilterValuesPage'
 import { clickMode, filterOptions, type FilterWriter } from '../../web/src/components/tasks/FilterValueList'
 import { FilterBar } from '../../web/src/components/tasks/FilterBar'
-import { FilterSearchResults, addFromSearch } from '../../web/src/components/tasks/FilterSearchResults'
+import { FilterSearchResults, addFromSearch, type SearchItem } from '../../web/src/components/tasks/FilterSearchResults'
 import { STATUS_OPTIONS } from '../../web/src/components/tasks/TaskStatusControl'
+
+// The menu's display rows reach the toast context (useNavigationPreference), whose
+// provider pulls in the markdown renderer and DOMPurify, which need a real DOM.
+vi.mock('@/contexts/notifications', () => ({ useNotifications: () => ({ notify: () => {} }) }))
 
 const CHECK_POINTS = 'points="3 8.5 6.5 12 13 4.5"'
 const TWO_SOURCES = [{ id: 'local', label: 'Local' }, { id: 'ms-todo', label: 'Microsoft To Do' }]
@@ -62,11 +68,11 @@ function dom(html: string): Document {
 function home(c: FilterBarController, moreOpen = false): Document {
   return dom(renderToStaticMarkup(createElement(FilterHome, {
     controller: c,
-    writer: writer(c),
     snap: takeHomeSnapshot(c),
     moreOpen,
     onMoreOpenChange: () => {},
     onOpenDim: () => {},
+    onClear: () => {},
   })))
 }
 
@@ -87,7 +93,7 @@ function bar(c: FilterBarController): Document {
 }
 
 const shownDims = (doc: Document) =>
-  Array.from(doc.querySelectorAll('.fb-group[data-section="properties"] > .fb-prop')).map((el) => el.getAttribute('data-filter-dim'))
+  Array.from(doc.querySelectorAll('.fb-home[data-section="filters"] > .fb-prop')).map((el) => el.getAttribute('data-filter-dim'))
 const foldedDims = (doc: Document) =>
   Array.from(doc.querySelectorAll('#fb-more-body .fb-prop')).map((el) => el.getAttribute('data-filter-dim'))
 const summary = (doc: Document, dim: string) => doc.querySelector(`.fb-prop[data-filter-dim="${dim}"] .fb-prop-summary`)
@@ -124,13 +130,29 @@ describe('FilterHome: the first page', () => {
     expect(home(controller(), true).querySelector('#fb-more-body')?.hasAttribute('hidden')).toBe(false)
   })
 
-  it('C4 fresh user: one group, no Most used, no group title, nothing else', () => {
+  it('C4 fresh user: one Filter group titled Filter, no Clear while nothing is set, nothing else', () => {
     const doc = home(controller({ lists: lists({ sources: TWO_SOURCES }) }))
-    expect(doc.querySelectorAll('.fb-home > .fb-group').length).toBe(1)
-    expect(doc.querySelector('[data-section="most-used"]')).toBeNull()
-    expect(doc.querySelector('.fb-group-title')).toBeNull()
+    const group = doc.querySelector('.fb-home.fb-group[data-section="filters"]')!
+    expect(group).not.toBeNull()
+    expect(doc.querySelectorAll('.fb-group').length).toBe(1)
+    expect(doc.querySelectorAll('.fb-group-title').length).toBe(1)
+    expect(group.querySelector('.fb-group-title')?.textContent).toBe('Filter')
+    expect(doc.querySelector('.fb-group-action')).toBeNull()
+    expect(doc.body.textContent).not.toContain('Clear')
     const items = Array.from(doc.querySelectorAll('.fb-item')).filter((el) => !el.closest('#fb-more-body'))
     expect(items.map((el) => el.getAttribute('data-filter-dim') ?? 'more')).toEqual(['status', 'project', 'date', 'source', 'more'])
+  })
+
+  it('a set filter puts Clear in the Filter title; it clears every filter', () => {
+    const onClear = vi.fn()
+    const c = controller({ state: withState({ projects: ['Garden'] }) })
+    const doc = dom(renderToStaticMarkup(createElement(FilterHome, {
+      controller: c, snap: takeHomeSnapshot(c), moreOpen: false, onMoreOpenChange: () => {}, onOpenDim: () => {}, onClear,
+    })))
+    const clear = doc.querySelector('.fb-group-title > button.fb-text-btn.fb-group-action')!
+    expect(clear.textContent).toBe('Clear')
+    expect(clear.getAttribute('type')).toBe('button')
+    expect(doc.querySelector('.fb-group-title > span')?.textContent).toBe('Filter')
   })
 
   it('C34: Source shows only with two sources; Priority only with show_priority, folded', () => {
@@ -160,37 +182,8 @@ describe('FilterHome: the first page', () => {
     expect(summary(doc, 'project')?.className).not.toContain('is-default')
   })
 
-  it('C33 + C68: Most used rows draw ids in words, ranked by uses, pressed when on; Filter by heads the properties', () => {
-    const recent: RecentEntry[] = [
-      { dim: 'date', value: 'this-week' },
-      { dim: 'project', value: 'Garden', uses: 3 },
-      { dim: 'status', value: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] },
-      { dim: 'blocked', value: 'false', uses: 2 },
-      { dim: 'project', value: 'Home' },
-    ]
-    const doc = home(controller({ recent, state: withState({ projects: ['Garden'] }) }))
-    const group = doc.querySelector('.fb-group[data-section="most-used"]')!
-    expect(group.querySelector('.fb-group-title')?.textContent).toBe('Most used')
-    const rows = Array.from(group.querySelectorAll('.fb-item.fb-quick'))
-    expect(rows.map((r) => r.getAttribute('data-filter-value'))).toEqual([
-      'Project: Garden', 'Not blocked', 'Date: Starting within 7 days', 'Status: Open, Complete',
-    ])
-    expect(rows.map((r) => r.getAttribute('data-recent-dim'))).toEqual(['project', 'blocked', 'date', 'status'])
-    expect(rows.map((r) => r.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false', 'false'])
-    expect(rows[0].querySelector('.fb-quick-dim')?.textContent).toBe('Project')
-    expect(rows[0].querySelector('.fb-quick-val')?.textContent).toBe('Garden')
-    expect(rows[0].querySelector('.fb-item-check svg')).not.toBeNull()
-    expect(rows[1].querySelector('.fb-item-check svg')).toBeNull()
-    // Blocked names itself: no property word in front of the value.
-    expect(rows[1].querySelector('.fb-quick-dim')).toBeNull()
-    expect(doc.querySelector('.fb-group[data-section="properties"] .fb-group-title')?.textContent).toBe('Filter by')
-    const fresh = home(controller())
-    expect(fresh.querySelector('[data-section="most-used"]')).toBeNull()
-    expect(fresh.body.textContent).not.toContain('Filter by')
-  })
-
   it('C12 + C13 + C22: no native checkbox or select, no tier words, no dashes or multiplication sign', () => {
-    const doc = home(controller({ lists: lists({ sources: TWO_SOURCES }), recent: [{ dim: 'project', value: 'Home' }] }), true)
+    const doc = home(controller({ lists: lists({ sources: TWO_SOURCES }), state: withState({ projects: ['Home'] }) }), true)
     expect(doc.querySelectorAll('input[type="checkbox"], select').length).toBe(0)
     const text = doc.body.textContent ?? ''
     for (const word of ['Focus', 'Satellite', 'Backlog', 'Parked', 'tier']) expect(text).not.toContain(word)
@@ -321,7 +314,8 @@ describe('FilterValuesPage: the second page', () => {
   it('a plain click toggles a multi-select row and replaces a single-select one; placeholders name the property', () => {
     for (const dim of ['status', 'project', 'source', 'priority', 'tags', 'sprint'] as FilterDim[]) expect(clickMode(dim)).toBe('toggle')
     for (const dim of ['date', 'blocked', 'time'] as FilterDim[]) expect(clickMode(dim)).toBe('replace')
-    expect(searchPlaceholder(null)).toBe('Search filters')
+    expect(searchPlaceholder(null)).toBe('Search filters and views')
+    expect(searchPlaceholder('view')).toBe('Search views')
     expect(searchPlaceholder('project')).toBe('Search projects')
     expect(searchPlaceholder('tags')).toBe('Search tags')
     expect(searchPlaceholder('source')).toBe('Search sources')
@@ -412,42 +406,70 @@ describe('FilterBar: the filter row', () => {
   })
 })
 
-describe('FilterButton', () => {
+describe('DisplayButton: the one toolbar button', () => {
+  function display(over: Partial<DisplayMenuProps> = {}): DisplayMenuProps {
+    return {
+      open: false, onOpenChange: vi.fn(), buttonRef: { current: null }, section: 'all', onSectionChange: vi.fn(),
+      customTiers: [], quickViews: false, onQuickViewsChange: vi.fn(), viewTitleHint: null,
+      sortBy: 'manual', projectSortCount: 0, onSortForAll: vi.fn(), showSort: true,
+      groupBy: 'project', onGroupByChange: vi.fn(), showGroup: true,
+      allCollapsed: false, onCollapseExpandAll: vi.fn(), showCollapse: false, orderNote: null,
+      tierLayout: null, recentOrder: null, ...over,
+    }
+  }
+  const button = (c: FilterBarController, over: Partial<DisplayMenuProps> = {}) =>
+    dom(renderToStaticMarkup(createElement(DisplayButton, { ...display(over), filters: c })))
+
   it('C2 + C3: no badge at 0, plain title, dialog popup; badge counts chips, 9+ past nine; is-active while set', () => {
-    const idle = dom(renderToStaticMarkup(createElement(FilterButton, { controller: controller() })))
+    const idle = button(controller())
     const btn = idle.querySelector('button')!
-    expect(btn.getAttribute('aria-label')).toBe('Filter')
-    expect(btn.getAttribute('title')).toBe('Filter tasks')
+    expect(btn.getAttribute('aria-label')).toBe('Display')
+    expect(btn.getAttribute('title')).toBe('Display: sort, group, layout')
     expect(btn.getAttribute('aria-haspopup')).toBe('dialog')
     expect(btn.getAttribute('aria-expanded')).toBe('false')
     expect(btn.className).toContain('tp-btn')
-    expect(btn.className).toContain('fb-filter-btn')
+    expect(btn.className).toContain('dm-display-btn')
     expect(btn.className).not.toContain('is-active')
-    expect(btn.textContent).toBe('Filter')
+    expect(btn.textContent).toBe('Display')
     expect(idle.querySelector('[data-testid="filter-badge"]')).toBeNull()
-    const two = dom(renderToStaticMarkup(createElement(FilterButton, {
-      controller: controller({ state: withState({ projects: ['Garden'], date: '' }) }),
-    })))
-    expect(two.querySelector('button')?.getAttribute('title')).toBe('Filter tasks (2 active)')
+    // Closed, the menu is not drawn at all.
+    expect(idle.querySelector('.fb-menu')).toBeNull()
+    expect(idle.querySelectorAll('button').length).toBe(1)
+    const two = button(controller({ state: withState({ projects: ['Garden'], date: '' }) }))
+    expect(two.querySelector('button')?.getAttribute('title')).toBe('Display: 2 active filters, sort, group, layout')
     expect(two.querySelector('button')?.className).toContain('is-active')
     expect(two.querySelector('.tp-badge[data-testid="filter-badge"]')?.textContent).toBe('2')
     expect(badgeText(12)).toBe('9+')
+    expect(badgeText(9)).toBe('9')
     expect(filterCountText(1)).toBe('1 task')
     expect(filterCountText(37)).toBe('37 tasks')
+  })
+
+  it('the title names the active filters and, with the tab bar hidden, the view', () => {
+    expect(displayButtonTitle(null, 0)).toBe('Display: sort, group, layout')
+    expect(displayButtonTitle(null, 1)).toBe('Display: 1 active filter, sort, group, layout')
+    expect(displayButtonTitle('Pinned', 0)).toBe('Display: view Pinned, sort, group, layout')
+    expect(displayButtonTitle('Pinned', 3)).toBe('Display: 3 active filters, view Pinned, sort, group, layout')
+    const pinned = button(controller({ state: withState({ projects: ['Garden'] }) }), { viewTitleHint: 'Pinned', open: false })
+    expect(pinned.querySelector('button')?.getAttribute('title')).toBe('Display: 1 active filter, view Pinned, sort, group, layout')
   })
 })
 
 describe('FilterSearchResults: the first page while the search box has text', () => {
   const two = lists({ sources: TWO_SOURCES })
-  function results(c: FilterBarController, query: string): Document {
-    const r = searchFilterDims(query, c.state, c.lists)
+  function draw(c: FilterBarController, query: string, items: SearchItem[]): Document {
     return dom(renderToStaticMarkup(createElement(FilterSearchResults, {
-      controller: c, query, hits: r.hits, pinHint: r.pinHint, viewHint: r.viewHint, activeIndex: 0, alreadyOnIndex: null,
-      onActiveIndexChange: () => {}, writer: writer(c),
+      controller: c, query, items, activeIndex: 0, alreadyOnIndex: null,
+      onActiveIndexChange: () => {}, onPickView: () => {}, writer: writer(c),
     })))
   }
+  /** The filter hits alone, in search order (the menu adds the view hits after them). */
+  function results(c: FilterBarController, query: string): Document {
+    const hits = searchFilterDims(query, c.state, c.lists).hits
+    return draw(c, query, hits.map((hit) => ({ kind: 'filter' as const, hit })))
+  }
 
-  it('C26: "gard" lists only Project Garden; "doing" finds In Progress; no match and pin hint lines', () => {
+  it('C26: "gard" lists only Project Garden; "doing" finds In Progress; a miss says Nothing matches', () => {
     const c = controller()
     const hits = Array.from(results(c, 'gard').querySelectorAll('[role="option"]'))
     expect(hits.map((h) => h.textContent)).toEqual(['ProjectGarden'])
@@ -461,8 +483,33 @@ describe('FilterSearchResults: the first page while the search box has text', ()
     expect(hits[0].querySelector('.fb-hit-value')?.textContent).toBe('Garden')
     const doing = results(c, 'doing').querySelector('[role="option"]')
     expect(doing?.getAttribute('data-filter-value')).toBe('In Progress')
-    expect(results(c, 'xyz').querySelector('.fb-empty')?.textContent).toBe('No filter matches "xyz"')
-    expect(results(c, 'pin').querySelector('.fb-pin-hint')?.textContent).toBe('Pinned is a view: open Display')
+    expect(results(c, 'xyz').querySelector('.fb-empty')?.textContent).toBe('Nothing matches "xyz"')
+  })
+
+  it('a view hit reads View and its label after the filter hits; the current view carries the check; no pin hint', () => {
+    const c = controller()
+    const garden = searchFilterDims('gard', c.state, c.lists).hits[0]
+    const doc = draw(c, 'p', [
+      { kind: 'filter', hit: garden },
+      { kind: 'view', view: { id: 'pinned', label: 'Pinned', selected: false } },
+      { kind: 'view', view: { id: 'tasks', label: 'Projects', selected: true } },
+    ])
+    const options = Array.from(doc.querySelectorAll('[role="option"]'))
+    expect(options.map((o) => o.getAttribute('data-view-option') ?? o.getAttribute('data-filter-dim'))).toEqual(['project', 'pinned', 'tasks'])
+    const pinned = doc.querySelector('.fb-hit[data-view-option="pinned"]')!
+    expect(pinned.getAttribute('role')).toBe('option')
+    expect(pinned.getAttribute('id')).toBe('fb-search-hit-1')
+    expect(pinned.getAttribute('aria-selected')).toBe('false')
+    expect(pinned.hasAttribute('data-filter-dim')).toBe(false)
+    expect(pinned.querySelector('.fb-hit-dim')?.textContent).toBe('View')
+    expect(pinned.querySelector('.fb-hit-value')?.textContent).toBe('Pinned')
+    expect(pinned.querySelector('.fb-item-icon svg')).not.toBeNull()
+    expect(pinned.className).not.toContain('is-selected')
+    expect(pinned.querySelector('.fb-item-check svg')).toBeNull()
+    const current = doc.querySelector('.fb-hit[data-view-option="tasks"]')!
+    expect(current.className).toContain('is-selected')
+    expect(current.querySelector('.fb-item-check svg')).not.toBeNull()
+    expect(doc.querySelector('.fb-pin-hint, .fb-empty')).toBeNull()
   })
 
   it('a selected hit carries is-selected and a check at the right; Blocked hits name no property', () => {

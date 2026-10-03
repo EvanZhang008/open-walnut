@@ -3,7 +3,7 @@
  * and changes it.
  *
  * The count is ONE app-wide setting (`ui.session_panels`, also in Settings, General and
- * the session kebab's Columns row); the Display menu is a third surface for it because
+ * the session kebab's Panels row); the Display menu is a third surface for it because
  * the task panel is where the user is when the strip needs more or fewer panels
  * (2026-09-23: "this should show the number of session panels we can adjust"). So the
  * assertions are about the shared setting, not a local copy: the menu reads the current
@@ -48,22 +48,23 @@ async function bootWithColumns(page: Page, baseURL: string, sids: readonly strin
 }
 
 const columns = (page: Page) => page.locator('.main-page-sessions-area > .main-page-session-column')
-const panelsRow = (page: Page) => page.locator('.dm-menu [data-view-option="session-panels"]')
+const panelsRow = (page: Page) => page.locator('.fb-menu [data-view-option="session-panels"]')
 const choice = (page: Page, key: string) => panelsRow(page).locator(`[data-choice="${key}"]`)
 const checked = (page: Page) => panelsRow(page).locator('button[aria-pressed="true"]')
-/** The session panel's own kebab and its Columns row (the other in-context surface of the setting). */
+/** The session panel's own kebab and its Panels row (the other in-context surface of the setting). */
 async function kebabPanels(page: Page) {
   const kebab = page.locator('.main-page-session-column .session-panel').first().getByRole('button', { name: 'More actions' })
   await expect(kebab).toBeVisible({ timeout: 20_000 })
   await kebab.click()
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
-  return menu.locator('.task-kebab-tier[data-kebab-row="columns"]').filter({ has: page.getByText('Columns', { exact: true }) })
+  return menu.locator('.task-kebab-tier').filter({ has: page.getByText('Panels', { exact: true }) })
 }
-/** The Display menu shows whole, its Session columns row included, with nothing to scroll. */
-const viewFits = (page: Page) => page.locator('.dm-menu').evaluate((el) => {
+/** The Display menu shows whole, its Session columns row included, with nothing to scroll (the body is what scrolls). */
+const viewFits = (page: Page) => page.locator('.fb-menu').evaluate((el) => {
+  const body = el.querySelector('.fb-menu-body')!
   const row = el.querySelector('[data-view-option="session-panels"]')!.getBoundingClientRect()
-  return el.scrollHeight <= el.clientHeight + 1 && row.bottom <= el.getBoundingClientRect().bottom + 1
+  return body.scrollHeight <= body.clientHeight + 1 && row.bottom <= el.getBoundingClientRect().bottom + 1
 })
 /** The strip's budget under Auto, from the same breakpoints the home page uses. */
 const autoBudget = (page: Page) => page.locator('.main-page-content-row').evaluate((el) => {
@@ -88,15 +89,15 @@ test('the Display menu shows the column count and a pick moves the strip at once
   await bootWithColumns(page, baseURL!, SIDS)
   await expect(columns(page)).toHaveCount(3, { timeout: 30_000 })
 
-  // The row sits right under the tab bar switch and reads the current value.
+  // The row sits right under the tab bar switch (the View row above both) and reads the current value.
   await openViewMenu(page)
-  const keys = await page.locator('.dm-menu .dm-settings > [data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')))
-  expect(keys.slice(0, 2)).toEqual(['quick-views', 'session-panels'])
+  const keys = await page.locator('.fb-menu .dm-settings > [data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')))
+  expect(keys).toEqual(['view', 'quick-views', 'session-panels'])
   await expect(panelsRow(page)).toContainText('Session columns')
   await expect(panelsRow(page).locator('button')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
   await expect(checked(page)).toHaveText(['3'])
   expect(await viewFits(page)).toBe(true)
-  await page.locator('.dm-menu').screenshot({ path: `${SHOTS}/${test.info().project.name}-display-menu-columns.png` })
+  await page.locator('.fb-menu').screenshot({ path: `${SHOTS}/${test.info().project.name}-display-menu-columns.png` })
 
   // A pick moves the strip without waiting for the config round-trip, and the menu stays open on it.
   await choice(page, '2').click()
@@ -118,8 +119,8 @@ test('the Display menu shows the column count and a pick moves the strip at once
   await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText(['2'])
   await page.keyboard.press('Escape')
 
-  // C58: Columns 1 from the session kebab: the strip drops to one column and Display shows 1.
-  await (await kebabPanels(page)).locator('.task-kebab-tier-btn[data-choice="1"]').click()
+  // C58: Panels 1 from the session kebab: the strip drops to one column and Display shows 1.
+  await (await kebabPanels(page)).locator('.task-kebab-tier-btn').filter({ hasText: /^1$/ }).click()
   await expect(columns(page)).toHaveCount(1, { timeout: 5000 })
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('1')
   await openViewMenu(page)
@@ -145,13 +146,13 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await choice(page, 'auto').click()
   await expect(checked(page)).toHaveText([`Auto (${await autoBudget(page)})`])
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('auto')
-  await page.locator('.dm-menu').screenshot({ path: `${SHOTS}/${test.info().project.name}-display-menu-auto.png` })
+  await page.locator('.fb-menu').screenshot({ path: `${SHOTS}/${test.info().project.name}-display-menu-auto.png` })
   await closeViewMenu(page)
 
   // A short window caps the menu to the space below its button; the body scrolls instead.
   await page.setViewportSize({ width: 1280, height: 560 })
   await openViewMenu(page)
-  expect(await page.locator('.dm-menu').evaluate((el) => el.getBoundingClientRect().bottom <= innerHeight)).toBe(true)
+  expect(await page.locator('.fb-menu').evaluate((el) => el.getBoundingClientRect().bottom <= innerHeight)).toBe(true)
   await panelsRow(page).scrollIntoViewIfNeeded()
   await expect(choice(page, 'auto')).toBeInViewport()
   await closeViewMenu(page)
@@ -164,8 +165,8 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await expect(checked(page)).toHaveText([`Auto (${wide})`])
   await closeViewMenu(page)
 
-  // The session kebab's Columns row says the same "Auto (N)" (one state, one wording).
-  await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText([`Auto (${wide})`])
+  // The session kebab's Panels row holds the same state (its Auto carries no count).
+  await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText(['Auto'])
   await page.keyboard.press('Escape')
 
   // The choice survives a reload.

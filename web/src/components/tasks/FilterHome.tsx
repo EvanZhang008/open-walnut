@@ -1,31 +1,26 @@
 /**
- * FilterHome: the Filter menu's first page (spec 6.2). A short list: the few
- * picks the user makes most (`Most used`, one click each), then one row per
- * property with its current value at the right; the rarely used properties
- * fold behind `More filters` unless one of them is set. A property row opens
- * that property's values as the menu's second page. Presentational: every
- * write goes through the shared writer; what is listed is frozen at open (G5).
+ * FilterHome: the filter half of the panel menu's first page (spec 6.2). A
+ * short list: a `Filter` title (with Clear while something is set), one row
+ * per property with its current value at the right, the rarely used
+ * properties folded behind `More filters` unless one of them is set. A
+ * property row opens that property's values as the menu's second page.
+ * Presentational: every write goes through the shared writer; which rows are
+ * listed is frozen at open (G5).
  */
-import type { ButtonHTMLAttributes, KeyboardEvent, ReactNode } from 'react';
-import { ICON_CHECK, ICON_CHEVRON_RIGHT } from '../common/Icons';
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { ICON_CHEVRON_RIGHT } from '../common/Icons';
 import { dimLabel } from './filter-bar-model';
-import { dimSummary, homeRows, mostUsed } from './filter-home-model';
-import { applyRecentEntry, isRecentActive, recentEntryLabel } from './filter-recent';
+import { dimSummary, homeRows } from './filter-home-model';
 import { dimIcon } from './filter-dim-icons';
-import type { FilterBarController, FilterDim, RecentEntry } from './filter-bar-types';
-import { arrowFocus, type FilterWriter } from './FilterValueList';
-
-export const HOME_ITEM = '.fb-item';
+import type { FilterBarController, FilterDim } from './filter-bar-types';
 
 export interface FilterHomeSnapshot {
-  mostUsed: RecentEntry[];
   shown: FilterDim[];
   folded: FilterDim[];
 }
 
-export function takeHomeSnapshot(c: Pick<FilterBarController, 'state' | 'lists' | 'recent'>): FilterHomeSnapshot {
-  const rows = homeRows(c.state, c.lists);
-  return { mostUsed: mostUsed(c.recent), shown: rows.shown, folded: rows.folded };
+export function takeHomeSnapshot(c: Pick<FilterBarController, 'state' | 'lists'>): FilterHomeSnapshot {
+  return homeRows(c.state, c.lists);
 }
 
 function Item({ className, children, ...rest }: { className?: string; children: ReactNode } & ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -33,32 +28,6 @@ function Item({ className, children, ...rest }: { className?: string; children: 
     <button type="button" className={`fb-item${className ? ` ${className}` : ''}`} {...rest}>
       {children}
     </button>
-  );
-}
-
-/** One `Most used` row: `Project  Home`, ticked while it is on; a click toggles it. */
-function MostUsedRow({ c, w, entry }: { c: FilterBarController; w: FilterWriter; entry: RecentEntry }) {
-  const on = isRecentActive(c.state, entry);
-  const label = recentEntryLabel(entry, c.lists);
-  const at = label.indexOf(': ');
-  const dim = at > 0 ? label.slice(0, at) : null;
-  const value = at > 0 ? label.slice(at + 2) : label;
-  return (
-    <Item
-      className="fb-quick"
-      data-recent-dim={entry.dim}
-      data-filter-value={label}
-      aria-pressed={on}
-      title={on ? `${label} is on. Click to remove it` : `Filter by ${label}`}
-      onClick={() => w.write((st) => applyRecentEntry(st, entry), 'recent')}
-    >
-      <span className="fb-item-icon" aria-hidden="true">{dimIcon(entry.dim)}</span>
-      <span className="fb-item-text">
-        {dim && <span className="fb-quick-dim">{dim}</span>}
-        <span className="fb-quick-val">{value}</span>
-      </span>
-      <span className="fb-item-check" aria-hidden="true">{on ? ICON_CHECK : null}</span>
-    </Item>
   );
 }
 
@@ -84,59 +53,43 @@ function PropRow({ c, dim, onOpen }: { c: FilterBarController; dim: FilterDim; o
 
 export interface FilterHomeProps {
   controller: FilterBarController;
-  writer: FilterWriter;
   snap: FilterHomeSnapshot;
   moreOpen: boolean;
   onMoreOpenChange(open: boolean): void;
   onOpenDim(dim: FilterDim, anchor: HTMLElement): void;
-  /** ArrowUp on the first row: the caller's search box takes focus. */
-  onExitTop?(): void;
+  /** Clear every filter (the title's button, shown while something is set). */
+  onClear(): void;
 }
 
-export function FilterHome({ controller: c, writer: w, snap, moreOpen, onMoreOpenChange, onOpenDim, onExitTop }: FilterHomeProps) {
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowUp' && onExitTop) {
-      const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(HOME_ITEM)).filter((el) => el.offsetParent !== null);
-      if (items.indexOf(document.activeElement as HTMLElement) === 0) { e.preventDefault(); onExitTop(); return; }
-    }
-    if (e.key === 'ArrowRight') {
-      const el = document.activeElement as HTMLElement | null;
-      const dim = el?.closest<HTMLElement>('.fb-prop')?.dataset.filterDim as FilterDim | undefined;
-      if (dim && el) { e.preventDefault(); onOpenDim(dim, el); return; }
-    }
-    arrowFocus(e, HOME_ITEM);
-  };
+export function FilterHome({ controller: c, snap, moreOpen, onMoreOpenChange, onOpenDim, onClear }: FilterHomeProps) {
   return (
-    <div className="fb-home" onKeyDown={onKeyDown}>
-      {snap.mostUsed.length > 0 && (
-        <div className="fb-group" data-section="most-used">
-          <div className="fb-group-title">Most used</div>
-          {snap.mostUsed.map((entry) => (
-            <MostUsedRow key={`${entry.dim}:${String(entry.value)}`} c={c} w={w} entry={entry} />
-          ))}
-        </div>
-      )}
-      <div className="fb-group" data-section="properties">
-        {snap.mostUsed.length > 0 && <div className="fb-group-title">Filter by</div>}
-        {snap.shown.map((dim) => <PropRow key={dim} c={c} dim={dim} onOpen={onOpenDim} />)}
-        {snap.folded.length > 0 && (
-          <>
-            <Item
-              className="fb-more-toggle"
-              aria-expanded={moreOpen}
-              aria-controls="fb-more-body"
-              onClick={() => onMoreOpenChange(!moreOpen)}
-            >
-              <span className="fb-item-icon fb-more-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
-              <span className="fb-item-text">More filters</span>
-              <span className="fb-prop-summary is-default">{snap.folded.map((d) => dimLabel(d)).join(', ')}</span>
-            </Item>
-            <div id="fb-more-body" className="fb-more-body" hidden={!moreOpen}>
-              {snap.folded.map((dim) => <PropRow key={dim} c={c} dim={dim} onOpen={onOpenDim} />)}
-            </div>
-          </>
+    <div className="fb-home fb-group" data-section="filters">
+      <div className="fb-group-title">
+        <span>Filter</span>
+        {c.chips.length > 0 && (
+          <button type="button" className="fb-text-btn fb-group-action" onClick={onClear}>
+            Clear
+          </button>
         )}
       </div>
+      {snap.shown.map((dim) => <PropRow key={dim} c={c} dim={dim} onOpen={onOpenDim} />)}
+      {snap.folded.length > 0 && (
+        <>
+          <Item
+            className="fb-more-toggle"
+            aria-expanded={moreOpen}
+            aria-controls="fb-more-body"
+            onClick={() => onMoreOpenChange(!moreOpen)}
+          >
+            <span className="fb-item-icon fb-more-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
+            <span className="fb-item-text">More filters</span>
+            <span className="fb-prop-summary is-default">{snap.folded.map((d) => dimLabel(d)).join(', ')}</span>
+          </Item>
+          <div id="fb-more-body" className="fb-more-body" hidden={!moreOpen}>
+            {snap.folded.map((dim) => <PropRow key={dim} c={c} dim={dim} onOpen={onOpenDim} />)}
+          </div>
+        </>
+      )}
     </div>
   );
 }

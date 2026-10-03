@@ -1,9 +1,10 @@
 /**
- * The home task panel's Filter button, menu and filter row on Mia's
- * first-week board (spec 2.1, 6.1 to 6.4): Home 3 + Garden 2 open, one Garden
- * task complete, two pins. The menu has two pages: page one lists the
- * properties with their values, page two one property's values as a
- * checklist. Also the two themes and the view item. The dense board lives in
+ * The home task panel's one toolbar button (Display), its menu and the filter
+ * row on Mia's first-week board (spec 2.1, 6.1 to 6.4): Home 3 + Garden 2 open,
+ * one Garden task complete, two pins. The menu has two pages: page one lists
+ * the properties with their values, then the display rows (Sort, Group, View,
+ * Show tab bar, Session columns); page two one property's values as a
+ * checklist, or the views. Also the two themes and the view item. The dense board lives in
  * filter-bar-dense.spec.ts, page navigation and keys in filter-bar-pages.spec.ts.
  * Every test answers the board reads for its own page (filter-bar-fixtures.ts
  * `stubBoard`); nothing is written to the fixture server, and isolateUiPrefs
@@ -12,8 +13,8 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator } from '@playwright/test'
 import {
-  addFilter, closeFilterMenu, expandMoreFilters, filterButton, filterChip, filterDimRow, filterMenu, filterPage, filterRow,
-  filterSearch, filterValue, openDisplayMenu, openFilterMenu, openFilterPage, removeFilterChip, setStatus,
+  addFilter, chooseDisplayOption, closeFilterMenu, expandMoreFilters, filterButton, filterChip, filterDimRow, filterMenu, filterPage,
+  filterRow, filterSearch, filterValue, openDisplayMenu, openFilterMenu, openFilterPage, openViewsPage, removeFilterChip, setStatus,
 } from './filter-bar-helpers'
 import {
   MIA, MIA_PINS, SHOTS, badge, box, clipAround, contrastOf, focusedLabel, listIds, openHome, ownerSeeds, row, settled, stubBoard,
@@ -25,9 +26,11 @@ test.describe.configure({ timeout: 120_000 })
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
 const OPEN_STATUS = [['To Do', 'true'], ['In Progress', 'true'], ['Need Action', 'true'], ['Waiting', 'false'], ['Complete', 'false']] as const
-const shownDims = (l: Locator) => l.locator('.fb-group[data-section="properties"] > .fb-prop')
+const shownDims = (l: Locator) => l.locator('.fb-home[data-section="filters"] > .fb-prop')
   .evaluateAll((els) => els.map((e) => e.getAttribute('data-filter-dim')))
 const summary = (page: Parameters<typeof filterDimRow>[0], dim: Parameters<typeof filterDimRow>[1]) => filterDimRow(page, dim).locator('.fb-prop-summary')
+/** The Filter title's Clear, there only while a filter is set. */
+const clearInTitle = (page: Parameters<typeof filterMenu>[0]) => filterMenu(page).locator('.fb-home .fb-group-title .fb-group-action')
 
 test.describe('Mia: first week', () => {
   test.beforeEach(async ({ page }) => {
@@ -40,24 +43,28 @@ test.describe('Mia: first week', () => {
     // C3: default state has no row, no badge; page one reads every default.
     await expect(filterRow(page)).toHaveCount(0)
     await expect(badge(page)).toHaveCount(0)
-    await expect(filterButton(page)).toHaveAttribute('title', 'Filter tasks')
+    await expect(filterButton(page)).toHaveAttribute('title', 'Display: sort, group, layout')
     await openFilterMenu(page)
     await expect(filterSearch(page)).toBeFocused()
     await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
-    await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search filters')
+    await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search filters and views')
+    await expect(filterMenu(page).locator('.fb-home .fb-group-title > span')).toHaveText('Filter')
     // One source, so no Source row (C34).
     expect(await shownDims(filterMenu(page))).toEqual(['status', 'project', 'date'])
     for (const [dim, text] of [['status', 'Open'], ['project', 'Any'], ['date', 'Available now']] as const) {
       await expect(summary(page, dim)).toHaveText(text)
       await expect(summary(page, dim)).toHaveClass(/is-default/)
     }
-    await expect(filterMenu(page).locator('.fb-menu-foot')).toHaveCount(0)
+    // Nothing set: nothing to clear.
+    await expect(clearInTitle(page)).toHaveCount(0)
     // C55: the row is there with its placeholder; the menu hangs under it, right edges aligned.
     await expect(filterRow(page)).toContainText('No filters yet')
     await settled(filterMenu(page))
     const rowBefore = await box(filterRow(page))
     const menu = await box(filterMenu(page))
     const btn = await box(filterButton(page))
+    // One width for every page: 320px, or the viewport less a margin.
+    expect(Math.round(menu.width)).toBe(Math.min(320, page.viewportSize()!.width - 16))
     expect(menu.y).toBeGreaterThanOrEqual(rowBefore.y + rowBefore.height - 1)
     // Right edges align when the menu fits on the panel left of the button's right edge;
     // else its left edge is clamped to the panel's left edge (F11).
@@ -90,14 +97,13 @@ test.describe('Mia: first week', () => {
     const chipBox = await box(filterChip(page, 'project'))
     const menuNow = await box(filterMenu(page))
     expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(menuNow.y + 1)
-    // Page one says what is set in its rows (no summary line any more); the footer counts and clears.
+    // Page one says what is set in its rows (no summary line, no footer); Clear sits in the Filter title.
     await filterMenu(page).getByRole('button', { name: 'Back to all filters' }).click()
     await expect(summary(page, 'project')).toHaveText('Garden')
     await expect(summary(page, 'project')).not.toHaveClass(/is-default/)
-    await expect(filterMenu(page).locator('.fb-menu-summary')).toHaveCount(0)
-    await expect(filterMenu(page).locator('.fb-menu-foot .fb-menu-count')).toHaveText('2 tasks')
-    await expect(filterMenu(page).locator('.fb-menu-foot').getByRole('button', { name: 'Clear filters' })).toBeVisible()
-    await expect(filterButton(page)).toHaveAttribute('title', 'Filter tasks (1 active)')
+    await expect(filterMenu(page).locator('.fb-menu-summary, .fb-menu-foot, .fb-menu-count')).toHaveCount(0)
+    await expect(clearInTitle(page)).toHaveText('Clear')
+    await expect(filterButton(page)).toHaveAttribute('title', 'Display: 1 active filter, sort, group, layout')
     await page.screenshot({ path: `${SHOTS}/filter-menu-light.png`, clip: await clipAround(page) })
     // Escape closes; the row stays.
     await page.keyboard.press('Escape')
@@ -114,7 +120,7 @@ test.describe('Mia: removing and clearing', () => {
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
   })
 
-  test('S2 + C6 + C63: pointer removal holds the row until the pointer leaves, then focus is on Filter', async ({ page }) => {
+  test('S2 + C6 + C63: pointer removal holds the row until the pointer leaves, then focus is on Display', async ({ page }) => {
     await addFilter(page, 'project', 'Garden')
     const tabs = page.locator('.todo-section-tabs').first()
     const tabsY = (await box(tabs)).y
@@ -123,7 +129,7 @@ test.describe('Mia: removing and clearing', () => {
     await page.mouse.click(xBox.x + xBox.width / 2, xBox.y + xBox.height / 2)
     await expect(filterChip(page, 'project')).toHaveCount(0)
     await expect(filterRow(page)).toContainText('No filters')
-    expect(await focusedLabel(page)).toBe('Filter')
+    expect(await focusedLabel(page)).toBe('Display')
     expect(Math.abs((await box(tabs)).y - tabsY)).toBeLessThanOrEqual(1)
     const selected = await page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]').textContent()
     await page.mouse.click(xBox.x + xBox.width / 2, xBox.y + xBox.height / 2)
@@ -134,7 +140,7 @@ test.describe('Mia: removing and clearing', () => {
     await expect(row(page, 'fb-mia-h2')).toBeVisible()
   })
 
-  test('C6 + C32: keyboard reaches body, x and Clear; Backspace removes at once and focus walks next, previous, Filter', async ({ page, browserName }) => {
+  test('C6 + C32: keyboard reaches body, x and Clear; Backspace removes at once and focus walks next, previous, Display', async ({ page, browserName }) => {
     // WebKit tabs through buttons only with Option held (the Safari default).
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await addFilter(page, 'project', 'Garden')
@@ -155,7 +161,7 @@ test.describe('Mia: removing and clearing', () => {
     await page.keyboard.press('Delete')
     await expect(filterRow(page)).toHaveCount(0)
     await expect(badge(page)).toHaveCount(0)
-    expect(await focusedLabel(page)).toBe('Filter')
+    expect(await focusedLabel(page)).toBe('Display')
   })
 
   test('C7: Clear puts every property back, keeps Sort, and the row goes', async ({ page }) => {
@@ -166,14 +172,14 @@ test.describe('Mia: removing and clearing', () => {
     await expect(filterRow(page).locator('.fb-chip')).toHaveCount(3)
     await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
     await expect(filterRow(page)).toHaveCount(0)
-    expect(await focusedLabel(page)).toBe('Filter')
+    expect(await focusedLabel(page)).toBe('Display')
     expect(await page.evaluate(() => localStorage.getItem('walnut-todo-sortBy'))).toBe(sortBefore)
     await openFilterMenu(page)
     for (const [dim, text] of [['status', 'Open'], ['project', 'Any'], ['date', 'Available now']] as const) {
       await expect(summary(page, dim)).toHaveText(text)
       await expect(summary(page, dim)).toHaveClass(/is-default/)
     }
-    await expect(filterMenu(page).locator('.fb-menu-foot')).toHaveCount(0)
+    await expect(clearInTitle(page)).toHaveCount(0)
     await openFilterPage(page, 'status')
     for (const [label, on] of OPEN_STATUS) await expect(filterValue(page, 'status', label)).toHaveAttribute('aria-pressed', on)
     await openFilterPage(page, 'date')
@@ -217,16 +223,15 @@ test.describe('Mia: menu layout and words', () => {
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
   })
 
-  test('C47: clicking at the coordinates measured when a page opens never moves a row; Most used waits for the next open', async ({ page }) => {
+  test('C47 + G5: clicking at the coordinates measured when a page opens never moves a row; page one keeps its rows until the next open', async ({ page }) => {
     await openFilterMenu(page)
-    await expect(page.locator('.fb-menu [data-section="most-used"]')).toHaveCount(0)
     const rects = (l: Locator) => l.evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width] }))
     const same = (a: number[][], b: number[][]) => {
       expect(a.length).toBe(b.length)
       a.forEach((p, i) => p.forEach((n, k) => expect(Math.abs(n - b[i][k])).toBeLessThanOrEqual(1)))
     }
     const at = async (l: Locator) => { const b = await box(l); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }
-    // Status: plain clicks toggle; the first chip and the footer arrive without moving a row.
+    // Status: plain clicks toggle; the first chip arrives without moving a row.
     await openFilterPage(page, 'status')
     await settled(filterMenu(page))
     const statusRows = filterPage(page, 'status').locator('.fb-opt-body')
@@ -245,26 +250,35 @@ test.describe('Mia: menu layout and words', () => {
     for (const v of ['Home', 'Garden']) await expect(filterValue(page, 'project', v)).toHaveAttribute('aria-pressed', 'true')
     same(await rects(projRows), p0)
     await expect(filterChip(page, 'project')).toContainText('Home, Garden')
-    // The first page keeps what it listed at open: Most used shows on the next open.
+    // A Time window preset keeps its page open; back on page one the property still sits in the
+    // fold it was listed in at open (its value already reads), and leaves it on the next open.
+    await openFilterPage(page, 'time')
+    await filterValue(page, 'time', '24h').click()
     await openFilterMenu(page)
-    await expect(page.locator('.fb-menu [data-section="most-used"]')).toHaveCount(0)
+    await expect(filterMenu(page).locator('#fb-more-body .fb-prop[data-filter-dim="time"]')).toHaveCount(1)
+    await expect(summary(page, 'time')).toHaveText('Updated in 24h')
+    // The row holds two lines while the menu hangs under it, so the third chip waits behind +N until it closes.
     await closeFilterMenu(page)
+    await expect(filterChip(page, 'time')).toBeVisible()
     await openFilterMenu(page)
-    await expect(page.locator('.fb-menu [data-section="most-used"]')).toBeVisible()
+    expect(await shownDims(filterMenu(page))).toEqual(['status', 'project', 'date', 'time'])
+    await expect(filterMenu(page).locator('#fb-more-body .fb-prop[data-filter-dim="time"]')).toHaveCount(0)
   })
 
   test('C29 + C42 + F14: More filters grows the box below its toggle and folds back; a set folded property is promoted; no motion under reduced motion', async ({ page }) => {
     await openFilterMenu(page)
     const h0 = (await box(filterMenu(page))).height
-    expect(h0).toBeLessThan(300)
+    // Page one, display rows included, fits under the cap: its body does not scroll.
+    expect(h0).toBeLessThan(520)
+    expect(await filterMenu(page).locator('.fb-menu-body').evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
     const toggle = filterMenu(page).getByRole('button', { name: /^More filters/ })
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await expect(toggle).toHaveAttribute('aria-controls', 'fb-more-body')
     await expect(toggle.locator('.fb-prop-summary')).toHaveText('Blocked, Time window')
-    // Folded, the box ends right under the toggle: no blank space for rows it does not draw (F14).
+    // Folded, the display rows start right under the toggle: no blank space for rows it does not draw (F14).
     const t0 = await box(toggle)
-    const m0 = await box(filterMenu(page))
-    expect(m0.y + m0.height - (t0.y + t0.height)).toBeLessThan(16)
+    const order0 = await box(filterMenu(page).locator('.dm-section.dm-order'))
+    expect(order0.y - (t0.y + t0.height)).toBeLessThan(16)
     await expandMoreFilters(page)
     await expect(filterDimRow(page, 'time')).toBeVisible()
     // The fold's rows land under the toggle: the box grows, the toggle does not move.
@@ -290,10 +304,10 @@ test.describe('Mia: menu layout and words', () => {
     await expect(summary(page, 'blocked')).toHaveText('Not blocked')
     await expect(summary(page, 'blocked')).not.toHaveClass(/is-default/)
     await expect(toggle.locator('.fb-prop-summary')).toHaveText('Time window')
-    // Folded again with the footer in: the toggle sits fully inside the box, not behind a scrollbar.
+    // Folded again with a filter set (Clear in the title): the toggle sits fully inside the box, not behind a scrollbar.
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    await expect(filterMenu(page).locator('.fb-menu-foot')).toBeVisible()
+    await expect(clearInTitle(page)).toBeVisible()
     await expect.poll(async () => {
       const [m, t] = [await box(filterMenu(page)), await box(toggle)]
       return t.y + t.height <= m.y + m.height + 0.5 && t.y >= m.y
@@ -328,7 +342,7 @@ test.describe('Mia: menu layout and words', () => {
     // Single-select: a bare tick slot, no square and no Only.
     await expect(filterPage(page, 'date').locator('.fb-check-box, .fb-only')).toHaveCount(0)
     await expect(filterValue(page, 'date', 'Available now').locator('.fb-check svg')).toHaveCount(1)
-    // A pick closes the menu and hands focus back to Filter.
+    // A pick closes the menu and hands focus back to Display.
     await filterValue(page, 'date', 'Any date').click()
     await expect(filterMenu(page)).toHaveCount(0)
     await expect(filterButton(page)).toBeFocused()
@@ -353,7 +367,7 @@ test.describe('Mia: menu layout and words', () => {
 })
 
 test.describe('Themes, narrow panels and the view item', () => {
-  test('C36 + C17: selected and unselected text clears 4.5:1 in both themes, on both pages and in the row', async ({ page }) => {
+  test('C36 + C17: selected and unselected text clears 4.5:1 in both themes, on every page and in the row', async ({ page }) => {
     await stubBoard(page, MIA, MIA_PINS)
     await openHome(page)
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
@@ -377,19 +391,23 @@ test.describe('Themes, narrow panels and the view item', () => {
     await expect(filterValue(page, 'project', 'Home').locator('.fb-check-box svg')).toHaveCount(0)
     const name = test.info().project.name === 'webkit' ? 'webkit-filter-dark' : 'filter-menu-dark'
     await page.screenshot({ path: `${SHOTS}/${name}.png`, clip: await clipAround(page) })
-    // Page one: property names, a set value and the footer.
+    // Page one: property names, a set value, the Filter title's Clear and the View row.
     await openFilterMenu(page)
     await page.mouse.move(1, 1)
     await measure([
       '.fb-menu .fb-prop[data-filter-dim="status"] .fb-item-text',
       '.fb-menu .fb-prop[data-filter-dim="project"] .fb-prop-summary',
-      '.fb-menu .fb-menu-foot .fb-text-btn',
+      '.fb-menu .fb-home .fb-group-action',
+      '.fb-menu [data-view-option="view"] .fb-item-text',
     ])
-    // The next open has a Most used row: its value reads too.
-    await closeFilterMenu(page)
-    await openFilterMenu(page)
+    // The View page: the current view and another one.
+    await openViewsPage(page)
     await page.mouse.move(1, 1)
-    await measure(['.fb-menu .fb-quick[data-recent-dim="project"] .fb-quick-val'])
+    await measure([
+      '.fb-menu .dm-view[aria-pressed="true"] .dm-view-label',
+      '.fb-menu .dm-view[aria-pressed="false"] .dm-view-label',
+      '.fb-menu .fb-page-title',
+    ])
   })
 
   test('C35 + C66 + F01 + F02: a narrow panel keeps property names and the unit, shows three filters, folds the rest behind +N', async ({ page }) => {
@@ -444,30 +462,33 @@ test.describe('Themes, narrow panels and the view item', () => {
     await stubBoard(page, MIA, MIA_PINS, { tabBar: true })
     await openHome(page)
     await openDisplayMenu(page)
-    const tabBarSwitch = page.locator('.dm-menu [data-view-option="quick-views"]')
+    const tabBarSwitch = filterMenu(page).locator('[data-view-option="quick-views"]')
     await expect(tabBarSwitch).toHaveAttribute('aria-checked', 'true')
     await tabBarSwitch.click()
-    // C56: switching the bar off closes Display and leaves focus on its button.
-    await expect(page.locator('.dm-menu')).toHaveCount(0)
+    // C56: switching the bar off closes the menu and leaves focus on Display.
+    await expect(filterMenu(page)).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Display')
     await openDisplayMenu(page)
     await expect(tabBarSwitch).toHaveAttribute('aria-checked', 'false')
-    await page.locator('.dm-menu [data-view-option="pinned"]').click()
-    await page.keyboard.press('Escape')
+    // A view is picked on the View page; the pick closes the menu.
+    await chooseDisplayOption(page, 'pinned')
+    await expect(filterMenu(page)).toHaveCount(0)
     const item = filterRow(page).locator('.fb-view-item')
     await expect(item).toHaveText('View: Pinned')
     await expect(item).toHaveAttribute('aria-label', 'View: Pinned, change in Display')
+    await expect(filterButton(page)).toHaveAttribute('title', 'Display: view Pinned, sort, group, layout')
     await expect(filterRow(page).locator('.fb-chip-x')).toHaveCount(0)
     await expect(badge(page)).toHaveCount(0)
     await item.click()
-    await expect(page.locator('.dm-menu')).toBeVisible()
+    await expect(filterMenu(page)).toBeVisible()
+    await expect(filterMenu(page).locator('[data-view-option="view"] .fb-prop-summary')).toHaveText('Pinned')
     await page.keyboard.press('Escape')
+    await expect(filterMenu(page)).toHaveCount(0)
     await addFilter(page, 'project', 'Garden')
     await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
     await expect(item).toHaveText('View: Pinned')
-    await openDisplayMenu(page)
-    await page.locator('.dm-menu [data-view-option="all"]').click()
-    await page.keyboard.press('Escape')
+    await chooseDisplayOption(page, 'all')
+    await expect(filterMenu(page)).toHaveCount(0)
     await expect(filterRow(page)).toHaveCount(0)
   })
 })

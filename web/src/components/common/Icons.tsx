@@ -88,8 +88,6 @@ export const ICON_LOCK = <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 export const ICON_UNLOCK = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 015.5-1.2"/></svg>;
 // Sliders / filter-options icon: three horizontal tracks each with a knob.
 export const ICON_SLIDERS = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="11" cy="4" r="1.7" fill="var(--bg-elevated,#1c1e24)"/><circle cx="5" cy="8" r="1.7" fill="var(--bg-elevated,#1c1e24)"/><circle cx="10" cy="12" r="1.7" fill="var(--bg-elevated,#1c1e24)"/></svg>;
-/** Funnel for the home Filter button; same box and stroke as ICON_SLIDERS. */
-export const ICON_FILTER = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h12l-4.75 5.5v4.25L6.75 14V8.5z"/></svg>;
 
 /**
  * Binary task-state icon, the glyph the interactive task toggle uses: hollow

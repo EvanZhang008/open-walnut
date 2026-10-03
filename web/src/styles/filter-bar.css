@@ -1,9 +1,10 @@
 /*
- * filter-bar: the home task panel's Filter menu (.fb-menu: one search box,
- * page one .fb-home, page two .fb-page), the chip menus (.fb-chip-menu) and
- * the pieces they share (.fb-item rows, .fb-opt checklist rows). Builds on
- * filter-toolbar-base.css (.tp-*). Existing tokens only. The filter row under
- * the toolbar is in filter-bar-row.css.
+ * filter-bar: the home task panel's one menu under Display (.fb-menu: one
+ * search box, page one .fb-home + the display sections, page two .fb-page),
+ * the chip menus (.fb-chip-menu) and the pieces they share (.fb-item rows,
+ * .fb-opt checklist rows). Builds on filter-toolbar-base.css (.tp-*); the
+ * display rows' own styles are in display-menu.css. Existing tokens only. The
+ * filter row under the toolbar is in filter-bar-row.css.
  *
  * Rhythm: 28px rows, 8px side padding, 13px names, 12px values, one 14px icon
  * slot at the left of every row so the names line up down the whole menu.
@@ -13,7 +14,7 @@
 .fb-menu {
   display: flex;
   flex-direction: column;
-  width: 272px;
+  width: 320px;
   box-sizing: border-box;
   overflow: hidden;
   font-size: 13px;
@@ -111,17 +112,21 @@
 .fb-item-check { display: inline-flex; flex: none; width: 12px; justify-content: center; color: var(--accent-text); }
 .fb-item-check svg { width: 12px; height: 12px; }
 
-/* Group titles on page one: small, muted, sentence case. */
+/* Group title on page one: small, muted, sentence case; its action (Clear) at the right. */
 .fb-group { display: flex; flex-direction: column; }
-.fb-group + .fb-group { margin-top: 2px; padding-top: 2px; }
 .fb-group-title {
-  padding: 6px 8px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+  padding: 4px 8px 2px;
   color: var(--tp-muted);
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
-.fb-group[data-section='properties'] .fb-group-title { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 8px; }
+.fb-group-action { height: 20px; padding: 0 6px; font-size: 11px; color: var(--accent-text); }
+.fb-group-action:hover { color: var(--accent-text); }
 
 /* Property row: the value at the right, muted while it is the default. */
 .fb-prop-summary {
@@ -135,12 +140,6 @@
   font-size: 12px;
 }
 .fb-prop-summary.is-default { color: var(--tp-muted); }
-
-/* Most used row: `Project  Home`, the property name muted before the value. */
-.fb-quick .fb-item-text { display: flex; gap: 6px; }
-.fb-quick-dim { flex: none; color: var(--tp-muted); font-size: 12px; }
-.fb-quick-val { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.fb-quick[aria-pressed='true'] .fb-quick-val { font-weight: 500; }
 
 /* More filters fold: the chevron turns, the rows appear under it. */
 .fb-more-toggle .fb-item-text { color: var(--fg-secondary); }
@@ -261,27 +260,14 @@
 }
 .fb-custom-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* ── Search results (6.3): `Status  In Progress`, the property muted ── */
+/* ── Search results (6.3): `Status  In Progress` or `View  Pinned`, the kind muted ── */
 .fb-search-results { display: flex; flex-direction: column; }
 .fb-hit-dim { flex: none; color: var(--tp-muted); font-size: 12px; }
 .fb-hit-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .fb-hit.is-selected .fb-hit-value { color: var(--accent-text); }
 .fb-hit-note { flex: none; color: var(--tp-muted); font-size: 11px; }
-.fb-pin-hint { color: var(--accent-text); }
-.fb-pin-hint:hover { background: var(--bg-hover); }
 
-/* ── Footer: the count and Clear, only while something is set ── */
-.fb-menu-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex: none;
-  min-height: 32px;
-  padding: 0 8px 0 12px;
-  border-top: 1px solid var(--border);
-}
-.fb-menu-count { flex: none; color: var(--tp-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* ── Text buttons: Clear in the Filter title, Reset in a page head ── */
 .fb-text-btn {
   flex: none;
   height: 24px;
@@ -328,10 +314,15 @@
 .fb-search-clear:focus-visible,
 .fb-chip-menu-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fb-opt-body:focus-visible { outline: none; }
+/* After a key, the focused control shows the ring in every engine (WebKit skips
+   :focus-visible on a focus moved by script, which is how the arrow keys move it). */
+.fb-menu[data-keyed] :is(.fb-item, .fb-back, .fb-text-btn, .dm-view, .dm-switch-row, .dm-action, .tp-seg-btn):focus,
+.fb-menu[data-keyed] .fb-opt:has(.fb-opt-body:focus) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fb-menu[data-keyed] .fb-opt-body:focus { outline: none; }
 
 /* ── Narrow viewport ── */
 @media (max-width: 599px) {
-  .fb-menu { width: min(272px, calc(100vw - 16px)); }
+  .fb-menu { width: min(320px, calc(100vw - 16px)); }
   .fb-chip-menu { width: min(240px, calc(100vw - 16px)); }
 }
 

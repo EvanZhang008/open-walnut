@@ -1,16 +1,16 @@
 /**
  * E2E: the Filter bar fix round (nitpicks F04, F05, F06, F09, F11 to F13, F22,
- * F26, F34, F36), on the two-page Filter menu. One selected signal on Status
- * values, Collapse all only where it folds something, one number for a
- * search, focus kept inside open menus, menus on the task panel and page two
- * replacing page one in place, a date pick selected at once, a menu as tall
- * as its content, and the active view always named.
+ * F26, F34, F36), on the one panel menu under Display. One selected signal on
+ * Status values, Collapse all only where it folds something, one number for a
+ * search, focus kept inside the open menu, the menu on the task panel and page
+ * two (a property or the View page) replacing page one in place, a date pick
+ * selected at once, a menu as tall as its content, and the active view always named.
  * Stubbed boards (filter-bar-fixtures.ts); prefs isolated per test.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  closeFilterMenu, displayMenu, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterValue, moreViewsRow,
-  openDisplayMenu, openFilterMenu, openFilterPage, settled, viewsFlyout,
+  chooseDisplayOption, closeFilterMenu, displayMenu, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterValue,
+  openDisplayMenu, openFilterMenu, openFilterPage, openViewsPage, settled, viewRow, viewsPage,
 } from './filter-bar-helpers'
 import { MIA, MIA_PINS, box, openHome, ownerSeeds, row, stubBoard } from './filter-bar-fixtures'
 
@@ -68,15 +68,19 @@ test('F05: Collapse all projects only where the view draws project groups', asyn
   // Inside the menu: the menu may follow its anchor, the row may not move within it.
   const sortY = async () => Math.round((await box(displayMenu(page).locator('[data-view-option="sort"]'))).y - (await box(displayMenu(page))).y)
   const y0 = await sortY()
-  await displayMenu(page).locator('[data-view-option="pinned"]').click()
+  // A view pick on the View page closes the menu; the next open shows that view's rows.
+  await chooseDisplayOption(page, 'pinned')
+  await expect(displayMenu(page)).toHaveCount(0)
+  await openDisplayMenu(page)
   await expect(collapse).toHaveCount(0)
   // Sort keeps its place and says why it is quiet here (C29b, F41).
   await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Only in All and Projects')
   expect(Math.abs((await sortY()) - y0)).toBeLessThanOrEqual(1)
-  await moreViewsRow(page).click()
-  await viewsFlyout(page).locator('[data-view-option="recent"]').click()
+  await chooseDisplayOption(page, 'recent')
+  await openDisplayMenu(page)
   await expect(collapse).toHaveCount(0)
-  await displayMenu(page).locator('[data-view-option="all"]').click()
+  await chooseDisplayOption(page, 'all')
+  await openDisplayMenu(page)
   // All draws about 200 rows again; on a loaded machine that takes longer than 5s.
   await expect(collapse).toHaveCount(1, { timeout: 20_000 })
   // Order: Sort, Group, then Collapse (spec 3.3).
@@ -122,7 +126,7 @@ test('F06 + C56: a search has one number for its rows: count = All badge = drawn
   expect(await agree()).toBe(11)
 })
 
-test('F09 + F38: Tab and Shift+Tab stay inside an open Filter menu (both pages) or Display menu; one Tab stop per value', async ({ page }) => {
+test('F09 + F38: Tab and Shift+Tab stay inside the open menu (page one, a property page, the View page); one Tab stop per value', async ({ page }) => {
   await stubBoard(page, MIA, MIA_PINS)
   await openHome(page)
   await openFilterMenu(page)
@@ -143,14 +147,15 @@ test('F09 + F38: Tab and Shift+Tab stay inside an open Filter menu (both pages) 
   await expect(filterPage(page, 'project').locator('[role="checkbox"], .fb-val-add')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(filterMenu(page)).toHaveCount(0)
-  await openDisplayMenu(page)
+  // The View page traps Tab too.
+  await openViewsPage(page)
   for (let i = 0; i < 12; i++) {
     await page.keyboard.press('Tab')
-    expect(await insideOf(page, '.dm-menu'), `Tab ${i + 1}: ${await activeLabel(page)}`).toBe(true)
+    expect(await insideOf(page, '.fb-menu'), `View page, Tab ${i + 1}: ${await activeLabel(page)}`).toBe(true)
   }
 })
 
-test('F10 + F11 + F12 + F13: the search keeps room; menus stay on the panel; page two opens in place; the views flyout sits beside Display', async ({ page }) => {
+test('F10 + F11 + F12 + F13: the search keeps room; the menu stays on the panel; a property page and the View page open in place', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await stubBoard(page, ownerSeeds(), [], { tabBar: true })
   await openHome(page)
@@ -174,18 +179,20 @@ test('F10 + F11 + F12 + F13: the search keeps room; menus stay on the panel; pag
   await openDisplayMenu(page)
   const dm = await box(displayMenu(page))
   expect(dm.x).toBeGreaterThanOrEqual(left - 1)
-  const rowBox = await box(moreViewsRow(page))
-  await moreViewsRow(page).click()
-  await settled(viewsFlyout(page))
-  const vf = await box(viewsFlyout(page))
-  expect(vf.x).toBeGreaterThanOrEqual(dm.x + dm.width)
-  // The flyout's first row is level with More views (it used to sit about 48px lower).
-  const firstItem = await box(viewsFlyout(page).locator('.dm-flyout-item').first())
-  expect(Math.abs(firstItem.y - rowBox.y)).toBeLessThanOrEqual(4)
-  // Tier views above a divider, Recent and Projects below it.
-  const kinds = await viewsFlyout(page).locator('.dm-flyout-item, .dm-flyout-sep')
+  // The View row opens the views in the same box, like a property: no flyout beside it.
+  await viewRow(page).click()
+  await expect(viewsPage(page)).toBeVisible()
+  await settled(displayMenu(page))
+  const vp = await box(displayMenu(page))
+  expect(Math.abs(vp.x - dm.x)).toBeLessThanOrEqual(1)
+  expect(Math.abs(vp.y - dm.y)).toBeLessThanOrEqual(1)
+  expect(Math.abs(vp.width - dm.width)).toBeLessThanOrEqual(1)
+  await expect(displayMenu(page)).toHaveAttribute('data-page', 'view')
+  await expect(page.locator('.dm-views-flyout')).toHaveCount(0)
+  // The tabs kept on the bar above a hairline, every other view below it, Projects last.
+  const kinds = await viewsPage(page).locator('.dm-view, .dm-flyout-sep')
     .evaluateAll((els) => els.map((e) => e.classList.contains('dm-flyout-sep') ? '|' : e.getAttribute('data-view-option')))
-  expect(kinds.indexOf('|')).toBe(kinds.indexOf('recent') - 1)
+  expect(kinds).toEqual(['all', 'pinned', '|', 'focus', 'satellite', 'wait', 'recent', 'tasks'])
 })
 
 test('F22 + F36: a date pick is selected at once and closes the menu; the Projects view is named in the row', async ({ page }) => {
@@ -200,10 +207,8 @@ test('F22 + F36: a date pick is selected at once and closes the menu; the Projec
   await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'false')
   await closeFilterMenu(page)
   await expect(filterMenu(page)).toHaveCount(0)
-  await openDisplayMenu(page)
-  await moreViewsRow(page).click()
-  await viewsFlyout(page).locator('[data-view-option="tasks"]').click()
-  await page.keyboard.press('Escape')
+  await chooseDisplayOption(page, 'tasks')
+  await expect(filterMenu(page)).toHaveCount(0)
   // No tab shows Projects, so the row names it.
   await expect(filterRow(page).locator('.fb-view-item')).toHaveText(/View:\s*Projects/)
 })
@@ -233,7 +238,7 @@ test('F34: a menu opened while tasks load grows to its loaded content, has no me
     fits: el.scrollHeight <= el.clientHeight + 1,
   }))
   expect(shape).toMatchObject({ height: '', measuring: false, fits: true })
-  expect(shape.max).toBeLessThanOrEqual(460)
+  expect(shape.max).toBeLessThanOrEqual(520)
   // Thirty projects reach the cap: the box stops there and its body scrolls.
   await openFilterPage(page, 'project')
   await settled(filterMenu(page))

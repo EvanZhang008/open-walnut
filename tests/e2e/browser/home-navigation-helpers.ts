@@ -4,14 +4,13 @@ import {
   closeDisplayMenu,
   displayButton,
   displayMenu,
-  moreViewsRow,
   openDisplayMenu,
+  openViewsPage,
   setStatus,
   STATUS_LABELS,
   filterValue,
-  openFilterMenu,
+  openFilterPage,
   closeFilterMenu,
-  viewsFlyout,
 } from './filter-bar-helpers'
 
 export const homeToolbar = (page: Page) => page.locator('#home-task-navigation .todo-panel-toolbar')
@@ -24,33 +23,30 @@ export async function openHome(page: Page, baseURL: string, timeout = 45_000): P
   await expect(displayButton(page)).toBeVisible({ timeout })
 }
 
-/** Opens the Display menu (views, sort, group, layout) on its View group. */
+/** Opens the Display menu (filters, sort, group, view, layout) on its first page. */
 export async function openViewMenu(page: Page): Promise<void> {
   await openDisplayMenu(page)
 }
 
 export async function closeViewMenu(page: Page): Promise<void> {
   await closeDisplayMenu(page)
-  await expect(page.locator('.dm-menu')).toHaveCount(0)
+  await expect(displayMenu(page)).toHaveCount(0)
 }
 
-/** Clicks one Display option (`data-view-option` key, More views aware) and closes the menu. */
+/**
+ * Clicks one Display option by its `data-view-option` key and closes the menu: a row
+ * of the first page, or a view id, which is picked on the View page.
+ */
 export async function chooseViewOption(page: Page, key: string): Promise<void> {
   await chooseDisplayOption(page, key)
   await closeViewMenu(page)
 }
 
-/** Which list the panel shows, read from the Display menu itself. */
+/** Which list the panel shows, read from the Display menu's View page. */
 export async function activeView(page: Page): Promise<string | null> {
-  await openViewMenu(page)
-  const pressed = displayMenu(page).locator('[data-view-group="Show"] [aria-pressed="true"]')
-  let key = (await pressed.count()) ? await pressed.first().getAttribute('data-view-option') : null
-  if (!key) {
-    await moreViewsRow(page).click()
-    await expect(viewsFlyout(page)).toBeVisible()
-    const inFlyout = viewsFlyout(page).locator('[aria-pressed="true"], [aria-checked="true"]')
-    key = (await inFlyout.count()) ? await inFlyout.first().getAttribute('data-view-option') : null
-  }
+  const views = await openViewsPage(page)
+  const pressed = views.locator('.dm-view[aria-pressed="true"]')
+  const key = (await pressed.count()) ? await pressed.first().getAttribute('data-view-option') : null
   await closeViewMenu(page)
   return key
 }
@@ -78,7 +74,8 @@ export async function arrange(page: Page, label: string): Promise<void> {
 
 /** Show or hide completed tasks: Status gains or loses `Complete`. */
 export async function setShowCompleted(page: Page, on: boolean): Promise<void> {
-  await openFilterMenu(page)
+  // The values are on the Status page (page two), not on the menu's first page.
+  await openFilterPage(page, 'status')
   const current: string[] = []
   for (const label of STATUS_LABELS) {
     if ((await filterValue(page, 'status', label).getAttribute('aria-pressed')) === 'true') current.push(label)

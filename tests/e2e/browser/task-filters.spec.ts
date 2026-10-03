@@ -325,13 +325,15 @@ test('the menu spells out the active filters on its property rows and each chip 
   await expect(summaryOf('project')).toHaveText('Meadow')
   // A set property leaves the fold: Time window sits among the first rows now.
   await expect(summaryOf('time')).toHaveText('Updated in 24h')
-  await expect(filterMenu(page).locator('.fb-menu-foot')).toContainText('Clear filters')
+  // Something is set: the Filter title offers Clear.
+  const clearInTitle = filterMenu(page).locator('.fb-home .fb-group-title .fb-group-action')
+  await expect(clearInTitle).toHaveText('Clear')
   // The row stays live under the open menu: its x removes exactly one condition.
   await filterChip(page, 'project').locator('.fb-chip-x').click()
   await expect(filterChip(page, 'project')).toHaveCount(0)
   await expect(summaryOf('project')).toHaveText('Any')
   await filterChip(page, 'time').locator('.fb-chip-x').click()
-  await expect(filterMenu(page).locator('.fb-menu-foot')).toHaveCount(0)
+  await expect(clearInTitle).toHaveCount(0)
   await expect(filterRow(page)).toContainText('No filters')
   await page.screenshot({ path: `${SHOTS}/05-summary-chips.png`, fullPage: true })
   await closeFilterMenu(page)

@@ -1,5 +1,5 @@
 /**
- * FilterValuesPage: the Filter menu's second page, one property's values
+ * FilterValuesPage: the panel menu's second page for a property, one property's values
  * (spec 6.2). A header with the way back and the property's name (plus Reset
  * while something is set), the Time window's basis segments where they apply,
  * then the shared checklist. The menu's search box filters the rows; the

@@ -1,15 +1,13 @@
 /**
- * filter-home-model: what the Filter menu's first page shows. A short list,
- * not a wall: the few filters the user picks most, then one row per property
- * (its current value at the right), the rarely used properties folded behind
- * `More filters` unless one of them is set. Pure, no React.
+ * filter-home-model: what the panel menu's first page shows for filters. A
+ * short list, not a wall: one row per property (its current value at the
+ * right), the rarely used properties folded behind `More filters` unless one
+ * of them is set. Also the use-based ranking of search hits. Pure, no React.
  */
 import type { FilterChip, FilterDim, FilterLists, FilterState, RecentEntry } from './filter-bar-types';
 import { FILTER_DIMS, MORE_DIMS } from './filter-bar-types';
 import { isDimDefault, isDimVisible } from './filter-bar-model';
-
-/** How many `Most used` rows the first page shows. */
-export const MOST_USED_LIMIT = 4;
+import { recentKey } from './filter-recent';
 
 /** The right-hand words of a property row when nothing is set on it. */
 const DEFAULT_SUMMARY: Record<FilterDim, string> = {
@@ -57,14 +55,46 @@ export function homeRows(state: FilterState, lists: FilterLists): HomeRows {
 }
 
 /**
- * The `Most used` rows: the remembered picks ranked by how often they were
- * made, newest first among equals, capped. The input is already validated
- * (every value still exists) and newest first.
+ * How often the user picked `value` on `dim` (0 = never remembered). The
+ * remembered picks (`RecentEntry`, `uses` counted in pushRecent) rank the
+ * search hits: the picks made most come first among what the text matches.
  */
-export function mostUsed(recent: readonly RecentEntry[], limit = MOST_USED_LIMIT): RecentEntry[] {
-  return recent
-    .map((entry, i) => ({ entry, i }))
-    .sort((a, b) => (b.entry.uses ?? 1) - (a.entry.uses ?? 1) || a.i - b.i)
-    .slice(0, limit)
-    .map((x) => x.entry);
+export function useCount(recent: readonly RecentEntry[], dim: FilterDim, value: string): number {
+  const key = `${dim}:${value}`;
+  const hit = recent.find((e) => !Array.isArray(e.value) && recentKey(e) === key);
+  return hit ? hit.uses ?? 1 : 0;
+}
+
+/** Stable sort: the items used most first, ties keep their order. */
+export function rankByUse<T>(items: readonly T[], uses: (item: T) => number): T[] {
+  return items
+    .map((item, i) => ({ item, i, n: uses(item) }))
+    .sort((a, b) => b.n - a.n || a.i - b.i)
+    .map((x) => x.item);
+}
+
+/**
+ * How well a label answers the typed text: 2 = the whole label, 1 = its start,
+ * 0 = somewhere inside (or through a keyword). `recent` names the Recent view
+ * before the time windows a keyword matched; `wait` puts Waiting first.
+ */
+export function matchScore(label: string, query: string): number {
+  const l = label.trim().toLowerCase();
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  if (l === q) return 2;
+  if (l.startsWith(q)) return 1;
+  return 0;
+}
+
+/** Stable sort by matchScore, highest first; ties keep their order. */
+export function rankByMatch<T>(items: readonly T[], label: (item: T) => string, query: string): T[] {
+  return items
+    .map((item, i) => ({ item, i, n: matchScore(label(item), query) }))
+    .sort((a, b) => b.n - a.n || a.i - b.i)
+    .map((x) => x.item);
+}
+
+export function badgeText(n: number): string {
+  return n > 9 ? '9+' : String(n);
 }

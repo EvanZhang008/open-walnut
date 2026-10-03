@@ -387,15 +387,9 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   const btn = toolbar.locator('.new-launcher-btn')
   const label = btn.locator('.new-launcher-label')
   const search = toolbar.getByPlaceholder(/Search tasks/)
-  // Filter + Display replaced the single View options button (one more 28px control).
-  const filterBtn = toolbar.getByRole('button', { name: 'Filter', exact: true })
+  // One menu button, Display, sits where the View options button was (one 28px control):
+  // the filters live in its menu, so there is no Filter button taking room from the search.
   const view = toolbar.getByRole('button', { name: 'Display', exact: true })
-  /** Room the Filter button takes from the search input: its width plus one toolbar gap. */
-  const filterRoom = async () => {
-    const box = await filterBtn.boundingBox()
-    const gap = await toolbar.evaluate((el) => parseFloat(getComputedStyle(el).columnGap) || 0)
-    return (box?.width ?? 0) + gap
-  }
   const collapsedButtonPx = 28
   const toolbarContentWidth = () => toolbar.evaluate((element) => {
     const style = getComputedStyle(element)
@@ -409,13 +403,13 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(btn).toHaveAttribute('aria-label', 'New task')
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
-  await expect(filterBtn).toBeVisible()
+  await expect(toolbar.getByRole('button', { name: 'Filter', exact: true })).toHaveCount(0)
   expect(await toolbarContentWidth()).toBeGreaterThan(275)
   const normalBox = await btn.boundingBox()
   const normalSearchBox = await search.boundingBox()
   expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx * 2)
-  // The search input gives up exactly the Filter button's room (it measured ~113px before it).
-  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100 - (await filterRoom()))
+  // With one menu button the search input keeps its room (it measured ~113px).
+  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
 
   // With the pinned 25% panel and collapsed sidebar, a 4px viewport step moves
@@ -425,9 +419,8 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(label).toBeVisible()
   expect(await toolbarContentWidth()).toBe(276)
   const boundaryWideSearchBox = await search.boundingBox()
-  // The home toolbar's hide button costs 32px, so at the breakpoint the input was ~68px;
-  // the Filter button takes exactly its own room from that, and nothing more.
-  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(60 - (await filterRoom()))
+  // The home toolbar's hide button costs 32px, so at the breakpoint the input is ~68px.
+  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(60)
 
   await page.setViewportSize({ width: 1240, height: 900 })
   await expect(label).toBeHidden()
@@ -435,7 +428,6 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(btn.locator('svg')).toBeVisible()
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
-  await expect(filterBtn).toBeVisible()
   expect(await toolbarContentWidth()).toBe(275)
   const narrowBox = await btn.boundingBox()
   const narrowSearchBox = await search.boundingBox()

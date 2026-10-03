@@ -1,6 +1,6 @@
 /**
  * filter-dim-icons: one 14px glyph per filter property, drawn at the left of
- * the Filter menu's rows. Same box and stroke as the toolbar icons in
+ * the panel menu's filter rows. Same box and stroke as the toolbar icons in
  * common/Icons.tsx (16-unit viewBox, 1.5 stroke, round caps).
  */
 import type { ReactNode } from 'react';
@@ -20,8 +20,8 @@ const ICONS: Record<FilterDim, ReactNode> = {
   time: <svg {...P}><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.3l2.2 1.3" /></svg>,
 };
 
-/** A small clock-with-arrow glyph for the `Most used` rows. */
-export const ICON_MOST_USED: ReactNode = <svg {...P}><path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.85" /><path d="M2.5 2.5v2.4h2.4" /><path d="M8 5.2V8l1.9 1.2" /></svg>;
+/** The View row and the view hits: a window with a sidebar. */
+export const ICON_VIEW: ReactNode = <svg {...P}><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M6 3v10" /></svg>;
 
 export function dimIcon(dim: FilterDim): ReactNode {
   return ICONS[dim];

@@ -100,7 +100,7 @@ export function viewLabel(id: string, customTiers: readonly { id: string; label:
 /**
  * At most this many views sit in the Display menu's first layer. A board with 30 custom
  * tiers keeps all 30 on its bar; inline they would make the menu unbounded (web/src
- * AGENTS.md menu rule 2), so the tail goes to the More views flyout instead.
+ * AGENTS.md menu rule 2), so the tail goes to the menu's View page instead.
  */
 export const DISPLAY_FIRST_LAYER_LIMIT = 6;
 
@@ -123,7 +123,7 @@ export function displayViewLayers(
   return { first, more };
 }
 
-/** Ids the bar's own menu lists above its divider; every tier goes under `More views`. */
+/** Ids the bar's own menu lists above its divider; every tier goes under the divider. */
 export const TAB_MENU_TOP_IDS: readonly string[] = ['all', 'pinned', 'recent'];
 
 /** The bar's own menu: All, Pinned, Recent on top; the built-in and custom tiers below. */

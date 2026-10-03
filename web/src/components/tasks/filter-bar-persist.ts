@@ -166,7 +166,7 @@ export function readRecent(): RecentEntry[] {
 /**
  * Record new picks (given oldest first): newest first, deduped, capped. A pick
  * made before keeps its place at the top and counts one more use, which is
- * what ranks the menu's `Most used` rows.
+ * what ranks the menu's search hits.
  */
 export function pushRecent(entries: readonly RecentEntry[]): RecentEntry[] {
   const current = readRecent();

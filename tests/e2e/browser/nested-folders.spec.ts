@@ -165,7 +165,7 @@ test('a subtask from a task in a shared folder lands in a subfolder the board dr
     await expect(card(page, child)).toBeVisible()
 
     // The Projects view draws the same tree: the subfolder's header one step in.
-    // Projects lives in Display's More views flyout.
+    // Projects lives on Display's View page.
     await chooseViewOption(page, 'tasks')
     // A project's list shows its first rows and folders sink to the bottom, so the
     // fixture's busy Walnut project needs "Show more", as it would for the user.
