@@ -5,8 +5,8 @@
  *   A. A thread reads like the app's chat: oldest first, the reply under the
  *      messages, a capped message area that opens at the newest and stays there,
  *      but leaves a user who scrolled up alone (with a way back down); bubbles
- *      and markdown. "Reply…" docks Walnut's own composer (voice included) under
- *      the frame, and its Send posts to that thread.
+ *      and markdown. "Reply…" opens Walnut's own composer (voice included) inline,
+ *      in the thread's place under its messages, and its Send posts to that thread.
  *   B. Projects, checks, choices, reminders and the "updated" dot:
  *      1. the leader's board_project_set recolors the section live, the strip
  *         counts follow, a cleared status gives the author's back, and
@@ -268,13 +268,19 @@ test('a thread reads like the chat, and Reply docks Walnut\'s composer', async (
   await expect(rows).toHaveCount(17, { timeout: 15_000 })
   await expect.poll(async () => (await layout()).gap).toBeLessThanOrEqual(2)
 
-  // "Reply…" docks Walnut's own composer (with the mic) under the frame; Send posts to the thread.
+  // "Reply…" opens Walnut's own composer (with the mic) inline, where the field was; Send posts to the thread.
   await thread.locator('.wn-reply').click()
   const dock = pane.getByTestId('board-reply-dock')
   await expect(dock).toBeVisible()
+  await expect(dock).toHaveAttribute('data-placement', 'inline')
   await expect(dock.getByTestId('board-reply-title')).toHaveText('Reply in Rollout talk')
   await expect(dock.locator('.mic-btn-wrapper button')).toBeVisible()
-  await expect(thread.locator('.wn-reply')).toHaveText('Replying in the box below')
+  await expect(thread.locator('.wn-reply')).toBeHidden()
+  const slot = thread.locator('.wn-composer .wn-dock-slot')
+  await expect.poll(async () => {
+    const [d, s] = [await dock.boundingBox(), await slot.boundingBox()]
+    return d && s ? Math.max(Math.abs(d.y - s.y), Math.abs(d.x - s.x), Math.abs(d.width - s.width), Math.abs(d.height - s.height)) : 99
+  }).toBeLessThanOrEqual(2)
   const input = dock.locator('.chat-input-textarea')
   await expect(input).toBeFocused()
   await input.fill(`From the dock ${stamp}`)
@@ -610,8 +616,10 @@ test('a choice takes the user\'s own words, alone or beside a pick', async ({ pa
   await expect(dock).toHaveAttribute('data-choice', 'deploy-when')
   await expect(dock.getByTestId('board-reply-title')).toHaveText(`Answer When to ship the fix in your own words about ${workerTitle}`)
   await expect(dock.locator('.mic-btn-wrapper button')).toBeVisible()
-  await expect(own).toHaveText('Answering in the box below')
+  await expect(own).toBeHidden()
   await expect(own).toHaveAttribute('aria-pressed', 'true')
+  await expect(dock).toHaveAttribute('data-placement', 'inline')
+  await expect(choice.locator('.wn-choice-own .wn-dock-slot')).toHaveCount(1)
   const input = dock.locator('.chat-input-textarea')
   await expect(input).toBeFocused()
   const mine = `Neither yet: wait for the backup ${stamp}, then run it.`

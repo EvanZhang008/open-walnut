@@ -62,6 +62,8 @@
         el.wnVisible = en.isIntersecting
           && (en.intersectionRatio >= 0.5 || en.intersectionRect.height >= window.innerHeight * 0.5);
         if (el.wnVisible) el.wnArm(); else el.wnDisarm();
+        // Coming into view (a section opened, a filter lifted): a pinned thread shows its newest message.
+        if (en.isIntersecting) el.wnRepin();
       });
     }, { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] })
     : null;
@@ -117,24 +119,34 @@
       this.wnPinned = true;
       this.classList.add('wn-thread');
       // Like the app's chat: the conversation, then the composer under it. The
-      // composer is Walnut's own (voice included), docked by the host under the
-      // frame: "Reply…" asks for it, and the host owns the draft.
+      // composer is Walnut's own (voice included), laid by the host over a slot
+      // here (core: slotHtml): "Reply…" asks for it, and the host owns the draft.
       this.innerHTML = '<div class="wn-thread-head"><span class="wn-thread-title"></span>'
         + '<span class="wn-badge" hidden></span><span class="wn-thread-tools">'
-        + '<a class="wn-mark-read" href="#" role="button" hidden>Mark read</a></span></div>'
+        + '<a class="wn-mark-read" href="#" role="button" hidden>Mark read</a>'
+        + '<button type="button" class="wn-fold-btn" hidden>Fold</button></span></div>'
+        + '<button type="button" class="wn-fold-more" hidden></button>'
         + '<div class="wn-scroll-wrap" hidden><div class="wn-scroll"><div class="wn-msgs"></div></div>'
         + '<button type="button" class="wn-jump" hidden></button></div>'
         + '<div class="wn-composer"><button type="button" class="wn-reply" aria-pressed="false">Reply…</button></div>';
       this.wnReply = this.querySelector('.wn-reply');
+      this.wnComposer = this.querySelector('.wn-composer');
       this.wnList = this.querySelector('.wn-msgs');
       this.wnScroll = this.querySelector('.wn-scroll');
       this.wnWrap = this.querySelector('.wn-scroll-wrap');
       this.wnJumpBtn = this.querySelector('.wn-jump');
+      // A thread in a section marked done folds to its newest message (one click shows the rest).
+      this.wnFoldMore = this.querySelector('.wn-fold-more');
+      this.wnFoldBtn = this.querySelector('.wn-fold-btn');
+      this.wnFoldMore.addEventListener('click', function (e) { e.preventDefault(); self.wnFold(false); });
+      this.wnFoldBtn.addEventListener('click', function (e) { e.preventDefault(); self.wnFold(true); });
       // Scrolled up to read: new messages leave the position alone until the user is back at the bottom.
       this.wnScroll.addEventListener('scroll', function () {
-        self.wnPinned = atBottom(self.wnScroll);
+        // A scroll the browser makes on its own (the area got its size) is not the reader leaving the bottom.
+        if (self.wnScroll.clientHeight > 0) self.wnPinned = atBottom(self.wnScroll);
         self.wnPaintJump();
         if (self.wnVisible) self.wnArm();
+        kit.reportView();
       }, { passive: true });
       this.wnJumpBtn.addEventListener('click', function (e) { e.preventDefault(); self.wnReveal(); });
       if (kit.Remind) {
@@ -179,6 +191,19 @@
       this.wnScroll.scrollTop = this.wnScroll.scrollHeight;
       this.wnPaintJump();
     }
+    /**
+     * One rule for every thread: oldest first, opened at the newest message, and
+     * left where the reader scrolled. A thread laid out while hidden (a closed
+     * <details>, a folded section) could not scroll, so it opened at its oldest;
+     * this runs again when it is shown.
+     */
+    wnRepin() { if (this.wnPinned && this.wnScroll && !atBottom(this.wnScroll)) this.wnToBottom(); }
+    /** The reader had scrolled up here before the board was rewritten: back to that spot. */
+    wnKeepAt(top) {
+      this.wnPinned = false;
+      this.wnScroll.scrollTop = top;
+      this.wnPaintJump();
+    }
     /** A row inside the message area's view and the window's. */
     wnInView(row) {
       var r = row.getBoundingClientRect();
@@ -194,7 +219,7 @@
     }
     /** Scrolled up: a button back to the newest (naming what is unread). */
     wnPaintJump() {
-      var show = !this.wnPinned && !this.wnWrap.hidden;
+      var show = !this.wnPinned && !this.wnWrap.hidden && !this.hasAttribute('data-folded');
       var n = show ? kit.unreadIn(this.wnId) : 0;
       var text = n === 0 ? 'Latest ↓' : n === 1 ? '1 new message ↓' : n + ' new messages ↓';
       if (this.wnJumpBtn.hidden !== !show) this.wnJumpBtn.hidden = !show;
@@ -243,6 +268,13 @@
       }, 1500);
     }
     wnDisarm() { clearTimeout(this.wnTimer); this.wnTimer = null; }
+    /** Fold to the newest message (or open it all, at the newest). The reader's choice outlives a rewritten board. */
+    wnFold(fold) {
+      this.wnKeepOpen = false;
+      kit.setFold('thread:' + this.wnId, !fold);
+      this.wnRender();
+      if (!fold) this.wnToBottom();
+    }
     /** "Reply…": the host docks its composer for this thread (a click and its focus count once). */
     wnCompose() {
       var now = Date.now();
@@ -260,6 +292,7 @@
       this.wnLocal = this.wnLocal.filter(function (l) { return l.status !== 'failed'; })
         .concat([{ key: key, text: text, ts: new Date().toISOString(), status: 'pending' }]);
       this.wnPinned = true;
+      this.wnKeepOpen = true;
       this.wnRender();
     }
     wnDropLocal(key) { this.wnLocal = this.wnLocal.filter(function (l) { return l.key !== key; }); }
@@ -300,11 +333,13 @@
       badge.hidden = n === 0;
       badge.textContent = n ? n + ' new' : '';
       this.querySelector('.wn-mark-read').hidden = n === 0;
+      // Composing here: the Reply… field gives its place to the slot Walnut's composer sits on.
       var composing = !!id && kit.flags.composing === id;
-      var replyText = composing ? 'Replying in the box below' : 'Reply…';
-      if (this.wnReply.textContent !== replyText) this.wnReply.textContent = replyText;
+      if (this.wnReply.hidden !== composing) this.wnReply.hidden = composing;
       this.wnReply.setAttribute('aria-pressed', composing ? 'true' : 'false');
-      this.wnReply.classList.toggle('wn-on', composing);
+      var slot = this.wnComposer.querySelector('.wn-dock-slot');
+      if (composing && !slot) { this.wnComposer.insertAdjacentHTML('beforeend', kit.slotHtml()); kit.trackSlot(); }
+      if (!composing && slot) slot.remove();
       // Oldest first, newest last (equal times keep their append order); the rows
       // still being sent (or that failed) come last, as they are the newest.
       var rows = (state.threads[id] || []).map(function (m, i) { return { ts: m.ts, i: i, html: self.wnRow(m) }; });
@@ -316,6 +351,17 @@
             failed ? '<span class="wn-error">' + esc(l.error) + '</span>' : ''),
         });
       });
+      // Finished (its section is done) and not being written to: the newest message only (seeing it reads the thread).
+      var section = this.closest('[data-status]');
+      var done = !!section && section.getAttribute('data-status') === 'done';
+      var folded = done && rows.length > 1 && !composing && !this.wnLocal.length && !this.wnKeepOpen
+        && !kit.folds()['thread:' + id];
+      if (this.hasAttribute('data-folded') !== folded) this.toggleAttribute('data-folded', folded);
+      var more = folded ? (rows.length === 2 ? 'Show 1 earlier message' : 'Show ' + (rows.length - 1) + ' earlier messages') : '';
+      if (this.wnFoldMore.hidden !== !folded) this.wnFoldMore.hidden = !folded;
+      if (this.wnFoldMore.textContent !== more) this.wnFoldMore.textContent = more;
+      var foldable = done && rows.length > 1 && !folded && !composing;
+      if (this.wnFoldBtn.hidden !== !foldable) this.wnFoldBtn.hidden = !foldable;
       var before = this.wnList.wnHtml;
       kit.setHtml(this.wnList, rows.map(function (r) { return r.html; }).join(''));
       if (this.wnWrap.hidden !== (rows.length === 0)) this.wnWrap.hidden = rows.length === 0;

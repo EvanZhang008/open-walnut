@@ -107,6 +107,9 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 }
 .wn-jump[hidden] { display: none; }
 .wn-composer { margin-top: 8px; }
+.wn-reply[hidden] { display: none; }
+/* Where Walnut's composer sits while it is open here (the host lays it over this). */
+.wn-dock-slot { box-sizing: border-box; width: 100%; border-radius: 12px; }
 .wn-reply {
   display: block; box-sizing: border-box; width: 100%; padding: 7px 12px; text-align: left;
   border: 1px solid rgba(128,128,128,.4); border-radius: 12px; background: transparent;
@@ -234,6 +237,39 @@ walnut-check[data-read]:hover { opacity: 1; }
 .wn-choice-status { opacity: .75; }
 .wn-choice-status.wn-failed { opacity: 1; }
 walnut-choice[data-answered] { border-color: rgba(128,128,128,.18); }
+
+/* ── Finished items fold: an answered choice to one row, a done section's thread to its newest message ── */
+walnut-choice[data-folded] { padding: 0; }
+walnut-choice[data-folded] > :not(.wn-fold-row) { display: none !important; }
+.wn-fold-row[hidden], .wn-fold-btn[hidden], .wn-fold-more[hidden] { display: none; }
+/* One row: what does not fit ends in an ellipsis (opening the choice shows it all). */
+.wn-fold-row {
+  display: flex; align-items: baseline; gap: 10px; width: 100%; box-sizing: border-box; white-space: nowrap;
+  padding: 7px 10px; border: 0; border-radius: 12px; background: transparent; color: inherit; font: inherit;
+  text-align: left; cursor: pointer;
+}
+.wn-fold-row:hover, .wn-fold-row:focus-visible { background: rgba(128,128,128,.08); outline: none; }
+.wn-fold-caret { flex: none; opacity: .55; font-size: .85em; }
+.wn-fold-title { flex: 0 1 auto; min-width: 3em; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.wn-fold-pick {
+  flex: 0 1 auto; max-width: 40%; min-width: 2em; overflow: hidden; text-overflow: ellipsis;
+  padding: 0 8px; border-radius: 999px; font-size: .85em; font-weight: 600; line-height: 1.6;
+  background: rgba(21,128,61,.12); color: var(--wn-done, #15803d);
+}
+.wn-fold-sum { flex: 1 1 0; min-width: 4em; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
+.wn-fold-words { font-style: italic; }
+.wn-fold-when { flex: none; font-size: .82em; opacity: .6; }
+.wn-fold-btn {
+  padding: 0 6px; border: 0; background: transparent; color: inherit; font: inherit; font-size: .85em; font-weight: 400;
+  opacity: .6; cursor: pointer;
+}
+.wn-fold-btn:hover, .wn-fold-btn:focus-visible { opacity: 1; text-decoration: underline; outline: none; }
+.wn-fold-more {
+  display: block; margin: 2px 0 4px; padding: 2px 8px; border: 0; border-radius: 999px; background: rgba(128,128,128,.1);
+  color: inherit; font: inherit; font-size: .82em; opacity: .75; cursor: pointer;
+}
+.wn-fold-more:hover, .wn-fold-more:focus-visible { opacity: 1; outline: none; }
+walnut-thread[data-folded] .wn-msg:not(:last-child), walnut-thread[data-folded] .wn-composer { display: none; }
 /* An overview row linked to an answered choice no longer needs the user. */
 tr[data-choice][data-answered], li[data-choice][data-answered] { display: none; }
 

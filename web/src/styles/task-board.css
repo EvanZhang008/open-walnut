@@ -405,6 +405,32 @@
   background: var(--bg-primary, var(--bg));
 }
 
+/* Inline: laid over the frame's slot under the thread, scrolled with it. `clip`, not
+   `hidden`: a clipped box is no scroll container, so focusing a box half out of view
+   cannot scroll the body (and the frame with it) to reveal it. */
+.task-board-body.has-inline-dock {
+  overflow: clip;
+}
+
+.task-board-dock.is-inline {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  padding: 6px 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Until the frame says where the slot is: in the tree (so focus lands), not on screen. */
+.task-board-dock[data-placement="waiting"] {
+  top: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .task-board-dock-head {
   display: flex;
   align-items: center;

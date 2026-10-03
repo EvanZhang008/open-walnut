@@ -1,14 +1,18 @@
 /**
  * The Board's reply box: Walnut's own chat composer (ChatInput, with its send
- * button and voice input), docked at the bottom of the Board pane under the
- * frame. A thread's "Reply…" field in the frame asks for it (`wn-board:compose`),
- * and so does a choice's "Answer in your own words…"; the frame cannot host the
- * composer itself (sandboxed, opaque origin, no microphone). The draft is per
- * board and thread (or choice), so it survives a re-rendered board, a closed dock
- * and a reload. Send posts to that thread, or saves the words as the choice's
- * answer (beside the pick, if the user made one) and closes the box.
+ * button and voice input). A thread's "Reply…" field in the frame asks for it
+ * (`wn-board:compose`), and so does a choice's "Answer in your own words…". The
+ * frame cannot host the composer itself (sandboxed, opaque origin, no
+ * microphone), so the frame keeps an empty slot where its field was and the host
+ * lays the composer over that slot, inline under the thread's messages, moving
+ * with it as the page scrolls (`anchor`, from `wn-board:slot`). A slot the frame
+ * does not report in time (or one that is hidden) puts the box at the bottom of
+ * the pane instead. The draft is per board and thread (or choice), so it
+ * survives a re-rendered board, a closed box and a reload. Send posts to that
+ * thread, or saves the words as the choice's answer (beside the pick, if the
+ * user made one) and closes the box.
  */
-import { useCallback, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type WheelEvent } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
 
@@ -24,6 +28,16 @@ export interface BoardReplyTarget {
   aboutTitle?: string;
 }
 
+/** Where the frame's slot is, in the frame's own viewport (the frame fills the Board body from its top left). */
+export interface BoardDockAnchor {
+  top: number;
+  left: number;
+  width: number;
+}
+
+/** How long the box waits for the frame's slot before it settles at the bottom of the pane. */
+export const DOCK_SLOT_WAIT_MS = 700;
+
 export interface BoardReplyDockProps {
   boardTaskId: string;
   target: BoardReplyTarget;
@@ -34,6 +48,12 @@ export interface BoardReplyDockProps {
   /** A choice answered in words: null when saved, else the reason. */
   onAnswer?: (choice: string, text: string) => Promise<string | null>;
   onClose: () => void;
+  /** The frame's slot: an object = inline there; null = no slot (the bottom of the pane); undefined = not reported yet. */
+  anchor?: BoardDockAnchor | null;
+  /** The box's height, so the frame's slot makes room for it. */
+  onHeight?: (height: number) => void;
+  /** A wheel over the box scrolls the board under it. */
+  onWheelScroll?: (dy: number) => void;
 }
 
 /** Where a thread's unsent reply lives (localStorage, ChatInput's own draft store). */
@@ -55,8 +75,38 @@ function SeededDraft({ draftKey, text, children }: { draftKey: string; text?: st
   return <>{children}</>;
 }
 
-export function BoardReplyDock({ boardTaskId, target, focusNonce, onSend, onAnswer, onClose }: BoardReplyDockProps) {
+/** A wheel the textarea can still use (it scrolls its own text) stays there; any other scrolls the board. */
+function textareaTakesWheel(e: WheelEvent<HTMLDivElement>): boolean {
+  const ta = (e.target as HTMLElement).closest?.('textarea');
+  if (!ta || ta.scrollHeight <= ta.clientHeight) return false;
+  return e.deltaY < 0 ? ta.scrollTop > 0 : ta.scrollTop + ta.clientHeight < ta.scrollHeight;
+}
+
+export function BoardReplyDock({
+  boardTaskId, target, focusNonce, onSend, onAnswer, onClose, anchor, onHeight, onWheelScroll,
+}: BoardReplyDockProps) {
   const [error, setError] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // No slot reported in time: the bottom of the pane, as before.
+  const [gaveUp, setGaveUp] = useState(false);
+  useEffect(() => {
+    setGaveUp(false);
+    if (anchor !== undefined) return;
+    const t = setTimeout(() => setGaveUp(true), DOCK_SLOT_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [anchor === undefined, target.thread, target.choice]); // eslint-disable-line react-hooks/exhaustive-deps
+  const inline = !!anchor;
+  const waiting = anchor === undefined && !gaveUp;
+
+  const heightCb = useRef(onHeight);
+  heightCb.current = onHeight;
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver(() => heightCb.current?.(Math.ceil(el.getBoundingClientRect().height)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const { thread, choice, title, aboutTitle } = target;
   const answering = !!choice && !!onAnswer;
   const name = title || choice || thread;
@@ -85,11 +135,15 @@ export function BoardReplyDock({ boardTaskId, target, focusNonce, onSend, onAnsw
   const draftKey = answering ? boardChoiceDraftKey(boardTaskId, choice!) : boardReplyDraftKey(boardTaskId, thread);
   return (
     <div
-      className="task-board-dock"
+      ref={rootRef}
+      className={`task-board-dock${inline || waiting ? ' is-inline' : ''}`}
       data-testid="board-reply-dock"
       data-thread={answering ? undefined : thread}
       data-choice={answering ? choice : undefined}
+      data-placement={inline ? 'inline' : waiting ? 'waiting' : 'docked'}
+      style={inline ? { top: anchor!.top, left: anchor!.left, width: anchor!.width } : undefined}
       onKeyDown={onKeyDown}
+      onWheel={inline && onWheelScroll ? (e) => { if (!textareaTakesWheel(e)) onWheelScroll(e.deltaY); } : undefined}
     >
       <div className="task-board-dock-head">
         <span className="task-board-dock-title" data-testid="board-reply-title">

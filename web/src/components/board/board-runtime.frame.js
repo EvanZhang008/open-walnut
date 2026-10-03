@@ -10,7 +10,9 @@
  * so everything goes through postMessage: the host posts `wn-board:data` (refs,
  * threads, marks, seen, projects, checks, choices, reminders,
  * section_seen, composing, composing_choice, note_drafts) and acks; the frame posts requests up. This part owns the state,
- * the bridge, links, scroll, the project statuses and the shared helpers, and
+ * the bridge, links, the reader's view (kept by the host across a new document: the
+ * scroll position, open <details>, a thread read mid-history, the filter, what the
+ * reader unfolded), the project statuses and the shared helpers, and
  * hands them to the other parts as `window.__wnBoardKit` (the last part takes it
  * off window before any author script runs).
  */
@@ -33,9 +35,10 @@
     // Notes the user typed and Walnut has not saved yet, kept by the host across a new document.
     note_drafts: {},
   };
-  // composing: the thread the host's docked composer replies in ('' = none);
-  // composingChoice: the choice it answers in the user's own words.
-  var flags = { hasData: false, filter: '', composing: '', composingChoice: '' };
+  // composing: the thread the host's composer replies in ('' = none);
+  // composingChoice: the choice it answers in the user's own words;
+  // dockHeight: how tall that composer is, so its slot here makes room for it.
+  var flags = { hasData: false, filter: '', composing: '', composingChoice: '', dockHeight: 0 };
   // Other host messages (the docked composer's sending / sent / send-failed), by type.
   var onHost = {};
   var live = new Set();
@@ -303,6 +306,7 @@
       if (f && !hide && !refresh && s.tagName === 'DETAILS') s.open = true;
     });
     renderAll();
+    if (!refresh) reportView();
   }
 
   // Page-level passes (board-sections.frame.js: the "updated" dots) that run on
@@ -327,6 +331,192 @@
     wnRender() {}
   }
 
+  // ── The reader's view: every leader write is a new document, and the host keeps
+  // what the reader had (the frame cannot: sessionStorage is blocked in its opaque
+  // origin), so the new one opens as the old one was left. Elements are named by
+  // a path from their nearest ancestor with an id, which survives an edit elsewhere. ──
+  var VIEW_MAX_ITEMS = 200;
+  var VIEW_NAME_MAX = 8192;
+  var view = { restored: false, restoring: false, userMoved: false, reportAfter: false, lastY: 0, kept: null, folds: {} };
+
+  function viewPath(el) {
+    var parts = [];
+    for (var n = el; n && n.nodeType === 1 && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+      if (n.id && document.getElementById(n.id) === n) { parts.unshift('#' + n.id); return parts; }
+      var i = 1;
+      for (var sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) if (sib.tagName === n.tagName) i++;
+      parts.unshift(n.tagName.toLowerCase() + ':' + i);
+    }
+    return parts;
+  }
+  function resolveViewPath(parts) {
+    if (!Array.isArray(parts) || !parts.length) return null;
+    var n = document.body;
+    for (var k = 0; k < parts.length && n; k++) {
+      var seg = String(parts[k]);
+      if (seg.charAt(0) === '#') { n = document.getElementById(seg.slice(1)); continue; }
+      var c = seg.lastIndexOf(':');
+      var tag = seg.slice(0, c).toUpperCase();
+      var want = parseInt(seg.slice(c + 1), 10);
+      var hit = null;
+      var i = 0;
+      for (var ch = n.firstElementChild; ch; ch = ch.nextElementSibling) if (ch.tagName === tag && ++i === want) { hit = ch; break; }
+      n = hit;
+    }
+    return n;
+  }
+  /** Pinned to the window (a sticky header, a fixed bar): it is at the top whatever is read under it. */
+  function pinned(el) {
+    for (var n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+      var pos = getComputedStyle(n).position;
+      if (pos === 'fixed' || pos === 'sticky') return true;
+    }
+    return false;
+  }
+  /** What is at the top of the window, under anything pinned there: the element (a Walnut part as a whole) and how far down it starts. */
+  function viewAnchor() {
+    var x = Math.max(1, Math.floor(window.innerWidth / 2));
+    for (var y = 4; y < window.innerHeight * 0.7; y += 24) {
+      var el = document.elementFromPoint(x, y);
+      if (!el || el === document.body || el === document.documentElement || pinned(el)) continue;
+      var host = el.closest ? el.closest(COMPONENTS) : null;
+      if (host) el = host;
+      var path = viewPath(el);
+      if (path.length) return { path: path, top: Math.round(el.getBoundingClientRect().top) };
+    }
+    return null;
+  }
+  function captureView() {
+    // Open and closed both: the reader may have closed one the author writes open.
+    var details = [];
+    var closed = [];
+    var all = document.querySelectorAll('details');
+    for (var i = 0; i < all.length && details.length + closed.length < VIEW_MAX_ITEMS; i++) (all[i].open ? details : closed).push(viewPath(all[i]));
+    var threads = {};
+    var n = 0;
+    threadEls().forEach(function (t) {
+      if (n >= VIEW_MAX_ITEMS || t.wnPinned !== false || !t.wnScroll) return;
+      threads[t.getAttribute('id')] = { top: Math.round(t.wnScroll.scrollTop) };
+      n++;
+    });
+    return {
+      v: 1, y: Math.round(window.scrollY), anchor: viewAnchor(), details: details, closed: closed, threads: threads,
+      filter: flags.filter, folds: view.folds,
+      // The page's own state, if it keeps one there: the host names the next frame with it (a new pane starts empty).
+      name: String(window.name || '').slice(0, VIEW_NAME_MAX),
+    };
+  }
+  var viewTimer = null;
+  /** Tell the host what the reader has now (at most every 300 ms). While a restore puts it back, once it is done. */
+  function reportView() {
+    if (!flags.hasData) return;
+    if (view.restoring) { view.reportAfter = true; return; }
+    if (viewTimer) return;
+    viewTimer = setTimeout(function () {
+      viewTimer = null;
+      if (view.restoring) view.reportAfter = true; else send({ t: 'wn-board:view', view: captureView() });
+    }, 300);
+  }
+  /** At once: a page's `scroll-behavior: smooth` would animate it, and every frame of that looks like a jump. */
+  function jumpTo(y) {
+    var root = document.documentElement;
+    var was = root.style.scrollBehavior;
+    root.style.scrollBehavior = 'auto';
+    window.scrollTo(0, y);
+    root.style.scrollBehavior = was;
+  }
+  function scrollToAnchor(v) {
+    var el = v.anchor ? resolveViewPath(v.anchor.path) : null;
+    if (el && el.getClientRects().length) jumpTo(el.getBoundingClientRect().top + window.scrollY - (Number(v.anchor.top) || 0));
+    else if (typeof v.y === 'number') jumpTo(v.y);
+    view.lastY = Math.round(window.scrollY);
+  }
+  /** The kept view onto a new document: once, after its first data render. A move by the reader ends the settling. */
+  function restoreView(v) {
+    if (view.restored) return;
+    view.restored = true;
+    if (!v || typeof v !== 'object') return;
+    view.restoring = true;
+    view.kept = v;
+    view.folds = obj(v.folds);
+    [[v.details, true], [v.closed, false]].forEach(function (pair) {
+      (Array.isArray(pair[0]) ? pair[0] : []).forEach(function (p) {
+        var d = resolveViewPath(p);
+        if (d && d.tagName === 'DETAILS' && d.open !== pair[1]) d.open = pair[1];
+      });
+    });
+    if (typeof v.filter === 'string' && v.filter && v.filter !== flags.filter) applyFilter(v.filter, true);
+    else renderAll();
+    var kept = obj(v.threads);
+    threadEls().forEach(function (t) {
+      var k = kept[t.getAttribute('id')];
+      if (k && typeof k.top === 'number' && t.wnKeepAt) t.wnKeepAt(k.top);
+    });
+    scrollToAnchor(v);
+    // Late layout (fonts, images, a thread finding its height) moves things: put the anchor back while it settles.
+    [120, 400, 900].forEach(function (ms, i, all) {
+      setTimeout(function () {
+        if (!view.userMoved) scrollToAnchor(v);
+        if (i < all.length - 1) return;
+        view.restoring = false;
+        view.kept = null;
+        // What changed meanwhile (the reader's scroll, a fold) still reaches the host.
+        if (view.reportAfter) { view.reportAfter = false; reportView(); }
+      }, ms);
+    });
+  }
+  ['wheel', 'touchstart', 'keydown', 'pointerdown'].forEach(function (type) {
+    window.addEventListener(type, function () { if (view.restoring) view.userMoved = true; }, { passive: true, capture: true });
+  });
+  // A scroll nobody asked for while it settles (the author's own "keep the scroll" script, which knows only
+  // the old y) is put back at once, so the page never jumps between the two.
+  window.addEventListener('scroll', function () {
+    if (!view.restoring || view.userMoved || !view.kept || Math.abs(Math.round(window.scrollY) - view.lastY) <= 2) return;
+    requestAnimationFrame(function () { if (view.restoring && !view.userMoved) scrollToAnchor(view.kept); });
+  }, { passive: true });
+  /** The reader unfolded (or folded) a finished item: kept like an open <details>. */
+  function setFold(id, open) {
+    if (!id) return;
+    if (open) view.folds[id] = true; else delete view.folds[id];
+    reportView();
+  }
+
+  // ── The composer's slot: Walnut's composer (voice included) cannot live in this
+  // frame (an opaque origin gets no microphone, and the composer is the app's own),
+  // so the host lays it over the frame exactly where the thread (or choice) keeps an
+  // empty slot of its height. While a slot is on the page, its place goes to the
+  // host every frame it moves (scrolling, the thread growing, a section opening). ──
+  var slotLoop = 0;
+  var slotLast = '';
+  function slotHtml() {
+    return '<div class="wn-dock-slot" data-wn-ui="" style="height:' + Math.max(48, Math.round(flags.dockHeight || 96)) + 'px"></div>';
+  }
+  function trackSlot() {
+    if (slotLoop) return;
+    var tick = function () {
+      var el = document.querySelector('.wn-dock-slot');
+      // Which box the slot is for, so the host never lays one thread's box over another's slot.
+      var target = { thread: flags.composing, choice: flags.composingChoice };
+      if (!el) {
+        slotLoop = 0;
+        if (slotLast !== 'none') { slotLast = 'none'; send({ t: 'wn-board:slot', rect: null, thread: target.thread, choice: target.choice }); }
+        return;
+      }
+      var r = el.getBoundingClientRect();
+      var shown = r.width > 0 && el.getClientRects().length > 0;
+      var key = target.thread + '|' + target.choice + '|' + (shown ? [Math.round(r.top), Math.round(r.left), Math.round(r.width)].join(',') : 'hidden');
+      if (key !== slotLast) {
+        slotLast = key;
+        send({
+          t: 'wn-board:slot', thread: target.thread, choice: target.choice,
+          rect: shown ? { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width) } : null,
+        });
+      }
+      slotLoop = requestAnimationFrame(tick);
+    };
+    slotLoop = requestAnimationFrame(tick);
+  }
+
   // `richText` (the message renderer) is added by board-markdown.frame.js, `Remind` by board-items.frame.js.
   window.__wnBoardKit = {
     state: state, flags: flags, live: live, Base: Base, DEFAULT_LABELS: DEFAULT_LABELS,
@@ -338,7 +528,8 @@
     countedStatuses: countedStatuses,
     choiceAnswered: choiceAnswered, cssId: cssId, watchers: watchers, onHost: onHost,
     reminderOf: reminderOf, reminderDue: reminderDue, reminderTargets: reminderTargets, dueTargets: dueTargets,
-    scheduleDue: scheduleDue,
+    scheduleDue: scheduleDue, reportView: reportView, setFold: setFold, folds: function () { return view.folds; },
+    slotHtml: slotHtml, trackSlot: trackSlot,
   };
 
   function obj(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
@@ -371,8 +562,15 @@
     } else if (d.t === 'wn-board:ack') {
       var cb = acks[d.reqId];
       if (cb) cb(d);
-    } else if (d.t === 'wn-board:scroll' && typeof d.y === 'number') {
-      window.scrollTo(0, d.y);
+    } else if (d.t === 'wn-board:view') {
+      if (flags.hasData) restoreView(d.view);
+    } else if (d.t === 'wn-board:dock-height' && typeof d.h === 'number' && d.h > 0) {
+      flags.dockHeight = Math.min(600, d.h);
+      var slots = document.querySelectorAll('.wn-dock-slot');
+      for (var si = 0; si < slots.length; si++) slots[si].style.height = Math.max(48, Math.round(flags.dockHeight)) + 'px';
+    } else if (d.t === 'wn-board:scroll-by' && typeof d.dy === 'number' && Number.isFinite(d.dy)) {
+      // A wheel over the host's composer scrolls the page under it, as it would over the page.
+      window.scrollBy(0, Math.max(-2000, Math.min(2000, d.dy)));
     } else if (typeof d.t === 'string' && Object.prototype.hasOwnProperty.call(onHost, d.t)) {
       onHost[d.t](d);
     }
@@ -396,15 +594,18 @@
     if (/^https?:\/\//i.test(href)) send({ t: 'wn-board:open-link', href: href });
   });
 
-  // ── Scroll position, so a re-rendered board opens where the user was ──
-  var lastScroll = 0;
-  var scrollTimer = null;
-  function postScroll() { lastScroll = Date.now(); send({ t: 'wn-board:scroll', y: window.scrollY }); }
-  window.addEventListener('scroll', function () {
-    var since = Date.now() - lastScroll;
-    if (since >= 250) { postScroll(); return; }
-    if (!scrollTimer) scrollTimer = setTimeout(function () { scrollTimer = null; postScroll(); }, 250 - since);
-  }, { passive: true });
+  // ── The reader's view goes to the host as it changes (scrolling, a <details> opened or closed) ──
+  window.addEventListener('scroll', reportView, { passive: true });
+  // toggle does not bubble: capture. An opened <details> also brings its pinned threads to their newest message.
+  document.addEventListener('toggle', function (e) {
+    var d = e.target;
+    if (!d || d.tagName !== 'DETAILS') return;
+    if (d.open) {
+      var inside = d.querySelectorAll('walnut-thread');
+      for (var i = 0; i < inside.length; i++) if (inside[i].wnRepin) inside[i].wnRepin();
+    }
+    reportView();
+  }, true);
 
   // ── Recount the strip and the unread total when sections change ──
   var COMPONENTS = 'walnut-strip, walnut-unread, walnut-task, walnut-thread, walnut-mark, walnut-project, walnut-check, walnut-choice';

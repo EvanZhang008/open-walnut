@@ -449,7 +449,7 @@
   // ── <walnut-choice id options recommended? title? task?>: numbered options, or the user's
   // own words (the host's docked composer, as a thread's Reply… is); the answer goes to the leader ──
   class WalnutChoice extends kit.Base {
-    static get observedAttributes() { return ['title', 'options', 'recommended', 'task']; }
+    static get observedAttributes() { return ['title', 'options', 'recommended', 'task', 'summary']; }
     attributeChangedCallback(name, oldValue, value) {
       // The title moves to data-title so the browser does not tooltip the whole choice.
       if (name === 'title' && value !== null) {
@@ -481,9 +481,22 @@
       this.wnOwnBtn = this.wnOwn.firstChild;
       this.wnFoot = document.createElement('div');
       this.wnFoot.className = 'wn-choice-foot';
-      this.wnFoot.innerHTML = '<span class="wn-choice-status" aria-live="polite"></span>';
-      [this.wnHead, this.wnOpts, this.wnWords, this.wnOwn, this.wnFoot].forEach(function (el) { el.setAttribute('data-wn-ui', ''); });
+      this.wnFoot.innerHTML = '<span class="wn-choice-status" aria-live="polite"></span>'
+        + '<button type="button" class="wn-fold-btn" hidden>Fold</button>';
+      // Answered, the choice folds to one row (what was asked, what the user said, the
+      // leader's `summary` of the outcome); a click opens it, and the view keeps that.
+      this.wnFoldRow = document.createElement('button');
+      this.wnFoldRow.type = 'button';
+      this.wnFoldRow.className = 'wn-fold-row';
+      this.wnFoldRow.setAttribute('aria-expanded', 'false');
+      this.wnFoldRow.title = 'Answered. Click to open the whole choice.';
+      this.wnFoldRow.hidden = true;
+      [this.wnFoldRow, this.wnHead, this.wnOpts, this.wnWords, this.wnOwn, this.wnFoot].forEach(function (el) { el.setAttribute('data-wn-ui', ''); });
       this.insertBefore(this.wnHead, this.firstChild);
+      this.insertBefore(this.wnFoldRow, this.wnHead);
+      this.wnFoldBtn = this.wnFoot.querySelector('.wn-fold-btn');
+      this.wnFoldRow.addEventListener('click', function (e) { e.preventDefault(); self.wnFold(false); });
+      this.wnFoldBtn.addEventListener('click', function (e) { e.preventDefault(); self.wnFold(true); });
       this.appendChild(this.wnOpts);
       this.appendChild(this.wnWords);
       this.appendChild(this.wnOwn);
@@ -503,6 +516,12 @@
       // Only a trusted click or focus docks the composer (an author script cannot answer for the user).
       this.wnOwnBtn.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) self.wnCompose(); });
       this.wnOwnBtn.addEventListener('focus', function (e) { if (trusted(e)) self.wnCompose(); });
+    }
+    /** Fold (or open) an answered choice. The reader's choice outlives a rewritten board (core: setFold). */
+    wnFold(fold) {
+      this.wnKeepOpen = false;
+      kit.setFold('choice:' + this.wnId, !fold);
+      this.wnRender();
     }
     /** "Answer in your own words…": the host docks its composer for this choice (a click and its focus count once). */
     wnCompose() {
@@ -528,6 +547,8 @@
         self.wnSending = '';
         if (ack.ok) {
           state.choices[id] = ack.choice || { option: value, at: new Date().toISOString() };
+          // Answered just now, here: it stays open under the user's eyes until the board is rewritten.
+          self.wnKeepOpen = true;
           // Answering clears a due reminder on it (the server does the same in that write).
           if (kit.reminderDue(kit.reminderOf(id))) delete state.reminders[id];
           var delivered = ack.delivery && (ack.delivery.state === 'queued' || ack.delivery.state === 'deferred');
@@ -576,12 +597,16 @@
           + '</div><div class="wn-text">' + kit.richText(words) + '</div>'
         : '');
       if (this.wnWords.hidden !== !words) this.wnWords.hidden = !words;
+      // Answering here: the field gives its place to the slot Walnut's composer sits on.
       var composing = !!id && kit.flags.composingChoice === id;
-      var ownText = composing ? 'Answering in the box below' : words ? 'Change your words…' : 'Answer in your own words…';
+      var ownText = words ? 'Change your words…' : 'Answer in your own words…';
       if (this.wnOwnBtn.textContent !== ownText) this.wnOwnBtn.textContent = ownText;
+      if (this.wnOwnBtn.hidden !== composing) this.wnOwnBtn.hidden = composing;
       this.wnOwnBtn.setAttribute('aria-pressed', composing ? 'true' : 'false');
-      this.wnOwnBtn.classList.toggle('wn-on', composing);
       this.wnOwnBtn.disabled = !kit.flags.hasData;
+      var slot = this.wnOwn.querySelector('.wn-dock-slot');
+      if (composing && !slot) { this.wnOwn.insertAdjacentHTML('beforeend', kit.slotHtml()); kit.trackSlot(); }
+      if (!composing && slot) slot.remove();
 
       // An answer the options no longer list still says what it was.
       var listed = options.filter(function (o) { return o.key === chosen; })[0];
@@ -595,6 +620,23 @@
       // linked to it (an overview row drops out by CSS).
       var answered = !!chosen || !!words;
       if (this.hasAttribute('data-answered') !== answered) this.toggleAttribute('data-answered', answered);
+      var folded = answered && !this.wnKeepOpen && !this.wnSending && !composing && !kit.folds()['choice:' + id];
+      if (this.hasAttribute('data-folded') !== folded) this.toggleAttribute('data-folded', folded);
+      if (this.wnFoldRow.hidden !== !folded) this.wnFoldRow.hidden = !folded;
+      if (folded) {
+        var summary = (this.getAttribute('summary') || '').trim();
+        var pick = chosen ? (listed ? listed.label : answer.label || chosen) : '';
+        var said = words.replace(/\s+/g, ' ').trim();
+        var at = answer.text_at && (!answer.at || answer.text_at > answer.at) ? answer.text_at : answer.at;
+        kit.setHtml(this.wnFoldRow, '<span class="wn-fold-caret" aria-hidden="true">\u25b8</span>'
+          + '<span class="wn-fold-title">' + esc(title || id) + '</span>'
+          + (pick ? '<span class="wn-fold-pick">' + esc(pick) + '</span>' : '')
+          + (summary ? '<span class="wn-fold-sum">' + esc(summary) + '</span>'
+            : said ? '<span class="wn-fold-sum wn-fold-words">"' + esc(said.length > 140 ? said.slice(0, 139) + '\u2026' : said) + '"</span>' : '')
+          + (at ? '<span class="wn-fold-when">' + esc(kit.when(at)) + '</span>' : ''));
+      }
+      var foldable = answered && !folded && !composing && !this.wnSending;
+      if (this.wnFoldBtn.hidden !== !foldable) this.wnFoldBtn.hidden = !foldable;
       var linked = id ? document.querySelectorAll('[data-choice="' + cssId(id) + '"]') : [];
       for (var i = 0; i < linked.length; i++) {
         if (linked[i].hasAttribute('data-answered') !== answered) linked[i].toggleAttribute('data-answered', answered);
@@ -611,6 +653,7 @@
     for (var i = 0; i < all.length; i++) {
       all[i].wnStatus = delivered ? 'Sent to the leader' : 'Saved. The leader sees it on the board.';
       all[i].wnFailed = false;
+      all[i].wnKeepOpen = true;
     }
     kit.renderAll();
   };

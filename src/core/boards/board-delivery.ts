@@ -80,7 +80,8 @@ export async function buildChoicePrompt(html: string, choiceId: string, choice: 
     head = `On your Board the user answered${what} ${where} in their own words, picking no option:\n\n${quote(words)}\n\n`;
   }
   return head
-    + 'Act on that answer now, then update that section with board_edit (and its project with board_project_set if the status changed). '
+    + 'Act on that answer now, then update that section with board_edit (and its project with board_project_set if the status changed); '
+    + 'give the choice a summary="..." attribute, one line on what came of it: the user sees the answered choice folded to that line. '
     + `If you need to tell the user something about it, post in that section's thread with ${op('board_post', { thread: '...', text: '...' })}; `
     + `board_get shows every answer. ${NOT_AN_ORDER}`;
 }

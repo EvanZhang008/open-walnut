@@ -44,7 +44,8 @@ import {
 import {
   boardBarTitle, boardOwnerId, projectTaskIds, taskLineage,
 } from './board-items-model';
-import { BoardReplyDock, type BoardReplyTarget } from './BoardReplyDock';
+import { BoardReplyDock, type BoardDockAnchor, type BoardReplyTarget } from './BoardReplyDock';
+import { boardView, keepBoardView } from './board-view-memory';
 import { useBoardItemSaves } from './useBoardItemSaves';
 import { boardErrorMessage, boardPath, useTaskBoard } from './useTaskBoard';
 import '@/styles/task-board.css';
@@ -102,14 +103,18 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const barTitle = boardBarTitle(ownerId, taskId, ownerTitle);
 
   const [seen, setSeen] = useState<BoardSeen>(() => readSeen(ownerId));
-  const scrollY = useRef<number | null>(null);
   // Section hashes the frame reported seen, until the server has them (else a reload would say "never seen").
   const pendingSeen = useRef<Record<string, BoardSectionSeen>>({});
-  // The docked composer: which thread it replies in (the frame's "Reply…" asks for it).
+  // The reply composer: which thread (or choice) it answers (the frame's "Reply…" asks for it).
   const [reply, setReply] = useState<{ target: BoardReplyTarget; nonce: number } | null>(null);
+  // Where the frame keeps the box's slot (`wn-board:slot`), for the box it was reported for.
+  const [slot, setSlot] = useState<{ key: string; rect: BoardDockAnchor | null } | null>(null);
+  const replyKey = reply ? `${reply.target.thread}|${reply.target.choice ?? ''}` : '';
+  const dockAnchor = slot && slot.key === replyKey ? slot.rect : undefined;
+  // The box's height, for a new document's slot (each leader write is one).
+  const dockHeight = useRef(0);
   useEffect(() => {
     setSeen(readSeen(ownerId));
-    scrollY.current = null;
     pendingSeen.current = {};
     setReply(null);
   }, [ownerId]);
@@ -137,6 +142,9 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const srcDoc = useMemo(() => (html === null ? null : wrapBoardHtml(html, RUNTIME_SRC, BOARD_RUNTIME_CSS, nonce)), [html, nonce]);
   // A new document is not ready until it says so (its listener does not exist yet).
   useLayoutEffect(() => { frameReady.current = false; }, [srcDoc]);
+  // The frame's window.name from the last pane (board-view-memory.ts), set once: a changed name attribute renames the frame.
+  const frameName = useRef<string | null>(null);
+  if (frameName.current === null && srcDoc !== null) frameName.current = boardView(ownerId)?.name ?? '';
 
   const toFrame = useCallback((msg: FrameMsg) => {
     frameRef.current?.contentWindow?.postMessage(msg, '*');
@@ -268,8 +276,11 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     switch (d.t) {
       case 'wn-board:ready':
         frameReady.current = true;
+        // Before the data: the slot is drawn at the box's height from its first render.
+        if (dockHeight.current) toFrame({ t: 'wn-board:dock-height', h: dockHeight.current });
         postData();
-        if (scrollY.current !== null) toFrame({ t: 'wn-board:scroll', y: scrollY.current });
+        // The reader's view of the last document (board-view-memory.ts), restored after this first render.
+        toFrame({ t: 'wn-board:view', view: boardView(ownerRef.current) });
         return;
       case 'wn-board:open-task':
         if (str('id')) openTask(str('id'));
@@ -312,9 +323,18 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         if (href) window.open(href, '_blank', 'noopener,noreferrer');
         return;
       }
-      case 'wn-board:scroll':
-        if (typeof d.y === 'number' && Number.isFinite(d.y)) scrollY.current = d.y;
+      case 'wn-board:view':
+        keepBoardView(ownerRef.current, d.view);
         return;
+      case 'wn-board:slot': {
+        const r = d.rect as Record<string, unknown> | null;
+        const n = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+        const rect = r && typeof r === 'object' && n(r.top) && n(r.left) && n(r.width) && (r.width as number) > 0
+          ? { top: r.top as number, left: r.left as number, width: r.width as number }
+          : null;
+        setSlot({ key: `${str('thread')}|${str('choice')}`, rect });
+        return;
+      }
       case 'wn-board:compose':
         if (str('thread')) openReply(str('thread'), str('title'), str('task'));
         else if (str('choice')) openReply('', str('title'), str('task'), str('choice'));
@@ -379,13 +399,14 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
           <button type="button" className="btn btn-sm" onClick={reload}>Retry</button>
         </div>
       )}
-      <div className="task-board-body">
+      <div className={`task-board-body${dockAnchor ? ' has-inline-dock' : ''}`}>
         {srcDoc !== null ? (
           <iframe
             ref={frameRef}
             className="task-board-frame"
             title="Board"
             sandbox="allow-scripts"
+            name={frameName.current || undefined}
             srcDoc={srcDoc}
           />
         ) : payload && !board ? (
@@ -394,17 +415,21 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         ) : loading ? (
           <div className="task-board-loading">Loading the board…</div>
         ) : null}
+        {/* Inside the body: inline over the frame's slot, or (no slot) a bar under the frame. */}
+        {reply && board && (
+          <BoardReplyDock
+            boardTaskId={ownerId}
+            target={reply.target}
+            focusNonce={reply.nonce}
+            onSend={sendFromDock}
+            onAnswer={saveChoiceText}
+            onClose={() => setReply(null)}
+            anchor={dockAnchor}
+            onHeight={(h) => { dockHeight.current = h; toFrame({ t: 'wn-board:dock-height', h }); }}
+            onWheelScroll={(dy) => toFrame({ t: 'wn-board:scroll-by', dy })}
+          />
+        )}
       </div>
-      {reply && board && (
-        <BoardReplyDock
-          boardTaskId={ownerId}
-          target={reply.target}
-          focusNonce={reply.nonce}
-          onSend={sendFromDock}
-          onAnswer={saveChoiceText}
-          onClose={() => setReply(null)}
-        />
-      )}
     </div>
   );
 }
