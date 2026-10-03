@@ -59,6 +59,7 @@ import {
   type MissingDependencyView,
 } from './PluginDependencyRows';
 import { PluginAppControls } from '../PluginAppControls';
+import { PluginMcpControls } from '../PluginMcpControls';
 import { BUNDLED_AVAILABLE_TITLE, runBundledAction } from './plugin-bundled-actions';
 import { PluginConnectionPanel, CONNECTION_BADGE, connectedHelp, type ConnectionReport } from '../PluginConnectionPanel';
 import { BuildPluginCard } from '../BuildPluginCard';
@@ -967,6 +968,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
         )}
         {/* The plugin's app entries live HERE, on the plugin itself. */}
         <PluginAppControls pluginId={row.id} />
+        {/* The MCP servers it runs: state, the reason it failed, Start / Restart. */}
+        {isOn && <PluginMcpControls pluginId={row.id} />}
         {/* The account link, always visible while the plugin is on: whether the credential
             is alive is the first thing to check when sync looks off. A base plugin (mail)
             has no report of its own; its providers each get an account row. */}

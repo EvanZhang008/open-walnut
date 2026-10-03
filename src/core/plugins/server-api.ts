@@ -39,6 +39,7 @@ import { getConfig, updatePluginConfig } from '../config-manager.js'
 import { getVersion } from '../version.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { createPluginMacos } from './plugin-macos.js'
+import { createPluginMcp } from './plugin-mcp.js'
 import { getDb } from '../task-db.js'
 import type { AgentDefinition, Task, TaskPhase, TaskPriority } from '../types.js'
 import type { SlimTask } from '../task-manager.js'
@@ -721,6 +722,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     },
 
     macos: createPluginMacos({ pluginId, own, assertLive }),
+
+    mcp: createPluginMcp({ pluginId, own, assertLive }),
 
     sessionImports: {
       tag: EXTERNAL_SESSION_IMPORT_TAG,

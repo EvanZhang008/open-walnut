@@ -164,6 +164,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.tasks` | Read, query, create, update, complete, and delete tasks; file, tag, pin and date tasks into a project or a folder in batches; list, create and delete folders; list and ensure pin groups. |
 | `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (over ssh for a remote host). |
 | `walnut.macos` | Read a file macOS keeps behind Full Disk Access through Walnut's one grant for it, after saying why. Mac only. |
+| `walnut.mcp` | Run a stdio MCP server Walnut keeps alive for you, call any registered server's tools, and choose what Walnut sessions may call on it. |
 | `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, and a way to keep its lifecycle on tasks you file elsewhere. |
 | `walnut.tags` | Say how your plugin's tags show on tasks: a tag or a `<namespace>:*` can default to hidden (searchable and filterable still, just no pill). |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
@@ -205,6 +206,37 @@ A pin group is one of the user's custom tiers beside Focus, Satellite, Backlog a
 Some files on a Mac sit behind Full Disk Access (`~/Library/DoNotDisturb/DB/` is one). Reading them with `fs.readFile` makes macOS judge the program running the server, which on many installs is a bare `node`, so the person would have to grant `node` a second Full Disk Access row next to Walnut's. Read them through `walnut.macos` instead, and Walnut's one grant covers your plugin too.
 
 First say why, for as long as your feature needs it: `walnut.macos.useFullDiskAccess({ reason, probe })`. `reason` finishes the sentence "Lets Walnut …" in Settings, macOS Access, Full Disk Access, so that row names every use of the grant; `probe` is one absolute path you read, which lets the row check the grant. Dispose the returned handle when the feature is switched off. Then `walnut.macos.readProtectedFile(path, { maxBytes })` behaves like `fs.readFile(path, 'utf8')`: a refused read rejects with code `EPERM`, a missing file with `ENOENT`, a file over `maxBytes` (default 1 MB, at most 16 MB) with `EFBIG`, and a read with no live declaration with `EACCES`. Off macOS, on a replica, and on a test server with a temporary data dir it rejects with `ENOTSUP`. `walnut.macos.fullDiskAccessTarget()` names what the person adds in System Settings (usually `/Applications/Walnut.app`), for the words of your own guidance. Full Disk Access never shows a dialog, so a refused read is a state to explain, not an error to retry.
+
+#### MCP servers
+
+A plugin that talks to a service through an MCP server registers the server once and calls it by name. Walnut starts the process on the first call (never at registration), shares one start between concurrent first calls, keeps it alive between calls, closes it after `idleCloseMs` without use (default 15 minutes, `0` never), and starts it again after a crash. A registration belongs to your plugin, so disabling, reloading or removing the plugin closes the process.
+
+The process gets an allowlisted environment (`HOME`, `PATH`, `USER`, `SHELL`, `TMPDIR`, locale, proxy and CA variables), never the server's own: pass anything else it needs in `env`. A replica never starts a server; check `walnut.replica` before you register.
+
+```ts compile=mcp
+import type { Disposable, WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export function useDocsServer(walnut: WalnutServerApi): Disposable {
+  return walnut.mcp.register({
+    name: 'acme-docs',
+    title: 'Acme Docs',
+    command: '/usr/local/bin/acme-docs-mcp',
+    args: ['--stdio'],
+    sessions: 'read-only',
+  })
+}
+
+export async function searchDocs(walnut: WalnutServerApi, query: string): Promise<unknown> {
+  const result = await walnut.mcp.client('acme-docs').call('search', { query }, { timeoutMs: 30_000 })
+  const text = result.content.find((part) => part.type === 'text')
+  if (result.isError) throw new Error(`search failed: ${String(text?.text ?? '')}`)
+  return JSON.parse(String(text?.text ?? 'null'))
+}
+```
+
+`call` hands back the server's answer as sent (`content`, `structuredContent`, `isError`), and throws an error with `failure` (`unavailable`, `timeout`, `closed`, `aborted`, `refused`) and `stage`. The stage is what matters before you retry a write: `before-call` means nothing reached the tool, `after-call` (a timeout, the process dying mid-call) means the tool may have run. `tools()` lists the server's tools with `readOnly` and `destructive` taken from its annotations; `status()` and `onStatus()` report `idle`, `starting`, `ready` or `failed` with the reason. Settings shows the same state under your plugin, with Start and Restart.
+
+`sessions` decides what Walnut sessions may call through `walnut mcp <server> tools call` and the `mcp_read` / `mcp_call` ops. `read-only` (the default) exposes only the tools the server marks read-only, so a write your plugin keeps behind the user's approval (posting a message) stays behind it. `all` also lets sessions on this Mac call the other tools. `none` keeps the server for your plugin alone.
 
 #### Outside sessions
 

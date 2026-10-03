@@ -29,6 +29,9 @@ import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, Gateway
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs } from './tool-args-source.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
+import {
+  MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
+} from './mcp-cli-args.js'
 
 // Catalog/detail rendering is SHARED with the hub CLI (src/commands/tools.ts)
 // so the two faces can never disagree about what an op's arguments are.
@@ -199,6 +202,7 @@ const HELP_ROOT = `walnut — the Walnut CLI
 USAGE
   walnut guide                              print the full Walnut manual (recipes + safety rules)
   walnut tools list|help|call ...           call Walnut operations (see \`walnut tools --help\`)
+  walnut mcp list | <server> tools ...      MCP servers Walnut runs (see \`walnut mcp --help\`)
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
   walnut --help | walnut tools --help
 
@@ -469,6 +473,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   // `walnut guide | head` closes the pipe early: EPIPE on stdout is the reader
   // saying "enough", not an error — without this Node prints an uncaught stack.
   process.stdout.on('error', (e: NodeJS.ErrnoException) => { if (e?.code === 'EPIPE') process.exit(0) })
+  if (argv[0] === 'mcp') return runMcpCli(argv.slice(1))
   const parsed = parseWalnutCliArgs(argv)
   if (parsed.kind === 'help') {
     await writeStdout(helpText(parsed.topic))
@@ -630,6 +635,94 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   } else {
     // tools.call — the op result verbatim, pretty JSON.
     await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
+  }
+  return 0
+}
+
+// ── walnut mcp — sugar over the mcp_* ops (mcp-cli-args.ts) ──
+
+async function runMcpCli(argv: string[]): Promise<number> {
+  const parsed = parseMcpCliArgs(argv)
+  if (parsed.kind === 'mcp.usage') {
+    if (!parsed.message) {
+      await writeStdout(MCP_CLI_HELP + '\n')
+      return 0
+    }
+    process.stderr.write(`walnut: ${parsed.message}\nrun \`walnut mcp --help\` for usage\n`)
+    return 2
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+  const endpoint = resolveWalnutCliEndpoint(process.env, probeSocket, uid)
+  if (!endpoint.ok) {
+    process.stderr.write(endpoint.message + '\n')
+    return 6
+  }
+  const { socketPath, sid } = endpoint
+  const callOp = async (name: string, args: Record<string, unknown>): Promise<GatewayResponse | number> => {
+    try {
+      return await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args } })
+    } catch (err) {
+      if (err instanceof WalnutCliTimeoutError) {
+        process.stderr.write('walnut: hub_timeout: no reply from the Walnut daemon within 30s\n')
+        return 5
+      }
+      process.stderr.write(`walnut: Walnut daemon socket unreachable at ${socketPath}: ${err instanceof Error ? err.message : String(err)}\n`)
+      return 6
+    }
+  }
+
+  let toolArgs: Record<string, unknown> = {}
+  if (parsed.kind === 'mcp.call') {
+    const source = classifyArgsSource(parsed.rawJson, process.stdin.isTTY === true)
+    if (source.kind === 'usage-error') {
+      process.stderr.write(`walnut: ${source.message}\n`)
+      return 2
+    }
+    let rawJson = source.kind === 'inline' ? source.json : ''
+    try {
+      if (source.kind === 'stdin') rawJson = await readStdin()
+      else if (source.kind === 'file') rawJson = fs.readFileSync(path.resolve(source.path), 'utf-8')
+    } catch (err) {
+      process.stderr.write(`walnut: cannot read arguments: ${err instanceof Error ? err.message : String(err)}\n`)
+      return 2
+    }
+    if (Buffer.byteLength(rawJson, 'utf-8') > GATEWAY_INLINE_ARGS_MAX_BYTES) {
+      process.stderr.write('walnut: MCP tool arguments are limited to one inline payload; pass less\n')
+      return 2
+    }
+    const args = parseToolArgs(rawJson)
+    if (!args.ok) {
+      process.stderr.write(`walnut: ${args.message}\n`)
+      return 2
+    }
+    toolArgs = args.args
+  }
+
+  let resp: GatewayResponse | number
+  if (parsed.kind === 'mcp.servers') resp = await callOp('mcp_servers', {})
+  else if (parsed.kind === 'mcp.call') {
+    const input = { server: parsed.server, tool: parsed.tool, arguments: toolArgs }
+    resp = await callOp('mcp_read', input)
+    // A tool that may change something: mcp_call decides whether this caller may run it.
+    if (typeof resp !== 'number' && !resp.ok && isNotReadOnlyRefusal(resp.error.message)) resp = await callOp('mcp_call', input)
+  } else resp = await callOp('mcp_tools', { server: parsed.server })
+  if (typeof resp === 'number') return resp
+  if (!resp.ok) {
+    process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
+    return errorToExitCode(resp.error.code)
+  }
+  if (parsed.kind === 'mcp.servers') await writeStdout(formatMcpServers(resp.result) + '\n')
+  else if (parsed.kind === 'mcp.tools') await writeStdout(formatMcpTools(resp.result) + '\n')
+  else if (parsed.kind === 'mcp.help') {
+    const help = formatMcpToolHelp(resp.result, parsed.tool)
+    if (help === null) {
+      process.stderr.write(`walnut: ${parsed.server} has no tool named ${parsed.tool}; run \`walnut mcp ${parsed.server} tools list\`\n`)
+      return 1
+    }
+    await writeStdout(help + '\n')
+  } else {
+    await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
+    if ((resp.result as { isError?: unknown } | undefined)?.isError === true) return 1
   }
   return 0
 }

@@ -26,6 +26,14 @@ budget or the run bookkeeping: the load-bearing parts are the at-least-once hand
 acknowledged only once the run's TASK exists) and the fact that the State.md check is SOFT and never
 retries a run that already sent letters.
 
+**MCP servers plugins run (`src/core/mcp-servers/`)**: Walnut as an MCP CLIENT (the opposite of
+`src/mcp/`, Walnut's own server). One process per registered server, started on first use, kept
+alive, closed when idle. Calls go through the SDK client's low-level `request`, never `callTool`:
+after a `listTools` the SDK throws on a structured result that breaks its outputSchema, which would
+turn a message that really posted into a failure. Sessions reach a server only through the
+`/api/mcp` exposure policy (read-only tools by default); see "MCP servers" in
+[plugin-development.md](../../docs/reference/plugin-development.md).
+
 ## Invariants you must not break (even without reading the skill)
 
 - **Daemon-uniform file access (THE one rule):** every read of a Claude Code session-data file

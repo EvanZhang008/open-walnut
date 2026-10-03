@@ -1207,6 +1207,106 @@ export interface MacosService {
   fullDiskAccessTarget(): Promise<string | null>
 }
 
+/** What a session, the CLI or the Personal AI may call on a server (see `McpServerDefinition`). */
+export type McpSessionAccess = 'read-only' | 'all' | 'none'
+
+/** A stdio MCP server Walnut runs for a plugin. */
+export interface McpServerDefinition {
+  /** Unique across Walnut: lowercase letters, digits, `.`, `_`, `-`. */
+  name: string
+  command: string
+  args?: string[]
+  /**
+   * Added to the environment the server starts with. That environment is an allowlist (HOME,
+   * PATH, USER, SHELL, TMPDIR, locale, proxies), never the Walnut server's own: pass anything
+   * else the server needs here.
+   */
+  env?: Record<string, string>
+  cwd?: string
+  /** Shown in Settings; defaults to the name. */
+  title?: string
+  /**
+   * What callers other than plugins may call (`walnut mcp <name> tools call`, the `mcp_read` and
+   * `mcp_call` ops). `read-only` (default): only tools the server marks `readOnlyHint`. `all`:
+   * every tool, from this Mac only. `none`: plugins alone.
+   */
+  sessions?: McpSessionAccess
+  /** Spawn + initialize budget. Default 60 s. */
+  startupTimeoutMs?: number
+  /** Default per-call deadline. Default 60 s. */
+  callTimeoutMs?: number
+  /** Close the process after this long without a call. Default 15 min; 0 keeps it open. */
+  idleCloseMs?: number
+}
+
+export interface McpServerStatus {
+  name: string
+  title: string
+  /** The plugin that registered it. */
+  owner: string
+  /** `idle`: no process (it starts on the next call). `failed`: the last start failed or it crashed. */
+  state: 'idle' | 'starting' | 'ready' | 'failed'
+  since: number
+  sessions: McpSessionAccess
+  toolCount?: number
+  serverInfo?: { name: string; version: string }
+  /** One plain sentence: why the last start failed, or why the process went away. */
+  lastError?: string
+}
+
+export interface McpToolInfo {
+  name: string
+  title?: string
+  description?: string
+  readOnly: boolean
+  destructive: boolean
+  inputSchema: Record<string, unknown>
+}
+
+/** A tools/call answer as the server sent it. Structured content is passed through unvalidated. */
+export interface McpCallResult {
+  content: Array<Record<string, unknown>>
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+}
+
+/**
+ * What `call` rejects with (`error.name === 'McpCallError'`). `stage: 'before-call'` means the
+ * request never reached the server, so it did not run; `after-call` (a timeout, the process died,
+ * cancelled) means it may have run, and a write must not be retried blindly.
+ */
+export interface McpCallFailure extends Error {
+  readonly failure: 'unavailable' | 'timeout' | 'closed' | 'aborted' | 'refused'
+  readonly stage: 'before-call' | 'after-call'
+}
+
+export interface McpClient {
+  readonly name: string
+  /** `meta` rides the request as `_meta` (a trace id, a tag your own test server reads). */
+  call(
+    tool: string,
+    args?: Record<string, unknown>,
+    options?: { timeoutMs?: number; signal?: AbortSignal; meta?: Record<string, unknown> },
+  ): Promise<McpCallResult>
+  tools(options?: { refresh?: boolean }): Promise<McpToolInfo[]>
+  /** Null while no server by this name is registered. */
+  status(): McpServerStatus | null
+}
+
+/**
+ * MCP servers Walnut runs as a client. Walnut starts a registered server on its first call, keeps
+ * the one process for every later call, starts it again after a crash, and closes it when idle.
+ * On a replica nothing starts: every call rejects `before-call`.
+ */
+export interface McpService {
+  /** Registered until disposed or the plugin stops. A name another plugin holds throws. */
+  register(definition: McpServerDefinition): Disposable
+  /** A handle by name; it resolves the server on every call, so it may be taken before one registers. */
+  client(name: string): McpClient
+  list(): McpServerStatus[]
+  onStatus(handler: (change: { name: string; status: McpServerStatus | null }) => void | Promise<void>): Disposable
+}
+
 export interface WalnutServerApi {
   readonly pluginId: string
   readonly pluginName: string
@@ -1225,6 +1325,7 @@ export interface WalnutServerApi {
   readonly tasks: TaskService
   readonly hosts: HostService
   readonly macos: MacosService
+  readonly mcp: McpService
   readonly sessionImports: SessionImportsService
   readonly tags: TagService
   readonly config: ConfigService

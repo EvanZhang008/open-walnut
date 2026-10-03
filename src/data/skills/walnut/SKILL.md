@@ -123,7 +123,15 @@ walnut recall "auth fixture"               # search tasks + memory
 walnut projects                            # projects with task counts
 walnut sessions                            # the user's other running work
 walnut wait 9f3a --timeout 600             # block until a task settles or an rq-… request resolves
+walnut mcp list                            # MCP servers Walnut runs for its plugins
+walnut mcp <server> tools list             # a server's tools (ro = read-only)
+walnut mcp <server> tools call <tool> '{json}'
 ```
+
+`walnut mcp` reaches the MCP servers plugins registered (a chat or docs service, say)
+without mounting them in your session. Outside callers get a server's read-only
+tools; a write a plugin keeps behind the user's approval goes through that
+plugin's own op.
 
 Add `--json` to ANY command for machine-readable output — parse that instead of
 scraping the human table. `add` returns the created task; `done`
@@ -203,6 +211,10 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `health_series` | One Apple Health metric over time (read, local-only, primary-only) | metric (heart_rate\|resting_hr\|walking_hr\|hrv_sdnn\|respiratory_rate\|spo2\|wrist_temp\|vo2max\|steps\|distance\|active_energy\|basal_energy\|exercise_min\|stand_min\|daylight_min\|workout\|mindful\|state_of_mind\|audio_env\|audio_headphone): Catalog metric name; from? (string): YYYY-MM-DD or ISO-8601 instant (default today); to? (string): YYYY-MM-DD (inclusive) or ISO-8601 instant (default today); bucket? (5m\|1h\|1d): Bucket width (default from the range) |
 | `day_review` | Review one day across Walnut (read, local-only, primary-only) | date? (string): YYYY-MM-DD (default today; yesterday before noon); sections? (string): Comma list, any of: tasks, time, apps, screentime, calendar, focus, sleep, activity (default all) |
 | `time_summary` | Time on tasks per day (read, primary-only) | days? (integer): How many days ending today (default 7, max 90) |
+| `mcp_servers` | List MCP servers (read) | (none) |
+| `mcp_tools` | List one MCP server's tools (read) | server (string): Server name, as `mcp_servers` lists it; refresh? (1): "1" asks the server again instead of the 10-minute cache |
+| `mcp_read` | Call a read-only MCP tool (read) | server (string): Server name, as `mcp_servers` lists it; tool (string): Tool name, as `mcp_tools` lists it; arguments? (object): The tool's arguments (its inputSchema); timeout_ms? (integer): Deadline in ms (default: the server's, usually 60000) |
+| `mcp_call` | Call any tool on an MCP server (write, local-only) | server (string): Server name, as `mcp_servers` lists it; tool (string): Tool name, as `mcp_tools` lists it; arguments? (object): The tool's arguments (its inputSchema); timeout_ms? (integer): Deadline in ms (default: the server's, usually 60000) |
 
 Use `walnut tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
 

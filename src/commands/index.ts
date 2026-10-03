@@ -248,12 +248,20 @@ export function registerCommands(program: Command): void {
       await runLogs(options as { follow?: boolean; json?: boolean; limit?: string; subsystem?: string });
     });
 
+  // Bare `mcp`: Walnut's own stdio MCP server (session configs launch exactly `open-walnut mcp`).
+  // `mcp list` / `mcp <server> tools …`: the MCP servers Walnut runs for its plugins, as a CLI.
   program
-    .command('mcp')
-    .description('Start a stdio MCP server exposing Walnut tools (for AI coding agents)')
+    .command('mcp [args...]')
+    .description('Start a stdio MCP server exposing Walnut tools; or `mcp list` / `mcp <server> tools list|help|call` for the MCP servers Walnut runs')
     .option('--readonly', 'Expose read-only tools only')
     .option('--api-url <url>', 'Walnut server base URL (default: OPEN_WALNUT_API_URL or http://127.0.0.1:3456)')
-    .action(async (options: Record<string, unknown>) => {
+    .allowUnknownOption(true)
+    .action(async (args: string[] | undefined, options: Record<string, unknown>) => {
+      if (args && args.length > 0) {
+        const { runMcpClient } = await import('./mcp-client.js');
+        await runMcpClient(args, { apiUrl: options.apiUrl as string | undefined });
+        return;
+      }
       const { runMcp } = await import('./mcp.js');
       await runMcp(options as { readonly?: boolean; apiUrl?: string });
     });

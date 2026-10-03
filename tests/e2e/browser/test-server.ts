@@ -3696,6 +3696,89 @@ export function activate(walnut) {
 }
 `)
   })()
+
+  // A plugin that runs two MCP servers (plugin-mcp-servers.spec.ts): `acme-tools` is the repo's
+  // fake stdio server (tests/fixtures/mcp/fake-stdio-server.mjs), `acme-tools-broken` names a
+  // command that does not exist. Both start only when something uses them.
+  const toolsDir = path.join(tmpBase, 'plugins', 'acme-tools')
+  await fs.mkdir(toolsDir, { recursive: true })
+  await fs.writeFile(path.join(toolsDir, 'manifest.json'), JSON.stringify({
+    id: 'acme-tools',
+    name: 'Acme Tools',
+    description: 'Runs the Acme tool servers',
+    version: '1.0.0',
+    apiVersion: 1,
+    engines: { walnut: '>=0.3.2' },
+    server: 'server.mjs',
+  }, null, 2))
+  const fakeMcp = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/mcp/fake-stdio-server.mjs')
+  await fs.writeFile(path.join(toolsDir, 'server.mjs'), `
+export function activate(walnut) {
+  walnut.mcp.register({
+    name: 'acme-tools',
+    title: 'Acme Tools',
+    command: ${JSON.stringify(process.execPath)},
+    args: [${JSON.stringify(fakeMcp)}],
+    env: { FAKE_MCP_LOG: ${JSON.stringify(path.join(tmpBase, 'acme-tools-mcp.jsonl'))} },
+  })
+  walnut.mcp.register({
+    name: 'acme-tools-broken',
+    title: 'Acme Tools (broken)',
+    command: ${JSON.stringify(path.join(tmpBase, 'no-such-mcp-binary'))},
+    sessions: 'none',
+  })
+}
+`)
+}
+
+// Task workspaces (task-workspaces.spec.ts, PW_WORKSPACE_FIXTURE=1): a git repo with
+// one commit, a plain folder for the fake multi-repo provider, and that provider
+// installed as a code-less plugin. HOME is tmpBase, so every worktree and every fake
+// workspace lands under it. Off by default: it adds a plugin other specs would count.
+if (process.env.PW_WORKSPACE_FIXTURE === '1') {
+  const { execFileSync } = await import('node:child_process')
+  const wsFixture = path.join(tmpBase, 'ws-fixture')
+  const repo = path.join(wsFixture, 'app')
+  if (!repo.startsWith(os.tmpdir())) throw new Error(`workspace fixture outside the temp dir: ${repo}`)
+  fsSync.mkdirSync(path.join(repo, 'pkg'), { recursive: true })
+  fsSync.writeFileSync(path.join(repo, 'README.md'), '# app\n')
+  fsSync.writeFileSync(path.join(repo, 'pkg', 'index.ts'), 'export const app = 1\n')
+  const gitEnv = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined }
+  for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'init']]) {
+    execFileSync('git', ['-c', 'user.name=Walnut Test', '-c', 'user.email=walnut-test@example.invalid', '-c', 'init.defaultBranch=main', ...args], { cwd: repo, env: gitEnv })
+  }
+  fsSync.mkdirSync(path.join(wsFixture, 'multi'), { recursive: true })
+  const providerDir = path.join(tmpBase, 'plugins', 'fake-multirepo')
+  fsSync.mkdirSync(providerDir, { recursive: true })
+  fsSync.copyFileSync(
+    path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/workspace-providers/fake-multirepo/provider.mjs'),
+    path.join(providerDir, 'provider.mjs'),
+  )
+  fsSync.writeFileSync(path.join(providerDir, 'manifest.json'), JSON.stringify({
+    id: 'fake-multirepo',
+    name: 'Fake Multi-repo',
+    description: 'Test provider: a folder of package repositories',
+    version: '1.0.0',
+    apiVersion: 1,
+    engines: { walnut: '>=0.3.2' },
+    capabilities: {
+      workspace: {
+        providers: [{
+          id: 'fake-multirepo',
+          displayName: 'Fake multi-repo',
+          priority: 50,
+          markers: ['fake-workspace.json'],
+          command: [process.execPath, '{script}'],
+          script: 'provider.mjs',
+          inputSchema: {
+            type: 'object',
+            properties: { packages: { type: 'array', title: 'Packages', description: 'Package repositories to clone', placeholder: 'alpha beta' } },
+            required: ['packages'],
+          },
+        }],
+      },
+    },
+  }, null, 2))
 }
 
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)

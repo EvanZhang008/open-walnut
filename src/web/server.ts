@@ -1629,6 +1629,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     sourceDir: (slug) => path.join(PLUGIN_STORES_DIR, slug),
     installedIds: () => getPluginLifecycleRecords(registry).filter((record) => !record.builtin).map((record) => record.id),
   }))
+  // MCP servers plugins registered (src/core/mcp-servers/): Settings, `walnut mcp`, the mcp_* ops.
+  {
+    const { createMcpServersRouter } = await import('./routes/mcp-servers.js')
+    app.use('/api/mcp', createMcpServersRouter())
+  }
   app.use('/api/plugin-runtime', createPluginRuntimeRouter({
     registry,
     linked: linkedCheckoutOps,
@@ -5451,6 +5456,12 @@ export async function stopServer(): Promise<void> {
   await pluginMutationTail.catch(() => undefined)
   await stopPluginSyncPolling()
   try { await disposeLoadedPlugins(registry) } catch { /* best-effort shutdown */ }
+  // A plugin's dispose closes its MCP servers; this catches one whose plugin never finished
+  // disposing, so no server process outlives Walnut.
+  try {
+    const { closeAllMcpServers } = await import('../core/mcp-servers/registry.js')
+    await closeAllMcpServers()
+  } catch { /* import failed (partial dist): nothing was started */ }
   disposeCoreServices() // after the plugins, so a deactivate may still use a core service
   removeCalendarEventForwarder()
   pluginSoftReload = async () => {}

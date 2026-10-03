@@ -16,6 +16,10 @@ import type {
   FullDiskAccessUse,
   HostRunInput,
   HostRunResult,
+  McpCallResult,
+  McpServerDefinition,
+  McpServerStatus,
+  McpToolInfo,
   TaskFilingInput,
   TaskFilingResult,
   WalnutServerApi,
@@ -74,6 +78,12 @@ export interface FakeWalnutOptions {
    *  read rejects with ENOTSUP, as on a host that cannot read protected files. Throw an error
    *  with `code: 'EPERM'` to stand in for a refused read. */
   readProtectedFile?: (path: string) => string | Promise<string>
+  /**
+   * MCP servers `mcp.client(name)` reaches, by name. Each answers tools/call (and tools/list when
+   * `tools` is given); pass a real client to run a test through a real MCP server. A name with no
+   * entry rejects every call `before-call`, as a server nobody registered does in Walnut.
+   */
+  mcpServers?: Record<string, FakeMcpServer>
   /** What `macos.fullDiskAccessTarget()` answers. Default null. */
   fullDiskAccessTarget?: string | null
   /** What `sessionImports.autoCompleteAfterDays()` answers. Default 7, the host's default. */
@@ -87,8 +97,22 @@ export interface FakeWalnutOptions {
   overrides?: Partial<WalnutServerApi>
 }
 
+export interface FakeMcpServer {
+  call(
+    tool: string,
+    args: Record<string, unknown>,
+    options?: { timeoutMs?: number; signal?: AbortSignal; meta?: Record<string, unknown> },
+  ): McpCallResult | Promise<McpCallResult>
+  tools?(): McpToolInfo[] | Promise<McpToolInfo[]>
+  status?(): McpServerStatus | null
+}
+
 export interface FakeWalnutResult {
   api: WalnutServerApi
+  /** Every server the plugin registered with `mcp.register` and has not disposed. */
+  mcpRegistrations: McpServerDefinition[]
+  /** Every `mcp.client(name).call`, in order. */
+  mcpCalls: Array<{ server: string; tool: string; args: Record<string, unknown> }>
   /** Live notices: a reminder re-fire replaces its key, `dismiss` removes it. */
   notices: PluginNotifyInput[]
   errors: PluginNotice[]
@@ -145,6 +169,12 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
   const fullDiskAccessUses: FullDiskAccessUse[] = []
   const protectedReads: string[] = []
+  const mcpRegistrations: McpServerDefinition[] = []
+  const mcpCalls: Array<{ server: string; tool: string; args: Record<string, unknown> }> = []
+  const mcpUnavailable = (name: string) => Object.assign(
+    new Error(`No MCP server named "${name}" is registered. Install or turn on the plugin that provides it.`),
+    { name: 'McpCallError', failure: 'unavailable', stage: 'before-call' },
+  )
   const importWatchers = new Set<() => void | Promise<void>>()
   const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
   const importLifecycleProjects: string[] = []
@@ -487,6 +517,47 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       },
       async fullDiskAccessTarget() { return options.fullDiskAccessTarget ?? null },
     },
+    mcp: {
+      register(definition) {
+        // The host's rule for ONE plugin: registering a name again replaces its own registration.
+        const previous = mcpRegistrations.findIndex((one) => one.name === definition.name)
+        if (previous >= 0) mcpRegistrations.splice(previous, 1)
+        const entry = structuredClone(definition)
+        mcpRegistrations.push(entry)
+        return disposable(() => {
+          const at = mcpRegistrations.indexOf(entry)
+          if (at >= 0) mcpRegistrations.splice(at, 1)
+        })
+      },
+      client(name) {
+        const server = () => options.mcpServers?.[name]
+        return {
+          name,
+          async call(tool, args = {}, callOptions) {
+            mcpCalls.push({ server: name, tool, args: structuredClone(args) })
+            const target = server()
+            if (!target) throw mcpUnavailable(name)
+            return await target.call(tool, args, callOptions)
+          },
+          async tools() {
+            const target = server()
+            if (!target) throw mcpUnavailable(name)
+            return target.tools ? await target.tools() : []
+          },
+          status() {
+            const target = server()
+            if (!target) return null
+            return target.status?.() ?? { name, title: name, owner: 'test', state: 'ready', since: 0, sessions: 'read-only' }
+          },
+        }
+      },
+      list() {
+        return Object.keys(options.mcpServers ?? {}).map((name) => (
+          options.mcpServers![name]!.status?.() ?? { name, title: name, owner: 'test', state: 'ready', since: 0, sessions: 'read-only' }
+        ))
+      },
+      onStatus: () => disposable(),
+    },
     sessionImports: {
       tag: FAKE_IMPORT_TAG,
       projectFor: fakeImportProject,
@@ -720,5 +791,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, mcpCalls }
 }

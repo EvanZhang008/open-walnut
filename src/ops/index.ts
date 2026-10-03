@@ -16,6 +16,7 @@ import './human-inbox.js'
 import './triggers.js'
 import './health.js'
 import './time.js'
+import './mcp.js'
 
 export {
   defineOp,

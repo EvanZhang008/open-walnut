@@ -65,6 +65,8 @@ const DAEMON_SOURCE_FILES = [
   // hub CLI). Bundled into the CLI above: an unchanged version means remote
   // hosts keep printing the old signature-less catalog.
   'src/ops/op-help.ts',
+  // `walnut mcp …` parsing and rendering, bundled into the CLI above.
+  'src/providers/mcp-cli-args.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',

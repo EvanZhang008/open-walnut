@@ -61,6 +61,7 @@ SOURCES=(
   src/providers/wn-cli.ts
   src/providers/tool-args-source.ts
   src/ops/op-help.ts
+  src/providers/mcp-cli-args.ts
   src/providers/acp-daemon.ts
   src/providers/agent-command-map.ts
   src/providers/acp-worker/worker.ts
