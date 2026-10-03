@@ -78,7 +78,11 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   are removed, no plugin syncs tasks (installed ones included), and there is no cloud bridge
   push and no heartbeat;
 - shared remote hosts stay off unless it is started with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1`,
-  because a remote daemon hands relayed work to whichever server it sees first.
+  because a remote daemon hands relayed work to whichever server it sees first;
+- search is keyword only: no isolated server (an ephemeral child, the test runner, any data
+  home in a temp dir) loads the embedding model, about 2.2 GB per worker lane plus a full
+  re-embed of the copied data (`src/core/search/semantic-default.ts`). Test semantic search
+  with `WALNUT_SEARCH_V2_SEMANTIC=1`.
 
 Plugins still load with the copied settings, so a test that sends mail or a chat message
 through one sends it for real.
@@ -140,6 +144,21 @@ hashed chunks — the hashed half can only be pinned against a real `startServer
 background agent session) inherits the positive nice and gets scheduler-starved under machine
 load — HTTP latency spikes that look like app bugs. The server logs an error at startup and
 exposes `processNice` in `GET /api/config` when this happens; fix = restart from a normal shell.
+
+**The deploy runs the server at app priority, the agents stay below it.** dev-prod.sh loads the
+server as a launchd job from a plist with `ProcessType` Interactive (base priority 31), because a
+bare `launchctl submit` job is launchd's Standard type, which macOS schedules in the utility band
+(priority 20) together with every agent build and test on the Mac. The same plist sets
+`WALNUT_DAEMON_QOS_CLAMP=1`, and only then does the server start its background children under
+`taskpolicy -c utility` (`src/lib/background-qos.ts`): the local daemon and so every agent
+session, the embedding model workers, the git backups and the history compaction keep the band
+they had. Still in the server's band: the model adapter's own `claude -p` turns (one call path
+carries the Personal AI chat and background titles alike, and nothing on the call says which),
+the warm search-agent CLI, and one-shot setup at boot. A server started any other way (a terminal, the Mac app, the submit fallback) clamps
+nothing, so its children inherit its band. `WALNUT_DEVPROD_PROCESS_TYPE=Standard` restores the
+plain submit. The job lives in one launchd domain (gui/<uid> from a GUI login, user/<uid> over
+ssh), and every look at it goes through `launchctl print|bootout <domain>/<label>`. Check with
+`ps -o pri= -p <pid>` (31 server, 20 daemon).
 
 **⚠️ NEVER wrap `npm run dev:prod` in a bare `launchctl submit`.** `launchctl submit` jobs are
 KeepAlive — the script exits, launchd re-runs it, forever. dev-prod.sh is a one-shot deploy, so
@@ -517,8 +536,21 @@ scripts/walnut-logs.sh slow [ms]         # deliveries slower than ms (default 30
 scripts/walnut-logs.sh daemon <sid>      # which daemon-d-*.log serves a sid
 scripts/walnut-logs.sh jsonl <sid>       # tail the session's CLI .jsonl stream
 scripts/walnut-logs.sh file <substr>     # ⭐ ONE timeline for ONE file: reads + writes + refusals + the editor's decisions
+scripts/walnut-logs.sh stalls [mins]     # ⭐ "the server froze": stall flight records (verdict, loop CPU vs hold, GC, paging) + kept CPU profiles
 scripts/walnut-logs.sh req <id> | task <id> | errors [n] | tail [n]
 ```
+
+**When the whole server froze, run `stalls` before anything else.** The stall flight recorder
+(`src/core/stall-recorder.ts`) keeps a CPU profile of every hold of 2 s or more and tags it with a
+verdict; `node scripts/stall-profile-summary.mjs` (newest profile, or a path) prints the functions
+the loop was in during the hold, with file:line. `cpu` means Walnut code held the loop, also on a
+busy machine: when the kept profile shows code on the thread for most of the hold (`profileHold`,
+with its top frames) or the thread burned a stall's worth of CPU in it, the verdict is `cpu` and
+`loadStretched: true` says the load made it longer. Fix that code first. Trust the profile's
+functions only for `cpu` or `gc`: profiles sample on a wall clock, so a `starved` thread (runnable,
+not run, and with little of its own to run: the loop thread ran a few ms of the hold) is sampled
+wherever it stopped. `starved`, or `paging`/`off-cpu` with a large `decompressions` or `swapins`
+count, is the machine (CPU load, memory) rather than a Walnut code path.
 
 **"Who overwrote my file?" starts with `file <path-substring>`.** Every read logs `file read`
 (status 200/304, the hash the client now holds, the token it quoted, `track`, size, ms), every

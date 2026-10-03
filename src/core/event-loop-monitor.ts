@@ -76,6 +76,39 @@ function wakeTimeChangedSince(cb: (changed: boolean) => void): void {
   })
 }
 
+/**
+ * A reported probe-late stall, as the stall flight recorder (stall-recorder.ts)
+ * sees it. Monotonic times are process.hrtime milliseconds.
+ */
+export interface StallReport {
+  lateByMs: number
+  /** The previous probe tick: the hold began after this. */
+  holdStartMono: number
+  /** When this probe was due: the hold covered this instant. */
+  dueMono: number
+  /** This (late) probe tick: the hold ended just before this. */
+  holdEndMono: number
+  wallNow: number
+  suspectSection: string | null
+  hold?: Record<string, unknown>
+}
+
+/**
+ * Optional observer of the probe (the stall flight recorder). tick() runs on
+ * every probe tick and must be O(1); hold() runs synchronously when a probe is
+ * late, BEFORE tick() replaces its previous sample, and returns fields for the
+ * report; reported() runs once the stall is confirmed (not a system sleep).
+ */
+export interface ProbeObserver {
+  tick(monoNow: number): void
+  hold(lateByMs: number, monoNow: number): Record<string, unknown> | undefined
+  reported(report: StallReport): void
+}
+let probeObserver: ProbeObserver | null = null
+export function setProbeObserver(next: ProbeObserver | null): void {
+  probeObserver = next
+}
+
 let histogram: ReturnType<typeof monitorEventLoopDelay> | null = null
 /** p99 loop delay of the last completed window (ms), for close-time diagnostics. */
 let lastWindowP99Ms: number | null = null
@@ -258,6 +291,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
     const monoNow = clocks.monoNow()
     const wallDelta = wallNow - lastProbeWallAt
     const monoDelta = monoNow - lastProbeMonoAt
+    const prevProbeMono = lastProbeMonoAt
     lastProbeWallAt = wallNow
     lastProbeMonoAt = monoNow
     const sleptMs = wallDelta - monoDelta
@@ -275,11 +309,30 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
       observe('eventloop.probe.late', Math.max(0, Math.round(lateBy)))
       if (lateBy >= STALL_THRESHOLD_MS) {
         const { section, detail, awaiting } = describeOpenSections()
+        // Hold context (thread CPU, faults, GC, memory) from the flight recorder,
+        // read now: the next tick replaces the sample it is measured against.
+        let hold: Record<string, unknown> | undefined
+        try { hold = probeObserver?.hold(lateBy, monoNow) } catch { hold = undefined }
         const payload = {
           lateByMs: Math.round(lateBy),
           suspectSection: section,
           openSections: detail,
           sectionAwaiting: awaiting,
+          ...(hold ? { hold } : {}),
+        }
+        const report = (): void => {
+          log.web.warn('event-loop blocked (probe late)', payload)
+          try {
+            probeObserver?.reported({
+              lateByMs: payload.lateByMs,
+              holdStartMono: prevProbeMono,
+              dueMono: prevProbeMono + PROBE_INTERVAL_MS,
+              holdEndMono: monoNow,
+              wallNow,
+              suspectSection: section,
+              hold,
+            })
+          } catch { /* diagnostics only */ }
         }
         // Same Apple Silicon caveat as the histogram: hrtime advances through
         // sleep there, so the wall-vs-mono branch above never triggers and a
@@ -291,14 +344,15 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
               log.web.info('system sleep detected via kern.waketime (probe lateness dropped)', { lateByMs: payload.lateByMs })
               clearSectionForSleep()
             } else {
-              log.web.warn('event-loop blocked (probe late)', payload)
+              report()
             }
           })
         } else {
-          log.web.warn('event-loop blocked (probe late)', payload)
+          report()
         }
       }
     }
+    try { probeObserver?.tick(monoNow) } catch { /* diagnostics only */ }
     probeTimer = setTimeout(probe, PROBE_INTERVAL_MS)
     if (probeTimer && typeof probeTimer === 'object' && 'unref' in probeTimer) probeTimer.unref()
   }

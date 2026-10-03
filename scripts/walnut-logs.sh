@@ -26,6 +26,7 @@
 #   scripts/walnut-logs.sh metrics [pfx] [mins] windowed latency histograms (http/llm/tool/search/eventloop; prefix filter, default 60min; live: GET /api/metrics)
 #   scripts/walnut-logs.sh ttft [sid] [mins]    ⭐ time-to-first-text per turn: turn wide-event firstThinking/Text/Tool + per-layer first-emit/arrival lines — attributes "text shows late" to model vs pipeline
 #   scripts/walnut-logs.sh file <substr> [mins] ⭐ ONE timeline for ONE file: reads + writes + refusals + the editor's own decisions, interleaved — "who overwrote my file?" starts here
+#   scripts/walnut-logs.sh stalls [mins]        ⭐ stall flight records (verdict, loop CPU vs hold, GC, paging) + the kept CPU profiles; summarize one with scripts/stall-profile-summary.mjs
 #   scripts/walnut-logs.sh loop [mins]          ⭐ event-loop health for the window (default 24h): probe-late count/sum/max, stall families, slow routes, slow health-monitor and plugin ticks, process RSS/CPU — the daily "is the server responsive?" check
 #   scripts/walnut-logs.sh errors [n]           last n ERR/WARN lines (default 40)
 #   scripts/walnut-logs.sh desktop [mins]       ⭐ Mac app page-process memory curve + recycles/crashes (default 24h) — "Mac app laggy?" starts here
@@ -597,6 +598,33 @@ PY
       ps -o pid=,rss=,pcpu=,etime=,nice= -p "$pid" | awk '{ printf "pid=%s rss=%.1fGB cpu=%s%% up=%s nice=%s\n", $1, $2/1048576, $3, $4, $5 }'
     else
       echo "no listener on :3456"
+    fi
+    ;;
+
+  stalls)
+    # stalls [mins]: the stall flight recorder's records (src/core/stall-recorder.ts):
+    # one line per kept stall with its verdict (cpu / starved / gc / paging /
+    # off-cpu), the loop thread's CPU against the hold, GC, faults, machine paging,
+    # and the kept CPU profile. Summarize a profile with
+    #   node scripts/stall-profile-summary.mjs <profile>   (no argument: the newest)
+    mins="${1:-1440}"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    logs=$(recent_logs); [[ -n "$logs" ]] || die "no JSON log found in $LOG_DIR"
+    echo "── stall flight records, last ${mins}min (since ${since}Z) ──"
+    # shellcheck disable=SC2086
+    cat $logs | grep -aF 'event-loop stall flight record' | jq -r --arg since "$since" '
+      select(.time >= $since) |
+      "\(.time) late=\(.lateByMs)ms \(.hold.verdict // "?")\(if .hold.loadStretched then "(load-stretched)" else "" end) code=\(.profileHold.codeShare // "-") cpu=\(.hold.mainCpuMs // "?")/\(.hold.windowMs // "?")ms sys=\(.hold.mainSysMs // "?") gc=\(.hold.gcMs // "?")ms majflt=\(.hold.majorFaults // "?") invcsw=\(.hold.invCtxSwitches // "?") load=\(.hold.load1 // "?") rss=\(.hold.rssMb // "?")MB heap=\(.hold.heapUsedMb // "?")MB swapins=\(.system.swapins // "?") decompress=\(.system.decompressions // "?") cmprs=\(.process.compressedMb // "-")MB \(.profile // .reason // "no profile")"'
+    # shellcheck disable=SC2086
+    cat $logs | grep -aF 'event-loop blocked (probe late)' | jq -rs --arg since "$since" '
+      map(select(.time >= $since and .hold != null)) |
+      if length == 0 then "holds >= 1s with context: none" else
+      "holds >= 1s with context: n=\(length) verdicts=\(map(.hold.verdict) | group_by(.) | map("\(.[0])=\(length)") | join(" "))" end'
+    pdir="$LOG_DIR/stall-profiles"
+    if [[ -d "$pdir" ]]; then
+      echo "── kept profiles in $pdir: $(ls "$pdir"/*.cpuprofile 2>/dev/null | wc -l | tr -d ' ') ──"
     fi
     ;;
 

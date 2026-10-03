@@ -528,6 +528,7 @@ function releaseSelfApiRoot(): void {
 let routineWakeHandle: import('../core/routines/wake-events.js').RoutineWakeHandle | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
+let unsubscribeMemoryPressure: (() => void) | null = null
 let sessionReaper: SessionReaper | null = null
 /** Primary box only: warms every configured host's daemon at startup. */
 let hostWarmup: import('../core/hosts/host-warmup.js').HostWarmup | null = null
@@ -1071,6 +1072,30 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Cheap libuv histogram + self-timer; safe to run in production.
   const { startEventLoopMonitor } = await import('../core/event-loop-monitor.js')
   startEventLoopMonitor()
+  // Stall flight recorder: hold context on long probe-late lines plus a rolling
+  // CPU profile kept only around a stall, so the next freeze names its culprit.
+  // Off in the test runner; WALNUT_STALL_RECORDER=0 is the kill switch.
+  try {
+    const { startStallRecorder } = await import('../core/stall-recorder.js')
+    await startStallRecorder()
+  } catch (err) {
+    log.web.warn('stall recorder failed to start', { error: err instanceof Error ? err.message : String(err) })
+  }
+  // Memory pressure: caches and background work give memory back before the
+  // machine swaps this process out (src/core/memory-pressure.ts; the embedding
+  // model and the changes prewarmer subscribe on their own).
+  try {
+    const mp = await import('../core/memory-pressure.js')
+    if (mp.startMemoryPressureMonitor()) {
+      const { setHistoryCacheShedding } = await import('../core/session-history.js')
+      unsubscribeMemoryPressure = mp.onMemoryPressureChange((shedding) => {
+        const trimmed = setHistoryCacheShedding(shedding)
+        if (shedding) log.web.info('memory pressure: parsed history cache trimmed', trimmed)
+      })
+    }
+  } catch (err) {
+    log.web.warn('memory pressure monitor failed to start', { error: err instanceof Error ? err.message : String(err) })
+  }
 
   // Ops guardrails: a niced server process (inherited from launching dev:prod
   // out of a niced shell, e.g. a background claude session) is starved first
@@ -2745,7 +2770,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
         setCompactionInProgress(true)
         await waitForSyncSettled() // a tick already in flight still moves main — let it drain first
-        const child = fork(workerPath, [], { stdio: 'ignore' })
+        // A history rewrite is minutes of git CPU nobody waits on: keep it in the
+        // utility band when this server was raised above it (background-qos.ts).
+        const { utilityQosForkExec } = await import('../lib/background-qos.js')
+        const child = fork(workerPath, [], { stdio: 'ignore', ...utilityQosForkExec(process.execArgv) })
         let reply: { ok: boolean; result?: { skipped?: boolean; before: number; after: number; error?: string }; error?: string } | null = null
         child.on('message', (msg) => { reply = msg as typeof reply })
         // 'error' without 'exit' (spawn failure) must not leave the tick
@@ -5434,6 +5462,16 @@ export async function stopServer(): Promise<void> {
     heartbeatHandle.stop()
     heartbeatHandle = null
   }
+  try {
+    const { stopStallRecorder } = await import('../core/stall-recorder.js')
+    await stopStallRecorder()
+  } catch { /* never started */ }
+  try {
+    unsubscribeMemoryPressure?.()
+    unsubscribeMemoryPressure = null
+    const { stopMemoryPressureMonitor } = await import('../core/memory-pressure.js')
+    stopMemoryPressureMonitor()
+  } catch { /* never started */ }
   if (unsubscribeHostRecovery) {
     unsubscribeHostRecovery()
     unsubscribeHostRecovery = null

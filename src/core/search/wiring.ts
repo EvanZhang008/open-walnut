@@ -29,13 +29,16 @@ import {
   type ScoredHit,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
-import { CLOUD_MODE, GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
+import { CLOUD_MODE, GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
+import { utilityQosForkExec } from '../../lib/background-qos.js';
 import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
 import { EventNames, type EventBus } from '../event-bus.js';
+import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
 import { listTasks } from '../task-manager.js';
 import { listSessions } from '../session-tracker.js';
 import { markdownToDoc, sessionToDoc, taskToDoc } from './serializers.js';
+import { semanticLaneDecision, type SemanticLaneDecision } from './semantic-default.js';
 import { iterateAllDocs, readSessionBody } from './build.js';
 
 /**
@@ -127,8 +130,24 @@ function resolveEmbedWorkerPath(): string | undefined {
   return embedWorkerCandidates(here, process.argv[1], process.cwd()).find((p) => fs.existsSync(p));
 }
 
+let loggedSemanticOff: SemanticLaneDecision['reason'] | null = null;
+
+/** Semantic lane on or off for this server (semantic-default.ts: off on isolated servers). */
+export function currentSemanticLaneDecision(): SemanticLaneDecision {
+  return semanticLaneDecision({ env: process.env, isEphemeral: IS_EPHEMERAL, walnutHome: WALNUT_HOME });
+}
+
 function buildEmbedderConfig(): EmbedderConfig | undefined {
-  if (process.env.WALNUT_SEARCH_V2_SEMANTIC === '0') return undefined;
+  const lane = currentSemanticLaneDecision();
+  if (!lane.on) {
+    if (lane.reason !== 'opt-out' && loggedSemanticOff !== lane.reason) {
+      loggedSemanticOff = lane.reason;
+      log.memory.info('search-v2: semantic lane off on an isolated server (keyword search only; WALNUT_SEARCH_V2_SEMANTIC=1 loads the model)', {
+        reason: lane.reason,
+      });
+    }
+    return undefined;
+  }
   const model = EMBED_MODELS[process.env.WALNUT_SEARCH_V2_EMBED_MODEL ?? DEFAULT_EMBED_MODEL];
   if (!model) return undefined;
   const workerPath = resolveEmbedWorkerPath();
@@ -139,7 +158,19 @@ function buildEmbedderConfig(): EmbedderConfig | undefined {
   // Model cache OUTSIDE node_modules: the transformers.js default cache dir
   // lives inside the package, so every `npm ci` silently discarded the 129MB
   // model and the next search re-downloaded it inside the web server.
-  return { ...model, workerPath, cacheDir: embedModelCacheDir() };
+  // WALNUT_EMBED_QUERY_IDLE_MS: how long the query worker (a full model copy)
+  // stays after the last query; 0 keeps it resident (embedder.ts).
+  const rawIdle = process.env.WALNUT_EMBED_QUERY_IDLE_MS;
+  const idle = rawIdle ? Number(rawIdle) : NaN;
+  // Model inference is background work: when the deploy raised this server to
+  // Interactive, its workers stay in the utility band like the agents
+  // (src/lib/background-qos.ts); otherwise they inherit the server's band.
+  const launch = utilityQosForkExec([]);
+  return {
+    ...model, workerPath, cacheDir: embedModelCacheDir(),
+    ...(Number.isFinite(idle) && idle >= 0 ? { queryIdleMs: idle } : {}),
+    ...(launch.execPath ? { workerLauncher: { execPath: launch.execPath, execArgv: launch.execArgv } } : {}),
+  };
 }
 
 /**
@@ -201,13 +232,14 @@ export interface SearchV2Hit extends ScoredHit {
  *  rescore (degrades to keyword order), plus raw doc text for snippets. */
 export async function searchV2Lane(
   query: string,
-  options: { kinds?: string[]; limit?: number; semanticDeadlineMs?: number } = {},
+  options: { kinds?: string[]; limit?: number; semanticDeadlineMs?: number; onSemantic?: (state: string) => void } = {},
 ): Promise<SearchV2Hit[]> {
   const index = getSearchV2Index();
   const hits = await index.searchSemantic(query, {
     kinds: options.kinds,
     limit: options.limit,
     semanticDeadlineMs: options.semanticDeadlineMs,
+    onSemantic: options.onSemantic,
   });
   return hits.map((hit) => {
     const doc = index.getDoc(hit.kind, hit.ref);
@@ -619,6 +651,9 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
     return total > 0 ? busy / total : 0;
   };
   const vecBatchPauseMs = (): number => {
+    // Memory pressure: the model is released (below) and the walk holds its
+    // place; look again in a minute instead of spinning on a suspended worker.
+    if (memoryPressureShedding()) return 60_000;
     // Extreme-only memory guard: macOS keeps freemem tiny by design (file
     // cache counts as used), so only genuine exhaustion should trip this.
     if (os.freemem() / os.totalmem() < 0.03) return 15_000;
@@ -680,6 +715,10 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
             vecTotal = 0;
             vecCursor = null; // next pass starts fresh (floor decided by the planner)
             vecPhase = 'light';
+            // The next pass is FILE_SWEEP_INTERVAL_MS away: give the passage
+            // worker's model copy back now rather than after its 5 min idle
+            // timer (passes run every ~10 min, so it used to stay half the time).
+            void index.releasePassageWorker().catch(() => { /* already gone */ });
             scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
             return;
           }
@@ -696,12 +735,32 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           vectorPass.passAborted();
           vecCursor = null;
           vecPhase = 'light';
+          void index.releasePassageWorker().catch(() => { /* already gone */ });
           scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
         }
       })();
     }, delayMs);
     vecTimer.unref?.();
   };
+
+  // Memory pressure: give the embedding model back (measured +2.2 GB of
+  // footprint per worker lane on the default model, the largest thing this
+  // server keeps; each lane is a child process, so a stop returns all of it).
+  // Search ranks by keyword, or by a cached query vector, until the kernel
+  // reads normal again for a while (memory-pressure.ts); the model reloads on
+  // the next query.
+  const unsubscribePressure = onMemoryPressureChange((shedding, level) => {
+    // Keyword only (an isolated server, or opted out): no model to give back.
+    if (stopped || !currentSemanticLaneDecision().on) return;
+    if (shedding) {
+      void index.suspendEmbedder().then(() => {
+        log.memory.warn('search-v2: embedding model released under memory pressure', { level });
+      }).catch(() => { /* suspend never throws; a dispose race is fine */ });
+    } else {
+      index.resumeEmbedder();
+      log.memory.info('search-v2: embedding model may load again (memory pressure cleared)');
+    }
+  });
 
   const backfillTimer = setTimeout(() => {
     void (async () => {
@@ -746,6 +805,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   return {
     async stop() {
       stopped = true;
+      unsubscribePressure();
       vectorPass.passAborted(); // a half-walked pass earns no floor
       clearTimeout(backfillTimer);
       if (vecTimer) clearTimeout(vecTimer);

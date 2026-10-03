@@ -45,6 +45,7 @@ import {
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { resolveSessionHostLaunch } from './session-host.js'
 import { classifySessionHostStart } from './session-host-core.js'
+import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -770,6 +771,10 @@ export class LocalDaemon {
     // the daemon can never become a carrier again (incident 2026-07-14).
     delete env.OPEN_WALNUT_EPHEMERAL
     if (env.NODE_ENV === 'test') delete env.NODE_ENV
+    // The clamp request describes THIS server's launch (an Interactive job). A
+    // server an agent starts inside a session was not raised, so it must not
+    // inherit the request through the daemon and the CLI.
+    delete env[QOS_CLAMP_ENV]
 
     // Preflight the ONE thing a daemon cannot recover from: the CLI it exists to
     // spawn. The daemon inherits this env verbatim, and its spawn preamble looks
@@ -833,7 +838,12 @@ export class LocalDaemon {
         detail: host.detail,
       })
     }
-    const [spawnCmd, spawnArgs] = host.available ? [host.argv[0]!, host.argv.slice(1)] : [cmd, args]
+    // Agent work stays in the utility QoS band when the deploy raised the server
+    // above it (src/lib/background-qos.ts, opt-in); the clamp execs the program,
+    // so pids are unchanged. Anywhere else the daemon inherits our band.
+    const [spawnCmd, spawnArgs] = host.available
+      ? withUtilityQosClamp(host.argv[0]!, host.argv.slice(1))
+      : withUtilityQosClamp(cmd, args)
     // stderr → daemon-stderr.log (append, rotated). The daemon died silently
     // ≥7 times over 2026-08-11..13 with stdio:'ignore' discarding the only
     // evidence a runtime-level crash (Bun OOM/native abort) ever leaves — the
@@ -898,7 +908,8 @@ export class LocalDaemon {
       this._sessionHostPid = null
       this._sessionHostApp = null
       const retryFd = this.openStderrLog()
-      const retry = spawn(cmd, args, {
+      const [retryCmd, retryArgs] = withUtilityQosClamp(cmd, args)
+      const retry = spawn(retryCmd, retryArgs, {
         detached: true,
         stdio: ['ignore', 'ignore', retryFd ?? 'ignore'],
         env,

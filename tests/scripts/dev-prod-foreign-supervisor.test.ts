@@ -26,6 +26,12 @@ const script = fs.readFileSync(SCRIPT, 'utf-8')
 const BLOCK_START = '# ── Foreign supervisor: is :$PORT served by THIS deploy\'s job?'
 const BLOCK_END = '# /api/config answers out of memory'
 
+function fn(name: string): string {
+  const m = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'm').exec(script)
+  expect(m, `function ${name} in dev-prod.sh`).not.toBeNull()
+  return m![0]
+}
+
 function block(): string {
   const a = script.indexOf(BLOCK_START)
   const b = script.indexOf(BLOCK_END, a)
@@ -44,14 +50,18 @@ function run(stub: Stub): { status: number | null; stdout: string; stderr: strin
     `use_launchd=${stub.useLaunchd ?? 1}`,
     `STUB_LISTENER='${stub.listener ?? ''}'`,
     `STUB_JOB='${stub.job ?? 'absent'}'`,
+    'LAUNCHD_DOMAIN=gui/501',
     'listener_pids() { if [[ -n "$STUB_LISTENER" ]]; then echo "$STUB_LISTENER"; fi; }',
-    // `launchctl list <label>` exits 113 for an unknown label.
+    fn('launchd_print_pid'),
+    // `launchctl print <domain>/<label>` exits 113 for a job that is not loaded
+    // there. Its pid is a top-level `\tpid = N` line; nested blocks also
+    // carry `= ` lines and must not be read as the job's.
     'launchctl() {',
-    '  if [[ "$1" == list ]]; then',
+    '  if [[ "$1" == print && "$2" == "gui/501/$LAUNCH_LABEL" ]]; then',
     '    if [[ "$STUB_JOB" == absent ]]; then return 113; fi',
-    '    printf \'{\\n\\t"Label" = "%s";\\n\' "$2"',
-    '    if [[ "$STUB_JOB" != nopid ]]; then printf \'\\t"PID" = %s;\\n\' "$STUB_JOB"; fi',
-    '    echo "};"',
+    '    printf \'gui/501/%s = {\\n\\tactive count = 1\\n\\ttype = Interactive\\n\' "$LAUNCH_LABEL"',
+    '    if [[ "$STUB_JOB" != nopid ]]; then printf \'\\tpid = %s\\n\' "$STUB_JOB"; fi',
+    '    printf \'\\tresource coalition = {\\n\\t\\tID = 99\\n\\t\\tpid = 1\\n\\t}\\n}\\n\'',
     '    return 0',
     '  fi',
     '  echo "UNEXPECTED launchctl $*"; return 1',
@@ -65,8 +75,14 @@ function run(stub: Stub): { status: number | null; stdout: string; stderr: strin
 
 describe('dev-prod.sh names its launchd job to the server', () => {
   it('passes WALNUT_LAUNCHD_LABEL in the submitted job environment', () => {
-    const submit = script.slice(script.indexOf('submit_launchd_job() {'), script.indexOf('# The job\'s live PID'))
-    expect(submit).toMatch(/WALNUT_LAUNCHD_LABEL="\$LAUNCH_LABEL" \\\n\s+"\$NODE_BIN" "\$1" web --port "\$PORT"/)
+    // One argv array (launchd_job_argv) feeds both the Interactive plist and the
+    // `launchctl submit` fallback, so the label rides along on either path.
+    const argv = script.slice(script.indexOf('launchd_job_argv() {'), script.indexOf('write_launchd_plist() {'))
+    expect(argv).toMatch(/WALNUT_LAUNCHD_LABEL="\$LAUNCH_LABEL"\n\s+"\$NODE_BIN" "\$1" web --port "\$PORT"\)/)
+    const submit = fn('submit_launchd_job')
+    expect(submit).toMatch(/launchd_job_argv "\$1"/)
+    expect(submit).toMatch(/-- "\$\{launchd_argv\[@\]\}"/)
+    expect(script.slice(script.indexOf('write_launchd_plist() {'), script.indexOf('bootstrap_interactive_job() {'))).toMatch(/for arg in "\$\{launchd_argv\[@\]\}"/)
   })
 })
 
@@ -79,9 +95,10 @@ describe('dev-prod.sh foreign-supervisor check', () => {
     expect(lkg).toBeGreaterThan(-1)
     expect(check).toBeGreaterThan(readinessFail)
     expect(check).toBeLessThan(lkg)
-    // It goes through the helper, so the first raw `launchctl remove` (which the
-    // portability ratchets order after the drain) stays where it is.
-    expect(block()).not.toMatch(/launchctl remove/)
+    // It asks the job's own domain and removes through the helper (bootout of
+    // that domain), never through the caller-domain legacy commands.
+    expect(block()).not.toMatch(/launchctl (remove|list)/)
+    expect(block()).toMatch(/launchctl print "\$LAUNCHD_DOMAIN\/\$LAUNCH_LABEL"/)
   })
 
   it('leaves a job alone when its own process is the listener', () => {

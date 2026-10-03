@@ -767,14 +767,18 @@ export async function search(
       cached = 'miss';
       count('search.result_cache', 1, { result: 'miss' });
     }
-    const run: SearchRun = { semanticTimedOut: false };
+    const run: SearchRun = { semanticIncomplete: false };
     const results = await searchInner(query, options, run);
     // Store the copy, hand out the fresh array (nothing else references it yet).
-    // Never a keyword-only fallback: its embedding is still being computed and
+    // Never an answer a lane gave without its semantic half (a timeout, or a
+    // cold model still loading): its embedding is still being computed and
     // lands in the embedder's cache, so the next identical search (the AI
     // search's seed after the list's, a second look) gets the real answer
-    // instead of this one replayed for the memo's lifetime.
-    if (memoable && !run.semanticTimedOut) {
+    // instead of this one replayed for the memo's lifetime. Decided by the
+    // lane's own report, not by its hits: a paraphrase with no keyword overlap
+    // comes back EMPTY from a cold lane, and that empty list was memoized
+    // (measured 2026-10-03: 0 results for 20 s, then 5 once the worker was warm).
+    if (memoable && !run.semanticIncomplete) {
       bindResultCacheInvalidation();
       resultCache.set(key, results.map((row) => ({ ...row })));
     }
@@ -838,15 +842,19 @@ export const DEFAULT_SEARCH_TYPES: ReadonlyArray<'task' | 'memory' | 'session'> 
 
 /** What searchInner learned beyond its rows. */
 interface SearchRun {
-  /** Some hybrid lane answered in keyword order because the query embedding
-   *  missed its deadline. */
-  semanticTimedOut: boolean;
+  /** Some hybrid lane answered without its semantic half: the query embedding
+   *  missed its deadline (a cold worker loads the model in the background), or
+   *  no candidate had vectors yet. */
+  semanticIncomplete: boolean;
 }
+
+/** Semantic states after which an answer may change within seconds on its own. */
+const INCOMPLETE_SEMANTIC = new Set(['timeout', 'cold']);
 
 async function searchInner(
   query: string,
   options: SearchOptions = {},
-  run: SearchRun = { semanticTimedOut: false },
+  run: SearchRun = { semanticIncomplete: false },
 ): Promise<SearchResult[]> {
   const limit = options.limit ?? 20;
   const types = options.types ?? DEFAULT_SEARCH_TYPES;
@@ -859,13 +867,12 @@ async function searchInner(
   let laneFailure: unknown;
   const hybridLane = async (kinds: string[]) => {
     const searchV2Lane = await loadSearchV2Lane();
-    const hits = await searchV2Lane(normalizedQuery, {
+    return searchV2Lane(normalizedQuery, {
       kinds,
       limit,
       semanticDeadlineMs: options.semanticDeadlineMs,
+      onSemantic: (state) => { if (INCOMPLETE_SEMANTIC.has(state)) run.semanticIncomplete = true; },
     });
-    if (hits.some((hit) => hit.semantic === 'timeout')) run.semanticTimedOut = true;
-    return hits;
   };
   // WALNUT_DISABLE_SEARCH=1 (and cloud replicas): no index exists — the task
   // and session lanes degrade to the in-process BM25 scorers, memory is

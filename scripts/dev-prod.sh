@@ -523,10 +523,77 @@ fi
 # start), and before `launchctl remove`, which is itself a kill.
 drain_active_turns
 
+# ── One launchd domain for the job's whole life ─────────────────────────────
+# The job is loaded with `launchctl bootstrap <domain>`, and every later look at
+# it (is it loaded, which pid) and its removal name the SAME domain:
+# `launchctl print|bootout <domain>/<label>`. The legacy `list`/`remove` act in
+# the caller's own domain, which is not gui/<uid> in an ssh session, so mixing
+# them with a gui/<uid> bootstrap could load the job in one domain and look for
+# it in another. A GUI login session (managername "Aqua") is gui/<uid>, where a
+# legacy `submit` from that shell also lands (checked 2026-10-03: a submitted
+# probe job printed `domain = gui/<uid>`, and user/<uid> did not know it). Any
+# other session (ssh: "Background") uses user/<uid>.
+LAUNCHD_DOMAIN=""
+LAUNCHD_BOOTOUT_WAIT_SECS="${WALNUT_DEVPROD_BOOTOUT_WAIT_SECS:-25}"
+if [[ ! "$LAUNCHD_BOOTOUT_WAIT_SECS" =~ ^[0-9]+$ ]]; then
+  LAUNCHD_BOOTOUT_WAIT_SECS=25
+fi
+
+launchd_domain() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local uid
+  uid="$(id -u)"
+  if [[ "$(launchctl managername 2>/dev/null || true)" == "Aqua" ]]; then
+    printf 'gui/%s' "$uid"
+  else
+    printf 'user/%s' "$uid"
+  fi
+}
+
+launchd_job_exists() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1
+}
+
+# The top-level `pid = N` line of `launchctl print` output on stdin (nested
+# blocks are indented deeper). Empty when the job is loaded but not running.
+launchd_print_pid() {
+  awk '/^\tpid = [0-9]+$/ { print $3; exit }'
+}
+
+# The job's live PID: empty when the label is loaded but has no process, or is
+# not loaded at all.
+launchd_job_pid() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null | launchd_print_pid || true
+}
+
+# bootout returns before a slow job has exited: measured 2026-10-03, 47 ms for
+# a job whose process took 3 s to exit, while `print` still showed it loaded.
+# A bootstrap of the same label in that window fails (a remove followed at
+# once by a bootstrap fell back to submit that way, 2026-10-03), so wait, bounded, until
+# launchd has let go. launchd sends SIGKILL after the job's ExitTimeOut (20 s
+# by default), so the default wait covers that with margin.
+remove_launchd_job() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  launchctl bootout "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1 || true
+  local waited=0
+  while launchd_job_exists; do
+    if (( waited >= LAUNCHD_BOOTOUT_WAIT_SECS * 5 )); then
+      echo "launchd job '$LAUNCH_LABEL' is still loaded in $LAUNCHD_DOMAIN ${LAUNCHD_BOOTOUT_WAIT_SECS}s after bootout." >&2
+      return 0
+    fi
+    sleep 0.2
+    waited=$(( waited + 1 ))
+  done
+  return 0
+}
+
 use_launchd=0
 if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
   use_launchd=1
-  launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
+  LAUNCHD_DOMAIN="$(launchd_domain)"
+  remove_launchd_job
 fi
 
 existing_pids="$(listener_pids)"
@@ -684,42 +751,125 @@ done
 # Rollback source: a dist snapshot taken only AFTER a deploy passes readiness.
 LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${TMPDIR:-/tmp}/open-walnut-lkg}"
 
-# One launchctl submit for the given cli.js. launchd gives jobs a minimal PATH
+# One launchd job for the given cli.js. launchd gives jobs a minimal PATH
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
 # (ffmpeg, git, ssh, brew, agent CLIs) resolve exactly as they would from the
 # deploying shell.
 # WALNUT_LAUNCHD_LABEL names the job to the server: a server that loses the
 # instance lock removes its OWN job (after launchd confirms its pid is the job's),
 # so KeepAlive cannot relaunch a duplicate forever (src/core/launchd-self-remove.ts).
+#
+# Scheduling: the job is loaded from a plist with ProcessType Interactive, not
+# with a bare `launchctl submit`. A submitted job is launchd's Standard type
+# ("spawn type = daemon"), which macOS runs in the utility band, base priority
+# 20, the same band as all the agent work on a busy Mac; measured 2026-10-02,
+# the server then got 1 to 30% of one core through 5 to 25 s freezes at load
+# 200+. Interactive is what apps get (base priority 31). The same plist sets
+# WALNUT_DAEMON_QOS_CLAMP=1, which tells the server it was raised, so it keeps
+# its background children (the local daemon and every agent session, the
+# embedding model worker, the git backups) in the utility band where they ran
+# before (src/lib/background-qos.ts) and only the server moves. The submit
+# fallback stays in the utility band, so it does not carry the flag, and a
+# server started any other way leaves its children alone. No root is needed
+# (the gui domain is the user's own). The plist is written to a private temp
+# file and deleted once loaded: launchd keeps the definition, KeepAlive
+# restarts included. Any failure falls back to submit.
+#
+# Every replacement below is a QUOTED variable in an UNQUOTED assignment. Bash
+# 5.2 turned on `patsub_replacement`, which makes an unquoted `&` in a
+# `${s//pat/rep}` replacement stand for the matched text, so `&lt;` came out as
+# `<lt;` and the plist would not parse (the Linux CI runner and a Homebrew bash
+# first on PATH both run 5.2); a quoted replacement is literal there. The outer
+# double quotes must stay off: bash 3.2 keeps quotes nested inside a
+# double-quoted `${...}` as literal characters. An assignment neither splits
+# nor globs, so the bare form is safe on both.
+xml_escape() {
+  local s="$1" amp='&amp;' lt='&lt;' gt='&gt;' quot='&quot;'
+  s=${s//&/"$amp"}; s=${s//</"$lt"}; s=${s//>/"$gt"}; s=${s//\"/"$quot"}
+  printf '%s' "$s"
+}
+
+# The job's command line, shared by the plist and the submit fallback.
+launchd_job_argv() {
+  launchd_argv=(/bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut
+    "$REPO_ROOT" /usr/bin/env
+    -u OPEN_WALNUT_EPHEMERAL
+    -u OPEN_WALNUT_HOME
+    -u WALNUT_DAEMON_DIR
+    -u VITEST
+    PATH="$PATH"
+    WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL"
+    "$NODE_BIN" "$1" web --port "$PORT")
+}
+
+write_launchd_plist() {
+  local out="$1" arg
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    printf '%s\n' '<plist version="1.0"><dict>'
+    printf '<key>Label</key><string>%s</string>\n' "$(xml_escape "$LAUNCH_LABEL")"
+    printf '%s\n' '<key>ProgramArguments</key><array>'
+    for arg in "${launchd_argv[@]}"; do
+      printf '<string>%s</string>\n' "$(xml_escape "$arg")"
+    done
+    printf '%s\n' '</array>'
+    printf '%s\n' '<key>ProcessType</key><string>Interactive</string>'
+    printf '%s\n' '<key>EnvironmentVariables</key><dict><key>WALNUT_DAEMON_QOS_CLAMP</key><string>1</string></dict>'
+    printf '%s\n' '<key>KeepAlive</key><true/>'
+    printf '%s\n' '<key>RunAtLoad</key><true/>'
+    printf '<key>StandardOutPath</key><string>%s</string>\n' "$(xml_escape "$SERVER_LOG")"
+    printf '<key>StandardErrorPath</key><string>%s</string>\n' "$(xml_escape "$SERVER_LOG")"
+    printf '%s\n' '</dict></plist>'
+  } > "$out"
+}
+
+# Load the job from a plist as ProcessType Interactive into $LAUNCHD_DOMAIN.
+# Returns 1 (the caller then submits) when that is turned off or anything in it
+# fails. The reason (plutil's or launchctl's own words) goes to the deploy's
+# stderr and into the server log, so a silent fall back to the utility band can
+# be told apart from a deliberate one afterwards.
+bootstrap_interactive_job() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  [[ "${WALNUT_DEVPROD_PROCESS_TYPE:-Interactive}" == "Interactive" ]] || return 1
+  local plist_dir plist rc=1 why=""
+  plist_dir="$(mktemp -d "${TMPDIR:-/tmp}/open-walnut-launchd.XXXXXX" 2>/dev/null)" || return 1
+  plist="$plist_dir/$LAUNCH_LABEL.plist"
+  if ! write_launchd_plist "$plist"; then
+    why="could not write $plist"
+  elif command -v plutil >/dev/null 2>&1 && ! why="$(plutil -lint -s "$plist" 2>&1)"; then
+    why="plutil: ${why:-lint failed}"
+  elif ! why="$(launchctl bootstrap "$LAUNCHD_DOMAIN" "$plist" 2>&1)"; then
+    why="launchctl bootstrap $LAUNCHD_DOMAIN: ${why:-failed}"
+  else
+    rc=0
+  fi
+  if (( rc != 0 )); then
+    why="$(printf '%s' "$why" | tr '\n' ' ')"
+    echo "Could not load '$LAUNCH_LABEL' as an Interactive job ($why); using launchctl submit (utility priority)." >&2
+    printf '%s dev-prod.sh: Interactive load of %s failed, using launchctl submit: %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LAUNCH_LABEL" "$why" >> "$SERVER_LOG" 2>/dev/null || true
+    # That line is the deploy's, not the server's: move the first-output
+    # baseline past it, or a server that never starts would look like it wrote.
+    server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  fi
+  rm -rf "$plist_dir"
+  return "$rc"
+}
+
 submit_launchd_job() {
   # Callers hold use_launchd=1 (Darwin-only); the guard keeps the helper inert
   # if one is ever added on another path.
   [[ "$(uname -s)" == "Darwin" ]] || return 1
+  launchd_job_argv "$1"
+  bootstrap_interactive_job && return 0
+  # A legacy submit lands in the caller's own domain, which launchd_domain
+  # picked to match; launch_server checks it really did.
   launchctl submit \
     -l "$LAUNCH_LABEL" \
     -o "$SERVER_LOG" \
     -e "$SERVER_LOG" \
-    -- /bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut \
-    "$REPO_ROOT" /usr/bin/env \
-    -u OPEN_WALNUT_EPHEMERAL \
-    -u OPEN_WALNUT_HOME \
-    -u WALNUT_DAEMON_DIR \
-    -u VITEST \
-    PATH="$PATH" \
-    WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL" \
-    "$NODE_BIN" "$1" web --port "$PORT"
-}
-
-# The job's live PID — empty when the label is registered but has no process.
-launchd_job_pid() {
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  launchctl list "$LAUNCH_LABEL" 2>/dev/null \
-    | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1
-}
-
-remove_launchd_job() {
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
+    -- "${launchd_argv[@]}"
 }
 
 # Launch a server for the given cli.js on :$PORT — launchd (KeepAlive, nice 0)
@@ -737,8 +887,12 @@ launch_server() {
     # process, zero log bytes) and the readiness window burned 180s probing a
     # server that never existed. Fall back to nohup; flipping use_launchd keeps
     # stop_new_server and the readiness death-check pointed at the right thing.
-    elif ! launchctl list "$LAUNCH_LABEL" >/dev/null 2>&1; then
-      echo "launchctl submit did not register '$LAUNCH_LABEL'; falling back to nohup." >&2
+    elif ! launchd_job_exists; then
+      echo "launchctl did not load '$LAUNCH_LABEL' into $LAUNCHD_DOMAIN; falling back to nohup." >&2
+      # A submit that landed in some other domain would KeepAlive a second
+      # server next to the nohup one: take it back out of the domain it went to
+      # (the caller's own, which is what the legacy remove acts on).
+      launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
       use_launchd=0
     else
       # Registered is NOT spawned. 2026-08-27 (twice, morning + evening): the
@@ -830,7 +984,7 @@ launch_server "$CLI_JS"
 
 stop_new_server() {
   if (( use_launchd )); then
-    launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
+    remove_launchd_job
   elif [[ -n "$pid" ]]; then
     kill -15 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
@@ -933,13 +1087,13 @@ fi
 # passed (the Mac app's server answered), while this job's own server exited as a
 # duplicate and launchd KeepAlive relaunched it about every 11s for seven hours.
 # New servers remove their own job when they lose the lock; this also covers an
-# old dist in the job. Removes only a job PROVABLY not serving: it is registered
-# (launchctl list answered) and its PID is absent or differs from the listener's.
-# A probe that answers nothing removes nothing.
+# old dist in the job. Removes only a job PROVABLY not serving: it is loaded
+# (`launchctl print` answered for the job's domain) and its PID is absent or
+# differs from the listener's. A probe that answers nothing removes nothing.
 if (( use_launchd )); then
   listener_now="$(listener_pids | head -n 1)"
-  if [[ -n "$listener_now" ]] && job_info="$(launchctl list "$LAUNCH_LABEL" 2>/dev/null)"; then
-    job_pid_now="$(printf '%s\n' "$job_info" | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1)"
+  if [[ -n "$listener_now" ]] && job_info="$(launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null)"; then
+    job_pid_now="$(printf '%s\n' "$job_info" | launchd_print_pid || true)"
     if [[ "$job_pid_now" != "$listener_now" ]]; then
       listener_cmd="$(ps -o command= -p "$listener_now" 2>/dev/null || true)"
       echo "Port :$PORT is served by PID $listener_now, not by launchd job '$LAUNCH_LABEL' (PID ${job_pid_now:-none})." >&2

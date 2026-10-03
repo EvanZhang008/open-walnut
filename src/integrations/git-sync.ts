@@ -1,5 +1,6 @@
 import { execSync, exec, spawn } from 'node:child_process';
 import { gitChildEnv } from '../lib/git-env.js';
+import { withUtilityQosClamp } from '../lib/background-qos.js';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -290,7 +291,11 @@ export async function execGitGroup(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('/bin/sh', ['-c', command], {
+    // Backups, gc and repacks are background work: in the utility band when the
+    // server was raised above it (background-qos.ts). The clamp execs, so the
+    // group leader is still the child and the group kill below still reaps it.
+    const [cmd, cmdArgs] = withUtilityQosClamp('/bin/sh', ['-c', command]);
+    const child = spawn(cmd, cmdArgs, {
       cwd: opts.cwd,
       // Strip here, not only in gitAsync: git-maintenance and the plugin paths call
       // this helper directly without an env, and `git branch -D` under an inherited
@@ -344,9 +349,11 @@ export async function execGitArgsGroup(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('git', args, {
+    const childEnv = gitChildEnv(opts.env);
+    const [cmd, cmdArgs] = withUtilityQosClamp('git', args, { searchPath: childEnv.PATH ?? '' });
+    const child = spawn(cmd, cmdArgs, {
       cwd: opts.cwd,
-      env: gitChildEnv(opts.env),
+      env: childEnv,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

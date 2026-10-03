@@ -388,6 +388,7 @@ export function _historyCacheGetForTesting(sessionId: string, host?: string): Pa
 export function _resetHistoryCacheForTesting(): void {
   parsedHistoryCache.clear();
   historyCacheChars = 0;
+  historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
   displayProbeMemo.clear();
 }
 
@@ -504,6 +505,28 @@ async function resolveOverCeilingDeadSet(
   }
 }
 
+// Memory pressure (memory-pressure.ts) cuts the budget to a quarter and drops
+// the least recent entries at once: a parsed transcript nobody is reading is
+// exactly the cold memory the kernel compresses, and every major GC has to
+// touch it again. The entry read last stays, whatever its size.
+let historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
+
+export function setHistoryCacheShedding(shedding: boolean): { dropped: number; chars: number } {
+  historyCacheBudgetChars = shedding ? Math.floor(MAX_HISTORY_CACHE_CHARS / 4) : MAX_HISTORY_CACHE_CHARS;
+  let dropped = 0;
+  if (shedding) {
+    const keys = [...parsedHistoryCache.keys()];
+    const newest = keys[keys.length - 1];
+    for (const k of keys) {
+      if (historyCacheChars <= historyCacheBudgetChars) break;
+      if (k === newest) continue;
+      cacheDelete(k);
+      dropped += 1;
+    }
+  }
+  return { dropped, chars: historyCacheChars };
+}
+
 function cacheSet(sessionId: string, entry: ParsedHistoryCacheEntry, host?: string): void {
   const key = cacheKey(sessionId, host);
   cacheDelete(key);
@@ -512,7 +535,7 @@ function cacheSet(sessionId: string, entry: ParsedHistoryCacheEntry, host?: stri
   // Evict LRU until BOTH bounds hold. The just-inserted entry is exempt (it may
   // alone exceed the budget — see MAX_HISTORY_CACHE_CHARS comment).
   for (const oldest of parsedHistoryCache.keys()) {
-    if (parsedHistoryCache.size <= MAX_HISTORY_CACHE && historyCacheChars <= MAX_HISTORY_CACHE_CHARS) break;
+    if (parsedHistoryCache.size <= MAX_HISTORY_CACHE && historyCacheChars <= historyCacheBudgetChars) break;
     if (oldest === key) continue;
     cacheDelete(oldest);
   }

@@ -106,6 +106,8 @@ export const SLOW_TEST_FILES = [
   'tests/core/stt-daemon-source-stdin.test.ts', // 3s: spawns fake python daemons on real ports
   // 26k heart-rate buckets into a real SQLite store, then a full materialize drain.
   'tests/core/health/perf.test.ts', // 3.6s
+  // Real inspector profiler around a real 1.8s loop block, on the 1s probe cadence.
+  'tests/core/stall-recorder-profile.test.ts', // 4s
 ] as const
 
 /**

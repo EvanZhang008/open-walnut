@@ -268,10 +268,11 @@ describe('GET /api/search structured references', () => {
     ]);
     // The call shape IS the contract on this interactive path: one lane call,
     // the caller's limit, and no extra scoring knob (an in-process quality pass
-    // here used to freeze every route in the app for seconds per query).
+    // here used to freeze every route in the app for seconds per query). The
+    // one callback only reports whether the semantic lane was complete.
     expect(searchLaneMock).toHaveBeenCalledWith(
       'career accomplishments',
-      { kinds: ['task'], limit: 20 },
+      { kinds: ['task'], limit: 20, onSemantic: expect.any(Function) },
     );
   });
 
@@ -319,7 +320,7 @@ describe('GET /api/search structured references', () => {
     ]);
     expect(searchLaneMock).toHaveBeenCalledWith(
       'implementation discussion',
-      { kinds: ['session'], limit: 20 },
+      { kinds: ['session'], limit: 20, onSemantic: expect.any(Function) },
     );
   });
 

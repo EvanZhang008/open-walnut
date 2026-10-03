@@ -362,9 +362,12 @@ describe('index memory search integration', () => {
     expect(results[0].matchField).toBe('memory');
     expect(results[0].path).toBe('memory/notes.md');
     // The whole file-backed universe rides ONE lane call.
+    // onSemantic tells the result memo whether the semantic lane was complete.
+    expect(lane).toHaveBeenCalledTimes(1);
     expect(lane).toHaveBeenCalledWith('TypeScript', {
       kinds: ['memory', 'note', 'skill'],
       limit: 20,
+      onSemantic: expect.any(Function),
     });
   });
 

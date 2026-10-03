@@ -191,14 +191,44 @@ describe('search() memo (wired)', () => {
     // The embedding that missed its deadline is still being computed and lands
     // in the embedder's cache; replaying the degraded rows for 20s would hide it.
     const lane = mockLane();
-    lane.mockResolvedValue([{
-      kind: 'memory', ref: '/m/a.md', title: 'Helm CRD update behavior', text: 'body about helm',
-      score: 0.9, components: { coverage: 1 }, semantic: 'timeout',
-    }]);
+    lane.mockImplementation(async (_q: string, opts: { onSemantic?: (s: string) => void }) => {
+      opts.onSemantic?.('timeout');
+      return [{
+        kind: 'memory', ref: '/m/a.md', title: 'Helm CRD update behavior', text: 'body about helm',
+        score: 0.9, components: { coverage: 1 }, semantic: 'timeout',
+      }];
+    });
     const { search } = await import('../../src/core/search.js');
     await search('helm crd', { types: ['memory'] });
     await search('helm crd', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['timeout', 'cold'])('never memoizes an EMPTY answer from a lane that reported %s', async (state) => {
+    // A cold worker answers a paraphrase with nothing: no hit carries the
+    // state, so only the lane's own report can say the answer is incomplete
+    // (measured 2026-10-03: 0 results replayed for 20 s, 5 once the worker was warm).
+    const lane = mockLane();
+    lane.mockImplementation(async (_q: string, opts: { onSemantic?: (s: string) => void }) => {
+      opts.onSemantic?.(state);
+      return [];
+    });
+    const { search } = await import('../../src/core/search.js');
+    expect(await search('helm crd', { types: ['memory'] })).toEqual([]);
+    expect(await search('helm crd', { types: ['memory'] })).toEqual([]);
+    expect(lane).toHaveBeenCalledTimes(2);
+  });
+
+  it('does memoize an empty answer the semantic lane completed', async () => {
+    const lane = mockLane();
+    lane.mockImplementation(async (_q: string, opts: { onSemantic?: (s: string) => void }) => {
+      opts.onSemantic?.('ok');
+      return [];
+    });
+    const { search } = await import('../../src/core/search.js');
+    await search('helm crd', { types: ['memory'] });
+    await search('helm crd', { types: ['memory'] });
+    expect(lane).toHaveBeenCalledTimes(1);
   });
 
   it('passes the caller\'s semantic deadline to every hybrid lane', async () => {

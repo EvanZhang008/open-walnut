@@ -30,6 +30,7 @@
 
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
+import { memoryPressureShedding } from './memory-pressure.js';
 
 interface PrewarmCandidate {
   claudeSessionId: string;
@@ -168,6 +169,11 @@ export class SessionChangesPrewarmer {
   /** One sweep: enqueue recent, listable, in-window sessions (recent first). */
   async sweep(): Promise<void> {
     if (this.stopped) return;
+    // Under memory pressure, proactive warms wait: a cold whale parse grows the
+    // daemon by hundreds of MB (2026-10-02 07:18Z: a 272 MB transcript took
+    // the local daemon from 312 to 622 MB while swap sat at 4.45 of 5 GB).
+    // A user opening the Changed tab still computes on demand.
+    if (memoryPressureShedding()) return;
     let candidates: PrewarmCandidate[];
     try {
       candidates = await this.listCandidates();
@@ -190,7 +196,7 @@ export class SessionChangesPrewarmer {
 
   /** Enqueue one session by id (turn-completion path). */
   private async enqueueSession(sessionId: string): Promise<void> {
-    if (this.stopped) return;
+    if (this.stopped || memoryPressureShedding()) return;
     try {
       const { getSessionByClaudeId } = await import('./session-tracker.js');
       const record = await getSessionByClaudeId(sessionId);
@@ -223,6 +229,12 @@ export class SessionChangesPrewarmer {
   /** Serial drain: one compute at a time, paced. */
   private async drain(): Promise<void> {
     while (!this.stopped) {
+      if (memoryPressureShedding()) {
+        // Drop the backlog; the next sweep after pressure clears re-queues it.
+        this.queue = [];
+        this.queued.clear();
+        return;
+      }
       const c = this.queue.shift();
       if (!c) return;
       this.queued.delete(c.claudeSessionId);

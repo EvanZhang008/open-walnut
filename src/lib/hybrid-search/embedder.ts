@@ -17,7 +17,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { LogFn } from './index.js';
+import type { LogFn, WorkerLauncher } from './index.js';
 
 export interface EmbedderRuntimeConfig {
   modelId: string;
@@ -39,6 +39,8 @@ export interface EmbedderRuntimeConfig {
   /** How long a cached reply may still serve its RECALL list (default 20s).
    *  Test seam / tuning knob; the cached VECTOR has no expiry. */
   recallFreshMs?: number;
+  /** Launcher that execs node in front of the worker (index.ts EmbedderConfig). */
+  workerLauncher?: WorkerLauncher;
 }
 
 /** One semantic-recall candidate from the worker's doc-level KNN. */
@@ -66,6 +68,15 @@ export interface Embedder {
   /** Embed passages (backfill path, no deadline). Throws on worker failure so
    *  the backfill loop can stop instead of writing garbage. */
   embedPassages(texts: string[]): Promise<Int8Array[]>;
+  /** Give the model memory back (machine memory pressure): stop both workers
+   *  (a run in flight finishes first) and spawn none until resume(). Queries
+   *  degrade to a cached vector or keyword order; passages reject. */
+  suspend(): Promise<void>;
+  resume(): void;
+  isSuspended(): boolean;
+  /** Stop the passage worker now unless a run is in flight (end of a backfill
+   *  pass). Resolves true when it stopped one. */
+  releasePassageWorker(): Promise<boolean>;
   dispose(): Promise<void>;
 }
 
@@ -161,7 +172,7 @@ export function cosineInt8(a: Int8Array, b: Int8Array): number {
 }
 
 /** One worker + its in-flight bookkeeping. The embedder runs TWO of these —
- *  a resident QUERY lane and a reap-when-idle PASSAGE lane — so an
+ *  a QUERY lane and a PASSAGE lane, each reaped when idle, so an
  *  interactive query embed can never queue behind a backfill/re-embed
  *  inference (measured: one 2KB passage is ~0.5-1s on a busy machine, which
  *  alone eats an interactive deadline; a batch used to be 22s). */
@@ -169,6 +180,8 @@ interface Lane {
   submit(texts: string[], recallK?: number): { id: number; promise: Promise<WorkerReply> } | null;
   /** No job in flight. */
   idle(): boolean;
+  /** A worker (with its model) exists right now. */
+  running(): boolean;
   /** Deliberate shutdown (idle reap / dispose) — never counted as a crash. */
   terminate(): Promise<void>;
 }
@@ -178,11 +191,27 @@ export interface EmbedderOptions {
   stopGraceMs?: number;
   /** Test seam: how long the passage lane may sit idle before it is reaped. */
   passageIdleMs?: number;
+  /** How long the query lane may sit idle before it is reaped (default
+   *  DEFAULT_QUERY_IDLE_MS; 0 keeps it resident). */
+  queryIdleMs?: number;
 }
+
+/**
+ * The query worker is released after this long without a query. Measured
+ * 2026-10-02: one lane of the default model is +2.2 GB of footprint, and the
+ * production server saw queries in 54 of 1314 minutes over 22 hours, so a
+ * resident query worker held that memory almost entirely for nothing. At 10
+ * minutes the worker is absent about 72% of the time, and about 25 queries a
+ * day arrive to a cold worker: those rank by keyword (the model loads in the
+ * background in 1.6 to 3.8 s and the next query is semantic again).
+ */
+export const DEFAULT_QUERY_IDLE_MS = 10 * 60_000;
 
 export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, options: EmbedderOptions = {}): Embedder {
   const stopGraceMs = options.stopGraceMs ?? WORKER_STOP_GRACE_MS;
   let disposed = false;
+  // Suspended: no lane may spawn a worker (each holds a full model copy).
+  let suspended = false;
 
   /** holdOpen: a job in flight keeps the host process alive. The passage lane
    *  does (its callers await every job); the query lane does not, because its
@@ -215,6 +244,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
     function getWorker(): ChildProcess | null {
       if (disposed || crashes >= MAX_CONSECUTIVE_CRASHES) return null;
       if (worker) return worker;
+      if (suspended) return null;
       const scriptPath = config.workerPath ?? new URL('./embed-worker.js', import.meta.url);
       const workerConfig = {
         modelId: config.modelId,
@@ -233,8 +263,11 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
           // 'advanced' carries the ArrayBuffer replies; JSON would not.
           serialization: 'advanced',
           // The worker is compiled JS: a host's loader or inspector flags
-          // (tsx, vitest, --inspect) must not follow it.
-          execArgv: [],
+          // (tsx, vitest, --inspect) must not follow it. A launcher (a
+          // scheduling clamp that execs node) goes in front of it instead.
+          ...(config.workerLauncher
+            ? { execPath: config.workerLauncher.execPath, execArgv: [...config.workerLauncher.execArgv] }
+            : { execArgv: [] }),
           env: { ...process.env, [EMBED_WORKER_CONFIG_ENV]: JSON.stringify(workerConfig) },
           stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
         });
@@ -327,6 +360,9 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
       idle() {
         return pending.size === 0;
       },
+      running() {
+        return worker !== null;
+      },
       async terminate() {
         const w = worker;
         if (!w) return;
@@ -357,13 +393,38 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
     };
   }
 
-  // Query lane stays resident: the first search pays the model load once and
-  // every later query hits a warm, never-contended worker. The passage lane
-  // holds a SECOND model copy, so it exists only while embedding work exists —
-  // reaped after idle, steady-state RAM is one model, not two.
+  // Each lane holds its own model copy. The query lane stays while queries
+  // keep coming (released after DEFAULT_QUERY_IDLE_MS without one) and never
+  // waits behind backfill; the passage lane exists only while embedding work
+  // exists (released when a pass drains, or after its idle timer).
   const queryLane = makeLane('query', false);
   const passageLane = makeLane('passage', true);
   const PASSAGE_IDLE_KILL_MS = options.passageIdleMs ?? 5 * 60_000;
+  const QUERY_IDLE_KILL_MS = options.queryIdleMs ?? DEFAULT_QUERY_IDLE_MS;
+  let queryIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastQueryAt = 0;
+  // Re-armed after every query that reached the worker. When it fires with no
+  // job in flight, the worker goes (with its model); the next query respawns it.
+  function armQueryReaper(): void {
+    if (QUERY_IDLE_KILL_MS <= 0 || disposed) return;
+    lastQueryAt = Date.now();
+    if (queryIdleTimer) clearTimeout(queryIdleTimer);
+    queryIdleTimer = setTimeout(function reap() {
+      queryIdleTimer = undefined;
+      if (disposed || suspended) return;
+      if (!queryLane.idle() || inflight.size > 0) {
+        queryIdleTimer = setTimeout(reap, QUERY_IDLE_KILL_MS);
+        queryIdleTimer.unref?.();
+        return;
+      }
+      if (!queryLane.running()) return;
+      log('info', 'hybrid-search: query embed worker released after idle', {
+        idleMs: Date.now() - lastQueryAt,
+      });
+      void queryLane.terminate();
+    }, QUERY_IDLE_KILL_MS);
+    queryIdleTimer.unref?.();
+  }
   let passageIdleTimer: ReturnType<typeof setTimeout> | undefined;
   function armPassageReaper(): void {
     if (passageIdleTimer) clearTimeout(passageIdleTimer);
@@ -423,6 +484,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         });
         const settled = promise.finally(() => {
           if (inflight.get(cacheKey) === promise) inflight.delete(cacheKey);
+          armQueryReaper();
         });
         settled.catch(() => {}); // settled after we gave up ≠ unhandled
         inflight.set(cacheKey, promise);
@@ -459,10 +521,34 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
       }
     },
 
+    async releasePassageWorker() {
+      if (disposed || !passageLane.running() || !passageLane.idle()) return false;
+      if (passageIdleTimer) clearTimeout(passageIdleTimer);
+      await passageLane.terminate();
+      return true;
+    },
+
+    async suspend() {
+      if (suspended || disposed) return;
+      suspended = true;
+      if (passageIdleTimer) clearTimeout(passageIdleTimer);
+      if (queryIdleTimer) clearTimeout(queryIdleTimer);
+      await Promise.all([queryLane.terminate(), passageLane.terminate()]);
+    },
+
+    resume() {
+      suspended = false;
+    },
+
+    isSuspended() {
+      return suspended;
+    },
+
     async dispose() {
       disposed = true;
       queryCache.clear();
       if (passageIdleTimer) clearTimeout(passageIdleTimer);
+      if (queryIdleTimer) clearTimeout(queryIdleTimer);
       await Promise.all([queryLane.terminate(), passageLane.terminate()]);
     },
   };

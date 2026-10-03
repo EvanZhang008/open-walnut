@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionChangesPrewarmer } from '../../src/core/session-changes-prewarm.js';
+import {
+  applyPressureReading,
+  _resetMemoryPressureForTest,
+  _setPressureHoldMsForTest,
+} from '../../src/core/memory-pressure.js';
+import { log } from '../../src/logging/index.js';
 
 const NOW = new Date('2026-08-13T12:00:00Z').getTime();
 
@@ -134,5 +140,71 @@ describe('SessionChangesPrewarmer', () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(compute.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it('memory pressure pauses proactive warms and drops the backlog until it clears', async () => {
+    vi.spyOn(log.web, 'info').mockImplementation(() => {});
+    vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    _resetMemoryPressureForTest();
+    _setPressureHoldMsForTest(1);
+    try {
+      const order: string[] = [];
+      const compute = vi.fn(async (sid: string) => {
+        order.push(sid);
+        await new Promise((r) => setTimeout(r, 1000));
+      });
+      const p = new SessionChangesPrewarmer({
+        // Sweeps far enough apart that none lands mid-compute (a sweep then
+        // re-queues the session being computed, which is not what this tests).
+        startupDelayMs: 10, sweepIntervalMs: 5_000, paceMs: 500,
+        listCandidates: async () => [candidate('s1'), candidate('s2'), candidate('s3')],
+        compute, hasInflight: () => false,
+      });
+      p.start();
+      await vi.advanceTimersByTimeAsync(10);     // sweep: s1 computing, s2 + s3 queued
+      applyPressureReading('warn');              // pressure lands mid-compute
+      await vi.advanceTimersByTimeAsync(10_000); // s1 finishes; sweeps keep firing
+      expect(order).toEqual(['s1']);             // nothing else started
+
+      applyPressureReading('normal', Date.now() + 1);
+      await vi.advanceTimersByTimeAsync(10_000); // the next sweep re-queues the rest
+      p.stop();
+      expect(order).toEqual(['s1', 's2', 's3']);
+    } finally {
+      _resetMemoryPressureForTest();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('under memory pressure a sweep does not even list the sessions', async () => {
+    // Listing reads every session record and its transcript size; the drain's
+    // own guard would drop what a sweep queued, but the listing cost is paid
+    // by then. The sweep itself must hold off.
+    vi.spyOn(log.web, 'info').mockImplementation(() => {});
+    vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    _resetMemoryPressureForTest();
+    _setPressureHoldMsForTest(1);
+    try {
+      applyPressureReading('warn');
+      const listCandidates = vi.fn(async () => [candidate('s1')]);
+      const compute = vi.fn(async (_sessionId: string) => {});
+      const p = new SessionChangesPrewarmer({
+        startupDelayMs: 10, sweepIntervalMs: 1_000, paceMs: 1,
+        listCandidates, compute, hasInflight: () => false,
+      });
+      p.start();
+      await vi.advanceTimersByTimeAsync(5_000); // the startup sweep and four more
+      expect(listCandidates).not.toHaveBeenCalled();
+      expect(compute).not.toHaveBeenCalled();
+
+      applyPressureReading('normal', Date.now() + 1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      p.stop();
+      expect(listCandidates).toHaveBeenCalled();
+      expect(compute.mock.calls[0]?.[0]).toBe('s1');
+    } finally {
+      _resetMemoryPressureForTest();
+      vi.restoreAllMocks();
+    }
   });
 });

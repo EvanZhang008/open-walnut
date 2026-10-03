@@ -97,6 +97,18 @@ export interface EmbedderConfig {
   /** Compiled embed-worker.js location. Required when the caller bundles this
    *  library; defaults to the sibling file (correct un-bundled). */
   workerPath?: string | URL;
+  /** Release the query worker (a full model copy) after this long without a
+   *  query; the next query reloads it. Default 10 min; 0 keeps it resident. */
+  queryIdleMs?: number;
+  /** Start the worker processes through a launcher that execs node (for
+   *  example a scheduling clamp): fork runs `execPath [...execArgv, worker]`,
+   *  so execArgv must end with the node binary. Omitted: plain node. */
+  workerLauncher?: WorkerLauncher;
+}
+
+export interface WorkerLauncher {
+  execPath: string;
+  execArgv: string[];
 }
 
 export interface SearchIndexOptions {
@@ -119,6 +131,10 @@ export interface SearchOptions {
   /** Budget for the semantic rescore; on expiry keyword results return as-is.
    *  Default 150ms when an embedder is configured; 0 disables the rescore. */
   semanticDeadlineMs?: number;
+  /** Told the semantic state of this search (the ScoredHit.semantic ladder)
+   *  even when no hit came back: an empty answer from a lane whose worker was
+   *  cold says nothing about what a warm one would find. */
+  onSemantic?: (state: string) => void;
 }
 
 export interface BackfillVectorsResult {
@@ -269,6 +285,15 @@ export interface SearchIndex {
    *  finishes first, because a process that exits under one aborts. The
    *  semantic lane then degrades to keyword order. Call before exiting. */
   stopEmbedder(): Promise<void>;
+  /** Release the embedding model while the machine is short of memory: the
+   *  workers stop (a run in flight finishes), searches rank by keyword (or a
+   *  cached query vector), and the vector backfill holds its place without
+   *  counting anything as a failure. resumeEmbedder() lets them respawn. */
+  suspendEmbedder(): Promise<void>;
+  resumeEmbedder(): void;
+  /** Stop the passage worker now if it has no run in flight (a backfill pass
+   *  just drained and the next one is minutes away). True when it stopped. */
+  releasePassageWorker(): Promise<boolean>;
   /** Escape hatch for the embedding worker and tests; not part of the
    *  stable surface. */
   readonly db: SearchDb;
@@ -323,7 +348,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       // The recall lane's worker opens its own readonly connection — only
       // possible for a real file (a :memory: db is invisible across threads).
       dbPath: options.dbPath !== ':memory:' ? options.dbPath : undefined,
-    }, log)
+    }, log, { queryIdleMs: options.embedder.queryIdleMs })
     : null;
   let closed = false;
   /** Per-process embed-failure counts; at 2 the doc is quarantined with a
@@ -427,6 +452,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         try {
           segmentObserver?.(seg);
         } catch { /* an observer bug must never break a search */ }
+        try {
+          searchOptions.onSemantic?.(semantic);
+        } catch { /* same rule for the caller's hook */ }
         if (seg.totalMs > SLOW_QUERY_LOG_MS) {
           const at = Date.now();
           if (at - slowLoggedAt < SLOW_QUERY_LOG_MIN_GAP_MS) {
@@ -483,7 +511,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       seg.embedSource = reply?.source ?? 'none';
       lastQueryAt = Date.now();
       if (!reply || closed) {
-        return publish('timeout', pool.slice(0, limit).map((h) => toScored(h, 'timeout')));
+        // A suspended embedder (memory pressure) skipped the rescore on purpose.
+        const why = embedder.isSuspended() ? 'skipped' : 'timeout';
+        return publish(why, pool.slice(0, limit).map((h) => toScored(h, why)));
       }
       const tRescore = performance.now();
       const queryVec = reply.vec;
@@ -631,6 +661,10 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     backfillVectors: async (backfillOptions = {}) => {
       if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };
+      // Suspended for memory pressure: hold the walk where it is. Not drained,
+      // and no doc is touched, so nothing is quarantined for a missing worker.
+      const hold = () => ({ embedded: 0, drained: false, cursor: backfillOptions.cursor ?? null });
+      if (embedder.isSuspended()) return hold();
       const batchDocs = backfillOptions.batchDocs ?? 16;
       const { docs, cursor, drained, scanned } = writer.listDocsMissingVectors(
         batchDocs, backfillOptions.cursor, backfillOptions.excludeKinds,
@@ -700,6 +734,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
             return { embedded, drained: false, cursor: backfillOptions.cursor ?? null };
           }
         } catch (err) {
+          // The embedder was suspended under this batch (its workers stopped
+          // and failed the run): not the doc's fault, so do not count it.
+          if (embedder.isSuspended()) return { ...hold(), embedded };
           // One poison doc (worker OOM/crash on its passages) must not stall
           // the walk: the cursor moves past it either way, and a second
           // failure quarantines it (zero vector = done, no boost; the next
@@ -749,6 +786,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     stats: () => collectStats(db),
     optimize: () => optimizeIndex(db),
     stopEmbedder: async () => { await embedder?.dispose(); },
+    suspendEmbedder: async () => { await embedder?.suspend(); },
+    releasePassageWorker: async () => (embedder ? embedder.releasePassageWorker() : false),
+    resumeEmbedder: () => { embedder?.resume(); },
     close: () => {
       closed = true; // in-flight backfill/searches bail instead of touching a closed handle
       void embedder?.dispose();

@@ -163,8 +163,8 @@ describe('dev-prod.sh last-known-good rollback', () => {
 
   it('verifies a launchctl submit actually registered, with a nohup fallback', () => {
     // 2026-08-23: a submit silently created nothing and the readiness window
-    // probed a server that never existed.
-    const check = indexOfOrFail('launchctl list "$LAUNCH_LABEL"')
+    // probed a server that never existed. The check asks the job's own domain.
+    const check = indexOfOrFail('elif ! launchd_job_exists; then')
     const fallback = script.indexOf('use_launchd=0', check)
     expect(fallback).toBeGreaterThan(check)
   })
