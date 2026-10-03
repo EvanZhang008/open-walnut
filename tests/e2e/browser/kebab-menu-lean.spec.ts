@@ -108,9 +108,13 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
   await expect(menu.getByText('Unpin', { exact: true })).toHaveCount(0)
   await expect(menu.locator('.task-kebab-priority')).toHaveCount(0)
 
-  // The tier pills are still there (4 built-ins, plus any custom tier another
-  // spec left in the shared fixture): pinning is one click, unpinning the same pill.
-  expect(await menu.locator('.task-kebab-tier-btn').count()).toBeGreaterThanOrEqual(4)
+  // The tier pills are still there (the 3 built-ins Focus, Satellite and Parked,
+  // since 982af739 retired Backlog, then any custom tier another spec left in the
+  // shared fixture): pinning is one click, unpinning the same pill.
+  const tiers = menu.locator('.task-kebab-tier-btn')
+  await expect(tiers.nth(0)).toHaveText('Focus')
+  await expect(tiers.nth(1)).toHaveText('Satellite')
+  await expect(tiers.nth(2)).toHaveText('Parked')
 
   const toggles = menu.locator('.task-kebab-date-toggle')
   await expect(toggles).toHaveCount(2)

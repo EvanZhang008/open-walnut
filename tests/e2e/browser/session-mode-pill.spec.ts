@@ -1,22 +1,25 @@
 /**
  * Playwright browser test: SessionPill real-time mode change.
  *
+ * The pill lives on the /tasks table's Session column (Home task rows have shown a
+ * status dot instead since 4fc00f92, and `tests/web/todo-panel-layout.test.ts`
+ * keeps it off Home). Its label reads "Session · {Mode} · {Phase} / {Process}".
+ *
  * Tests two bug scenarios:
  *
  * 1. Single-slot bug (pw-task-001 / pw-mode-test-session):
  *    Task has session_id set. Mode change event updates session_status.mode
- *    → pill should update from "session" → "plan".
+ *    → pill should update from "Session · Bypass" → "Session · Plan".
  *
  * 2. Exec-slot bug (pw-task-exec-bug / pw-exec-bug-session):
  *    Task has exec_session_id but NO session_id (simulates broken server state
  *    where task:updated was emitted without session_id). Mode change event
- *    updates exec_session_status.mode only — pill must still show "plan".
+ *    updates exec_session_status.mode only — pill must still show "Plan".
  *    Bug: mode prop reads session_status?.mode ?? plan_session_status?.mode,
  *    missing exec_session_status?.mode. AND the 2-slot legacy path ignores
  *    the mode prop entirely, always showing "exec".
  */
 import { test, expect } from '@playwright/test'
-import { showEverything } from './todo-panel-helpers'
 
 // Session ID used in test-server seed data (the bypass session linked to pw-task-001)
 const BYPASS_SESSION_ID = 'pw-mode-test-session'
@@ -39,6 +42,63 @@ async function injectEvent(page: import('@playwright/test').Page, name: string, 
     },
     { name, data },
   )
+}
+
+/**
+ * Emits `session:status-changed` the way the server does now: a versioned
+ * snapshot (top-level fields plus `status`, SessionStatusChangedEvent). The
+ * status store drops unversioned input once it holds a versioned snapshot
+ * (`applyLegacy` in session-status-store.ts), and the page hydrates one for every
+ * visible session, so a bare `{ sessionId, mode }` frame would never land.
+ * Starts from the server's current snapshot and bumps the revision per change.
+ */
+async function statusChanger(page: import('@playwright/test').Page, sessionId: string) {
+  const res = await page.request.get(`/api/sessions/status?ids=${encodeURIComponent(sessionId)}`)
+  expect(res.ok()).toBe(true)
+  const { statuses } = await res.json() as { statuses: Record<string, Record<string, unknown>> }
+  const base = statuses[sessionId]
+  expect(base, `server status snapshot for ${sessionId}`).toBeTruthy()
+  let revision = base.statusRevision as number
+  return async (patch: { process_status: string; mode: string; activity: string }) => {
+    revision += 1
+    const status = { ...base, ...patch, statusRevision: revision, statusUpdatedAt: new Date().toISOString() }
+    await injectEvent(page, 'session:status-changed', { ...status, status })
+  }
+}
+
+/** Load Home and wait for the captured WebSocket to connect. */
+async function openHomeWithSocket(page: import('@playwright/test').Page) {
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await page.waitForFunction(() => {
+    const ws = (window as any).__capturedWs as WebSocket | undefined
+    return ws && ws.readyState === WebSocket.OPEN
+  }, null, { timeout: 5000 })
+}
+
+/**
+ * A task's row on the /tasks table, reached the way a user reaches it: the
+ * sidebar link, the column chooser to show the Session column (off by default),
+ * then the table's search box to find the task among the fixture's rows.
+ */
+async function tasksTableRow(page: import('@playwright/test').Page, taskId: string, title: string) {
+  await page.getByTestId('sidebar-core-app-tasks').click()
+  await expect(page).toHaveURL(/\/tasks$/)
+  const table = page.getByTestId('tasks-table')
+  await expect(table).toBeVisible({ timeout: 30_000 })
+
+  await page.getByTestId('tasks-columns-btn').click()
+  const menu = page.getByTestId('tasks-columns-menu')
+  await expect(menu).toBeVisible()
+  await menu.locator('[data-column="session"] input').check()
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+
+  await page.locator('input.tp-search').fill(title)
+  const row = table.locator(`.tp-row[data-task-id="${taskId}"]`)
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await expect(row.locator('[data-col="session"]')).toHaveCount(1)
+  return row
 }
 
 // ── Setup: Patch WebSocket before each test ──
@@ -68,116 +128,50 @@ test.beforeEach(async ({ page }) => {
 // ── Tests ──
 
 test.describe('SessionPill real-time mode change', () => {
-  test('bypass → plan: SessionPill text changes from "session" to "plan" on mode change event', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
+  test('bypass → plan: SessionPill text changes from "Bypass" to "Plan" on mode change event', async ({ page }) => {
+    await openHomeWithSocket(page)
 
-    // Wait for WS to connect
-    await page.waitForFunction(() => {
-      const ws = (window as any).__capturedWs as WebSocket | undefined
-      return ws && ws.readyState === WebSocket.OPEN
-    }, null, { timeout: 5000 })
-
-    // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
-    // main task list) and the PROJECT chip (project scoping can hide these tasks;
-    // it lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
-    await showEverything(page)
-    await page.waitForTimeout(300)
-
-    // Find the SessionPill for pw-task-001 — it should show "session" (bypass mode)
-    const taskItem = page.locator('.todo-panel-item', { hasText: 'Playwright test task' })
-    await expect(taskItem).toBeVisible({ timeout: 5000 })
-
+    // Find the SessionPill for pw-task-001 — it should show "Bypass" (bypass mode)
+    const taskItem = await tasksTableRow(page, TASK_ID, 'Playwright test task')
     const pill = taskItem.locator('.task-session-pill')
     await expect(pill).toBeVisible({ timeout: 3000 })
 
-    // Verify initial state: pill should contain "session" (not "plan") since mode is bypass
-    const initialText = await pill.textContent()
-    expect(initialText).toContain('session')
-    expect(initialText).not.toContain('plan')
+    // Verify initial state: the mode segment is Bypass, not Plan
+    await expect(pill).toContainText('Session · Bypass ·')
+    await expect(pill).not.toContainText('Plan')
 
     // Now inject a session:status-changed event with mode: 'plan'
     // This simulates what happens when EnterPlanMode fires mid-session
-    await injectEvent(page, 'session:status-changed', {
-      sessionId: BYPASS_SESSION_ID,
-      taskId: TASK_ID,
-      process_status: 'running',
-      mode: 'plan',
-      activity: 'planning',
-    })
+    const changeStatus = await statusChanger(page, BYPASS_SESSION_ID)
+    await changeStatus({ process_status: 'running', mode: 'plan', activity: 'planning' })
 
-    // Wait a moment for React to re-render
-    await page.waitForTimeout(500)
-
-    // THE CRITICAL ASSERTION: SessionPill should now show "plan" instead of "session"
-    const updatedText = await pill.textContent()
-    expect(updatedText).toContain('plan')
-    expect(updatedText).not.toContain('session')
+    // THE CRITICAL ASSERTION: SessionPill should now show "Plan" instead of "Bypass"
+    await expect(pill).toContainText('Session · Plan ·')
+    await expect(pill).not.toContainText('Bypass')
   })
 
-  test('plan → bypass: SessionPill text changes from "plan" to "session" on mode change event', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
+  test('plan → bypass: SessionPill text changes from "Plan" to "Bypass" on mode change event', async ({ page }) => {
+    await openHomeWithSocket(page)
 
-    await page.waitForFunction(() => {
-      const ws = (window as any).__capturedWs as WebSocket | undefined
-      return ws && ws.readyState === WebSocket.OPEN
-    }, null, { timeout: 5000 })
-
-    // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
-    // main task list) and the PROJECT chip (project scoping can hide these tasks;
-    // it lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
-    await showEverything(page)
-    await page.waitForTimeout(300)
-
-    const taskItem = page.locator('.todo-panel-item', { hasText: 'Playwright test task' })
-    await expect(taskItem).toBeVisible({ timeout: 5000 })
-
+    const taskItem = await tasksTableRow(page, TASK_ID, 'Playwright test task')
     const pill = taskItem.locator('.task-session-pill')
     await expect(pill).toBeVisible({ timeout: 3000 })
 
     // First: inject a mode change to 'plan'
-    await injectEvent(page, 'session:status-changed', {
-      sessionId: BYPASS_SESSION_ID,
-      taskId: TASK_ID,
-      process_status: 'running',
-      mode: 'plan',
-      activity: 'planning',
-    })
-    await page.waitForTimeout(300)
+    const changeStatus = await statusChanger(page, BYPASS_SESSION_ID)
+    await changeStatus({ process_status: 'running', mode: 'plan', activity: 'planning' })
 
-    // Verify it shows "plan"
-    await expect(pill).toContainText('plan')
+    // Verify it shows "Plan"
+    await expect(pill).toContainText('Session · Plan ·')
 
     // Now inject mode change BACK to bypass
-    await injectEvent(page, 'session:status-changed', {
-      sessionId: BYPASS_SESSION_ID,
-      taskId: TASK_ID,
-      process_status: 'running',
-      mode: 'bypass',
-      activity: 'implementing',
-    })
-    await page.waitForTimeout(500)
+    await changeStatus({ process_status: 'running', mode: 'bypass', activity: 'implementing' })
 
-    // Should show "session" again (not "plan")
-    const finalText = await pill.textContent()
-    expect(finalText).toContain('session')
-    expect(finalText).not.toContain('plan')
+    // Should show "Bypass" again (not "Plan")
+    await expect(pill).toContainText('Session · Bypass ·')
+    await expect(pill).not.toContainText('Plan')
   })
 })
-
-// ── Exec-slot bug: task has exec_session_id but NO session_id ──
-//
-// Root cause: when a new session starts, the server emits task:updated with the
-// task returned by linkSessionSlot (has exec_session_id but NO session_id).
-// linkSession is called but its return value is ignored.
-// Result in browser: task.session_id stays undefined → legacy 2-slot path used.
-//
-// Bug #1 (frontend): mode prop = session_status?.mode ?? plan_session_status?.mode
-//   → misses exec_session_status?.mode
-// Bug #2 (frontend): 2-slot path's slotLabel = 'exec' regardless of mode prop
-//
-// Both bugs must be fixed for this test to pass.
 
 // ── Exec-slot bug: task has exec_session_id but NO session_id ──
 //
@@ -194,28 +188,19 @@ test.describe('SessionPill real-time mode change', () => {
 //   6. SessionPill 2-slot path: slotLabel = 'exec' (ignores mode prop).
 //      Pill never shows "plan".
 //
-// Fix (both needed):
-//   A. TodoPanel: add ?? task.exec_session_status?.mode to mode prop
-//   B. SessionPill: in exec-only 2-slot path, use mode prop for slotLabel
+// Fix (both needed; today both live in TaskSessionPill, SessionPill.tsx):
+//   A. The mode prop falls back to exec_session_status?.mode
+//   B. A task with only exec_session_id resolves to that session (single-slot
+//      path), so the label is the session's mode, never a bare "exec"
 
 test.describe('SessionPill exec-slot mode change (missing session_id)', () => {
-  test('exec-slot: SessionPill should show "plan" when mode changes to plan via exec slot', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
+  test('exec-slot: SessionPill should show "Plan" when mode changes to plan via exec slot', async ({ page }) => {
+    await openHomeWithSocket(page)
 
-    await page.waitForFunction(() => {
-      const ws = (window as any).__capturedWs as WebSocket | undefined
-      return ws && ws.readyState === WebSocket.OPEN
-    }, null, { timeout: 5000 })
-
-    // Both panel axes to "All" — this test used to click a bare
-    // `.todo-panel-tab` strip that no longer exists (dead selector).
-    await showEverything(page)
-    await page.waitForTimeout(300)
-
-    // Find the task — initially it has NO sessions
-    const taskItem = page.locator('.todo-panel-item', { hasText: 'Exec slot bug task' })
-    await expect(taskItem).toBeVisible({ timeout: 5000 })
+    // Find the task. Its seed carries no session fields, but the server links the
+    // seeded pw-exec-bug-session record to it, so the row may already show a pill.
+    const taskItem = await tasksTableRow(page, EXEC_TASK_ID, 'Exec slot bug task')
+    const pill = taskItem.locator('.task-session-pill')
 
     // STEP 1: Inject task:updated simulating the BUGGY server emit from linkSessionSlot.
     // The task has exec_session_id set but NO session_id (linkSession return was ignored).
@@ -238,34 +223,20 @@ test.describe('SessionPill exec-slot mode change (missing session_id)', () => {
       },
     })
 
-    await page.waitForTimeout(300)
-
-    // STEP 2: Verify pill now shows "exec" — 2-slot legacy path (no session_id)
-    const pill = taskItem.locator('.task-session-pill')
+    // STEP 2: The pill appears for the exec-slot session, in its mode (bypass)
     await expect(pill).toBeVisible({ timeout: 3000 })
-    const initialText = await pill.textContent()
-    expect(initialText).toContain('exec')
-    expect(initialText).not.toContain('plan')
+    await expect(pill).toContainText('Session · Bypass ·')
+    await expect(pill).not.toContainText('Plan')
 
     // STEP 3: Inject session:status-changed with mode: 'plan'
     // This simulates EnterPlanMode firing mid-session.
-    await injectEvent(page, 'session:status-changed', {
-      sessionId: EXEC_SESSION_ID,
-      taskId: EXEC_TASK_ID,
-      process_status: 'running',
-      mode: 'plan',
-      activity: 'planning',
-    })
+    const changeStatus = await statusChanger(page, EXEC_SESSION_ID)
+    await changeStatus({ process_status: 'running', mode: 'plan', activity: 'planning' })
 
-    await page.waitForTimeout(500)
-
-    // FIXED: pill should show "plan · planning / live"
-    // Fix A (TodoPanel): mode prop now reads exec_session_status?.mode as fallback
-    // Fix B (SessionPill): exec-only 2-slot path uses mode prop for slotLabel
-    const updatedText = await pill.textContent()
-    // Specifically check the label prefix "plan ·" (not just "plan" which could match "planning")
-    expect(updatedText).toContain('plan ·')
-    expect(updatedText).not.toContain('exec ·')
+    // FIXED: pill should show "Session · Plan · …"
+    // Check the mode segment "Plan ·" (not just "Plan", which "Planning" also matches)
+    await expect(pill).toContainText('Session · Plan ·')
+    await expect(pill).not.toContainText('Bypass')
 
     // Screenshot to document the passing state
     await page.screenshot({ path: 'test-results/exec-slot-pill-pass.png' })
