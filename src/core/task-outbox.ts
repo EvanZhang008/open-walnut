@@ -129,8 +129,8 @@ const LEGACY_NEVER_APPLY: (keyof Task)[] = ['summary'];
 
 /**
  * True when the primary's projected pin state disagrees with the replica's row.
- * Used by importProjectionOnCloud for the one primary write that deliberately
- * does NOT move `updated_at` (pin retirement); see the branch that calls it.
+ * Part of the clock-silent state importProjectionOnCloud adopts at an EQUAL
+ * `updated_at` (see clockSilentStateDiffers and the branch that calls it).
  *
  * Normalized both sides because the projection omits rather than falsifies:
  * `pinned` is absent when false, and `pin_order` / `focus_tier` are omitted
@@ -145,6 +145,37 @@ function pinStateDiffers(
   const rowOrder = typeof row.pin_order === 'number' ? row.pin_order : null;
   if (projectedOrder !== rowOrder) return true;
   return (projected.focus_tier ?? '') !== (row.focus_tier ?? '');
+}
+
+/**
+ * True when the primary's projected phase state (phase, and the read marker the
+ * phase implies) disagrees with the replica's row.
+ *
+ * The session machine writes the phase through the raw row-patch path
+ * (applySessionPhase → updateTaskRaw), which stamps `phase_changed_at` and leaves
+ * `updated_at` alone. So does the WAITING clock (task-wait-until) and a plugin
+ * sync pull. Those are exactly the transitions a phone watches a task for
+ * (IN_PROGRESS ⇄ NEED_ACTION on every turn), and the `updated_at` LWW gate
+ * dropped every one of them: 2026-10-03, a task whose session the user had just
+ * messaged from the phone stayed NEED_ACTION on the replica for a quarter of an
+ * hour while the primary said IN_PROGRESS and the session itself said running,
+ * so the board row read "handed back" over a conversation whose header read
+ * "Running".
+ */
+function phaseStateDiffers(
+  projected: { phase: string; unread?: boolean },
+  row: Task,
+): boolean {
+  if (projected.phase !== row.phase) return true;
+  return !!projected.unread !== !!row.unread;
+}
+
+/** Everything a primary write may change without moving the row's clock. */
+function clockSilentStateDiffers(
+  projected: { phase: string; unread?: boolean; pinned?: boolean; pin_order?: number; focus_tier?: string },
+  row: Task,
+): boolean {
+  return pinStateDiffers(projected, row) || phaseStateDiffers(projected, row);
 }
 
 let opSeq = 0;
@@ -676,26 +707,35 @@ export async function importProjectionOnCloud(): Promise<number> {
       });
     } else if (
       Date.parse(p.updated_at) === Date.parse(row.updated_at) &&
-      pinStateDiffers(p, row)
+      clockSilentStateDiffers(p, row)
     ) {
-      // SAME clock, DIFFERENT pin state. The `updated_at` LWW gate above assumes
-      // every primary write moves the row's clock, and one deliberately does not:
-      // pin retirement (core/task-pin-retirement.ts) unpins old completed rows
-      // WITHOUT touching updated_at, because bumping 1,100 finished tasks would
-      // sort them all to the top of every recency surface (the 40-entry recent-task
-      // ledger, search decay) — the exact junk it just retired. Without this branch
-      // the replica keeps every retired pin forever and the phone board never
-      // shrinks, since a finished task never gets another edit to carry the change.
+      // SAME clock, DIFFERENT state. The `updated_at` LWW gate above assumes
+      // every primary write moves the row's clock, and two kinds do not:
+      //  - pin retirement (core/task-pin-retirement.ts) unpins old completed rows
+      //    WITHOUT touching updated_at, because bumping 1,100 finished tasks would
+      //    sort them all to the top of every recency surface (the 40-entry
+      //    recent-task ledger, search decay) — the exact junk it just retired;
+      //  - the session machine's phase transitions ride the raw row patch
+      //    (applySessionPhase, task-wait-until, plugin sync pulls), which stamps
+      //    phase_changed_at and nothing else (see phaseStateDiffers).
+      // Without this branch the replica keeps every retired pin forever and shows
+      // every task's phase as of its last clock-moving edit, so a phone on the
+      // cloud reads "handed back" over a session that is running.
       //
-      // Only the pin trio is patched, and `updated_at` is deliberately left alone,
-      // so the pass is idempotent (the next import sees matching pin state).
-      // Equality is the whole safety argument: any replica-side pin write bumps its
-      // own row's clock (togglePin / reorderPins), so equal clocks mean neither box
-      // has an unsynced pin edit — and rows with a queued op are already excluded
-      // by `pendingIds` above.
+      // Only the clock-silent fields are patched, and `updated_at` is deliberately
+      // left alone, so the pass is idempotent (the next import sees matching
+      // state). Equality is the whole safety argument: any replica-side write to
+      // these fields bumps its own row's clock (togglePin / reorderPins / the
+      // phase picker through updateTask), so equal clocks mean neither box has an
+      // unsynced edit — and rows with a queued op are already excluded by
+      // `pendingIds` above. A COMPLETE or WAITING row leaving its phase still
+      // goes through the reopen pass below, like the newer-clock branch.
       toUpdate.push({
         id: p.id,
         patch: {
+          phase: p.phase as Task['phase'],
+          status: p.status as Task['status'],
+          unread: !!p.unread,
           pinned: !!p.pinned,
           pin_order: (p.pin_order ?? null) as Task['pin_order'],
           focus_tier: (p.focus_tier ?? null) as Task['focus_tier'],

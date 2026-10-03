@@ -239,6 +239,113 @@ describe('task-outbox: cloud side', () => {
     expect(after.pinned).toBeFalsy();
     expect(after.updated_at).toBe(replicaClock);
   });
+
+  // The session machine is the OTHER clock-silent primary writer: applySessionPhase
+  // rides updateTaskRaw, which stamps phase_changed_at and leaves updated_at alone.
+  // Every turn moves a task IN_PROGRESS ⇄ NEED_ACTION that way, and the LWW gate
+  // dropped all of it — the replica showed each task's phase as of its last
+  // clock-moving edit. 2026-10-03: a phone on the cloud read "handed back" on a
+  // task whose session the user had just messaged and whose header read "Running".
+  async function seedReplicaRowInPhase(
+    phase: 'NEED_ACTION' | 'IN_PROGRESS' | 'WAITING' | 'COMPLETE',
+  ): Promise<{
+    mods: Modules; id: string; updatedAt: string;
+    writeProjection: (row: Record<string, unknown>) => Promise<void>;
+  }> {
+    const mods = await loadWithCloudMode(true);
+    const { tm, projection } = mods;
+    const { task } = await tm.addTask({ title: 'session task', source: 'local' });
+    // The raw path, like the primary: phase moves, the clock does not.
+    const status = phase === 'COMPLETE' ? 'done' : phase === 'WAITING' ? 'todo' : 'in_progress';
+    await tm.updateTaskRaw(task.id, {
+      phase, status, unread: phase === 'NEED_ACTION',
+      ...(phase === 'COMPLETE' ? { completed_at: new Date().toISOString() } : {}),
+      ...(phase === 'WAITING' ? { wait_until: new Date(Date.now() + 86_400_000).toISOString() } : {}),
+    } as never);
+    const row = (await tm.listTasks()).find((t) => t.id === task.id)!;
+    const writeProjection = async (projected: Record<string, unknown>): Promise<void> => {
+      await fsp.mkdir(path.dirname(projection.PROJECTION_FILE), { recursive: true });
+      await fsp.writeFile(projection.PROJECTION_FILE, JSON.stringify({
+        version: projection.PROJECTION_VERSION,
+        exportedAt: new Date().toISOString(),
+        truncated: true,
+        tasks: [projected],
+      }));
+    };
+    return { mods, id: task.id, updatedAt: row.updated_at, writeProjection };
+  }
+
+  it('adopts a clock-silent primary phase change (a human sent the task more work) at an EQUAL updated_at', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedReplicaRowInPhase('NEED_ACTION');
+    current = mods;
+    // What the primary exports after session:input: IN_PROGRESS, read, same clock.
+    await writeProjection({
+      id, title: 'session task', status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt,
+    });
+
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(1);
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.phase).toBe('IN_PROGRESS');
+    expect(after.status).toBe('in_progress');
+    expect(after.unread).toBeFalsy();
+    // Idempotent: the clock stays, so the next export sees matching state.
+    expect(after.updated_at).toBe(updatedAt);
+    await writeProjection({
+      id, title: 'session task', status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt,
+    });
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(0);
+  });
+
+  it('adopts the hand-back too (IN_PROGRESS → NEED_ACTION with its unread marker)', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedReplicaRowInPhase('IN_PROGRESS');
+    current = mods;
+    await writeProjection({
+      id, title: 'session task', status: 'in_progress', phase: 'NEED_ACTION', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt, unread: true,
+    });
+
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(1);
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.phase).toBe('NEED_ACTION');
+    expect(after.unread).toBe(true);
+    expect(after.updated_at).toBe(updatedAt);
+  });
+
+  it('a WAITING row woken on the primary leaves the held phase through the reopen pass', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedReplicaRowInPhase('WAITING');
+    current = mods;
+    // task-wait-until fired on the primary: raw NEED_ACTION, clock untouched.
+    await writeProjection({
+      id, title: 'session task', status: 'in_progress', phase: 'NEED_ACTION', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt, unread: true,
+    });
+
+    await mods.outbox.importProjectionOnCloud();
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.phase).toBe('NEED_ACTION');
+  });
+
+  it('never reverts a replica-side phase edit that has not reached the primary yet', async () => {
+    const { mods, id, updatedAt, writeProjection } = await seedReplicaRowInPhase('NEED_ACTION');
+    current = mods;
+    // The phone's phase picker goes through updateTask, which moves the replica's
+    // clock — so the older projection still claiming NEED_ACTION must lose.
+    const replicaClock = new Date(Date.parse(updatedAt) + 60_000).toISOString();
+    await mods.tm.updateTaskRaw(id, {
+      phase: 'IN_PROGRESS', status: 'in_progress', unread: false, updated_at: replicaClock,
+    } as never);
+    await writeProjection({
+      id, title: 'session task', status: 'in_progress', phase: 'NEED_ACTION', priority: 'none',
+      project: '', created_at: updatedAt, updated_at: updatedAt, unread: true,
+    });
+
+    expect(await mods.outbox.importProjectionOnCloud()).toBe(0);
+    const after = (await mods.tm.listTasks()).find((t) => t.id === id)!;
+    expect(after.phase).toBe('IN_PROGRESS');
+    expect(after.updated_at).toBe(replicaClock);
+  });
 });
 
 // ── Primary side: applyOutboxOnPrimary ──────────────────────────────────────
