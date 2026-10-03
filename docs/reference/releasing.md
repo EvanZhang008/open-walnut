@@ -19,11 +19,18 @@ is installed again. Pre-1.0, a minor bump may carry breaking changes (see CHANGE
 
 Nobody has to cut a stable release. Once a day, jobs `promote-*` of the same workflow
 promote a nightly that users on the nightly channel have run for a day. They check whenever
-CI finishes on `main` (`workflow_run`) and every hour (`37 * * * *` UTC), and a check does
-nothing until the last stable is 23 hours old (`MIN_GAP_HOURS`). A single daily cron is not
-enough: GitHub delays scheduled runs by hours under load and drops some (this repo's 17:17
-cron ran at 21:48 on 2026-10-01, and five hours of half-hourly checks never ran the next
-morning). A run by hand skips the gap.
+CI finishes on `main` (`workflow_run`) and on the workflow's one schedule
+(`7,17,27,37,47,57 * * * *` UTC), and a check does nothing until the last stable is 23
+hours old (`MIN_GAP_HOURS`). A run by hand skips the gap.
+
+GitHub runs few of this repo's scheduled runs: 10 of about 75 in the 25 hours to 2026-10-03
+13:00 UTC, with gaps of three to five hours, and a `release:` commit starts no CI run. So
+the schedule asks every ten minutes, and every scheduled run checks both channels (each
+job keeps its own gap). With one cron per channel, the only run in the two hours after a
+nightly came due was the stable one, and that nightly waited seven hours. Each publishing
+job has its own queue (`release-nightly`, `release-promote`, one per release tag): a
+running publisher is never cancelled, and two runs that planned the same release run its
+steps one after the other, the second finding everything done.
 
 1. **Plan** (`scripts/stable-promote.mjs plan`). The candidate is the newest nightly
    published at least 24 hours ago; the registry records each version's commit as
@@ -160,8 +167,8 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 
 ## Nightlies
 
-Job `nightly` of the same workflow checks whenever CI finishes on `main` and every 30
-minutes (`17,47 * * * *` UTC), and runs by hand (`workflow_dispatch`, with a `force` input
+Job `nightly` of the same workflow checks whenever CI finishes on `main` and on every
+scheduled run (above), and runs by hand (`workflow_dispatch`, with a `force` input
 for a republish). A check publishes only when the `nightly` dist-tag is at least 5.5 hours
 old (`scripts/nightly-version.mjs due`), so nightlies come about every six hours while
 `main` moves, whatever GitHub does with the schedule. It asks for the newest commit
@@ -179,7 +186,7 @@ version on npm, `-nightly.<UTC day>.<run number>`; the release commit an automat
 pushes gets no CI run, so the newest green commit can still name the previous version),
 publishes under `--tag nightly`, and waits until npm serves that version
 (`scripts/nightly-version.mjs wait`; npm takes minutes to process a version it accepted).
-The channel's queue starts the next check only after that, so it never reads the nightly
+The job's queue starts the next check only after that, so it never reads the nightly
 before this one and publishes the same commit twice. It
 does not rerun the tests: CI already ran them on that exact commit, and a red `main` simply
 means the nightly stays on the last green one. The version bump is never committed: a

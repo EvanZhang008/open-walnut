@@ -319,24 +319,24 @@ describe('release.yml', () => {
   const runs = (job: string) => doc.jobs[job]!.steps.map((s) => s.run ?? '').join('\n')
   const stepIndex = (job: string, needle: string) => doc.jobs[job]!.steps.findIndex((s) => (s.run ?? '').includes(needle))
 
-  it('runs on release tags, two schedules and by hand, each job on its own', () => {
+  it('runs on release tags, a schedule and by hand, and every check asks for both channels', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
-    // Checks gated by a gap: whenever CI finishes on main, and on a schedule as a
-    // backup (GitHub ran a 17:17 cron at 21:48 and skipped five hours of others).
+    // Checks gated by a gap: whenever CI finishes on main, and on a schedule for a
+    // quiet main. GitHub fired 10 of about 75 scheduled runs in 25 hours
+    // (2026-10-03), so one schedule, as often as GitHub allows, and every scheduled
+    // run checks both channels: with a cron per channel, the only run in the two
+    // hours after a nightly came due was the stable one, and the nightly waited 7h.
     expect(doc.on.workflow_run).toEqual({ workflows: ['CI'], types: ['completed'], branches: ['main'] })
-    expect(doc.on.schedule).toEqual([{ cron: '17,47 * * * *' }, { cron: '37 * * * *' }])
+    expect(doc.on.schedule).toEqual([{ cron: '7,17,27,37,47,57 * * * *' }])
+    expect(text).not.toContain('github.event.schedule ==')
+    for (const job of ['nightly', 'promote-plan']) expect(doc.jobs[job]!.if).toContain("github.event_name == 'schedule'")
     expect(doc.jobs.nightly!.if).toContain("github.event_name == 'workflow_run'")
     expect(doc.jobs['promote-plan']!.if).toContain("github.event_name == 'workflow_run'")
     expect(doc.jobs.stable!.if).not.toContain('workflow_run')
     const dispatch = doc.on.workflow_dispatch as { inputs: Record<string, { options?: string[]; default?: unknown }> }
     expect(dispatch.inputs.channel).toMatchObject({ options: ['nightly', 'stable'], default: 'nightly' })
-    expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17,47 * * * *'")
     expect(doc.jobs.nightly!.if).toContain("inputs.channel != 'stable'")
-    expect(doc.jobs['promote-plan']!.if).toContain("github.event.schedule == '37 * * * *'")
     expect(doc.jobs['promote-plan']!.if).toContain("inputs.channel == 'stable'")
-    // Every schedule a job compares against is one the workflow has.
-    const crons = (doc.on.schedule as Array<{ cron: string }>).map((s) => s.cron)
-    for (const [, m] of text.matchAll(/github\.event\.schedule == '([^']+)'/g)) expect(crons).toContain(m)
   })
 
   it('the release jobs push without the repo\'s git hooks', () => {
@@ -406,13 +406,18 @@ describe('release.yml', () => {
     expect(publish.run!.indexOf('export WALNUT_LATEST_STABLE')).toBeLessThan(publish.run!.indexOf('node scripts/nightly-version.mjs'))
   })
 
-  it('each channel has its own queue and a running publisher is never cancelled', () => {
-    const c = (doc as unknown as { concurrency: { group: string; 'cancel-in-progress': boolean } }).concurrency
-    expect(c['cancel-in-progress']).toBe(false)
-    expect(c.group).toContain("&& 'stable' || 'nightly'")
-    expect(c.group).toContain("github.event.schedule == '37 * * * *'")
-    expect(c.group).toContain("inputs.channel == 'stable'")
-    expect(c.group).toContain("startsWith(github.ref, 'refs/tags/')")
+  it('each publishing job has its own queue and a running publisher is never cancelled', () => {
+    // Per job, not per run: one run checks both channels, and a nightly must not
+    // wait behind a stable release.
+    expect((doc as unknown as { concurrency?: unknown }).concurrency).toBeUndefined()
+    const queue = (job: string) => (doc.jobs[job] as unknown as { concurrency?: { group: string; 'cancel-in-progress': boolean } }).concurrency
+    expect(queue('nightly')).toEqual({ group: 'release-nightly', 'cancel-in-progress': false })
+    expect(queue('promote')).toEqual({ group: 'release-promote', 'cancel-in-progress': false })
+    // A tag publish is never a pending job another run could replace.
+    expect(queue('stable')).toEqual({ group: 'release-tag-${{ github.ref_name }}', 'cancel-in-progress': false })
+    // The planning and smoke jobs only read, so they need no queue.
+    expect(queue('promote-plan')).toBeUndefined()
+    expect(queue('promote-smoke')).toBeUndefined()
   })
 
   it('every release job has a time limit, so a hung run cannot hold the release queue', () => {
