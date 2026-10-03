@@ -14,9 +14,18 @@ name: Release
 #   nightly  about every six hours (checked when CI finishes on main and every 30
 #            minutes; and by hand): the newest commit on main that CI passed,
 #            when it is not the last nightly. Published as
-#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, then the
-#            `nightly` tag moves to it. Nothing is committed: the version lives in
-#            the registry, not in package.json.
+#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`. Nothing is
+#            committed: the version lives in the registry, not in package.json,
+#            and so does the record of its commit (the version's `gitHead`).
+#
+# The job's token may point a ref only at a commit whose .github/workflows match
+# main's tip: GitHub compares a new or moved ref with the default branch, not
+# with the ref's old value or the commit's parent, and refuses anything else as
+# "create or update workflow without `workflows` permission" (2026-10-03, when a
+# `nightly` tag followed a green commit that main's newest commit had passed).
+# So no job here tags an older commit as it is: the nightly keeps no tag, and the
+# stable tag goes on the released commit or, when main's workflows moved on, on a
+# child of it that carries main's workflows (job `promote`).
 #
 # Both channels publish only commits CI passed (scripts/ci-gate.mjs reads the CI
 # workflow's `CI OK` job), because every npm install updates itself on restart.
@@ -60,6 +69,10 @@ on:
         description: 'Publish a nightly even when main has not moved since the last one'
         type: boolean
         default: false
+      dry_run:
+        description: 'stable: plan and smoke-test the newest nightly now (no 24h soak), publish nothing'
+        type: boolean
+        default: false
 
 # One queue per channel: a nightly never waits behind a stable release (or the
 # reverse), and a running publisher is never cancelled. Inside a channel a newer
@@ -72,6 +85,12 @@ permissions:
   contents: write
   id-token: write
   actions: read
+
+env:
+  # `npm ci` runs `prepare`, which wires the repo's git hooks, and job `promote`
+  # pushes (the release tag and commit): the pre-push hook then
+  # type-checked for 50s before a tag moved. Those hooks are for people.
+  HUSKY: '0'
 
 jobs:
   stable:
@@ -144,8 +163,8 @@ jobs:
             exit 0
           fi
           green="$(node scripts/ci-gate.mjs last-green main)"
-          git fetch --quiet origin 'refs/tags/nightly:refs/tags/nightly' 2>/dev/null || true
-          last="$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' 2>/dev/null || echo none)"
+          last="$(node scripts/nightly-version.mjs last)"
+          [ -n "$last" ] || last=none
           echo "newest green on main: ${green:-none}"
           echo "last nightly:         $last"
           if [ -z "$green" ]; then
@@ -160,7 +179,7 @@ jobs:
           elif [ "${{ inputs.force }}" != "true" ] && [ "$last" != "none" ] && ! git merge-base --is-ancestor "$last" "$green"; then
             # The runs list can lag a finished run by a minute or two, so "newest green"
             # may be an older commit; a nightly must never move installs backwards
-            # (`force` overrides, for a nightly tag left on a rewritten history).
+            # (`force` overrides, for a last nightly built on a rewritten history).
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "$green is not newer than the last nightly; nothing to publish"
           else
@@ -196,11 +215,12 @@ jobs:
           npm version "$version" --no-git-tag-version
           npm publish --tag nightly --provenance --access public
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Move the nightly tag to this commit
+      # The next run learns the last nightly from npm, and npm serves a version it
+      # accepted only minutes later; this channel's queue holds the next run until
+      # this step ends, so it never sees the nightly before this one.
+      - name: Wait until npm serves it
         if: steps.pick.outputs.publish == 'true'
-        run: |
-          git tag -f nightly "${{ steps.pick.outputs.sha }}"
-          git push --force origin refs/tags/nightly
+        run: node scripts/nightly-version.mjs wait "${{ steps.publish.outputs.version }}"
       - if: steps.pick.outputs.publish == 'true'
         run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from ${{ steps.pick.outputs.sha }}"
 
@@ -230,8 +250,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        # By hand means now: no one-a-day gap.
-        run: node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" ${{ github.event_name == 'workflow_dispatch' && '--min-gap-hours 0' || '' }} >> "$GITHUB_OUTPUT"
+        # By hand means now: no one-a-day gap. A dry run takes the newest nightly, soaked
+        # or not, so the smoke can be tried on demand; it never reaches job `promote`.
+        run: node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" ${{ github.event_name == 'workflow_dispatch' && '--min-gap-hours 0' || '' }} ${{ inputs.dry_run && '--soak-hours 0' || '' }} >> "$GITHUB_OUTPUT"
       - if: steps.plan.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -293,7 +314,7 @@ jobs:
   promote:
     name: Promote ${{ needs.promote-plan.outputs.nightly }} to ${{ needs.promote-plan.outputs.version }}
     needs: [promote-plan, promote-smoke]
-    if: needs.promote-plan.outputs.publish == 'true'
+    if: needs.promote-plan.outputs.publish == 'true' && !inputs.dry_run
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -314,14 +335,23 @@ jobs:
           bun-version: latest
       - run: npm install -g npm@12
       - run: npm ci
+      # Every step below skips what an earlier attempt already did, so "Re-run failed
+      # jobs" finishes a release that stopped halfway (npm refuses a version twice,
+      # and the next plan sees the version out and would never come back for the
+      # tag, the GitHub Release or main). tests/scripts/release-promote-steps.test.ts
+      # runs these three scripts against a scratch repository.
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
       - name: Version it and publish it as latest
         env:
           WALNUT_VERSION_STAMPED: '1'
           VERSION: ${{ needs.promote-plan.outputs.version }}
         run: |
-          npm version "$VERSION" --no-git-tag-version
-          npm publish --provenance --access public
+          if curl -fsS -o /dev/null --max-time 30 -H 'cache-control: no-cache' "https://registry.npmjs.org/open-walnut/$VERSION"; then
+            echo "open-walnut@$VERSION is already on npm; not publishing it again"
+          else
+            npm version "$VERSION" --no-git-tag-version
+            npm publish --provenance --access public
+          fi
       # Pushed with the job's token, so neither the tag nor the commit below starts a
       # workflow: the tag cannot publish a second time through job `stable`.
       - name: Tag it and open the GitHub Release
@@ -332,21 +362,59 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "v$VERSION" -m "Open Walnut $VERSION" "$SHA"
-          git push origin "refs/tags/v$VERSION"
-          gh release create "v$VERSION" --title "Open Walnut $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
-      # The package is out; this only keeps main's CHANGELOG and version in step.
+          tagged=""
+          if git fetch --quiet --force origin "refs/tags/v$VERSION:refs/tags/v$VERSION" 2> /dev/null; then
+            tagged="$(git rev-parse "v$VERSION^{commit}")"
+          fi
+          if [ -z "$tagged" ]; then
+            # This token may create the tag only on a commit whose .github/workflows
+            # match main's tip (see the top of this file). When main's workflows
+            # moved on since $SHA, the tag goes on a child of $SHA with $SHA's tree
+            # and main's workflows: the same package source, as workflows never ship.
+            for attempt in 1 2 3 4 5; do
+              git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+              target="$SHA"
+              if ! git diff --quiet "$SHA" origin/main -- .github/workflows; then
+                index="$RUNNER_TEMP/release-tag-index"
+                rm -f "$index"
+                GIT_INDEX_FILE="$index" git read-tree "$SHA"
+                GIT_INDEX_FILE="$index" git rm -r -q --cached --ignore-unmatch .github/workflows
+                GIT_INDEX_FILE="$index" git read-tree --prefix=.github/workflows/ "origin/main:.github/workflows"
+                target="$(git commit-tree "$(GIT_INDEX_FILE="$index" git write-tree)" -p "$SHA" \
+                  -m "release: $VERSION" \
+                  -m "The source of open-walnut@$VERSION, built from $SHA. Its .github/workflows are main's at $(git rev-parse origin/main), so that the release job's token may tag it.")"
+              fi
+              git tag -f -a "v$VERSION" -m "Open Walnut $VERSION" "$target"
+              if git push origin "refs/tags/v$VERSION"; then break; fi
+              if [ "$attempt" = 5 ]; then echo "::error::GitHub refused the v$VERSION tag five times"; exit 1; fi
+              echo "the tag push was refused (main may have moved); trying again ($attempt)"
+              sleep $((attempt * 5))
+            done
+          elif [ "$tagged" != "$SHA" ] && ! { [ "$(git rev-parse "$tagged^")" = "$SHA" ] && git diff --quiet "$SHA" "$tagged" -- . ':!.github/workflows'; }; then
+            echo "::error::v$VERSION already exists on $tagged, not on $SHA"; exit 1
+          fi
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "the v$VERSION GitHub Release already exists"
+          else
+            gh release create "v$VERSION" --title "Open Walnut $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+      # The package is out; this only keeps main's CHANGELOG and version in step. A
+      # failure here is red, not a warning: left alone, the next stable's notes would
+      # repeat this one's.
       - name: Roll CHANGELOG and package.json on main
         env:
           VERSION: ${{ needs.promote-plan.outputs.version }}
         run: |
           git checkout --quiet -- .
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
             git checkout --quiet -B main origin/main
+            if grep -qF "## [$VERSION]" CHANGELOG.md; then echo "main already says $VERSION"; exit 0; fi
             node scripts/stable-promote.mjs roll --version "$VERSION" --notes "$RUNNER_TEMP/notes.md"
             git commit --quiet -am "release: $VERSION"
             if git push --quiet origin main; then echo "main now says $VERSION"; exit 0; fi
             echo "main moved during the push; trying again ($attempt)"
+            sleep $((attempt * 5))
           done
-          echo "::warning::open-walnut@$VERSION is published, but main's CHANGELOG and package.json were not rolled"
+          echo "::error::open-walnut@$VERSION is published, but main's CHANGELOG and package.json were not rolled"
+          exit 1
