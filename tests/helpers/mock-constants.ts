@@ -27,6 +27,13 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
   // first mkdir often happens in a spawned daemon or CLI, which the reaper cannot
   // observe — those homes were the leak that outlived the reaper (2026-09-16).
   fs.mkdirSync(tmpBase, { recursive: true });
+  // The log dir sits BESIDE the home, not in it. The logger appends to LOG_DIR
+  // from a 2s timer, and most test files delete their home in a hook: a flush that
+  // landed between rm's unlink and rmdir of `logs/` failed the rm with ENOTEMPTY
+  // and the test with it (CI 2026-10-03, plugin-capabilities). Made here, in the
+  // worker, so the reaper removes it after the file like the home.
+  const logDir = `${tmpBase}-logs`;
+  fs.mkdirSync(logDir, { recursive: true });
   const tasksDir = path.join(tmpBase, 'tasks');
   const validateAgentId = (agentId: string) => {
     const ordinary = /^[a-z0-9_-]{1,64}$/i.test(agentId);
@@ -100,12 +107,12 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     MOBILE_STAGED_IMAGES_DIR: path.join(tmpBase, 'images', 'mobile'),
     PASTES_DIR: path.join(tmpBase, 'pastes'),
     HEARTBEAT_FILE: path.join(tmpBase, 'HEARTBEAT.md'),
-    LOG_DIR: path.join(tmpBase, 'logs'),
+    LOG_DIR: logDir,
     // Per-test dtach socket dir. MUST stay isolated: the terminal orphan reaper
     // kills every socket here whose sessionId is missing from the (empty) test
     // registry, so a shared dir means a test server pkill's the developer's live
     // production terminals. See DTACH_SOCKET_DIR in src/constants.ts.
-    DTACH_SOCKET_DIR: path.join(tmpBase, 'logs', 'term'),
+    DTACH_SOCKET_DIR: path.join(logDir, 'term'),
     LOG_PREFIX: 'open-walnut-test-',
     FREQUENT_DIRS_FILE: path.join(tmpBase, 'frequent-directories.json'),
     ASK_WALNUT_LAUNCH_FILE: path.join(tmpBase, 'ask-walnut-launch.json'),
