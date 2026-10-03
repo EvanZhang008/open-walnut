@@ -69,6 +69,15 @@ Tag and commit are pushed with the job's own token, which starts no workflow, so
 cannot publish a second time through job `stable` and the release commit gets no CI run of
 its own (it changes only the version files and CHANGELOG).
 
+That token has no `workflows` permission, and GitHub then lets it point a ref only at a
+commit whose `.github/workflows` match the tip of `main`: it compares a new or moved ref
+with the default branch, not with the ref's old value or the commit's parent. The candidate
+is a day old, so when `main` changed a workflow since, the tag goes on a child of the
+candidate with the candidate's tree and `main`'s workflows (its message names the
+candidate). The package source is the same, since workflows never ship; npm's provenance
+names the candidate itself. A tag push GitHub refuses is retried against a fresh `main`
+five times.
+
 To promote now instead of waiting for the schedule: Actions, Release, Run workflow, channel
 `stable` (the same plan and smoke run). With `dry_run` ticked the plan takes the newest
 nightly without the 24 hour soak and the smoke installs and starts it, but nothing is
@@ -157,13 +166,21 @@ for a republish). A check publishes only when the `nightly` dist-tag is at least
 old (`scripts/nightly-version.mjs due`), so nightlies come about every six hours while
 `main` moves, whatever GitHub does with the schedule. It asks for the newest commit
 on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
-when there is none among the last 30 runs, when that commit is already the `nightly` tag,
-or when it is not a descendant of that tag (GitHub's runs list can show a finished run as
-still running for a minute or two, so the newest green may be an older commit, and a
-nightly must never move installs backwards). Otherwise it checks that commit out, installs, sets the version with
+when there is none among the last 30 runs, when that commit is already the last nightly's,
+or when it is not a descendant of it (GitHub's runs list can show a finished run as still
+running for a minute or two, so the newest green may be an older commit, and a nightly
+must never move installs backwards). The last nightly's commit is the `gitHead` npm
+records for the version under the `nightly` dist-tag (`scripts/nightly-version.mjs last`).
+A `nightly` git tag used to say it, until 2026-10-03, when GitHub refused to move it: the
+newest green commit trailed a `main` whose newest commit changed a workflow (see the token
+rule above). Otherwise it checks that commit out, installs, sets the version with
 `scripts/nightly-version.mjs` (next patch of the newer of `package.json` and the `latest`
 version on npm, `-nightly.<UTC day>.<run number>`; the release commit an automatic stable
-pushes gets no CI run, so the newest green commit can still name the previous version), publishes under `--tag nightly`, and moves the `nightly` tag to the commit. It
+pushes gets no CI run, so the newest green commit can still name the previous version),
+publishes under `--tag nightly`, and waits until npm serves that version
+(`scripts/nightly-version.mjs wait`; npm takes minutes to process a version it accepted).
+The channel's queue starts the next check only after that, so it never reads the nightly
+before this one and publishes the same commit twice. It
 does not rerun the tests: CI already ran them on that exact commit, and a red `main` simply
 means the nightly stays on the last green one. The version bump is never committed: a
 nightly's version lives in the registry only, and `package.json` on `main` names the last

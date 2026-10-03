@@ -21,7 +21,15 @@
  * runs, so the newest green commit can still name the version before it, and a
  * nightly must never sort below the stable it follows.
  *
- *   node scripts/nightly-version.mjs due   ->  due=true|false: is a scheduled nightly due?
+ *   node scripts/nightly-version.mjs due              ->  due=true|false: is a scheduled nightly due?
+ *   node scripts/nightly-version.mjs last             ->  the commit the last nightly was built from
+ *   node scripts/nightly-version.mjs wait <version>   ->  returns once npm serves <version> as `nightly`
+ *
+ * The registry is the record of which commit the last nightly came from (the
+ * `gitHead` npm stores with each version). A `nightly` git tag used to say it,
+ * until the job could not move it: GitHub lets the job's token point a ref only
+ * at a commit whose .github/workflows match main's tip, and the newest green
+ * commit lags a main whose newest commit changed a workflow (2026-10-03).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -55,6 +63,18 @@ export function nightlyDue(packument, now, gapHours = NIGHTLY_GAP_HOURS) {
     : { due: false, reason: `${tag} is ${hours.toFixed(1)}h old; the next one is due at ${gapHours}h` }
 }
 
+/** The commit the version under the `nightly` dist-tag was built from, or '' when npm has none. */
+export function lastNightlyCommit(packument) {
+  const tag = packument['dist-tags']?.nightly
+  const head = tag ? packument.versions?.[tag]?.gitHead : undefined
+  return typeof head === 'string' && /^[0-9a-f]{40}$/.test(head) ? head : ''
+}
+
+/** Whether npm already serves `version` under the `nightly` dist-tag. */
+export function servesNightly(packument, version) {
+  return packument['dist-tags']?.nightly === version && Boolean(packument.versions?.[version])
+}
+
 export function nightlyVersion(baseVersion, date, run) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/.exec(baseVersion)
   if (!m) throw new Error(`package.json version "${baseVersion}" is not x.y.z`)
@@ -64,14 +84,42 @@ export function nightlyVersion(baseVersion, date, run) {
   return `${m[1]}.${m[2]}.${Number(m[3]) + 1}-nightly.${day}.${n}`
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === 'due') {
-  // `due`: prints due=true|false for $GITHUB_OUTPUT, the reason on stderr.
-  const res = await fetch('https://registry.npmjs.org/open-walnut', { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(30_000) })
+const REGISTRY = process.env.WALNUT_NIGHTLY_REGISTRY_URL ?? 'https://registry.npmjs.org/open-walnut'
+
+async function packument() {
+  const res = await fetch(REGISTRY, { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(30_000) })
   if (!res.ok) throw new Error(`registry answered ${res.status}`)
-  const { due, reason } = nightlyDue(await res.json(), new Date())
+  return res.json()
+}
+
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain && process.argv[2] === 'due') {
+  // `due`: prints due=true|false for $GITHUB_OUTPUT, the reason on stderr.
+  const { due, reason } = nightlyDue(await packument(), new Date())
   process.stderr.write(`${reason}\n`)
   process.stdout.write(`due=${due}\n`)
-} else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+} else if (isMain && process.argv[2] === 'last') {
+  process.stdout.write(`${lastNightlyCommit(await packument())}\n`)
+} else if (isMain && process.argv[2] === 'wait') {
+  // npm takes minutes to serve a version it accepted ("Your package is being
+  // processed"). The next nightly run reads the registry to learn what the last
+  // nightly was, and the channel's queue starts it only when this one ends, so a
+  // publish waits here until npm serves it: otherwise the next run would see the
+  // nightly before it and publish the same commit again.
+  const version = process.argv[3]
+  if (!version) throw new Error('usage: nightly-version.mjs wait <version>')
+  const deadline = Date.now() + Number(process.env.WALNUT_NIGHTLY_WAIT_SECS ?? 1800) * 1000
+  const every = Number(process.env.WALNUT_NIGHTLY_WAIT_EVERY_SECS ?? 20) * 1000
+  for (;;) {
+    const served = await packument().then((p) => servesNightly(p, version), (err) => (process.stderr.write(`${err.message}\n`), false))
+    if (served) { process.stdout.write(`npm serves open-walnut@${version} as nightly\n`); break }
+    if (Date.now() + every > deadline) {
+      process.stderr.write(`npm accepted open-walnut@${version} but does not serve it as nightly yet; the next run may publish this commit again\n`)
+      process.exit(1)
+    }
+    await new Promise((resolve) => setTimeout(resolve, every))
+  }
+} else if (isMain) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
   const run = process.env.GITHUB_RUN_NUMBER ?? process.argv[2] ?? '0'

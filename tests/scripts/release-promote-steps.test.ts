@@ -10,6 +10,12 @@
  * only the three release files, a rerun of a release that stopped halfway
  * finishes it without doing anything twice, and a main that cannot be rolled
  * fails the job instead of passing with a warning.
+ *
+ * The origin enforces GitHub's rule for the job's token (a pre-receive hook): a
+ * ref other than main may point only at a commit whose .github/workflows match
+ * main's tip, and main may move only by commits that leave them alone. GitHub
+ * refused the nightly tag that way on 2026-10-03, and a stable tag on a nightly
+ * from a day before main's newest workflow change would be refused the same way.
  */
 import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -59,7 +65,7 @@ let released: string
 let mainBefore: string
 
 function gitIn(cwd: string, ...args: string[]): string {
-  return execFileSync('git', args, { cwd, env: cleanEnv(), encoding: 'utf8' }).trim()
+  return execFileSync('git', args, { cwd, env: cleanEnv({ WALNUT_TEST_USER_PUSH: '1' }), encoding: 'utf8' }).trim()
 }
 const atOrigin = (...args: string[]) => gitIn(origin, ...args)
 
@@ -133,6 +139,24 @@ const CHANGELOG = [
 ].join('\n')
 const NOTES = '### Fixed\n\n- **Released fix.** It shipped in this release.\n'
 
+// GitHub's check for a token without the `workflows` permission, as observed:
+// a new or moved ref is compared with the default branch's tip, not with its old
+// value or its parent. A push made as the user (WALNUT_TEST_USER_PUSH=1) holds
+// that permission.
+const WORKFLOW_RULE = `#!/bin/sh
+[ "$WALNUT_TEST_USER_PUSH" = 1 ] && exit 0
+zero=0000000000000000000000000000000000000000
+while read old new ref; do
+  [ "$new" = "$zero" ] && continue
+  if [ "$ref" = refs/heads/main ]; then base="$old"; else base="$(git rev-parse refs/heads/main)"; fi
+  [ "$base" = "$zero" ] && continue
+  if ! git diff --quiet "$base" "$(git rev-parse "$new^{commit}")" -- .github/workflows; then
+    echo "refusing to allow a GitHub App to create or update workflow without workflows permission ($ref)" >&2
+    exit 1
+  fi
+done
+`
+
 /**
  * Main moves under the step: before each matching `git push origin main`, a
  * peer pushes a commit of its own (only the first time unless RACE_ALWAYS=1).
@@ -180,7 +204,10 @@ beforeEach(() => {
   const lock = { name: 'open-walnut', version: '0.6.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'open-walnut', version: '0.6.0' } } }
   fs.writeFileSync(path.join(seed, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`)
   fs.writeFileSync(path.join(seed, 'CHANGELOG.md'), CHANGELOG)
+  fs.mkdirSync(path.join(seed, '.github', 'workflows'), { recursive: true })
+  fs.writeFileSync(path.join(seed, '.github', 'workflows', 'ci.yml'), 'name: CI\n')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: cleanEnv() })
+  fs.writeFileSync(path.join(origin, 'hooks', 'pre-receive'), WORKFLOW_RULE, { mode: 0o755 })
   gitIn(seed, 'init', '-q', '-b', 'main')
   gitIn(seed, 'add', '-A')
   gitIn(seed, 'commit', '-q', '-m', 'fix: the released fix')
@@ -281,6 +308,33 @@ describe('release.yml promote steps', { timeout: 120_000 }, () => {
     expect(atOrigin('log', '-1', '--format=%s', 'main~1')).toBe("fix: a peer's change 0")
     expect(atOrigin('log', '-1', '--format=%s', 'main')).toBe(`release: ${VERSION}`)
     expect(atOrigin('show', 'main:peer-0.txt')).toBe('peer 0')
+  })
+
+  it('when main changed a workflow after the release, tags a child of it that carries main\'s workflows', async () => {
+    fs.writeFileSync(path.join(seed, '.github', 'workflows', 'ci.yml'), 'name: CI\non: push\n')
+    gitIn(seed, 'commit', '-q', '-am', 'ci: a workflow change after the release')
+    gitIn(seed, 'push', '-q', 'origin', 'main')
+    const mainNow = gitIn(seed, 'rev-parse', 'HEAD')
+    // The rule is live: the job's token cannot tag the released commit as it is.
+    const direct = await runStep({ name: 'probe', run: `git tag probe "${released}" && git push origin refs/tags/probe` })
+    expect(direct.code).toBe(1)
+    expect(direct.out).toContain('refusing to allow a GitHub App to create or update workflow')
+
+    await releaseAll()
+    const tagged = atOrigin('rev-parse', `v${VERSION}^{commit}`)
+    expect(tagged).not.toBe(released)
+    expect(atOrigin('rev-parse', `${tagged}^`)).toBe(released)
+    // The package source is the released commit's; only the workflows are main's.
+    expect(atOrigin('diff', '--name-only', released, tagged)).toBe('.github/workflows/ci.yml')
+    expect(atOrigin('show', `${tagged}:.github/workflows/ci.yml`)).toBe(atOrigin('show', `${mainNow}:.github/workflows/ci.yml`))
+    expect(atOrigin('log', '-1', '--format=%B', tagged)).toContain(`built from ${released}`)
+    expect(fs.existsSync(path.join(state, 'releases', `v${VERSION}`))).toBe(true)
+    expect(atOrigin('log', '-1', '--format=%s', 'main')).toBe(`release: ${VERSION}`)
+
+    // A rerun takes that tag as this release's, and does nothing twice.
+    await releaseAll({ FAKE_REGISTRY_HAS: '1' })
+    expect(atOrigin('rev-parse', `v${VERSION}^{commit}`)).toBe(tagged)
+    expect(log('gh').filter((l) => l.startsWith('release create'))).toHaveLength(1)
   })
 
   it('fails, loudly, when main never holds still long enough', async () => {

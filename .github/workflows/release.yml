@@ -14,9 +14,18 @@ name: Release
 #   nightly  about every six hours (checked when CI finishes on main and every 30
 #            minutes; and by hand): the newest commit on main that CI passed,
 #            when it is not the last nightly. Published as
-#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, then the
-#            `nightly` tag moves to it. Nothing is committed: the version lives in
-#            the registry, not in package.json.
+#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`. Nothing is
+#            committed: the version lives in the registry, not in package.json,
+#            and so does the record of its commit (the version's `gitHead`).
+#
+# The job's token may point a ref only at a commit whose .github/workflows match
+# main's tip: GitHub compares a new or moved ref with the default branch, not
+# with the ref's old value or the commit's parent, and refuses anything else as
+# "create or update workflow without `workflows` permission" (2026-10-03, when a
+# `nightly` tag followed a green commit that main's newest commit had passed).
+# So no job here tags an older commit as it is: the nightly keeps no tag, and the
+# stable tag goes on the released commit or, when main's workflows moved on, on a
+# child of it that carries main's workflows (job `promote`).
 #
 # Both channels publish only commits CI passed (scripts/ci-gate.mjs reads the CI
 # workflow's `CI OK` job), because every npm install updates itself on restart.
@@ -78,8 +87,8 @@ permissions:
   actions: read
 
 env:
-  # `npm ci` runs `prepare`, which wires the repo's git hooks, and the jobs push
-  # (the nightly tag, the release commit and tag): the pre-push hook then
+  # `npm ci` runs `prepare`, which wires the repo's git hooks, and job `promote`
+  # pushes (the release tag and commit): the pre-push hook then
   # type-checked for 50s before a tag moved. Those hooks are for people.
   HUSKY: '0'
 
@@ -154,8 +163,8 @@ jobs:
             exit 0
           fi
           green="$(node scripts/ci-gate.mjs last-green main)"
-          git fetch --quiet origin 'refs/tags/nightly:refs/tags/nightly' 2>/dev/null || true
-          last="$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' 2>/dev/null || echo none)"
+          last="$(node scripts/nightly-version.mjs last)"
+          [ -n "$last" ] || last=none
           echo "newest green on main: ${green:-none}"
           echo "last nightly:         $last"
           if [ -z "$green" ]; then
@@ -170,7 +179,7 @@ jobs:
           elif [ "${{ inputs.force }}" != "true" ] && [ "$last" != "none" ] && ! git merge-base --is-ancestor "$last" "$green"; then
             # The runs list can lag a finished run by a minute or two, so "newest green"
             # may be an older commit; a nightly must never move installs backwards
-            # (`force` overrides, for a nightly tag left on a rewritten history).
+            # (`force` overrides, for a last nightly built on a rewritten history).
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "$green is not newer than the last nightly; nothing to publish"
           else
@@ -206,11 +215,12 @@ jobs:
           npm version "$version" --no-git-tag-version
           npm publish --tag nightly --provenance --access public
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Move the nightly tag to this commit
+      # The next run learns the last nightly from npm, and npm serves a version it
+      # accepted only minutes later; this channel's queue holds the next run until
+      # this step ends, so it never sees the nightly before this one.
+      - name: Wait until npm serves it
         if: steps.pick.outputs.publish == 'true'
-        run: |
-          git tag -f nightly "${{ steps.pick.outputs.sha }}"
-          git push --force origin refs/tags/nightly
+        run: node scripts/nightly-version.mjs wait "${{ steps.publish.outputs.version }}"
       - if: steps.pick.outputs.publish == 'true'
         run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from ${{ steps.pick.outputs.sha }}"
 
@@ -357,9 +367,30 @@ jobs:
             tagged="$(git rev-parse "v$VERSION^{commit}")"
           fi
           if [ -z "$tagged" ]; then
-            git tag -f -a "v$VERSION" -m "Open Walnut $VERSION" "$SHA"
-            git push origin "refs/tags/v$VERSION"
-          elif [ "$tagged" != "$SHA" ]; then
+            # This token may create the tag only on a commit whose .github/workflows
+            # match main's tip (see the top of this file). When main's workflows
+            # moved on since $SHA, the tag goes on a child of $SHA with $SHA's tree
+            # and main's workflows: the same package source, as workflows never ship.
+            for attempt in 1 2 3 4 5; do
+              git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+              target="$SHA"
+              if ! git diff --quiet "$SHA" origin/main -- .github/workflows; then
+                index="$RUNNER_TEMP/release-tag-index"
+                rm -f "$index"
+                GIT_INDEX_FILE="$index" git read-tree "$SHA"
+                GIT_INDEX_FILE="$index" git rm -r -q --cached --ignore-unmatch .github/workflows
+                GIT_INDEX_FILE="$index" git read-tree --prefix=.github/workflows/ "origin/main:.github/workflows"
+                target="$(git commit-tree "$(GIT_INDEX_FILE="$index" git write-tree)" -p "$SHA" \
+                  -m "release: $VERSION" \
+                  -m "The source of open-walnut@$VERSION, built from $SHA. Its .github/workflows are main's at $(git rev-parse origin/main), so that the release job's token may tag it.")"
+              fi
+              git tag -f -a "v$VERSION" -m "Open Walnut $VERSION" "$target"
+              if git push origin "refs/tags/v$VERSION"; then break; fi
+              if [ "$attempt" = 5 ]; then echo "::error::GitHub refused the v$VERSION tag five times"; exit 1; fi
+              echo "the tag push was refused (main may have moved); trying again ($attempt)"
+              sleep $((attempt * 5))
+            done
+          elif [ "$tagged" != "$SHA" ] && ! { [ "$(git rev-parse "$tagged^")" = "$SHA" ] && git diff --quiet "$SHA" "$tagged" -- . ':!.github/workflows'; }; then
             echo "::error::v$VERSION already exists on $tagged, not on $SHA"; exit 1
           fi
           if gh release view "v$VERSION" > /dev/null 2>&1; then

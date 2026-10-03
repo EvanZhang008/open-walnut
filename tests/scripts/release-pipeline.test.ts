@@ -14,13 +14,13 @@
  *   once a week after a fresh-machine install of it (the plan itself is
  *   tests/scripts/stable-promote.test.ts).
  */
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
-import { NIGHTLY_GAP_HOURS, newerBase, nightlyDue, nightlyVersion } from '../../scripts/nightly-version.mjs'
+import { NIGHTLY_GAP_HOURS, lastNightlyCommit, newerBase, nightlyDue, nightlyVersion, servesNightly } from '../../scripts/nightly-version.mjs'
 import { pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
@@ -175,6 +175,58 @@ describe('nightlyDue', () => {
   })
 })
 
+describe('the last nightly, as npm records it', () => {
+  const head = '6e37ee4c881d998c40046ddbe92eb58833e1e21d'
+  const pack = { 'dist-tags': { nightly: '0.6.1-nightly.20261003.27' }, versions: { '0.6.1-nightly.20261003.27': { gitHead: head } } }
+
+  it('is the gitHead of the version under the nightly dist-tag', () => {
+    expect(lastNightlyCommit(pack)).toBe(head)
+    expect(lastNightlyCommit({ 'dist-tags': {}, versions: {} })).toBe('')
+    // A version published without a git checkout has no gitHead: no record, not a guess.
+    expect(lastNightlyCommit({ ...pack, versions: { '0.6.1-nightly.20261003.27': {} } })).toBe('')
+  })
+
+  it('npm serves a nightly only once the dist-tag names it and the version is there', () => {
+    expect(servesNightly(pack, '0.6.1-nightly.20261003.27')).toBe(true)
+    expect(servesNightly(pack, '0.6.1-nightly.20261003.28')).toBe(false)
+    expect(servesNightly({ 'dist-tags': { nightly: '0.6.1-nightly.20261003.28' }, versions: {} }, '0.6.1-nightly.20261003.28')).toBe(false)
+  })
+
+  it('`last` and `wait` read the registry the job reads', async () => {
+    const http = await import('node:http')
+    let body = JSON.stringify({ 'dist-tags': {}, versions: {} })
+    let hits = 0
+    const server = http.createServer((_req, res) => {
+      hits++
+      // The third read sees the version npm finished processing.
+      if (hits === 3) body = JSON.stringify(pack)
+      res.setHeader('content-type', 'application/json')
+      res.end(body)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/open-walnut`
+    const script = path.resolve(__dirname, '../../scripts/nightly-version.mjs')
+    const call = (args: string[], waitSecs = '5') => new Promise<{ code: number; out: string }>((resolve) => {
+      execFile(process.execPath, [script, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, WALNUT_NIGHTLY_REGISTRY_URL: url, WALNUT_NIGHTLY_WAIT_EVERY_SECS: '0.05', WALNUT_NIGHTLY_WAIT_SECS: waitSecs },
+      }, (err, stdout, stderr) => resolve({ code: err ? 1 : 0, out: `${stdout}${stderr}` }))
+    })
+    try {
+      expect(await call(['last'])).toEqual({ code: 0, out: '\n' })
+      const waited = await call(['wait', '0.6.1-nightly.20261003.27'])
+      expect(waited).toEqual({ code: 0, out: 'npm serves open-walnut@0.6.1-nightly.20261003.27 as nightly\n' })
+      expect(hits).toBe(3)
+      expect((await call(['last'])).out).toBe(`${head}\n`)
+      const never = await call(['wait', '0.6.1-nightly.20261003.99'], '0.2')
+      expect(never.code).toBe(1)
+      expect(never.out).toContain('does not serve it as nightly yet')
+    } finally {
+      server.close()
+    }
+  })
+})
+
 describe('releaseNotes', () => {
   it('is the body of the version\'s section, up to the next one', () => {
     const rolled = rollChangelog(CHANGELOG, '0.5.2', '2026-10-01')
@@ -288,7 +340,7 @@ describe('release.yml', () => {
   })
 
   it('the release jobs push without the repo\'s git hooks', () => {
-    // 2026-10-02: the pre-push hook type-checked for 50s before the nightly tag moved.
+    // 2026-10-02: the pre-push hook type-checked for 50s before a tag moved.
     expect((doc as unknown as { env: Record<string, string> }).env.HUSKY).toBe('0')
   })
 
@@ -326,13 +378,20 @@ describe('release.yml', () => {
     expect(runs('nightly')).toContain('node scripts/ci-gate.mjs last-green main')
     expect(runs('nightly')).not.toContain('test:baseline')
     const pick = doc.jobs.nightly!.steps.find((s) => s.id === 'pick')
-    expect(pick?.run).toContain('refs/tags/nightly')
+    // The last nightly is the one npm records, never a git tag: the job's token
+    // cannot point a tag at a commit whose workflows differ from main's tip.
+    expect(pick?.run).toContain('last="$(node scripts/nightly-version.mjs last)"')
+    expect(pick?.run).not.toContain('refs/tags/nightly')
     expect(pick?.run).toContain('git checkout --quiet "$green"')
     // Never older than the last nightly (the runs list can lag a finished run).
     expect(pick?.run).toContain('git merge-base --is-ancestor "$last" "$green"')
     const publish = doc.jobs.nightly!.steps.find((s) => s.name?.includes('publish it'))
     expect(publish?.if).toBe("steps.pick.outputs.publish == 'true'")
-    expect(runs('nightly')).toContain('git tag -f nightly "${{ steps.pick.outputs.sha }}"')
+    expect(runs('nightly')).not.toMatch(/git (tag|push)/)
+    // The run ends only once npm serves what it published, so the next run reads it.
+    const wait = doc.jobs.nightly!.steps.findIndex((s) => (s.run ?? '').includes('node scripts/nightly-version.mjs wait "${{ steps.publish.outputs.version }}"'))
+    expect(wait).toBeGreaterThan(doc.jobs.nightly!.steps.indexOf(publish!))
+    expect(doc.jobs.nightly!.steps[wait]!.if).toBe("steps.pick.outputs.publish == 'true'")
   })
 
   it('the GitHub Release notes come from the tested script, after the publish', () => {
