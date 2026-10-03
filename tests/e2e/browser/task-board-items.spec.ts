@@ -42,6 +42,7 @@ import { expect, test, type FrameLocator, type Locator, type Page } from '@playw
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { showCustomBoard } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -120,15 +121,17 @@ async function taskWithSession(title: string, opts: Record<string, unknown>, rea
   return { id, sid: sessionId }
 }
 
-/** Open a task's session column from its row, then its Board tab. */
-async function openBoardTab(page: Page, taskId: string, sid: string): Promise<{ panel: Locator; pane: Locator; frame: FrameLocator }> {
+/** Open a task's session column from its row, then its Board tab, on the leader's page (Custom) unless `custom` is false. */
+async function openBoardTab(page: Page, taskId: string, sid: string, custom = true): Promise<{ panel: Locator; pane: Locator; frame: FrameLocator }> {
   const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 90_000 })
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
-  return { panel, pane: page.getByTestId('task-board-pane'), frame: page.frameLocator('.task-board-frame') }
+  const pane = page.getByTestId('task-board-pane')
+  if (custom) await showCustomBoard(pane)
+  return { panel, pane, frame: page.frameLocator('.task-board-frame') }
 }
 
 const leaderPost = (board: string, sid: string, thread: string, text: string) => api(
@@ -683,11 +686,11 @@ test('a worker\'s Board tab shows its leader\'s board, and its posts land there'
   await expect(leaderRow).toBeVisible({ timeout: 90_000 })
   const chevron = leaderRow.locator('.collapse-chevron')
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
-  const { pane, frame } = await openBoardTab(page, worker, sid)
+  const { pane, frame } = await openBoardTab(page, worker, sid, false)
 
-  // No board anywhere in the tree yet: the empty state, under the owner's name.
+  // No board anywhere in the tree yet: the team's Overview, under the owner's name.
   const title = pane.getByTestId('board-title')
-  await expect(pane.getByTestId('board-empty')).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-overview')).toBeVisible({ timeout: 15_000 })
   await expect(title).toHaveText(`Board · ${leaderTitle}`)
   await expect(title).toHaveAttribute('title', `Shared with your team: ${leaderTitle} keeps this board`)
   // The leader writes one: it arrives live in the worker's tab.
@@ -697,6 +700,7 @@ test('a worker\'s Board tab shows its leader\'s board, and its posts land there'
 <walnut-thread id="team-talk" title="Team talk"></walnut-thread>
 </main></body></html>`,
   })
+  await showCustomBoard(pane)
   await expect(frame.locator('h1.team-h1')).toHaveText(`${engine} team board ${stamp}`, { timeout: 15_000 })
   await expect(title).toHaveText(`Board · ${leaderTitle}`)
   // A post from the worker's tab lands on the LEADER's board.

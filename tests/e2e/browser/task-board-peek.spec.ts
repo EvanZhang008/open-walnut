@@ -34,6 +34,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { showCustomBoard } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -194,6 +195,7 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   const tabs = columnTabs(ownCol)
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  await showCustomBoard(pane)
   const frame = page.frameLocator('.task-board-frame')
   const chip = (id: string) => frame.locator(`#team walnut-task[id="${id}"] .wn-task`)
   await expect(chip(worker).locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
@@ -469,6 +471,7 @@ test('on a worker\'s panel the Board is the leader\'s: the leader\'s chip opens 
 
   // ── The worker's Board tab shows the team's board, the leader's ──
   await panel.getByTestId('session-board-chip').click()
+  await showCustomBoard(page.getByTestId('task-board-pane'))
   const frame = page.frameLocator('.task-board-frame')
   await expect(frame.locator('h1')).toHaveText(`${engine} team board ${stamp}`, { timeout: 15_000 })
   const chip = (id: string) => frame.locator(`#team walnut-task[id="${id}"] .wn-task`)

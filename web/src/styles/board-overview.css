@@ -1,0 +1,440 @@
+/* The Board's Overview (components/board/BoardOverview.tsx) and the bar's
+   Overview | Custom switch (BoardViewToggle.tsx). Same visual language as the
+   home task list: the phase circle, the red unread dot, a faint red tint for
+   "act on me", the violet Leader pill; 28px one-line rows.
+   Every selector carries the bo- / board-view- prefix: this file is injected
+   before globals.css (the component module loads first), so nothing here may
+   rely on winning a tie against a bare global class.
+   Dark mode follows the app's two switches: an explicit data-theme, or the OS
+   preference when no theme is set (same pattern as subtask-pill.css). */
+
+/* ── The view switch in the bar ── */
+.board-view-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.board-view-toggle .board-view-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.board-view-toggle .board-view-seg:hover { color: var(--fg); }
+.board-view-toggle .board-view-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.board-view-toggle .board-view-seg.is-active {
+  color: var(--fg);
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--border);
+}
+
+.board-view-toggle .board-view-seg[aria-disabled="true"] {
+  color: var(--fg-muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.board-view-toggle .board-view-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--error);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The Overview ── */
+.board-overview {
+  /* The local tones: small text on a soft tint must clear 4.5:1 on white. */
+  --bo-red: #c4271d;
+  --bo-green: #1b7f3b;
+  --bo-amber: #9e5300;
+  --bo-violet: #6d4ad6;
+  --bo-grey: var(--fg-secondary);
+  --bo-red-tint: rgba(255, 59, 48, 0.1);
+  --bo-green-tint: rgba(52, 199, 89, 0.14);
+  --bo-amber-tint: rgba(255, 149, 0, 0.14);
+  --bo-violet-tint: rgba(139, 92, 246, 0.13);
+  --bo-grey-tint: color-mix(in srgb, var(--fg) 7%, transparent);
+  --bo-needs-row: rgba(255, 59, 48, 0.06);
+  --bo-needs-row-hover: rgba(255, 59, 48, 0.11);
+
+  /* Where a row's title starts, for the lines that align with it (row padding + dot + circle + gaps). */
+  --bo-text-x: 51px;
+
+  container: board-overview / inline-size;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 18px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+:root[data-theme="dark"] .board-overview {
+  --bo-red: #ff6961;
+  --bo-green: #30d158;
+  --bo-amber: #ffb340;
+  --bo-violet: #b9a8ff;
+  --bo-red-tint: rgba(255, 69, 58, 0.18);
+  --bo-green-tint: rgba(48, 209, 88, 0.16);
+  --bo-amber-tint: rgba(255, 179, 64, 0.16);
+  --bo-violet-tint: rgba(160, 140, 255, 0.18);
+  --bo-needs-row: rgba(255, 69, 58, 0.1);
+  --bo-needs-row-hover: rgba(255, 69, 58, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .board-overview {
+    --bo-red: #ff6961;
+    --bo-green: #30d158;
+    --bo-amber: #ffb340;
+    --bo-violet: #b9a8ff;
+    --bo-red-tint: rgba(255, 69, 58, 0.18);
+    --bo-green-tint: rgba(48, 209, 88, 0.16);
+    --bo-amber-tint: rgba(255, 179, 64, 0.16);
+    --bo-violet-tint: rgba(160, 140, 255, 0.18);
+    --bo-needs-row: rgba(255, 69, 58, 0.1);
+    --bo-needs-row-hover: rgba(255, 69, 58, 0.16);
+  }
+}
+
+/* The leader and the rollup */
+.board-overview .bo-head {
+  padding: 10px 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.board-overview .bo-kicker {
+  padding: 0 8px 2px calc(var(--bo-text-x) - 8px);
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.board-overview .bo-rollup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 0 8px 0 calc(var(--bo-text-x) - 8px);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-overview .bo-rollup-text { flex: 0 0 auto; white-space: nowrap; }
+
+.board-overview .bo-meter {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 40px;
+  max-width: 220px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.board-overview .bo-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--success);
+  transition: width 0.3s ease;
+}
+
+.board-overview .bo-meter-pct {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* Groups */
+.board-overview .bo-group { padding: 0 8px; }
+
+.board-overview .bo-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 12px 16px 4px;
+  border: 0;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.board-overview .bo-group-head:hover { color: var(--fg-secondary); }
+.board-overview .bo-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+
+.board-overview .bo-chevron {
+  width: 0;
+  height: 0;
+  margin: 0 2px 0 3px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  transition: transform 0.15s ease;
+}
+
+.board-overview .bo-chevron.is-open { transform: rotate(90deg); }
+
+.board-overview .bo-group-count {
+  color: var(--fg-muted);
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-overview .bo-group[data-group="needs"] .bo-group-label { color: var(--bo-red); }
+
+.board-overview .bo-group[data-group="needs"] .bo-group-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--error);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.board-overview .bo-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A row: [dot] (circle) Title · now ........ [Leader · N] [Badge] 3m */
+.board-overview .bo-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 3px 8px 3px calc(4px + var(--bo-indent, 0) * 18px);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-overview .bo-row:hover { background: var(--bg-hover); }
+.board-overview .bo-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.board-overview .bo-row[data-group="needs"] { background: var(--bo-needs-row); }
+.board-overview .bo-row[data-group="needs"]:hover { background: var(--bo-needs-row-hover); }
+
+/* A child of the row above, in the same group: a thin guide where its parent's circle sits. */
+.board-overview .bo-row[data-indent="1"]::before,
+.board-overview .bo-row[data-indent="2"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(4px + (var(--bo-indent, 1) - 1) * 18px + 24px);
+  border-left: 1px solid var(--border-strong);
+}
+
+.board-overview .bo-gutter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 9px;
+  width: 9px;
+  height: 18px;
+}
+
+.board-overview .bo-gutter .task-unread-dot { width: 7px; height: 7px; }
+
+.board-overview .bo-circle.task-phase-icon-btn {
+  flex: 0 0 18px;
+  cursor: inherit;
+  pointer-events: none;
+}
+
+.board-overview .bo-circle.task-phase-icon-btn:hover { background: none; }
+
+.board-overview .bo-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.board-overview .bo-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* The now-line takes what the title leaves; it never squeezes a short title. */
+.board-overview .bo-row:not(.bo-row-leader) .bo-title { flex-shrink: 0; max-width: 62%; }
+
+.board-overview .bo-now {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.board-overview .bo-row[data-group="needs"] .bo-now { color: var(--fg-secondary); }
+.board-overview .bo-row[data-reason="error"] .bo-now,
+.board-overview .bo-row[data-reason="permission"] .bo-now { color: var(--bo-red); }
+
+.board-overview .bo-under { color: var(--fg-muted); }
+
+.board-overview .bo-row[data-group="done"] .bo-title { color: var(--fg-secondary); }
+
+.board-overview .bo-tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.board-overview .bo-place {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
+
+.board-overview .task-team-pill.bo-leader-pill { cursor: inherit; }
+
+.board-overview .bo-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--bo-grey-tint);
+  color: var(--bo-grey);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.board-overview .bo-badge[data-tone="red"] { background: var(--bo-red-tint); color: var(--bo-red); }
+.board-overview .bo-badge[data-tone="green"] { background: var(--bo-green-tint); color: var(--bo-green); }
+.board-overview .bo-badge[data-tone="amber"] { background: var(--bo-amber-tint); color: var(--bo-amber); }
+.board-overview .bo-badge[data-tone="violet"] { background: var(--bo-violet-tint); color: var(--bo-violet); }
+
+.board-overview .bo-time {
+  min-width: 26px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The leader: the title on top, its "now" line under it; a touch larger. */
+.board-overview .bo-row.bo-row-leader { min-height: 36px; padding-top: 4px; padding-bottom: 4px; cursor: pointer; }
+.board-overview .bo-row-leader .bo-main { flex-direction: column; align-items: stretch; gap: 0; }
+.board-overview .bo-row-leader .bo-title { font-size: 14px; font-weight: 600; line-height: 19px; }
+.board-overview .bo-row-leader .bo-now { flex: 0 0 auto; }
+.board-overview .bo-row.bo-row-unknown { cursor: default; padding-left: calc(var(--bo-text-x) - 8px); }
+
+/* Empty team, loading, the archive note, the no-page line */
+.board-overview .bo-empty {
+  padding: 18px 16px 6px var(--bo-text-x);
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.board-overview .bo-empty-title { color: var(--fg-secondary); font-weight: 600; }
+
+.board-overview .bo-archive,
+.board-overview .bo-foot {
+  padding: 8px 16px 0 var(--bo-text-x);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.board-overview .bo-foot { padding-top: 16px; }
+
+.board-overview .bo-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text, var(--accent));
+  font: inherit;
+  cursor: pointer;
+}
+
+.board-overview .bo-link:hover { text-decoration: underline; }
+.board-overview .bo-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.board-overview .bo-link:disabled { color: var(--fg-muted); cursor: default; text-decoration: none; }
+
+.board-overview .bo-foot-error {
+  margin-top: 4px;
+  color: var(--bo-red);
+}
+
+/* A narrow pane: the title keeps the room, the now-line moves to the tooltip. */
+@container board-overview (max-width: 420px) {
+  .board-overview .bo-row:not(.bo-row-leader) .bo-now { display: none; }
+  .board-overview .bo-row:not(.bo-row-leader) .bo-title { flex-shrink: 1; max-width: 100%; }
+  .board-overview .bo-place { display: none; }
+}

@@ -31,6 +31,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { showCustomBoard } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -158,8 +159,10 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await chip.click()
   await expect(chip).toHaveClass(/session-action-chip-active/)
   const pane = page.getByTestId('task-board-pane')
-  await expect(pane.getByTestId('board-empty')).toBeVisible({ timeout: 15_000 })
-  await expect(pane.getByTestId('board-empty')).toContainText('No board yet.')
+  // No page yet: the Overview (the default view) lists the team, and the ask is a small link under it.
+  await expect(pane.getByTestId('board-overview')).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-overview-no-page')).toContainText('No custom page yet.')
+  await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-disabled', 'true')
   const ask = pane.getByTestId('board-ask-button')
   await expect(ask).toHaveText('Ask for a board')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-1-empty.png` })
@@ -168,8 +171,9 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await expect(panel.getByText(/Please start a Board for this task: read the walnut-board skill/).first()).toBeVisible({ timeout: 15_000 })
   await expect(ask).toHaveText('Ask for a board', { timeout: 8_000 })
 
-  // ── 2. A board arrives: the frame renders it live, no click needed ──
+  // ── 2. A board arrives: Custom turns on live, and the frame renders it ──
   await api('PUT', `/api/v1/tasks/${leader}/board`, { html: boardHtml(engine, stamp, worker) })
+  await showCustomBoard(pane)
   const frame = page.frameLocator('.task-board-frame')
   const workerChip = frame.locator(`#sec-a walnut-task[id="${worker}"] .wn-task`)
   await expect(workerChip.locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
@@ -484,6 +488,6 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   mode = 'real'
   await error.getByRole('button', { name: 'Retry' }).click()
   await expect(error).toHaveCount(0)
-  await expect(pane.getByTestId('board-empty')).toBeVisible()
+  await expect(pane.getByTestId('board-overview')).toBeVisible()
   await expect(pane.getByTestId('board-ask-button')).toHaveText('Ask for a board')
 })

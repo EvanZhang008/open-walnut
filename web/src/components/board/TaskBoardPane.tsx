@@ -46,8 +46,12 @@ import {
 } from './board-items-model';
 import { BoardReplyDock, type BoardDockAnchor, type BoardReplyTarget } from './BoardReplyDock';
 import { boardView, keepBoardView } from './board-view-memory';
+import { BoardOverview } from './BoardOverview';
+import { BoardViewToggle } from './BoardViewToggle';
+import { ASK_FOR_BOARD_TEXT, useAskForBoard } from './useAskForBoard';
 import { useBoardItemSaves } from './useBoardItemSaves';
 import { boardErrorMessage, boardPath, useTaskBoard } from './useTaskBoard';
+import { useBoardView, useTeamOverview } from './useTeamOverview';
 import '@/styles/task-board.css';
 
 export interface TaskBoardPaneProps {
@@ -61,10 +65,7 @@ export interface TaskBoardPaneProps {
   onSendToSession?: (text: string) => Promise<unknown> | void;
 }
 
-export const ASK_FOR_BOARD_TEXT = 'Please start a Board for this task: read the walnut-board skill '
-  + '(walnut tools call skill_read \'{"dirName":"walnut-board"}\'), write it with board_set, and keep it current.';
-
-const ASKED_MS = 3000;
+export { ASK_FOR_BOARD_TEXT };
 /** The frame runtime: the core first (it defines the kit), the message renderer, the elements, the items, then the sections (it hides the kit). */
 const RUNTIME_SRC = `${runtimeCore}\n${runtimeMarkdown}\n${runtimeElements}\n${runtimeItems}\n${runtimeSections}`;
 
@@ -118,6 +119,16 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     pendingSeen.current = {};
     setReply(null);
   }, [ownerId]);
+
+  // ── Overview (Walnut's view of the team, the default) | Custom (the leader's page) ──
+  const hasPage = !!board;
+  const team = useTeamOverview(ownerId, payload, seen);
+  const { view, pick: pickView } = useBoardView(ownerId, hasPage);
+  // No task store (a pop-out window) has no team to show: the page alone, as before.
+  const shownView = team.overview ? view : 'custom';
+  // The frame boots on the first Custom visit, then stays mounted (hidden) so switching back is instant.
+  const [frameOwner, setFrameOwner] = useState<string | null>(null);
+  useEffect(() => { if (shownView === 'custom') setFrameOwner(ownerId); }, [shownView, ownerId]);
 
   // ── Live refs: the store's row wins, the payload's copy is the fallback ──
   const refsNow = useMemo(
@@ -376,7 +387,10 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
           data-testid="board-title"
           data-board-task-id={ownerId}
         >{barTitle.text}</span>
-        {board && (
+        {team.overview && payload && (
+          <BoardViewToggle view={shownView} hasPage={hasPage} attention={team.overview.attention} onPick={pickView} />
+        )}
+        {board && shownView === 'custom' && (
           <span className="task-board-bar-sub" title={new Date(board.updated_at).toLocaleString()} data-testid="board-meta">
             v{board.version} · updated {timeAgo(board.updated_at, { long: true })} by {boardWriterLabel(board.updated_by, ownerId)}
           </span>
@@ -400,7 +414,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         </div>
       )}
       <div className={`task-board-body${dockAnchor ? ' has-inline-dock' : ''}`}>
-        {srcDoc !== null ? (
+        {srcDoc !== null && (shownView === 'custom' || frameOwner === ownerId) && (
           <iframe
             ref={frameRef}
             className="task-board-frame"
@@ -408,15 +422,29 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             sandbox="allow-scripts"
             name={frameName.current || undefined}
             srcDoc={srcDoc}
+            style={shownView === 'custom' ? undefined : { display: 'none' }}
           />
-        ) : payload && !board ? (
-          // No board anywhere in the tree: ask its owner (this session's composer only when that is this task).
+        )}
+        {shownView === 'overview' && team.overview && payload ? (
+          <BoardOverview
+            key={ownerId}
+            overview={team.overview}
+            ownerTitle={ownerTitle}
+            hasPage={hasPage}
+            loading={team.loading}
+            completedHidden={team.completedHidden}
+            onLoadArchive={team.loadArchive}
+            onOpenTask={openTask}
+            onSendToSession={ownerId === taskId ? onSendToSession : undefined}
+          />
+        ) : srcDoc === null && payload && !board ? (
+          // No board anywhere in the tree, and no team to show (no task store): ask its owner.
           <BoardEmptyState taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />
-        ) : loading ? (
+        ) : loading && !payload ? (
           <div className="task-board-loading">Loading the board…</div>
         ) : null}
         {/* Inside the body: inline over the frame's slot, or (no slot) a bar under the frame. */}
-        {reply && board && (
+        {reply && board && shownView === 'custom' && (
           <BoardReplyDock
             boardTaskId={ownerId}
             target={reply.target}
@@ -436,30 +464,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
 
 /** No board yet: say what one is, and let the user ask the leader for one. */
 function BoardEmptyState({ taskId, onSendToSession }: Pick<TaskBoardPaneProps, 'taskId' | 'onSendToSession'>) {
-  const [state, setState] = useState<'idle' | 'sending' | 'asked'>('idle');
-  const [askError, setAskError] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-
-  const ask = async () => {
-    setState('sending');
-    setAskError(null);
-    try {
-      let ok = true;
-      if (onSendToSession) ok = (await onSendToSession(ASK_FOR_BOARD_TEXT)) !== false;
-      else await apiPost('/api/v1/messages', { to: taskId, text: ASK_FOR_BOARD_TEXT });
-      if (!ok) throw new Error('The message was not sent');
-      log.info('board', 'asked the leader for a board', { taskId });
-      setState('asked');
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setState('idle'), ASKED_MS);
-    } catch (err) {
-      const message = boardErrorMessage(err);
-      log.error('board', 'ask for a board failed', { taskId, error: message });
-      setAskError(message);
-      setState('idle');
-    }
-  };
+  const { state, askError, ask } = useAskForBoard(taskId, onSendToSession);
 
   return (
     <div className="task-board-empty" data-testid="board-empty">
