@@ -6,6 +6,22 @@ breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An effort you pick right after starting a session is kept.** A reasoning effort chosen
+  while the session's Claude Code was still starting was saved, then replaced by the launch
+  effort a moment later, and that Claude Code ran the launch effort until it ended. The pick
+  now holds, and the starting Claude Code is told.
+- **A session keeps the mode you picked while it was not running.** Switching a session's
+  permission mode (to accept edits, say) while its Claude Code process had ended was saved,
+  but the next message resumed it in the old mode.
+- **Stopping the search model can no longer crash the server.** The model ran on a thread
+  inside the server, and ending that thread in the middle of a model run (an idle stop
+  firing after the Mac woke, a shutdown, the server exiting) aborted the whole server. It
+  now runs in a process of its own, which is the only thing a forced stop can end.
+
+## [0.6.1] - 2026-10-03
+
 ### Changed
 
 - **Stable releases are automatic and daily.** Every day the newest nightly that has been out
@@ -18,26 +34,14 @@ breaking changes).
   the way a user does, on Linux and macOS, serves it, runs a session against a mock Claude
   Code across a restart, and checks that both an older build and the version on npm today
   update themselves to it. The slow test tier (about 1,000 tests with real daemons and
-  servers) and the e2e tier (real servers with a mock Claude Code) now block too, and the
-  browser suite runs on every push.
+  servers) now blocks too, and the e2e and browser suites run on every push.
 
 ### Fixed
 
-- **An effort you pick right after starting a session is kept.** A reasoning effort chosen
-  while the session's Claude Code was still starting was saved, then replaced by the launch
-  effort a moment later, and that Claude Code ran the launch effort until it ended. The pick
-  now holds, and the starting Claude Code is told.
-- **A session keeps the mode you picked while it was not running.** Switching a session's
-  permission mode (to accept edits, say) while its Claude Code process had ended was saved,
-  but the next message resumed it in the old mode.
 - **On Linux, editing notes no longer stops the server.** Linux watches the notes folder one
   subfolder at a time, and a folder that vanished while it was being read (each note save
   makes and removes a short-lived lock folder) was an error nobody handled, so the server
   exited. Those errors are now logged and watching carries on.
-- **Stopping the search model can no longer crash the server.** The model ran on a thread
-  inside the server, and ending that thread in the middle of a model run (an idle stop
-  firing after the Mac woke, a shutdown, the server exiting) aborted the whole server. It
-  now runs in a process of its own, which is the only thing a forced stop can end.
 - **A published build no longer calls itself dirty.** `open-walnut --version` on 0.6.0 reads
   `33eb1cb+dirty` because the release rewrote a stale `web/package-lock.json` while it built.
   The lockfile is current again, CI and the release jobs install with `npm ci` (which never
