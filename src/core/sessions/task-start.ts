@@ -10,6 +10,7 @@ import type { Task, SessionEngine, SessionMode } from '../types.js';
 import { engineCaps, normalizeEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
+import { deferTaskStart, workspaceCwdOf, workspaceStartPlace } from '../workspaces/launch.js';
 
 export interface SessionStartParams {
   taskIdPrefix: string;
@@ -31,6 +32,8 @@ export interface SessionStartResult {
   sessionId?: string;
   requestId?: string;
   started: boolean;
+  /** The task's isolated workspace is being made; the session starts in it once it is ready. */
+  preparing?: boolean;
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -82,6 +85,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   }
   const pending = pendingStarts.get(task.id);
   if (pending !== undefined) throw alreadyStarted(task, pending);
+  // A workspace still being made: the start waits for it (core/workspaces/launch.ts).
+  const deferred = await deferTaskStart(task, params);
+  if (deferred) return deferred;
   const engine = normalizeEngine(params.engine);
   const sid = engineCaps(engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   const runtimeId = sid ?? `acp-${randomUUID()}`;
@@ -254,13 +260,15 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
  * default host is the local box, and the first start died on a path that only
  * exists remotely).
  */
-export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id'>): Promise<string | undefined> {
+export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'>): Promise<string | undefined> {
   const project = (task.project ?? '').trim().toLowerCase();
-  let current: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id'> | undefined = task;
+  let current: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'> | undefined = task;
   const seen = new Set<string>();
   while (current && !seen.has(current.id)) {
     if ((current.project ?? '').trim().toLowerCase() !== project) return undefined;
-    if (current.cwd) return current.cwd;
+    // A ready isolated workspace is where the task's work lives (core/workspaces).
+    const own = workspaceCwdOf(current) ?? current.cwd;
+    if (own) return own;
     seen.add(current.id);
     current = current.parent_task_id ? await getTask(current.parent_task_id).catch(() => undefined) : undefined;
   }
@@ -278,14 +286,16 @@ async function prepareLaunch(task: Task, params: SessionStartParams) {
     if (!model) throw new QuickStartError(`Invalid model: ${params.model}. Use one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}`, 400);
   }
   const metadata = await getProjectMetadata(task.project || '');
-  let cwd = params.cwd ?? await recordedCwd(task);
+  // The task's own ready workspace: its cwd and host as ONE pair (core/workspaces/launch.ts).
+  const wsPlace = workspaceStartPlace(task, params);
+  let cwd = wsPlace?.cwd ?? params.cwd ?? await recordedCwd(task);
   // A worker starting another task of its own project, with no place named and
   // none recorded, runs it where the worker runs: host and cwd as ONE pair, so
   // a path never lands on a machine it does not exist on (caller-placement.ts).
   const pair = !cwd && params.host === undefined && params.callerSid
     ? await inheritedLaunchPair(params.callerSid, task).catch(() => undefined)
     : undefined;
-  const requestedHost = params.host ?? (pair ? pair.host : metadata?.default_host);
+  const requestedHost = wsPlace ? wsPlace.host : params.host ?? (pair ? pair.host : metadata?.default_host);
   const host = requestedHost === '__local__' || requestedHost === 'local' ? '' : requestedHost;
   if (host && host !== '__local__' && host !== 'local') {
     const { getConfig } = await import('../config-manager.js');

@@ -1,0 +1,188 @@
+/* Task workspaces: the draft option, the row pill, the kebab flyout, the preparing column. */
+
+/* ── Draft: "Isolated workspace" ── */
+.draft-workspace-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+/* The switch is a row of the draft's More menu (DraftWorkspaceMenuItem). */
+.draft-workspace-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.draft-workspace-menu-hint { font-size: 11px; color: var(--fg-muted); }
+/* While on: one quiet pill leads the body, its × turns the option off. */
+.draft-workspace-on {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 3px 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.draft-workspace-off {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.draft-workspace-off:hover { background: var(--accent-subtle); color: var(--fg); }
+.draft-workspace-off:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+.draft-workspace-check {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+}
+.draft-workspace-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-width: 0;
+  padding-left: 2px;
+}
+.draft-workspace-providers { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.draft-workspace-provider {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.draft-workspace-provider:hover { border-color: var(--accent); color: var(--accent); }
+.draft-workspace-provider.is-picked { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+.draft-workspace-provider-meta { color: var(--fg-muted); }
+.draft-workspace-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.draft-workspace-field-label { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.draft-workspace-input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.draft-workspace-input:focus { outline: none; border-color: var(--accent); }
+.draft-workspace-note { font-size: 11px; color: var(--fg-muted); }
+.draft-workspace-note.is-warn { color: var(--color-warning, #b26a00); }
+.draft-workspace-note.is-error { color: var(--color-error, #ff3b30); }
+
+/* ── Task row pill ── */
+.workspace-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-pill-glyph { font-size: 10px; opacity: 0.8; }
+.workspace-pill-ok { color: var(--accent); }
+.workspace-pill-busy { color: var(--fg-muted); }
+.workspace-pill-warn { color: var(--color-warning, #b26a00); }
+.workspace-pill-error { color: var(--color-error, #ff3b30); }
+.workspace-pill-spin {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: workspace-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes workspace-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .workspace-pill-spin { animation: none; } }
+
+/* ── Kebab flyout ── */
+.workspace-flyout { min-width: 260px; max-width: 360px; padding: 6px 0; }
+.workspace-flyout-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 12px 6px;
+}
+.workspace-flyout-title { font-size: 12px; font-weight: 600; color: var(--fg); }
+.workspace-flyout-state { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.workspace-flyout-state.is-failed { color: var(--color-error, #ff3b30); }
+.workspace-flyout-state.is-kept { color: var(--color-warning, #b26a00); }
+.workspace-flyout-state.is-ready { color: var(--accent); }
+.workspace-flyout-note {
+  margin: 0 12px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+.workspace-flyout-note.is-error { color: var(--color-error, #ff3b30); }
+.workspace-flyout-note.is-warn { color: var(--color-warning, #b26a00); }
+.workspace-fact {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 6px;
+  padding: 2px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.workspace-fact-label { color: var(--fg-muted); }
+.workspace-fact-value { color: var(--fg); overflow-wrap: anywhere; user-select: text; }
+.workspace-fact-value.is-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; }
+.workspace-repos { display: flex; flex-wrap: wrap; gap: 3px 4px; }
+.workspace-repo {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--fg-secondary);
+}
+.workspace-flyout .task-kebab-item { margin-top: 2px; }
+.workspace-confirm-body p { margin: 0 0 6px; overflow-wrap: anywhere; }
+
+/* ── Preparing column ── */
+/* Prose, not a path: the panel's .pending-session-path (globals.css, loaded later)
+   is monospace with break-all, which split words mid-way ("beta-w / ebkit"). */
+.workspace-preparing-panel .workspace-preparing-progress,
+.workspace-preparing-panel .workspace-preparing-error {
+  font-family: inherit; font-size: 12px; word-break: normal; overflow-wrap: anywhere; max-width: 420px;
+}
+.workspace-preparing-panel .workspace-preparing-progress { color: var(--fg-secondary); }
+.workspace-preparing-panel .workspace-preparing-error { color: var(--color-error, #ff3b30); white-space: pre-wrap; }

@@ -16,6 +16,7 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
 import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
+import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
 import { TaskTagPills } from './TaskTagPills';
@@ -526,6 +527,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       <LeaderPill task={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />
       <TriggerPill taskId={task.id} />
+      <WorkspacePill task={task} />
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
           rows. Hidden in select mode: a press there means "toggle selection", so a
           launch button would be a mis-click trap. */}

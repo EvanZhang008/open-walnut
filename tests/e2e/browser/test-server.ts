@@ -3918,6 +3918,18 @@ if (!mockDaemon) {
 }
 if (mockDaemon) {
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+  // Task workspaces run on the daemon this fixture's sessions use (MockDaemon runs the
+  // real workspace core), never on the isolated real local daemon, whose prebuilt
+  // binary may predate 'workspace-v1'. Only the pool lookup is swapped.
+  if (process.env.PW_WORKSPACE_FIXTURE === '1') {
+    const { __setWorkspaceConnectionForTesting } = await import('../../../src/core/workspaces/daemon-client.js')
+    const { getDirectDaemonConnection } = await import('../../../src/providers/daemon-connection.js')
+    const wsUrl = `ws://127.0.0.1:${mockDaemon.port}`
+    __setWorkspaceConnectionForTesting(async (host) => {
+      if (host !== '__local__') throw new Error(`the workspace fixture has no host ${host}`)
+      return getDirectDaemonConnection('__local__', wsUrl)
+    })
+  }
   if (process.env.WALNUT_TEST_HOST_FIXTURE_MODE === '1') {
     // A fixture host lists folders through this daemon, from the fixture's tree.
     const { fixtureFsLs, setFixtureSpawnProbe } = await import('../../../src/core/hosts/host-fixture.js')

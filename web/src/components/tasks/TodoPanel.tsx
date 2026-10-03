@@ -51,6 +51,7 @@ import { CronPill } from '@/components/sessions/CronPill';
 import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
+import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { TagEditor } from '@/components/tasks/TagEditor';
 import { dateTags } from '../../../../src/core/tag-model';
@@ -1385,6 +1386,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <CronPill sessionId={resolveTaskSessionId(task)} />
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
+          <WorkspacePill task={task} />
           <TaskTagPills task={task} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />

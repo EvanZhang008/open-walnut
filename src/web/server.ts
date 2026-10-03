@@ -1506,6 +1506,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startWaitUntilWatch()
   }
 
+  // ── Task workspaces: cleanup on complete/delete + resume interrupted jobs (src/core/workspaces/).
+  {
+    const { startWorkspaceWatch } = await import('../core/workspaces/watch.js')
+    startWorkspaceWatch()
+  }
+
   // ── Task Boards: a deleted task takes its board with it, and the reminders
   // clock (src/core/boards/board-reminders.ts) runs; both primary only.
   {
@@ -1745,6 +1751,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Remote-host connect status (hydrate + deliberate retry); live updates ride
   // the `host:status` WS event, so nothing polls this.
   app.use('/api/hosts', hostsRouter)
+  app.use('/api/workspaces', (await import('./routes/workspaces.js')).workspacesRouter) // per-task isolated workspaces
   app.use('/api/resources', resourcesRouter)
   // Test-only remote-host fixture: mounted solely by the Playwright fixture
   // server (the flag, AND ephemeral, AND not cloud: hostFixtureRouteAllowed).
@@ -5551,6 +5558,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('host-status-defs')
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts
+  bus.unsubscribe('task-workspaces') // core/workspaces/watch.ts
   try {
     const { stopBoardReminders } = await import('../core/boards/board-reminders.js')
     stopBoardReminders() // its subscriber and its timer

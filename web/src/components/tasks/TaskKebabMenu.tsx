@@ -18,6 +18,7 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
+import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
@@ -769,6 +770,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               tracker's Sprint. Generic: one picker row per declared field,
               options fetched from the plugin when the flyout opens. */}
           <PluginFieldsSection task={task} afterAction={closeMenu} />
+
+          {/* The task's isolated workspace: details, Retry, Remove workspace… */}
+          <WorkspaceMenuSection task={task} afterAction={closeMenu} />
 
           {/* Source badge — combined with external link if available */}
           {task.source && (() => {

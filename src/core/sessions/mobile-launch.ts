@@ -20,6 +20,7 @@ import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
+import { mobileWorkspacePlace } from '../workspaces/launch.js';
 import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { SessionEngine } from '../types.js';
 import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
@@ -291,10 +292,12 @@ export async function performMobileLaunch(
 
   const preassignedSessionId = engineCaps(input.engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   const ask = input.walnutAgent ? await planMobileAsk(input) : undefined;
+  // A task with a ready isolated workspace launches in it (core/workspaces/launch.ts).
+  const wsPlace = input.taskId && !ask ? await mobileWorkspacePlace(input.taskId, input.cwd, input.host) : null;
   const task = await quickStartSession({
     message: input.message,
-    cwd: ask ? ASK_LAUNCH_CWD : input.cwd,
-    host: input.host,
+    cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd,
+    host: wsPlace ? wsPlace.host : input.host,
     model: ask ? ask.model : input.model,
     mode: input.mode,
     existingTaskId: input.taskId,
@@ -315,7 +318,7 @@ export async function performMobileLaunch(
   });
   if (ask) rememberAskModelPick(input.rawModel, input.taskId);
   log.web.info(`${source}: session created`, {
-    sessionId: preassignedSessionId, taskId: task.id, cwd: ask ? ASK_LAUNCH_CWD : input.cwd, host: input.host ?? '',
+    sessionId: preassignedSessionId, taskId: task.id, cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd, host: (wsPlace ? wsPlace.host : input.host) ?? '',
     ...(ask ? { ask: true, agentId: ask.agentId } : {}),
   });
   return {

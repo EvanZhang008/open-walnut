@@ -83,6 +83,7 @@ import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
+import { createWorkspaceCore, type WorkspaceCoreDeps } from './workspace-core.js'
 import {
   computeHostLocalChanges,
   toLightChangesResult,
@@ -1846,6 +1847,16 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'turns.restore':
     case 'turns.guard':
     case 'turns.configure': return cmdTurns(ws, id as number, cmd)
+    // 'workspace-v1' (workspace-core.ts): a task's isolated working copy. NOT in
+    // BRIDGE_ALLOWED_COMMANDS: it runs providers and removes folders on this host.
+    // Keep in sync with daemon-source.ts.
+    case 'workspace.configure':
+    case 'workspace.detect':
+    case 'workspace.create':
+    case 'workspace.job':
+    case 'workspace.status':
+    case 'workspace.repos':
+    case 'workspace.remove': return cmdWorkspace(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id as number, cmd)
@@ -7030,6 +7041,35 @@ function cmdGitCommitStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     })
   } catch (err) {
     sendError(ws, id, 'git.commitStart failed: ' + (err as Error).message, { code: (err as { code?: string }).code ?? 'failed' })
+  }
+}
+
+// ── Task workspaces (host-local, capability 'workspace-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is workspace-core.ts
+// (shared with the source twin); this twin only hands it the host's spawn/fs.
+const workspaceCore = createWorkspaceCore({
+  spawn: spawn as unknown as WorkspaceCoreDeps['spawn'],
+  fs: fs as unknown as WorkspaceCoreDeps['fs'],
+  path, homedir: () => HOME_DIR, env: process.env,
+  stateDir: SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR,
+  randomId: () => crypto.randomBytes(6).toString('hex'),
+  killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal as NodeJS.Signals) },
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+function cmdWorkspace(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const name = String(cmd.cmd)
+  const work = () => workspaceCore.handle(name, cmd).then(
+    (r) => { if (r.ok) sendOk(ws, id, r); else sendError(ws, id, r.error, r) },
+    (err) => sendError(ws, id, name + ' failed: ' + (err as Error).message, { code: 'failed' }),
+  )
+  // A job poll is a read and must answer during a shutdown; everything else is
+  // admitted through the drain so a stopping daemon starts no new provider run.
+  if (name === 'workspace.job') return work()
+  try {
+    return daemonCommands.run(work)
+  } catch (err) {
+    sendError(ws, id, name + ' refused: ' + (err as Error).message, { code: 'daemon_stopping' })
   }
 }
 

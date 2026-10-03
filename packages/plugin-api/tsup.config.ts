@@ -6,6 +6,7 @@ export default defineConfig({
     server: 'src/server.ts',
     web: 'src/web.ts',
     testing: 'src/testing.ts',
+    workspace: 'src/workspace.ts',
     react: 'src/react.ts',
     'react-dom': 'src/react-dom.ts',
     'jsx-runtime': 'src/jsx-runtime.ts',

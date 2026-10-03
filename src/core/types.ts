@@ -761,6 +761,9 @@ export interface Task {
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.
    *  UI surfaces a warning; cleared when cwd is updated to a valid path. */
   cwd_missing?: boolean;
+  /** The task's isolated workspace, when it asked for one (src/core/workspaces/).
+   *  Records its host. Local-only, payload blob; never pushed to sync backends. */
+  workspace?: import('./workspaces/types.js').TaskWorkspace;
   /** ISO timestamp — server-side lastModified from last successful push response.
    *  Used for echo detection on pull. Local-only, never pushed to remote. */
   _syncedAt?: string;

@@ -79,6 +79,18 @@ describe('mergeFetchedTasks', () => {
     expect(next[0]).toBe(withNote); // has_note flip must not be swallowed
   });
 
+  it('detects a change of the task workspace, whose writes leave updated_at alone', () => {
+    const ws = { provider: 'git-worktree', host: '__local__', anchor: '/r/app', repos: [], state: 'creating' as const, progress: 'Starting', updated_at: '2026-10-02T10:00:00Z' };
+    const a = task({ id: 'a', workspace: ws });
+    expect(listRowEqual(a, { ...a, workspace: { ...ws } } as Task)).toBe(true);
+    expect(listRowEqual(a, { ...a, workspace: { ...ws, progress: 'Cloning alpha' } } as Task)).toBe(false);
+    expect(listRowEqual(a, { ...a, workspace: { ...ws, state: 'failed', error: 'no network' } } as Task)).toBe(false);
+    const b = task({ id: 'b' });
+    expect(listRowEqual(b, { ...b, workspace: ws } as Task)).toBe(false);
+    const next = mergeFetchedTasks([a], [{ ...a, workspace: { ...ws, state: 'ready' as const } } as Task]);
+    expect(next[0].workspace?.state).toBe('ready');
+  });
+
   it('detects is_blocked flips (blocked badge must heal on refetch)', () => {
     const a = task({ id: 'a' });
     const blocked = { ...a, is_blocked: true } as unknown as Task;

@@ -30,7 +30,7 @@
  * it was and the menu grows down from its top, capped to the viewport (C25b).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { TaskPriority } from '@open-walnut/core';
 import { ProjectPickerFlyout, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
@@ -67,6 +67,9 @@ interface Props {
   /** The Project section at the top (absent: Ask Walnut, whose project is a
    *  server fact). */
   project?: DraftMenuProject;
+  /** The "Isolated workspace" row, right under the Project section (absent:
+   *  Ask Walnut and forks, which run where they must). */
+  workspace?: ReactNode;
 }
 
 /** The task's project, as the menu's first section shows it. */
@@ -82,7 +85,7 @@ export interface DraftMenuProject {
 
 export function DraftTaskMenuPopover({
   open, anchorEl, menuRef, meta, priorityVisible, walnutPicks,
-  onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce, focusTarget = 'tier', project,
+  onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce, focusTarget = 'tier', project, workspace,
 }: Props) {
   // A fresh ref OBJECT per anchor: useMenuPlacement re-places (and re-decides
   // the side) when its ref identity changes, so a re-anchor moves the open menu.
@@ -169,6 +172,7 @@ export function DraftTaskMenuPopover({
         <span>The task this launch creates</span>
       </div>
       {project && <ProjectSection project={project} onDone={() => onClose('select')} />}
+      {workspace}
       <TaskActionMenuItems
         task={{
           priority: (meta.priority ?? 'none') as TaskPriority,

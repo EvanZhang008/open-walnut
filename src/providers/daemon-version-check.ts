@@ -154,6 +154,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/git-diff-core.ts',
   // The paced bridge uplink and loop-drift probe: same import-or-inline rule.
   'src/providers/bridge-uplink-core.ts',
+  // Task workspaces (workspace.create / status / remove): same import-or-inline rule.
+  'src/providers/workspace-core.ts',
 ] as const
 
 /**

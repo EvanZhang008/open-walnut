@@ -121,6 +121,12 @@ export interface QuickStartParams {
    * Unknown / non-console ids are a 400. Ignored without walnutAgent.
    */
   agentId?: string;
+  /**
+   * File (or reuse) the task and stop there: no session record, no
+   * SESSION_START. The task's isolated workspace is made first and the session
+   * started in it afterwards (core/workspaces/launch.ts).
+   */
+  deferStart?: boolean;
 }
 
 export class QuickStartError extends Error {
@@ -492,6 +498,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js');
     clearDaemonFailureCache(host);
   }
+
+  if (params.deferStart) return updatedTask;
 
   // Seed the session record BEFORE the spawn when the id is caller-minted.
   //

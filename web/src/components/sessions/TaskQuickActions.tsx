@@ -21,6 +21,7 @@ import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
+import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
@@ -408,6 +409,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
           {/* Adopt a worker / Leave leader — the same rows as the board's task kebab. */}
           <TeamMenuItems task={task} afterAction={closeKebab} />
+
+          {/* The task's isolated workspace: the same row as the board's task kebab. */}
+          <WorkspaceMenuSection task={task} afterAction={closeKebab} />
 
           {/* Source badge — combined with external link if available */}
           {(() => {

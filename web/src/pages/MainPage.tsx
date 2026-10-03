@@ -88,6 +88,9 @@ import {
 } from './home-panel-flags';
 import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
+import { WorkspacePreparingPanel } from '@/components/workspaces/WorkspacePreparingPanel';
+import { draftWorkspaceRequest, setDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
+import { rememberWorkspaceLaunch, workspaceLaunchInfo, workspacePendingColumnId, workspacePendingTaskId } from '@/components/workspaces/preparing-columns';
 
 const SS_TASK_KEY = 'open-walnut-home-focused-task';
 
@@ -2360,6 +2363,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       restore?: GatedRestore;
       /** "Start anyway": skip the outdated / not-signed-in gate. */
       overrideReadiness?: boolean;
+      /** Isolated workspace: the task is filed now, its session starts once the host made it. */
+      workspace?: { provider: string; inputs: Record<string, unknown> };
     },
   ) => {
       // Set pending ref BEFORE the async call so WS events that arrive
@@ -2456,10 +2461,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         taskId: opts?.taskId,
         ...(opts?.walnutAgent ? { walnutAgent: true } : {}),
         ...(opts?.overrideReadiness ? { overrideReadiness: true } : {}),
+        ...(opts?.workspace ? { workspace: opts.workspace } : {}),
       }).then((result) => {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
           pendingQuickStartRef.current = result.taskId;
+        }
+        // The host is making the task's isolated workspace: this launch waits in a
+        // column of its own (WorkspacePreparingPanel), freeing the one in-flight slot.
+        if (result.preparing || result.workspaceError) {
+          if (pendingQuickStartRef.current === result.taskId) pendingQuickStartRef.current = null;
+          if (pendingQuickStartMetaRef.current?.id === pendingColId) pendingQuickStartMetaRef.current = null;
+          rememberWorkspaceLaunch(result.taskId, { task: result.task as never, message: text, error: result.workspaceError });
+          setSessionColumns(prev => replaceSessionColumn(prev, pendingColId, workspacePendingColumnId(result.taskId)));
+          void fetchWorkingDirs().catch(() => { /* chips stay hidden until the next launch */ });
+          return;
         }
         // Store real taskId so PendingSessionPanel can match error events
         if (pendingQuickStartMetaRef.current?.id === pendingColId) {
@@ -2615,6 +2631,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       textLen: message.length,
       rules: SUGGEST_RULES_VERSION,
     });
+    // Isolated workspace (off by default). On but not ready (no provider, a
+    // required field empty): the Start waits and the row says why.
+    const wsRequest = draftWorkspaceRequest(draftId);
+    if (wsRequest && 'error' in wsRequest) {
+      setDraftWorkspace(draftId, { startError: wsRequest.error });
+      return false;
+    }
     // ONE commit: the strip slot morphs draft:→pending: (inside launchQuickStart)
     // while the draft row + its composer key disappear. Splitting these would
     // render either a `pending:` column still holding a DraftSessionPanel, or a
@@ -2646,6 +2669,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // A host refusal (409) brings this very draft back.
         restore: { draft, composerText: text, ...(images?.length ? { images } : {}) },
         ...(startOpts?.overrideReadiness ? { overrideReadiness: true } : {}),
+        ...(wsRequest ? { workspace: wsRequest } : {}),
       },
     );
     return true;
@@ -3190,6 +3214,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     repairTarget={walnutRepairTarget}
                   />
                 ) : null
+              ) : workspacePendingTaskId(sid) ? (
+                <WorkspacePreparingPanel
+                  taskId={workspacePendingTaskId(sid)!}
+                  initialTask={workspaceLaunchInfo(workspacePendingTaskId(sid)!).task}
+                  message={workspaceLaunchInfo(workspacePendingTaskId(sid)!).message}
+                  launchError={workspaceLaunchInfo(workspacePendingTaskId(sid)!).error}
+                  onClose={() => handleCloseSession(sid)}
+                  onSessionReady={(sessionId) => setSessionColumns(prev => replaceSessionColumn(prev, sid, sessionId))}
+                />
               ) : isPending && pendingMeta ? (
                 <PendingSessionPanel
                   taskId={sid}

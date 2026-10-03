@@ -58,6 +58,7 @@ import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
+import { createWorkspaceCore } from './workspace-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -212,6 +213,7 @@ export function getDaemonSource(): string {
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
     ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
     ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
+    ['__CREATE_WORKSPACE_CORE__', createWorkspaceCore.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -390,6 +392,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const g = createGuard({})
       if (g.guardVerdict('differs', false, 'same') !== 'conflict' || g.guardVerdict('same', false, 'differs') !== 'suspect') throw new Error('turn guard verdict table changed')
       if (g.opVerdict({ kind: 'edit', newString: 'gone' }, { path: '/r/a.ts', exists: true, text: 'kept\r\n' }) !== 'differs') throw new Error('turn guard misjudged an edit')
+    }
+    // Task workspace smoke: the path refusals and the provider reply framing ride
+    // this text, so a reconstructed copy must still refuse `/` and home, keep a
+    // slug to one segment, and read a reply that follows log noise.
+    const createWorkspace = reconstructed['__CREATE_WORKSPACE_CORE__'] as typeof createWorkspaceCore | undefined
+    if (createWorkspace) {
+      const wc = createWorkspace({ spawn: () => { throw new Error('unused') }, fs: fs as never, path, homedir: () => '/h/u', env: {}, stateDir: '/nonexistent' })
+      if (!wc.forbiddenReason('/') || !wc.forbiddenReason('/h/u') || wc.forbiddenReason('/h/u/src/repo')) throw new Error('workspace core path refusals changed')
+      if (wc.slugify('../../Fix It!') !== 'fix-it') throw new Error('workspace core slug escaped one segment')
+      if (wc.parseReply('cloning\n{"version":1,"ok":true,"result":{}}')?.ok !== true || wc.parseReply('no') !== null) throw new Error('workspace core misread a provider reply')
     }
     // host.fix smoke: the package-manager table and the sudo refusal reader ride
     // this text, so a reconstructed copy must still build apk's argv and read
@@ -2833,6 +2845,16 @@ function dispatchCommand(ws, id, cmd) {
     case 'turns.restore':
     case 'turns.guard':
     case 'turns.configure': return cmdTurns(ws, id, cmd);
+    // 'workspace-v1' (workspace-core.ts): a task's isolated working copy. NOT in
+    // BRIDGE_ALLOWED_COMMANDS: it runs providers and removes folders on this host.
+    // Keep in sync with daemon-standalone.ts.
+    case 'workspace.configure':
+    case 'workspace.detect':
+    case 'workspace.create':
+    case 'workspace.job':
+    case 'workspace.status':
+    case 'workspace.repos':
+    case 'workspace.remove': return cmdWorkspace(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id, cmd);
@@ -8783,6 +8805,36 @@ function cmdGitCommitStart(ws, id, cmd) {
     });
   } catch (err) {
     sendError(ws, id, 'git.commitStart failed: ' + err.message, { code: err.code || 'failed' });
+  }
+}
+
+// ── Task workspaces (host-local, capability 'workspace-v1') ──
+// PARITY: keep in sync with daemon-standalone.ts. workspace-core.ts is injected
+// as text; this twin only hands it the host's spawn/fs and answers in its shape.
+const workspaceCore = (__CREATE_WORKSPACE_CORE__)({
+  spawn: spawn, fs: fs, path: path, homedir: function () { return HOME_DIR; }, env: process.env,
+  stateDir: STATE_DIR_OR_RUNTIME,
+  randomId: function () { return crypto.randomBytes(6).toString('hex'); },
+  killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
+function cmdWorkspace(ws, id, cmd) {
+  const work = function () {
+    return workspaceCore.handle(cmd.cmd, cmd).then(function (r) {
+      if (r.ok) sendOk(ws, id, r);
+      else sendError(ws, id, r.error, r);
+    }, function (err) {
+      sendError(ws, id, cmd.cmd + ' failed: ' + err.message, { code: 'failed' });
+    });
+  };
+  // A job poll is a read and must answer during a shutdown; everything else is
+  // admitted through the drain so a stopping daemon starts no new provider run.
+  if (cmd.cmd === 'workspace.job') return work();
+  try {
+    return daemonCommands.run(work);
+  } catch (err) {
+    sendError(ws, id, cmd.cmd + ' refused: ' + err.message, { code: 'daemon_stopping' });
   }
 }
 

@@ -74,6 +74,8 @@ export const SLOW_TEST_FILES = [
   'tests/providers/git-commit-core.test.ts', // ~46s at load 200: ~15 temp repos, hooks, bare remotes, real pushes
   'tests/providers/git-commit-twin-parity.test.ts', // ~2.5s at load 200: two temp repos + the full source-twin build
   'tests/providers/turn-snapshot-core.test.ts', // ~24s: 32 tests, each on its own temp repo with real snapshot refs
+  'tests/providers/workspace-core.test.ts', // 10-19s: real git worktrees and provider processes in temp dirs
+  'tests/providers/daemon-workspace-twins-e2e.test.ts', // 6-15s: boots both daemon twins and makes real worktrees
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
   'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict

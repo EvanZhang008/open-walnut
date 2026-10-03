@@ -58,6 +58,7 @@ must live under one of these top-level categories instead of directly under
 - [ACP seam map](reference/acp-seam-map.md)
 - [Frozen API v1 contract](reference/api-v1.md)
 - [Plugin development](reference/plugin-development.md): the authoritative plugin guide. One-command authoring, the full-trust model and its real security boundaries, the manifest, server and native web entries, the `walnut.ui.app` atom with its host-derived route, deep links and badge, the shared App Registry, storage and secrets, lifecycle, publish-check, and troubleshooting. The runnable companion is [examples/plugins/walnut-demo](../examples/plugins/walnut-demo), the Walnut Plugin Demo.
+- [Workspace providers](reference/workspace-providers.md): per-task isolated workspaces. The built-in git worktree provider, how cleanup decides, and the stdin/stdout protocol a plugin provider speaks (a monorepo tool whose workspace holds several repositories, for example).
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, the live-session bridge, and what the box installs
   to run sessions itself.

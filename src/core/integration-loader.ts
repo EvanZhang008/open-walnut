@@ -899,7 +899,7 @@ export function getBuiltinPluginDir(): string {
 /** Capability types this Walnut version can load. Everything else is reserved
  *  (`hooks`, `routines`): a manifest declaring only those is recorded as
  *  unsupported and its code is never imported. */
-const SUPPORTED_CAPABILITIES = new Set(['sync', 'ui', 'tools', 'skills']);
+const SUPPORTED_CAPABILITIES = new Set(['sync', 'ui', 'tools', 'skills', 'workspace']);
 
 /** Longest a plugin tool's description may be. Tool schemas ride the prompt-cache
  *  prefix on EVERY turn, so an essay here is billed forever. */

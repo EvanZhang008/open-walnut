@@ -36,6 +36,8 @@ One plugin can contribute any mix of: a native React App in the console, Setting
 
 There is no fixed dashboard, no dashboard page, and no panel grid. The unit of plugin UI is an App.
 
+A plugin can also declare a workspace provider in its manifest, with no server code at all: a command Walnut runs on a task's host to make that task its own isolated working copy. See [Workspace providers](workspace-providers.md).
+
 ## Trust model
 
 Installing a plugin means trusting its code. A server entry runs inside the Walnut server process as full Node: it can read local files, start processes, use the network, and reach anything the Walnut user can reach. A native web entry runs inside Walnut's own browser realm and shares the console's React tree, so it can touch the page like any other trusted browser code.

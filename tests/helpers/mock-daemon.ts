@@ -25,6 +25,7 @@ import { createProcSampler, type ProcSampleExecFile, type ProcSampleRoot } from 
 import { createTurnSnapshots, type TurnSnapshotExecFile, type TurnSnapshotFs } from '../../src/providers/turn-snapshot-core.js'
 import { createTurnGuard } from '../../src/providers/turn-guard-core.js'
 import { computeHostLocalChanges } from '../../src/providers/session-changes-core.js'
+import { createWorkspaceCore, type WorkspaceCoreDeps } from '../../src/providers/workspace-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -295,6 +296,9 @@ export class MockDaemon {
       // 'turn-snapshot-v1': the REAL snapshot and guard cores, pinned to turnSnapshotRoot.
       case 'turns.list': case 'turns.diff': case 'turns.restore': case 'turns.guard':
       case 'turns.configure': return this.cmdTurns(ws, id, cmd)
+      // 'workspace-v1': the REAL core (git worktrees and plugin providers run for real).
+      case 'workspace.configure': case 'workspace.detect': case 'workspace.create': case 'workspace.job':
+      case 'workspace.status': case 'workspace.repos': case 'workspace.remove': return this.cmdWorkspace(ws, id, cmd)
       // ── ACP command family: forwarded to the REAL createAcpDaemon module
       //    (same code the standalone daemon embeds) — real workers, mock agent.
       case 'acpStart': {
@@ -838,6 +842,46 @@ export class MockDaemon {
     }
     void this.procSampler.sample(roots).then((r) => {
       if (ws.readyState === WebSocket.OPEN) this.sendOk(ws, id, r as unknown as Record<string, unknown>)
+    })
+  }
+
+  /**
+   * The real workspace core, built on first use (its state dir is this daemon's temp dir).
+   * Its HOME and worktrees folder are set explicitly to temp dirs: the process HOME
+   * when that is a temp dir (the browser fixture's), else one inside this daemon's
+   * temp dir, so an exported HOME or WALNUT_WORKTREES_ROOT can never send test
+   * worktrees into the user's real folders.
+   */
+  private _workspaceCore: ReturnType<typeof createWorkspaceCore> | null = null
+  private workspaceHome(): string {
+    const real = (p: string) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
+    const temps = [os.tmpdir(), '/tmp', '/private/tmp', '/var/folders', '/private/var/folders'].map(real)
+    const envHome = process.env.HOME ? real(process.env.HOME) : ''
+    if (envHome && temps.some((t) => envHome.startsWith(t + path.sep))) return process.env.HOME!
+    const own = path.join(this.tmpDir, 'workspace-home')
+    fs.mkdirSync(own, { recursive: true })
+    return own
+  }
+  private cmdWorkspace(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    if (!this._workspaceCore) {
+      const home = this.workspaceHome()
+      const worktrees = path.join(home, '.open-walnut-worktrees')
+      this._workspaceCore = createWorkspaceCore({
+        spawn: spawn as unknown as WorkspaceCoreDeps['spawn'],
+        fs: fs as unknown as WorkspaceCoreDeps['fs'],
+        path,
+        homedir: () => home,
+        env: { ...process.env, HOME: home, WALNUT_WORKTREES_ROOT: worktrees },
+        worktreesRoot: worktrees,
+        stateDir: this.tmpDir,
+        killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal as NodeJS.Signals) },
+      })
+    }
+    void this._workspaceCore.handle(String(cmd.cmd), cmd).then((r) => {
+      if (ws.readyState !== WebSocket.OPEN) return
+      // The error reply carries the core's fields (code, probe), like the twins' sendError.
+      if (r.ok) this.sendOk(ws, id, r as Record<string, unknown>)
+      else ws.send(JSON.stringify({ ...r, id, ok: false, error: r.error }))
     })
   }
 

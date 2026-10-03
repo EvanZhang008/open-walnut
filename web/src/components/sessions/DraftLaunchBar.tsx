@@ -75,6 +75,8 @@ import {
 import { DraftDecisionChips, DraftMoreButton, useDraftDecisionMenu } from './DraftDecisionRow';
 import { DraftTaskMenuPopover } from './DraftTaskMenu';
 import { DraftFolderPill, DraftPillsBreak, DraftProjectChip } from './DraftLaunchPills';
+import { DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
+import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
 
 /** The owner map of a draft whose task fields nobody owns yet. */
@@ -292,6 +294,10 @@ export function DraftLaunchBar({
           Ask Walnut renders NO pills at all: folder and project are server
           facts ('Ask Walnut' / WALNUT_HOME), and a read-only pill in the
           folder pill's usual slot read as "runs in that folder" (user). */}
+      {/* The "Isolated workspace" body, right above the folder it isolates: nothing
+          while off (the switch is in More), so a folder pick never grows the bar. */}
+      {!isWalnut && !isFork && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} />}
+
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">
           <DraftFolderPill
@@ -331,6 +337,9 @@ export function DraftLaunchBar({
           focusNonce={menu.mode === 'keyboard' ? menu.focusNonce : 0}
           focusTarget={menu.anchor?.classList.contains('draft-project-chip') ? 'project' : 'tier'}
           project={menuProject}
+          workspace={!isWalnut && !isFork
+            ? <DraftWorkspaceMenuItem draftId={draft.id} hasFolder={!!draft.cwd} onDone={() => menu.close('select')} />
+            : undefined}
         />
       )}
 

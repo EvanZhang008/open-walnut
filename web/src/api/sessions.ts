@@ -1020,9 +1020,13 @@ export async function quickStartSession(opts: {
   engine?: LaunchEngine;
   /** "Start anyway": skip the outdated / not-signed-in readiness gate (never the hard kinds). */
   overrideReadiness?: boolean;
+  /** Isolated workspace (core/workspaces): the server files the task, makes the
+   *  workspace on the host, then starts the session in it. The answer says
+   *  `preparing` and carries no sessionId. */
+  workspace?: { provider: string; inputs?: Record<string, unknown> };
   /** `sessionId` is present when the engine takes a preassigned id; an engine
    *  whose provider issues its own id (every ACP engine) omits it. */
-}): Promise<{ taskId: string; task: unknown; sessionId?: string }> {
+}): Promise<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
   const payload: Record<string, unknown> = { ...opts };
   if (opts.images?.length) {
@@ -1049,7 +1053,7 @@ export async function quickStartSession(opts: {
   // budget as the notification card's fix (api/notifications.ts).
   const timeoutMs = opts.intent === 'fix-walnut' ? 330_000 : 60_000;
   try {
-    const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string }>('/api/sessions/quick-start', payload, { timeoutMs });
+    const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }>('/api/sessions/quick-start', payload, { timeoutMs });
     seedTaskSessionStatuses(result.task, 'rest:task');
     invalidateWorkingDirsCache(); // new session → new path entry
     if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie

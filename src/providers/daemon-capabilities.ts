@@ -391,6 +391,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Not bridge-reachable: it writes refs and publishes. Optional: without it the
   // Changed tab says the host's daemon needs an update.
   'git-commit-v1',
+  // 'workspace-v1': a task's isolated working copy (workspace-core.ts).
+  // `workspace.detect` / `.create` / `.job` / `.status` / `.repos` / `.remove`
+  // run the built-in git-worktree provider natively and plugin providers from an
+  // allowlist the server pushes with `workspace.configure` (argv, no shell, JSON
+  // over stdin/stdout). Both twins implement it (the core is text-injected into
+  // the source twin), so it is NOT sidecar-gated. Not bridge-reachable: it runs
+  // providers and removes folders on this host. Optional: without it a task
+  // asking for an isolated workspace is told the host's daemon needs an update.
+  'workspace-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

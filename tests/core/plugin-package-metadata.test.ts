@@ -188,6 +188,7 @@ describe('@open-walnut/plugin-api publishing contract', () => {
       './server',
       './web',
       './testing',
+      './workspace',
       './react',
       './react-dom',
       './jsx-runtime',

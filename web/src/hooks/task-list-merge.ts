@@ -39,6 +39,12 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     if (av.length !== bv.length) return false;
     for (let i = 0; i < av.length; i++) if (av[i] !== bv[i]) return false;
   }
+  // The isolated workspace (task.workspace): its writes leave updated_at alone, so
+  // without this every progress line and state change bailed as "equal".
+  const wa = a.workspace;
+  const wb = b.workspace;
+  if (wa !== wb && (wa?.state !== wb?.state || wa?.updated_at !== wb?.updated_at || wa?.progress !== wb?.progress
+    || wa?.error !== wb?.error || wa?.launch_error !== wb?.launch_error || wa?.kept_reason !== wb?.kept_reason)) return false;
   // Session status slots (nested objects) — compare on the process_status/activity
   // fields we actually render; deeper equality not needed because session:status-changed
   // is a separate WS event that delivers those changes with its own merge path.

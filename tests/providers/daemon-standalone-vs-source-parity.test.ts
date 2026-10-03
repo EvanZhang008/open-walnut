@@ -700,6 +700,50 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(buildSrc).toContain(f)
     }
   })
+  // workspace.* (workspace-core.ts): the binary twin imports the factory, the
+  // source twin inlines it; both answer through ONE handler that sends the core's
+  // error fields (code, probe) on a refusal. Optional and never bridge-reachable.
+  it("both twins dispatch workspace.*; 'workspace-v1' advertised but NOT required, not bridge-reachable", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      for (const c of ['workspace.configure', 'workspace.detect', 'workspace.create', 'workspace.job', 'workspace.status', 'workspace.repos', 'workspace.remove']) {
+        expect(src).toContain(`case '${c}':`)
+      }
+      expect(src).toMatch(/return cmdWorkspace\(ws, id/)
+      expect(src).toMatch(/function cmdWorkspace\(/)
+      expect(src).toMatch(/workspaceCore\.handle\(/)
+      // A refusal carries the core's code to the server (providers_stale drives the re-push).
+      expect(src).toMatch(/else sendError\(ws, id, r\.error, r\)/)
+      // The adapter scripts live in a service daemon's state dir, else in the runtime
+      // dir (under /tmp, where a cleaner may remove them: the core writes a missing
+      // adapter again before each run).
+      expect(src).toMatch(/stateDir: (SERVICE_MODE && DAEMON_STATE_DIR \? DAEMON_STATE_DIR : DAEMON_DIR|STATE_DIR_OR_RUNTIME)/)
+      // A job poll answers during a shutdown; new provider runs go through the drain.
+      expect(src).toMatch(/=== 'workspace\.job'\) return work\(\)/)
+      const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(start).toBeGreaterThanOrEqual(0)
+      const end = src.indexOf('])', start)
+      expect(end).toBeGreaterThan(start)
+      expect(src.slice(start, end)).not.toMatch(/workspace\./)
+    }
+    expect(templateSrc).toMatch(/\(__CREATE_WORKSPACE_CORE__\)\(\{/)
+    expect(standaloneSrc).toMatch(/createWorkspaceCore\(\{/)
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(reqStart).toBeGreaterThanOrEqual(0)
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(reqEnd).toBeGreaterThan(reqStart)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'workspace-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(advStart).toBeGreaterThanOrEqual(0)
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(advEnd).toBeGreaterThan(advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'workspace-v1'/)
+    const versionSrc = readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts'))
+    const buildSrc = readFile(path.join(ROOT, 'scripts/build-daemon.sh'))
+    expect(versionSrc).toContain("'src/providers/workspace-core.ts'")
+    expect(buildSrc).toContain('src/providers/workspace-core.ts')
+  })
   it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
     // Every sidecar-gated capability must be excluded from the STATIC caps
     // literal (a source deploy that advertised one before its sidecar loaded

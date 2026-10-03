@@ -45,6 +45,7 @@ import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
+import { workspaceLaunchPlan } from '../../core/workspaces/launch.js'
 import {
   ASK_HOST_REFUSAL,
   ASK_LAUNCH_CWD,
@@ -633,6 +634,12 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         }
         await ensureCwd(cwd, host)
       }
+      // An isolated workspace (core/workspaces/launch.ts): a ready one is where an
+      // existing task runs; asking for one files the task now and starts the
+      // session in it once the host has made it.
+      const wsPlan = await workspaceLaunchPlan(req.body as Record<string, unknown>, { cwd, host, existingTaskId, isWalnutAgent })
+      if (wsPlan?.refuse) { res.status(wsPlan.refuse.status).json(wsPlan.refuse.body); return }
+      if (wsPlan?.cwd) cwd = wsPlan.cwd
       // Mint the session id HERE so it can ride the response: the UI then mounts
       // the real session panel in the same frame as the click instead of parking
       // on a placeholder until the CLI's first init line (3–6s later). The CLI
@@ -656,6 +663,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         source: 'quick-start', requestTs,
         engine: effectiveEngine,
         preassignedSessionId,
+        ...(wsPlan?.defer ? { deferStart: true, preassignedSessionId: undefined } : {}),
         ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
         hostGate: { checked: true },
         // Client project seed (project-header "+ → Add session"). fixWalnutExtras
@@ -691,6 +699,14 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         }).catch(() => {})
       } else if (isWalnutAgent) {
         rememberAskModelPick(rawModel, existingTaskId)
+      }
+      if (wsPlan?.begin) {
+        res.json(await wsPlan.begin(updatedTask, {
+          message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}),
+          ...(effectiveEngine ? { engine: effectiveEngine } : {}), ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
+          source: 'quick-start',
+        }))
+        return
       }
       // sessionId is present for native starts (see preassignedSessionId above).
       // Clients MUST treat it as optional — an ACP start omits it.
