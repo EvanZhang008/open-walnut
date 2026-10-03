@@ -244,14 +244,24 @@ appId: $BUNDLE
 - takeScreenshot: $WORK/05-backlog-created
 
 # ── the FULL SHEET can pick a tier at create time ───────────────────────────
+# Reached from the quick-add row's expand icon (shown once there is text), seeded
+# with the sentence AND the row's destination. The toolbar + is New Session alone
+# since 2026-10-03. The row still points at Backlog from the step above, and a
+# sheet born pinned would show the "Born in this tier" footer before any tap, so
+# reset the destination first: the Focus pick below has to be the sheet's own.
 - tapOn:
-    id: "sessions.new"
+    id: "tasks.quickAdd.destination"
+- tapOn: "Default"
 - tapOn:
-    id: "tasks.create"
+    id: "tasks.quickAdd.field"
+- inputText: "born in focus from the sheet"
+- tapOn:
+    id: "tasks.quickAdd.expand"
 - extendedWaitUntil:
     visible:
       id: "newTask.title"
     timeout: 15000
+- assertVisible: "born in focus from the sheet"
 - takeScreenshot: $WORK/06-sheet-pin-section
 # Every built-in tier is a visible, individually addressable row — plus the
 # registered custom one, which is the dynamic half of the picker.
@@ -265,9 +275,6 @@ appId: $BUNDLE
     id: "newTask.pin.wait"
 - assertVisible:
     id: "newTask.pin.none"
-- tapOn:
-    id: "newTask.title"
-- inputText: "born in focus from the sheet"
 # Getting the keyboard out of the way is the fiddly part on iOS 26: it survives
 # hideKeyboard AND survives tapping the nav title, and while it is up it covers
 # the Pin rows so taps land on KEYS instead (measured: rows at y=594-919 under a

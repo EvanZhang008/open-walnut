@@ -1525,8 +1525,11 @@ host's SSH daemon). Works on BOTH boxes:
     the web Start gives; servers before 2026-09 answered `400 bad_request`).
   - `message`: optional first turn; empty/absent spawns the CLI idle.
   - `taskId`: link the session to an existing task instead of creating one
-    (unknown id → `404 not_found`). Absent: a task is created and
-    auto-organized, exactly like a web Quick Start.
+    (unknown id → `404 not_found`); the task keeps its board tier. Absent: a
+    task is created and auto-organized, exactly like a web draft launch, and
+    born pinned in **Focus** (the web draft's default; servers before
+    2026-10-03 filed it in Satellite). The body carries no tier: the page
+    shows no tier control, so the tier is moved later on the board.
   - `model` / `mode`: same accepted values as the web quick-start route
     (`bypass`/`accept`/`default`/`plan`; alias or catalog model ids).
   - Remote host gate (additive, 2026-09): a launch on a host that cannot run

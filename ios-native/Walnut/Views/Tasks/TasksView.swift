@@ -32,13 +32,14 @@ struct TasksView: View {
     /// The board row whose tap is currently resolving a destination (nil = none).
     /// Drives that row's spinner and keeps a second tap from starting a second lookup.
     @State private var resolvingRowId: String?
-    @State private var showNewTask = false
-    /// Sentence carried from the quick-add row into the full NewTaskSheet
-    /// (the expand affordance) — parsed there into the form fields.
-    @State private var newTaskSeedText = ""
-    /// Destination carried into the full NewTaskSheet alongside the sentence
-    /// (which project / pin tier the add started from).
-    @State private var newTaskSeed = NewTaskSeed(project: "", pin: .unspecified)
+    /// The full NewTaskSheet, presented by ITEM: the sentence carried from a
+    /// quick-add row's expand affordance and the destination the add started
+    /// from ride inside the item. They used to be two separate @States beside a
+    /// Bool, and SwiftUI's first `.sheet(isPresented:)` presentation of a process
+    /// read the content closure with the PREVIOUS values of those states, so the
+    /// first expand after launch opened an empty form while the row had already
+    /// cleared its text (QA, 2026-10-03: 5 of 5 first opens lost the sentence).
+    @State private var newTaskPresentation: NewTaskPresentation?
     /// Which group header's `+` is currently open, by seed identity. Exactly one
     /// inline add row at a time: two open keyboards on one list is not a thing,
     /// and a single value makes "the other one closes" automatic.
@@ -315,40 +316,28 @@ struct TasksView: View {
                         .accessibilityIdentifier("tasks.select")
                     }
                 }
-                // BOTH create entries show on BOTH server modes (2026-08).
-                // TASK creation: the replica writes its local store and the
-                // task outbox syncs it back to the primary. SESSION creation:
-                // the replica relays over the bridge to the primary box
-                // (narrow session.launch command → quick-start there); an
-                // old cloud server / old daemon degrades to a clear error in
-                // the sheet (not_supported_cloud / session_launch_needs_upgrade).
+                // The + IS New Session: one tap lands in the draft chat page. It
+                // used to open a two-item menu (New Task / New Session), and the
+                // menu was a step the user never wanted (2026-10-03: "tap + and
+                // the new session comes up, nothing else"). Task creation keeps
+                // its own rows: the quick-add row at the top of every filter
+                // (Return creates; the slider icon opens the full sheet), the
+                // inline add at the foot of the lists, and the band feet.
+                // Shows on BOTH server modes: the replica relays the launch over
+                // the bridge to the primary box; an old cloud server / old daemon
+                // degrades to a clear error in the page (not_supported_cloud /
+                // session_launch_needs_upgrade).
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            showNewTask = true
-                        } label: {
-                            Label("New Task", systemImage: "checkmark.circle")
-                        }
-                        .accessibilityIdentifier("tasks.create")
-                        Button {
-                            // The toolbar's draft is about no task in particular.
-                            newSessionSeed = BoardModel.BoardDraftSeed.unattached
-                        } label: {
-                            Label("New Session", systemImage: "terminal")
-                        }
-                        .accessibilityIdentifier("sessions.create")
+                    Button {
+                        // The toolbar's draft is about no task in particular.
+                        newSessionSeed = BoardModel.BoardDraftSeed.unattached
                     } label: {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(Theme.tint)
                     }
-                    // Automation compat: the collapsed Menu renders as ONE
-                    // accessibility element (a button), and SwiftUI surfaces
-                    // the identifier applied to the Menu itself — not one on
-                    // the label view. Existing Maestro flows tap "sessions.new"
-                    // to start session creation, so the menu container keeps
-                    // that id (tap → menu opens → tap "sessions.create").
-                    // The menu ITEMS carry distinct ids ("tasks.create" /
-                    // "sessions.create") so open-menu taps are unambiguous.
+                    .accessibilityLabel("New Session")
+                    // The id the Maestro flows and the UI tests already tap to
+                    // start a session; it now opens the page directly.
                     .accessibilityIdentifier("sessions.new")
                 }
             }
@@ -379,13 +368,10 @@ struct TasksView: View {
                 }
                 .presentationDetents([.large])
             }
-            .sheet(isPresented: $showNewTask, onDismiss: {
-                newTaskSeedText = ""
-                newTaskSeed = NewTaskSeed(project: "", pin: .unspecified)
-            }) {
+            .sheet(item: $newTaskPresentation) { presentation in
                 // No onCreated action: the store's optimistic insert makes the
                 // new task appear in the list the moment the sheet dismisses.
-                NewTaskSheet(seedText: newTaskSeedText, seed: newTaskSeed)
+                NewTaskSheet(seedText: presentation.text, seed: presentation.seed)
                     .presentationDetents([.medium, .large])
             }
             // Session rows push a full-screen conversation page instead of a sheet.
@@ -700,9 +686,7 @@ struct TasksView: View {
                             : NewTaskSeed(project: "", pin: .unspecified),
                         identifier: "tasks.quickAdd",
                         onExpand: { text, target in
-                            newTaskSeedText = text
-                            newTaskSeed = target
-                            showNewTask = true
+                            newTaskPresentation = NewTaskPresentation(text: text, seed: target)
                         }
                     )
                 }
@@ -765,8 +749,8 @@ struct TasksView: View {
                 // Apple Reminders-style inline add — a persistent row at the
                 // BOTTOM of every task list (not the Sessions tab): tap →
                 // inline TextField, Return creates + keeps typing for rapid
-                // consecutive adds. Goes to Inbox; the toolbar "+" menu keeps
-                // the full sheet for project/priority/due picks.
+                // consecutive adds. Goes to Inbox; the quick-add row's expand
+                // icon keeps the full sheet for project/priority/due picks.
                 if activeFilter != .sessions {
                     Section {
                         InlineAddTaskRow(isActive: $inlineAddActive)
@@ -1018,7 +1002,7 @@ struct TasksView: View {
                                 proxy.scrollTo(Self.topAnchorId, anchor: .top)
                             }
                         },
-                        addTask: { showNewTask = true }
+                        addTask: { newTaskPresentation = NewTaskPresentation() }
                     )
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -1194,10 +1178,8 @@ struct TasksView: View {
                 showsDestination: false,
                 identifier: "tasks.groupAdd.\(seed.id).row",
                 onExpand: { text, target in
-                    newTaskSeedText = text
-                    newTaskSeed = target
                     openAddGroup = nil
-                    showNewTask = true
+                    newTaskPresentation = NewTaskPresentation(text: text, seed: target)
                 },
                 autoFocus: true,
                 onDismiss: { openAddGroup = nil }
@@ -1476,9 +1458,7 @@ struct TasksView: View {
                     seed: NewTaskSeed(project: "", pin: .tier("satellite")),
                     identifier: "focus.quickAdd",
                     onExpand: { text, target in
-                        newTaskSeedText = text
-                        newTaskSeed = target
-                        showNewTask = true
+                        newTaskPresentation = NewTaskPresentation(text: text, seed: target)
                     }
                 )
             }
@@ -1732,10 +1712,8 @@ struct TasksView: View {
                             showsDestination: false,
                             identifier: "board.createRow.\(TaskBoardList.slug(bandId))",
                             onExpand: { text, target in
-                                newTaskSeedText = text
-                                newTaskSeed = target
                                 openCreateBand = nil
-                                showNewTask = true
+                                newTaskPresentation = NewTaskPresentation(text: text, seed: target)
                             },
                             autoFocus: true,
                             onDismiss: { openCreateBand = nil }
@@ -1899,6 +1877,15 @@ struct TasksView: View {
 /// button. Creation goes through the same TasksStore.createTask path as the
 /// sheet, so the optimistic insert + pending overlay + locate-me flash all
 /// apply.
+/// One opening of the full NewTaskSheet: the sentence to parse into the form and
+/// the destination it was typed toward. A fresh identity per opening, so two
+/// expands in a row each present their own sheet.
+struct NewTaskPresentation: Identifiable {
+    let id = UUID()
+    var text: String = ""
+    var seed = NewTaskSeed(project: "", pin: .unspecified)
+}
+
 struct InlineAddTaskRow: View {
     /// Bubbles focus state up so the list can suppress its scroll-to-created
     /// behavior while the user is chain-adding.

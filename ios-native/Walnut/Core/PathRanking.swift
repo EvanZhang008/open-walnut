@@ -459,4 +459,66 @@ enum PathRanking {
         guard let shown = hostLabel ?? host, !shown.isEmpty else { return dir }
         return "\(dir) · \(shown)"
     }
+
+    // MARK: Quick folders (draft-column.ts quickDirsFor + DraftLaunchBar.tsx useQuickChipHostLabels)
+
+    /// How many chips are picked by absolute use count vs. by recency. 4+4, the
+    /// web's numbers: fewer and the folder you want is usually not in the row.
+    static let quickTopByCount = 4
+    static let quickTopByRecent = 4
+
+    /// The quick-folder row: the most-used directories, then the most recent of
+    /// the rest. One chip per directory (the wire can carry two rows for one
+    /// `host::cwd`), ties on count break on recency so the order never depends on
+    /// the server's array order, and the row is a pure function of the listing:
+    /// picking a chip never reshuffles it.
+    static func quickDirs(_ dirs: [SessionLaunchOptions.Dir],
+                          topByCount: Int = quickTopByCount,
+                          topByRecent: Int = quickTopByRecent) -> [SessionLaunchOptions.Dir] {
+        var seen = Set<String>()
+        var candidates: [SessionLaunchOptions.Dir] = []
+        for d in dirs {
+            let key = pathChipKey(dir: d)
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            candidates.append(d)
+        }
+        let byCount = Array(candidates.sorted { a, b in
+            if a.count != b.count { return a.count > b.count }
+            return lastUsedMs(a) > lastUsedMs(b)
+        }.prefix(max(0, topByCount)))
+        let picked = Set(byCount.map(pathChipKey(dir:)))
+        let byRecent = Array(candidates
+            .filter { !picked.contains(pathChipKey(dir: $0)) }
+            .sorted { lastUsedMs($0) > lastUsedMs($1) }
+            .prefix(max(0, topByRecent)))
+        return byCount + byRecent
+    }
+
+    /// The chip's text: the folder basename, plus " · host" ONLY when another chip
+    /// in the same row shares that basename (two "walnut" chips on two machines).
+    /// A lone chip stays a bare name: the row is a row of folders, and a host on
+    /// every chip made it read as a list of machines.
+    static func quickChipLabel(_ dir: SessionLaunchOptions.Dir,
+                               among chips: [SessionLaunchOptions.Dir],
+                               hostLabel: String?,
+                               localHostLabel: String = "Mac") -> String {
+        let name = pathBasename(dir.cwd)
+        let collisions = chips.filter { pathBasename($0.cwd).lowercased() == name.lowercased() }.count
+        guard collisions >= 2 else { return name }
+        let host: String
+        if let alias = normalizedHost(dir.host) {
+            host = (hostLabel?.isEmpty == false ? hostLabel : nil)
+                ?? (dir.hostLabel?.isEmpty == false ? dir.hostLabel : nil)
+                ?? alias
+        } else {
+            host = localHostLabel
+        }
+        return "\(name) · \(host)"
+    }
+
+    /// The TS `Date.parse` sort key: an unparseable stamp sorts last.
+    private static func lastUsedMs(_ d: SessionLaunchOptions.Dir) -> Double {
+        WalnutTask.parseISO(d.lastUsed)?.timeIntervalSince1970 ?? -.infinity
+    }
 }

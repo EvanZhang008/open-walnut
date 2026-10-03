@@ -191,6 +191,30 @@ describe('POST /api/v1/sessions', () => {
     expect(record?.process_status).toBe('idle');
   });
 
+  // The phone's New Session page has no tier control, like the web draft column,
+  // so its task is born where the web draft's is: Focus. The launch core's own
+  // default (Satellite) put every phone session out of the user's first view.
+  it('a task-less phone launch is born pinned in Focus, like the web draft', async () => {
+    const res = await request(createApp())
+      .post('/api/v1/sessions')
+      .send({ cwd: '/tmp/my-proj', message: 'fix the bug' });
+    expect(res.status).toBe(201);
+    const task = await getTask(res.body.taskId);
+    expect(task.pinned).toBe(true);
+    expect(task.focus_tier).toBe('focus');
+  });
+
+  it("a launch from an existing task keeps that task's tier", async () => {
+    const { task } = await addTask({ title: 'Satellite work', project: 'Quick Start', pinned: true });
+    const res = await request(createApp())
+      .post('/api/v1/sessions')
+      .send({ cwd: '/tmp/y', taskId: task.id, message: 'continue' });
+    expect(res.status).toBe(201);
+    const after = await getTask(task.id);
+    // undefined = Satellite, the store's default tier for a pinned task.
+    expect(after.focus_tier ?? 'satellite').toBe('satellite');
+  });
+
   it('keeps the frozen mobile response shape when an engine field is present', async () => {
     const res = await request(createApp())
       .post('/api/v1/sessions')

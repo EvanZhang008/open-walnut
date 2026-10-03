@@ -101,6 +101,7 @@ struct QuickAddRow: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("More options")
                     .accessibilityIdentifier("\(identifier).expand")
                 }
             }

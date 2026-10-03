@@ -269,6 +269,9 @@ export interface MobileLaunchResult { sessionId?: string; taskId: string; title:
  */
 export const MOBILE_HOST_GATE_DEADLINE_MS = 10_000;
 
+/** The board tier a task-less phone launch is born in: the web draft's default. */
+export const MOBILE_DRAFT_TIER = 'focus';
+
 /**
  * Config host check + the shared quickStartSession core. Throws
  * QuickStartError with an HTTP-ish statusCode on every failure.
@@ -308,7 +311,16 @@ export async function performMobileLaunch(
       agentId: ask.agentId,
       projectFromFolder: false,
       taskMeta: { pinTier: askLaunchTier(undefined) },
-    } : {}),
+    } : input.taskId ? {} : {
+      // The phone's task-less New Session is the web draft column on a phone,
+      // and lands where that draft lands: FOCUS (web DEFAULT_META.pinTier).
+      // Neither surface shows a tier control, so the tier a new session takes
+      // has to be the one the user looks at first; the launch core's own
+      // default (Satellite) put every phone session out of sight (2026-10-03).
+      // A launch FROM a task keeps that task's tier (taskMeta is ignored on
+      // retry anyway).
+      taskMeta: { pinTier: MOBILE_DRAFT_TIER },
+    }),
     source,
     requestTs: Date.now(),
     engine: normalizeEngine(input.engine),

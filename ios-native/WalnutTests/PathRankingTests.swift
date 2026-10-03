@@ -383,4 +383,128 @@ final class PathRankingTests: XCTestCase {
         XCTAssertTrue(PathRanking.buildSections(ranked: [], hostGrouping: false, hostActivity: [:]).isEmpty)
         XCTAssertTrue(PathRanking.buildSections(ranked: [], hostGrouping: true, hostActivity: [:]).isEmpty)
     }
+
+    // MARK: - Quick folders (draft-column.ts quickDirsFor)
+
+    private func dir(_ cwd: String, host: String = "", hostLabel: String? = nil,
+                     count: Int, daysAgo: Double) -> SessionLaunchOptions.Dir {
+        let stamp = Date(timeIntervalSince1970: 1_790_000_000 - daysAgo * 86_400)
+        return SessionLaunchOptions.Dir(cwd: cwd, host: host, hostLabel: hostLabel,
+                                        lastUsed: ISO8601DateFormatter().string(from: stamp), count: count)
+    }
+
+    /// The wire can carry the same directory twice (seen on a real listing: the
+    /// same local folder once with count 1105 and once with count 1). One chip.
+    func testQuickDirsShowOneChipPerDirectory() {
+        let dirs = [
+            dir("/Users/me/walnut", count: 1105, daysAgo: 0.1),
+            dir("/Users/me/other", count: 5, daysAgo: 1),
+            dir("/Users/me/walnut", count: 1, daysAgo: 0),
+        ]
+        let quick = PathRanking.quickDirs(dirs)
+        XCTAssertEqual(quick.map(\.cwd), ["/Users/me/walnut", "/Users/me/other"])
+        XCTAssertEqual(quick.first?.count, 1105, "the first wire row for a directory is the one kept")
+    }
+
+    /// Most-used first (ties broken by recency, never by array order), then the
+    /// most recent of the rest, with the web's 4+4 cap.
+    func testQuickDirsAreTopByCountThenTopByRecencyCappedAtFourPlusFour() {
+        var dirs: [SessionLaunchOptions.Dir] = []
+        for i in 0..<6 { dirs.append(dir("/used/\(i)", count: 100 - i, daysAgo: 30 + Double(i))) }
+        for i in 0..<6 { dirs.append(dir("/recent/\(i)", count: 1, daysAgo: Double(i))) }
+        let quick = PathRanking.quickDirs(dirs)
+        XCTAssertEqual(quick.map(\.cwd), [
+            "/used/0", "/used/1", "/used/2", "/used/3",
+            "/recent/0", "/recent/1", "/recent/2", "/recent/3",
+        ])
+    }
+
+    func testQuickDirsTieOnCountBreaksOnRecencyNotArrayOrder() {
+        let dirs = [
+            dir("/older", count: 7, daysAgo: 5),
+            dir("/newer", count: 7, daysAgo: 1),
+        ]
+        XCTAssertEqual(PathRanking.quickDirs(dirs).map(\.cwd), ["/newer", "/older"])
+    }
+
+    /// A short listing is shown whole; an empty one yields no row at all.
+    func testQuickDirsWithFewerCandidatesThanTheCap() {
+        let dirs = [dir("/a", count: 3, daysAgo: 1), dir("/b", count: 1, daysAgo: 2)]
+        XCTAssertEqual(PathRanking.quickDirs(dirs).map(\.cwd), ["/a", "/b"])
+        XCTAssertTrue(PathRanking.quickDirs([]).isEmpty)
+    }
+
+    /// A pick must not reshuffle the row: membership is a pure function of the
+    /// listing, so the same input gives the same chips in the same order.
+    func testQuickDirsAreStableForTheSameListing() {
+        let dirs = (0..<10).map { dir("/d/\($0)", count: ($0 * 7) % 5, daysAgo: Double(($0 * 3) % 7)) }
+        XCTAssertEqual(PathRanking.quickDirs(dirs).map(\.id), PathRanking.quickDirs(dirs).map(\.id))
+    }
+
+    /// An unparseable stamp sorts last rather than poisoning the comparison.
+    func testQuickDirsUnparseableStampSortsLast() {
+        let bad = SessionLaunchOptions.Dir(cwd: "/bad", host: "", hostLabel: nil, lastUsed: "not a date", count: 1)
+        let good = dir("/good", count: 1, daysAgo: 100)
+        XCTAssertEqual(PathRanking.quickDirs([bad, good]).map(\.cwd), ["/good", "/bad"])
+    }
+
+    // MARK: - Quick chip label (DraftLaunchBar.tsx useQuickChipHostLabels)
+
+    /// A lone chip is a bare folder name; a host appears only to tell two chips
+    /// with the same basename apart, and then on BOTH of them.
+    func testQuickChipLabelAddsTheHostOnlyOnABasenameCollision() {
+        let local = dir("/Users/me/walnut", count: 9, daysAgo: 1)
+        let remote = dir("/home/me/walnut", host: "box", hostLabel: "Build box", count: 3, daysAgo: 2)
+        let lone = dir("/Users/me/notes", count: 2, daysAgo: 3)
+        let chips = [local, remote, lone]
+        XCTAssertEqual(PathRanking.quickChipLabel(local, among: chips, hostLabel: nil), "walnut · Mac")
+        XCTAssertEqual(PathRanking.quickChipLabel(remote, among: chips, hostLabel: nil), "walnut · Build box")
+        XCTAssertEqual(PathRanking.quickChipLabel(lone, among: chips, hostLabel: nil), "notes")
+    }
+
+    /// The live host label wins over the wire's, which wins over the raw alias;
+    /// the collision check is case-insensitive like the web's.
+    func testQuickChipLabelHostNamePrecedenceAndCaseInsensitiveCollision() {
+        let a = dir("/x/Walnut", host: "box", hostLabel: "Wire label", count: 1, daysAgo: 1)
+        let b = dir("/y/walnut", host: "other", hostLabel: nil, count: 1, daysAgo: 1)
+        let chips = [a, b]
+        XCTAssertEqual(PathRanking.quickChipLabel(a, among: chips, hostLabel: "Live label"), "Walnut · Live label")
+        XCTAssertEqual(PathRanking.quickChipLabel(a, among: chips, hostLabel: nil), "Walnut · Wire label")
+        XCTAssertEqual(PathRanking.quickChipLabel(b, among: chips, hostLabel: nil), "walnut · other")
+        XCTAssertEqual(PathRanking.quickChipLabel(a, among: chips, hostLabel: ""), "Walnut · Wire label",
+                       "an empty live label is absent, not a name")
+    }
+
+    // MARK: - The full path is shown only when no chip is lit for it
+
+    func testPathSummaryShowsOnlyWhenTheFolderIsNotAQuickChip() {
+        let chips = [dir("/Users/me/walnut", count: 9, daysAgo: 1),
+                     dir("/home/me/infra", host: "box", count: 3, daysAgo: 2)]
+        XCTAssertFalse(NewSessionChatView.showsPathSummary(cwd: "", host: "", quickDirs: chips),
+                       "nothing chosen, nothing to spell out")
+        XCTAssertFalse(NewSessionChatView.showsPathSummary(cwd: "/Users/me/walnut", host: "", quickDirs: chips),
+                       "the lit chip and the pill already say it")
+        XCTAssertFalse(NewSessionChatView.showsPathSummary(cwd: "/home/me/infra", host: "box", quickDirs: chips))
+        XCTAssertTrue(NewSessionChatView.showsPathSummary(cwd: "/Users/me/elsewhere", host: "", quickDirs: chips),
+                      "a hand-picked folder outside the row is spelled out")
+        XCTAssertTrue(NewSessionChatView.showsPathSummary(cwd: "/Users/me/walnut", host: "box", quickDirs: chips),
+                      "same path on another host is another folder")
+        XCTAssertTrue(NewSessionChatView.showsPathSummary(cwd: "/Users/me/walnut", host: "", quickDirs: []),
+                      "no row at all: the path is the only statement of where it runs")
+    }
+
+    /// A fresh draft opens on the FIRST CHIP, not on the server list's head: the two
+    /// differ when the head is neither most-used nor most-recent, and a preselect
+    /// outside the row would light no chip and bring the full path back on open.
+    func testPreselectIsTheFirstQuickChip() {
+        var dirs = [dir("/server-head", count: 5, daysAgo: 10)]
+        for i in 0..<4 { dirs.append(dir("/used/\(i)", count: 100 - i, daysAgo: 30)) }
+        for i in 0..<4 { dirs.append(dir("/recent/\(i)", count: 1, daysAgo: Double(i))) }
+        let picked = NewSessionChatView.preselectedDir(dirs)
+        XCTAssertEqual(picked?.cwd, "/used/0")
+        XCTAssertEqual(picked?.id, PathRanking.quickDirs(dirs).first?.id)
+        XCTAssertFalse(NewSessionChatView.showsPathSummary(cwd: picked!.cwd, host: picked!.host,
+                                                           quickDirs: PathRanking.quickDirs(dirs)))
+        XCTAssertNil(NewSessionChatView.preselectedDir([]))
+    }
 }

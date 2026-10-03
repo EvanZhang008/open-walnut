@@ -122,11 +122,28 @@ struct NewSessionChatView: View {
 
     // MARK: - Body content
 
-    /// The page above the composer. Not a transcript (there is none yet): it
-    /// states what starting will DO, which is the honest content for a draft.
+    /// The page above the composer. Not a transcript (there is none yet): load
+    /// errors, the task link, and the full path only when the launch bar below
+    /// does not already show the folder. Otherwise the same quiet empty state the
+    /// Chat tab shows before its first message: a full phone screen with nothing
+    /// on it reads as "still loading" (QA), where the web draft's narrow column
+    /// can simply stay blank.
     private var introOrStatus: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if showsEmptyState {
+                    VStack(spacing: 8) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 36, weight: .light))
+                            .foregroundStyle(.quaternary)
+                        Text("Your first message starts the session")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 120)
+                    .accessibilityIdentifier("newSessionChat.emptyState")
+                }
                 if let loadFailed {
                     Label(loadFailed, systemImage: "icloud.slash")
                         .font(.subheadline)
@@ -158,7 +175,12 @@ struct NewSessionChatView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("newSessionChat.linkedTask")
                 }
-                if !cwd.isEmpty {
+                // The full path, ONLY when nothing else on the page says where the
+                // session runs: no quick-folder row, or a folder picked by hand that
+                // is not in it. With the row up, the highlighted chip and the folder
+                // pill already answer that, and a monospaced path above them was the
+                // same fact a third time (user feedback, 2026-10-03).
+                if showsPathSummary {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Your first message starts a session in")
                             .font(.caption)
@@ -172,39 +194,6 @@ struct NewSessionChatView: View {
                     }
                     .accessibilityIdentifier("newSessionChat.summary")
                 }
-                // Quick folders: the top-ranked recents, one tap each. Same idea as
-                // the web's quick-folder chip row (label = the folder BASENAME),
-                // which is the row that makes the common case zero-navigation.
-                if !quickDirs.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Quick folders")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
-                                ForEach(quickDirs) { dir in
-                                    Button {
-                                        cwd = dir.cwd
-                                        host = dir.host
-                                        didPreselect = true
-                                    } label: {
-                                        Text(PathRanking.pathBasename(dir.cwd))
-                                            .font(.caption.weight(.medium))
-                                            .lineLimit(1)
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                            .background(
-                                                isCurrent(dir) ? Theme.tintSoft : Color(.tertiarySystemFill),
-                                                in: Capsule()
-                                            )
-                                            .foregroundStyle(isCurrent(dir) ? Theme.tint : .primary)
-                                    }
-                                    .accessibilityIdentifier("newSessionChat.quickDir")
-                                }
-                            }
-                        }
-                    }
-                }
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -212,9 +201,78 @@ struct NewSessionChatView: View {
         }
     }
 
-    /// The launch bar: folder/host pill, model pill, mode pill. Directly above the
-    /// composer and LEFT-ALIGNED, matching the web draft's fixed last row.
+    /// The launch bar, the web draft's two rows in the web's order: the quick-folder
+    /// row on top (the row whose CONTENT changes most between launches, so it never
+    /// sits where a fixed control is aimed for), then the folder/host, model and
+    /// mode pills, LEFT-ALIGNED and glued to the composer they configure.
     private var launchBar: some View {
+        VStack(spacing: 0) {
+            if !quickDirs.isEmpty {
+                quickFolderRow
+                Divider().padding(.horizontal, 12)
+            }
+            pillRow
+        }
+        .background(.bar)
+    }
+
+    /// Quick folders: the most-used and most-recent directories, one tap each,
+    /// labelled by BASENAME (a host only when two chips share a name). The
+    /// caption is what keeps the chips and the pills under them from reading as
+    /// one wall of buttons. The current folder's chip renders active and stays
+    /// in the row: picks never reshuffle it.
+    private var quickFolderRow: some View {
+        let chips = quickDirs
+        return VStack(alignment: .leading, spacing: 4) {
+            // The placeholder ink, not `.secondary`: at caption2 on the bar the
+            // system secondary measured 3.4:1 in light mode (QA), and this caption
+            // is the one thing that says the row below is folders.
+            Text("Quick folders")
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(FieldPlaceholder.ink)
+                .padding(.horizontal, 12)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(chips) { dir in
+                        Button {
+                            cwd = dir.cwd
+                            host = dir.host
+                            didPreselect = true
+                        } label: {
+                            Text(PathRanking.quickChipLabel(
+                                dir, among: chips,
+                                hostLabel: options?.hosts.first { $0.alias == dir.host }?.label
+                            ))
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                isCurrent(dir) ? Theme.tintSoft : Color(.tertiarySystemFill),
+                                in: Capsule()
+                            )
+                            // The web's accent border on the lit chip. Without it
+                            // the tinted fill sat 1.04:1 from the bar in dark mode
+                            // and the chosen folder was the FAINTEST chip in the row.
+                            .overlay(
+                                Capsule().strokeBorder(Theme.tint, lineWidth: isCurrent(dir) ? 1 : 0)
+                            )
+                            .foregroundStyle(isCurrent(dir) ? Theme.tint : .primary)
+                        }
+                        .accessibilityIdentifier("newSessionChat.quickDir")
+                        .accessibilityAddTraits(isCurrent(dir) ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+        .accessibilityIdentifier("newSessionChat.quickFolders")
+    }
+
+    private var pillRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 Button {
@@ -270,7 +328,6 @@ struct NewSessionChatView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
-        .background(.bar)
     }
 
     /// Aliases the launch route accepts (`resolveModelSwitchValue`). A draft has
@@ -284,7 +341,10 @@ struct NewSessionChatView: View {
 
     private func pill(_ text: String, icon: String, active: Bool) -> some View {
         HStack(spacing: 4) {
+            // Decorative: VoiceOver otherwise reads the symbol's name ("Move"
+            // for the folder) ahead of the pill's own words.
             Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                .accessibilityHidden(true)
             Text(text).font(.caption.weight(.medium)).lineLimit(1)
         }
         .foregroundStyle(active ? Theme.tint : .secondary)
@@ -307,14 +367,31 @@ struct NewSessionChatView: View {
         host.isEmpty ? "on this Mac" : "on \(hostLabel ?? host)"
     }
 
-    /// Top recents, best-first (the server already scores them). Six fits one
-    /// horizontal row's worth of taps without becoming a second list.
+    /// The web's quick-folder membership (`quickDirsFor`): most-used, then most
+    /// recent of the rest, one chip per directory. Not the server list's head: that
+    /// carried the same folder twice when the wire had two rows for it.
     private var quickDirs: [SessionLaunchOptions.Dir] {
-        Array((options?.dirs ?? []).prefix(6))
+        PathRanking.quickDirs(options?.dirs ?? [])
     }
 
     private func isCurrent(_ dir: SessionLaunchOptions.Dir) -> Bool {
         PathRanking.pathChipKey(dir: dir) == PathRanking.pathChipKey(cwd: cwd, host: host.isEmpty ? nil : host)
+    }
+
+    /// Spell the full path out only when no chip is lit for it.
+    private var showsPathSummary: Bool {
+        Self.showsPathSummary(cwd: cwd, host: host, quickDirs: quickDirs)
+    }
+
+    /// The quiet empty state: only while nothing else has a claim on the page.
+    private var showsEmptyState: Bool {
+        !showsPathSummary && !creating && loadFailed == nil && (taskId ?? "").isEmpty
+    }
+
+    static func showsPathSummary(cwd: String, host: String, quickDirs: [SessionLaunchOptions.Dir]) -> Bool {
+        guard !cwd.isEmpty else { return false }
+        let key = PathRanking.pathChipKey(cwd: cwd, host: host.isEmpty ? nil : host)
+        return !quickDirs.contains { PathRanking.pathChipKey(dir: $0) == key }
     }
 
     // MARK: - Load
@@ -354,13 +431,21 @@ struct NewSessionChatView: View {
             cwd = ""
             didPreselect = false
         }
-        // Preselect the top-ranked recent exactly once, and never over a choice
+        // Preselect the FIRST QUICK CHIP exactly once, and never over a choice
         // the user already made (the empty-cache apply doesn't latch, so the live
-        // fetch behind it can still seed a real suggestion).
-        guard !didPreselect, cwd.isEmpty, let top = opts.dirs.first else { return }
+        // fetch behind it can still seed a real suggestion). The chip row and the
+        // preselect must agree: a preselect from the server list's head that is
+        // not in the row would open the page with no chip lit AND the full path.
+        guard !didPreselect, cwd.isEmpty, let top = Self.preselectedDir(opts.dirs) else { return }
         cwd = top.cwd
         host = top.host
         didPreselect = true
+    }
+
+    /// The folder a fresh draft opens on: the first quick chip, so the lit chip and
+    /// the preselect are one fact; the listing's head only when the row is empty.
+    static func preselectedDir(_ dirs: [SessionLaunchOptions.Dir]) -> SessionLaunchOptions.Dir? {
+        PathRanking.quickDirs(dirs).first ?? dirs.first
     }
 
     // MARK: - Launch

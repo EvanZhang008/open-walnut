@@ -174,16 +174,35 @@ final class DemoModeUITests: XCTestCase {
         tab(app, "Tasks")
         XCTAssertTrue(text(app, containing: "shared album").waitForExistence(timeout: 15),
                       "the sample board is missing")
+        // The toolbar + opens New Session directly: no menu in between, and with
+        // the demo's quick folders up the page names the folder by its chip and
+        // pill, never by a full path.
         let plus = element(app, "sessions.new")
         XCTAssertTrue(plus.waitForExistence(timeout: 10), "no + on the board")
         plus.tap()
-        let newTask = app.buttons["tasks.create"]
-        XCTAssertTrue(newTask.waitForExistence(timeout: 10))
-        newTask.tap()
+        XCTAssertTrue(element(app, "newSessionChat.pathPill").waitForExistence(timeout: 10),
+                      "+ did not land in New Session")
+        XCTAssertFalse(app.buttons["sessions.create"].exists, "+ opened a menu instead of the page")
+        XCTAssertTrue(element(app, "newSessionChat.quickFolders").waitForExistence(timeout: 10),
+                      "the quick-folder row is missing")
+        XCTAssertFalse(element(app, "newSessionChat.summary").exists,
+                       "the full path is spelled out while a quick-folder chip is lit for it")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(element(app, "newSessionChat.pathPill").waitForNonExistence(timeout: 10))
+
+        // The full New Task sheet opens from the quick-add row's expand icon (the
+        // toolbar + is New Session alone since 2026-10-03), seeded with the sentence.
+        let quickAdd = element(app, "tasks.quickAdd.field")
+        XCTAssertTrue(quickAdd.waitForExistence(timeout: 10), "no quick-add row on the board")
+        quickAdd.tap()
+        quickAdd.typeText("Order new garden hose")
+        let expand = app.buttons["tasks.quickAdd.expand"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 10), "the quick-add row has no expand icon once text is typed")
+        expand.tap()
         let title = element(app, "newTask.title")
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        title.tap()
-        title.typeText("Order new garden hose")
+        XCTAssertEqual(title.value as? String, "Order new garden hose",
+                       "the sheet did not inherit the quick-add sentence")
         let add = app.buttons["newTask.add"]
         XCTAssertTrue(add.waitForExistence(timeout: 5))
         add.tap()
