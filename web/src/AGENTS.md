@@ -331,6 +331,15 @@ show inline after the open ones, other completed hits that show the query fold i
   (`stripInputDecorations` in `tests/providers/mock-claude.mjs`: no `> quote`, no `(Back to …)`,
   no reminder lines, and with `MOCK_CLAUDE_PLAIN_ECHO=1` from the browser fixture no spawn-flag
   suffixes), so an e2e that needs proof of WHAT was sent reads the record's anchor, not the echo.
+  **The file on show has its own question rail (2026-10-02)**: `FileQuestionRail`
+  (`components/common/FileQuestionRail.tsx`, rows from `fileQuestionRows` in `utils/file-thread.ts`)
+  is the narrow column's rail again (same `.thread-map-mark` lines, `railMarks`, `MapRow`), one
+  mark per question about THIS file plus the draft, pinned by the layer at the top-left of the
+  file area just under the Preview/Source toolbar (`.fv-file-rail`, measured against
+  `.fv-html-toolbar`), never inside the HTML iframe. Hover or focus opens "In this file"; a row
+  calls `requestCard(key, 'file-rail')`. The user asked for it after not knowing what they had
+  asked in a document. The rail pitch is `MAP_RAIL_PITCH` = 10px (was 14: two marks read as two
+  unrelated dashes); `.thread-map-mark { height }` must match it.
   Ratchets: `tests/web/file-thread.test.ts`, `tests/e2e/browser/session-file-questions.spec.ts`.
 - **Side question vs Ask: two features, pick by context.** A side question (`SideQuestionDrawer`,
   the btw fork) runs in an ISOLATED context: a one-off aside whose answer must not enter the main

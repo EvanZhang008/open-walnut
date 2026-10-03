@@ -22,8 +22,10 @@ export type ThreadMapShape = 'panel' | 'rail';
 export const MAP_PANEL_MIN_BOX = 640;
 export const MAP_PANEL_MIN_W = 176;
 export const MAP_PANEL_MAX_W = 260;
-/** Vertical pitch of one rail mark (hit target height). */
-export const MAP_RAIL_PITCH = 14;
+/** Vertical pitch of one rail mark. 10px reads as one shape (2026-10-02: at
+ *  14px two marks sat apart like two unrelated dashes); the rail is one hit
+ *  target, so the marks need no height of their own. */
+export const MAP_RAIL_PITCH = 10;
 
 const NO_KEYS: ReadonlySet<string> = new Set<string>();
 /** A current key no page can have: nothing is current (no target chosen). */
@@ -104,7 +106,7 @@ export function onPathIds(rows: readonly TreeRow[]): Set<string> {
  * first ones plus a `+<n>` mark (which opens the full list). The current row is
  * never cut: when it would fall past the cut it takes the last slot.
  */
-export function railMarks(rows: readonly TreeRow[], room: number): { marks: TreeRow[]; more: number } {
+export function railMarks<T extends { current: boolean }>(rows: readonly T[], room: number): { marks: T[]; more: number } {
   const fit = Math.max(1, Math.floor(room / MAP_RAIL_PITCH));
   if (rows.length <= fit) return { marks: [...rows], more: 0 };
   const keep = Math.max(1, fit - 1);

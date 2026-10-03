@@ -129,7 +129,7 @@ function rowName(row: TreeRow): string {
 /** A row id as an attribute value: a question key holds a NUL (parent + NUL +
  *  passage), which CSS.escape turns into U+FFFD, so a selector built from the
  *  raw id never matches the element it names (the drawer encodes for its ids). */
-function rowDomId(id: string): string {
+export function rowDomId(id: string): string {
   return encodeURIComponent(id);
 }
 
@@ -165,7 +165,7 @@ const Lead = memo(function Lead({ kind, number, expanded }: {
   return <span className="thread-map-num" aria-hidden="true">{number ?? ''}</span>;
 });
 
-interface MapRowProps {
+export interface MapRowProps {
   id: string;
   stop: string;
   kind: TreeRow['kind'];
@@ -188,7 +188,8 @@ interface MapRowProps {
   onClickRow: (id: string, byKey: boolean) => void;
 }
 
-const MapRow = memo(function MapRow(r: MapRowProps) {
+/** One labelled row; also the Files tab's question rail (FileQuestionRail). */
+export const MapRow = memo(function MapRow(r: MapRowProps) {
   return (
     <button
       type="button"

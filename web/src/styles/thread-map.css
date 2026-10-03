@@ -243,12 +243,13 @@
 /* Thin lines, nothing else (the rail reads like a minimap): the main
    conversation 12px, a question 8px stepped in by depth, a pending question
    dashed, a pin a 5px hairline, a done group 6px and faint. The current row is
-   dark and 2px; an unanswered-but-answered (unread) question adds a dot. */
+   dark and 2px; an unanswered-but-answered (unread) question adds a dot. The
+   pitch is MAP_RAIL_PITCH (utils/thread-map.ts): keep the two in step. */
 .thread-map-mark {
   display: flex;
   align-items: center;
   flex: none;
-  height: 14px;
+  height: 10px;
   padding-left: calc(3px + min(var(--map-depth, 0), 3) * 2px);
   color: var(--fg-muted);
 }

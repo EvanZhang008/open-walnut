@@ -10,8 +10,9 @@
  */
 import type { ThreadCardPlace } from '@/contexts/SessionThreadsContext';
 import type { ThreadPendingPage } from '@/components/sessions/thread-ui-contract';
-import type { ThreadMetaIndex } from '@/utils/thread-meta';
-import { displayTitleOf, metaOf } from '@/utils/thread-meta';
+import type { ThreadMetaIndex, ThreadViewStatus } from '@/utils/thread-meta';
+import { displayTitleOf, metaOf, statusOf } from '@/utils/thread-meta';
+import { questionNumbers } from '@/utils/question-tag';
 import type { PassageMarkSpec } from '@/utils/thread-card';
 import { CARD_GAP, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
 import { ROOT_THREAD_KEY, fileOfParent, type ThreadTree } from '@/utils/thread-tree';
@@ -45,6 +46,49 @@ export function fileQuestionMarks(
       resolved: metaOf(node, index)?.status === 'resolved',
       title: displayTitleOf(node, index).title,
       neutral: true,
+    });
+  }
+  return out;
+}
+
+/** One row of the file's question rail (FileQuestionRail): a question about a
+ *  passage of this file, or the draft being written about one. */
+export interface FileRailRow {
+  key: string;
+  kind: 'thread' | 'pending';
+  number?: number;
+  title: string;
+  naming: boolean;
+  status: ThreadViewStatus;
+  current: boolean;
+  unread: boolean;
+}
+
+/**
+ * The questions about passages of `path`, in transcript order, the draft last:
+ * what the rail at the top left of the file view shows (one mark each) and lists
+ * on hover. `currentKey` is the question whose card is open (else the composer's
+ * target), so the rail says where the reader is, the way the session's map does.
+ */
+export function fileQuestionRows(
+  tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, path: string,
+  pending: PendingFileMark | null | undefined, currentKey: string | null, unreadKeys: ReadonlySet<string>,
+): FileRailRow[] {
+  const numbers = questionNumbers(tree, index);
+  const out: FileRailRow[] = [];
+  for (const node of tree.threads) {
+    if (node.key === ROOT_THREAD_KEY || hiddenKeys.has(node.key) || node.file?.path !== path) continue;
+    const { title, naming } = displayTitleOf(node, index);
+    const number = numbers.get(node.key);
+    out.push({
+      key: node.key, kind: 'thread', ...(number !== undefined ? { number } : {}), title, naming,
+      status: statusOf(node, index), current: node.key === currentKey, unread: unreadKeys.has(node.key),
+    });
+  }
+  if (pending && fileOfParent(pending.parentMsgId) === path && !tree.byKey.has(pending.pageKey)) {
+    out.push({
+      key: pending.pageKey, kind: 'pending', title: pending.title, naming: false, status: 'pending',
+      current: pending.pageKey === currentKey, unread: false,
     });
   }
   return out;

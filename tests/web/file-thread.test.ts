@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { buildThreadTree, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
 import { CARD_GAP, CARD_WIDTH } from '@/utils/thread-card';
-import { FILE_CARD_MIN_HEIGHT, fileQuestionMarks, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
+import { FILE_CARD_MIN_HEIGHT, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
 
 const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
 const reply = (msgId: string, text = `a ${msgId}`): ThreadTreeMessage => ({ role: 'assistant', msgId, text });
@@ -90,5 +90,32 @@ describe('fileQuestionMarks with a draft', () => {
     expect(marks.map((m) => [m.key, m.quote.exact, m.resolved])).toEqual([['pending:file:/r/a.md:x', 'a passage', false]]);
     expect(fileQuestionMarks(tree, new Set(), new Map(), '/r/b.md', draft)).toEqual([]);
     expect(fileQuestionMarks(tree, new Set(), new Map(), '/r/a.md', { ...draft, quote: undefined })).toEqual([]);
+  });
+});
+
+describe('fileQuestionRows (the rail)', () => {
+  const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3'), user('u4'), reply('r4')];
+  const first = anchor('u2', 'file:/d/cache.md', { quote: { exact: 'late flush' } });
+  const other = anchor('u3', 'file:/d/other.md', { quote: { exact: 'late flush' } });
+  const second = anchor('u4', 'file:/d/cache.md', { quote: { exact: 'batches are capped' } });
+  const tree = buildThreadTree(messages, [first, other, second]);
+  const index = new Map([[ 'u4', { headId: 'u4', status: 'open', seq: 7 } ]]) as never;
+
+  it('lists this file\'s questions in order with number, status and the current one', () => {
+    const rows = fileQuestionRows(tree, new Set(), index, '/d/cache.md', null, threadKeyOf(second), new Set([threadKeyOf(first)]));
+    expect(rows.map((r) => [r.kind, r.number, r.current, r.unread, r.status])).toEqual([
+      ['thread', 1, false, true, 'older'],
+      ['thread', 7, true, false, 'open'],
+    ]);
+    expect(rows[1].title.length).toBeGreaterThan(0);
+  });
+  it('adds the draft about this file last, dashed as pending, and skips a hidden question', () => {
+    const draft = { pageKey: 'pending:file:/d/cache.md:x', parentMsgId: 'file:/d/cache.md', quote: { exact: 'a passage' }, title: 'New question' };
+    const rows = fileQuestionRows(tree, new Set([threadKeyOf(first)]), new Map(), '/d/cache.md', draft, draft.pageKey, new Set());
+    expect(rows.map((r) => [r.kind, r.current])).toEqual([['thread', false], ['pending', true]]);
+    expect(rows[1]).toMatchObject({ key: draft.pageKey, title: 'New question', status: 'pending' });
+  });
+  it('is empty for a file nobody asked about', () => {
+    expect(fileQuestionRows(tree, new Set(), new Map(), '/d/none.md', null, null, new Set())).toEqual([]);
   });
 });

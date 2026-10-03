@@ -20,6 +20,21 @@
 .fv-thread-layer > .thread-card {
   position: absolute;
 }
+/* The file's question rail (FileQuestionRail): the map's rail marks, as a small
+   chip under the toolbar at the left edge; its list opens over the document. */
+.fv-file-rail {
+  position: absolute;
+  left: 4px;
+  z-index: 2;
+  width: 20px;
+}
+.fv-file-rail > .thread-map-rail {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+.fv-file-rail.is-open > .thread-map-rail { opacity: 0; }
 /* The inline Ask: a small pill at the right edge of the block under the pointer. */
 .fv-ask-block {
   position: absolute;

@@ -58,6 +58,7 @@ async function openFile(page: Page, panel: Locator, name: string): Promise<Locat
 }
 
 const fileCard = (view: Locator) => view.locator('.fv-thread-layer .thread-card')
+const fileRail = (view: Locator) => view.locator('[data-testid="file-question-rail"]')
 
 /** Viewport rects of `needle` inside `root` (the top document). */
 async function textRects(root: Locator, needle: string) {
@@ -103,6 +104,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(editor).toContainText(MD_PASSAGE_FULL)
     await expect(view.locator('.fv-thread-layer')).toHaveCount(1)
 
+    // No question about this file yet: no rail.
+    await expect(fileRail(view)).toHaveCount(0)
     const rects = await textRects(editor, MD_PASSAGE_FULL)
     await dragSelect(page, rects)
     const askHere = page.locator('[data-testid="bubble-ask-here"]')
@@ -125,6 +128,15 @@ test.describe('Questions about a file passage (Files tab)', () => {
     expect(cb.y - (passage.top + passage.height)).toBeLessThan(40)
     expect(cb.x).toBeGreaterThanOrEqual(vb.x)
     expect(cb.x + cb.width).toBeLessThanOrEqual(vb.x + vb.width + 1)
+    // The rail appears with the draft: one dashed mark, under the toolbar at the left edge.
+    const rail = fileRail(view)
+    await expect(rail.locator('.thread-map-mark')).toHaveCount(1)
+    await expect(rail.locator('.thread-map-mark')).toHaveAttribute('data-kind', 'pending')
+    const rb = (await rail.boundingBox())!
+    const tb = (await view.locator('.fv-html-toolbar').first().boundingBox())!
+    expect(rb.y).toBeGreaterThanOrEqual(tb.y + tb.height)
+    expect(rb.y - (tb.y + tb.height)).toBeLessThan(12)
+    expect(rb.x - vb.x).toBeLessThan(10)
     await shot(page, 'file-q-draft')
 
     await input.fill('Why keep both versions until compaction?')
@@ -146,6 +158,13 @@ test.describe('Questions about a file passage (Files tab)', () => {
     // The sidebar lists it (a rail of marks: the chat column beside the Files tab
     // is narrow); the bubble names the file by its path from the session's cwd.
     await expect(panel.locator('.thread-map [data-kind="thread"]')).toHaveCount(3)
+    // The session rail's marks sit close together (10px pitch, not 14).
+    const markBox = (await panel.locator('.thread-map .thread-map-mark').first().boundingBox())!
+    expect(markBox.height).toBeLessThanOrEqual(10.5)
+    // The file's rail: the question's mark is now a solid, current one.
+    await expect(rail.locator('.thread-map-mark')).toHaveCount(1)
+    await expect(rail.locator('.thread-map-mark')).toHaveAttribute('data-kind', 'thread')
+    await expect(rail.locator('.thread-map-mark')).toHaveAttribute('data-current', 'true')
     const bubble = panel.locator('.session-history .session-msg--threaded').last()
     await expect(bubble).toContainText(`About ${MD_FILE}:`)
     await expect(bubble).not.toContainText('/projects/editor-fixture/')
@@ -157,6 +176,21 @@ test.describe('Questions about a file passage (Files tab)', () => {
     expect(await page.evaluate(() => CSS.highlights?.has('thread-mark-neutral') ?? false), 'the passage wears a mark').toBe(true)
     const r = (await textRects(editor, MD_PASSAGE_FULL))[0]
     await page.mouse.click(r.left + 8, r.top + r.height / 2)
+    await expect(card).toBeVisible()
+    await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
+
+    // The rail's list: hovering names the question; its row opens the card.
+    await input.press('Escape')
+    await expect(card).toHaveCount(0)
+    await rail.locator('.thread-map-rail').hover()
+    const list = rail.locator('.thread-map-overlay')
+    await expect(list).toBeVisible()
+    await expect(list.locator('.thread-map-title')).toHaveText('In this file')
+    await expect(list.locator('.thread-map-row')).toHaveCount(1)
+    await expect(list.locator('.thread-map-row .thread-map-num')).toHaveText(String(next))
+    await shot(page, 'file-q-rail-list')
+    await list.locator('.thread-map-row').click()
+    await expect(list).toHaveCount(0)
     await expect(card).toBeVisible()
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
   })
@@ -199,6 +233,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(card2).toBeVisible({ timeout: 15_000 })
     await expect(card2.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
     await expect(card2.locator('.thread-card-body')).toContainText('Follow-up from the main composer')
+    await expect(fileRail(view2).locator('.thread-map-mark[data-current="true"]')).toHaveCount(1)
     const passage = (await textRects(view2.locator('.fv-wysiwyg-editor .ProseMirror'), MD_PASSAGE_FULL)).at(-1)!
     const cb = (await card2.boundingBox())!
     expect(cb.y).toBeGreaterThanOrEqual(passage.top + passage.height - 1)
@@ -287,6 +322,23 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await page.mouse.click(again.left + 8, again.top + again.height / 2)
     await expect(card).toBeVisible()
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
+    // The rail sits over the frame too, and its row reaches the card.
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).toHaveCount(0)
+    const rail = fileRail(view)
+    await expect(rail.locator('.thread-map-mark')).toHaveCount(1)
+    // Under the toolbar even here: the preview is a block taller than its pane,
+    // whose scroll (the card's own scroll-into-view) moves the sticky toolbar
+    // against the view. The first build pinned the rail to the view's top and
+    // the toolbar slid over it.
+    await expect.poll(async () => {
+      const rb = (await rail.boundingBox())!
+      const tb = (await view.locator('.fv-html-toolbar').first().boundingBox())!
+      return rb.y - (tb.y + tb.height)
+    }).toBeGreaterThanOrEqual(0)
+    await rail.locator('.thread-map-rail').hover()
+    await rail.locator('.thread-map-overlay .thread-map-row').click()
+    await expect(card).toBeVisible()
     // The card fades in (120ms): the shot is of the settled card over the frame.
     await page.waitForTimeout(300)
     const opaque = await card.evaluate((el) => {

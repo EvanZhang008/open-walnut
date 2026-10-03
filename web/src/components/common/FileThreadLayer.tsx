@@ -25,8 +25,9 @@ import { pendingPageKey } from '@/utils/thread-stack-state';
 import type { SessionPinnedQuote } from '@/types/session';
 import { buildTextIndex, quoteFromRange, rangeForQuote } from '@/utils/text-quote-anchor';
 import {
-  askableBlockOf, blockQuoteOf, fileQuestionMarks, placeFileCard, rectInHost, toHostRect, type HostRect,
+  askableBlockOf, blockQuoteOf, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
+import { FileQuestionRail } from '@/components/common/FileQuestionRail';
 import { caretFromPoint, hitMark, rafThrottle, selectionIsEmpty, type ThreadMark } from '@/utils/thread-mark-hit';
 import { log } from '@/utils/log';
 import '@/styles/file-thread.css';
@@ -80,6 +81,49 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const pending = threads.stack.pending;
   const specs = useMemo(() => fileQuestionMarks(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending),
     [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending]);
+  // The rail's rows: the same questions, the open card (else the target) current.
+  const railCurrent = threads.openCardKey ?? threads.currentThreadKey;
+  const railRows = useMemo(
+    () => fileQuestionRows(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending, railCurrent, threads.unreadKeys),
+    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending, railCurrent, threads.unreadKeys],
+  );
+  // Where the rail sits: under the view's toolbar, at the left edge. The toolbar
+  // is sticky, so when the view's PARENT scrolls (the HTML preview is a plain
+  // block taller than its pane) its bottom moves relative to the view while this
+  // box, which is the view's size, does not: re-measure on every scroll in the
+  // document, not only on resize, or the rail slides up under the toolbar.
+  const [railBox, setRailBox] = useState({ top: 4, room: 0 });
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const measure = () => {
+      const bar = root.querySelector<HTMLElement>(':scope > .fv-html-toolbar');
+      const rootBox = root.getBoundingClientRect();
+      // A toolbar scrolled away (static in fullscreen) leaves the rail at the view's top.
+      const barBottom = Math.max(bar ? bar.getBoundingClientRect().bottom : 0, rootBox.top);
+      const top = Math.round(barBottom - rootBox.top + 4);
+      const visibleBottom = Math.min(rootBox.bottom, window.innerHeight);
+      const room = Math.max(0, Math.round(visibleBottom - rootBox.top - top - 8));
+      setRailBox((prev) => (prev.top === top && prev.room === room ? prev : { top, room }));
+    };
+    let raf = 0;
+    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measure(); }); };
+    measure();
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(later);
+    ro?.observe(root);
+    document.addEventListener('scroll', later, true);
+    window.addEventListener('resize', later);
+    return () => {
+      ro?.disconnect();
+      document.removeEventListener('scroll', later, true);
+      window.removeEventListener('resize', later);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [rootRef, surfaceNonce]);
+  const openFromRail = useCallback((key: string) => {
+    log.info('threads', 'file rail row opened', { sessionId, path: filePath, key });
+    argsRef.current.threads.requestCard(key, 'file-rail');
+  }, [sessionId, filePath]);
   const openCard = useCallback((key: string, via: string) => argsRef.current.threads.requestCard(key, via), []);
   const locatePassage = useCallback((p: { msgId: string; quote?: SessionPinnedQuote }) => {
     const b = body();
@@ -355,6 +399,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const hostW = rootRef.current?.clientWidth ?? 0;
   return (
     <div ref={layerRef} className="fv-thread-layer" data-file-path={filePath} data-surface={surface}>
+      <FileQuestionRail rows={railRows} top={railBox.top} room={railBox.room} boxWidth={hostW} onOpen={openFromRail} />
       <ThreadMarkTipLayer store={tips} />
       {hover && (
         <button
