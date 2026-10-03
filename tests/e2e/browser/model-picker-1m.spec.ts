@@ -110,6 +110,16 @@ async function openSessionPanel(page: import('@playwright/test').Page) {
   return sessionPanelInput
 }
 
+/**
+ * The picker `/model` opens, where the user sees it. It anchors to the column's
+ * composer model pill and is PORTALLED to <body> (`.model-picker-popout`, see
+ * ModelPicker.tsx), so it is not inside `REAL_PANEL`. Only one picker is open at a
+ * time; `openModelPicker` checks that none was open before and exactly one after.
+ */
+function modelPickerPopout(page: import('@playwright/test').Page) {
+  return page.locator('body > .model-picker.model-picker-popout')
+}
+
 async function openModelPicker(page: import('@playwright/test').Page, input: import('@playwright/test').Locator) {
   await input.focus()
   await input.fill('/m')
@@ -120,11 +130,12 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
 
   const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
   await expect(modelItem).toBeVisible({ timeout: 3000 })
+  const modelPicker = modelPickerPopout(page)
+  await expect(modelPicker).toHaveCount(0)
   await modelItem.dispatchEvent('mousedown')
-  await page.waitForTimeout(300)
 
-  const modelPicker = page.locator(`${REAL_PANEL} .model-picker`)
   await expect(modelPicker).toBeVisible({ timeout: 3000 })
+  await expect(modelPicker).toHaveCount(1)
 
   return modelPicker
 }
@@ -240,21 +251,24 @@ test.describe('ModelPicker CLI catalog', () => {
     const options = picker.locator('.model-picker-col-models .model-picker-row')
     await expect(options).toHaveCount(3)
 
+    // Rows carry the version derived from the full provider ID (caa9e214); the
+    // Default row says what it resolves to.
     const names = picker.locator('.model-picker-col-models .model-picker-row-name')
-    await expect(names.nth(0)).toHaveText('Default')
-    await expect(names.nth(1)).toHaveText('Fable')
-    await expect(names.nth(2)).toHaveText('Opus (1M context)')
+    await expect(names.nth(0)).toHaveText('Default (Fable 5)')
+    await expect(names.nth(1)).toHaveText('Fable 5')
+    await expect(names.nth(2)).toHaveText('Opus 4.8 1M')
 
     // Active row = Fable (resolvedModel match on the non-default row), ✓-marked.
-    const active = picker.locator('.model-picker-row-active')
+    // Scoped to the Model column: the Effort column marks its own active row.
+    const active = picker.locator('.model-picker-col-models .model-picker-row-active')
     await expect(active).toHaveCount(1)
-    await expect(active.locator('.model-picker-row-name')).toHaveText('Fable')
+    await expect(active.locator('.model-picker-row-name')).toHaveText('Fable 5')
     await expect(active.locator('.model-picker-row-check')).toHaveText('✓')
 
     // Disabled row: greyed and not clickable.
     const disabled = picker.locator('.model-picker-row-disabled')
     await expect(disabled).toHaveCount(1)
-    await expect(disabled.locator('.model-picker-row-name')).toHaveText('Opus (1M context)')
+    await expect(disabled.locator('.model-picker-row-name')).toHaveText('Opus 4.8 1M')
     await expect(disabled).toBeDisabled()
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-cli-catalog.png') })
@@ -268,7 +282,9 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const fableRow = picker.locator('.model-picker-col-models .model-picker-row', { hasText: 'Fable' })
+    // Exact name: the Default row reads "Default (Fable 5)" and also contains "Fable".
+    const fableRow = picker.locator('.model-picker-col-models .model-picker-row')
+      .filter({ has: page.locator('.model-picker-row-name', { hasText: /^Fable 5$/ }) })
     const [req] = await Promise.all([
       page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
       fableRow.click(),
@@ -290,9 +306,11 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(synthetic).toBeVisible()
     await expect(synthetic).toHaveAttribute('title', /not in this session's selectable catalog/)
 
-    // No CATALOG row is active — the synthetic row is the only active-styled one.
-    const actives = picker.locator('.model-picker-row-active')
+    // No CATALOG row is active — the synthetic row is the only active-styled one
+    // in the Model column (the Effort column marks its own active row).
+    const actives = picker.locator('.model-picker-col-models .model-picker-row-active')
     await expect(actives).toHaveCount(1)
+    await expect(actives).toHaveAttribute('data-testid', 'picker-out-of-catalog')
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-out-of-catalog.png') })
   })
@@ -396,5 +414,57 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(currentLabel).toContainText('Current: Fable')
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-header-current.png') })
+  })
+})
+
+// ── `/model` before the session record loads ──
+//
+// The composer takes `/model` while the header still says "Loading...", but the
+// model pill (which owns the picker) mounts only once the record arrives. The pill
+// used to count the request it mounted with as already served and dropped it: the
+// input cleared and no picker ever opened (a cold run, 2026-10-03: the first test
+// on each of 4 workers). Unit level: tests/web/composer-model-pill-open-request.test.ts.
+
+test.describe('ModelPicker requested before the session loads', () => {
+  test('/model picked while the record loads opens the picker once the pill mounts', async ({ page }) => {
+    // Hold the panel's record request so the pill cannot mount yet.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
+      await gate
+      await route.continue()
+    })
+
+    await presetPanelView(page)
+    await page.goto('/')
+    const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' }).first()
+    await expect(taskItem).toBeVisible({ timeout: 15_000 })
+    await taskItem.click()
+    const input = page.locator(`${REAL_PANEL} .chat-input-textarea`)
+    await expect(input).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator(`${REAL_PANEL} .session-panel-badge`, { hasText: 'Loading' })).toBeVisible()
+    const pill = page.locator(`${REAL_PANEL} [data-control-id="model"]`)
+    await expect(pill).toHaveCount(0)
+
+    await input.focus()
+    await input.fill('/m')
+    const palette = page.locator(`${REAL_PANEL} .command-palette`)
+    await expect(palette).toBeVisible({ timeout: 3000 })
+    const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
+    await expect(modelItem).toBeVisible({ timeout: 3000 })
+    await modelItem.dispatchEvent('mousedown')
+    await expect(input).toHaveValue('')
+    const picker = modelPickerPopout(page)
+    await expect(picker).toHaveCount(0)
+
+    release()
+    await expect(pill).toHaveCount(1, { timeout: 10_000 })
+    await expect(picker).toBeVisible({ timeout: 5000 })
+    await expect(picker).toHaveCount(1)
+    await expect(picker.locator('.model-picker-col-models .model-picker-row')).toHaveCount(7)
+
+    // Served once: closed, it stays closed.
+    await page.keyboard.press('Escape')
+    await expect(picker).toHaveCount(0)
   })
 })

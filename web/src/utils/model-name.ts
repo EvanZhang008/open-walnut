@@ -22,6 +22,11 @@ export function formatModelName(model: string | undefined): string {
       .replace(/-(?=[A-Z][a-z])/g, ' ');
   }
   else return model;
+  // Walnut's own picker aliases (SESSION_MODELS ids: 'opus', 'sonnet-1m', …) name
+  // the 1M context window with a '-1m' suffix, which is not a version: read as
+  // "family-X" it turned 'sonnet-1m' into "Sonnet 1", and every fallback picker
+  // showed "Sonnet 1" / "Fable 1" / "Opus 1" for the 1M rows.
+  if (/^(?:opus|sonnet|haiku|fable)-1m$/.test(lower)) return `${family} 1M`;
   // Detect 1M extended context from init model string
   const is1M = lower.includes('[1m]');
   const suffix = is1M ? ' 1M' : '';

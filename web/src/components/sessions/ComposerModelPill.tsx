@@ -15,7 +15,7 @@
  *    sent: picks are reported to the caller and the picker closes. The picker
  *    runs in its draft shape (an "Auto" row, no live get_settings pull).
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { ModelPicker, acpModelDisplayName } from './ModelPicker';
 import { SessionSpeedReadout } from './SessionSpeedReadout';
 import { SubscriptionLimitPillHint, SubscriptionLimitReadout } from './SubscriptionLimitReadout';
@@ -76,10 +76,38 @@ export interface ComposerModelPillProps {
   /** Bump to OPEN the picker from outside — SessionPanel's `/model` command.
    *  Only the pill that receives it opens. */
   openNonce?: number;
+  /** The last `openNonce` a pill opened for, kept by the CALLER so it outlives
+   *  the pill (see `useOpenRequest`). */
+  openServedRef?: MutableRefObject<number>;
+}
+
+/**
+ * An outside request to open the picker: `/model` bumps `openNonce`, and each
+ * value opens the picker once. `servedRef` is the caller's record of the last
+ * value a pill opened for. It has to outlive the pill: SessionPanel mounts the
+ * pill only once the session record has loaded, and the composer takes `/model`
+ * before that, so the pill that mounts then still opens for it, while a pill
+ * that remounts after serving a value (or a re-render with the same value) does
+ * not reopen. 2026-10-03: the pill counted the value it mounted with as served,
+ * so a `/model` picked during the load was dropped (input cleared, no picker).
+ * Without a `servedRef`, the value at mount counts as served.
+ */
+export function useOpenRequest(
+  openNonce: number | undefined,
+  servedRef: MutableRefObject<number> | undefined,
+  open: () => void,
+): void {
+  const lastOpenNonce = useRef(servedRef ? servedRef.current : openNonce);
+  useEffect(() => {
+    if (openNonce === undefined || openNonce === lastOpenNonce.current) return;
+    lastOpenNonce.current = openNonce;
+    if (servedRef) servedRef.current = openNonce;
+    open();
+  }, [openNonce, servedRef, open]);
 }
 
 export function ComposerModelPill({
-  sessionId, session, engineUi, onOptimistic, fallbackAssistant, pending, title, openNonce,
+  sessionId, session, engineUi, onOptimistic, fallbackAssistant, pending, title, openNonce, openServedRef,
 }: ComposerModelPillProps) {
   const { notify } = useNotifications();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -91,14 +119,10 @@ export function ComposerModelPill({
   const pillRef = useRef<HTMLElement | null>(null);
   const setPillEl = useCallback((el: HTMLButtonElement | null) => { pillRef.current = el; }, []);
 
-  // External open request (`/model`): open on a CHANGED nonce only, so a
-  // re-render with the same value can't re-open a picker the user just closed.
-  const lastOpenNonce = useRef(openNonce);
-  useEffect(() => {
-    if (openNonce === undefined || openNonce === lastOpenNonce.current) return;
-    lastOpenNonce.current = openNonce;
-    setPickerOpen(true);
-  }, [openNonce]);
+  // External open request (`/model`): each value opens once, so a re-render with
+  // the same value can't re-open a picker the user just closed.
+  const openPicker = useCallback(() => setPickerOpen(true), []);
+  useOpenRequest(openNonce, openServedRef, openPicker);
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId ?? null);

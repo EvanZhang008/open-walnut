@@ -47,6 +47,16 @@ async function openSessionPanel(page: import('@playwright/test').Page) {
 }
 
 /**
+ * The picker `/model` opens, where the user sees it. It anchors to the column's
+ * composer model pill and is PORTALLED to <body> (`.model-picker-popout`, see
+ * ModelPicker.tsx), so it is not inside `REAL_PANEL`. Only one picker is open at a
+ * time; callers check that none was open before and exactly one after.
+ */
+function modelPickerPopout(page: import('@playwright/test').Page) {
+  return page.locator('body > .model-picker.model-picker-popout')
+}
+
+/**
  * Types /m in the session chat input and selects the /model command from the palette.
  * Returns after the ModelPicker is visible.
  */
@@ -63,13 +73,14 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   // Find the /model palette item (use control class to avoid matching commands with "model" in description)
   const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
   await expect(modelItem).toBeVisible({ timeout: 3000 })
+  const modelPicker = modelPickerPopout(page)
+  await expect(modelPicker).toHaveCount(0)
   // Use mousedown (CommandPalette uses onMouseDown, not onClick)
   await modelItem.dispatchEvent('mousedown')
-  await page.waitForTimeout(300)
 
-  // Verify ModelPicker is visible
-  const modelPicker = page.locator(`${REAL_PANEL} .model-picker`)
+  // Verify exactly one ModelPicker is open
   await expect(modelPicker).toBeVisible({ timeout: 3000 })
+  await expect(modelPicker).toHaveCount(1)
 
   return modelPicker
 }
@@ -101,12 +112,13 @@ test.describe('Model Switch UI', () => {
     await expect(controlBadge).toHaveText('Control')
 
     // Click /model to open the picker
+    const modelPicker = modelPickerPopout(page)
+    await expect(modelPicker).toHaveCount(0)
     await modelItem.dispatchEvent('mousedown')
-    await page.waitForTimeout(300)
 
-    // ModelPicker should be visible
-    const modelPicker = page.locator(`${REAL_PANEL} .model-picker`)
+    // Exactly one ModelPicker should be visible
     await expect(modelPicker).toBeVisible({ timeout: 3000 })
+    await expect(modelPicker).toHaveCount(1)
 
     // Input should be cleared (control command resets input)
     await expect(input).toHaveValue('')

@@ -332,6 +332,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // `/model` from the composer opens the model pill's picker — the pill owns the
   // open state, so this bumps the nonce it watches.
   const [modelPickerRequest, setModelPickerRequest] = useState(0);
+  // The last request a pill opened for. Kept here, not in the pill: the pill
+  // mounts only once the record has loaded, and `/model` can come before that.
+  const modelPickerServed = useRef(0);
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
 
@@ -1592,6 +1595,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onOptimistic={applyModelPillPatch}
             fallbackAssistant={lastAssistant}
             openNonce={opts.openNonce}
+            openServedRef={opts.openNonce !== undefined ? modelPickerServed : undefined}
           />
         ),
       },

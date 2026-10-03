@@ -8,6 +8,53 @@
  */
 import { describe, it, expect } from 'vitest';
 import { formatModelName, shortModelName } from '../../web/src/utils/model-name';
+import { catalogRowLabel } from '../../web/src/components/sessions/ModelPicker';
+import { sessionModelsAsCatalog } from '../../src/core/types';
+
+describe('formatModelName', () => {
+  // The '-1m' of a picker alias is the 1M context window, not major version 1:
+  // the fallback picker read "Sonnet 1" / "Fable 1" / "Opus 1" for the 1M rows.
+  it('names the legacy picker aliases without inventing a version', () => {
+    expect(formatModelName('haiku')).toBe('Haiku');
+    expect(formatModelName('sonnet')).toBe('Sonnet');
+    expect(formatModelName('sonnet-1m')).toBe('Sonnet 1M');
+    expect(formatModelName('fable')).toBe('Fable');
+    expect(formatModelName('fable-1m')).toBe('Fable 1M');
+    expect(formatModelName('opus')).toBe('Opus');
+    expect(formatModelName('opus-1m')).toBe('Opus 1M');
+    expect(formatModelName('opus[1m]')).toBe('Opus 1M');
+  });
+
+  it('keeps the version of real provider ids', () => {
+    expect(formatModelName('claude-opus-4-8[1m]')).toBe('Opus 4.8 1M');
+    expect(formatModelName('global.anthropic.claude-opus-4-8[1m]')).toBe('Opus 4.8 1M');
+    expect(formatModelName('global.anthropic.claude-fable-5')).toBe('Fable 5');
+    expect(formatModelName('global.anthropic.claude-fable-5[1m]')).toBe('Fable 5 1M');
+    expect(formatModelName('claude-fable-5-1')).toBe('Fable 5.1');
+    expect(formatModelName('claude-opus-4-1')).toBe('Opus 4.1');
+    expect(formatModelName('global.anthropic.claude-opus-4-6-v1[1m]')).toBe('Opus 4.6 1M');
+    expect(formatModelName('us.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe('Haiku 4.5');
+    expect(formatModelName('claude-sonnet-4-6')).toBe('Sonnet 4.6');
+    expect(formatModelName('gpt-5.6-sol')).toBe('GPT-5.6 Sol');
+  });
+});
+
+describe('catalogRowLabel', () => {
+  it('labels the 7 fallback rows with their registry names', () => {
+    expect(sessionModelsAsCatalog().map(catalogRowLabel)).toEqual([
+      'Opus', 'Opus 1M', 'Sonnet', 'Sonnet 1M', 'Haiku', 'Fable', 'Fable 1M',
+    ]);
+  });
+
+  it('shows the real version of CLI catalog rows', () => {
+    expect(catalogRowLabel({ value: 'global.anthropic.claude-fable-5', displayName: 'Fable' })).toBe('Fable 5');
+    expect(catalogRowLabel({
+      value: 'default', resolvedModel: 'global.anthropic.claude-opus-5[1m]', displayName: 'Default',
+    })).toBe('Default (Opus 5 1M)');
+    expect(catalogRowLabel({ value: 'global.anthropic.claude-opus-4-8[1m]', displayName: 'Opus (1M context)' }))
+      .toBe('Opus 4.8 1M');
+  });
+});
 
 describe('shortModelName', () => {
   it('keeps the family word of a Claude display name', () => {
