@@ -1851,7 +1851,11 @@ async function loadPlugin(
       context.signal.throwIfAborted();
     }
   } catch (err) {
-    log.error('Plugin registration threw an error', { id: pluginId, pluginId, error: String(err) });
+    // Warn, not error: the manager rethrows this into loadPlugin's catch below,
+    // whose 'Plugin activation failed' is the ONE card for the failure. At error
+    // level this line was a second card for the same cause (2026-10-03: a Slack
+    // plugin refused by an older Walnut raised two cards per boot).
+    log.warn('Plugin registration threw an error', { id: pluginId, pluginId, error: String(err) });
     throw err;
   }
 
@@ -1859,7 +1863,7 @@ async function loadPlugin(
   // plugin has nothing to sync, so demanding a 16-method no-op object from it
   // would be pure ceremony.
   if (expectsSync && !builder.collected.sync) {
-    log.error('Plugin did not call registerSync()', { id: pluginId, capabilities: effectiveCapabilities });
+    log.warn('Plugin did not call registerSync()', { id: pluginId, capabilities: effectiveCapabilities });
     throw new Error(`Plugin "${pluginId}" did not call registerSync()`);
   }
 

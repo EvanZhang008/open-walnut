@@ -18,6 +18,9 @@ import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import { canonicalRecoveryKey } from './route-condition.js';
+import { WRITER_ORIGIN, type NotificationOrigin } from './origin.js';
+
+export type { NotificationOrigin } from './origin.js';
 
 /** notifications.json lives next to incidents.json / sessions.json under WALNUT_HOME. */
 const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
@@ -84,6 +87,16 @@ export interface NotificationRecord {
    *  lets ONE recovery signal (the daemon reconnecting) retire all of them, and
    *  what the UI groups by while they're firing. */
   causeKey?: string;
+
+  /** operation-error only — the Walnut that observed this failure, when it was
+   *  not the primary. The feed file rides the data sync, so a card the cloud
+   *  companion writes shows up on the Mac (2026-10-03: a Slack plugin the
+   *  companion's older build could not load read as a Mac failure, while Slack
+   *  on the Mac was fine). A recovery signal is scoped to the instance that saw
+   *  it: a plugin loading cleanly on the Mac says nothing about the companion,
+   *  so recoverNotifications retires only same-origin cards. Follows the LATEST
+   *  occurrence on a fold, like causeKey. Absent = written by the primary. */
+  origin?: NotificationOrigin;
 
   /** operation-error only — the FAMILY this error belongs to ('Sessions', 'API',
    *  'Data & Sync', a plugin's display name, …), derived at write time by
@@ -332,10 +345,21 @@ export async function addNotification(input: NewNotification): Promise<Notificat
       id: input.id ?? generateId(),
       timestamp: input.timestamp ?? Date.now(),
       read: input.read ?? false,
+      ...originStamp(input.kind),
     };
     store.notifications.push(record);
     return record;
   }));
+}
+
+/** The `origin` fields an error card written by THIS process carries. */
+function originStamp(kind: NotificationKind): { origin?: NotificationOrigin } {
+  return kind === 'operation-error' && WRITER_ORIGIN ? { origin: WRITER_ORIGIN } : {};
+}
+
+/** True when this process is the Walnut whose success signals may retire `rec`. */
+export function writtenHere(rec: Pick<NotificationRecord, 'origin'>): boolean {
+  return rec.origin === WRITER_ORIGIN;
 }
 
 /** Optional detail fields a refresh copies over when the caller supplies them.
@@ -391,6 +415,7 @@ export async function upsertNotification(
         id: input.id ?? generateId(),
         timestamp: input.timestamp ?? Date.now(),
         read: input.read ?? false,
+        ...originStamp(input.kind),
       };
       store.notifications.push(record);
       return { record, outcome: 'inserted' as const };
@@ -412,6 +437,11 @@ export async function upsertNotification(
     // occurrence" — the field follows the LATEST occurrence, either direction.
     if (input.causeKey !== undefined) existing.causeKey = input.causeKey;
     else delete existing.causeKey;
+    // Same rule for the writer: the card now describes the instance that saw the
+    // latest occurrence, and that instance's success is what may retire it.
+    const stamp = originStamp(existing.kind);
+    if (stamp.origin) existing.origin = stamp.origin;
+    else delete existing.origin;
     existing.count = (existing.count ?? 1) + 1;
     existing.lastTimestamp = input.timestamp ?? Date.now();
     // Deliberate: a re-FIRE re-badges the bell — the thing is happening again,
@@ -640,9 +670,12 @@ export async function recoverNotifications(
   // produced, whatever condition each one was filed under.
   // A route key is compared in today's normalization too: a card written under
   // an older id rule would otherwise wait for a signal nothing can send.
+  // Only cards THIS Walnut wrote: a success here is not a success on the cloud
+  // companion whose cards share the feed (see NotificationRecord.origin).
   const matches = (rec: NotificationRecord): boolean =>
-    (!!rec.recoveryKey && (keys.has(rec.recoveryKey) || keys.has(canonicalRecoveryKey(rec.recoveryKey))))
-    || (!!rec.causeKey && keys.has(rec.causeKey));
+    writtenHere(rec)
+    && ((!!rec.recoveryKey && (keys.has(rec.recoveryKey) || keys.has(canonicalRecoveryKey(rec.recoveryKey))))
+      || (!!rec.causeKey && keys.has(rec.causeKey)));
   // Lock-free pre-check, same reasoning as expireErrorNotifications: the
   // host-connected recovery path fires on EVERY daemon (re)connect — including
   // boots on a healthy box with nothing to retire. A plain read costs no

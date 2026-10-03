@@ -65,6 +65,7 @@ import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadN
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 import { readPluginWebModule } from '../../src/core/plugins/plugin-web-module.js';
+import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../src/logging/subsystem.js';
 
 // ── Helpers ──
 
@@ -568,6 +569,37 @@ export function activate(walnut) { walnut.http.route('GET', '/value', () => ({ j
     await fsp.writeFile(serverFile, 'export function activate() {}\n');
     expect((await reloadLoadedPlugin(registry, 'throws')).state).toBe('active');
     expect(registry.has('throws')).toBe(true);
+  });
+
+  it('one activation failure reaches the error sink ONCE (one card), carrying the plugin\'s own message', async () => {
+    // The registration catch used to log at error and rethrow into the activation
+    // catch, which logged at error again: two cards per boot for one cause (2026-10-03,
+    // a Slack plugin refused by an older Walnut). The outer line is the card; the
+    // inner one is context at warn.
+    const pluginDir = path.join(tmpDir, 'plugins', 'refuses');
+    await writeManifest(pluginDir, {
+      id: 'refuses',
+      name: 'Refuses',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(
+      path.join(pluginDir, 'dist', 'server.mjs'),
+      'export function activate() { throw new Error("This plugin needs a newer Walnut."); }\n',
+    );
+    const sunk: ErrorNotifyPayload[] = [];
+    setErrorNotificationSink((payload) => { sunk.push(payload); });
+    try {
+      await load(new IntegrationRegistry());
+    } finally {
+      setErrorNotificationSink(null);
+    }
+
+    const forPlugin = sunk.filter((p) => p.meta?.id === 'refuses' || p.meta?.pluginId === 'refuses');
+    expect(forPlugin.map((p) => p.message)).toEqual(['Plugin activation failed']);
+    expect(forPlugin[0].meta).toMatchObject({ pluginId: 'refuses', error: 'This plugin needs a newer Walnut.' });
   });
 
   it('recovers a quarantined Plugin through clearQuarantine then reload', async () => {

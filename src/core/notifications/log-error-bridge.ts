@@ -36,6 +36,7 @@ import { redactSensitiveText } from '../../logging/redact.js';
 import { upsertNotification } from './store.js';
 import { humanizeErrorNotification } from './humanize.js';
 import { causeKeyForError } from './error-cause.js';
+import { withOriginNote } from './origin.js';
 import { log } from '../../logging/index.js';
 
 /** Storm absorber: skip repeat sink calls for the same key within this window. */
@@ -333,7 +334,9 @@ export function installLogErrorNotifications(
       ...(payload.meta ? { meta: payload.meta } : {}),
     }, { sanitize: redactSensitiveText });
     const title = human.title.length > 120 ? `${human.title.slice(0, 120)}…` : human.title;
-    const body = human.message ? capBody(human.message) : undefined;
+    // On the cloud companion the sentence also says where this happened: the
+    // feed is read on the Mac too, where the same card would read as a Mac failure.
+    const body = capBody(withOriginNote(human.message));
 
     // Async wrapper because the side-thread suppression needs an awaited record
     // read, which the old fire-and-forget `void upsertNotification(...)` could

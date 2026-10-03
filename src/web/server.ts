@@ -146,6 +146,7 @@ import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
 import { humanizeErrorNotification } from '../core/notifications/humanize.js'
+import { withOriginNote } from '../core/notifications/origin.js'
 import { causeKeyForError, hostCauseKey } from '../core/notifications/error-cause.js'
 import { releaseAbsorbedKeys } from '../core/notifications/log-error-bridge.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
@@ -272,7 +273,8 @@ async function publishErrorNotification(input: {
     body: plainBody,
     ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),
   }, { sanitize: redactSensitiveText })
-  const body = human.message ? cap(human.message) : rawBody
+  // On the cloud companion the sentence also says where this happened (origin.ts).
+  const body = cap(withOriginNote(human.message || plainBody))
   // Only when the humanizer actually replaced the body — an identical string in
   // both fields would render the same sentence twice (once inline, once behind
   // the toggle).

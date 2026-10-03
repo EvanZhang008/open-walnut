@@ -76,6 +76,10 @@ export interface Notification {
    *  `host:<alias>`; the Errors pane folds cards sharing an open causeKey into
    *  one group (server-owned, src/core/notifications/error-cause.ts). */
   causeKey?: string;
+  /** operation-error only — the Walnut that observed the failure when it was not
+   *  the primary ('replica' = the cloud companion, whose feed syncs into this
+   *  one). Its body already says so; absent = written by the primary. */
+  origin?: 'replica';
   /** operation-error only — the FAMILY the Errors rail groups by ('Sessions',
    *  'API', a plugin's display name, …). Server-derived
    *  (src/core/notifications/humanize.ts); absent on pre-humanizer records. */

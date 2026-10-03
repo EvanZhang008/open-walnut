@@ -864,6 +864,56 @@ describe('recoverNotifications by causeKey', () => {
 });
 
 /**
+ * origin — the feed file is shared with the cloud companion through the data
+ * sync, so a card it wrote sits in this feed too. This process is the PRIMARY
+ * (CLOUD_MODE false in the mocked constants): its own cards carry no origin, and
+ * its success signals must not retire a card another Walnut raised.
+ */
+describe('origin: cards another Walnut wrote', () => {
+  it('a card written here carries no origin, and a companion\'s card is left for the companion to retire', async () => {
+    // The 2026-10-03 shape: the companion's older build could not load a plugin the
+    // Mac loads fine. The Mac's clean load must not stamp the companion's card recovered.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Plugin activation failed',
+      dedupKey: 'logerr:plugin-loader:replica', recoveryKey: 'plugin:chat', origin: 'replica',
+    });
+    const { record: mine } = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Plugin activation failed',
+      dedupKey: 'logerr:plugin-loader:mine', recoveryKey: 'plugin:chat',
+    });
+    expect(mine.origin).toBeUndefined();
+
+    const { recovered } = await recoverNotifications(['plugin:chat']);
+    expect(recovered.map(r => r.dedupKey)).toEqual(['logerr:plugin-loader:mine']);
+    const { feed } = await listNotifications();
+    expect(feed.find(n => n.dedupKey === 'logerr:plugin-loader:replica')?.resolved).toBeUndefined();
+  });
+
+  it('a fold here takes the card over: origin follows the latest occurrence, like causeKey', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed',
+      dedupKey: 'logerr:shared', recoveryKey: 'git', origin: 'replica',
+    });
+    const { record } = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed',
+      dedupKey: 'logerr:shared', recoveryKey: 'git',
+    });
+    expect(record.origin).toBeUndefined();
+    const { recovered } = await recoverNotifications(['git']);
+    expect(recovered.map(r => r.dedupKey)).toEqual(['logerr:shared']);
+  });
+
+  it('a cause-key recovery is scoped the same way: a host reconnect here says nothing about the companion\'s link', async () => {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed',
+      dedupKey: 'logerr:there', recoveryKey: 'route:GET /api/x', causeKey: 'host:devbox', origin: 'replica',
+    });
+    const { recovered } = await recoverNotifications(['host:devbox']);
+    expect(recovered).toEqual([]);
+  });
+});
+
+/**
  * pruneResolvedErrorNotifications — settled receipts leave the feed.
  *
  * A recovered/expired error is worth a day or two of "that outage retired

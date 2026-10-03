@@ -31,7 +31,7 @@
 import {
   listNotifications, resolvePermissionNotification,
   expireErrorNotifications, expireKeylessErrorNotifications, expireQuietErrorNotifications,
-  pruneResolvedErrorNotifications,
+  pruneResolvedErrorNotifications, writtenHere,
   type NotificationRecord,
 } from './store.js';
 import { getSessionByClaudeId } from '../session-tracker.js';
@@ -160,7 +160,8 @@ function taskIdOfErrorKey(record: NotificationRecord): string | null {
  * healthy response, clean turn or quiet git tick found nothing failing and
  * published nothing. The store is the durable memory of what is failing; this
  * hands it back to the trackers. Run after the expiry sweep so a card it just
- * settled is not re-armed.
+ * settled is not re-armed. Only this Walnut's own cards: the trackers watch
+ * this process, and a recovery it publishes never retires another instance's.
  */
 export async function unresolvedErrorRecoveryKeys(): Promise<string[]> {
   try {
@@ -168,6 +169,7 @@ export async function unresolvedErrorRecoveryKeys(): Promise<string[]> {
     const keys = new Set<string>();
     for (const record of feed) {
       if (record.kind !== 'operation-error' || record.resolved || !record.recoveryKey) continue;
+      if (!writtenHere(record)) continue;
       keys.add(canonicalRecoveryKey(record.recoveryKey));
     }
     return [...keys];
