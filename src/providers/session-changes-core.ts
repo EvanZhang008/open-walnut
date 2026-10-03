@@ -68,11 +68,16 @@ export interface SessionChangesResult {
 
 // ── Per-file accumulated ops ──
 
+// `failed`: the CLI answered this tool call with an error (`is_error: true`), so
+// the edit never reached the file. The Changed view's reconstruction ignores the
+// flag; per-hunk attribution (git-commit-core.ts) skips such ops, because a
+// failed edit whose new text happens to exist in the file would otherwise claim
+// someone else's lines.
 export type FileOp =
-  | { kind: 'edit'; oldString: string; newString: string; replaceAll: boolean }
+  | { kind: 'edit'; oldString: string; newString: string; replaceAll: boolean; toolUseId?: string; failed?: boolean }
   // `original`: the file as it was before this Write, when the CLI recorded one
   // (its tool result is `type: 'update'` with `originalFile`). Absent = a create.
-  | { kind: 'write'; content: string; toolUseId?: string; original?: string }
+  | { kind: 'write'; content: string; toolUseId?: string; original?: string; failed?: boolean }
   | { kind: 'create' }
   | { kind: 'delete' }
   | { kind: 'rename'; from: string };
@@ -94,9 +99,34 @@ interface RawLine {
       name?: string;
       input?: Record<string, unknown>;
       tool_use_id?: string;
+      is_error?: boolean;
     }>;
   };
   toolUseResult?: unknown;
+}
+
+/**
+ * Mark the edit/write ops whose tool call the CLI answered with an error. The
+ * error arrives on a later user line (possibly a later parse chunk), so the op
+ * is found by its tool_use id across the map. Ops are replaced, not mutated (a
+ * cloned map shares op objects with the cached one it came from).
+ */
+function markFailedOps(raw: RawLine, fileMap: Map<string, FileAccum>): void {
+  const blocks = raw.message?.content;
+  if (!Array.isArray(blocks)) return;
+  let failed: Set<string> | null = null;
+  for (const b of blocks) {
+    if (b.type === 'tool_result' && b.is_error === true && b.tool_use_id) (failed ??= new Set()).add(b.tool_use_id);
+  }
+  if (!failed) return;
+  for (const accum of fileMap.values()) {
+    for (let i = accum.ops.length - 1; i >= 0; i--) {
+      const op = accum.ops[i]!;
+      if ((op.kind === 'edit' || op.kind === 'write') && op.toolUseId && failed.has(op.toolUseId) && !op.failed) {
+        accum.ops[i] = { ...op, failed: true };
+      }
+    }
+  }
 }
 
 /**
@@ -147,6 +177,7 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
     if (raw.type === 'user') {
       const attached = attachWriteOriginal(raw, fileMap);
       if (attached) originalsAttached.add(attached);
+      markFailedOps(raw, fileMap);
       continue;
     }
     if (raw.type !== 'assistant') continue;
@@ -210,10 +241,11 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
             oldString: input.old_string,
             newString: input.new_string,
             replaceAll: input.replace_all === true,
+            ...(block.id ? { toolUseId: block.id } : {}),
           });
         }
       } else if (block.name === 'MultiEdit') {
-        // MultiEdit applies edits[] in order.
+        // MultiEdit applies edits[] in order (and fails as one call).
         const edits = Array.isArray(input.edits) ? input.edits : [];
         for (const e of edits as Array<Record<string, unknown>>) {
           if (typeof e.old_string === 'string' && typeof e.new_string === 'string') {
@@ -222,6 +254,7 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
               oldString: e.old_string,
               newString: e.new_string,
               replaceAll: e.replace_all === true,
+              ...(block.id ? { toolUseId: block.id } : {}),
             });
           }
         }
@@ -229,7 +262,7 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
         // Notebook cells: best-effort treat new_source as an edit onto old.
         const newSrc = typeof input.new_source === 'string' ? input.new_source : undefined;
         if (newSrc !== undefined) {
-          accum.ops.push({ kind: 'edit', oldString: '', newString: newSrc, replaceAll: false });
+          accum.ops.push({ kind: 'edit', oldString: '', newString: newSrc, replaceAll: false, ...(block.id ? { toolUseId: block.id } : {}) });
         }
       }
 

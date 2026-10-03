@@ -22,6 +22,7 @@ import { requestLogger, setRouteRecoveryPublisher, seedFailingRoutes } from './m
 import { tasksRouter } from './routes/tasks.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { sessionsRouter } from './routes/sessions.js'
+import { sessionCommitRouter } from './routes/session-commit.js'
 import { searchRouter } from './routes/search.js'
 import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
@@ -1521,6 +1522,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/cron', routinesRouter)
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)
+  app.use('/api/sessions', sessionCommitRouter) // commit / push / PR from the Changed tab
   app.use('/api/sessions', sessionsRouter)
   // Agent search mounts BEFORE /api/search so Express never routes it there.
   app.use('/api/search/agent', searchAgentRouter)

@@ -371,6 +371,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // bridge-reachable: it names host processes. Optional: without it the
   // Machine readout says the host's daemon needs an upgrade.
   'proc-sample-v1',
+  // 'git-commit-v1': `git.commitPlan` (the files a session changed in each repo
+  // it touched, its own hunks attributed), `git.commitStart` (a commit / push /
+  // PR job: a commit is built in a private index, hooks run against it, the
+  // branch moves by compare-and-swap; a push never forces) and `git.commitJob`
+  // (poll a job). Both twins implement it (git-commit-core.ts and
+  // git-attribution-core.ts are text-injected into the source twin), so it is
+  // NOT sidecar-gated; without the changes sidecar the plan is unattributed.
+  // Not bridge-reachable: it writes refs and publishes. Optional: without it the
+  // Changed tab says the host's daemon needs an update.
+  'git-commit-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

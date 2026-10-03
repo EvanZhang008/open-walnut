@@ -71,6 +71,8 @@ export const SLOW_TEST_FILES = [
   'tests/integrations/git-sync-health.test.ts', // 6s: real repos, commits and ls-files
   'tests/core/git-versioning.test.ts', // 5s
   'tests/core/plugins/linked-checkout.test.ts', // 4s: bare origin + publisher + linked clone
+  'tests/providers/git-commit-core.test.ts', // ~46s at load 200: ~15 temp repos, hooks, bare remotes, real pushes
+  'tests/providers/git-commit-twin-parity.test.ts', // ~2.5s at load 200: two temp repos + the full source-twin build
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
   'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict

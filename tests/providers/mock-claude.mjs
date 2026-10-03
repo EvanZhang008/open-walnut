@@ -619,6 +619,97 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.-1.4. "file-edit-turn:<json>" — a turn that REALLY edits files the way
+    //          the CLI's Edit/Write tools do, then STAYS ALIVE like
+    //          snapshot-clean-turn (multi-turn included). <json> (first line only)
+    //          is { edits: [{ file, old, new } | { file, write }], text? }; a
+    //          relative file is resolved against the cwd. Each edit is applied on
+    //          disk, streamed as tool_use + tool_result (is_error when `old` is
+    //          not found exactly once, and the file is left alone), and written
+    //          to the canonical transcript under MOCK_CLAUDE_TRANSCRIPT_DIR with
+    //          a parentUuid chain, so the Changed tab and the commit view read
+    //          this session's ops exactly as they read a real one's.
+    if (effectiveMessage.startsWith('file-edit-turn:')) {
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      let spec = { edits: [] };
+      try { spec = JSON.parse(effectiveMessage.split('\n')[0].slice('file-edit-turn:'.length)); } catch { /* no edits */ }
+      const turn = ++snapshotTurnSeq;
+      const rows = [];
+      const body = () => {
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+        (spec.edits || []).forEach((e, i) => {
+          const file = path.resolve(process.cwd(), String(e.file));
+          const id = `toolu_fe_${process.pid}_${turn}_${i}`;
+          let isError = false;
+          let resultText = '';
+          let toolUseResult;
+          let input;
+          if (typeof e.write === 'string') {
+            input = { file_path: file, content: e.write };
+            let original = null;
+            try { original = fs.readFileSync(file, 'utf8'); } catch { /* a create */ }
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, e.write);
+            toolUseResult = original === null ? { type: 'create', filePath: file, content: e.write } : { type: 'update', filePath: file, content: e.write, originalFile: original };
+            resultText = `File ${original === null ? 'created' : 'updated'} successfully at: ${file}`;
+          } else {
+            input = { file_path: file, old_string: String(e.old), new_string: String(e.new), replace_all: false };
+            let text = null;
+            try { text = fs.readFileSync(file, 'utf8'); } catch { /* missing */ }
+            const count = text === null ? 0 : text.split(String(e.old)).length - 1;
+            if (count !== 1) {
+              isError = true;
+              resultText = text === null ? 'File does not exist.' : count === 0 ? 'String to replace not found in file.' : `Found ${count} matches of the string to replace.`;
+            } else {
+              fs.writeFileSync(file, text.replace(String(e.old), () => String(e.new)));
+              resultText = `The file ${file} has been updated successfully.`;
+              toolUseResult = { filePath: file, oldString: String(e.old), newString: String(e.new) };
+            }
+          }
+          const assistant = { type: 'assistant', session_id: sid, parent_tool_use_id: null, message: {
+            id: `msg_fe_${process.pid}_${turn}_${i}`, type: 'message', role: 'assistant', model: 'mock-model',
+            content: [{ type: 'tool_use', id, name: typeof e.write === 'string' ? 'Write' : 'Edit', input }],
+            stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 },
+          } };
+          const user = { type: 'user', session_id: sid, parent_tool_use_id: null, message: { role: 'user', content: [
+            { type: 'tool_result', tool_use_id: id, content: resultText, ...(isError ? { is_error: true } : {}) },
+          ] }, ...(toolUseResult ? { tool_use_result: toolUseResult } : {}) };
+          emit(assistant);
+          emit(user);
+          rows.push({ type: 'assistant', message: assistant.message }, { type: 'user', message: user.message, ...(toolUseResult ? { toolUseResult } : {}) });
+        });
+        const text = spec.text || `Edited ${(spec.edits || []).length} file(s).`;
+        const final = { type: 'assistant', session_id: sid, message: { id: `msg_fe_${process.pid}_${turn}_done`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } } };
+        emit(final);
+        rows.push({ type: 'assistant', message: final.message });
+        const root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR;
+        if (root) {
+          const dir = path.join(root, process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+          fs.mkdirSync(dir, { recursive: true });
+          const shared = { sessionId: sid, cwd: process.cwd(), isSidechain: false };
+          const promptId = randomUUID();
+          const out = [{ ...shared, type: 'user', uuid: promptId, parentUuid: transcriptParent, timestamp: new Date().toISOString(), message: { role: 'user', content: effectiveMessage.split('\n')[0] } }];
+          let parent = promptId;
+          for (const r of rows) {
+            const uuid = randomUUID();
+            out.push({ ...shared, ...r, uuid, parentUuid: parent, timestamp: new Date().toISOString() });
+            parent = uuid;
+          }
+          transcriptParent = parent;
+          fs.appendFileSync(path.join(dir, `${sid}.jsonl`), out.map((row) => JSON.stringify(row)).join('\n') + '\n');
+        }
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      // Same think time as snapshot-clean-turn, for the same turn-start ordering reason.
+      const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
+      if (THINK_MS > 0) setTimeout(body, THINK_MS);
+      else body();
+      return;
+    }
+
     // 2a.-1. "snapshot-clean-turn[:<text>]" — ONE clean turn then STAY ALIVE
     //         (real FIFO-mode CLI behavior), so the daemon's fold sees the
     //         canonical settle sequence and the session converges to idle

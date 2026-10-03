@@ -79,6 +79,8 @@ import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
+import { createGitAttribution } from './git-attribution-core.js'
+import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
 import {
   computeHostLocalChanges,
   toLightChangesResult,
@@ -1823,6 +1825,12 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.fileShow': return cmdGitFileShow(ws, id as number, cmd)
     // 'git-exclude-v1': writes ONLY .git/info/exclude; same bridge rule as above.
     case 'git.ensureExcluded': return cmdGitEnsureExcluded(ws, id as number, cmd)
+    // 'git-commit-v1' (git-commit-core.ts): commit / push / PR of one session's
+    // hunks. NOT in BRIDGE_ALLOWED_COMMANDS: it writes refs and publishes.
+    // Keep in sync with daemon-source.ts.
+    case 'git.commitPlan': return cmdGitCommitPlan(ws, id as number, cmd)
+    case 'git.commitStart': return cmdGitCommitStart(ws, id as number, cmd)
+    case 'git.commitJob': return sendOk(ws, id as number, { job: gitCommit.job(cmd.jobId) })
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
@@ -6970,6 +6978,45 @@ async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
     sendOk(ws, id, { found: false })
   } catch (err) {
     sendError(ws, id, 'changes.file failed: ' + (err as Error).message)
+  }
+}
+
+// ── Session commit (host-local, capability 'git-commit-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is git-commit-core.ts +
+// git-attribution-core.ts (shared with the source twin); this twin only hands
+// the plan the session's ops from the changes cache and tracks commit jobs on
+// the command drain, so a shutdown waits for a commit instead of cutting it.
+const gitCommit = createGitCommitCore({
+  spawn: spawn as unknown as import('./git-commit-core.js').GitCommitDeps['spawn'],
+  fs: fs as unknown as import('./git-commit-core.js').GitCommitDeps['fs'],
+  path, tmpdir: () => os.tmpdir(), env: process.env,
+  attribution: createGitAttribution(),
+  randomId: () => crypto.randomBytes(6).toString('hex'),
+  killGroup: (pid) => { if (pid > 1) process.kill(-pid, 'SIGKILL') },
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+async function cmdGitCommitPlan(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  try {
+    const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+    const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
+    const entry = sid ? await computeChangesCached(sid, cwd).catch(() => null) : null
+    const changes = entry ? { groups: entry.output.result.groups, fileMap: entry.output.fileMap } as unknown as PlanChanges : null
+    sendOk(ws, id, await gitCommit.plan(cmd, changes) as unknown as Record<string, unknown>)
+  } catch (err) {
+    sendError(ws, id, 'git.commitPlan failed: ' + (err as Error).message)
+  }
+}
+
+function cmdGitCommitStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  try {
+    daemonCommands.run(() => {
+      const started = gitCommit.start(cmd)
+      sendOk(ws, id, { job: started.job })
+      return started.done
+    })
+  } catch (err) {
+    sendError(ws, id, 'git.commitStart failed: ' + (err as Error).message, { code: (err as { code?: string }).code ?? 'failed' })
   }
 }
 

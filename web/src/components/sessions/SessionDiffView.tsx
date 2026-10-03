@@ -32,6 +32,7 @@ import {
 } from '@/utils/dom-text-search';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
 
 export type DiffViewType = 'split' | 'unified';
 /** The toolbar layout mode: 'auto' picks per file — split only when some line
@@ -2331,6 +2332,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             title={aiSummaryOn ? 'AI summaries on — click to hide' : 'AI summaries off — click to show a short AI blurb per file'}
             aria-pressed={aiSummaryOn}
           >✦ AI</button>
+          <SessionCommitButton sessionId={sessionId} disabled={!data || empty} onCommitted={() => load(true)} />
           <button className="session-diff-refresh" onClick={() => load(true)} title="Re-scan changes">
             {ICON_REFRESH}
           </button>

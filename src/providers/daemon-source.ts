@@ -52,6 +52,8 @@ import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createProcSampler } from './proc-sample-core.js'
+import { createGitAttribution } from './git-attribution-core.js'
+import { createGitCommitCore } from './git-commit-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 
@@ -201,6 +203,8 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_FIX__', createHostFix.toString()],
     ['__CREATE_FS_LS__', createFsLs.toString()],
     ['__CREATE_PROC_SAMPLER__', createProcSampler.toString()],
+    ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
+    ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
     ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
     ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
@@ -347,6 +351,22 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const rows = ps.parsePsTable('  10     1    10  2048  75:01.50 1-02:03:04 /Applications/Some App.app/Contents/MacOS/claude\n  11     1    10   512   0:00.10 00:07 node\n')
       if (rows.length !== 2 || rows[0].comm !== 'claude' || rows[0].cpuSeconds !== 4501.5 || rows[0].elapsedSeconds !== 93784) throw new Error('proc sampler misread a ps row')
       if (ps.attribute(rows, [{ sid: 's', pid: 10, kind: 'cli' }]).get(11) !== 0) throw new Error('proc sampler lost a re-parented child')
+    }
+    // Session commit smoke: the attribution and the hunk placement ride this
+    // text, so a reconstructed copy must still claim a session's own edit, leave
+    // another writer's hunk alone, and build the commit core around it.
+    const createAttr = reconstructed['__CREATE_GIT_ATTRIBUTION__'] as typeof createGitAttribution | undefined
+    const createCommit = reconstructed['__CREATE_GIT_COMMIT__'] as typeof createGitCommitCore | undefined
+    if (createAttr) {
+      const at = createAttr()
+      const att = at.attribute({ head: 'a\nb\nc\nd\ne\nf\n', work: 'A\nb\nc\nd\ne\nF\n', ops: [{ kind: 'edit', oldString: 'a\n', newString: 'A\n' }] })
+      if (att.hunks.length !== 2 || att.hunks[0].owner !== 'mine' || att.hunks[1].owner !== 'other') throw new Error('git attribution misattributed a hunk')
+      const applied = at.applyHunks('a\nb\nc\nd\ne\nf\n', [att.hunks[0]])
+      if (!('text' in applied) || applied.text !== 'A\nb\nc\nd\ne\nf\n') throw new Error('git attribution misplaced a hunk')
+      if (createCommit) {
+        const gc = createCommit({ spawn: () => { throw new Error('unused') }, fs: fs as never, path, tmpdir: () => '/tmp', env: {}, attribution: at })
+        if (gc.job('none') !== null || gc.cleanMessage('  x  \n\n\n\ny\n') !== '  x\n\ny\n') throw new Error('git commit core did not build')
+      }
     }
     // host.fix smoke: the package-manager table and the sudo refusal reader ride
     // this text, so a reconstructed copy must still build apk's argv and read
@@ -2771,6 +2791,12 @@ function dispatchCommand(ws, id, cmd) {
     case 'git.fileShow': return cmdGitFileShow(ws, id, cmd);
     // 'git-exclude-v1': writes ONLY .git/info/exclude; same bridge rule as above.
     case 'git.ensureExcluded': return cmdGitEnsureExcluded(ws, id, cmd);
+    // 'git-commit-v1' (git-commit-core.ts): commit / push / PR of one session's
+    // hunks. NOT in BRIDGE_ALLOWED_COMMANDS: it writes refs and publishes.
+    // Keep in sync with daemon-standalone.ts.
+    case 'git.commitPlan': return cmdGitCommitPlan(ws, id, cmd);
+    case 'git.commitStart': return cmdGitCommitStart(ws, id, cmd);
+    case 'git.commitJob': return sendOk(ws, id, { job: gitCommit.job(cmd.jobId) });
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
@@ -8634,6 +8660,42 @@ async function cmdProcSample(ws, id) {
   }
   const r = await procSampler.sample(roots);
   sendOk(ws, id, r);
+}
+
+// ── Session commit (host-local, capability 'git-commit-v1') ──
+// PARITY: keep in sync with daemon-standalone.ts. git-commit-core.ts and
+// git-attribution-core.ts are injected as text. Without the changes sidecar the
+// plan still lists every changed file, unattributed.
+const gitCommit = (__CREATE_GIT_COMMIT__)({
+  spawn: spawn, fs: fs, path: path, tmpdir: function () { return os.tmpdir(); }, env: process.env,
+  attribution: (__CREATE_GIT_ATTRIBUTION__)(),
+  randomId: function () { return crypto.randomBytes(6).toString('hex'); },
+  killGroup: function (pid) { if (pid > 1) process.kill(-pid, 'SIGKILL'); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
+async function cmdGitCommitPlan(ws, id, cmd) {
+  try {
+    const sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+    const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined;
+    const entry = sid && changesCore ? await computeChangesCached(sid, cwd, false).catch(function () { return null; }) : null;
+    const changes = entry ? { groups: entry.output.result.groups, fileMap: entry.output.fileMap } : null;
+    sendOk(ws, id, await gitCommit.plan(cmd, changes));
+  } catch (err) {
+    sendError(ws, id, 'git.commitPlan failed: ' + err.message);
+  }
+}
+
+function cmdGitCommitStart(ws, id, cmd) {
+  try {
+    daemonCommands.run(function () {
+      const started = gitCommit.start(cmd);
+      sendOk(ws, id, { job: started.job });
+      return started.done;
+    });
+  } catch (err) {
+    sendError(ws, id, 'git.commitStart failed: ' + err.message, { code: err.code || 'failed' });
+  }
 }
 
 // ── List all sessions ──
