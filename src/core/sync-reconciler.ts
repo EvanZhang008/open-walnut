@@ -213,6 +213,20 @@ interface ApplyOutcome {
  */
 const REFUSAL_ESCALATE_TICKS = 3;
 
+/**
+ * The condition id of one refused list: `plugin:<id>:list:<project>`.
+ *
+ * Its OWN key, not the plugin's `plugin:<id>`: that one is retired by the
+ * plugin's next successful sync, and sync succeeds on every tick while a list
+ * stays refused, so the card was recovered on the first tick after each boot and
+ * raised again three reconciles later (one card reached count 29 in a day with
+ * the mismatch untouched). The refusal ends when the list stops being refused,
+ * and only that ends the card.
+ */
+export function listRefusalRecoveryKey(pluginId: string, project: string): string {
+  return `plugin:${pluginId}:list:${project.toLowerCase()}`;
+}
+
 /** 2 min after the first failure, then 4, 8, 16, then the regular 30-min cadence. */
 export function failureBackoffMs(consecutiveFailures: number): number {
   const doublings = Math.min(Math.max(consecutiveFailures, 1), 10);
@@ -225,6 +239,32 @@ function inFailureBackoff(state: ReconcileState, now: number = Date.now()): bool
   const failedAt = Date.parse(state.lastFailureAt);
   if (Number.isNaN(failedAt)) return false;
   return now - failedAt < failureBackoffMs(failures);
+}
+
+/**
+ * Retire the cards of lists that are no longer refused. Lock-free when nothing
+ * matches (recoverNotifications pre-checks), so a healthy reconcile pays one
+ * store read at most; never throws into the reconcile.
+ */
+async function recoverListRefusals(keys: string[]): Promise<void> {
+  try {
+    const [{ recoverNotifications }, { releaseAbsorbedKeys }] = await Promise.all([
+      import('./notifications/store.js'),
+      import('./notifications/log-error-bridge.js'),
+    ]);
+    releaseAbsorbedKeys(keys);
+    const { recovered } = await recoverNotifications(keys);
+    for (const record of recovered) {
+      bus.emit('notification:updated', record, ['web-ui'], { source: 'sync-reconciler' });
+    }
+    if (recovered.length > 0) {
+      log.web.info('sync-reconciler: refused lists imported again, cards retired', { keys, count: recovered.length });
+    }
+  } catch (err) {
+    log.web.warn('sync-reconciler: retiring list-refusal cards failed', {
+      keys, error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export class SyncReconciler {
@@ -979,9 +1019,13 @@ export class SyncReconciler {
       // Escalate ONCE per standing mismatch (not every cycle): the card exists to
       // tell the human something needs a decision, not to count cycles.
       if (streak !== REFUSAL_ESCALATE_TICKS) continue;
-      log.web.error('Task sync cannot import a remote list', {
+      // The list's name is in the MESSAGE so two refused lists with the same
+      // reason are two cards (the bridge fingerprints message + a few meta keys,
+      // and `project` is not one of them).
+      log.web.error(`Task sync cannot import the remote list "${project}"`, {
         pluginId,
         project,
+        recoveryKey: listRefusalRecoveryKey(pluginId, project),
         reason: info.reason,
         ...(info.claimedBy ? { claimedBy: info.claimedBy } : {}),
         items: info.items,
@@ -994,10 +1038,15 @@ export class SyncReconciler {
       });
     }
     // A refusal that stopped happening must not keep an old streak alive — the
-    // next occurrence starts a fresh count (and can escalate again).
+    // next occurrence starts a fresh count (and can escalate again). Its end is
+    // also the recovery signal for the card it may have raised.
+    const ended: string[] = [];
     for (const key of [...this.refusalStreaks.keys()]) {
-      if (key.startsWith(`${pluginId}:`) && !seen.has(key)) this.refusalStreaks.delete(key);
+      if (!key.startsWith(`${pluginId}:`) || seen.has(key)) continue;
+      this.refusalStreaks.delete(key);
+      ended.push(`plugin:${pluginId}:list:${key.slice(pluginId.length + 1)}`);
     }
+    if (ended.length > 0) void recoverListRefusals(ended);
   }
 
   /**

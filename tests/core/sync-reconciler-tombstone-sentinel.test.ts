@@ -21,7 +21,8 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 }));
 
 import { SYNC_DIR, WALNUT_HOME } from '../../src/constants.js';
-import { SyncReconciler } from '../../src/core/sync-reconciler.js';
+import { SyncReconciler, listRefusalRecoveryKey } from '../../src/core/sync-reconciler.js';
+import { upsertNotification, listNotifications } from '../../src/core/notifications/store.js';
 import {
   _resetForTesting,
   deleteProject,
@@ -209,12 +210,41 @@ describe('the UNLINKED state: a remote list and a LOCAL project share a name', (
       advancePastFullInterval();
     }
 
-    const escalations = error.mock.calls.filter(([m]) => m === 'Task sync cannot import a remote list');
+    const escalations = error.mock.calls.filter(([m]) => String(m).startsWith('Task sync cannot import the remote list'));
     expect(escalations).toHaveLength(1);
+    // The list's name rides in the message (two refused lists are two cards) and
+    // the card has its OWN condition key, not the plugin's.
+    expect(escalations[0][0]).toBe('Task sync cannot import the remote list "Fix Walnut"');
     expect(escalations[0][1]).toMatchObject({
       pluginId: 'ms-todo', project: 'Fix Walnut', reason: 'local-project', consecutiveReconciles: 3,
+      recoveryKey: 'plugin:ms-todo:list:fix walnut',
     });
     expect(String((escalations[0][1] as { remedy?: string }).remedy)).toContain('LOCAL project');
+  });
+
+  it('a refusal that ENDS retires its own card and leaves the plugin\'s other cards alone', async () => {
+    // Before the own key, the card shared `plugin:<id>` with every other card of the
+    // plugin: a successful sync (every tick, since the refusal never fails the sync)
+    // recovered it, and three reconciles later it was raised again, boot after boot.
+    await ensureProject('Fix Walnut', 'local');
+    const card = (dedupKey: string, recoveryKey: string) => upsertNotification({
+      kind: 'operation-error', severity: 'error', title: dedupKey, dedupKey, recoveryKey,
+    });
+    await card('error:list', listRefusalRecoveryKey('ms-todo', 'Fix Walnut'));
+    await card('error:plugin', 'plugin:ms-todo');
+    const stuck = makePlugin([remoteItem({ remoteId: 'probe-1', title: 'A8 probe plain', fields: { project: 'Fix Walnut' } })]);
+    const healed = makePlugin([]);
+
+    await reconciler.tick(stuck, makeCtx([]));
+    advancePastFullInterval();
+    await reconciler.tick(healed, makeCtx([])); // the list is gone: the refusal ended
+    // The recovery is fire-and-forget off the reconcile.
+    await vi.waitFor(async () => {
+      const { feed } = await listNotifications();
+      expect(feed.find(n => n.dedupKey === 'error:list')?.resolved).toBe('recovered');
+    });
+    const { feed } = await listNotifications();
+    expect(feed.find(n => n.dedupKey === 'error:plugin')?.resolved).toBeUndefined();
   });
 
   it('a refusal that stops resets the streak — nothing is escalated for a mismatch that healed', async () => {
@@ -231,6 +261,6 @@ describe('the UNLINKED state: a remote list and a LOCAL project share a name', (
     advancePastFullInterval();
     await reconciler.tick(stuck, makeCtx([]));  // a fresh count starts at 1
 
-    expect(error.mock.calls.filter(([m]) => m === 'Task sync cannot import a remote list')).toHaveLength(0);
+    expect(error.mock.calls.filter(([m]) => String(m).startsWith('Task sync cannot import the remote list'))).toHaveLength(0);
   });
 });
