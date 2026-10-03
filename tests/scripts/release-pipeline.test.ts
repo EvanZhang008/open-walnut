@@ -451,6 +451,16 @@ describe('release.yml', () => {
     expect(runs('promote')).toContain('git commit --quiet -am "release: $VERSION"')
   })
 
+  it('package.json is already in the form npm publishes', () => {
+    // npm normalizes the manifest at publish and logs each fix; for `./bin/x` it
+    // says the bin "was invalid and removed" though it keeps it (2026-10-03 nightly
+    // log), which reads like a broken package. Nothing to fix means nothing logged.
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as { bin: Record<string, string>; repository: { url: string } }
+    expect(Object.keys(pkg.bin).sort()).toEqual(['open-walnut', 'walnut'])
+    for (const target of Object.values(pkg.bin)) expect(target).toBe('bin/open-walnut.js')
+    expect(pkg.repository.url).toBe('git+https://github.com/EvanZhang008/open-walnut.git')
+  })
+
   it('package.json exposes the release command', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as { scripts: Record<string, string> }
     expect(pkg.scripts.release).toBe('node scripts/release.mjs')

@@ -6,7 +6,7 @@
   "homepage": "https://github.com/EvanZhang008/open-walnut",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EvanZhang008/open-walnut.git"
+    "url": "git+https://github.com/EvanZhang008/open-walnut.git"
   },
   "keywords": [
     "ai",
@@ -31,8 +31,8 @@
     "packages/plugin-cli"
   ],
   "bin": {
-    "open-walnut": "./bin/open-walnut.js",
-    "walnut": "./bin/open-walnut.js"
+    "open-walnut": "bin/open-walnut.js",
+    "walnut": "bin/open-walnut.js"
   },
   "main": "./dist/cli.js",
   "engines": {
