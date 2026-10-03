@@ -89,6 +89,30 @@ final class ModelCatalogRowLabelTests: XCTestCase {
         XCTAssertEqual(ModelCatalogRowLabel.formatModelName(nil), "")
     }
 
+    /// The fallback catalog (the server's `sessionModelsAsCatalog`, sent when the
+    /// CLI cannot answer initialize): its 1M rows are aliases whose '-1m' is the
+    /// context window, not version 1. Both read "Sonnet 1" until 2026-10-03.
+    /// (id, label) and the expected strings come from the web code itself
+    /// (`catalogRowLabel(sessionModelsAsCatalog())` and `formatModelName`).
+    func testTheFallbackCatalogsOneMillionRowsReadOneM() {
+        let fallback: [(String, String)] = [
+            ("opus", "Opus"), ("opus-1m", "Opus 1M"), ("sonnet", "Sonnet"), ("sonnet-1m", "Sonnet 1M"),
+            ("haiku", "Haiku"), ("fable", "Fable"), ("fable-1m", "Fable 1M"),
+        ]
+        let rows = fallback.map { id, label in
+            Row(id: id, label: label, supportsEffort: nil, supportedEffortLevels: nil)
+        }
+        XCTAssertEqual(rows.map(ModelCatalogRowLabel.label(for:)),
+                       ["Opus", "Opus 1M", "Sonnet", "Sonnet 1M", "Haiku", "Fable", "Fable 1M"])
+        let golden: [(String, String)] = [
+            ("sonnet-1m", "Sonnet 1M"), ("opus-1m", "Opus 1M"), ("fable-1m", "Fable 1M"), ("haiku-1m", "Haiku 1M"),
+            ("claude-sonnet-1m", "Sonnet 1"), ("opus-1", "Opus 1"), ("sonnet-1m-x", "Sonnet 1"),
+        ]
+        for (id, expected) in golden {
+            XCTAssertEqual(ModelCatalogRowLabel.formatModelName(id), expected, "formatModelName(\(id))")
+        }
+    }
+
     /// Why this is its own twin instead of reusing the pill's name function: the
     /// two disagree on exactly the rows the user looks at.
     func testShortModelNameIsNotATwinOfFormatModelName() {

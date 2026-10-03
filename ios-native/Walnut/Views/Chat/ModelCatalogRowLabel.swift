@@ -54,6 +54,9 @@ enum ModelCatalogRowLabel {
         else if lower.contains("fable") { family = "Fable" }
         else if lower.hasPrefix("gpt-") { return gptName(model) }
         else { return model }
+        // Walnut's own picker aliases ('sonnet-1m', …) name the 1M context window
+        // with a '-1m' suffix, which is not a version ("Sonnet 1M", not "Sonnet 1").
+        if firstMatch(aliasOneMPattern, in: lower) != nil { return "\(family) 1M" }
         let suffix = lower.contains("[1m]") ? " 1M" : ""
         if let groups = firstMatch(versionPattern, in: lower), groups.count == 2 {
             return "\(family) \(groups[0]).\(groups[1])\(suffix)"
@@ -80,6 +83,9 @@ enum ModelCatalogRowLabel {
     // `[0-9]`, not `\d`: JavaScript's `\d` is ASCII-only, NSRegularExpression's is not.
     private static let versionPattern = try! NSRegularExpression(
         pattern: "(?:opus|sonnet|haiku|fable)-([0-9]+)-([0-9]+)"
+    )
+    private static let aliasOneMPattern = try! NSRegularExpression(
+        pattern: "^(?:opus|sonnet|haiku|fable)-1m$"
     )
     private static let majorPattern = try! NSRegularExpression(
         pattern: "(?:opus|sonnet|haiku|fable)-([0-9]+)"
