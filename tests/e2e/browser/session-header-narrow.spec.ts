@@ -164,6 +164,7 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.titleRow.pillsStartAfterTitle, `${label}: a pill overlaps the title`).toBe(true)
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
   expect(state.toolRow.visible, `${label}: expand must stay`).toContain('expand')
+  expect(state.toolRow.visible, `${label}: pin must stay`).toContain('lock')
 }
 
 /** The header alone, or the header plus `below` px of the page under it (an open menu). */
@@ -177,9 +178,9 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
   })
 }
 
-/** The order items leave the tool row; the hidden set must always be a suffix of it. Expand and Close never leave. */
-const LEAVE_ORDER = ['popout', 'lock', 'locate', 'resources', 'time', 'terminal', 'board', 'files', 'changed', 'fork']
-const WINDOW_BUTTONS = ['locate', 'popout', 'lock']
+/** The order the chips leave the tool row, first to go first. Pin, Expand and Close never leave. */
+const CHIP_LEAVE_ORDER = ['terminal', 'board', 'files', 'changed', 'fork']
+const WINDOW_BUTTONS = ['locate', 'popout']
 /** The chips a "..." row stands in for (the heavy pill is one too, when a session wears it). */
 const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal', 'resources']
 /** Everything the "..." menu lists: the time is the one hidden item it does not. */
@@ -189,14 +190,13 @@ const LISTED = [...VIEW_CHIPS, ...WINDOW_BUTTONS]
 function expectRules(state: HeaderState, label: string) {
   expectInsidePanel(state, label)
   const hidden = new Set(state.toolRow.hidden)
-  // A suffix of the leave order: nothing leaves before everything after it has.
-  const present = LEAVE_ORDER.filter((id) => hidden.has(id) || state.toolRow.visible.includes(id))
-  const firstHidden = present.findIndex((id) => hidden.has(id))
-  if (firstHidden >= 0) {
-    for (const id of present.slice(0, firstHidden + 1)) expect(hidden.has(id), `${label}: ${id} should have left before ${present[firstHidden]}`).toBe(true)
+  // The chips leave in order (Terminal first, Fork last). A window button fills whatever room they
+  // leave, so it may sit on the row beside a hidden chip (2026-10-04).
+  const chips = CHIP_LEAVE_ORDER.filter((id) => hidden.has(id) || state.toolRow.visible.includes(id))
+  const firstVisibleChip = chips.findIndex((id) => !hidden.has(id))
+  if (firstVisibleChip >= 0) {
+    for (const id of chips.slice(firstVisibleChip)) expect(hidden.has(id), `${label}: ${id} left before a chip that leaves sooner`).toBe(false)
   }
-  const chipHidden = VIEW_CHIPS.some((id) => hidden.has(id))
-  if (chipHidden) for (const id of WINDOW_BUTTONS) expect(hidden.has(id), `${label}: ${id} stays while a chip is hidden`).toBe(true)
   const listedHidden = LISTED.some((id) => hidden.has(id))
   expect(state.moreVisible, `${label}: the "..." chip shows exactly when it has something to list`).toBe(listedHidden)
   expect(state.statusLabelVisible, `${label}: the status word shows only at the full level`).toBe(state.titleRow.fit === 'full')
@@ -208,9 +208,9 @@ function expectRules(state: HeaderState, label: string) {
   if (state.titleRow.hiddenPills) expect(letters, `${label}: pills hide only after the letter level`).toBe(true)
 }
 
-/** Narrower never shows what wider hid. */
+/** Narrower never shows a chip that wider hid (a window button can return where a chip left). */
 function expectMonotonic(wider: HeaderState, narrower: HeaderState, label: string) {
-  for (const id of wider.toolRow.hidden) expect(narrower.toolRow.hidden, `${label}: ${id} came back`).toContain(id)
+  for (const id of wider.toolRow.hidden.filter((h) => CHIP_LEAVE_ORDER.includes(h))) expect(narrower.toolRow.hidden, `${label}: ${id} came back`).toContain(id)
   const rank = { full: 0, dot: 1, letters: 2 } as Record<string, number>
   expect(rank[narrower.titleRow.fit], `${label}: the title row stepped back up`).toBeGreaterThanOrEqual(rank[wider.titleRow.fit])
 }
@@ -251,12 +251,12 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
     await shootHeader(panel, String(width))
   }
   // The movable window buttons are the first to go (400px has room for the chips, not for five
-  // buttons too); Expand and Close stay at every width.
+  // buttons too); Pin, Expand and Close stay at every width.
   expect(states[400].toolRow.hidden).toContain('popout')
   expect(['changed', 'files', 'board', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
   // 240px cannot hold five chips; 180px holds Fork and little else.
-  expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['terminal', ...WINDOW_BUTTONS]))
-  expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal', ...WINDOW_BUTTONS]))
+  expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['terminal']))
+  expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))
   expect(states[180].toolRow.visible[0]).toBe('fork')
   // The pills read as letters by 240px, and the words are still there for readers and tests.
   expect(states[240].titleRow.fit).toBe('letters')
@@ -274,11 +274,11 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
     await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveText(id[0]!.toUpperCase() + id.slice(1))
   }
   await expect(more.getByTestId('session-header-more-item-locate')).toHaveText(/Locate task/)
-  await expect(more.getByTestId('session-header-more-item-lock')).toHaveText(/Pin panel/)
+  await expect(more.getByTestId('session-header-more-item-lock')).toHaveCount(0)
   await expect(more.getByTestId('session-header-more-item-popout')).toHaveText(/Open in new tab/)
   await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
   const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
-  expect(moreRows.slice(-3), 'window buttons come after the views').toEqual(['locate', 'lock', 'popout'])
+  expect(moreRows.slice(-2), 'window buttons come after the views').toEqual(['locate', 'popout'])
   await shootHeader(panel, '180-more', 220)
   await more.getByTestId('session-header-more-item-files').click()
   await expect(more).toHaveCount(0)
@@ -309,12 +309,12 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('trigger-jobs-flyout')).toHaveCount(0, { timeout: 10_000 })
 
-  // 320px: the movable window buttons are in the "..." menu while the pills are still on the
-  // row; Expand is still a button. It goes full screen, where the whole header comes back;
+  // 320px: something is in the "..." menu while the pills are still on the row; Pin and Expand
+  // are still buttons. It goes full screen, where the whole header comes back;
   // Escape returns to the same narrow shape.
   const at320 = await settleAt(page, panel, 320)
-  expect(at320.toolRow.hidden).toEqual(expect.arrayContaining(['popout', 'lock', 'locate']))
-  expect(at320.toolRow.visible).toContain('expand')
+  expect(at320.toolRow.hidden.length, '320px cannot hold every chip and button').toBeGreaterThan(0)
+  expect(at320.toolRow.visible).toEqual(expect.arrayContaining(['lock', 'expand']))
   await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
   await expect(panel.getByRole('button', { name: 'Collapse session', exact: true })).toBeVisible({ timeout: 10_000 })
   const full = await settleAt(page, panel, 320)

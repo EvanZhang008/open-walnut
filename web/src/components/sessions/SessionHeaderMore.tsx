@@ -5,7 +5,7 @@
  *
  * `SessionHeaderMoreMenu` is the "..." chip on the tool row and its menu: one row
  * per hidden view chip (Changed, Files, Board, Terminal, Fork, the heavy pill),
- * then, after a divider, one per hidden window button (Open in new tab, Pin panel,
+ * then, after a divider, one per hidden window button (Open in new tab,
  * Locate task). `HiddenPillRows` is the kebab's leading section: one row per
  * title-row pill that did not fit even as a letter.
  *
@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { ICON_LOCATE, ICON_LOCK, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
 import { TOOL_ITEMS } from './useSessionHeaderFit';
 import { TITLE_PILL_SELECTOR } from './session-header-fit';
 
@@ -32,7 +32,7 @@ function activate(row: HTMLElement | null, id: string) {
 }
 
 interface ItemState {
-  /** The open view, the pin state, the heavy pill's number. */
+  /** The open view, the heavy pill's number. */
   value: string;
   /** The real button's accessible name ("Find on Home" where the panel is not on Home). */
   label: string;
@@ -50,7 +50,6 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   const label = button.getAttribute('aria-label') ?? '';
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
-  else if (id === 'lock') value = button.getAttribute('aria-pressed') === 'true' ? 'Pinned' : '';
   else if (id === 'resources') value = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
   return { value, label, disabled };
 }
@@ -186,9 +185,7 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
 function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
   const { value, label: ariaLabel } = useItemState(rowRef, id);
   // Locate reads as the real button does ("Find on Home" off the home page).
-  const label = id === 'lock' && value === 'Pinned' ? 'Unpin panel'
-    : id === 'locate' && ariaLabel ? ariaLabel
-    : TOOL_ITEMS[id]?.name ?? id;
+  const label = id === 'locate' && ariaLabel ? ariaLabel : TOOL_ITEMS[id]?.name ?? id;
   return (
     <button
       type="button"
@@ -204,7 +201,7 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
   );
 }
 
-const WINDOW_ICONS: Record<string, ReactNode> = { locate: ICON_LOCATE, lock: ICON_LOCK, popout: ICON_NEW_TAB };
+const WINDOW_ICONS: Record<string, ReactNode> = { locate: ICON_LOCATE, popout: ICON_NEW_TAB };
 
 interface HiddenPillRowsProps {
   /** `.session-panel-title-meta`, where the pills live. */

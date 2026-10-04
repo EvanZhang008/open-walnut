@@ -48,12 +48,13 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   time: { kind: 'info', priority: 7, name: 'Last activity' },
   resources: { kind: 'chip', priority: 8, name: 'Heavy' },
   // Locate, the way back to the task from the Ask and Mail drawers, is the last
-  // of the three movable window buttons to leave.
+  // of the two movable window buttons to leave.
   locate: { kind: 'window', priority: 9, name: 'Locate task' },
-  lock: { kind: 'window', priority: 10, name: 'Pin panel' },
   popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
-  // Expand and Close stay at every width: a cramped column is the moment to go
-  // full screen (the user: "at the very least keep close and expand", 2026-10-03).
+  // Pin, Expand and Close stay at every width: a cramped column is the moment to
+  // go full screen (the user: "at the very least keep close and expand",
+  // 2026-10-03), and Pin is the one that keeps the panel there (2026-10-04).
+  lock: { kind: 'fixed', priority: 0, name: 'Pin panel' },
   expand: { kind: 'fixed', priority: 0, name: 'Expand' },
   close: { kind: 'fixed', priority: 0, name: 'Close' },
 };
