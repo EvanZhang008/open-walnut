@@ -82,6 +82,16 @@ Two properties make this gate trustworthy rather than decorative:
 - **Collection failures count.** A file that dies at import time reports `status: "failed"` with an *empty* `assertionResults` array, so harvesting only assertion results made the most likely regression of a refactor — a broken import — produce zero new keys and pass. The gate now synthesizes a `<file failed to load or collect>` key for those.
 - **A truncated run is never a pass.** Before the run the gate asks `vitest list` for the tier's files and cuts the run's `--shard` slice the way vitest does (sha1 of the root-relative path, `ceil(total / n)` per slice); every file of that slice must be in the report, and the ones that are not are named. `WALNUT_BASELINE_MIN_FILES` is a floor on the whole tier's listed files (default 1400; quick listed 1529 on 2026-10-02), for an include glob that broke. The fixed floor this replaced had gone stale (290 against 1529 files), so most of the tier could have vanished unnoticed. `tests/scripts/test-baseline-shard-cut.test.ts` checks the cut against the real vitest.
 
+### A superseded run is not red
+
+A newer push cancels the run in progress (`concurrency` with `cancel-in-progress`). `CI OK` used to run under `if: always()` and judge the cancelled legs, so every quick re-push left a red run behind: 6 of the 9 red runs on main between 2026-10-02 and 10-04. It now runs under `if: ${{ !cancelled() }}`: a run that ends cancelled has no verdict, and `scripts/ci-gate.mjs` reads it as `cancelled`, never `red`. A job that hits its timeout does not cancel the run, so `CI OK` still runs and fails on it.
+
+### Flake hunt
+
+`.github/workflows/flake-hunt.yml` runs after every green CI push on main and reruns the blocking legs (quick 1/3..3/3, e2e 1/4..4/4, slow) on that same commit, with CI's own arguments, workers, retries and baselines. A failure there is a flake by definition: the code passed minutes ago. Flakes are what turned innocent pushes red on 2026-10-02 (an inode the filesystem reused within one millisecond) and 10-03 (a log flush racing a directory removal); the hunt finds them on a commit that is already green, before they cost a push.
+
+The hunt never paints a commit red or mails anyone: its legs stay green (`continue-on-error`), and `scripts/flake-report.mjs` turns what a leg found into warning annotations titled `Flaky test (<leg>)` (or `Flake hunt (<leg>)` when the leg failed with nothing to name: no report, a missing file, a setup step). The release watch reads those annotations and wakes the session that owns the pipeline. `tests/scripts/flake-hunt.test.ts` pins the legs to CI's.
+
 ## How you learn CI failed, and how it gets fixed
 
 GitHub emails the pusher on a failed run and shows a red X on the commit; the mobile app pushes a notification. To bring a failure down to where an AI can act on it:

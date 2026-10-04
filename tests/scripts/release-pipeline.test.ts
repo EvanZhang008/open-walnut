@@ -278,6 +278,11 @@ describe('ci-gate', () => {
     expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'failure')], () => gate('success')).verdict).toBe('green')
     expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'success')], () => gate('failure')).verdict).toBe('red')
     expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'cancelled')], () => []).verdict).toBe('cancelled')
+    // A superseded run: CI OK skipped (now), or run against cancelled legs (before).
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'cancelled')], () => gate('skipped')).verdict).toBe('cancelled')
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'cancelled')], () => gate('failure')).verdict).toBe('cancelled')
+    // A job that timed out fails the run, not cancels it: still red.
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'failure')], () => gate('failure')).verdict).toBe('red')
     // No gate job (an older workflow): the run's own conclusion.
     expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'success')], () => []).verdict).toBe('green')
     // A rerun is a newer run for the same commit and wins.
@@ -430,7 +435,7 @@ describe('release.yml', () => {
     expect(runs('promote-plan')).toMatch(/node scripts\/stable-promote\.mjs plan --notes "\$RUNNER_TEMP\/notes\.md" .*>> "\$GITHUB_OUTPUT"/)
     expect(jobs['promote-smoke']!.needs).toBe('promote-plan')
     expect(jobs['promote-smoke']!.if).toBe("needs.promote-plan.outputs.publish == 'true'")
-    expect(jobs['promote-smoke']!.strategy!.matrix.os).toEqual(['ubuntu-latest', 'macos-latest'])
+    expect(jobs['promote-smoke']!.strategy!.matrix.os).toEqual(['ubuntu-24.04', 'macos-26'])
     const smoke = runs('promote-smoke')
     expect(smoke).toContain('npm install -g npm@12')
     expect(smoke).toContain('node scripts/stable-promote.mjs allow-scripts')
@@ -488,8 +493,15 @@ describe('ci.yml', () => {
     for (const job of gate.needs as string[]) expect(check, job).toContain(`needs.${job}.result`)
   })
 
+  it('CI OK judges every finished run but one a newer push cancelled', () => {
+    // always() ran it on superseded runs too, against cancelled legs: a red run
+    // for every quick re-push. !cancelled() still runs it when a gate failed.
+    expect((gate as { if?: string }).if).toBe('${{ !cancelled() }}')
+    expect((parseYaml(text) as { concurrency: { 'cancel-in-progress': boolean } }).concurrency['cancel-in-progress']).toBe(true)
+  })
+
   it('the rehearsal packs this commit and installs it with npm 12 on Linux and macOS', () => {
-    expect(doc.jobs.rehearsal!.strategy!.matrix.os).toEqual(['ubuntu-latest', 'macos-latest'])
+    expect(doc.jobs.rehearsal!.strategy!.matrix.os).toEqual(['ubuntu-24.04', 'macos-26'])
     const steps = doc.jobs.rehearsal!.steps.map((s) => s.run ?? '')
     const pack = steps.findIndex((r) => r.includes('scripts/release-rehearsal/pack.mjs') && r.includes('--rehearsal'))
     const npm12 = steps.findIndex((r) => r.includes('npm install -g npm@12'))

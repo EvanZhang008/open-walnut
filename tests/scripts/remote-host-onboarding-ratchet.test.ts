@@ -292,9 +292,9 @@ describe('CI · the remote-host job exists and blocks', () => {
   }
   const job = ci.jobs['remote-host']
 
-  it('runs the runner on ubuntu-latest after build', () => {
+  it('runs the runner on the pinned Ubuntu image after build', () => {
     expect(job, 'ci.yml lost the remote-host job').toBeDefined()
-    expect(job['runs-on']).toBe('ubuntu-latest')
+    expect(job['runs-on']).toBe('ubuntu-24.04')
     expect([job.needs].flat()).toContain('build')
     expect(job.steps?.some((s) => s.run?.includes('scripts/onboarding-test/remote-host/run.sh'))).toBe(true)
   })

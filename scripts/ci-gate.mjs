@@ -36,7 +36,11 @@ export function verdictOf(runs, jobsOf) {
   const gate = (jobsOf(run.id) ?? []).find((j) => j.name === GATE_JOB)
   const conclusion = gate ? gate.conclusion : run.conclusion
   if (conclusion === 'success') return { verdict: 'green', url }
-  return { verdict: conclusion === 'cancelled' ? 'cancelled' : 'red', url }
+  // A cancelled run (a newer push superseded it) says nothing about the commit,
+  // whatever its gate job did: CI OK is skipped there now, and older runs ran it
+  // against cancelled legs and failed.
+  if (conclusion === 'cancelled' || run.conclusion === 'cancelled') return { verdict: 'cancelled', url }
+  return { verdict: 'red', url }
 }
 
 /** Which commit a release tag is judged by: its parent when it only rolls the release files. */

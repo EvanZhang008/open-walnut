@@ -13,6 +13,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Runner images are pinned (ubuntu-24.04, macos-26), here and in release.yml and
+# flake-hunt.yml: a `-latest` label moves to a new OS on GitHub's date (ubuntu
+# to 26.04 from 2026-10-19), which would turn CI red without a commit. Moving to
+# a new image is a deliberate one-line change, tried on a pull request first.
 env:
   # tests/setup/worker-budget.ts defaults CI jobs to 4 workers. Resource-heavy
   # tiers override that per command where parallelism causes timeout flakes.
@@ -22,7 +26,7 @@ jobs:
   # ── Gate 1: type-check + build. Everything else is moot if this fails. ───────
   build:
     name: Lint & build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -55,7 +59,7 @@ jobs:
   # zero expressions, obvious behaviour.
   test:
     name: Test (${{ matrix.tier }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     strategy:
       fail-fast: false
@@ -102,7 +106,7 @@ jobs:
   # needs the retry is a flake to fix, and the log says so.
   test-heavy:
     name: Test (slow)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 45
     steps:
@@ -133,7 +137,7 @@ jobs:
   # Each leg uploads its own failures so a new baseline can be read off a run.
   test-e2e:
     name: Test (e2e ${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 40
     strategy:
@@ -184,7 +188,7 @@ jobs:
   # BARE: no Bun, no caches, nothing the docs don't tell a person to install. It
   # runs the documented commands and requires the server to answer.
   #
-  # macos-latest matters on its own: it is real Mac hardware, free for public
+  # macOS matters on its own: it is real Mac hardware, free for public
   # repos, and the only platform where the install can hit Xcode/native-module
   # problems. Locally the same probe runs against a stock macOS VM or an EC2 box
   # (scripts/onboarding-test/), which goes further: those machines have no Node
@@ -196,7 +200,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-26]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -300,7 +304,7 @@ jobs:
   # the runner only to build the daemon sidecars (the Walnut side).
   remote-host:
     name: Remote host (fresh Linux dev box)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     # Setup (~4 min) plus two capped attempts (2 x 12 min) fits in 30.
     timeout-minutes: 30
@@ -376,7 +380,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-26]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -409,7 +413,7 @@ jobs:
   # CI). Reported, not judged, until a recorded baseline lets new failures block.
   browser:
     name: Report (browser ${{ matrix.shard }}/8)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 60
     strategy:
@@ -462,9 +466,13 @@ jobs:
   # `needs` deliberately omits browser, so the informational tier cannot block.
   ci-ok:
     name: CI OK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal]
-    if: always()
+    # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
+    # there it judged cancelled legs and turned the superseded run red (6 of the
+    # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
+    # does not cancel the run, so CI OK still runs and fails on it.
+    if: ${{ !cancelled() }}
     steps:
       - name: Check gate results
         run: |
