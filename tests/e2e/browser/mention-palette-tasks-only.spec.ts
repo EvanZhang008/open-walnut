@@ -15,8 +15,11 @@
  * `@[title]` token, and the LAUNCH message reaches the agent with the reference
  * card (quick-start appends it, as session:send does for a later message) while
  * the session's own title reads the task's words, never the markup.
+ *
+ * The third test opens a draft BEFORE any folder is picked: the palette still
+ * has both groups, with the Files group rooted at the host's home.
  */
-import { discoverFixtureRoot, draftComposer, loadHome, openDraftOnCwd, REAL_PANEL } from './draft-helpers'
+import { discoverFixtureRoot, draftComposer, loadHome, openDraft, openDraftOnCwd, REAL_PANEL } from './draft-helpers'
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { presetPanelView } from './todo-panel-helpers'
@@ -236,6 +239,56 @@ test('a draft column offers the same Tasks group, and a Start carrying a referen
   const session = await (await request.get(`/api/sessions/${sid}`)).json() as { session: { title?: string } }
   expect(session.session.title ?? '').not.toContain('<task-ref')
   expect(session.session.title ?? '').not.toContain('walnut-refs')
+})
+
+test('a draft with no folder yet shows the same two groups, Files rooted at home', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const tag = `pw-homeref-${Date.now().toString(36)}`
+  await newTask(request, `${tag} target`)
+  await loadHome(page)
+  // A fresh draft: no folder picked, so the composer has no cwd of its own.
+  await openDraft(page)
+  const input = draftComposer(page)
+  await input.click()
+  await page.keyboard.type('@')
+  const palette = page.locator('.draft-session-panel .mention-palette')
+  await expect(palette).toBeVisible({ timeout: 10_000 })
+
+  // Both groups, as in a running session (2026-10-03: a draft without a folder
+  // showed Tasks alone, and the user read it as a different picker).
+  await expect(palette.locator('[data-group="task"]')).toBeVisible()
+  await expect(palette.locator('[data-group="files"]')).toBeVisible()
+  const groupNames = await palette.locator('.mention-group-name').allTextContents()
+  expect(groupNames, `groups: ${groupNames.join(',')}`).toEqual(['Tasks', 'Files'])
+  await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} target` })).toBeVisible({ timeout: 15_000 })
+  // The fixture's HOME is its temp root, so `~` lists that root's folders.
+  const fileRows = palette.locator('[data-group="files"] .mention-row')
+  await expect(fileRows.first()).toBeVisible({ timeout: 15_000 })
+  const fixtureRoot = await discoverFixtureRoot()
+  const homeDir = fixtureRoot.replace(/\/ps-fixture$/, '')
+  expect(await fileRows.first().getAttribute('title')).toMatch(new RegExp(`^${homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`))
+  // The file hints a session's palette shows (group / parent / recents).
+  const hints = await palette.locator('.mention-hintbar').textContent()
+  for (const hint of ['group', 'parent', 'recents']) expect(hints, `hintbar: ${hints}`).toContain(hint)
+  const shots = `/tmp/wn-inline-ref/${test.info().project.name}`
+  await fs.mkdir(shots, { recursive: true })
+  await page.locator('.draft-session-panel').screenshot({ path: `${shots}/04-draft-no-folder-tasks-and-files.png` })
+
+  // Descending from home browses the tree (the query filters each level, as the
+  // row budget shows a handful per group), and a pick lands in the box as an
+  // absolute path: the draft has no root to shorten it against.
+  for (const [typed, dir] of [['ps-fix', 'ps-fixture'], ['proj', 'projects'], ['waln', 'walnut']] as const) {
+    await page.keyboard.type(typed)
+    const row = fileRows.filter({ hasText: dir }).first()
+    await expect(row).toBeVisible({ timeout: 15_000 })
+    await row.click()
+    await expect(palette.locator('[data-group="files"] .mention-group-verb')).toContainText(`in `, { timeout: 15_000 })
+  }
+  const webRow = fileRows.filter({ hasText: 'web' })
+  await expect(webRow).toBeVisible({ timeout: 15_000 })
+  await webRow.locator('.mention-pick-btn').click()
+  await expect(palette).toHaveCount(0)
+  await expect(input).toHaveValue(`@${fixtureRoot}/projects/walnut/web `)
 })
 
 test('a bound draft never offers the task it will attach to', async ({ page, request }) => {

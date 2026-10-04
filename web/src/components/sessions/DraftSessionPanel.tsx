@@ -861,11 +861,14 @@ export function DraftSessionPanel({
           onRefreshSessionCommands={refreshSlashCommands}
           onSessionCommandsPaletteOpen={onSlashPaletteOpen}
           sessionCommandsStatus={slashCommandsStatus}
-          mentionCwd={draft.cwd || undefined}
+          // The same "@" palette a running session has: Tasks and Files, in
+          // every draft. Before a folder is picked the Files group browses the
+          // host's home (the server and the daemon both expand `~`), so the
+          // palette never loses a group. A picked task lands in the text as
+          // `@[title]`; the launch message carries the tag and the server
+          // appends its reference card.
+          mentionCwd={draft.cwd || '~'}
           mentionHost={draft.host ?? undefined}
-          // The same "@" palette a running session has: Tasks and Files. A
-          // picked task lands in the text as `@[title]`; the launch message
-          // carries the tag and the server appends its reference card.
           enableEntityMention
           mentionSelfTaskId={draft.taskId}
           // Shift+Tab cycles the permission mode, as it does in a running session.
