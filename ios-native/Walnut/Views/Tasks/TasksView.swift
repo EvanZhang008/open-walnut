@@ -300,7 +300,9 @@ struct TasksView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
+                // No server-mode pill here: Live/Replica is plumbing the person adding
+                // a task neither needs nor wants (2026-10-03). Offline still says so,
+                // through the OfflineBanner in the list; Settings keeps the pill.
                 // Multi-select entry — task LIST filters only (sessions aren't
                 // batch-actionable, and the calendar has no rows to select).
                 // "Select" → edit mode with a bottom bar.

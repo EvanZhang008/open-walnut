@@ -310,36 +310,42 @@ final class ComposerControlsTests: XCTestCase {
         )
     }
 
-    /// Talking straight to the Mac.
-    func testPrimaryChatSaysThisMac() {
+    /// Talking straight to the Mac: one word, no second line.
+    func testPrimaryChatSaysMacAndNothingElse() {
         let p = ComposerHostProvenance.chat(status: status(.live, bridges: nil), online: true)
-        XCTAssertEqual(p.label, "This Mac")
+        XCTAssertEqual(p.label, "Mac")
+        XCTAssertNil(p.detail, "a healthy row is the machine's name and nothing else")
         XCTAssertEqual(p.icon, "laptopcomputer")
         XCTAssertFalse(p.degraded)
     }
 
-    /// On the replica with the Mac's daemon dialled in, the useful fact is that
-    /// answers relay THROUGH to the Mac.
-    func testReplicaWithThePrimaryBridgedSaysMacConnected() {
+    /// The reported bug (2026-10-03, and build 82 before it): the phone on the
+    /// cloud companion with the Mac bridged said "Cloud · Mac connected" over
+    /// "Answers relay to your Mac.". The Mac computes the reply, so the row says
+    /// "Mac", and the relay is plumbing the row does not mention at all.
+    func testReplicaWithThePrimaryBridgedSaysMacNotCloud() {
         let p = ComposerHostProvenance.chat(
             status: status(.replica, bridges: ["__local__", "clouddev"]), online: true
         )
-        XCTAssertEqual(p.label, "Cloud · Mac connected")
-        XCTAssertEqual(p.icon, "cloud")
+        XCTAssertEqual(p.label, "Mac")
+        XCTAssertNil(p.detail, "the relay path is not the user's business")
+        XCTAssertEqual(p.icon, "laptopcomputer")
         XCTAssertFalse(p.degraded)
+        XCTAssertFalse(p.label.contains("Cloud"), "never headline the network path")
     }
 
-    /// The state the user has actually been stuck in: the phone is on the cloud
-    /// box and the Mac is gone. The label must SAY so and the detail must name the
-    /// consequence, because a cheerful "Cloud" hides why nothing works.
-    func testReplicaWithThePrimaryMissingSaysMacOfflineAndNamesTheConsequence() {
+    /// The phone is on the cloud box and the Mac is gone: the cloud answers, so
+    /// the row says "Cloud", and the second line names the consequence, because
+    /// that is exactly when sends to Mac sessions cannot land.
+    func testReplicaWithThePrimaryMissingSaysCloudAndNamesTheConsequence() {
         let p = ComposerHostProvenance.chat(
             status: status(.replica, bridges: ["clouddev"]), online: true
         )
-        XCTAssertEqual(p.label, "Cloud · Mac offline")
+        XCTAssertEqual(p.label, "Cloud")
+        XCTAssertEqual(p.icon, "cloud")
         XCTAssertTrue(p.degraded)
         let detail = p.detail ?? ""
-        XCTAssertTrue(detail.contains("isn't connected"), "detail must state the Mac is not connected: \(detail)")
+        XCTAssertTrue(detail.contains("Mac is offline"), "detail must state the Mac is offline: \(detail)")
         XCTAssertTrue(detail.contains("can't be reached"), "detail must state the consequence: \(detail)")
     }
 
@@ -348,25 +354,48 @@ final class ComposerControlsTests: XCTestCase {
     /// is offline on a server that never reports bridges at all.
     func testAbsentBridgeHostsIsUnknownNotOffline() {
         let absent = ComposerHostProvenance.chat(status: status(.replica, bridges: nil), online: true)
-        XCTAssertEqual(absent.label, "Cloud", "an old server can't tell us — don't claim the Mac is offline")
+        XCTAssertEqual(absent.label, "Cloud")
+        XCTAssertNil(absent.detail, "an old server can't tell us: don't claim the Mac is offline")
         XCTAssertFalse(absent.degraded)
 
         let empty = ComposerHostProvenance.chat(status: status(.replica, bridges: []), online: true)
-        XCTAssertEqual(empty.label, "Cloud · Mac offline", "an empty list IS a verdict")
+        XCTAssertEqual(empty.label, "Cloud")
+        XCTAssertNotNil(empty.detail, "an empty list IS a verdict")
         XCTAssertTrue(empty.degraded)
     }
 
     /// Transport down: say that, rather than reporting a mode we can't confirm.
+    /// A stale "Mac" must not survive the phone going offline.
     func testOfflineIsReportedForBothModes() {
         let live = ComposerHostProvenance.chat(status: status(.live, bridges: nil), online: false)
-        XCTAssertEqual(live.label, "This Mac · unreachable")
+        XCTAssertEqual(live.label, "Offline")
+        XCTAssertEqual(live.detail, "Your Mac isn't responding right now.")
         XCTAssertTrue(live.degraded)
 
         let replica = ComposerHostProvenance.chat(
             status: status(.replica, bridges: ["__local__"]), online: false
         )
-        XCTAssertEqual(replica.label, "Cloud · unreachable")
+        XCTAssertEqual(replica.label, "Offline")
+        XCTAssertEqual(replica.detail, "The cloud server isn't responding right now.")
         XCTAssertTrue(replica.degraded)
+    }
+
+    /// Every chat state is one of the two machine names or a state word, never a
+    /// compound with a "·" (the shape the user asked to be rid of).
+    func testNoChatLabelIsACompound() {
+        let cases: [(ServerStatus?, Bool)] = [
+            (nil, true), (nil, false),
+            (status(.live, bridges: nil), true), (status(.live, bridges: nil), false),
+            (status(.replica, bridges: ["__local__"]), true),
+            (status(.replica, bridges: ["__local__"]), false),
+            (status(.replica, bridges: []), true),
+            (status(.replica, bridges: nil), true),
+        ]
+        for (s, online) in cases {
+            let label = ComposerHostProvenance.chat(status: s, online: online).label
+            XCTAssertFalse(label.contains("·"), "compound label: \(label)")
+            XCTAssertTrue(["Mac", "Cloud", "Offline", "Connecting…"].contains(label), "unexpected label: \(label)")
+        }
     }
 
     func testNoStatusYetSaysConnecting() {
@@ -384,7 +413,7 @@ final class ComposerControlsTests: XCTestCase {
     /// different question from which server is answering. The cwd is the detail.
     func testSessionProvenanceReportsItsExecHostAndCwd() {
         let local = ComposerHostProvenance.session(hostAlias: "", cwd: "/Users/x/walnut")
-        XCTAssertEqual(local.label, "This Mac")
+        XCTAssertEqual(local.label, "Mac")
         XCTAssertEqual(local.detail, "/Users/x/walnut")
         XCTAssertFalse(local.degraded, "a session's host is a fact, never a degraded state")
 
