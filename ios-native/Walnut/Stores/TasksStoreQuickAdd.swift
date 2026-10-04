@@ -184,7 +184,7 @@ extension TasksStore {
             createdAt: t.createdAt, updatedAt: t.updatedAt,
             completedAt: t.completedAt, starred: t.starred,
             pinned: true, tags: t.tags, summary: t.summary,
-            startDate: t.startDate, endDate: t.endDate
+            startDate: t.startDate, endDate: t.endDate, unread: t.unread
         )
     }
 

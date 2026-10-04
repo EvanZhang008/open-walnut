@@ -763,10 +763,12 @@ final class TasksStore {
         var endDate: String? = nil
         var project: String? = nil
         var title: String? = nil
+        /// The read marker. Only `false` is ever sent from the phone (`markRead`).
+        var unread: Bool? = nil
 
         var isEmpty: Bool {
             status == nil && priority == nil && dueDate == nil && startDate == nil
-                && endDate == nil && project == nil && title == nil
+                && endDate == nil && project == nil && title == nil && unread == nil
         }
     }
 
@@ -800,8 +802,27 @@ final class TasksStore {
             startDate: edit.startDate.map { $0.isEmpty ? nil : $0 } ?? task.startDate,
             endDate: (edit.startDate?.isEmpty == true)
                 ? nil
-                : (edit.endDate.map { $0.isEmpty ? nil : $0 } ?? task.endDate)
+                : (edit.endDate.map { $0.isEmpty ? nil : $0 } ?? task.endDate),
+            // nil = read, the projection's own encoding (it omits a false marker).
+            unread: edit.unread.map { $0 ? true : nil } ?? task.unread
         )
+    }
+
+    /// Opening a task marks it read, the web's rule (`MainPage.handleFocusTask`).
+    /// Guarded on the row's own marker, so a read task costs no request, and a
+    /// second open while the first PATCH runs finds the optimistic row already read.
+    /// A failed PATCH rolls the dot back: the server still says unread.
+    func markRead(taskId: String) {
+        guard let task = tasks.first(where: { $0.id == taskId }), task.isUnread else { return }
+        Task {
+            do {
+                _ = try await updateTask(id: taskId, edit: TaskEdit(unread: false))
+            } catch {
+                AppLog.warn("tasks", "mark read failed", [
+                    "taskId": taskId, "error": String(describing: error),
+                ])
+            }
+        }
     }
 
     /// Edits with a PATCH in flight, keyed by task id. A feed `task-upsert`
@@ -856,7 +877,7 @@ final class TasksStore {
             id: id, status: edit.status, priority: edit.priority,
             dueDate: edit.dueDate, startDate: edit.startDate, endDate: edit.endDate,
             project: edit.project, title: edit.title,
-            description: nil
+            description: nil, unread: edit.unread
         )
     }
 
@@ -870,7 +891,7 @@ final class TasksStore {
             createdAt: t.createdAt, updatedAt: t.updatedAt,
             completedAt: t.completedAt, starred: t.starred,
             pinned: value, tags: t.tags, summary: t.summary,
-            startDate: t.startDate, endDate: t.endDate
+            startDate: t.startDate, endDate: t.endDate, unread: t.unread
         )
     }
 

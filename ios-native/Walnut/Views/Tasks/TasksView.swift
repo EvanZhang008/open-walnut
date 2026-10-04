@@ -1683,8 +1683,8 @@ struct TasksView: View {
                 openCreateBand: openCreateBand,
                 newRowId: highlightedTaskId,
                 tierOf: tasks.taskTiers,
-                // The row whose tap is asking the server where to go (spinner in place
-                // of its state dot).
+                // The row whose tap is asking the server where to go (spinner in its
+                // leading gutter, where the unread dot sits).
                 resolvingRowId: resolvingRowId,
                 onToggleHideDone: { bandId in
                     withAnimation(.snappy(duration: 0.2)) {
@@ -1702,7 +1702,10 @@ struct TasksView: View {
                 onPickTier: { row, token in pickTier(row, token) },
                 onOpenSession: { row in openSession(row) },
                 onOpenDetail: { row in
-                    if let task = row.task { selected = task }
+                    if let task = row.task {
+                        tasks.markRead(taskId: task.id)
+                        selected = task
+                    }
                 },
                 // The band hands over its OWN seed, so a project heading's ring
                 // files into that project and a tier heading's into that tier.
@@ -1787,6 +1790,9 @@ struct TasksView: View {
     /// server's session projection silently dropped older sessions: a tap on a pinned
     /// task that HAS a session opened a New Session draft.
     private func openSession(_ row: BoardRow) {
+        // Opening a task marks it read, whichever destination the tap resolves to
+        // (the web's rule; a draft for a sessionless handed-back task counts too).
+        if let taskId = row.owningTaskId { tasks.markRead(taskId: taskId) }
         switch BoardModel.tapRoute(row) {
         case .open(let session):
             navPath.append(session)

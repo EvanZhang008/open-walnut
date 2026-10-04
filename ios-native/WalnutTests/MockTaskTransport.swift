@@ -94,13 +94,14 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
     func updateTask(
         id: String, status: String?, priority: String?, dueDate: String?,
         startDate: String?, endDate: String?,
-        project: String?, title: String?, description: String?
+        project: String?, title: String?, description: String?, unread: Bool?
     ) async throws -> WalnutTask {
         // The calendar dates join the recorded args so a test can assert WHAT a
-        // reschedule sent, not just that a PATCH happened.
+        // reschedule sent, not just that a PATCH happened. Same for the read marker.
         try await checkpoint("updateTask", [
             id, status ?? "-", priority ?? "-", title ?? "-",
             startDate ?? "-", endDate ?? "-",
+            unread.map { "unread=\($0)" } ?? "-",
         ])
         if let updateTaskResult { return updateTaskResult(id) }
         return WalnutTask(

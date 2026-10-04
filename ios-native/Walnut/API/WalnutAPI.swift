@@ -167,7 +167,7 @@ struct WalnutAPI {
         id: String, status: String? = nil, priority: String? = nil,
         dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
         project: String? = nil, title: String? = nil,
-        description: String? = nil
+        description: String? = nil, unread: Bool? = nil
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let status: String?
@@ -178,13 +178,15 @@ struct WalnutAPI {
             let project: String?
             let title: String?
             let description: String?
+            let unread: Bool?
         }
         let updated: TaskCreated = try await send(
             "PATCH", "/tasks/\(escape(id))",
             body: Body(
                 status: status, priority: priority, due_date: dueDate,
                 start_date: startDate, end_date: endDate,
-                project: project, title: title, description: description
+                project: project, title: title, description: description,
+                unread: unread
             )
         )
         return updated.task

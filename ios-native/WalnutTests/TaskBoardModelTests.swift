@@ -18,7 +18,7 @@ final class TaskBoardModelTests: XCTestCase {
     private func task(
         _ id: String, title: String = "a task", project: String = "",
         status: String = "todo", phase: String = "TODO", pinned: Bool? = true,
-        start: String? = nil, due: String? = nil
+        start: String? = nil, due: String? = nil, unread: Bool? = nil
     ) -> WalnutTask {
         WalnutTask(
             id: id, title: title, status: status, phase: phase,
@@ -26,7 +26,7 @@ final class TaskBoardModelTests: XCTestCase {
             createdAt: "2026-08-27T00:00:00Z", updatedAt: "2026-08-27T00:00:00Z",
             completedAt: status == "done" ? "2026-08-27T01:00:00Z" : nil,
             starred: nil, pinned: pinned, tags: nil, summary: nil,
-            startDate: start
+            startDate: start, unread: unread
         )
     }
 
@@ -77,62 +77,73 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(BoardRow(task: nil, session: session("s9", taskId: nil)).id, "s9")
     }
 
-    // MARK: - Row state (derived only from fields the projection carries)
+    // MARK: - The row's mark (the web's two dots)
 
-    func testStateMapsEveryProcessStatus() {
-        XCTAssertEqual(BoardModel.state(task: task("t"), session: session("s", taskId: "t", status: "running")), .running)
-        XCTAssertEqual(BoardModel.state(task: task("t"), session: session("s", taskId: "t", status: "idle")), .waiting)
-        XCTAssertEqual(BoardModel.state(task: task("t"), session: session("s", taskId: "t", status: "stopped")), .ended)
-        XCTAssertEqual(BoardModel.state(task: task("t"), session: session("s", taskId: "t", status: "error")), .failed)
-        XCTAssertEqual(BoardModel.state(task: task("t"), session: nil), .none,
-            "no session = no state, never a fake one")
+    /// The web's pinned-card rule: unread wins, then needs-a-human, then nothing. The
+    /// process state never reaches the row: a running, idle, stopped or failed session
+    /// all draw the same row.
+    func testTheDotIsUnreadThenNeedsActionThenNothing() {
+        XCTAssertEqual(BoardModel.dot(task("t", unread: true)), .unread)
+        XCTAssertEqual(
+            BoardModel.dot(task("t", phase: "NEED_ACTION", unread: true)), .unread,
+            "an unread handed-back task is filled: unread is the louder fact"
+        )
+        XCTAssertEqual(
+            BoardModel.dot(task("t", phase: "NEED_ACTION")), .needsAction,
+            "read but waiting on you is the hollow dot"
+        )
+        XCTAssertNil(BoardModel.dot(task("t", phase: "IN_PROGRESS")), "running work has no mark")
+        XCTAssertNil(BoardModel.dot(task("t")), "a plain todo has no mark")
+        XCTAssertNil(BoardModel.dot(task("t", unread: false)), "an explicit false is read")
+        XCTAssertNil(
+            BoardModel.dot(task("t", status: "done", phase: "NEED_ACTION")),
+            "a finished task is not waiting on anyone"
+        )
+        XCTAssertEqual(
+            BoardModel.dot(task("t", status: "done", phase: "COMPLETE", unread: true)), .unread,
+            "output the human has not opened is unread even on a done task (the web's pinned cards)"
+        )
+        XCTAssertNil(BoardModel.dot(nil), "a session-only row has no task to read")
     }
 
-    /// NEED_ACTION outranks the process status on purpose: a CLI can idle for
-    /// hours after handing back, and "waiting" would bury the one row that owes a
-    /// human a look.
-    func testHandedBackOutranksTheProcessStatus() {
-        for status in ["running", "idle", "stopped", "error"] {
-            XCTAssertEqual(
-                BoardModel.state(
-                    task: task("t", phase: "NEED_ACTION"),
-                    session: session("s", taskId: "t", status: status)
-                ),
-                .handedBack,
-                "phase NEED_ACTION must win over process_status=\(status)"
-            )
+    /// The wire carries the marker only when true, so both absent and `false` decode read.
+    func testTheProjectionsReadMarkerDecodes() throws {
+        func decode(_ extra: String) throws -> WalnutTask {
+            let json = """
+            {"id":"t1","title":"a","status":"todo","phase":"TODO","priority":"none",
+             "project":""\(extra)}
+            """
+            return try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
         }
-        // But only with a session: a phase alone is not a session state.
-        XCTAssertEqual(BoardModel.state(task: task("t", phase: "NEED_ACTION"), session: nil), .none)
+        XCTAssertTrue(try decode(#","unread":true"#).isUnread)
+        XCTAssertFalse(try decode(#","unread":false"#).isUnread)
+        XCTAssertFalse(try decode("").isUnread)
     }
 
-    func testEveryStateHasNonEmptyWording() {
-        for state in [BoardRowState.running, .waiting, .handedBack, .ended, .failed,
-                      .earlierSession, .none] {
-            XCTAssertFalse(state.word.isEmpty)
-            XCTAssertFalse(state.word.contains("\n"), "the row's second line is ONE line")
-        }
-    }
-
-    // MARK: - Short age
-
-    func testShortAgeUnits() {
-        XCTAssertEqual(BoardModel.shortAge(0), "0s")
-        XCTAssertEqual(BoardModel.shortAge(59), "59s")
-        XCTAssertEqual(BoardModel.shortAge(60), "1m")
-        XCTAssertEqual(BoardModel.shortAge(59 * 60), "59m")
-        XCTAssertEqual(BoardModel.shortAge(60 * 60), "1h")
-        XCTAssertEqual(BoardModel.shortAge(23 * 3600), "23h")
-        XCTAssertEqual(BoardModel.shortAge(24 * 3600), "1d")
-        XCTAssertEqual(BoardModel.shortAge(9 * 24 * 3600), "9d")
-        // A clock skew (a stamp in the future) must not render "-3s".
-        XCTAssertEqual(BoardModel.shortAge(-500), "0s")
-    }
-
-    func testShortAgeIsAlwaysShortEnoughForTheRowLine() {
-        for seconds in [0, 1, 90, 3_600, 100_000, 10_000_000] {
-            XCTAssertLessThanOrEqual(BoardModel.shortAge(TimeInterval(seconds)).count, 5)
-        }
+    /// A "By project" band's heading names the project, so its rows drop the grey project
+    /// line; a tier band's heading does not, so its rows keep it.
+    func testOnlyAProjectHeadingTakesTheProjectOffItsRows() {
+        let tasks = [task("t1", project: "Marina"), task("t2", project: "Acme")]
+        let tiers = BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: []
+        )
+        XCTAssertFalse(tiers.isEmpty)
+        XCTAssertTrue(tiers.allSatisfy { !$0.headingNamesProject }, "a tier heading names a tier")
+        let projects = BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
+            grouping: .project, now: Self.now
+        )
+        XCTAssertEqual(projects.count, 2)
+        XCTAssertTrue(projects.allSatisfy(\.headingNamesProject), "each project band is headed by its project")
+        // ONE project and no folder: the heading is replaced by the sole-heading label, so
+        // the rows keep their project line, or the name would appear nowhere.
+        let sole = BoardModel.bands(
+            tasks: [task("t1", project: "Marina"), task("t2", project: "Marina")],
+            sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
+            grouping: .project, now: Self.now
+        )
+        XCTAssertEqual(sole.count, 1)
+        XCTAssertFalse(sole[0].headingNamesProject, "the sole band's heading does not name Marina")
     }
 
     // MARK: - Band assembly + ORDER
@@ -2517,35 +2528,15 @@ final class TaskBoardCountTests: XCTestCase {
     }
 }
 
-/// The board row's SURFACE: "this task wants a human", said by painting the WHOLE row
-/// red.
+/// The board row's SURFACE and its MARK, after the red wash was retired (2026-10-04).
 ///
-/// # What this replaced, twice
-///
-/// Attempt one was a whole-row wash at `rgba(255,59,48,0.08)`, ported from the
-/// desktop's `.todo-panel-item-needs-action`. At that strength it read as a pink smudge
-/// on 8 of 11 visible rows: loud enough to make the LIST look broken, too weak to read
-/// as a statement about one row. Attempt two was a saturated 3pt capsule at the row's
-/// leading edge, which collided with the done ring — the ring carried
-/// `padding(.leading, -6)` to sit flush at x≈0.5 and the capsule drew at x 0..3, so the
-/// two overlapped by 2.5pt on every marked row ("怎么能重叠呢").
-///
-/// The answer to that was not a wider gutter: "那个红色…不要变成一个竖道了,把它变成一整个
-/// 底都变成红色的吧". The mark IS the paper now, at a strength that reads (0.16 light /
-/// 0.30 dark), so there is no column left to collide with the ring.
-///
-/// # Why arithmetic and not a screenshot
-///
-/// The tint is a dynamic `UIColor`, so both schemes resolve here and the composite is
-/// exact. That matters because both earlier attempts failed on a value nobody
-/// re-measured in the mode it was wrong in, and because the claim being made is about
-/// EVERY Dynamic Type size — a background has no metrics, and this file is where that
-/// stops being a promise: the surface takes no type size, and the loop below is what
-/// makes anyone who adds one say so out loud.
+/// "This task wants a human" used to be said by painting the WHOLE row red (after a 0.08
+/// desktop wash and a 3pt capsule were both rejected). The user asked for the web's
+/// language instead: a filled red dot for unread, a hollow one for read-but-waiting, and
+/// no red row. So the paper now says nothing about the task's state, and the only tint a
+/// row can take is the just-created flash.
 @MainActor
-final class BoardRowNeedsActionSurfaceTests: XCTestCase {
-
-    // MARK: - Colour helpers (WCAG, on real resolved colours)
+final class BoardRowSurfaceAndDotTests: XCTestCase {
 
     private func rgba(_ color: UIColor, dark: Bool) -> (r: Double, g: Double, b: Double, a: Double) {
         let resolved = color.resolvedColor(
@@ -2556,63 +2547,30 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
         return (Double(r), Double(g), Double(b), Double(a))
     }
 
-    // The local `composite(tint:over:dark:)` helper is GONE (R29). It blended the tint
-    // onto a base this file chose, which is exactly the re-derivation that can agree with
-    // a bug: the app flattens the tint onto the band card itself now, so `surface` below
-    // reads `BoardRowSurface.opaqueSurface` and every assertion here is about the colour
-    // the screen paints. The independent blend still exists, once, where it earns its keep
-    // — `BoardBandCardSurfaceTests` proves the app is compositing over the CARD.
-
-    private func luminance(_ rgb: (r: Double, g: Double, b: Double)) -> Double {
-        func channel(_ value: Double) -> Double {
-            let v = value / 255
-            return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
-    }
-
-    private func contrast(
-        _ a: (r: Double, g: Double, b: Double), _ b: (r: Double, g: Double, b: Double)
-    ) -> Double {
-        let x = luminance(a) + 0.05, y = luminance(b) + 0.05
-        return max(x, y) / min(x, y)
-    }
-
-    /// The row surface as the view paints it, for one scheme.
-    ///
-    /// R29: the base is the BAND CARD, not the window background. The board's rows are
-    /// inset-grouped card cells now, so a tint that used to be measured over
-    /// `systemBackground` (black, in dark mode) is really landing on
-    /// `secondarySystemGroupedBackground` (28,28,30) — measuring the old base would keep
-    /// asserting a colour nothing paints.
-    ///
-    /// And it reads the APP's own composite (`BoardRowSurface.opaqueSurface`) rather than
-    /// re-blending here, because the app is what flattens the tint onto the card now: a
-    /// local re-derivation could agree with a bug in the shipped blend.
-    private func surface(needsAction: Bool, isNew: Bool = false, dark: Bool)
-        -> (r: Double, g: Double, b: Double) {
+    /// The row surface as the view paints it, for one scheme: the APP's own composite.
+    private func surface(isNew: Bool, dark: Bool) -> (r: Double, g: Double, b: Double) {
         let painted = BoardRowSurface.opaqueSurface(
-            needsAction: needsAction, isNew: isNew,
-            traits: UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+            isNew: isNew, traits: UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
         )
         let rgb = rgba(painted, dark: dark)
         return (rgb.r * 255, rgb.g * 255, rgb.b * 255)
     }
 
-    private func task(_ id: String, phase: String, status: String = "todo") -> WalnutTask {
+    private func task(
+        _ id: String, phase: String, status: String = "todo", unread: Bool? = nil
+    ) -> WalnutTask {
         WalnutTask(
             id: id, title: "a task", status: status, phase: phase, priority: "none",
             project: "", dueDate: nil,
             createdAt: "2026-08-27T00:00:00Z", updatedAt: "2026-08-27T00:00:00Z",
             completedAt: status == "done" ? "2026-08-27T01:00:00Z" : nil,
-            starred: nil, pinned: true, tags: nil, summary: nil
+            starred: nil, pinned: true, tags: nil, summary: nil, unread: unread
         )
     }
 
-    /// WHEN the row is red: the desktop's rule, ported (`taskNeedsAction` — phase
-    /// NEED_ACTION and not done). Every other row paints NOTHING, which is what keeps
-    /// the board one continuous sheet.
-    func testOnlyAHandedBackTaskPaintsItsRowRed() {
+    /// WHEN the hollow dot draws: the desktop's rule, ported (`taskNeedsAction` — phase
+    /// NEED_ACTION and not done).
+    func testNeedsHumanIsTheDesktopsRule() {
         XCTAssertTrue(BoardModel.needsHuman(task("back", phase: "NEED_ACTION")))
         XCTAssertFalse(BoardModel.needsHuman(task("todo", phase: "TODO")))
         XCTAssertFalse(BoardModel.needsHuman(task("running", phase: "IN_PROGRESS")))
@@ -2624,37 +2582,20 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
             BoardModel.needsHuman(task("closed", phase: "NEED_ACTION", status: "done")),
             "done outranks the phase: a finished task is not waiting on anyone"
         )
-        XCTAssertFalse(
-            BoardModel.needsHuman(nil),
-            "a session-only row has no phase to read, and inventing one would paint a row red on no evidence"
-        )
-        // …and NOTHING is painted for an ordinary row.
-        XCTAssertNil(BoardRowSurface.tint(needsAction: false, isNew: false, dark: false))
-        XCTAssertNil(BoardRowSurface.tint(needsAction: false, isNew: false, dark: true))
-        // `nil`, not `.clear`, and R29 made that difference load-bearing: `.clear` used to
-        // mean "let the board's one sheet through", and inside a card it would mean "cut a
-        // hole in the card and show the page". `nil` hands the cell back to the
-        // inset-grouped section, which paints its own card.
-        XCTAssertNil(
-            BoardRowSurface.color(needsAction: false, isNew: false),
-            "an ordinary row must take the section's own card, untouched"
-        )
+        XCTAssertFalse(BoardModel.needsHuman(nil), "a session-only row has no phase to read")
     }
 
-    /// The composition the LIST executes, driven end to end over rows the real band
-    /// assembly built: `TaskBoardList.rowSurface` is the app-target call site, so this is
-    /// the case that fails if the join is wired to the wrong row, the wrong id or the
-    /// wrong field while both halves still pass their own tests.
-    func testTheListPaintsRedForExactlyTheRowsThatWantAHuman() {
+    /// The composition the LIST executes, over rows the real band assembly built: NO row
+    /// is painted for its state any more, a handed-back or unread one included. The mark
+    /// moved to the gutter dot, and the join is asserted here so a red wash cannot come
+    /// back through `rowSurface` while the dot tests still pass.
+    func testTheListPaintsNoRowForItsState() {
         let tasks = [
             task("wants-a-human", phase: "NEED_ACTION"),
+            task("unread", phase: "TODO", unread: true),
             task("ordinary", phase: "TODO"),
             task("finished", phase: "NEED_ACTION", status: "done"),
         ]
-        // Done folds by default, so the finished row is off the board until a band is
-        // asked to show it. This case is about row PAINTING, and the finished row is the
-        // half that proves a COMPLETED needs-action row gets no red paper — so reveal
-        // every band rather than drop the row and lose that half.
         let folded = BoardModel.bands(
             tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: []
         )
@@ -2663,154 +2604,60 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
             shownDoneTiers: Set(folded.map(\.bandId))
         )
         let rows = bands.flatMap(\.rows)
-        XCTAssertEqual(rows.count, 3, "all three are pinned, so all three are on the board")
+        XCTAssertEqual(rows.count, 4, "all four are pinned, so all four are on the board")
+        let expected: [String: BoardRowDot?] = [
+            "wants-a-human": .needsAction, "unread": .unread, "ordinary": nil, "finished": nil,
+        ]
         for row in rows {
-            let red = row.id == "wants-a-human"
-            XCTAssertEqual(BoardModel.needsHuman(row.task), red, "row \(row.id)")
-            let painted = TaskBoardList.rowSurface(row, newRowId: nil)
-            if red {
-                XCTAssertNotNil(painted, "row \(row.id) should be red paper")
-            } else {
-                XCTAssertNil(painted, "row \(row.id) must take the card untouched")
-            }
+            XCTAssertNil(
+                TaskBoardList.rowSurface(row, newRowId: nil),
+                "row \(row.id) must take the card untouched — the red row is retired"
+            )
+            XCTAssertEqual(BoardModel.dot(row.task), expected[row.id] ?? nil, "row \(row.id)")
         }
-        // The green just-created flash rides the same surface, and RED WINS when a row is
-        // both: two tints on one row would be two claims about the same pixels.
-        let redRow = rows.first { $0.id == "wants-a-human" }!
-        let flashed = surface(needsAction: true, isNew: true, dark: false)
-        let plainRed = surface(needsAction: true, isNew: false, dark: false)
-        XCTAssertEqual(flashed.r, plainRed.r, accuracy: 0.001, "red beats green on a row that is both")
-        XCTAssertEqual(flashed.g, plainRed.g, accuracy: 0.001)
-        XCTAssertEqual(flashed.b, plainRed.b, accuracy: 0.001)
-        XCTAssertNotNil(
-            TaskBoardList.rowSurface(redRow, newRowId: redRow.id),
-            "the newly created red row is still painted"
-        )
-        let ordinary = rows.first { $0.id == "ordinary" }!
-        XCTAssertNotNil(
-            TaskBoardList.rowSurface(ordinary, newRowId: ordinary.id),
-            "a just-created ordinary row takes the green flash — that is how 'where did it land?' is answered"
-        )
+        // The green just-created flash is the one surface left, on any row.
+        for row in rows {
+            XCTAssertNotNil(
+                TaskBoardList.rowSurface(row, newRowId: row.id),
+                "a just-created row takes the green flash — that is how 'where did it land?' is answered"
+            )
+        }
+        XCTAssertNil(BoardRowSurface.tint(isNew: false, dark: false))
+        XCTAssertNil(BoardRowSurface.tint(isNew: false, dark: true))
+        // `nil`, not `.clear`: `.clear` inside a card would cut a hole in the card and show
+        // the page. `nil` hands the cell back to the inset-grouped section.
+        XCTAssertNil(BoardRowSurface.color(isNew: false))
     }
 
-    /// It has to read as RED at a glance, in BOTH schemes — the failure mode of the
-    /// first attempt (0.08 over white) was a tint that was present in the data and
-    /// invisible on the screen.
-    ///
-    /// Stated as channel separation on the composite rather than as an alpha, because
-    /// alpha is not what the eye judges: the same 0.16 over black lands at a near-black
-    /// brown, which is why the dark value is its own number.
-    func testTheRedRowReallyReadsRedInBothSchemes() {
+    /// The flash has to read as green, not grey, in both schemes.
+    func testTheJustCreatedFlashReadsGreenInBothSchemes() {
         for dark in [false, true] {
-            let paper = surface(needsAction: false, dark: dark)
-            let red = surface(needsAction: true, dark: dark)
-            let separation = red.r - max(red.g, red.b)
-            XCTAssertGreaterThan(
-                separation, 20,
-                "dark=\(dark): the red channel leads by only \(separation)/255 — this is the 0.08 pink smudge again"
-            )
-            XCTAssertGreaterThan(
-                abs(luminance(red) - luminance(paper)), 0.005,
-                "dark=\(dark): the marked row is the same brightness as the sheet, so it reads as an unexplained smudge rather than a mark"
-            )
-            // The tint's own alpha, so a UIKit surprise (a dynamic colour that drops the
-            // alpha on resolve) is diagnosed here rather than surfacing as a mystery.
-            let tint = BoardRowSurface.tint(needsAction: true, isNew: false, dark: dark)
-            XCTAssertNotNil(tint)
-            let alpha = rgba(tint!, dark: dark).a
-            let declared = dark
-                ? BoardRowSurface.needsActionAlpha.dark
-                : BoardRowSurface.needsActionAlpha.light
-            XCTAssertEqual(alpha, Double(declared), accuracy: 0.001, "dark=\(dark)")
-            XCTAssertGreaterThan(alpha, 0.10, "dark=\(dark): weaker than this reads as a smudge")
-            XCTAssertLessThan(alpha, 0.45, "dark=\(dark): stronger than this and the ink is fighting it")
-        }
-        XCTAssertGreaterThan(
-            BoardRowSurface.needsActionAlpha.dark, BoardRowSurface.needsActionAlpha.light,
-            "over black the same alpha reads as nearly nothing — dark needs the stronger tint"
-        )
-        // The flash is the quieter of the two in both schemes: it answers "where did it
-        // land?" and then goes away, so it must not out-shout a row that is asking for
-        // something.
-        XCTAssertLessThan(
-            BoardRowSurface.justCreatedAlpha.light, BoardRowSurface.needsActionAlpha.light)
-        XCTAssertLessThan(
-            BoardRowSurface.justCreatedAlpha.dark, BoardRowSurface.needsActionAlpha.dark)
-        for dark in [false, true] {
-            let green = surface(needsAction: false, isNew: true, dark: dark)
-            // A lower bar than the red's 20, deliberately: `systemGreen` is a much lighter
-            // hue than `systemRed`, so over white paper the same alpha buys less channel
-            // separation (measured ~15 light, ~31 dark). The flash only has to be
-            // recognisably green for the second it exists, and it is the quieter of the
-            // two treatments by design.
+            let green = surface(isNew: true, dark: dark)
             XCTAssertGreaterThan(
                 green.g - max(green.r, green.b), 10,
                 "dark=\(dark): the just-created flash has to read as green, not as grey"
             )
+            let alpha = rgba(BoardRowSurface.tint(isNew: true, dark: dark)!, dark: dark).a
+            let declared = dark
+                ? BoardRowSurface.justCreatedAlpha.dark : BoardRowSurface.justCreatedAlpha.light
+            XCTAssertEqual(alpha, Double(declared), accuracy: 0.001, "dark=\(dark)")
         }
     }
 
-    /// The TITLE stays legible on the red paper, which is the other half of the request:
-    /// the ring and the title keep their normal colours, so the tint has to be something
-    /// full-strength label ink still clears WCAG 4.5:1 against.
-    ///
-    /// Both schemes, because the tint is per-scheme and the label flips with it.
-    func testTheTitleClearsFourAndAHalfToOneOnTheRedRow() {
-        for dark in [false, true] {
-            let red = surface(needsAction: true, dark: dark)
-            let label = rgba(.label, dark: dark)
-            let ratio = contrast(
-                (r: label.r * 255, g: label.g * 255, b: label.b * 255), red)
-            XCTAssertGreaterThanOrEqual(
-                ratio, 4.5,
-                "dark=\(dark): the title reads at \(ratio):1 on the marked row"
-            )
-            // The second line is `.secondary` on the same paper — a lower bar (it is
-            // supporting text), but it must not disappear into the tint either.
-            let secondary = rgba(.secondaryLabel, dark: dark)
-            let secondaryInk = (
-                r: (secondary.r * secondary.a) * 255 + red.r * (1 - secondary.a),
-                g: (secondary.g * secondary.a) * 255 + red.g * (1 - secondary.a),
-                b: (secondary.b * secondary.a) * 255 + red.b * (1 - secondary.a)
-            )
-            XCTAssertGreaterThanOrEqual(
-                contrast(secondaryInk, red), 3.0,
-                "dark=\(dark): the state word and project line sink into the tint"
-            )
-        }
-    }
-
-    /// Type-INDEPENDENCE, which is how "holds at default type AND at accessibility-XXXL"
-    /// is established without re-measuring at each size: the surface takes no type size
-    /// at all, so there is nothing for a size to change. The loop is what makes the day
-    /// someone adds a size parameter an argument rather than a silent regression.
-    func testTheSurfaceIsIdenticalAtEveryDynamicTypeSizeIncludingAXXXXL() {
-        XCTAssertTrue(DynamicTypeSize.allCases.contains(.accessibility5),
-            "AX-XXXL is the size the reported claim is about")
-        for dark in [false, true] {
-            let baseline = surface(needsAction: true, dark: dark)
-            for size in DynamicTypeSize.allCases {
-                let again = surface(needsAction: true, dark: dark)
-                XCTAssertEqual(again.r, baseline.r, accuracy: 0.001, "\(size) dark=\(dark)")
-                XCTAssertEqual(again.g, baseline.g, accuracy: 0.001, "\(size) dark=\(dark)")
-                XCTAssertEqual(again.b, baseline.b, accuracy: 0.001, "\(size) dark=\(dark)")
-                let label = rgba(.label, dark: dark)
-                XCTAssertGreaterThanOrEqual(
-                    contrast((r: label.r * 255, g: label.g * 255, b: label.b * 255), again), 4.5,
-                    "\(size) dark=\(dark): the title's contrast on the marked row moved with the type size"
-                )
-            }
-        }
+    /// The gutter mark sits entirely LEFT of the ring, inside the cell's leading inset
+    /// (16pt on the pinned iPhone 16 Pro, the narrowest measured), so it can never overlap
+    /// the ring the way the old 3pt capsule did, nor hang off the card.
+    func testTheGutterMarkSitsLeftOfTheRingInsideTheCellInset() {
+        let right = TaskBoardRow.gutterCenterX + TaskBoardRow.gutterSlot / 2
+        let left = TaskBoardRow.gutterCenterX - TaskBoardRow.gutterSlot / 2
+        XCTAssertLessThanOrEqual(right, 0, "the mark reaches into the ring's column")
+        XCTAssertGreaterThanOrEqual(left, -16, "the mark spills past the card's edge")
+        XCTAssertLessThan(TaskBoardRow.dotSize, TaskBoardRow.gutterSlot)
     }
 
     /// The hairline still starts at the TITLE, not at the row's edge, so the ring's
-    /// gutter stays clear (mockup: `left: 48px`). It is the one number the retired gutter
-    /// column moved, and it is back where the shipped row had it: 34pt of ring frame with
-    /// `-6` leading padding is 28pt of layout, plus 11pt of HStack spacing.
-    ///
-    /// It survives R29 unchanged, and that is not luck: the guide is measured in the row's
-    /// OWN content space, so moving the row inside a card (which changed the cell's insets
-    /// from full bleed to the platform's) cannot move it.
+    /// gutter stays clear (mockup: `left: 48px`). 34pt of ring frame with `-6` leading
+    /// padding is 28pt of layout, plus 11pt of HStack spacing.
     func testTheRowSeparatorStartsAtTheTitleColumn() {
         XCTAssertEqual(TaskBoardRow.separatorLeadingInset, 39, accuracy: 0.001,
             "the hairline moved off the title — 34 - 6 + 11 is the arithmetic behind it")
@@ -2818,10 +2665,8 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
             TaskBoardRow.separatorLeadingInset, 28,
             "the hairline must start after the ring's tap target, or the line points at the ring"
         )
-        // 320pt is the narrowest iPhone width the app ships to. Inside a card the row's
-        // content is what is left after the section margin AND the cell's own inset on
-        // both sides (~20pt each), i.e. ~240pt — a narrower budget than V1's full-bleed
-        // 288pt, so this is the assertion that got STRICTER when the cards came back.
+        // 320pt is the narrowest iPhone width the app ships to; inside a card the row's
+        // content is ~240pt.
         XCTAssertLessThan(
             TaskBoardRow.separatorLeadingInset, 240 * 0.25,
             "the leading column eats more than a quarter of the narrowest row — a title at AX sizes has nowhere to wrap"
@@ -2893,7 +2738,7 @@ final class BoardBandCardSurfaceTests: XCTestCase {
         XCTAssertEqual(BoardBandCard.page, Color(BoardBandCard.pageColor))
     }
 
-    /// APP CALL SITE 1: the marked row's paper. `TaskBoardList.rowSurface` →
+    /// APP CALL SITE 1: the just-created row's paper. `TaskBoardList.rowSurface` →
     /// `BoardRowSurface.color` → `opaqueSurface`, which is what the row's
     /// `listRowBackground` actually gets — and it has to be the tint flattened onto the
     /// CARD, not onto the window background and not onto the page.
@@ -2902,18 +2747,16 @@ final class BoardBandCardSurfaceTests: XCTestCase {
     /// its keep: it proves the app's own blend is compositing over the card rather than
     /// over something that merely looks similar in light mode (white `systemBackground` is
     /// the trap — it is identical to the card in light and 28 grey away in dark).
-    func testTheMarkedRowsPaperIsTheTintFlattenedOntoTheBandCard() {
+    func testTheFlashedRowsPaperIsTheTintFlattenedOntoTheBandCard() {
         for dark in [false, true] {
             let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
-            let painted = channels(BoardRowSurface.opaqueSurface(
-                needsAction: true, isNew: false, traits: traits))
+            let painted = channels(BoardRowSurface.opaqueSurface(isNew: true, traits: traits))
             let ink = channels(
-                BoardRowSurface.tint(needsAction: true, isNew: false, dark: dark)!
-                    .resolvedColor(with: traits))
+                BoardRowSurface.tint(isNew: true, dark: dark)!.resolvedColor(with: traits))
             let card = channels(BoardBandCard.surfaceColor.resolvedColor(with: traits))
             XCTAssertEqual(
                 painted.r, ink.r * ink.a + card.r * (1 - ink.a), accuracy: 0.002,
-                "dark=\(dark): the red row is not composited over the band card"
+                "dark=\(dark): the flash is not composited over the band card"
             )
             XCTAssertEqual(
                 painted.g, ink.g * ink.a + card.g * (1 - ink.a), accuracy: 0.002, "dark=\(dark)")
@@ -2925,10 +2768,11 @@ final class BoardBandCardSurfaceTests: XCTestCase {
             )
         }
         // …and a real board row asks for exactly that paint: the JOIN, so the pairing
-        // cannot be correct arithmetic nothing reaches.
+        // cannot be correct arithmetic nothing reaches. Non-nil is the whole claim
+        // available: two dynamic colours built from separate trait providers are not `==`.
         let bands = BoardModel.bands(
             tasks: [WalnutTask(
-                id: "wants-a-human", title: "a task", status: "todo", phase: "NEED_ACTION",
+                id: "just-made", title: "a task", status: "todo", phase: "TODO",
                 priority: "none", project: "", dueDate: nil,
                 createdAt: "2026-08-30T00:00:00Z", updatedAt: "2026-08-30T00:00:00Z",
                 completedAt: nil, starred: nil, pinned: true, tags: nil, summary: nil
@@ -2937,18 +2781,9 @@ final class BoardBandCardSurfaceTests: XCTestCase {
         )
         let row = bands.flatMap(\.rows).first
         XCTAssertNotNil(row)
-        XCTAssertTrue(
-            BoardModel.needsHuman(row?.task),
-            "fixture: this row is the one that wants a human"
-        )
-        // Non-nil is the whole claim available here: two dynamic colours built from
-        // separate trait providers are not `==`, so comparing the Colors would be testing
-        // `UIColor.isEqual`, not the paint. WHICH rows are painted is pinned by
-        // `BoardRowNeedsActionSurfaceTests`; what this adds is that the value the list
-        // hands `listRowBackground` is produced by the composite asserted above.
         XCTAssertNotNil(
-            TaskBoardList.rowSurface(row!, newRowId: nil),
-            "the list stopped painting the row the model says wants a human"
+            TaskBoardList.rowSurface(row!, newRowId: "just-made"),
+            "the list stopped painting the just-created row"
         )
     }
 
@@ -3190,55 +3025,6 @@ final class BoardSessionTapRouteTests: XCTestCase {
         XCTAssertNil(BoardModel.newestSessionId(["", " "]))
     }
 
-    // MARK: - The row's state must not claim the task is sessionless
-
-    /// THE regression: a row whose task has `session_ids` but no hydrated session is
-    /// NOT `.none`. `.none` blanks the dot and drops the state word, so the row reads
-    /// as work that never started.
-    func testARowWithIdsOnlyIsNotSessionless() {
-        let state = BoardModel.state(
-            task: task("t1"), session: nil, knownSessionIds: ["s-old"]
-        )
-        XCTAssertNotEqual(state, .none, "a task with session_ids must not read as sessionless")
-        XCTAssertEqual(state, .earlierSession)
-        XCTAssertTrue(state.hasSession, "the trailing dot draws for a row that HAS history")
-        XCTAssertFalse(state.word.isEmpty, "the second line has to say something true")
-    }
-
-    /// The two honest "no session" cases keep today's wording: nobody has asked yet,
-    /// and asked-and-there-are-none. Neither may invent history.
-    func testUnknownAndLearnedEmptyBothStayNone() {
-        XCTAssertEqual(BoardModel.state(task: task("t1"), session: nil), .none)
-        XCTAssertEqual(
-            BoardModel.state(task: task("t1"), session: nil, knownSessionIds: []), .none,
-            "asked, and this task has never had a session"
-        )
-        XCTAssertEqual(
-            BoardModel.state(task: task("t1"), session: nil, knownSessionIds: [""]), .none,
-            "a cleared slot is not a session"
-        )
-    }
-
-    /// A hydrated session still decides the state — the ids are a FALLBACK, never a
-    /// second opinion about a session the list already has.
-    func testAHydratedSessionOutranksTheIds() {
-        XCTAssertEqual(
-            BoardModel.state(
-                task: task("t1"), session: session("s9", taskId: "t1", status: "running"),
-                knownSessionIds: ["s-old", "s9"]
-            ),
-            .running
-        )
-        XCTAssertEqual(
-            BoardModel.state(
-                task: task("t1", phase: "NEED_ACTION"),
-                session: session("s9", taskId: "t1"), knownSessionIds: ["s9"]
-            ),
-            .handedBack,
-            "the red-row rule keeps its precedence"
-        )
-    }
-
     // MARK: - Where the tap goes
 
     func testAHydratedSessionOpensThatSession() {
@@ -3465,11 +3251,7 @@ final class BoardSessionTapRouteTests: XCTestCase {
         }
         XCTAssertNil(row.session, "the session list genuinely has nothing for this task")
         XCTAssertEqual(row.knownSessionIds, ["s-old", "s-new"])
-        XCTAssertNotEqual(
-            BoardModel.state(task: row.task, session: row.session, knownSessionIds: row.knownSessionIds),
-            .none,
-            "the row must not read as sessionless"
-        )
+        XCTAssertEqual(BoardModel.affordance(row), .open, "the row must not read as sessionless")
         XCTAssertEqual(
             BoardModel.tapRoute(row),
             .resolve(
@@ -3553,10 +3335,7 @@ final class BoardSessionTapRouteTests: XCTestCase {
         XCTAssertEqual(row.messageCount, 0)
         XCTAssertNil(row.pinned, "the pin lives on the TASK — claiming one here invents a board row")
         XCTAssertEqual(row.processStatus, "unknown")
-        XCTAssertEqual(
-            BoardModel.state(task: nil, session: row), .ended,
-            "unknown liveness reads as ended, not as running"
-        )
+        XCTAssertFalse(row.statusKind.isAlive, "unknown liveness is not claimed as alive")
     }
 }
 

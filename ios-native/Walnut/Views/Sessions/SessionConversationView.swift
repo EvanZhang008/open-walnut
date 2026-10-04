@@ -241,10 +241,16 @@ struct SessionConversationView: View {
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id
+            // Opening the conversation reads the task (the board's unread dot clears),
+            // whichever surface pushed this page.
+            if let taskId = session.taskId { tasksStore?.markRead(taskId: taskId) }
             lifecycle.start()
             await store.open()
         }
         .onDisappear {
+            // And leaving it does too: output that landed while the page was on screen
+            // was seen, so it must not greet the user as unread on the board.
+            if let taskId = session.taskId { tasksStore?.markRead(taskId: taskId) }
             if MediaContext.currentSessionID == session.id { MediaContext.currentSessionID = nil }
             // Clear the flag too: cancelling the reset task alone would leave
             // a retained (nav-stacked) view permanently geometry-frozen.

@@ -303,6 +303,11 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// with pre-existing call sites (they simply leave the dates nil).
     var startDate: String? = nil
     var endDate: String? = nil
+    /// The read marker: `true` when the agent produced output the human has not
+    /// opened yet. The projection sends it only when true, so a read task decodes
+    /// nil. Every copy of a row (`TasksStore.applyEdit`, `withPinned`) must carry it,
+    /// or an unrelated edit would clear the board's unread dot until the next refresh.
+    var unread: Bool? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -313,6 +318,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case starred, pinned, tags, summary
         case startDate = "start_date"
         case endDate = "end_date"
+        case unread
     }
 }
 
@@ -427,6 +433,7 @@ extension WalnutTask {
     var statusKind: TaskStatus { TaskStatus(status) }
     var priorityKind: TaskPriority { TaskPriority(priority) }
     var isDone: Bool { statusKind == .done }
+    var isUnread: Bool { unread == true }
 
     var dueDateValue: Date? { Self.parseISO(dueDate) }
     var startDateValue: Date? { Self.parseISO(startDate) }

@@ -38,9 +38,10 @@ struct BoardRow: Identifiable, Equatable {
     ///
     /// The distinction is what lets a tap on a row with no hydrated session open the
     /// session it actually has instead of a New Session draft (`BoardModel.tapRoute`),
-    /// and what lets the row say it has history instead of "no session yet"
-    /// (`BoardModel.state`). Collapsing unknown into "none" is the defect: the phone
-    /// then states, on no evidence, that a task with 30 sessions has never had one.
+    /// and what keeps the long-press menu from offering "Start Session" on a task that
+    /// has sessions (`BoardModel.affordance`). Collapsing unknown into "none" is the
+    /// defect: the phone then acts, on no evidence, as if a task with 30 sessions had
+    /// never had one.
     var knownSessionIds: [String]? = nil
 
     /// True when this row is known to have a session — hydrated, or known by id.
@@ -108,50 +109,26 @@ struct BoardRow: Identifiable, Equatable {
     var canRetier: Bool { task != nil }
 }
 
-/// What the row's second line says about the work. Derived ONLY from fields the
-/// slim projection actually carries (`process_status`, `last_active_at`, and the
-/// owning task's `phase`) — nothing here is inferred from data we do not have.
-enum BoardRowState: Equatable {
-    /// A CLI process is working right now.
-    case running
-    /// Alive but not working: it is waiting on the machine or on a human.
-    case waiting
-    /// Alive/finished AND the task is in NEED_ACTION — the agent handed the
-    /// work back and a human owes it a look. The one state worth its own colour.
-    case handedBack
-    /// The CLI is gone (a normal end).
-    case ended
-    /// The CLI died badly.
-    case failed
-    /// The task HAS a session, known by id only: the session list the phone holds does
-    /// not carry it, so there is no `process_status` to report — just history.
-    ///
-    /// It is a state of its own because the two honest facts here differ from every
-    /// other case: we know work happened, and we do NOT know how it ended. Folding it
-    /// into `.ended` would invent an ending; folding it into `.none` (what shipped)
-    /// makes the dot and the word vanish, so a task with sessions reads as sessionless
-    /// and its row's tap looks like it should start one.
-    case earlierSession
-    /// No session has ever run for this task — or nothing has told the phone otherwise
-    /// yet (see `BoardRow.knownSessionIds`).
-    case none
+/// The single mark a board row carries in its leading gutter: the web's two dots.
+///
+/// It replaced a coloured state word, an age and a red row wash (2026-10-04). The user
+/// asked for the web's language: no "running" or other status, a small red dot when
+/// unread, a hollow red dot when read but still handed back, no red highlight and no
+/// date. The word said "handed back" while the open conversation said "Running", and
+/// the age was noise.
+enum BoardRowDot: Equatable {
+    /// Filled red: the agent produced output the human has not opened.
+    case unread
+    /// Hollow red: read, but the task is handed back and waiting on the human.
+    case needsAction
 
-    /// Leading word shown on the row and in the expanded strip.
-    var word: String {
+    /// What VoiceOver says for the row, since the dot itself is drawn, not read.
+    var accessibilityValue: String {
         switch self {
-        case .running: return "running"
-        case .waiting: return "waiting"
-        case .handedBack: return "handed back"
-        case .ended: return "session ended"
-        case .failed: return "session failed"
-        case .earlierSession: return "earlier session"
-        case .none: return "no session yet"
+        case .unread: return "Unread"
+        case .needsAction: return "Needs your action"
         }
     }
-
-    /// True when the row is about work that exists (as opposed to work never started).
-    /// The trailing dot draws for exactly these.
-    var hasSession: Bool { self != .none }
 }
 
 /// How the board groups its rows — the phone's half of the desktop's grouping
@@ -273,6 +250,11 @@ struct BoardBand: Identifiable, Equatable {
     /// every band the tier grouping builds, and every project band the flat fallback
     /// builds, is constructed exactly as before.
     var nest: BoardBandNest? = nil
+    /// The band sits under a heading that already names its rows' project (the "By
+    /// project" grouping, folder bands included), so a row repeating the project on its
+    /// second line would say the heading again. Stated by the builder, not read off
+    /// the band id, for the same reason `createSeed` is.
+    var headingNamesProject = false
 
     var id: String { bandId }
     /// The heading's number is what you can actually SEE in the band — toggling the
@@ -574,30 +556,6 @@ enum BoardModel {
         return nil
     }
 
-    /// Row state from the projection's own fields (see BoardRowState).
-    ///
-    /// `knownSessionIds` is the task's own `session_ids` when the phone has read them
-    /// (nil = never asked). It only matters when there is no hydrated session: a task
-    /// that HAS sessions the session list does not carry is `.earlierSession`, not
-    /// `.none`, because "no session yet" would be a statement the data contradicts.
-    static func state(
-        task: WalnutTask?, session: WalnutSession?, knownSessionIds: [String]? = nil
-    ) -> BoardRowState {
-        guard let session else {
-            return newestSessionId(knownSessionIds) != nil ? .earlierSession : .none
-        }
-        // NEED_ACTION outranks the process state on purpose: a CLI can sit
-        // idle for hours after handing back, and "waiting" would bury the one
-        // row that needs a human.
-        if task?.phase == "NEED_ACTION" { return .handedBack }
-        switch session.statusKind {
-        case .running: return .running
-        case .idle: return .waiting
-        case .error: return .failed
-        case .stopped, .unknown: return .ended
-        }
-    }
-
     // MARK: - Where a row's TAP goes
     //
     // The row has ONE tap and it is a destination, not a menu (see TaskBoardRow). So
@@ -791,41 +749,31 @@ enum BoardModel {
             : DoneToggle(folding: false, word: "hide done")
     }
 
-    // MARK: - "This row wants a human" (the red row)
+    // MARK: - "This row wants a human" (the dot)
 
     /// The desktop's rule, verbatim (`web/src/utils/session-status.ts`
     /// `taskNeedsAction`): phase NEED_ACTION and not done. Both surfaces have to
-    /// agree about what red means, so this is a port and not a reinterpretation.
+    /// agree about what the hollow dot means, so this is a port and not a
+    /// reinterpretation.
     ///
     /// It covers more than "the agent finished": a session error drives the phase to
     /// NEED_ACTION, and so does a permission prompt or a question waiting for an
     /// answer. All three are the same thing to the person scrolling — work stopped and
-    /// it is your turn.
-    ///
-    /// It lives HERE, next to `state`, rather than inside the row view, for the reason
-    /// every other rule on this screen does: it now decides a row's whole SURFACE
-    /// (`BoardRowSurface`, applied by `TaskBoardList`) as well as the row's own ink, and
-    /// two readers of one rule is exactly the shape that drifts into two rules. It takes
-    /// the optional task the row carries, so a session-only row (no task in the
-    /// projection) answers `false` rather than crashing or guessing — there is no phase
-    /// to read, and inventing one would paint a row red on no evidence.
+    /// it is your turn. A session-only row (no task in the projection) answers `false`:
+    /// there is no phase to read.
     static func needsHuman(_ task: WalnutTask?) -> Bool {
         guard let task else { return false }
         if task.isDone || task.phase == "COMPLETE" { return false }
         return task.phase == "NEED_ACTION"
     }
 
-    /// Compact age ("2m", "1h", "3d") for the row's second line. A row shows
-    /// several of these, so the long relative form ("3 days ago") costs a line
-    /// wrap on a two-line title. Pure so the tests don't need a clock.
-    static func shortAge(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval))
-        if seconds < 60 { return "\(seconds)s" }
-        let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes)m" }
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours)h" }
-        return "\(hours / 24)d"
+    /// The one mark a row carries, the web's pinned-card rule (`FocusSatelliteCards`):
+    /// unread wins, then needs-a-human, then nothing. The process state ("running",
+    /// "waiting", "handed back") is deliberately NOT on the row: it was the word that
+    /// disagreed with the open conversation, and the conversation is where it belongs.
+    static func dot(_ task: WalnutTask?) -> BoardRowDot? {
+        if task?.isUnread == true { return .unread }
+        return needsHuman(task) ? .needsAction : nil
     }
 
     // MARK: - Search
@@ -1571,7 +1519,11 @@ enum BoardModel {
                         leadsProject: false,
                         depth: folders.depth(of: folderId),
                         ancestors: folderSteps(folders.ancestors(of: folderId), folders: folders)
-                    ) : nil
+                    ) : nil,
+                    // A project heading is on screen for every band here unless the
+                    // sole-project case replaced it with `soleHeadingLabel`; then the rows
+                    // keep their project line, or the name would appear nowhere.
+                    headingNamesProject: !noProjectWorthNaming
                 ))
             }
         }

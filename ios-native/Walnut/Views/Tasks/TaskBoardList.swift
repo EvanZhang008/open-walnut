@@ -53,9 +53,9 @@ import SwiftUI
 /// Three things the board still says per row, all VALUES rather than structural
 /// branches, so nothing about the List's identity depends on the filter:
 /// `listRowBackground` (nil for an ordinary row — the section paints its own
-/// card; an OPAQUE tint-over-card for a row that wants a human, see `rowSurface`,
+/// card; an OPAQUE tint-over-card for the just-created flash, see `rowSurface`,
 /// which the section's rounded mask clips at the band's first and last cell so
-/// red cannot bleed past a corner), separators moved to the title with
+/// the tint cannot bleed past a corner), separators moved to the title with
 /// `alignmentGuide(.listRowSeparatorLeading)`, and `listSectionSpacing(0)` so the
 /// heading's own padding is the only gap between one card and the next.
 ///
@@ -135,23 +135,16 @@ struct TaskBoardList: View {
     /// the scroll exist to answer.
     static func rowAnchorId(_ rowId: String) -> String { "task-\(rowId)" }
 
-    /// The colour `listRowBackground` gets for ONE row: red card for a task that wants a
-    /// human, a green flash for the row that was just created, and `nil` for every
-    /// ordinary row — `nil` meaning the inset-grouped section paints its own card, which
-    /// is how a board row and a row on any other Tasks filter are the same object.
+    /// The colour `listRowBackground` gets for ONE row: a green flash for the row that
+    /// was just created, and `nil` for every other row — `nil` meaning the inset-grouped
+    /// section paints its own card, which is how a board row and a row on any other Tasks
+    /// filter are the same object. A row that wants a human is NOT painted any more; its
+    /// hollow dot says so (`BoardModel.dot`).
     ///
     /// A named function rather than an expression inline in `body`, so the composition
-    /// the app actually executes is the one the tests drive — the predicate
-    /// (`BoardModel.needsHuman`) and the surface (`BoardRowSurface`) are each covered on
-    /// their own, and this is where they are joined. An inline expression would leave the
-    /// JOIN untested, which is the half that can silently stop applying the treatment
-    /// (pass the wrong row's id, read `isDone` instead of the phase) while both halves
-    /// still pass their own cases.
+    /// the app actually executes is the one the tests drive.
     static func rowSurface(_ row: BoardRow, newRowId: String?) -> Color? {
-        BoardRowSurface.color(
-            needsAction: BoardModel.needsHuman(row.task),
-            isNew: row.id == newRowId
-        )
+        BoardRowSurface.color(isNew: row.id == newRowId)
     }
 
     var body: some View {
@@ -160,13 +153,7 @@ struct TaskBoardList: View {
                 ForEach(band.rows) { row in
                     TaskBoardRow(
                         row: row,
-                        // `knownSessionIds` rides along so a row whose session the
-                        // session LIST does not carry still reports that it HAS one
-                        // (`.earlierSession`) instead of "no session yet".
-                        state: BoardModel.state(
-                            task: row.task, session: row.session,
-                            knownSessionIds: row.knownSessionIds
-                        ),
+                        showsProject: !band.headingNamesProject,
                         isResolving: row.id == resolvingRowId,
                         onToggleDone: { onToggleDone(row) },
                         onOpenSession: { onOpenSession(row) }
@@ -185,22 +172,11 @@ struct TaskBoardList: View {
                     // is what makes a board row and a row on the reference page line up on
                     // the same pixels. The row keeps its own `padding(.vertical, 2)`.
                     //
-                    // The row's SURFACE, and the one place the board says "this task
-                    // wants a human": an ordinary row is `nil` so the section's card is
-                    // untouched, and a needs-action row's whole CARD CELL takes the red
-                    // ("把它变成一整个底都变成红色的吧"), clipped by the card's own
-                    // corners. The tint, the per-scheme strength, the opaque composite and
-                    // the three rounds of history behind it are on `BoardRowSurface`.
-                    //
-                    // Applied HERE and not inside the row, because a row cannot paint
-                    // outside its own content box: `listRowBackground` is the only thing
-                    // that reaches the row's full rect, which is what "the whole row"
-                    // means. It is also why the old mark was a 3pt capsule INSIDE the row
-                    // and ended up fighting the done ring for the same three points.
-                    //
-                    // The predicate is the model's (`BoardModel.needsHuman`, the port of
-                    // the desktop's `taskNeedsAction`) and the row reads the same one for
-                    // its ink, so "red row" and "quiet state word" can never disagree.
+                    // The row's SURFACE: `nil` for every row (the section's card,
+                    // untouched) except the just-created flash, clipped by the card's own
+                    // corners. Applied HERE and not inside the row, because only
+                    // `listRowBackground` reaches the row's full rect. The red wash a
+                    // needs-action row used to take is gone (`BoardRowSurface`).
                     .listRowBackground(Self.rowSurface(row, newRowId: newRowId))
                     // The hairline starts at the TITLE, not at the row edge, so the
                     // ring's gutter stays clear (mockup: `left: 48px`). The guide is

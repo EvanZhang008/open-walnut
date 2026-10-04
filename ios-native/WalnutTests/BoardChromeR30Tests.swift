@@ -315,51 +315,22 @@ final class BoardChromeR30Tests: XCTestCase {
 
     // MARK: - The row's second line
 
-    /// At accessibility-XXXL the line used to squeeze every token equally, so the row read
-    /// "hand… · Immi…" — the STATE WORD, the one thing that says what is being asked of the
-    /// reader, destroyed to keep two other tokens that were also destroyed.
-    func testTheStateWordSurvivesEveryTypeSize() {
-        for size in DynamicTypeSize.allCases {
-            let meta = TaskBoardRow.meta(
-                word: "handed back", age: "2h", project: "Immigration", typeSize: size)
-            XCTAssertEqual(meta.state, "handed back", "\(size): the state word was dropped or shortened")
-            XCTAssertEqual(meta.tokens.first, "handed back", "\(size): the state word must lead the line")
+    /// The row says no process state and no age any more (2026-10-04): the state word
+    /// disagreed with the open conversation and the age was noise. Source-scanned because
+    /// what must not come back is a line of code: a value test cannot see that a view
+    /// started printing a word again.
+    func testTheRowPrintsNoStateWordAndNoAge() throws {
+        let source = code(in: try source("Walnut/Views/Tasks/TaskBoardRow.swift"))
+        for phrase in ["lastActiveValue", "statusKind", "\"running\"", "\"handed back\""] {
+            XCTAssertFalse(
+                source.contains(phrase),
+                "TaskBoardRow reads `\(phrase)` again — the row is back to narrating the process"
+            )
         }
-    }
-
-    /// The ladder, in order: at ordinary sizes all three tokens; at accessibility sizes the
-    /// age goes first and then the project, because one word fills the column.
-    func testTheLadderDropsTheCheapestTokenFirst() {
-        let ordinary = TaskBoardRow.meta(
-            word: "running", age: "5m", project: "Marina", typeSize: .large)
-        XCTAssertEqual(ordinary.tokens, ["running", "5m", "Marina"])
-
-        let accessible = TaskBoardRow.meta(
-            word: "running", age: "5m", project: "Marina", typeSize: .accessibility3)
-        XCTAssertEqual(accessible.tokens, ["running"],
-            "at an accessibility size the line says the one thing that matters")
-        XCTAssertNil(accessible.age)
-        XCTAssertNil(accessible.project)
-    }
-
-    /// A row with no session state keeps its project at every size: then the project IS the
-    /// line, and dropping it would leave the row's second line empty.
-    func testARowWithNoStateKeepsItsProject() {
-        let accessible = TaskBoardRow.meta(
-            word: nil, age: nil, project: "Marina", typeSize: .accessibility5)
-        XCTAssertEqual(accessible.tokens, ["Marina"])
-
-        let inbox = TaskBoardRow.meta(word: nil, age: nil, project: "", typeSize: .large)
-        XCTAssertEqual(inbox.tokens, ["Inbox"],
-            "the empty project is the Inbox, which is a place with a name")
-    }
-
-    /// The age is only ever dropped BY THE TYPE SIZE — a row that has no session has no age
-    /// to begin with, and the two nils must not be confused (the first is a degradation, the
-    /// second is the truth).
-    func testAnAbsentAgeIsNotADegradation() {
-        let meta = TaskBoardRow.meta(word: "ended", age: nil, project: "Marina", typeSize: .large)
-        XCTAssertEqual(meta.tokens, ["ended", "Marina"])
+        XCTAssertTrue(
+            source.contains("BoardModel.dot(row.task)"),
+            "the row stopped reading the one rule that decides its mark"
+        )
     }
 
     // MARK: - The heading's done toggle (done folds by default)

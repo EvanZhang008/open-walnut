@@ -14,14 +14,23 @@ final class OptimisticMutationTests: XCTestCase {
 
     private func makeTask(
         _ id: String, title: String = "t", status: String = "todo",
-        pinned: Bool? = nil, updatedAt: String = "2026-08-16T00:00:00Z"
+        pinned: Bool? = nil, updatedAt: String = "2026-08-16T00:00:00Z",
+        unread: Bool? = nil
     ) -> WalnutTask {
         WalnutTask(
             id: id, title: title, status: status, phase: "TODO",
             priority: "none", project: "", dueDate: nil,
             createdAt: "2026-08-16T00:00:00Z", updatedAt: updatedAt,
-            completedAt: nil, starred: nil, pinned: pinned, tags: nil, summary: nil
+            completedAt: nil, starred: nil, pinned: pinned, tags: nil, summary: nil,
+            unread: unread
         )
+    }
+
+    /// Poll (≤2s) until `condition` holds; `markRead` runs its PATCH in its own Task.
+    private func eventually(_ condition: () -> Bool) async {
+        for _ in 0..<200 where !condition() {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 
     private func makeSession(_ id: String, title: String? = nil) -> WalnutSession {
@@ -93,6 +102,95 @@ final class OptimisticMutationTests: XCTestCase {
         mock.error = nil
         _ = try? await store.updateTask(id: "t1", edit: .init(title: "after"))
         XCTAssertEqual(store.tasks[0].title, "after")
+    }
+
+    // MARK: - markRead (opening a task clears the board's unread dot)
+
+    /// Apply half: the dot clears at once, while the PATCH (carrying `unread: false`)
+    /// is still hanging.
+    func testMarkReadClearsTheDotBeforeThePatchResolves() async {
+        let mock = MockTaskTransport()
+        let gate = CheckedContinuationGate()
+        mock.gate = gate
+        let store = makeStore(mock)
+        store.tasks = [makeTask("t1", unread: true)]
+
+        store.markRead(taskId: "t1")
+        await eventually { !store.tasks[0].isUnread && mock.callCount("updateTask") == 1 }
+        XCTAssertFalse(store.tasks[0].isUnread, "the dot must clear optimistically")
+        XCTAssertEqual(mock.calls.first { $0.name == "updateTask" }?.args.last, "unread=false",
+            "the PATCH must carry the read marker and nothing else")
+        gate.open()
+        // The mock's answer stamps this `updatedAt`, so seeing it means the server row
+        // was adopted.
+        await eventually { store.tasks[0].updatedAt == "2026-08-16T00:00:01Z" }
+        XCTAssertEqual(store.tasks[0].updatedAt, "2026-08-16T00:00:01Z")
+        XCTAssertFalse(store.tasks[0].isUnread)
+        XCTAssertEqual(mock.callCount("updateTask"), 1, "one open, one request")
+    }
+
+    /// A read task costs no request, and neither does an id the store does not hold.
+    func testMarkReadOnAReadTaskSendsNothing() async {
+        let mock = MockTaskTransport()
+        let store = makeStore(mock)
+        store.tasks = [makeTask("t1")]
+        store.markRead(taskId: "t1")
+        store.markRead(taskId: "not-on-this-phone")
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(mock.callCount("updateTask"), 0)
+    }
+
+    /// A second open while the first PATCH runs finds the row already read: one request.
+    func testMarkReadTwiceInARowSendsOneRequest() async {
+        let mock = MockTaskTransport()
+        let gate = CheckedContinuationGate()
+        mock.gate = gate
+        let store = makeStore(mock)
+        store.tasks = [makeTask("t1", unread: true)]
+        store.markRead(taskId: "t1")
+        await eventually { !store.tasks[0].isUnread }
+        store.markRead(taskId: "t1")
+        gate.open()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(mock.callCount("updateTask"), 1)
+    }
+
+    /// Revert half: a failed PATCH brings the dot back, because the server still says
+    /// unread.
+    func testMarkReadFailureBringsTheDotBack() async {
+        let mock = MockTaskTransport()
+        mock.error = boom
+        let store = makeStore(mock)
+        store.tasks = [makeTask("t1", unread: true)]
+        store.markRead(taskId: "t1")
+        await eventually { mock.callCount("updateTask") == 1 && store.tasks[0].isUnread }
+        XCTAssertEqual(mock.callCount("updateTask"), 1)
+        XCTAssertTrue(store.tasks[0].isUnread, "the rollback must restore the unread row")
+    }
+
+    /// Every copy of a row carries the marker: an unrelated edit or a pin must not clear
+    /// the dot until the next refresh.
+    func testUnrelatedEditsAndPinsKeepTheUnreadMarker() {
+        let unread = makeTask("t1", unread: true)
+        XCTAssertTrue(TasksStore.applyEdit(.init(status: "done"), to: unread).isUnread)
+        XCTAssertTrue(TasksStore.applyEdit(.init(title: "renamed"), to: unread).isUnread)
+        XCTAssertTrue(TasksStore.withPinned(unread, true).isUnread)
+        XCTAssertFalse(TasksStore.applyEdit(.init(unread: false), to: unread).isUnread)
+        XCTAssertNil(
+            TasksStore.applyEdit(.init(unread: false), to: unread).unread,
+            "read is nil on the row, the projection's own encoding"
+        )
+    }
+
+    /// A feed upsert that lands mid-PATCH still carrying `unread: true` (emitted for an
+    /// unrelated reason) must not flash the dot back on: the in-flight edit is replayed.
+    func testAFeedUpsertMidMarkReadDoesNotBringTheDotBack() {
+        let store = makeStore(MockTaskTransport())
+        store.tasks = [makeTask("t1", unread: true)]
+        store._setInFlightEditForTesting(id: "t1", edit: .init(unread: false))
+        store._applyFeedMutationsForTesting([.taskUpsert(makeTask("t1", title: "x", unread: true))])
+        XCTAssertFalse(store.tasks[0].isUnread)
+        XCTAssertEqual(store.tasks[0].title, "x", "the rest of the server row is adopted")
     }
 
     // MARK: - setPinned
