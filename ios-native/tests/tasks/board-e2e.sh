@@ -14,7 +14,7 @@
 #      server's own tier split, not by reading the UI back.
 #   4. The create ring at the FOOT of a band files a task into that tier, and the
 #      new row lands at the foot (the server's pin_order = max + 1).
-#   5. `hide done` hides a completed row and the heading count follows it.
+#   5. `Show done` in the filters menu shows completed rows and hides them again.
 #   6. The rail teleports between bands.
 #
 # Isolation: own port (:3523) + throwaway OPEN_WALNUT_HOME under $WORK, launched
@@ -131,7 +131,7 @@ F1="$(tid "$WORK/seed-f1.json")"; F2="$(tid "$WORK/seed-f2.json")"
 F3="$(tid "$WORK/seed-f3.json")"; DONE_ID="$(tid "$WORK/seed-done.json")"
 log "seeded focus rows: $F1 / $F2 (long) / $F3, done row $DONE_ID"
 
-# Complete one row so "done stays in place, struck" and `hide done` are testable.
+# Complete one row so "done stays in place, struck" and `Show done` are testable.
 api POST /tasks/batch/phase "{\"task_ids\":[\"$DONE_ID\"],\"phase\":\"COMPLETE\"}" >/dev/null \
   || log "could not complete the done seed (hide-done step will be weaker)"
 
@@ -334,27 +334,17 @@ appId: $BUNDLE
     timeout: 25000
 - takeScreenshot: $WORK/06-created-at-foot
 
-# 5. HIDE DONE on a heading, and the count follows.
-#
-# visibilityPercentage is deliberately below 100: a band heading is STICKY and
-# the compact filter bar floats over the top of the list, so the topmost heading
-# is legitimately part-covered. Demanding 100% would fail on the design, not on a
-# defect. (No backticks in this comment: the heredoc is unquoted, so bash would
-# run the contents as a command substitution.)
-- scrollUntilVisible:
-    element:
-      id: "board.hideDone.focus"
-    direction: UP
-    visibilityPercentage: 40
-    timeout: 25000
-- takeScreenshot: $WORK/07-before-hide-done
+# 5. SHOW DONE lives in the band bar's filters menu (no heading carries it).
 - tapOn:
-    id: "board.hideDone.focus"
-- extendedWaitUntil:
-    visible:
-      id: "board.hideDone.focus"
-    timeout: 15000
-- takeScreenshot: $WORK/08-after-hide-done
+    id: "board.filters"
+- tapOn:
+    id: "board.showDone"
+- takeScreenshot: $WORK/07-show-done-on
+- tapOn:
+    id: "board.filters"
+- tapOn:
+    id: "board.showDone"
+- takeScreenshot: $WORK/08-show-done-off
 
 # 6. The rail teleports. Tap the Backlog glyph and its heading must come into view.
 #
@@ -377,7 +367,7 @@ appId: $BUNDLE
 YAML
 
 if "$MAESTRO" --udid "$UDID" test "$WORK/flow-board2.yaml" > "$WORK/maestro-2.log" 2>&1; then
-  log "phase 3 (tier move + create + hide done + rail) PASS"
+  log "phase 3 (tier move + create + show done + rail) PASS"
 else
   fail "phase 3 — see $WORK/maestro-2.log"
 fi

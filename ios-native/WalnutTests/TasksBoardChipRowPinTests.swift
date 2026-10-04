@@ -600,7 +600,7 @@ final class TasksBoardChipRowPinTests: XCTestCase {
     ) -> BoardBandBar {
         BoardBandBar(
             chips: tierChips, selected: nil,
-            grouping: .constant(.tier), dateFilter: .constant(.all),
+            grouping: .constant(.tier), dateFilter: .constant(.all), showDone: .constant(false),
             onSelect: { _ in }, placement: placement, pinLatch: latch
         )
     }

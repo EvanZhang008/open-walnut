@@ -228,10 +228,9 @@ struct BoardBand: Identifiable, Equatable {
     let bandId: String
     let label: String
     let rows: [BoardRow]
-    /// Rows this band is currently suppressing because its done rows are folded —
-    /// which is the DEFAULT now (see `bands(shownDoneTiers:)`), so on a board nobody
-    /// has touched this is nonzero wherever a band has completed work. Shown on the
-    /// heading (`show done (N)`) so folding is never a silent disappearance.
+    /// Rows this band is currently suppressing because its done rows are folded,
+    /// which is the DEFAULT (see `bands(showDone:)`): the board's filters menu holds the
+    /// one switch that shows them (`Show done`), and no heading carries a control for it.
     let hiddenDone: Int
     /// What the foot's `+` creates, or nil for a band with no create affordance.
     ///
@@ -257,15 +256,12 @@ struct BoardBand: Identifiable, Equatable {
     var headingNamesProject = false
 
     var id: String { bandId }
-    /// The heading's number is what you can actually SEE in the band — toggling the
-    /// done fold changes it, which is the feedback that the toggle worked. A count
-    /// that included hidden rows would disagree with the rows below it.
+    /// The heading's number is what you can actually SEE in the band. A count that
+    /// included hidden rows would disagree with the rows below it.
     ///
-    /// Since done rows fold by default, this reads as the band's OPEN count on a
-    /// board nobody has expanded, and the chip above it carries the same number
-    /// (`chips` reads it off the band). Expand a band and it counts what is then on
-    /// screen, done included: still "what you can see", and the `show done (N)` label
-    /// is what carries the done count in the folded state.
+    /// Since done rows fold by default, this reads as the band's OPEN count, and the
+    /// chip above it carries the same number (`chips` reads it off the band). With
+    /// `Show done` on it counts what is then on screen, done included.
     var count: Int { rows.count }
 }
 
@@ -716,39 +712,6 @@ enum BoardModel {
         return row.knownSessionIds == nil ? .unknown : .start
     }
 
-    // MARK: - The band's done toggle
-
-    /// What a band's done toggle says and which way it points — as ONE value, read off
-    /// the BAND.
-    ///
-    /// The band is the only thing that knows: `hiddenDone` is how many rows it is
-    /// actually suppressing, computed in the same pass that built the rows. The view
-    /// used to phrase this from the expanded/folded SET instead, which was harmless
-    /// while showing was the default and is not any more: with folding the default,
-    /// every band would offer `show done` — including the ones with nothing done to
-    /// show, i.e. a control that promises rows that do not exist. Same defect shape as
-    /// `affordance` vs `hasKnownSession`: a label phrased from state the label's own
-    /// subject can contradict.
-    struct DoneToggle: Equatable {
-        /// True while the band is suppressing rows, so the toggle offers to SHOW them.
-        let folding: Bool
-        /// The word (and the VoiceOver label): `show done (N)` while folding N rows,
-        /// `hide done` otherwise. A band with no done rows at all reads `hide done` —
-        /// tapping it is a no-op either way, and it is the phrase that band has always
-        /// shown, so the flip introduces no new wording where there is nothing to fold.
-        let word: String
-
-        /// Closed eye hides, open eye shows — the glyph the heading falls back to when
-        /// Dynamic Type takes the word away.
-        var glyph: String { folding ? "eye" : "eye.slash" }
-    }
-
-    static func doneToggle(_ band: BoardBand) -> DoneToggle {
-        band.hiddenDone > 0
-            ? DoneToggle(folding: true, word: "show done (\(band.hiddenDone))")
-            : DoneToggle(folding: false, word: "hide done")
-    }
-
     // MARK: - "This row wants a human" (the dot)
 
     /// The desktop's rule, verbatim (`web/src/utils/session-status.ts`
@@ -867,9 +830,12 @@ enum BoardModel {
     ///     "never asked", which is not the same as "no sessions" — see
     ///     `BoardRow.knownSessionIds`. Empty (the default) is the state a cold board
     ///     starts in and every row behaves exactly as it did before this existed.
-    ///   - shownDoneTiers: the bands that are showing their done rows. Done FOLDS BY
-    ///     DEFAULT (the empty set = every band folded), so this is the EXCEPTION set:
-    ///     the bands the reader explicitly expanded with `show done (N)`.
+    ///   - showDone: every band shows its done rows. The board's one `Show done`
+    ///     switch, in its filters menu; off by default, so done FOLDS everywhere.
+    ///   - shownDoneTiers: individual bands that show their done rows even while
+    ///     `showDone` is off. Done FOLDS BY DEFAULT (the empty set = every band folded),
+    ///     so this is the EXCEPTION set. The app no longer offers a per-band switch (the
+    ///     heading control went into the filters menu as `showDone`).
     ///
     ///     The default is the flip this parameter's name records. It used to be
     ///     `hiddenDoneTiers`, an opt-OUT set, so the board counted and drew every
@@ -897,6 +863,7 @@ enum BoardModel {
         query: String = "",
         grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all,
+        showDone: Bool = false,
         shownDoneTiers: Set<String> = [],
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
@@ -907,7 +874,8 @@ enum BoardModel {
         assemble(
             tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
             customTiers: customTiers, query: query, grouping: grouping,
-            dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, folders: folders,
+            dateFilter: dateFilter, showDone: showDone, shownDoneTiers: shownDoneTiers,
+            folders: folders,
             knownSessionIds: knownSessionIds, scope: scope, projectOrder: projectOrder,
             now: now
         ).bands
@@ -936,6 +904,7 @@ enum BoardModel {
         query: String = "",
         grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all,
+        showDone: Bool = false,
         shownDoneTiers: Set<String> = [],
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
@@ -1047,7 +1016,8 @@ enum BoardModel {
         // projects and folders under `By project`.
         let railBands = tierBands(
             rowById: rowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
-            query: query, dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
+            query: query, dateFilter: dateFilter, showDone: showDone,
+            shownDoneTiers: shownDoneTiers, now: now
         )
 
         // …and each chip's COUNT is what the board SHOWS for that tier, which is why it is
@@ -1070,7 +1040,7 @@ enum BoardModel {
         for id in order {
             guard let tier = tierById[id], let row = rowById[id] else { continue }
             guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
-            if row.isDone,
+            if row.isDone, !showDone,
                !shownDoneTiers.contains(
                    foldKey(row, tier: tier, grouping: grouping, folders: folders)
                ) { continue }
@@ -1110,7 +1080,7 @@ enum BoardModel {
                 // which is the order the console's rule reads. One tier when scoped.
                 rows: tiers.flatMap { pinOrder[$0.id] ?? [] }.compactMap { scopedRowById[$0] },
                 query: query,
-                dateFilter: dateFilter, shownDoneTiers: shownDoneTiers,
+                dateFilter: dateFilter, showDone: showDone, shownDoneTiers: shownDoneTiers,
                 folders: folders,
                 // What the ONE remaining heading is called when there is no project worth
                 // naming: the tier you are in, or `All`. See `projectBands`.
@@ -1123,7 +1093,8 @@ enum BoardModel {
         } else {
             bands = tierBands(
                 rowById: scopedRowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
-                query: query, dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
+                query: query, dateFilter: dateFilter, showDone: showDone,
+                shownDoneTiers: shownDoneTiers, now: now
             )
         }
         return BoardAssembly(rail: rail, bands: bands, scope: honoured)
@@ -1228,6 +1199,7 @@ enum BoardModel {
         folders: BoardFolderIndex = .empty,
         query: String,
         dateFilter: BoardDateFilter,
+        showDone: Bool = false,
         shownDoneTiers: Set<String>,
         now: Date
     ) -> [BoardBand] {
@@ -1238,9 +1210,9 @@ enum BoardModel {
             // `filter`/`count` calls over the same array is three walks and two
             // throwaway arrays per band per body pass; a band is rebuilt on every
             // keystroke, so the pass count is what the budget notices.
-            // Folded unless this band was explicitly expanded — the default, not the
-            // exception (see `shownDoneTiers`).
-            let hidingDone = !shownDoneTiers.contains(tier.id)
+            // Folded unless `Show done` is on or this band was expanded: the default,
+            // not the exception (see `showDone`).
+            let hidingDone = !showDone && !shownDoneTiers.contains(tier.id)
             var rows: [BoardRow] = []
             rows.reserveCapacity(ids.count)
             var doneCount = 0
@@ -1253,6 +1225,11 @@ enum BoardModel {
                 }
                 rows.append(row)
             }
+            // A TIER whose rows are all folded completions keeps its band: the heading,
+            // its create ring and its chip on the rail (`railBands` is this builder), so
+            // finishing the last open task in the tier you are scoped to neither takes
+            // away the place to add the next one nor drops the chip and the scope with it.
+            // A tier with no pinned rows at all has no band, as before.
             guard !rows.isEmpty || doneCount > 0 else { continue }
             bands.append(BoardBand(
                 bandId: tier.id, label: tier.label,
@@ -1353,6 +1330,7 @@ enum BoardModel {
         rows source: [BoardRow],
         query: String,
         dateFilter: BoardDateFilter,
+        showDone: Bool = false,
         shownDoneTiers: Set<String>,
         folders: BoardFolderIndex = .empty,
         soleHeadingLabel: String = allChipLabel,
@@ -1476,12 +1454,14 @@ enum BoardModel {
                 }
                 // Folded unless expanded, exactly as a tier band is: the default lives
                 // in ONE place per builder and both builders state the same rule.
-                let hidingDone = !shownDoneTiers.contains(bandId)
+                let hidingDone = !showDone && !shownDoneTiers.contains(bandId)
                 let inBand = inProject.rows[folderId] ?? []
                 let doneCount = inBand.count { $0.isDone }
                 let bandRows = hidingDone ? inBand.filter { !$0.isDone } : inBand
-                // Same rule as everywhere else on this board: a band with nothing to
-                // show is not rendered. That covers the project with no loose rows (its
+                // A band with nothing to show is not rendered, and here (unlike a tier
+                // band) that includes a band of folded completions: no heading carries a
+                // done toggle any more, so it could only say "0", and the web's board
+                // drops such a group too. That covers the project with no loose rows (its
                 // heading then rides the first folder band, see `relead`) and the empty
                 // folder the server lists but the pinned board has no rows for.
                 //
@@ -1490,7 +1470,7 @@ enum BoardModel {
                 // therefore no create ring. That is the board's existing rule and not a
                 // new hole — an empty TIER has no heading and no ring either — and the
                 // ring comes back the moment the project has one loose pinned row.
-                guard !bandRows.isEmpty || doneCount > 0 else { continue }
+                guard !bandRows.isEmpty else { continue }
                 bands.append(BoardBand(
                     bandId: bandId, label: label,
                     rows: bandRows,
@@ -1875,11 +1855,9 @@ struct BoardBandsKey: Equatable {
     /// (When the scope was a post-filter over assembled bands it legitimately did not
     /// belong here — that is exactly what changed.)
     var scope: String? = nil
-    /// The bands the reader expanded to show their done rows (see
-    /// `bands(shownDoneTiers:)`). Part of the key because it changes which rows a band
-    /// holds — which is also what makes an explicit expand survive every rebuild the
-    /// store publishes underneath it.
-    let shownDoneBands: Set<String>
+    /// The filters menu's `Show done` (see `bands(showDone:)`). Part of the key because it
+    /// changes which rows every band holds.
+    let showDone: Bool
     let nowBucket: Int
 }
 

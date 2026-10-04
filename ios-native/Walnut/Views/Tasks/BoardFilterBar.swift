@@ -66,6 +66,9 @@ enum BoardFilterPrefs {
     /// an ordinary view preference, so it survives a grouping switch, a tab switch and a
     /// relaunch like the two above it.
     static let tierScopeKey = "tasks.board.tierScope"
+    /// `Show done` in the band bar's filters menu: every band shows its completed rows.
+    /// Off by default, so the board opens on open work.
+    static let showDoneKey = "tasks.board.showDone"
 
     /// The map key the `All` scope stores its grouping under. Underscored so it cannot
     /// collide with a tier id (`focus`, `ct_*`).

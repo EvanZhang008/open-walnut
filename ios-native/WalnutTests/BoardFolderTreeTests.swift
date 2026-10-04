@@ -430,18 +430,12 @@ final class BoardFolderTreeTests: XCTestCase {
         for (name, folders) in trees {
             let index = BoardFolderIndex.build(folders)
 
-            /// The board as it OPENS (done folded), and then with every band of THAT grouping
-            /// expanded — the fold set is per-grouping because band ids are.
+            /// The board as it OPENS (done folded), and then with the filters menu's
+            /// `Show done` on.
             func board(_ grouping: BoardGrouping, expanded: Bool) -> [BoardBand] {
-                let folded = BoardModel.bands(
+                BoardModel.bands(
                     tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
-                    grouping: grouping, folders: index, now: Self.now
-                )
-                guard expanded else { return folded }
-                return BoardModel.bands(
-                    tasks: tasks, sessions: [], tierOf: [:], tierOrder: [:], customTiers: [],
-                    grouping: grouping, shownDoneTiers: Set(folded.map(\.bandId)),
-                    folders: index, now: Self.now
+                    grouping: grouping, showDone: expanded, folders: index, now: Self.now
                 )
             }
             func rows(_ bands: [BoardBand]) -> [String] { bands.flatMap { $0.rows.map(\.id) } }
@@ -463,27 +457,24 @@ final class BoardFolderTreeTests: XCTestCase {
                 }
             }
 
-            // Expanding adds exactly the done rows, in BOTH groupings — the honest form of
-            // "no row is ever lost": what the folded board hides, `hiddenDone` counts and one
-            // tap brings back.
+            // `Show done` adds exactly the done rows, in BOTH groupings: the honest form of
+            // "no row is ever lost", since what the folded board hides one switch brings
+            // back. (No heading counts the hidden rows any more, and a band holding only
+            // folded completions is not drawn, so there is no `hiddenDone` total to check.)
             for grouping in BoardGrouping.allCases {
                 let folded = board(grouping, expanded: false)
                 let expanded = board(grouping, expanded: true)
                 XCTAssertEqual(
                     Set(rows(expanded)), everyId,
-                    "\(name), \(grouping.rawValue): expanding every band has to show every row"
+                    "\(name), \(grouping.rawValue): Show done has to show every row"
                 )
                 XCTAssertEqual(
                     Set(rows(expanded)).subtracting(Set(rows(folded))), ["m5"],
                     "\(name), \(grouping.rawValue): folding hides exactly the done rows"
                 )
                 XCTAssertEqual(
-                    folded.reduce(0) { $0 + $1.hiddenDone }, 1,
-                    "\(name), \(grouping.rawValue): the hidden row is not counted on any heading"
-                )
-                XCTAssertEqual(
                     expanded.reduce(0) { $0 + $1.hiddenDone }, 0,
-                    "\(name), \(grouping.rawValue): an expanded band still claims to hide rows"
+                    "\(name), \(grouping.rawValue): a band still claims to hide rows under Show done"
                 )
             }
         }

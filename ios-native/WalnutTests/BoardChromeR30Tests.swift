@@ -143,7 +143,6 @@ final class BoardChromeR30Tests: XCTestCase {
             ("label", BoardHeadingType.label),
             ("folderLabel", BoardHeadingType.folderLabel),
             ("count", BoardHeadingType.count),
-            ("control", BoardHeadingType.control),
             ("folderGlyph", BoardHeadingType.folderGlyph),
         ]
         for entry in styles {
@@ -172,7 +171,7 @@ final class BoardChromeR30Tests: XCTestCase {
         let label = pointSize(BoardHeadingType.label)
         XCTAssertGreaterThanOrEqual(label, 11,
             "the label is smaller than the 11pt literal it replaced")
-        for smaller in [BoardHeadingType.folderLabel, BoardHeadingType.count, BoardHeadingType.control] {
+        for smaller in [BoardHeadingType.folderLabel, BoardHeadingType.count] {
             XCTAssertLessThan(pointSize(smaller), label,
                 "a heading satellite is not allowed to be as loud as the band's name")
         }
@@ -181,18 +180,13 @@ final class BoardChromeR30Tests: XCTestCase {
             "the folder glyph is an icon beside a word, so it never outsizes the word")
     }
 
-    /// The heading's own ladder: at accessibility sizes the control becomes a glyph and the
-    /// count goes, because the four things on that line want 330.5pt of a 330pt row and the
-    /// only one that cannot be sacrificed is the band's NAME (it hyphenated into "Fo-cus"
-    /// while the control truncated to "hid…" — every element lost).
-    func testTheHeadingSpendsItsControlLabelAndCountAtAccessibilitySizes() {
+    /// The heading's own ladder: at accessibility sizes the count goes, because the only
+    /// thing on that line that cannot be sacrificed is the band's NAME.
+    func testTheHeadingSpendsItsCountAtAccessibilitySizes() {
         for size in [DynamicTypeSize.small, .large, .xxLarge, .xxxLarge] {
-            XCTAssertTrue(BoardHeadingType.showsControlLabel(size), "\(size)")
             XCTAssertTrue(BoardHeadingType.showsCount(size), "\(size)")
         }
         for size in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
-            XCTAssertFalse(BoardHeadingType.showsControlLabel(size),
-                "\(size): a spelled-out control eats the band label's room")
             XCTAssertFalse(BoardHeadingType.showsCount(size),
                 "\(size): the count is the cheapest token on the line and the chip above says it too")
         }
@@ -333,56 +327,28 @@ final class BoardChromeR30Tests: XCTestCase {
         )
     }
 
-    // MARK: - The heading's done toggle (done folds by default)
+    // MARK: - Done rows: one switch in the filters menu, nothing on a heading
 
-    /// The toggle is phrased from the BAND, and the band is the only thing that knows how
-    /// many rows it is suppressing. Folded with rows to show is the DEFAULT state now, so
-    /// this is the label a cold board draws on every band that has finished work.
-    func testTheDoneToggleOffersToShowExactlyWhatTheBandIsHoldingBack() {
-        let toggle = BoardModel.doneToggle(band("focus", hiddenDone: 59))
-        XCTAssertEqual(toggle.word, "show done (59)")
-        XCTAssertTrue(toggle.folding)
-        XCTAssertEqual(toggle.glyph, "eye", "a closed eye is what you tap to open")
-    }
-
-    /// Expanded, it offers the way back. No count in the word: the rows are on screen, so
-    /// the number is the heading's job and repeating it here would be two answers to one
-    /// question.
-    func testTheDoneToggleOffersToFoldAgainOnceTheBandIsExpanded() {
-        let toggle = BoardModel.doneToggle(band("focus", hiddenDone: 0))
-        XCTAssertEqual(toggle.word, "hide done")
-        XCTAssertFalse(toggle.folding)
-        XCTAssertEqual(toggle.glyph, "eye.slash")
-    }
-
-    /// THE case the flip creates, and the reason the label reads the band instead of the
-    /// view's expanded set: a band with nothing done is folded like every other band, and
-    /// it must not offer to `show done` rows that do not exist. Phrased from the set it
-    /// would have, because "not expanded" says nothing about whether there is anything to
-    /// expand.
-    func testABandWithNothingDoneNeverOffersToShowDoneRows() {
-        let toggle = BoardModel.doneToggle(band("wait", hiddenDone: 0))
-        XCTAssertEqual(toggle.word, "hide done",
-            "a folded band with no completions must not promise rows it does not have")
-        XCTAssertFalse(toggle.word.contains("show"))
-    }
-
-    /// The arrangement, source-scanned for the same reason `affordance` is above: what must
-    /// not come back is a line of code. The heading may not re-derive the toggle from a set
-    /// of expanded band ids, and the list may not take that set as a property again —
-    /// either one lets the label and the rows disagree.
-    func testTheHeadingReadsTheToggleOffTheBandAndNeverOffTheExpandedSet() throws {
-        let source = code(in: try source("Walnut/Views/Tasks/TaskBoardList.swift"))
-        XCTAssertTrue(
-            source.contains("BoardModel.doneToggle(band)"),
-            "the heading stopped reading the one rule that knows what the band is folding"
-        )
-        for phrase in ["hiddenDoneBands", "shownDoneBands"] {
-            XCTAssertFalse(
-                source.contains(phrase),
-                "TaskBoardList reads `\(phrase)` again — the label is back to guessing"
-            )
+    /// The user's call (2026-10-04): "show done" is rare, so it is not on every heading. A
+    /// heading carries the band's name and count; the one switch is `Show done` in the
+    /// band bar's filters menu. Source-scanned because what must not come back is a line
+    /// of code: a per-heading toggle, or the view's per-band expanded set.
+    func testNoHeadingCarriesADoneToggleAndTheFiltersMenuDoes() throws {
+        let list = code(in: try source("Walnut/Views/Tasks/TaskBoardList.swift"))
+        for phrase in ["hideDoneButton", "onToggleHideDone", "board.hideDone", "doneToggle"] {
+            XCTAssertFalse(list.contains(phrase), "a heading offers a done toggle again (`\(phrase)`)")
         }
+        let view = code(in: try source("Walnut/Views/Tasks/TasksView.swift"))
+        XCTAssertFalse(view.contains("shownDoneBands"), "the view keeps a per-band expanded set again")
+        XCTAssertTrue(view.contains("showDone: showDone"), "the board stopped reading the one switch")
+        let bar = code(in: try source("Walnut/Views/Tasks/BoardBandBar.swift"))
+        XCTAssertTrue(bar.contains("\"Show done\""), "the filters menu lost its Show done item")
+        XCTAssertTrue(bar.contains("board.showDone"))
+    }
+
+    /// The switch is persisted under its own key, beside the board's other view choices.
+    func testShowDoneIsAPersistedBoardPreference() {
+        XCTAssertEqual(BoardFilterPrefs.showDoneKey, "tasks.board.showDone")
     }
 
     // MARK: - The nav row's chips
@@ -414,14 +380,6 @@ final class BoardChromeR30Tests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// A band that is suppressing `hiddenDone` rows.
-    ///
-    /// No rows on purpose: `hiddenDone` is the ONLY field the heading's toggle is allowed
-    /// to read (that is the rule these cases pin), so a fixture carrying visible rows
-    /// would invite an assertion about a number the toggle must not consult.
-    private func band(_ id: String, hiddenDone: Int) -> BoardBand {
-        BoardBand(bandId: id, label: id, rows: [], hiddenDone: hiddenDone, createSeed: nil)
-    }
 
     /// One dynamic colour resolved for a scheme, as a 0-255 grey. The bar's surfaces are all
     /// neutral, so the channel average is the whole story.

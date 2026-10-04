@@ -453,6 +453,9 @@ struct BoardBandBar: View {
     let selected: String?
     @Binding var grouping: BoardGrouping
     @Binding var dateFilter: BoardDateFilter
+    /// `Show done`: every band shows its completed rows. Lives here, one tap deep, and
+    /// nowhere else, because it is rarely used (it used to be a capsule on every heading).
+    @Binding var showDone: Bool
     /// Band id to filter to, or nil for the whole board.
     let onSelect: (String?) -> Void
     /// Which copy this is. Read by `cardInset` and by `drawsChips`, and nothing else.
@@ -891,6 +894,18 @@ struct BoardBandBar: View {
                 .padding(.trailing, layout.railTrailingContentInset)
                 .frame(height: layout.rail.height)
             }
+            // No scroll edge effect on the rail, on ANY edge: this is the fix for the
+            // pinned bar that kept its card and lost its chips (2026-10-04).
+            //
+            // SwiftUI stretches this horizontal scroll view's platform view up into the
+            // top safe area (measured: 52pt of chips in a 280pt `UIScrollView` at rest,
+            // 168pt once the large title collapses), and iOS 26 gives every scroll view
+            // under a bar a top edge pocket sized to that bar. With the title collapsed
+            // the pocket ran from the window top to y=168, i.e. over the WHOLE visible
+            // strip (116...168), so the edge effect drew over the chips while the card,
+            // which sits outside the scroll view, stayed. The rail never scrolls
+            // vertically, so it has no edge for an effect to mark.
+            .hiddenScrollEdgeEffects()
             // The rail is exactly the card minus the reserved column, so the filters
             // control is not "beside" the chips by negotiation — it is outside a frame
             // the chips were never given.
@@ -1069,6 +1084,9 @@ struct BoardBandBar: View {
                     Section("Dates") {
                         filterValues($dateFilter, identifierPrefix: "board.date", in: .menu)
                     }
+                    Section {
+                        showDoneToggle
+                    }
                 } label: {
                     filtersLabel
                 }
@@ -1082,7 +1100,8 @@ struct BoardBandBar: View {
         // hierarchy dump proved the platform keeps publishing this UIKit-backed subtree,
         // so a flow (or VoiceOver) matching the WORD "Filters" would otherwise find two.
         .accessibilityLabel(drawing ? "Filters" : "")
-        .accessibilityValue(drawing ? "\(grouping.label), \(dateFilter.label)" : "")
+        .accessibilityValue(drawing
+            ? "\(grouping.label), \(dateFilter.label)\(showDone ? ", Show done" : "")" : "")
         .sheet(isPresented: $showFiltersSheet) { filtersSheet }
     }
 
@@ -1118,6 +1137,9 @@ struct BoardBandBar: View {
                 Section("Dates") {
                     filterValues($dateFilter, identifierPrefix: "board.date", in: .sheet)
                 }
+                Section {
+                    showDoneToggle
+                }
             }
             .navigationTitle("Filters")
             .toolbar {
@@ -1134,6 +1156,18 @@ struct BoardBandBar: View {
         .dynamicTypeSize(typeSize)
         .presentationDetents([.medium, .large])
         .accessibilityIdentifier("board.filtersSheet")
+    }
+
+    /// The `Show done` switch: a checkmark item in the menu, a switch row in the sheet.
+    private var showDoneToggle: some View {
+        Toggle("Show done", isOn: Binding(
+            get: { showDone },
+            set: { value in
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(.snappy(duration: 0.2)) { showDone = value }
+            }
+        ))
+        .accessibilityIdentifier("board.showDone")
     }
 
     /// One filter's values, with the current one checked.
@@ -1184,6 +1218,21 @@ struct BoardBandBar: View {
             }
             .accessibilityIdentifier("\(identifierPrefix).\(option.rawValue)")
             .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+        }
+    }
+}
+
+// MARK: - The rail's scroll edge
+
+private extension View {
+    /// `scrollEdgeEffectHidden(true, for: .all)` where the OS has it (iOS 26). A helper
+    /// rather than an inline `if #available`, because the modifier changes the view's type.
+    @ViewBuilder
+    func hiddenScrollEdgeEffects() -> some View {
+        if #available(iOS 26.0, *) {
+            self.scrollEdgeEffectHidden(true, for: .all)
+        } else {
+            self
         }
     }
 }

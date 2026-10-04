@@ -130,7 +130,7 @@ final class PinnedTierOrderTests: XCTestCase {
     }
 
     private func assemble(
-        _ board: Board, key: String, shownDone: Set<String> = []
+        _ board: Board, key: String, showDone: Bool = false
     ) throws -> BoardAssembly {
         let parts = key.split(separator: "/").map(String.init)
         XCTAssertEqual(parts.count, 3, key)
@@ -139,7 +139,7 @@ final class PinnedTierOrderTests: XCTestCase {
             tierOf: board.tierOf, tierOrder: board.tierOrder, customTiers: board.customTiers,
             grouping: parts[1] == "project" ? .project : .tier,
             dateFilter: parts[2] == "now" ? .now : .all,
-            shownDoneTiers: shownDone,
+            showDone: showDone,
             folders: board.folders,
             scope: parts[0] == "all" ? nil : parts[0],
             projectOrder: board.projectOrder,
@@ -184,15 +184,13 @@ final class PinnedTierOrderTests: XCTestCase {
         }
     }
 
-    /// `show done (N)` on every band: each completed row is drawn in its pin place inside
-    /// its own group (a group only completed rows have comes last), and no open row moves.
+    /// `Show done` on: each completed row is drawn in its pin place inside its own group
+    /// (a group only completed rows have comes last), and no open row moves.
     func testShowDoneKeepsCompletedRowsInTheirPinPlace() throws {
         let board = try board()
         for key in board.views.keys.sorted() {
             let view = try XCTUnwrap(board.views[key])
-            let folded = try assemble(board, key: key)
-            let everyBand = Set(folded.bands.map(\.bandId))
-            let open = try assemble(board, key: key, shownDone: everyBand)
+            let open = try assemble(board, key: key, showDone: true)
             XCTAssertEqual(open.bands.flatMap { $0.rows.map(\.id) }, view.showDone, key)
         }
     }

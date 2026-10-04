@@ -256,7 +256,7 @@ final class TaskBoardModelTests: XCTestCase {
         }
         XCTAssertEqual(bands.map { $0.count }, [1, 1, 0], "every heading counts open work")
         XCTAssertEqual(bands.map { $0.hiddenDone }, [1, 1, 1],
-            "and every one of them says how many it is holding back")
+            "and every one of them knows how many it is holding back")
     }
 
     /// The toggle is the ONLY thing that brings them back, and it brings back exactly
@@ -334,19 +334,70 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(bands.first(where: { $0.bandId == "satellite" })?.rows.map(\.id), ["s1", "s2"])
     }
 
-    /// A band that is ALL done and folded must still render its heading, or the
-    /// `show done (N)` toggle that would bring the rows back would be gone too. With
-    /// folding the default this is the shape of a whole finished band on a cold board,
-    /// not an edge case someone has to reach by tapping.
-    func testABandHidingEveryRowKeepsItsHeading() {
-        let bands = BoardModel.bands(
-            tasks: [task("d", status: "done", phase: "COMPLETE")], sessions: [],
-            tierOf: ["d": "focus"], tierOrder: ["focus": ["d"]],
-            customTiers: []
+    /// A band that is ALL done and folded: a TIER band stays (heading, create ring,
+    /// chip), so completing the last open task in a scoped tier does not drop the scope;
+    /// a PROJECT band is not drawn, since no heading carries a done toggle any more and
+    /// it could only say "0". `Show done` brings the rows back in both groupings.
+    func testABandOfFoldedCompletionsKeepsItsTierButNotItsProject() {
+        let tasks = [
+            task("d", project: "marina", status: "done", phase: "COMPLETE"),
+            task("o", project: "acme"),
+        ]
+        let tierOf = ["d": "focus", "o": "satellite"]
+        let order = ["focus": ["d"], "satellite": ["o"]]
+        func board(_ grouping: BoardGrouping, showDone: Bool) -> BoardAssembly {
+            BoardModel.assemble(
+                tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
+                customTiers: [], grouping: grouping, showDone: showDone
+            )
+        }
+        let byTier = board(.tier, showDone: false)
+        XCTAssertEqual(byTier.bands.map(\.bandId), ["focus", "satellite"])
+        XCTAssertEqual(byTier.bands.first?.rows.count, 0)
+        XCTAssertNotNil(byTier.bands.first?.createSeed, "the ring stays where the next task goes")
+        XCTAssertEqual(byTier.rail.map(\.bandId), [nil, "focus", "satellite"],
+            "and so does the chip")
+
+        let byProject = board(.project, showDone: false)
+        XCTAssertFalse(byProject.bands.contains { $0.rows.isEmpty }, "an empty project heading")
+        XCTAssertEqual(byProject.bands.flatMap { $0.rows.map(\.id) }, ["o"])
+        XCTAssertEqual(byProject.rail.map(\.bandId), [nil, "focus", "satellite"],
+            "the rail is the tier rail in both groupings")
+
+        for grouping in [BoardGrouping.tier, .project] {
+            XCTAssertEqual(
+                Set(board(grouping, showDone: true).bands.flatMap { $0.rows.map(\.id) }),
+                ["d", "o"], "\(grouping)")
+        }
+    }
+
+    /// `Show done` is ONE switch for the whole board: every band, every grouping, and the
+    /// rail's counts, which count what is drawn.
+    func testShowDoneShowsEveryBandsCompletionsAndTheChipsCountThem() {
+        let tasks = [
+            task("f1"), task("f2", status: "done", phase: "COMPLETE"),
+            task("s1"), task("s2", status: "done", phase: "COMPLETE"),
+        ]
+        let tierOf = ["f1": "focus", "f2": "focus", "s1": "satellite", "s2": "satellite"]
+        let order = ["focus": ["f1", "f2"], "satellite": ["s1", "s2"]]
+        let off = BoardModel.assemble(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order, customTiers: []
         )
-        XCTAssertEqual(bands.map(\.bandId), ["focus"])
-        XCTAssertEqual(bands.first?.rows.count, 0)
-        XCTAssertEqual(bands.first?.hiddenDone, 1, "the heading can say what to un-hide")
+        XCTAssertEqual(off.bands.map { $0.rows.map(\.id) }, [["f1"], ["s1"]])
+        XCTAssertEqual(off.rail.map(\.count), [2, 1, 1])
+        let on = BoardModel.assemble(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order, customTiers: [],
+            showDone: true
+        )
+        XCTAssertEqual(on.bands.map { $0.rows.map(\.id) }, [["f1", "f2"], ["s1", "s2"]],
+            "done rows in place, struck through, in every band")
+        XCTAssertEqual(on.bands.map(\.hiddenDone), [0, 0])
+        XCTAssertEqual(on.rail.map(\.count), [4, 2, 2], "the chips count what is drawn")
+        let byProject = BoardModel.bands(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order, customTiers: [],
+            grouping: .project, showDone: true
+        )
+        XCTAssertEqual(Set(byProject.flatMap { $0.rows.map(\.id) }), ["f1", "f2", "s1", "s2"])
     }
 
     // MARK: - The board IS the pinned working set (the tail band is gone)
@@ -818,8 +869,8 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(visible.first?.hiddenDone, 0)
     }
 
-    /// Folding every row in a band still leaves the band, so the `show done (N)`
-    /// toggle that brings them back is still on screen.
+    /// Folding every row in a TIER band still leaves the band, so its create ring (and
+    /// its chip) stays where the next task goes.
     func testABandHidingEveryRowKeepsItsHeadingAndItsRing() {
         let bands = BoardModel.bands(
             tasks: [task("d", status: "done", phase: "COMPLETE")], sessions: [],
@@ -1687,8 +1738,8 @@ final class TaskBoardModelTests: XCTestCase {
     /// arriving, a title changing, any refresh that rebuilds the bands must not re-fold
     /// a band that was opened. The set is the view's state and the model is pure, so the
     /// property to pin here is that the same set keeps producing the same answer over
-    /// changed inputs — which is what `BoardBandsKey.shownDoneBands` then carries
-    /// through the memo (`BoardBandsCacheTests.testEveryInputInvalidates`).
+    /// changed inputs — which is what `BoardBandsKey.showDone` then carries through
+    /// the memo (`BoardBandsCacheTests.testEveryInputInvalidates`).
     func testAnExpandedBandStaysExpandedWhenTheStoreChangesUnderneathIt() {
         let base = [task("a"), task("b", status: "done", phase: "COMPLETE")]
         func rows(_ tasks: [WalnutTask], order: [String]) -> [String] {
@@ -2104,14 +2155,13 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// The ids the board actually SHIPS for a CJK project, asserted at the same
-    /// place they are built rather than on `slug` alone: the heading, the band's
-    /// hide-done toggle, the count, the create ring and now the band chip all
-    /// interpolate it.
+    /// place they are built rather than on `slug` alone: the heading, the count, the
+    /// create ring and the band chip all interpolate it.
     func testEveryBandIdentifierOfACJKProjectIsAsciiSafe() {
         let bandId = BoardModel.projectBandPrefix + "工作"
         let slug = TaskBoardList.slug(bandId)
         let safe = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]+$")
-        for id in ["board.heading.\(slug)", "board.hideDone.\(slug)",
+        for id in ["board.heading.\(slug)",
                    "board.count.\(slug)", "board.create.\(slug)",
                    "board.createRow.\(slug)", TaskBoardList.chipId(bandId)] {
             XCTAssertNotNil(
@@ -2214,9 +2264,9 @@ final class TaskBoardModelTests: XCTestCase {
             "satellite": "satellite",
             "backlog": "backlog",
             "wait": "wait",
-            // The retired tail band's id. Kept in this table on purpose: a stored
-            // `shownDoneBands` entry or an old automation flow can still name it, and
-            // the fold must keep answering the same string it always did.
+            // The retired tail band's id. Kept in this table on purpose: an old
+            // automation flow can still name it, and the slug must keep answering the
+            // same string it always did.
             "unpinned": "unpinned",
             "ct_abc12345": "ct_abc12345",
             "proj:": "proj_",
@@ -2871,11 +2921,11 @@ final class BoardBandsCacheTests: XCTestCase {
     private func key(
         gen: UInt64 = 1, query: String = "", grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all, scope: String? = nil,
-        shownDone: Set<String> = [], nowBucket: Int = 0
+        showDone: Bool = false, nowBucket: Int = 0
     ) -> BoardBandsKey {
         BoardBandsKey(
             inputsGen: gen, query: query, grouping: grouping, dateFilter: dateFilter,
-            scope: scope, shownDoneBands: shownDone, nowBucket: nowBucket
+            scope: scope, showDone: showDone, nowBucket: nowBucket
         )
     }
 
@@ -2924,9 +2974,9 @@ final class BoardBandsCacheTests: XCTestCase {
             // changes which rows exist: without it in the key the board would keep showing
             // the previous tier until some unrelated input moved the key.
             ("the rail's tier scope", key(scope: "focus")),
-            // An explicit expand has to survive the memo, or the tap would look like it
-            // did nothing until some unrelated input happened to move the key.
-            ("a band's done toggle", key(shownDone: ["focus"])),
+            // The filters menu's switch has to move the memo, or the tap would look like
+            // it did nothing until some unrelated input happened to move the key.
+            ("the Show done switch", key(showDone: true)),
             ("the clock, under the .now filter", key(dateFilter: .now, nowBucket: 1)),
         ]
         for (what, changed) in variants {

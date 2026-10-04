@@ -93,26 +93,17 @@ struct TasksView: View {
 
     // MARK: - Board state (the default filter's bands)
     //
-    // Bands showing their done rows, and which band's create row is open. Both are
-    // sets/optionals of BAND ids rather than per-row view state so a store refresh
-    // can't reset them. (There is no expanded-row state: a row's tap opens its
-    // session — the row itself never grows.)
-    //
-    // "Band id", not "tier id": under `By project` grouping these are
-    // `proj:<name>`. The model namespaces them (`BoardModel.projectBandPrefix`)
-    // precisely so the two groupings can share this state without a project
-    // called "focus" inheriting the Focus tier's hide-done switch.
+    // Which band's create row is open, by BAND id rather than per-row view state so a
+    // store refresh can't reset it. (There is no expanded-row state: a row's tap opens
+    // its session — the row itself never grows.)
 
-    /// Bands the reader has EXPANDED to show their done rows, by band id.
+    /// The filters menu's `Show done`: every band shows its completed rows.
     ///
-    /// Empty is the shipped default and it means every band folds its completions
-    /// (`BoardModel.bands(shownDoneTiers:)`), so the board opens on open work: the
-    /// counts on the headings and the chips are then open counts, which is what the
-    /// screen is for. This set is the exception, one explicit tap per band, and it
-    /// lives here (not per row, not per launch preference) for the same reason
-    /// `openCreateBand` does: a store refresh must not silently re-fold a band the
-    /// reader just opened.
-    @State private var shownDoneBands: Set<String> = []
+    /// Off is the default, so the board opens on open work and the counts on the headings
+    /// and the chips are open counts. It is ONE switch in the filters menu, not a control
+    /// on every heading: showing finished work is rare, and a `show done (N)` capsule on
+    /// each band was noise on the screen whose job is the open rows.
+    @AppStorage(BoardFilterPrefs.showDoneKey) private var showDone = false
     /// Which band's foot create row is open, by band id (exactly one: two
     /// keyboards on one list is not a thing).
     @State private var openCreateBand: String?
@@ -1559,7 +1550,7 @@ struct TasksView: View {
             // chip tap changes which rows exist, and a key without it would leave the
             // previous tier on screen until some unrelated input moved the key.
             scope: scope,
-            shownDoneBands: shownDoneBands,
+            showDone: showDone,
             // `.all` admits every row regardless of the clock, so its bands are
             // time-independent and the bucket is a constant. Under `.now` a start date
             // that passes has to show up, and a minute is the granularity that costs one
@@ -1576,10 +1567,8 @@ struct TasksView: View {
                 query: trimmedQuery,
                 grouping: activeGrouping,
                 dateFilter: filter,
-                // The model spells this parameter `shownDoneTiers`; what it matches
-                // against is `bandId`, which is a tier id only under tier grouping.
-                // Empty = every band folds its done rows, which is the default.
-                shownDoneTiers: shownDoneBands,
+                // The filters menu's one switch; off = every band folds its done rows.
+                showDone: showDone,
                 // Used by project grouping only. Empty (a server without the endpoint,
                 // a failed fetch, an offline cold start) = the flat project bands.
                 folders: folders,
@@ -1633,6 +1622,7 @@ struct TasksView: View {
             selected: selected,
             grouping: grouping,
             dateFilter: dateFilter,
+            showDone: $showDone,
             onSelect: { bandId in
                 tierScopeRaw = BoardFilterPrefs.rawScope(bandId)
                 // Land at the top of what you just asked for. Without this, narrowing from
@@ -1686,12 +1676,6 @@ struct TasksView: View {
                 // The row whose tap is asking the server where to go (spinner in its
                 // leading gutter, where the unread dot sits).
                 resolvingRowId: resolvingRowId,
-                onToggleHideDone: { bandId in
-                    withAnimation(.snappy(duration: 0.2)) {
-                        if shownDoneBands.contains(bandId) { shownDoneBands.remove(bandId) }
-                        else { shownDoneBands.insert(bandId) }
-                    }
-                },
                 onToggleCreate: { bandId in
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     openCreateBand = (openCreateBand == bandId) ? nil : bandId

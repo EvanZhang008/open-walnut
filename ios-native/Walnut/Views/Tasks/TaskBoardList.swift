@@ -68,12 +68,8 @@ import SwiftUI
 struct TaskBoardList: View {
     let bands: [BoardBand]
     let tierChoices: [(id: String, label: String)]
-    // No `hiddenDoneBands` here on purpose. The heading's toggle is phrased from the
-    // BAND (`BoardModel.doneToggle`), which is the only thing that knows how many rows
-    // it is actually suppressing; handing the view the set as well would let the label
-    // and the rows disagree — and with folding now the DEFAULT, the set's own answer
-    // for an untouched band ("not expanded") says nothing about whether that band has
-    // anything to expand.
+    // No done toggle on a heading: completed rows fold everywhere by default, and the
+    // one switch that shows them is `Show done` in the band bar's filters menu.
     /// Which band's create row is open, by band id (nil = none).
     let openCreateBand: String?
     /// Just-created row id — its whole row takes a green tint so its landing place is
@@ -88,7 +84,6 @@ struct TaskBoardList: View {
     /// and a second row spinning would advertise two destinations at once.
     var resolvingRowId: String? = nil
 
-    let onToggleHideDone: (String) -> Void
     let onToggleCreate: (String) -> Void
     let onToggleDone: (BoardRow) -> Void
     let onPickTier: (BoardRow, BoardModel.TierToken) -> Void
@@ -112,7 +107,7 @@ struct TaskBoardList: View {
     /// speck, and the pairing here is what keeps the dot proportional to the word it marks.
     @ScaledMetric(relativeTo: BoardHeadingType.label) private var headingDot: CGFloat = 7
 
-    /// Read by the heading's own ladder (`BoardHeadingType.showsControlLabel`). Everything
+    /// Read by the heading's own ladder (`BoardHeadingType.showsCount`). Everything
     /// else in this view is a text style, which the OS scales without being asked.
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -345,7 +340,6 @@ struct TaskBoardList: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(2)
-                hideDoneButton(band)
                 Spacer(minLength: 6)
                 if BoardHeadingType.showsCount(typeSize) { countLabel(band) }
             }
@@ -419,7 +413,6 @@ struct TaskBoardList: View {
                 .foregroundStyle(BoardHeadingType.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            hideDoneButton(band)
             Spacer(minLength: 6)
             if BoardHeadingType.showsCount(typeSize) { countLabel(band) }
         }
@@ -434,9 +427,8 @@ struct TaskBoardList: View {
     /// has no band of its own on screen (it holds no rows, or a chip selected this
     /// subfolder alone).
     ///
-    /// Same line as a folder heading minus the two controls: `hide done` and the count
-    /// belong to a BAND, and this line is standing in for a band that is not being
-    /// rendered — a toggle here would fold rows the reader cannot see.
+    /// Same line as a folder heading minus the count: the count belongs to a BAND, and
+    /// this line is standing in for a band that is not being rendered.
     private func ancestorFolderHeading(
         _ step: BoardFolderStep, isFirstLine: Bool
     ) -> some View {
@@ -460,51 +452,6 @@ struct TaskBoardList: View {
         // line above it uses, so a two- or three-level header reads as one block.
         .padding(.bottom, 3)
         .accessibilityElement(children: .combine)
-    }
-
-    /// The done toggle lives on the heading it affects — a global switch would hide
-    /// completions in bands the user isn't looking at. Keyed by BAND id, so a project,
-    /// a folder and a tier can never collide (each id carries its own prefix).
-    ///
-    /// It READS as a control now (R30): tinted text in a soft tinted capsule, next to a
-    /// grey heading. As bare 10.5pt tint text beside a bold uppercase label it was neither
-    /// — the same colour as a link, the same weight as the heading, no shape of its own —
-    /// so a toggle that changes what the band shows looked like part of the band's name.
-    private func hideDoneButton(_ band: BoardBand) -> some View {
-        // ONE value decides the word, the glyph and the VoiceOver label, and it is read
-        // off the band rather than off a set the view holds — see `BoardModel.doneToggle`.
-        let toggle = BoardModel.doneToggle(band)
-        let word = toggle.word
-        return Button {
-            onToggleHideDone(band.bandId)
-        } label: {
-            Group {
-                if BoardHeadingType.showsControlLabel(typeSize) {
-                    Text(word)
-                        .textCase(nil)
-                        .lineLimit(1)
-                } else {
-                    // The glyph says the same thing the word does: an eye that is closed
-                    // hides, an open one shows.
-                    Image(systemName: toggle.glyph)
-                }
-            }
-            .font(.system(BoardHeadingType.control, weight: .semibold))
-            .foregroundStyle(Theme.tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Theme.tintSoft, in: Capsule())
-            // MIN height, not a fixed one: the label inside scales with Dynamic Type,
-            // so a hard height would clip it at accessibility sizes (the create foot
-            // learned this the same way).
-            .frame(minHeight: 26)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("board.hideDone.\(Self.slug(band.bandId))")
-        // The WORD is the label whichever form is drawn, so VoiceOver and any text-matching
-        // flow read the same thing at every type size.
-        .accessibilityLabel(word)
     }
 
     private func countLabel(_ band: BoardBand) -> some View {
@@ -901,8 +848,6 @@ enum BoardHeadingType {
     static let folderLabel: Font.TextStyle = .footnote
     /// The row count at the trailing edge.
     static let count: Font.TextStyle = .footnote
-    /// The `hide done` control.
-    static let control: Font.TextStyle = .footnote
     /// The folder glyph.
     static let folderGlyph: Font.TextStyle = .caption2
 
@@ -938,24 +883,13 @@ enum BoardHeadingType {
     static let countInkColor: UIColor = .secondaryLabel
     static let countInk = Color(countInkColor)
 
-    /// Does the `hide done` control spell itself out, or draw as a glyph?
-    ///
-    /// A WORD at ordinary sizes, a GLYPH at accessibility sizes, and the reason is the same
-    /// ladder the board's rows use: a heading is a label, a control and a count competing for
-    /// one line, and at accessibility-XXXL "hide done" alone wants ~166pt of a 370pt row. The
-    /// build that shipped this comment's predecessor squeezed the band label instead and
-    /// hyphenated it — the heading read "Fo-cus" over two lines while the control still
-    /// truncated to "hid…", i.e. every element lost. The glyph keeps the control's tap target
-    /// and its accessibility label while giving the band's NAME the room.
-    static func showsControlLabel(_ size: DynamicTypeSize) -> Bool { !size.isAccessibilitySize }
-
     /// Does the heading draw its row COUNT? Not at accessibility sizes.
     ///
     /// The last rung of the heading's ladder, and it was reached by measurement rather than
     /// taste. At accessibility-XXXL the heading has 330pt of content width and the four
-    /// things on it want 16.5 (dot) + 118 ("Focus") + 84 (the control) + 85 (the count) + 27
-    /// of spacing = 330.5 — half a point over, which is enough for the label to truncate to
-    /// "Fo…". Every arrangement that keeps all four loses the band's NAME, so the count goes.
+    /// things on it wanted 16.5 (dot) + 118 ("Focus") + 84 (the done control, gone since) +
+    /// 85 (the count) + 27 of spacing = 330.5, half a point over, which was enough for the
+    /// label to truncate to "Fo…". The name has to win the line, so the count goes.
     ///
     /// It costs nothing a reader cannot get: the same number is on the band's own chip in
     /// the bar above ("Focus 152"), which is where a count is read from anyway. This is the
