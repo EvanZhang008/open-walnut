@@ -187,10 +187,14 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
       const standardAbort = (failure: { method: string; url: string; errorText?: string }) => {
         const pathname = new URL(failure.url).pathname
         if (failure.errorText !== 'net::ERR_ABORTED' && failure.errorText !== 'cancelled') return false
+        // The app-wide pollers (quiet mode, the rail's plugin status items) fetch
+        // with an AbortController, so a navigation or unmount cancels them by design.
         return (failure.method === 'GET'
             && (pathname.endsWith('/workflow')
               || pathname.endsWith('/history')
-              || pathname === '/api/notifications'))
+              || pathname === '/api/notifications'
+              || pathname === '/api/quiet'
+              || pathname === '/api/plugin-status-items'))
           || (failure.method === 'POST' && pathname === '/api/browser-logs')
       }
       const unexpectedFailures = failedRequests.filter((failure) =>
