@@ -84,7 +84,7 @@ const NO_OWNERS: NonNullable<DraftColumn['fieldOwner']> = Object.freeze({});
 
 /** `host::cwd`: one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
-  return `${d.host ?? '__local__'}::${d.cwd}`;
+  return `${d.host || '__local__'}::${d.cwd}`;
 }
 
 interface Props {
@@ -247,7 +247,7 @@ export function DraftLaunchBar({
               const saysSomething = !!dot && CHIP_DOT_KINDS.includes(dot.kind);
               return (
                 <button
-                  key={`${d.host ?? '__local__'}::${d.cwd}`}
+                  key={chipKey({ cwd: d.cwd, host: d.host ?? null })}
                   className={`draft-quick-chip${active ? ' draft-quick-chip-active' : ''}`}
                   aria-pressed={active}
                   // Truly disabled (not a click-less button): a focusable control

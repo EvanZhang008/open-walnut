@@ -59,6 +59,33 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 
 // ── Read / Write ──
 
+/**
+ * '' and null both mean "this machine". A caller that passed `host: ''` once
+ * filed the same folder under a second key, and the launcher drew two identical
+ * "walnut · Local" chips. Fold every spelling into null (summing uses) on read,
+ * so a store written before the writers were fixed heals on its next write.
+ */
+function foldLocalSpellings(store: FrequentDirsStore): FrequentDirsStore {
+  const byKey = new Map<string, FrequentDirEntry>()
+  for (const d of store.directories) {
+    const host = d.host || null
+    const key = `${d.cwd}::${host ?? '__local__'}`
+    const kept = byKey.get(key)
+    if (!kept) {
+      byKey.set(key, { ...d, host })
+      continue
+    }
+    kept.count += d.count
+    if (Date.parse(d.lastUsed) > Date.parse(kept.lastUsed)) kept.lastUsed = d.lastUsed
+    const votes = { ...(kept.projectVotes ?? {}) }
+    for (const [project, n] of Object.entries(d.projectVotes ?? {})) votes[project] = (votes[project] ?? 0) + n
+    kept.projectVotes = votes
+    kept.lastLaunch ??= d.lastLaunch
+  }
+  store.directories = [...byKey.values()]
+  return store
+}
+
 function readStore(): FrequentDirsStore | null {
   try {
     if (!fs.existsSync(FREQUENT_DIRS_FILE)) return null
@@ -66,7 +93,7 @@ function readStore(): FrequentDirsStore | null {
     const parsed = JSON.parse(raw)
     // Schema validation: reject corrupted or incompatible data
     if (parsed?.version !== 1 || !Array.isArray(parsed?.directories)) return null
-    return parsed as FrequentDirsStore
+    return foldLocalSpellings(parsed as FrequentDirsStore)
   } catch (err) {
     log.session.debug('frequent-dirs: failed to read store', {
       error: err instanceof Error ? err.message : String(err),
@@ -117,7 +144,8 @@ export function scoreFrequentDir(
  * Record a directory usage (called on session start).
  * Increments count, updates lastUsed, adds a project vote.
  */
-export async function recordDirectory(cwd: string, host: string | null, project?: string): Promise<void> {
+export async function recordDirectory(cwd: string, hostArg: string | null, project?: string): Promise<void> {
+  const host = hostArg || null
   // The Walnut data dir is where Personal-AI sessions run (main chat lanes,
   // Ask Walnut) — it is never a coding folder. Recording it made it the
   // highest-frequency entry, so fresh drafts opened POINTING AT the config/db
@@ -179,7 +207,9 @@ export interface DirectoryUse {
  * added on top of that compile (it would count each of them twice).
  */
 export async function recordDirectoryUses(uses: readonly DirectoryUse[]): Promise<void> {
-  const kept = uses.filter(u => u.cwd && !(!u.host && path.resolve(u.cwd) === path.resolve(WALNUT_HOME)))
+  const kept = uses
+    .map(u => ({ ...u, host: u.host || null }))
+    .filter(u => u.cwd && !(!u.host && path.resolve(u.cwd) === path.resolve(WALNUT_HOME)))
   if (kept.length === 0) return
   return withWriteLock(async () => {
     let store = readStore()
@@ -218,7 +248,8 @@ export async function recordDirectoryUses(uses: readonly DirectoryUse[]): Promis
  * Creates a placeholder entry (count 0) when the dir has no history yet;
  * recordDirectory() at spawn time increments it to a real entry.
  */
-export async function recordLaunchPrefs(cwd: string, host: string | null, prefs: LaunchPrefs): Promise<void> {
+export async function recordLaunchPrefs(cwd: string, hostArg: string | null, prefs: LaunchPrefs): Promise<void> {
+  const host = hostArg || null
   return withWriteLock(async () => {
     let store = readStore()
     if (!store) {
@@ -289,7 +320,7 @@ async function compileFromSessionsInternal(): Promise<void> {
       if (s.lane) continue
       if (s.archived) continue
 
-      const key = `${s.cwd}::${s.host ?? '__local__'}`
+      const key = `${s.cwd}::${s.host || '__local__'}`
       const project = s.taskId ? taskProjectMap.get(s.taskId) : undefined
       const existing = dirMap.get(key)
 
@@ -304,7 +335,7 @@ async function compileFromSessionsInternal(): Promise<void> {
         if (project) votes[project] = 1
         dirMap.set(key, {
           cwd: s.cwd,
-          host: s.host ?? null,
+          host: s.host || null,
           count: 1,
           lastUsed: s.startedAt,
           projectVotes: votes,

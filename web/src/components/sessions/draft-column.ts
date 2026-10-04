@@ -265,7 +265,7 @@ export function launchDivergesFromDirMemory(
 /** `host::cwd` — the identity of a working dir (the same folder path on two hosts
  *  is two entries), used to dedupe the two chip groups against each other. */
 function dirKey(d: { cwd: string; host: string | null }): string {
-  return `${d.host ?? '__local__'}::${d.cwd}`;
+  return `${d.host || '__local__'}::${d.cwd}`;
 }
 
 /** How many chips are picked by ABSOLUTE use count vs. by recency.

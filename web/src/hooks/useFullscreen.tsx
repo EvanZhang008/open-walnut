@@ -6,6 +6,7 @@ import { hasActiveModalOverlay, lockScroll, unlockScroll } from './useModalOverl
 import { traceInteraction } from '@/utils/interaction-timer';
 import { keyTargetClaimsEscape } from './usePanelKeyRouter';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
+import { log } from '@/utils/log';
 
 /** Window event every live fullscreen sheet exits on. Fired by `yieldFullscreen`. */
 export const FULLSCREEN_YIELD_EVENT = 'fullscreen:yield';
@@ -96,10 +97,19 @@ export function useFullscreen() {
       // A consumer that used the Esc (palette, picker, confirm) prevented it, and a
       // question page or open drawer in the target panel claims it first: one Esc
       // closes one layer, fullscreen exits only at the root with nothing open.
-      if (e.key === 'Escape' && !hasActiveModalOverlay() && !escapeWasConsumedByOthers(e) && !keyTargetClaimsEscape()) {
-        e.stopPropagation();
-        setIsFullscreen(false);
+      if (e.key !== 'Escape') return;
+      // Esc that does not leave fullscreen was reported as "sometimes dead" with
+      // nothing to point at: name the layer that kept it.
+      const kept = hasActiveModalOverlay() ? 'modal-overlay'
+        : escapeWasConsumedByOthers(e) ? 'consumed-by-other-handler'
+        : keyTargetClaimsEscape() ? 'panel-layer-open'
+        : null;
+      if (kept) {
+        log.info('fullscreen', 'escape kept fullscreen open', { reason: kept, target: (e.target as HTMLElement | null)?.tagName });
+        return;
       }
+      e.stopPropagation();
+      setIsFullscreen(false);
     };
     // Its own interaction name, not `fullscreen-exit`: the frame after a yield
     // also mounts the column that caused it, so timing it as an exit would inflate

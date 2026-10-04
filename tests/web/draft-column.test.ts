@@ -104,6 +104,14 @@ describe('quickDirsFor — chip selection (R6)', () => {
     expect(out.map((d) => d.host)).toEqual([null, 'devbox']);
   });
 
+  it("treats host '' and host null as the same local folder (one chip, not two)", () => {
+    seedDirs([
+      dir('/repo', 1108, '2026-10-01T00:00:00Z'),
+      { cwd: '/repo', host: '', project: '', count: 1, lastUsed: '2026-10-03T00:00:00Z' },
+    ]);
+    expect(names(quickDirsFor())).toEqual(['/repo']);
+  });
+
   it('dedupes duplicate rows for one cwd+host pair', () => {
     seedDirs([dir('/a', 10, '2026-08-01T00:00:00Z'), dir('/a', 4, '2026-08-05T00:00:00Z')]);
     expect(names(quickDirsFor())).toEqual(['/a']);
