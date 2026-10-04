@@ -892,25 +892,32 @@ export function DraftSessionPanel({
                 cwd={draft.cwd || undefined}
                 walnut={isWalnut}
               />
-              {/* A bound draft is already a task, and a fork's sibling task is
-                  the fork route's job — offering "create task" on either would
-                  make a duplicate. Walnut mode hides it too: it would file the
-                  QUESTION as a Walnut/Focus task with no session to answer it. */}
-              {!isBound && !isFork && !isWalnut && (
-                <button
-                  className="draft-later-btn"
-                  disabled={!text.trim()}
-                  onClick={() => { void onSaveAsTask(draft.id, text); }}
-                  title="Creates a todo from this text (first line becomes the title). No session starts."
-                >
-                  ◌&nbsp;Save as todo
-                </button>
-              )}
               {/* No "Start ↵" here: the composer's send arrow (and Enter) already
                   starts the session, and two buttons for one action read as two
                   actions (user, 2026-09-29). */}
             </div>
           )}
+          // "Save as todo" is the text's other exit, so it sits beside the send
+          // arrow, not among the launch settings on the left (user, 2026-10-03).
+          // A bound draft is already a task, and a fork's sibling task is the
+          // fork route's job — offering "create task" on either would make a
+          // duplicate. Walnut mode hides it too: it would file the QUESTION as a
+          // Walnut/Focus task with no session to answer it.
+          sendSlot={!isBound && !isFork && !isWalnut ? (
+            <button
+              className="draft-later-btn"
+              disabled={!text.trim()}
+              onClick={() => { void onSaveAsTask(draft.id, text); }}
+              title="Save as todo: creates a todo from this text (first line becomes the title). No session starts."
+              aria-label="Save as todo"
+            >
+              {/* Three widths, chosen by the controls row (CSS container query):
+                  the full words, "Todo", or the glyph alone in a ~270px column. */}
+              <span className="draft-later-glyph" aria-hidden="true">◌</span>
+              <span className="draft-later-words">Save as todo</span>
+              <span className="draft-later-short" aria-hidden="true">Todo</span>
+            </button>
+          ) : undefined}
         />
       </div>
     </div>

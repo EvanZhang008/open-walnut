@@ -7187,6 +7187,10 @@ select {
   align-items: center;
   gap: 2px;
   padding: 0 6px 6px;
+  /* A query container, so a control in the row can shed its words as the column
+     narrows (the draft's "Save as todo" pill, below). Its menus anchor to their
+     own positioned wrappers, so the containment changes none of them. */
+  container-type: inline-size;
 }
 .chat-input-controls-spacer { flex: 1; }
 
@@ -22960,30 +22964,50 @@ a.tag-chip:focus-visible,
   color: var(--fg);
 }
 
-/* "Save as todo": the draft's one exit besides the send arrow. Accent-tinted
-   fill (not solid): a real exit, not an afterthought, so it reads as a button at
-   rest, but stays visually behind the solid send arrow. It may shrink and wrap
-   its words: the controls bar of a ~270px column is ~120px wide, and a nowrap
-   pill wider than that spilled out of the column under the mic/send cluster
-   (seen with a longer label on 2026-09-28). */
+/* "Save as todo": the draft's one exit besides the send arrow, so it sits
+   right before the arrow (ChatInput `sendSlot`), not among the launch settings
+   on the left (user, 2026-10-03). Accent-tinted fill (not solid): a real exit,
+   not an afterthought, so it reads as a button at rest, but stays visually
+   behind the solid send arrow. A capsule as tall as the arrow, one line, never
+   shrinking: the right cluster keeps its size and the model select on the left
+   is the control that gives way on a ~270px column. */
 .draft-later-btn {
-  flex: 0 1 auto;
-  min-width: 0;
-  padding: 3px 10px;
+  flex: 0 0 auto;
+  height: 34px;
+  margin: 0 2px;
+  padding: 0 12px;
   border: none;
-  border-radius: 10px;
+  border-radius: 17px;
   background: var(--accent-subtle);
   color: var(--accent);
   font-family: inherit;
   font-size: 11px;
   font-weight: 600;
-  line-height: 1.3;
-  text-align: left;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
 .draft-later-btn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.draft-later-glyph { margin-right: 5px; }
+.draft-later-short { display: none; }
+/* The row narrows (a ~280px row: the third of three columns on a 1280px window):
+   "Todo" stands in for the words. Narrower still (~220px, the third of three on
+   1100px): the glyph alone, a round button the size of the mic and the arrow
+   beside it, the words in its tooltip. The mode pill's "⇧Tab" hint goes first in
+   both tiers: the model label next to it is the control that would otherwise be
+   squeezed to nothing. Widths measured by tests/e2e/browser/draft-save-as-todo. */
+@container (max-width: 380px) {
+  .draft-later-words { display: none; }
+  .draft-later-short { display: inline; }
+  .draft-actions-bar .mode-toggle-pill-shortcut { display: none; }
+}
+@container (max-width: 250px) {
+  .draft-later-short { display: none; }
+  .draft-later-glyph { margin-right: 0; }
+  .draft-later-btn { width: 34px; padding: 0; border-radius: 50%; font-size: 14px; }
 }
 .draft-later-btn:disabled {
   opacity: 0.45;

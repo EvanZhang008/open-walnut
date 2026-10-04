@@ -148,6 +148,9 @@ interface ChatInputProps {
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
+  /** A second exit for the text, rendered right before the send arrow (after the
+   *  mic) so the two ways out sit together: the draft's "Save as todo". */
+  sendSlot?: React.ReactNode;
   /** A removable chip at the top of the box saying where the send goes (the
    *  session's question target). The owner renders it, × included. */
   contextPill?: React.ReactNode;
@@ -209,7 +212,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1659,6 +1662,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
+        {sendSlot}
         {/* Send — icon button (↑). While streaming with an EMPTY composer the
             primary swaps to a square STOP (Claude-style); typing flips it back
             to send, which grows a split "▾" exposing Interrupt & send. */}
