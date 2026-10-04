@@ -46,18 +46,20 @@ on:
   # The checks only ask, and a gap decides: a nightly when the last one is 5.5h old
   # (scripts/nightly-version.mjs due), a stable when the last one is 23h old
   # (scripts/stable-promote.mjs plan). They ask whenever CI finishes on main,
-  # which is when there is something new to ship, and on a schedule as a backup.
-  # Schedules alone were not enough: GitHub ran this repo's 17:17 cron at 21:48
-  # (2026-10-01) and none of the next 5 hours of half-hourly ones.
+  # which is when there is something new to ship, and on a schedule for a quiet
+  # main. GitHub runs few of this repo's scheduled runs: 10 of about 75 in the 25
+  # hours to 2026-10-03 13:00 UTC, with gaps of 3 to 5 hours, and a release
+  # commit (pushed by the job's token) starts no CI. So every scheduled run asks
+  # for BOTH channels, as often as GitHub allows: with one cron per channel, the
+  # only run in the 2 hours after a nightly came due was the stable one, and the
+  # nightly waited 7 hours.
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
   schedule:
-    # Off the hour, which GitHub drops most. The jobs compare
-    # github.event.schedule to these strings.
-    - cron: '17,47 * * * *'   # nightly check, every 30 minutes
-    - cron: '37 * * * *'      # stable promotion check, hourly
+    # Off the hour, which GitHub drops most.
+    - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
     inputs:
       channel:
@@ -74,12 +76,10 @@ on:
         type: boolean
         default: false
 
-# One queue per channel: a nightly never waits behind a stable release (or the
-# reverse), and a running publisher is never cancelled. Inside a channel a newer
-# pending run replaces an older pending one, which is what a nightly wants.
-concurrency:
-  group: release-${{ (github.event.schedule == '37 * * * *' || inputs.channel == 'stable' || startsWith(github.ref, 'refs/tags/')) && 'stable' || 'nightly' }}
-  cancel-in-progress: false
+# One queue per publishing job, not per run: a run checks both channels, and a
+# nightly must never wait behind a stable release (or the reverse). A running
+# publisher is never cancelled; a newer pending job replaces an older pending one,
+# which asks the same question later. The planning jobs only read.
 
 permissions:
   contents: write
@@ -96,6 +96,10 @@ jobs:
   stable:
     name: Publish stable (${{ github.ref_name }})
     if: startsWith(github.ref, 'refs/tags/v')
+    # Its own queue per tag: a pending tag publish is never replaced by another job.
+    concurrency:
+      group: release-tag-${{ github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -139,7 +143,10 @@ jobs:
 
   nightly:
     name: Publish nightly from main
-    if: github.event_name == 'workflow_run' || (github.event_name == 'schedule' && github.event.schedule == '17,47 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
+    if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
+    concurrency:
+      group: release-nightly
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -216,7 +223,7 @@ jobs:
           npm publish --tag nightly --provenance --access public
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # The next run learns the last nightly from npm, and npm serves a version it
-      # accepted only minutes later; this channel's queue holds the next run until
+      # accepted only minutes later; this job's queue holds the next run's until
       # this step ends, so it never sees the nightly before this one.
       - name: Wait until npm serves it
         if: steps.pick.outputs.publish == 'true'
@@ -229,7 +236,7 @@ jobs:
   # ships that a fresh install could not start.
   promote-plan:
     name: Pick the nightly to promote
-    if: github.event_name == 'workflow_run' || (github.event_name == 'schedule' && github.event.schedule == '37 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
+    if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -315,6 +322,11 @@ jobs:
     name: Promote ${{ needs.promote-plan.outputs.nightly }} to ${{ needs.promote-plan.outputs.version }}
     needs: [promote-plan, promote-smoke]
     if: needs.promote-plan.outputs.publish == 'true' && !inputs.dry_run
+    # Two runs can plan the same release; the second waits here, then finds every
+    # step done (each one skips what is already out) and changes nothing.
+    concurrency:
+      group: release-promote
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
