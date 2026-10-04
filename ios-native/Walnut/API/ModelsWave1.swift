@@ -253,12 +253,15 @@ struct SessionDetail: Codable {
         var messageCount: Int? = nil
         var model: String? = nil
         var description: String? = nil
+        /// The user's own note about the session (the `+` menu's Note).
+        var humanNote: String? = nil
 
         private enum CodingKeys: String, CodingKey {
             case claudeSessionId, title, mode, archived
             case processStatus = "process_status"
             case taskId, project, host, cwd, startedAt, lastActiveAt, messageCount
             case model, description
+            case humanNote = "human_note"
         }
     }
 

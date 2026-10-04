@@ -68,6 +68,7 @@ struct DemoSession {
     var description: String?
     var transcript: [SessionTranscript.Message]
     var archived = false
+    var humanNote: String? = nil
 }
 
 struct DemoConversation {

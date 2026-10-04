@@ -53,6 +53,18 @@ final class ComposerCameraTests: XCTestCase {
         )
     }
 
+    /// An owner's rows (a session's Side question, Note, Fork) come after the two
+    /// image sources, in the owner's order, and the read-only host row stays last.
+    func testOwnerRowsSitBetweenTheImageSourcesAndTheHostRow() {
+        XCTAssertEqual(
+            ComposerBar.plusMenuItems(
+                cameraAvailable: true, hasHostProvenance: true,
+                actionIDs: ["session.sideQuestions", "session.note", "session.forkMenu"]
+            ),
+            ["chat.photo", "chat.camera", "session.sideQuestions", "session.note", "session.forkMenu", "composer.hostRow"]
+        )
+    }
+
     /// No camera = no item, not a permanently disabled one: an item that can never
     /// do anything reads as a broken app. Only reachable through this parameter,
     /// since every device and simulator to hand reports a camera.

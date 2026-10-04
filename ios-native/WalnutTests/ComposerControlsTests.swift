@@ -35,9 +35,8 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(controls.pillLabel, "Opus 5", "the bare 'Opus' label loses the version the id knows")
     }
 
-    /// The effort pill appears only when the current model actually has an effort
-    /// axis: "Opus 5" beside "High". (Effort used to ride in the model pill's
-    /// label and menu; see `ComposerModelPill` for why it has its own pill.)
+    /// The effort half appears only when the current model actually has an effort
+    /// axis: "Opus 5" and "High". These are the two halves the one pill joins.
     func testTheEffortPillShowsWhenTheModelSupportsIt() {
         let controls = ComposerControlsModel(
             models: [model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high", "max"])],
@@ -48,6 +47,125 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(controls.effortPillLabel, "High")
         XCTAssertEqual(controls.effortMenu.sections.flatMap(\.items).map(\.title), ["Low", "High", "Max"])
         XCTAssertEqual(controls.effortMenu.sections.flatMap(\.items).filter(\.checked).map(\.title), ["High"])
+    }
+
+    // MARK: - One pill for model and effort
+
+    /// One pill names both, the web's way: "Opus 5 · High". VoiceOver reads the
+    /// model as the name and the effort as the value, so "Model: Opus 5" stays the
+    /// pill's identity for every test that finds it by label.
+    func testOnePillNamesTheModelAndItsEffort() {
+        let controls = ComposerControlsModel(
+            models: [model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high", "max"])],
+            currentModelID: "global.anthropic.claude-opus-5[1m]",
+            currentEffort: "high"
+        )
+        XCTAssertEqual(controls.combinedPillLabel, "Opus 5 · High")
+        XCTAssertEqual(controls.pillAccessibilityLabel, "Model: Opus 5")
+        XCTAssertEqual(controls.pillAccessibilityValue, "Effort: High")
+    }
+
+    /// The pill's menu is the levels, then the models, as INLINE sections (never
+    /// a submenu, whose chevron column squeezed the model names), each headed by
+    /// its current value and each with exactly its own row checked. The levels
+    /// lead as compact tiles: always in view, however long the model list.
+    func testTheOnePillsMenuHoldsTheLevelsThenTheModels() {
+        let controls = ComposerControlsModel(
+            models: [
+                model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high", "max"]),
+                model("global.anthropic.claude-haiku-4-5", "Haiku"),
+            ],
+            currentModelID: "global.anthropic.claude-opus-5[1m]",
+            currentEffort: "max"
+        )
+        let sections = controls.combinedMenu().sections
+        XCTAssertEqual(sections.map(\.title), ["Effort: Max", "Model: Opus 5 1M"])
+        XCTAssertEqual(sections.map(\.compact), [true, false])
+        XCTAssertEqual(sections[0].items.map(\.choice), [.effort("low"), .effort("high"), .effort("max")])
+        XCTAssertEqual(sections[0].items.filter(\.checked).map(\.title), ["Max"])
+        XCTAssertEqual(sections[1].items.filter(\.checked).count, 1)
+        XCTAssertEqual(controls.combinedMenu().token, controls.menuToken)
+
+        // At the accessibility sizes a tile is a whole row: the models lead, the
+        // levels follow as an ordinary section.
+        let large = controls.combinedMenu(compactLevels: false).sections
+        XCTAssertEqual(large.map(\.title), ["Model: Opus 5 1M", "Effort: Max"])
+        XCTAssertEqual(large.map(\.compact), [false, false])
+    }
+
+    /// A compact section becomes rows of at most three medium tiles (UIKit spills
+    /// a fourth tile into a plain row), the first row carrying the heading; a
+    /// plain section stays one inline group.
+    func testACompactSectionIsRowsOfThreeTilesUnderItsHeading() {
+        let levels = ["Low", "Medium", "High", "Extra High", "Max"]
+        let menu = PillMenu(sections: [
+            .init(title: "Effort: High", items: levels.map { .init(title: $0, choice: .effort($0)) }, compact: true),
+            .init(title: "Model: Opus 5", items: [.init(title: "Opus 5", choice: .model("opus"))]),
+        ], token: .init(generation: 0, version: 0))
+        let built = PillMenuUIButton.build(menu) { _, _ in }
+        let tiles = built.children[0] as? UIMenu
+        let rows = tiles?.children.compactMap { $0 as? UIMenu } ?? []
+        XCTAssertEqual(rows.map { $0.children.map(\.title) }, [["Low", "Medium", "High"], ["Extra High", "Max"]])
+        XCTAssertEqual(rows.map(\.preferredElementSize), [.medium, .medium])
+        XCTAssertEqual(rows.map(\.title), ["Effort: High", ""])
+        let plain = built.children[1] as? UIMenu
+        XCTAssertEqual(plain?.title, "Model: Opus 5")
+        XCTAssertEqual(plain?.children.map(\.title), ["Opus 5"])
+    }
+
+    /// A model with no effort axis: the model alone, and a menu of models only.
+    func testAModelWithoutEffortIsTheModelAlone() {
+        let controls = ComposerControlsModel(
+            models: [model("global.anthropic.claude-haiku-4-5", "Haiku")],
+            currentModelID: "global.anthropic.claude-haiku-4-5",
+            currentEffort: nil
+        )
+        XCTAssertEqual(controls.combinedPillLabel, controls.pillLabel)
+        XCTAssertNil(controls.pillAccessibilityValue)
+        XCTAssertEqual(controls.combinedMenu().sections.count, 1)
+    }
+
+    /// An effort axis with no reported level: "Effort" is a placeholder, not a
+    /// fact, so the pill names the model alone, and the menu still offers the
+    /// levels with none checked.
+    func testAnUnreportedEffortAddsNothingToThePill() {
+        let controls = ComposerControlsModel(
+            models: [model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high"])],
+            currentModelID: "global.anthropic.claude-opus-5[1m]",
+            currentEffort: nil
+        )
+        XCTAssertEqual(controls.combinedPillLabel, "Opus 5")
+        XCTAssertNil(controls.pillAccessibilityValue)
+        let levels = controls.combinedMenu().sections.first?.items ?? []
+        XCTAssertEqual(levels.map(\.title), ["Low", "High"])
+        XCTAssertTrue(levels.allSatisfy { !$0.checked })
+    }
+
+    /// With the Mac away the pill keeps both last known halves and says so, and
+    /// its menu is the Retry, never levels it cannot write.
+    func testUnreachableKeepsBothHalvesAndOffersOnlyRetry() {
+        let controls = ComposerControlsModel(
+            models: [model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high"])],
+            currentModelID: "global.anthropic.claude-opus-5[1m]",
+            currentEffort: "high", unreachable: true, statusNote: ComposerControlsModel.unreachableNote
+        )
+        XCTAssertEqual(controls.combinedPillLabel, "Opus 5 · High")
+        XCTAssertEqual(controls.pillAccessibilityValue, "Effort: High, last known")
+        XCTAssertEqual(controls.combinedMenu().sections.flatMap(\.items).map(\.choice), [.retry])
+    }
+
+    /// The mode pill follows the session a pick is written to; the in-process
+    /// chat (no session) has none.
+    func testTheModeSessionIsTheWriteTargetSession() {
+        let session = ComposerControlsModel(
+            models: [], currentModelID: "x", currentEffort: nil, writeTarget: .session(id: "sess-1")
+        )
+        XCTAssertEqual(session.switchableSessionID, "sess-1")
+        let inProcess = ComposerControlsModel(
+            models: [], currentModelID: "x", currentEffort: nil,
+            writeTarget: .chat(agentID: "general", conversationID: "c1")
+        )
+        XCTAssertNil(inProcess.switchableSessionID)
     }
 
     /// Both menus are headed by the current value, which at the accessibility

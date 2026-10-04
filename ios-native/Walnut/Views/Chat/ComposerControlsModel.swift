@@ -273,6 +273,38 @@ final class ComposerControlsModel {
         return unreachable ? "Effort: \(label), last known" : "Effort: \(label)"
     }
 
+    /// What the ONE model pill shows: the model, then the effort when it has one
+    /// ("Opus 5 · High"), as the web's model pill does. The "Effort" placeholder
+    /// (a model with an effort axis whose level is not reported) adds nothing to
+    /// read, so the pill then names the model alone.
+    var combinedPillLabel: String? {
+        guard let model = pillLabel else { return nil }
+        guard let effort = effortPillLabel, effort != "Effort" else { return model }
+        return "\(model) · \(effort)"
+    }
+
+    /// The effort half of the pill for VoiceOver and UI tests, kept out of the
+    /// label so "Model: Opus 5" stays the pill's name. nil = no effort to read.
+    var pillAccessibilityValue: String? {
+        guard let effort = effortPillLabel, effort != "Effort" else { return nil }
+        return unreachable ? "Effort: \(effort), last known" : "Effort: \(effort)"
+    }
+
+    /// The one pill takes taps while neither half is being written; it spins
+    /// while either is.
+    var combinedPillState: PillState {
+        if applyingWhat != nil { return .writing }
+        return modelPillState
+    }
+
+    /// The session a mode pill reads and writes: the session itself, or the
+    /// chat's lane session once it is resolved. nil = nothing to set a mode on
+    /// (the in-process chat engine, or not resolved yet).
+    var switchableSessionID: String? {
+        if case .session(let id) = writeTarget { return id }
+        return nil
+    }
+
     /// Both pills take a tap only when a pick has somewhere true to go.
     var pillEnabled: Bool { !applying && !resolving }
 
@@ -387,6 +419,27 @@ final class ComposerControlsModel {
                 .init(title: Self.effortLabel(level), choice: .effort(level), checked: level == currentEffort)
             }
         )], token: menuToken, title: statusNote ?? "")
+    }
+
+    /// The one pill's menu: the effort levels as rows of tiles, then the models.
+    /// The levels lead so the menu opens with them in view however long the
+    /// model list is. At the accessibility sizes UIKit draws every tile as a
+    /// full-height row, so there (`compactLevels` false) the levels follow the
+    /// models as an ordinary section, and the menu opens on the models with their
+    /// heading in view (measured at AX5: levels first left only Low, Medium and
+    /// High on screen). INLINE sections, never a submenu: a submenu row reserves
+    /// a trailing chevron column in every row and squeezed the model names onto
+    /// two lines (why effort once moved to a pill of its own). The retry and
+    /// read-only states have no effort to offer and stay the model menu.
+    func combinedMenu(compactLevels: Bool = true) -> PillMenu {
+        let model = modelMenu
+        guard !unreachable, !readOnly, !effortLevelsForCurrentModel.isEmpty else { return model }
+        var levels = effortMenu.sections
+        guard compactLevels else {
+            return PillMenu(sections: model.sections + levels, token: menuToken, title: model.title)
+        }
+        for index in levels.indices { levels[index].compact = true }
+        return PillMenu(sections: levels + model.sections, token: menuToken, title: model.title)
     }
 
     /// A menu's heading names the current value ("Effort: Extra High"): at the

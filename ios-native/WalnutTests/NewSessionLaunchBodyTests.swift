@@ -162,6 +162,7 @@ final class NewSessionLaunchBodyTests: XCTestCase {
         XCTAssertEqual(items.map(\.title), ["Default", "Opus", "Sonnet", "Haiku"])
         XCTAssertEqual(items.map(\.choice), [.model(""), .model("opus"), .model("sonnet"), .model("haiku")])
         XCTAssertEqual(items.filter(\.checked).map(\.title), ["Default"])
+        XCTAssertEqual(menu.sections.map(\.title), ["Model: Default"], "headed by the pick, like the live pill")
 
         let picked = NewSessionChatView.modelMenu(selected: "sonnet").sections.flatMap(\.items)
         XCTAssertEqual(picked.filter(\.checked).map(\.title), ["Sonnet"], "exactly one row is checked")
@@ -173,6 +174,7 @@ final class NewSessionLaunchBodyTests: XCTestCase {
         let items = NewSessionChatView.modeMenu(selected: .plan).sections.flatMap(\.items)
         XCTAssertEqual(items.map(\.choice), NewSessionSheet.PermissionMode.allCases.map { .mode($0.rawValue) })
         XCTAssertEqual(items.filter(\.checked).map(\.title), ["Plan"])
+        XCTAssertEqual(NewSessionChatView.modeMenu(selected: .plan).sections.map(\.title), ["Mode: Plan"])
         for case .mode(let raw) in items.map(\.choice) {
             XCTAssertNotNil(NewSessionSheet.PermissionMode(rawValue: raw), "\(raw) must parse back")
         }

@@ -1,35 +1,31 @@
 import SwiftUI
 
-/// The composer's model controls: a MODEL pill and, when the current model has
-/// an effort axis, an EFFORT pill beside it. They sit in the input row, next to
-/// the message they configure.
+/// The composer's model control: ONE pill naming the model and its effort
+/// ("Opus 5 · High"), whose menu holds the effort levels and then the models. It
+/// sits in the input row, next to the message it configures, after the mode pill
+/// (`ComposerModePill`), in the web composer's order.
 ///
 /// Why the model lives HERE and not in a settings sheet: this mirrors the web
 /// console's decision, quoted from `DraftLaunchBar.tsx` ("the model belongs with
 /// the message, so the draft renders it inside the composer's controls row,
 /// exactly where a real session's model pill sits"). The desktop's session
 /// composer and its main-agent composer (`LaneComposerControls.tsx`) both put the
-/// model pill in the controls row; the phone matches.
+/// model pill in the controls row, with the effort inside the same pill; the
+/// phone matches (user, 2026-10-04: one pill, not a model pill and an effort pill).
 ///
-/// Effort is its own pill. It used to be a submenu row at the top of the model
-/// menu, and a menu with one submenu reserves a trailing chevron column in EVERY
-/// row: the model names got about 139pt and "Default (Opus 5.5 1M)" wrapped onto
-/// two lines at the default text size. With the model menu holding models only,
-/// the names get the full width, and changing the effort is one tap shorter. The
-/// web's picker keeps effort in a column of its own for the same reason: it is a
-/// separate axis of the same choice. The effort pill offers only the levels the
-/// CURRENT model declares, and is absent (not greyed out) for a model without an
-/// effort axis, so there is never a control that is disabled for a reason the
-/// user can't see.
+/// Effort is an INLINE section of the same menu, never a submenu: rows of tiles
+/// at the top, so the menu opens with them in view however long the model list
+/// (after the models at the accessibility sizes, where a tile is a whole row).
+/// A submenu row reserves a trailing chevron column in EVERY row: the model names
+/// got about 139pt and "Default (Opus 5.5 1M)" wrapped onto two lines at the
+/// default text size, which is why effort once had a pill of its own. The section
+/// offers only the levels the CURRENT model declares, and is absent for a model
+/// without an effort axis.
 ///
 /// What is deliberately NOT in this row (a 44pt row is not a settings screen):
-///  - A live session's permission mode stays in the session menu (Session
-///    Controls). It is a spawn-shaped safety setting, not a per-message choice.
-///    The new-session draft is where it IS chosen, so its composer carries a mode
-///    pill beside its model pill (`NewSessionChatView.launchPills`, the same
-///    `PillChip`), as the web draft's controls row does.
 ///  - Path/host are not in a live session's composer at all: they are facts of a
 ///    running CLI, and belong to session CREATION (see NewSessionChatView).
+///  - Side questions, the session note and fork are in the `+` menu.
 ///
 /// The pills are UIKit button menus (`PillMenuButton`), so UIKit places the menu
 /// (it can never overflow the screen however many models the catalog carries).
@@ -38,80 +34,74 @@ import SwiftUI
 /// away and the next tap opens the menu: there is no room above a pill that sits
 /// on the keyboard, and a menu laid over the pill picked rows on a double tap.
 ///
-/// Text size: side by side up to the largest standard size, STACKED at the
-/// accessibility sizes, where the model name also wraps instead of truncating.
-/// Side by side at AX5 the model pill got 131pt and "GPT-6 Astra" read "GP…"
-/// while the effort pill kept "High" in full (gate r2 D2): a name the user
-/// cannot read is not a control. Stacked, the model name has the whole row.
+/// Text size: at the accessibility sizes the name wraps instead of truncating
+/// (gate r2 D2: "GPT-6 Astra" read "GP…" at AX5, and a name the user cannot read
+/// is not a control).
 struct ComposerModelPill: View {
     @State var controls: ComposerControlsModel
+    /// How far above itself the menu must also clear (a stacked pill above).
+    var menuClearance: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    /// The model pill's height, for the stacked effort pill's menu to clear.
-    @State private var modelPillHeight: CGFloat = 0
-    private static let spacing: CGFloat = 6
 
     var body: some View {
-        let stacked = dynamicTypeSize.isAccessibilitySize
-        // One layout value switched, not two view trees: the pills keep their
-        // identity (and their UIKit buttons) across a text-size change.
-        let layout = stacked
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: Self.spacing))
-            : AnyLayout(HStackLayout(spacing: Self.spacing))
-        layout {
-            // Nothing known yet (still loading, or an engine with no switchable
-            // session): no pill rather than one that lies or a spinner that draws
-            // the eye to a control the user did not ask about.
-            if let label = controls.pillLabel {
-                PillChip(
-                    text: label,
-                    // The name is the LAST KNOWN one while unreachable, so the pill
-                    // itself says so rather than only the menu: a stale value that
-                    // looks live is the failure that state exists to avoid.
-                    glyph: controls.unreachable ? .warning : (controls.readOnly ? .none : .chevron),
-                    state: controls.modelPillState,
-                    wraps: stacked,
-                    rawID: controls.pillLabelIsRawID,
-                    menu: controls.modelMenu,
-                    menuID: "model",
-                    accessibilityID: "composer.modelPill",
-                    accessibilityLabel: controls.pillAccessibilityLabel,
-                    onSelect: { choice, token in controls.menuSelect(choice, token: token) },
-                    onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) }
-                )
-                // Side by side, the effort pill ("High") gives way first: the
-                // model name is the one that must stay readable.
-                .layoutPriority(1)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { modelPillHeight = $0 }
-            }
-            if let effort = controls.effortPillLabel {
-                PillChip(
-                    text: effort,
-                    // Last known (the Mac is away): a fact to read, no menu.
-                    glyph: controls.effortPillState == .lastKnown ? .none : .chevron,
-                    state: controls.effortPillState,
-                    wraps: stacked,
-                    rawID: false,
-                    menu: controls.effortMenu,
-                    menuID: "effort",
-                    // Stacked, the model pill sits above this one, and the effort
-                    // menu opening over it would put a level row where the model
-                    // pill is. It opens above both.
-                    menuClearance: stacked && controls.pillLabel != nil ? modelPillHeight + Self.spacing : 0,
-                    accessibilityID: "composer.effortPill",
-                    accessibilityLabel: controls.effortPillAccessibilityLabel,
-                    onSelect: { choice, token in controls.menuSelect(choice, token: token) },
-                    onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) }
-                )
-            }
+        // Nothing known yet (still loading, or an engine with no switchable
+        // session): no pill rather than one that lies or a spinner that draws
+        // the eye to a control the user did not ask about.
+        if let label = controls.combinedPillLabel {
+            PillChip(
+                text: label,
+                // The name is the LAST KNOWN one while unreachable, so the pill
+                // itself says so rather than only the menu: a stale value that
+                // looks live is the failure that state exists to avoid.
+                glyph: controls.unreachable ? .warning : (controls.readOnly ? .none : .chevron),
+                state: controls.combinedPillState,
+                wraps: dynamicTypeSize.isAccessibilitySize,
+                rawID: controls.pillLabelIsRawID,
+                menu: controls.combinedMenu(compactLevels: !dynamicTypeSize.isAccessibilitySize),
+                menuID: "model",
+                menuClearance: menuClearance,
+                accessibilityID: "composer.modelPill",
+                accessibilityLabel: controls.pillAccessibilityLabel,
+                accessibilityValue: controls.pillAccessibilityValue,
+                onSelect: { choice, token in controls.menuSelect(choice, token: token) },
+                onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) }
+            )
+        }
+    }
+}
+
+/// The permission-mode pill of a live composer (a coding session, or the main
+/// chat's lane session): the session's own mode control, read and written
+/// through `/sessions/:id/controls`, the same channel the web's mode pill and the
+/// Session Controls sheet use. Absent until the session's controls answer, and
+/// for a session that has no mode control.
+struct ComposerModePill: View {
+    let mode: ComposerModeModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if let label = mode.label {
+            PillChip(
+                text: label,
+                glyph: .chevron,
+                state: mode.pillState,
+                wraps: dynamicTypeSize.isAccessibilitySize,
+                rawID: false,
+                menu: mode.menu,
+                menuID: "mode",
+                accessibilityID: "composer.modePill",
+                accessibilityLabel: "Permission mode: \(label)",
+                onSelect: { choice, _ in mode.menuSelect(choice) },
+                onPresentedChange: { _, _ in }
+            )
         }
     }
 }
 
 /// One capsule: the SwiftUI label the user sees, with the UIKit button that owns
 /// its menu laid exactly over it (see `PillMenuButton` for why the menu is UIKit).
-/// Shared by the live composer's model/effort pills and the new-session draft's
-/// model/mode pills, so every pill on a composer's bottom row looks and opens the
-/// same way; the owner answers the taps.
+/// Shared by every pill on a composer's bottom row (mode, model), live or draft,
+/// so they all look and open the same way; the owner answers the taps.
 struct PillChip: View {
     enum Glyph { case chevron, warning, none }
 
@@ -128,6 +118,7 @@ struct PillChip: View {
     var menuClearance: CGFloat = 0
     let accessibilityID: String
     let accessibilityLabel: String
+    var accessibilityValue: String? = nil
     /// A row was tapped (with the token of the menu it was on).
     let onSelect: (PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void
     /// The menu opened or closed (`menuID`, open).
@@ -178,6 +169,7 @@ struct PillChip: View {
                 menu: menu,
                 accessibilityID: accessibilityID,
                 accessibilityLabel: accessibilityLabel,
+                accessibilityValue: accessibilityValue,
                 menuID: menuID,
                 menuClearance: menuClearance,
                 onSelect: onSelect,

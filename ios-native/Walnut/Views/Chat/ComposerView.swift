@@ -123,6 +123,9 @@ struct ComposerBar: View {
     /// permission-mode pills here: it has no session for `modelSource` to read, and
     /// those two choices ride the create call. nil = nothing extra.
     var controlsAccessory: AnyView? = nil
+    /// The owner's rows for the `+` menu, after the image sources (a session's
+    /// Side question, Note and Fork). Empty = the menu holds attachments only.
+    var plusActions: [ComposerPlusAction] = []
     /// Bumps each time the owner's live stream (re)connects. A reconnect is the
     /// moment the box can talk again after a gap, which is exactly when a model
     /// answer fetched during that gap needs re-asking. 0 = the owner has no stream.
@@ -184,6 +187,10 @@ struct ComposerBar: View {
     /// Model + effort for the pill. Owned here (not by the parent) so it survives
     /// the parent's body passes; `attach` is idempotent per source.
     @State private var controls = ComposerControlsModel()
+    /// The live session's permission mode, for the mode pill.
+    @State private var mode = ComposerModeModel()
+    /// The mode pill's height, for a stacked model pill's menu to clear.
+    @State private var modePillHeight: CGFloat = 0
     /// Photo picker presentation is now explicit: the `+` is a MENU (photos +
     /// camera + host provenance), so the picker is presented rather than being the
     /// button.
@@ -463,7 +470,11 @@ struct ComposerBar: View {
             // so this view (it is still mounted: it got this call) says it is here
             // again. Whether it is on SCREEN is the model's one rule, which also
             // asks the dock which surface is in front (`composerOnScreen`).
-            if phase == .active { controls.setVisible(true) }
+            if phase == .active {
+                controls.setVisible(true)
+                // Only the composer on screen re-asks, the model pill's rule.
+                if onScreen { mode.refresh() }
+            }
             controls.setSceneActive(phase == .active)
             guard phase == .active, measuredHeight > 0 else { return }
             guard onScreen || dock?.isActiveComposerSurface(surface) == true else { return }
@@ -504,6 +515,9 @@ struct ComposerBar: View {
             // After attach, so a first appear is answered by the load attach
             // started, and a return to a retained tab re-asks only a stale answer.
             controls.setVisible(true)
+            // A return to a retained tab re-reads the mode (it may have changed on
+            // the web meanwhile); a new session is a fresh attach.
+            if mode.sessionID == modeSessionID { mode.refresh() } else { mode.attach(modeSessionID) }
             // An interruption (call / Siri) auto-transcribes the partial take.
             // For a quick-action take that text is still owed to the agent —
             // route it the same way a normal stop would.
@@ -541,6 +555,10 @@ struct ComposerBar: View {
             controls, source: modelSource, fallbackModel: fallbackModel,
             revalidateToken: modelRevalidateToken
         )
+        // The mode pill follows the same session the model pill writes to (for
+        // the chat, its lane session once resolved), and re-asks on a reconnect.
+        .onChange(of: modeSessionID) { _, id in mode.attach(id) }
+        .onChange(of: modelRevalidateToken) { _, _ in mode.refresh() }
         // Warm launch: the shortcut arrives while this view is already mounted,
         // so onAppear never runs again — the mailbox change is the trigger.
         .onChange(of: quickAction.pending) { _, request in
@@ -681,6 +699,32 @@ struct ComposerBar: View {
         Self.showsModelPill(modelSource: modelSource, pillLabel: controls.pillLabel)
     }
 
+    /// How the row's pills sit together: side by side, STACKED at the accessibility
+    /// sizes, where a model name side by side got 131pt and "GPT-6 Astra" read
+    /// "GP…" (gate r2 D2). One layout value switched, not two view trees, so the
+    /// pills keep their identity (and their UIKit buttons) across a size change.
+    /// The new-session draft's pills use it too.
+    static func pillLayout<Content: View>(
+        stacked: Bool, @ViewBuilder content: () -> Content
+    ) -> some View {
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: pillSpacing))
+            : AnyLayout(HStackLayout(spacing: pillSpacing))
+        return layout { content() }
+    }
+
+    static let pillSpacing: CGFloat = 6
+
+    /// The session whose permission mode the mode pill shows: a session composer's
+    /// own, or the chat's lane session once the model pill has resolved it. nil on
+    /// the new-session draft (its own pill rides the create call) and on the
+    /// in-process chat engine (no session, no mode).
+    private var modeSessionID: String? {
+        if case .session(let id) = modelSource { return id }
+        guard modelSource != nil else { return nil }
+        return controls.switchableSessionID
+    }
+
     // MARK: - The `+` menu's model
 
     /// No room for another attachment. Both sources are disabled at the ceiling
@@ -699,9 +743,14 @@ struct ComposerBar: View {
     /// presents a working picker, contrary to the old "simulators have no camera"
     /// assumption), so a rule that asked UIKit for itself could only ever be
     /// exercised one way.
-    static func plusMenuItems(cameraAvailable: Bool, hasHostProvenance: Bool) -> [String] {
+    static func plusMenuItems(
+        cameraAvailable: Bool, hasHostProvenance: Bool, actionIDs: [String] = []
+    ) -> [String] {
         var items = [photoItemID]
         if cameraAvailable { items.append(cameraItemID) }
+        // The owner's rows (a session's Side question, Note, Fork) after the
+        // inputs, and before the read-only provenance, which stays last.
+        items += actionIDs
         if hasHostProvenance { items.append(hostRowItemID) }
         return items
     }
@@ -891,12 +940,34 @@ struct ComposerBar: View {
             // The pills are the only flexible thing on this row: the three buttons
             // carry fixed 32pt frames, so an absurdly long model name truncates
             // rather than shoving send off the edge. At the accessibility sizes the
-            // pills stack and the model name wraps instead (see `ComposerModelPill`).
-            if showsModelPill {
-                ComposerModelPill(controls: controls)
+            // names wrap instead. Mode, then model (with its effort): the web
+            // composer's order, on every composer.
+            if modeSessionID != nil || showsModelPill {
+                let stacked = dynamicTypeSize.isAccessibilitySize
+                Self.pillLayout(stacked: stacked) {
+                    if modeSessionID != nil {
+                        ComposerModePill(mode: mode)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { modePillHeight = $0 }
+                    }
+                    if showsModelPill {
+                        // Stacked, the mode pill sits above this one, and the model
+                        // menu opening over it would put a row where that pill is.
+                        // It opens above both. UIKit keeps a scrolling menu at one
+                        // height (517pt measured on a 6.3" phone), so at AX5, where
+                        // less room than that is left above the mode pill, it slides
+                        // down over the mode pill's top (20pt measured); the model
+                        // pill itself stays clear.
+                        ComposerModelPill(
+                            controls: controls,
+                            menuClearance: stacked && modeSessionID != nil && mode.label != nil
+                                ? modePillHeight + Self.pillSpacing : 0
+                        )
+                        .layoutPriority(1)
+                    }
+                }
             }
-            // The owner's pills (the new-session draft's model and mode), in the
-            // seat the model pill takes on a live composer.
+            // The owner's pills (the new-session draft's mode and model), in the
+            // seat those take on a live composer.
             if let controlsAccessory {
                 controlsAccessory
             }
@@ -1073,7 +1144,8 @@ struct ComposerBar: View {
     private var attachmentMenu: some View {
         let items = Self.plusMenuItems(
             cameraAvailable: CameraPicker.isAvailable,
-            hasHostProvenance: hostProvenance != nil
+            hasHostProvenance: hostProvenance != nil,
+            actionIDs: plusActions.map(\.id)
         )
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element) { index, item in
@@ -1110,7 +1182,12 @@ struct ComposerBar: View {
                     .padding(.vertical, 10)
             }
         default:
-            EmptyView()
+            if let action = plusActions.first(where: { $0.id == item }) {
+                plusMenuRow(
+                    title: action.title, icon: action.systemImage, identifier: action.id,
+                    enabled: true, action: action.perform
+                )
+            }
         }
     }
 
@@ -1118,6 +1195,13 @@ struct ComposerBar: View {
     /// (a 44pt target: caption-height label plus 12pt above and below).
     private func attachmentSourceRow(
         title: String, icon: String, identifier: String, action: @escaping () -> Void
+    ) -> some View {
+        plusMenuRow(title: title, icon: icon, identifier: identifier, enabled: !atImageCeiling, action: action)
+    }
+
+    /// A `+` menu row: an image source, or one of the owner's actions.
+    private func plusMenuRow(
+        title: String, icon: String, identifier: String, enabled: Bool, action: @escaping () -> Void
     ) -> some View {
         Button {
             // Lower the popover, then act. Dismiss-then-present in one transaction is
@@ -1151,8 +1235,8 @@ struct ComposerBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(atImageCeiling ? Color.secondary : Color.primary)
-        .disabled(atImageCeiling)
+        .foregroundStyle(enabled ? Color.primary : Color.secondary)
+        .disabled(!enabled)
         .accessibilityIdentifier(identifier)
     }
 
@@ -1848,6 +1932,19 @@ struct ComposerView: View {
         }
         return await chat.sendReportingOutcome(text, images: images).keptTheWords
     }
+}
+
+// MARK: - The `+` menu's owner rows
+
+/// A row an owner adds to the composer's `+` menu (a session's Side question,
+/// Note, Fork). The menu closes first, then `perform` runs, so a sheet it
+/// presents opens on a clean frame.
+struct ComposerPlusAction: Identifiable {
+    /// Also the row's accessibility identifier.
+    let id: String
+    let title: String
+    let systemImage: String
+    let perform: () -> Void
 }
 
 // MARK: - The floating card

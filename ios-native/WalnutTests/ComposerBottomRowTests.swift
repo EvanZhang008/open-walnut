@@ -1,7 +1,7 @@
 import XCTest
 @testable import Walnut
 
-/// The composer's BOTTOM CONTROL ROW rule: `+`, model pill, mic, send.
+/// The composer's BOTTOM CONTROL ROW rule: `+`, mode and model pills, mic, send.
 ///
 /// The 2026-08-28 restructure (field on its own full-width row, controls below it)
 /// moved which piece is conditional, and that move is the only new logic in an

@@ -1,14 +1,12 @@
 import SwiftUI
 
-/// Session controls — model switch, reasoning effort, and fork — over the
-/// additive /api/v1 session-control endpoints. Presented from the conversation
-/// page's toolbar. Cloud-relay failures surface as honest, actionable copy
+/// Session controls (model switch, reasoning effort, and the provider's own
+/// controls) over the additive /api/v1 session-control endpoints. Presented from
+/// the conversation page's toolbar. Fork lives in the composer's `+` menu
+/// (`SessionForkSheet`). Cloud-relay failures surface as honest, actionable copy
 /// (same ladder as NewSessionSheet).
 struct SessionControlsSheet: View {
     let session: WalnutSession
-    /// Called with the pre-seeded fork session right before dismissal — the
-    /// presenter pushes its conversation page.
-    var onForked: (WalnutSession) -> Void
 
     @Environment(\.dismiss) private var dismiss
     private let api = WalnutAPI()
@@ -23,10 +21,6 @@ struct SessionControlsSheet: View {
     /// Wave-2 provider-neutral controls (mode select for Claude; native set
     /// for Codex/ACP). Best-effort: an old server just hides the section.
     @State private var controls: SessionControlsPayload?
-
-    // Fork
-    @State private var forkMessage = ""
-    @State private var forking = false
 
     /// The catalog row matching the CURRENT model (drives the effort section).
     private var currentModel: SessionModelOptions.Model? {
@@ -54,17 +48,15 @@ struct SessionControlsSheet: View {
                 modelSection
                 effortSection
                 providerControlsSection
-                forkSection
             }
             .navigationTitle("Session Controls")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }.disabled(forking)
+                    Button("Done") { dismiss() }
                 }
             }
             .task { await loadOptions() }
-            .interactiveDismissDisabled(forking)
         }
     }
 
@@ -117,7 +109,7 @@ struct SessionControlsSheet: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(applying || forking)
+                    .disabled(applying)
                     .accessibilityIdentifier("session.model.\(model.id)")
                 }
             } else if let loadError {
@@ -202,7 +194,7 @@ struct SessionControlsSheet: View {
                                 .foregroundStyle(selected ? Theme.tint : .primary)
                         }
                         .buttonStyle(.plain)
-                        .disabled(applying || forking)
+                        .disabled(applying)
                         .accessibilityIdentifier("session.effort.\(level)")
                     }
                 }
@@ -269,7 +261,7 @@ struct SessionControlsSheet: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(applying || forking)
+                        .disabled(applying)
                         .accessibilityIdentifier("session.control.\(control.id).\(option.value)")
                     }
                 } header: {
@@ -298,77 +290,6 @@ struct SessionControlsSheet: View {
             AppLog.info("session", "applied session control", [
                 "sessionId": session.id, "controlId": control.id, "value": option.value,
             ])
-        } catch {
-            errorMessage = Self.friendlyControlError(error)
-        }
-    }
-
-    // MARK: - Fork
-
-    private var forkSection: some View {
-        Section {
-            TextField("Optional first message for the fork", text: $forkMessage, axis: .vertical)
-                .lineLimit(2...4)
-                .accessibilityIdentifier("session.forkMessage")
-            Button {
-                Task { await fork() }
-            } label: {
-                HStack {
-                    if forking {
-                        ProgressView().controlSize(.small)
-                        Text("Forking…")
-                    } else {
-                        Label("Fork Session", systemImage: "arrow.triangle.branch")
-                    }
-                }
-            }
-            .disabled(forking || applying)
-            .accessibilityIdentifier("session.fork")
-        } header: {
-            Text("Fork")
-        } footer: {
-            Text("Creates a sibling task with a copy of this conversation. The original keeps running untouched.")
-        }
-    }
-
-    private func fork() async {
-        guard !forking else { return }
-        forking = true
-        errorMessage = nil
-        confirmation = nil
-        defer { forking = false }
-        do {
-            let message = forkMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-            let created = try await api.forkSession(id: session.id, message: message.isEmpty ? nil : message)
-            // Same launch-stash pattern as NewSessionSheet: paint the first
-            // message instantly on the pushed page (spawn is async).
-            if !message.isEmpty {
-                SessionLaunchContext.stash(sessionId: created.sessionId, message: message)
-            }
-            AppLog.info("session", "forked session", [
-                "sourceSessionId": session.id, "sessionId": created.sessionId,
-            ])
-            let now = ISO8601DateFormatter().string(from: Date())
-            let forked = WalnutSession(
-                id: created.sessionId,
-                title: created.title,
-                taskId: created.taskId,
-                taskTitle: created.title,
-                project: session.project,
-                host: session.host,
-                processStatus: "idle",
-                model: session.model,
-                mode: session.mode,
-                startedAt: now,
-                lastActiveAt: now,
-                messageCount: 0,
-                cwd: session.cwd,
-                pinned: nil,
-                focusTier: nil,
-                description: nil
-            )
-            onForked(forked)
-            dismiss()
         } catch {
             errorMessage = Self.friendlyControlError(error)
         }

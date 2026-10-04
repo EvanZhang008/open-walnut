@@ -238,6 +238,8 @@ let degradedModel = DEGRADED_MODEL
 /** The lane session's model and effort, moved by the app's writes. */
 let laneModel = null
 let laneEffort = null
+/** The lane session's permission mode, moved by the app's mode pill. */
+let laneMode = 'bypass'
 /** `laneEffort` value for "the session reports no effort". */
 const NO_EFFORT = Symbol('no-effort')
 /** How long the lane session's writes take to answer, so a test can see a pick
@@ -499,6 +501,7 @@ function resetAll() {
   degradedModel = DEGRADED_MODEL
   laneModel = null
   laneEffort = null
+  laneMode = 'bypass'
   laneWriteDelayMs = 0
   workSession = false
   statusMode = 'live'
@@ -1668,6 +1671,28 @@ const server = http.createServer(async (req, res) => {
     laneEffort = String(payload.effort ?? '')
     console.log(`[stub] lane effort WRITE → ${laneEffort}`)
     return json(res, 200, { effort: laneEffort, appliedLive: true, effectiveEffort: laneEffort })
+  }
+  // The lane session's provider controls: the real server's Claude shape
+  // (`claudeModeControls` in src/core/sessions/session-extras.ts), every mode by
+  // the mode registry's labels.
+  const controlsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/controls$/)
+  if (controlsMatch && (req.method === 'GET' || req.method === 'POST')) {
+    if (decodeURIComponent(controlsMatch[1]) !== LANE_SESSION_ID) return notFound(res, 'no such session')
+    if (req.method === 'POST') {
+      let payload = {}
+      try { payload = JSON.parse(raw || '{}') } catch { /* answered as an empty body */ }
+      if (payload.id !== 'mode') return json(res, 400, { error: { code: 'bad_request', message: 'Claude sessions only support the mode control' } })
+      laneMode = String(payload.value ?? '')
+      console.log(`[stub] lane mode WRITE → ${laneMode}`)
+    }
+    const labels = { plan: 'Plan', default: 'Default', dontAsk: "Don't Ask", accept: 'Accept', auto: 'Auto', bypass: 'Bypass' }
+    return json(res, 200, {
+      engine: 'claude',
+      controls: [{
+        id: 'mode', name: 'Mode', type: 'select', currentValue: laneMode,
+        options: Object.entries(labels).map(([value, name]) => ({ value, name })),
+      }],
+    })
   }
   if (p === '/api/v1/client-logs' && req.method === 'POST') {
     printComposerLogLines(req, body)

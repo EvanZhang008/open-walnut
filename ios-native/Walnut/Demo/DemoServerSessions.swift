@@ -25,6 +25,7 @@ extension DemoServer {
                 if let title = r.string("title"), !title.isEmpty { state.sessions[i].title = title }
                 if let archived = r.bool("archived") { state.sessions[i].archived = archived }
                 if let mode = r.string("mode") { state.sessions[i].mode = mode }
+                if let note = r.string("human_note") { state.sessions[i].humanNote = note }
                 return Self.record(state.sessions[i], state)
             }
             publishSession(id)
@@ -119,7 +120,7 @@ extension DemoServer {
             project: task.map { $0.project.isEmpty ? nil : $0.project } ?? nil,
             host: s.host, cwd: s.cwd, startedAt: s.startedAt, lastActiveAt: s.lastActiveAt,
             messageCount: s.transcript.filter { $0.kind == nil }.count, model: s.model,
-            description: s.description
+            description: s.description, humanNote: s.humanNote
         )
     }
 
@@ -136,13 +137,17 @@ extension DemoServer {
     private func controls(_ id: String) -> SessionControlsPayload {
         let mode = withState { $0.sessions[$0.sessionIndex(id)!].mode }
         return SessionControlsPayload(engine: "claude", controls: [
+            // The real server's shape (`claudeModeControls`): every mode, by the
+            // labels of the one mode registry.
             SessionControlsPayload.Control(
-                id: "mode", name: "Permission mode", type: "select", currentValue: mode,
+                id: "mode", name: "Mode", type: "select", currentValue: mode,
                 options: [
-                    .init(value: "default", name: "Ask before acting"),
-                    .init(value: "accept", name: "Accept edits"),
-                    .init(value: "plan", name: "Plan first"),
-                    .init(value: "bypass", name: "Act without asking"),
+                    .init(value: "plan", name: "Plan"),
+                    .init(value: "default", name: "Default"),
+                    .init(value: "dontAsk", name: "Don't Ask"),
+                    .init(value: "accept", name: "Accept"),
+                    .init(value: "auto", name: "Auto"),
+                    .init(value: "bypass", name: "Bypass"),
                 ]
             ),
         ])
@@ -195,7 +200,7 @@ extension DemoServer {
             let id = state.nextID("s")
             state.sessions.append(DemoSession(
                 id: id, title: title, taskId: taskID, host: host, processStatus: "idle",
-                model: r.string("model") ?? DemoFixtures.mainModel, mode: r.string("mode") ?? "default",
+                model: r.string("model") ?? DemoFixtures.mainModel, mode: r.string("mode") ?? "bypass",
                 startedAt: now, lastActiveAt: now, cwd: cwd, description: nil, transcript: []
             ))
             if let t = state.taskIndex(taskID!) { state.tasks[t].sessionIds.append(id) }

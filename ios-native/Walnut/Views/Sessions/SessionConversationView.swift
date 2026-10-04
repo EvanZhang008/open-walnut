@@ -29,6 +29,9 @@ struct SessionConversationView: View {
     @State private var showPlan = false
     @State private var showSideQuestions = false
     @State private var showFiles = false
+    // The composer's `+` menu: the session note and fork.
+    @State private var showNote = false
+    @State private var showFork = false
     @State private var showRename = false
     @State private var renameDraft = ""
     /// Non-nil = terminate hit 409 cron_owner; confirm to force.
@@ -129,6 +132,7 @@ struct SessionConversationView: View {
                 // The model pill switches THIS session's model/effort live.
                 modelSource: .session(id: session.id),
                 fallbackModel: session.model,
+                plusActions: plusActions,
                 modelRevalidateToken: store.streamConnects,
                 // A live session's exec host is a fact, not a choice (the CLI is
                 // already running there), so it shows as provenance in the `+`.
@@ -162,10 +166,20 @@ struct SessionConversationView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showControls) {
-            SessionControlsSheet(session: session) { forked in
+            SessionControlsSheet(session: session)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showNote) {
+            SessionNoteSheet(sessionId: session.id)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showFork) {
+            SessionForkSheet(session: session) { forked in
                 forkedSession = forked
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
         // Every task capability in place — a session IS a task. The sheet's
@@ -261,15 +275,32 @@ struct SessionConversationView: View {
         }
     }
 
+    /// The composer's `+` rows for this session, in the web's order: the side
+    /// thread, the note, then fork. They used to hide in the session menu and the
+    /// Controls sheet (user, 2026-10-04: "in the plus, keep it simple").
+    private var plusActions: [ComposerPlusAction] {
+        [
+            ComposerPlusAction(
+                id: "session.sideQuestions", title: "Side question", systemImage: "questionmark.bubble"
+            ) { showSideQuestions = true },
+            ComposerPlusAction(
+                id: "session.note", title: "Note", systemImage: "note.text"
+            ) { showNote = true },
+            ComposerPlusAction(
+                id: "session.forkMenu", title: "Fork", systemImage: "arrow.triangle.branch"
+            ) { showFork = true },
+        ]
+    }
+
     /// THE toolbar entry — one ellipsis menu unifying what used to be three
     /// buttons (controls sliders / info / lifecycle menu). Sections top→down:
-    /// frequent (Controls incl. fork, Info, linked Task), lifecycle
-    /// (Restart/Retry/Rename/Archive), tools (Queue/Plan/Side Questions/
-    /// Files), destructive (Terminate). Retry only shows for error/stopped
-    /// sessions (the server 400s otherwise).
+    /// frequent (Controls, Info, linked Task), lifecycle
+    /// (Restart/Retry/Rename/Archive), tools (Queue/Plan/Files), destructive
+    /// (Terminate). Side questions, the note and fork are in the composer's `+`.
+    /// Retry only shows for error/stopped sessions (the server 400s otherwise).
     private var sessionMenu: some View {
         Menu {
-            // Frequent: the controls sheet (model / effort / mode / fork).
+            // Frequent: the controls sheet (model / effort / mode).
             Button {
                 showControls = true
             } label: {
@@ -340,12 +371,6 @@ struct SessionConversationView: View {
                 Label("View Plan", systemImage: "list.bullet.clipboard")
             }
             .accessibilityIdentifier("session.plan")
-            Button {
-                showSideQuestions = true
-            } label: {
-                Label("Side Questions", systemImage: "questionmark.bubble")
-            }
-            .accessibilityIdentifier("session.sideQuestions")
             Button {
                 showFiles = true
             } label: {

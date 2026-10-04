@@ -29,6 +29,14 @@ extension WalnutAPI {
         )
     }
 
+    /// Replace the session's note (`human_note`); "" clears it.
+    func setSessionNote(id: String, note: String) async throws -> SessionPatched {
+        struct Body: Encodable {
+            let human_note: String
+        }
+        return try await send("PATCH", "/sessions/\(escape(id))", body: Body(human_note: note))
+    }
+
     /// Kill the CLI process (no respawn). 409 cron_owner unless force —
     /// callers confirm with the user, then retry with force=true.
     func terminateSession(id: String, force: Bool = false) async throws -> SessionTerminated {

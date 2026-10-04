@@ -9,8 +9,8 @@ struct PillMenu: Equatable {
     enum Choice: Equatable {
         case model(String)
         case effort(String)
-        /// A permission mode, chosen before a session exists (the new-session
-        /// draft's mode pill). A live composer never builds one.
+        /// A permission mode: the mode pill on every composer (a live session's
+        /// mode control, or the new-session draft's launch choice).
         case mode(String)
         case retry
         /// An informational row (read-only reason, a current model the catalog
@@ -30,6 +30,9 @@ struct PillMenu: Equatable {
     struct Section: Equatable {
         var title: String
         var items: [Item]
+        /// Lay the rows out as tiles, three to a row (the effort levels), so the
+        /// levels take two rows above a model list of any length.
+        var compact = false
     }
 
     var sections: [Section]
@@ -64,6 +67,8 @@ struct PillMenuButton: UIViewRepresentable {
     var menu: PillMenu
     var accessibilityID: String
     var accessibilityLabel: String
+    /// Read after the label (the model pill's effort). nil = none.
+    var accessibilityValue: String? = nil
     /// Distinguishes the pills of one composer in the open/close reports.
     var menuID: String
     /// How far above its own top the menu must also stay clear: the height of
@@ -91,6 +96,7 @@ struct PillMenuButton: UIViewRepresentable {
         button.onHighlightChange = onHighlightChange
         button.accessibilityIdentifier = accessibilityID
         button.accessibilityLabel = accessibilityLabel
+        button.accessibilityValue = accessibilityValue
         button.show(menu)
     }
 
@@ -189,13 +195,16 @@ final class PillMenuUIButton: UIButton {
         shown = menu
     }
 
+    /// How many tiles UIKit fits in one medium-size row.
+    static let compactRowLength = 3
+
     static func build(
         _ menu: PillMenu,
         onSelect: @escaping (PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void
     ) -> UIMenu {
         let token = menu.token
         let sections: [UIMenuElement] = menu.sections.map { section in
-            UIMenu(title: section.title, options: .displayInline, children: section.items.map { item in
+            let actions: [UIMenuElement] = section.items.map { item in
                 let action = UIAction(
                     title: item.title,
                     image: item.systemImage.flatMap { UIImage(systemName: $0) },
@@ -204,7 +213,20 @@ final class PillMenuUIButton: UIButton {
                 ) { _ in onSelect(item.choice, token) }
                 action.accessibilityIdentifier = item.accessibilityID
                 return action
-            })
+            }
+            guard section.compact else {
+                return UIMenu(title: section.title, options: .displayInline, children: actions)
+            }
+            // UIKit lays a medium-size group out as one row of at most three
+            // tiles and spills the rest into ordinary rows, so the rows are cut
+            // into groups of three, each its own row of tiles.
+            let rows = stride(from: 0, to: actions.count, by: compactRowLength).map { start in
+                let row = UIMenu(title: start == 0 ? section.title : "", options: .displayInline,
+                                 children: Array(actions[start..<min(start + compactRowLength, actions.count)]))
+                row.preferredElementSize = .medium
+                return row as UIMenuElement
+            }
+            return UIMenu(title: "", options: .displayInline, children: rows)
         }
         return UIMenu(title: menu.title, children: sections)
     }

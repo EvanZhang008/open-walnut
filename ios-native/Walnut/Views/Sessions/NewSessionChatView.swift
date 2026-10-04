@@ -10,11 +10,11 @@ import SwiftUI
 ///  - **Where it runs sits directly ABOVE the composer**: the quick-folder row,
 ///    then the folder/host pill LEFT-ALIGNED on the last row, so "where does this
 ///    run" stays glued to the message that answers it.
-///  - **The model and the permission mode live IN the composer's bottom row**
-///    (`launchPills`), where a live session's model pill sits and where the web
-///    draft puts its mode and model pills, inside the floating card the way
-///    ChatGPT draws its composer (user, 2026-10-03). They used to be two more
-///    pills up in the folder row.
+///  - **The permission mode and the model live IN the composer's bottom row**
+///    (`launchPills`), where a live session's mode and model pills sit and where
+///    the web draft puts them, inside the floating card the way ChatGPT draws
+///    its composer (user, 2026-10-03). They used to be two more pills up in the
+///    folder row.
 ///
 /// It replaces the old form-shaped `NewSessionSheet` as the DEFAULT entry (that
 /// sheet is still the right shape when launching FROM a task, where the folder is
@@ -47,6 +47,8 @@ struct NewSessionChatView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The mode pill's height, for the stacked model pill's menu to clear.
+    @State private var modePillHeight: CGFloat = 0
     @Environment(TasksStore.self) private var tasks: TasksStore?
     @Environment(ConnectionStore.self) private var connection: ConnectionStore?
 
@@ -298,35 +300,19 @@ struct NewSessionChatView: View {
 
     // MARK: - Model and mode, on the composer's bottom row
 
-    /// The draft's model and permission-mode pills, handed to the composer for its
-    /// bottom row. The same `PillChip` a live session's model pill is, so the row
-    /// reads like one: with the keyboard up the first tap puts the keyboard away
-    /// and the next opens the menu above the pill (a SwiftUI `Menu` in this row lost
-    /// taps over the keyboard, see `ComposerBar.plusButton`). Side by side, stacked
-    /// at the accessibility sizes, as `ComposerModelPill` does.
+    /// The draft's permission-mode and model pills, handed to the composer for its
+    /// bottom row in the live row's order (mode, then model). The same `PillChip`
+    /// a live session's pills are, so the row reads like one: with the keyboard up
+    /// the first tap puts the keyboard away and the next opens the menu above the
+    /// pill (a SwiftUI `Menu` in this row lost taps over the keyboard, see
+    /// `ComposerBar.plusButton`). Side by side, stacked at the accessibility
+    /// sizes, like the live pills (`ComposerBar.pillLayout`).
     private var launchPills: some View {
         let stacked = dynamicTypeSize.isAccessibilitySize
-        let layout = stacked
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
-            : AnyLayout(HStackLayout(spacing: 6))
         // A pick while the create call runs would be a choice the launch already
         // went without.
         let state: ComposerControlsModel.PillState = creating ? .waiting : .ready
-        return layout {
-            PillChip(
-                text: modelLabel,
-                glyph: .chevron,
-                state: state,
-                wraps: stacked,
-                rawID: false,
-                menu: Self.modelMenu(selected: model),
-                menuID: "launchModel",
-                accessibilityID: "newSessionChat.modelPill",
-                accessibilityLabel: "Model: \(model == nil ? "Default" : modelLabel)",
-                onSelect: { choice, _ in pick(choice) },
-                onPresentedChange: { _, _ in }
-            )
-            .layoutPriority(1)
+        return ComposerBar.pillLayout(stacked: stacked) {
             PillChip(
                 text: mode.label,
                 glyph: .chevron,
@@ -340,6 +326,23 @@ struct NewSessionChatView: View {
                 onSelect: { choice, _ in pick(choice) },
                 onPresentedChange: { _, _ in }
             )
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { modePillHeight = $0 }
+            PillChip(
+                text: modelLabel,
+                glyph: .chevron,
+                state: state,
+                wraps: stacked,
+                rawID: false,
+                menu: Self.modelMenu(selected: model),
+                menuID: "launchModel",
+                // Stacked, its menu opens above the mode pill too, not over it.
+                menuClearance: stacked ? modePillHeight + ComposerBar.pillSpacing : 0,
+                accessibilityID: "newSessionChat.modelPill",
+                accessibilityLabel: "Model: \(model == nil ? "Default" : modelLabel)",
+                onSelect: { choice, _ in pick(choice) },
+                onPresentedChange: { _, _ in }
+            )
+            .layoutPriority(1)
         }
     }
 
@@ -386,10 +389,13 @@ struct NewSessionChatView: View {
                 accessibilityID: "newSessionChat.model.\(id)"
             )
         }
-        return PillMenu(sections: [.init(title: "Model", items: items)], token: draftMenuToken)
+        let current = items.first(where: \.checked)?.title
+        return PillMenu(sections: [.init(title: ComposerControlsModel.heading("Model", current: current), items: items)],
+                        token: draftMenuToken)
     }
 
-    /// Every permission mode, the current one checked.
+    /// Every permission mode, the current one checked, headed like the live
+    /// composer's mode menu ("Mode: Bypass").
     static func modeMenu(selected: NewSessionSheet.PermissionMode) -> PillMenu {
         let items = NewSessionSheet.PermissionMode.allCases.map { m in
             PillMenu.Item(
@@ -397,7 +403,8 @@ struct NewSessionChatView: View {
                 accessibilityID: "newSessionChat.mode.\(m.rawValue)"
             )
         }
-        return PillMenu(sections: [.init(title: "Permission mode", items: items)], token: draftMenuToken)
+        return PillMenu(sections: [.init(title: ComposerControlsModel.heading("Mode", current: selected.label), items: items)],
+                        token: draftMenuToken)
     }
 
     private func pill(_ text: String, icon: String, active: Bool) -> some View {

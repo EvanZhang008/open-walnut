@@ -299,14 +299,14 @@ final class ModelPillHealUITests: XCTestCase {
 
     // MARK: - Scenario 6: a pick through the UIKit menu
 
-    /// A tap on a row writes exactly that model, and while the write is out both
-    /// pills are disabled (their quieter ink) with the spinner on the model pill;
-    /// they take taps again once the Mac has answered.
+    /// A tap on a row writes exactly that model, and while the write is out the
+    /// pill is disabled with its spinner, the name in readable ink; it takes taps
+    /// again once the Mac has answered.
     ///
     /// "Disabled" is checked as the user meets it, not only as a flag: the first
     /// version of this test caught SwiftUI re-enabling the UIKit button right
     /// after the pill disabled it, so a pill drawn in the quiet ink still opened
-    /// its menu. A tap on the effort pill mid-write must open nothing.
+    /// its menu. A tap on the pill mid-write must open nothing.
     @MainActor
     func testAPickWritesTheTappedModelAndThePillsWaitForTheWrite() async throws {
         let stub = try await stubUnderTest()
@@ -316,9 +316,8 @@ final class ModelPillHealUITests: XCTestCase {
         let app = try launchPaired()
         openChatTab(app)
         let pill = app.buttons["composer.modelPill"]
-        let effort = app.buttons["composer.effortPill"]
         XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 45), "the pill never showed the Mac's model")
-        XCTAssertTrue(pill.isEnabled && effort.isEnabled)
+        XCTAssertTrue(pill.isEnabled)
         try await stub.screenshot(app, "model-pill-09-enabled-pills")
 
         try await openMenu(app, pill)
@@ -326,21 +325,16 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(sonnet.waitForExistence(timeout: 5), "the model menu did not open")
         sonnet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(waitUntil(timeout: 3) { !pill.isEnabled }, "the pill took taps while its pick was being written")
-        XCTAssertFalse(effort.isEnabled, "the effort pill took taps while a model pick was being written")
         XCTAssertEqual(pill.label, "Model: Sonnet 5", "the pick is not shown while it is written")
         try await stub.screenshot(app, "model-pill-09-disabled-pills-while-writing")
         // What the user reads, measured off the screen: the name being written in
-        // readable ink (it was 1.69:1, gate r2), the pill that waits in the quiet
-        // one. The second number proves the measurement tells the two apart.
+        // readable ink (it was 1.69:1, gate r2).
         let writing = Self.textContrast(of: pill)
-        let waiting = Self.textContrast(of: effort)
-        print("[evidence] while writing: the model pill's text is \(Self.fmt1(writing)):1, "
-              + "the waiting effort pill's \(Self.fmt1(waiting)):1")
+        print("[evidence] while writing: the model pill's text is \(Self.fmt1(writing)):1")
         XCTAssertGreaterThanOrEqual(writing, 4.5, "the name being written reads \(Self.fmt1(writing)):1")
-        XCTAssertLessThan(waiting, 3, "the waiting pill does not look waiting (\(Self.fmt1(waiting)):1)")
-        effort.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertFalse(app.buttons["Extra High"].waitForExistence(timeout: 1.5),
-                       "a disabled effort pill opened its menu mid-write")
+        pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertFalse(app.buttons["Haiku 4.5"].waitForExistence(timeout: 1.5),
+                       "a disabled pill opened its menu mid-write")
         XCTAssertFalse(pill.isEnabled, "the write finished before the disabled tap was checked; lengthen the delay")
 
         XCTAssertTrue(waitUntil(timeout: 12) { pill.isEnabled }, "the pill never came back after the write landed")
@@ -351,19 +345,52 @@ final class ModelPillHealUITests: XCTestCase {
         try await stub.screenshot(app, "model-pill-09-after-write")
     }
 
+    // MARK: - Scenario 6b: the chat's mode pill (user, 2026-10-04)
+
+    /// On the lane engine the chat runs in a real session, so its composer has the
+    /// web's mode pill, before the model pill on the same row: it reads the lane
+    /// session's mode control, and a pick writes exactly that mode to it.
+    @MainActor
+    func testTheChatComposerShowsAndWritesTheLaneSessionsMode() async throws {
+        let stub = try await stubUnderTest()
+        try await stub.reset()
+        try await stub.setEngine("lane")
+        let app = try launchPaired()
+        openChatTab(app)
+        let pill = app.buttons["composer.modelPill"]
+        let mode = app.buttons["composer.modePill"]
+        XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 45), "the pill never showed the Mac's model")
+        XCTAssertTrue(waitForLabel(mode, "Permission mode: Bypass", timeout: 15),
+                      "no mode pill on the lane chat (reads \(mode.exists ? mode.label : "absent"))")
+        XCTAssertLessThanOrEqual(mode.frame.maxX, pill.frame.minX, "the mode pill is not before the model pill")
+        try await stub.screenshot(app, "model-pill-13-mode-pill")
+
+        try await openMenu(app, mode)
+        let plan = app.buttons["composer.mode.plan"]
+        XCTAssertTrue(plan.waitForExistence(timeout: 5), "the mode menu did not open")
+        try await stub.screenshot(app, "model-pill-13-mode-menu")
+        plan.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(waitForLabel(mode, "Permission mode: Plan", timeout: 10),
+                      "the pick did not land (reads \(mode.label))")
+        let writes = try await stub.requests().filter { $0.method == "POST" && $0.path.hasSuffix("/controls") }
+        XCTAssertEqual(writes.count, 1, "the pick was not written exactly once: \(writes.map(\.path))")
+        XCTAssertEqual(writes.first?.path, "/api/v1/sessions/sess-stub-lane/controls")
+        try await stub.screenshot(app, "model-pill-13-mode-picked")
+    }
+
     // MARK: - Scenario 5: the menu and the pills at the default and largest text sizes
 
     /// The gate: "Default (Opus 5.5 1M)" wrapped onto two lines at the DEFAULT
     /// size, because an Effort submenu in the same menu reserved a chevron column
-    /// in every row. Effort is its own pill now. At the default size every name is
-    /// on one line; at XXXL (the largest standard size) the menu grows with the
-    /// text, every row is still there in the Mac's order, and the two pills still
-    /// fit beside the mic.
+    /// in every row. Effort is an inline SECTION of the one pill's menu now, never
+    /// a submenu. At the default size every name is on one line; at XXXL (the
+    /// largest standard size) the menu grows with the text, every row is still
+    /// there in the Mac's order, and the pill still fits beside the mic.
     ///
     /// And AX5, the largest ACCESSIBILITY size, with the WIDEST real pill label
-    /// (gate r2 D2: side by side there, "GPT-6 Astra" read "GP…" in a 131pt pill
-    /// while "High" kept its full width). The pills stack, and the model name must
-    /// fit the pill it got, measured against the real font.
+    /// (gate r2 D2: side by side there, "GPT-6 Astra" read "GP…" in a 131pt pill).
+    /// The pill wraps, and the model name must fit the pill it got, measured
+    /// against the real font.
     @MainActor
     func testTheMenuAndPillsAtTheDefaultAndTheLargestTextSizes() async throws {
         let stub = try await stubUnderTest()
@@ -374,7 +401,8 @@ final class ModelPillHealUITests: XCTestCase {
             try await stub.reset()
             try await stub.setEngine("lane")
             let expected: String
-            // Only some rows of the catalog have an effort axis (and so a second pill).
+            // Only some rows of the catalog have an effort axis (and so an effort
+            // half on the pill and an effort section in its menu).
             var hasEffort = true
             if size == ax5 {
                 try await stub.setLane(model: widest.id, effort: "xhigh")
@@ -389,29 +417,21 @@ final class ModelPillHealUITests: XCTestCase {
             let pill = app.buttons["composer.modelPill"]
             XCTAssertTrue(waitForLabel(pill, expected, timeout: 45),
                           "\(tag): the pill never showed \(expected) (reads \(pill.exists ? pill.label : "absent"))")
-            let effort = app.buttons["composer.effortPill"]
-            XCTAssertEqual(effort.waitForExistence(timeout: 10), hasEffort, "\(tag): effort pill presence")
+            XCTAssertEqual(waitUntil(timeout: 10) { Self.effortValue(pill) != nil }, hasEffort,
+                           "\(tag): effort on the pill (value \(Self.effortValue(pill) ?? "none"))")
             let mic = element(app, "chat.mic")
             XCTAssertTrue(mic.waitForExistence(timeout: 5))
             XCTAssertLessThanOrEqual(pill.frame.maxX, mic.frame.minX,
                                      "\(tag): the model pill runs into the mic (\(pill.frame) vs \(mic.frame))")
-            if hasEffort {
-                XCTAssertLessThanOrEqual(effort.frame.maxX, mic.frame.minX,
-                                         "\(tag): the effort pill runs into the mic (\(effort.frame) vs \(mic.frame))")
-            }
             if size == ax5 {
-                if hasEffort {
-                    XCTAssertGreaterThanOrEqual(effort.frame.minY, pill.frame.maxY,
-                                                "ax5: the pills are side by side (\(pill.frame), \(effort.frame)), not stacked")
-                }
                 assertTheNameFits(widest.label, in: pill.frame, at: .accessibilityExtraExtraExtraLarge, tag: tag)
-            } else {
-                XCTAssertLessThanOrEqual(pill.frame.maxX, effort.frame.minX, "\(tag): the pills overlap")
             }
             try await stub.screenshot(app, "model-pill-08-\(tag)-pills")
 
             try await openMenu(app, pill)
-            XCTAssertTrue(app.buttons[Self.macOrder[0]].waitForExistence(timeout: 5), "\(tag): the model menu did not open")
+            let opened = waitUntil(timeout: 5) { (Self.macOrder + Self.effortRows).contains { app.buttons[$0].exists } }
+            try await stub.screenshot(app, "model-pill-08-\(tag)-menu-opened")
+            XCTAssertTrue(opened, "\(tag): the model menu did not open")
             // Row frames only prove it while the menu does not scroll: a row cut off
             // at the bottom of a scrolling menu keeps its whole frame, over the pill,
             // though the menu clips it. At the big sizes the TAP below is the proof.
@@ -454,28 +474,21 @@ final class ModelPillHealUITests: XCTestCase {
                 XCTAssertLessThan(longest, single * 1.25,
                                   "default size: \"Default (Opus 5.5 1M)\" is \(Int(longest))pt against \(Int(single))pt: it wrapped")
             }
-            print("[evidence] \(tag): pills \(pill.frame) + \(hasEffort ? "\(effort.frame)" : "none"), mic \(mic.frame)")
+            print("[evidence] \(tag): pill \(pill.frame) (effort \(Self.effortValue(pill) ?? "none")), mic \(mic.frame)")
             // A second tap on the pill closes its menu and picks nothing (gate r2 D1).
             try await tapPillToClose(app, pill, rows: Self.macOrder, tag: tag)
-            if hasEffort {
-                try await openMenu(app, effort)
-                XCTAssertTrue(app.buttons["Extra High"].waitForExistence(timeout: 5), "\(tag): the effort menu did not open")
-                if size == nil { assertNoRowCovers(effort, rows: Self.effortRows, app, tag: "\(tag) effort") }
-                // At AX5 the checked level can sit below the fold (gate r3 P2-4): the
-                // heading names it where the menu starts.
-                assertTheHeadingShows(size == ax5 ? "Effort: Extra High" : Self.healedEffort,
-                                      above: Self.effortRows, app, tag: "\(tag) effort")
-                try await stub.screenshot(app, "model-pill-08-\(tag)-effort-menu")
-                try await tapPillToClose(app, effort, rows: Self.effortRows, tag: "\(tag) effort")
-                if size == ax5 {
-                    // Stacked, the model pill is above the effort pill: the effort
-                    // menu opens above both, so a tap on the model pill closes it too.
-                    try await openMenu(app, effort)
-                    XCTAssertTrue(app.buttons["Extra High"].waitForExistence(timeout: 5), "\(tag): the effort menu did not open")
-                    try await stub.screenshot(app, "model-pill-08-\(tag)-effort-menu-clear")
-                    try await tapPillToClose(app, pill, rows: Self.effortRows, tag: "\(tag) effort, a tap on the model pill")
-                    if app.buttons[Self.macOrder[0]].exists { closeMenu(app) }
-                }
+            if hasEffort, size == nil {
+                // The levels lead the menu as tiles above the models, headed by the
+                // current level, and none of them sits over the pill.
+                try await openMenu(app, pill)
+                XCTAssertTrue(app.buttons["Extra High"].waitForExistence(timeout: 5), "\(tag): the menu has no effort section")
+                assertNoRowCovers(pill, rows: Self.effortRows, app, tag: "\(tag) effort")
+                assertTheHeadingShows(Self.healedEffort, above: Self.effortRows, app, tag: "\(tag) effort")
+                let lastLevel = Self.effortRows.map { app.buttons[$0].frame.maxY }.max()!
+                let firstModel = app.buttons[Self.macOrder[0]].frame.minY
+                XCTAssertLessThanOrEqual(lastLevel, firstModel, "\(tag): the levels are not above the models")
+                try await stub.screenshot(app, "model-pill-08-\(tag)-effort-section")
+                try await tapPillToClose(app, pill, rows: Self.macOrder + Self.effortRows, tag: "\(tag) effort")
             }
             let writes = try await stub.writes()
             XCTAssertTrue(writes.isEmpty, "\(tag): looking at the menus wrote \(writes.map(\.path))")
@@ -635,20 +648,45 @@ final class ModelPillHealUITests: XCTestCase {
     }
 
     /// No row of an open menu sits over its pill: a second tap there must land
-    /// outside the menu (gate r2 D1).
+    /// outside the menu (gate r2 D1). The menu's list reports its whole CONTENT
+    /// frame, not the part on screen (measured: 874pt tall from y=216 on an
+    /// 874pt screen), so frames prove this only for a menu that does not scroll:
+    /// there the list's frame is the menu, and it must end above the pill. A list
+    /// whose content runs past the bottom of the screen scrolls, its clipped rows
+    /// keep frames over the pill, and the second tap (which must close the menu
+    /// and write nothing) is the proof instead.
     @MainActor
     private func assertNoRowCovers(
         _ pill: XCUIElement, rows: [String], _ app: XCUIApplication, tag: String,
         file: StaticString = #filePath, line: UInt = #line
     ) {
         let target = pill.frame
-        // Only rows a finger can reach: a row scrolled out of a long menu keeps a
-        // frame, but it is clipped and takes no tap.
-        let reachable = rows.filter { app.buttons[$0].exists && app.buttons[$0].isHittable }
-        XCTAssertFalse(reachable.isEmpty, "\(tag): no row of the open menu is reachable, so this check "
+        let inTree = rows.filter { app.buttons[$0].exists }
+        XCTAssertFalse(inTree.isEmpty, "\(tag): the open menu has none of its rows, so this check "
                        + "would pass vacuously", file: file, line: line)
-        let covering = reachable.filter { app.buttons[$0].frame.intersects(target) }
+        guard let first = inTree.first else { return }
+        let screen = app.windows.firstMatch.frame
+        if let list = Self.menuList(holding: first, app), list.maxY > screen.maxY + 0.5 {
+            print("[evidence] \(tag): the menu scrolls (list content \(list) on a \(screen.height)pt screen), "
+                  + "so the tap on the pill is the proof, not row frames")
+            return
+        }
+        let covering = inTree.filter { app.buttons[$0].frame.intersects(target) }
+        print("[evidence] \(tag): \(inTree.count) rows judged, the menu does not scroll, pill \(target)")
         XCTAssertTrue(covering.isEmpty, "\(tag): \(covering) sit over the pill \(target)", file: file, line: line)
+    }
+
+    /// The frame of the list that holds an open menu's row (its whole content,
+    /// see `assertNoRowCovers`): the smallest collection or scroll view with the
+    /// row inside it.
+    @MainActor
+    private static func menuList(holding row: String, _ app: XCUIApplication) -> CGRect? {
+        let label = NSPredicate(format: "label == %@", row)
+        let candidates = (app.collectionViews.containing(label).allElementsBoundByIndex
+            + app.scrollViews.containing(label).allElementsBoundByIndex).map(\.frame)
+        return candidates
+            .filter { $0.width > 0 && $0.height > 0 }
+            .min { $0.width * $0.height < $1.width * $1.height }
     }
 
     /// The open menu starts with a heading that names the current value, in view
@@ -678,9 +716,9 @@ final class ModelPillHealUITests: XCTestCase {
     /// The gate's repro: the menu grew out of the pill and covered it, with its
     /// strongest rows exactly where the pill was. A double tap wrote `default`
     /// 380ms after the open; tap, wait 1.2s, tap the pill again (to close the menu)
-    /// wrote `opus` while the user was on Sonnet 5; on the effort pill both wrote
-    /// `max`. Every second tap here lands on the pill's own spot while its menu is
-    /// up, and nothing may be written.
+    /// wrote `opus` while the user was on Sonnet 5; on the old effort pill both
+    /// wrote `max`. Every second tap here lands on the pill's own spot while its
+    /// menu (models and levels) is up, and nothing may be written.
     @MainActor
     func testASecondTapOnThePillWhileItsMenuIsUpNeverPicksARow() async throws {
         let stub = try await stubUnderTest()
@@ -690,13 +728,11 @@ final class ModelPillHealUITests: XCTestCase {
         let app = try launchPaired()
         openChatTab(app)
         let pill = app.buttons["composer.modelPill"]
-        let effort = app.buttons["composer.effortPill"]
         XCTAssertTrue(waitForLabel(pill, "Model: Sonnet 5", timeout: 45), "the pill never showed Sonnet 5")
-        XCTAssertTrue(waitForLabel(effort, "Effort: High", timeout: 10), "no effort pill on High")
-        try await secondTaps(app, stub, pill, rows: Self.macOrder, tag: "model")
-        try await secondTaps(app, stub, effort, rows: Self.effortRows, tag: "effort")
+        XCTAssertTrue(waitForEffort(pill, "Effort: High", timeout: 10), "no effort High on the pill")
+        try await secondTaps(app, stub, pill, rows: Self.macOrder + Self.effortRows, tag: "model")
         XCTAssertEqual(pill.label, "Model: Sonnet 5")
-        XCTAssertEqual(effort.label, "Effort: High")
+        XCTAssertEqual(Self.effortValue(pill), "Effort: High")
 
         // An effort the session does not report (the CLI default): no row is
         // checked, so there is no "current" row a stray tap could safely land on.
@@ -704,9 +740,9 @@ final class ModelPillHealUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         try await Task.sleep(for: .seconds(1))
         app.activate()
-        XCTAssertTrue(waitForLabel(effort, "Effort: Effort", timeout: 20),
-                      "no unknown-effort pill (reads \(effort.exists ? effort.label : "absent"))")
-        try await secondTaps(app, stub, effort, rows: Self.effortRows, tag: "effort-unknown")
+        XCTAssertTrue(waitForEffort(pill, nil, timeout: 20),
+                      "the pill still names an effort (\(Self.effortValue(pill) ?? "none")) the session does not report")
+        try await secondTaps(app, stub, pill, rows: Self.macOrder + Self.effortRows, tag: "effort-unknown")
     }
 
     /// The Retry-only menu under the same rule: Retry never sits over the pill, so
@@ -812,23 +848,21 @@ final class ModelPillHealUITests: XCTestCase {
             let app = try launchPaired(size.map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
             openChatTab(app)
             let pill = app.buttons["composer.modelPill"]
-            let effort = app.buttons["composer.effortPill"]
             XCTAssertTrue(waitForLabel(pill, "Model: Sonnet 5", timeout: 45), "\(tag): the pill never showed Sonnet 5")
-            XCTAssertTrue(waitForLabel(effort, "Effort: High", timeout: 10), "\(tag): no effort pill on High")
-            try await keyboardUpTaps(app, stub, pill, rows: Self.macOrder, tag: "\(tag)-model")
-            try await keyboardUpTaps(app, stub, effort, rows: Self.effortRows, tag: "\(tag)-effort")
+            XCTAssertTrue(waitForEffort(pill, "Effort: High", timeout: 10), "\(tag): no effort High on the pill")
+            try await keyboardUpTaps(app, stub, pill, rows: Self.macOrder + Self.effortRows, tag: "\(tag)-model")
             XCTAssertEqual(pill.label, "Model: Sonnet 5")
-            XCTAssertEqual(effort.label, "Effort: High")
+            XCTAssertEqual(Self.effortValue(pill), "Effort: High")
             if size == nil {
                 // No level checked (the CLI default): nothing "safe" to land on.
                 try await stub.setLane(model: "global.anthropic.claude-sonnet-5", effort: "none")
                 XCUIDevice.shared.press(.home)
                 try await Task.sleep(for: .seconds(1))
                 app.activate()
-                XCTAssertTrue(waitForLabel(effort, "Effort: Effort", timeout: 20),
-                              "no unknown-effort pill (reads \(effort.exists ? effort.label : "absent"))")
-                try await keyboardUpTaps(app, stub, effort, rows: Self.effortRows, tag: "\(tag)-effort-unknown")
-                try await keyboardUpPick(app, stub, effort, row: "Medium", tag: "\(tag)-effort")
+                XCTAssertTrue(waitForEffort(pill, nil, timeout: 20),
+                              "the pill still names an effort (\(Self.effortValue(pill) ?? "none")) the session does not report")
+                try await keyboardUpTaps(app, stub, pill, rows: Self.macOrder + Self.effortRows, tag: "\(tag)-effort-unknown")
+                try await keyboardUpPick(app, stub, pill, row: "Medium", tag: "\(tag)-effort")
             }
             app.terminate()
         }
@@ -1192,27 +1226,27 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(pill, lastKnown, timeout: 20),
                       "the unreachable pill reads \(pill.exists ? pill.label : "absent"), not \(lastKnown)")
         XCTAssertFalse(pill.label.contains("global.anthropic"), "the pill shows a raw catalog id: \(pill.label)")
-        // Its effort stays too, as last known and not tappable (gate r3 UX note).
-        let effort = app.buttons["composer.effortPill"]
-        XCTAssertTrue(waitForLabel(effort, "Effort: High, last known", timeout: 5),
-                      "the effort pill reads \(effort.exists ? effort.label : "absent") with the Mac away")
-        XCTAssertFalse(effort.isEnabled, "a last known level took taps with nowhere to write it")
-        let quiet = Self.textContrast(of: effort)
-        XCTAssertGreaterThanOrEqual(quiet, 4.5, "the last known level reads \(Self.fmt1(quiet)):1")
-        print("[evidence] mac away after a good answer: pill reads \"\(pill.label)\", effort \"\(effort.label)\" "
-              + "(enabled \(effort.isEnabled), text \(Self.fmt1(quiet)):1)")
+        // Its effort stays too, as last known (gate r3 UX note); the menu offers
+        // only Retry, so no level can be written while the Mac is away.
+        XCTAssertTrue(waitForEffort(pill, "Effort: High, last known", timeout: 5),
+                      "the pill's effort reads \(Self.effortValue(pill) ?? "none") with the Mac away")
+        let quiet = Self.textContrast(of: pill)
+        XCTAssertGreaterThanOrEqual(quiet, 4.5, "the last known name reads \(Self.fmt1(quiet)):1")
+        print("[evidence] mac away after a good answer: pill reads \"\(pill.label)\", "
+              + "effort \"\(Self.effortValue(pill) ?? "none")\" (text \(Self.fmt1(quiet)):1)")
         try await stub.screenshot(app, "model-pill-12-last-known-name")
         try await openMenu(app, pill)
         XCTAssertTrue(element(app, "composer.modelPill.retry").waitForExistence(timeout: 5),
                       "the unreachable pill's menu offers no Retry")
         XCTAssertFalse(app.buttons["Haiku 4.5"].exists, "the unreachable menu lists models it cannot write")
+        XCTAssertFalse(app.buttons["Extra High"].exists, "the unreachable menu lists levels it cannot write")
         try await stub.screenshot(app, "model-pill-12-last-known-menu")
         closeMenu(app)
 
         try await stub.setEngine("lane")
         XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 45), "the pill did not heal once the Mac was back")
-        XCTAssertTrue(waitForLabel(effort, Self.healedEffort, timeout: 10), "the effort pill did not come back live")
-        XCTAssertTrue(effort.isEnabled)
+        XCTAssertTrue(waitForEffort(pill, Self.healedEffort, timeout: 10), "the effort did not come back live")
+        XCTAssertTrue(pill.isEnabled)
         let writes = try await stub.writes()
         XCTAssertTrue(writes.isEmpty, "the Mac being away wrote \(writes.map(\.path))")
     }
@@ -1309,28 +1343,53 @@ final class ModelPillHealUITests: XCTestCase {
                               file: file, line: line)
         }
         XCTAssertFalse(element(app, "composer.modelPill.effort").exists,
-                       "effort is its own pill now, not a row in the model menu", file: file, line: line)
+                       "effort is a section of the menu, never a submenu row", file: file, line: line)
         try await stubUnderTest().screenshot(app, shot)
         closeMenu(app)
     }
 
+    /// The pill names the effort, and its menu's first section offers every
+    /// level, low to high in reading order (rows of tiles), above the models.
     @MainActor
     private func assertEffortPillOffersTheLevels(
         _ app: XCUIApplication, shot: String, file: StaticString = #filePath, line: UInt = #line
     ) async throws {
-        let effort = app.buttons["composer.effortPill"]
-        XCTAssertTrue(waitForLabel(effort, Self.healedEffort, timeout: 5),
-                      "no effort pill beside the model (reads \(effort.exists ? effort.label : "absent"))",
+        let pill = app.buttons["composer.modelPill"]
+        XCTAssertTrue(waitForEffort(pill, Self.healedEffort, timeout: 5),
+                      "the pill names no effort (value \(Self.effortValue(pill) ?? "none"))",
                       file: file, line: line)
-        try await openMenu(app, effort)
-        for level in ["Low", "Medium", "High", "Extra High", "Max"] {
-            XCTAssertTrue(app.buttons[level].waitForExistence(timeout: 5), "the effort menu has no \(level)",
+        try await openMenu(app, pill)
+        for level in Self.effortRows {
+            XCTAssertTrue(app.buttons[level].waitForExistence(timeout: 5), "the menu has no \(level)",
                           file: file, line: line)
         }
-        let tops = ["Low", "Medium", "High", "Extra High", "Max"].map { app.buttons[$0].frame.minY }
-        XCTAssertEqual(tops, tops.sorted(), "the effort levels are not low to high", file: file, line: line)
+        // Reading order: row by row, left to right within a row of tiles.
+        let frames = Self.effortRows.map { app.buttons[$0].frame }
+        let reading = zip(frames, frames.dropFirst()).allSatisfy { a, b in
+            b.minY > a.minY + 1 || (abs(b.minY - a.minY) <= 1 && b.minX > a.minX)
+        }
+        XCTAssertTrue(reading, "the effort levels are not low to high: "
+                      + "\(zip(Self.effortRows, frames).map { "\($0) @\(Int($1.minX)),\(Int($1.minY))" })",
+                      file: file, line: line)
+        let firstModel = app.buttons[Self.macOrder[0]]
+        if firstModel.exists {
+            XCTAssertLessThanOrEqual(frames.map(\.maxY).max()!, firstModel.frame.minY,
+                                     "the effort levels are not above the models", file: file, line: line)
+        }
         try await stubUnderTest().screenshot(app, shot)
         closeMenu(app)
+    }
+
+    /// The pill's effort half, as VoiceOver reads it after the name. nil = none.
+    @MainActor
+    private static func effortValue(_ pill: XCUIElement) -> String? {
+        guard pill.exists, let value = pill.value as? String, !value.isEmpty else { return nil }
+        return value
+    }
+
+    @MainActor
+    private func waitForEffort(_ pill: XCUIElement, _ value: String?, timeout: TimeInterval) -> Bool {
+        waitUntil(timeout: timeout) { pill.exists && Self.effortValue(pill) == value }
     }
 
     @MainActor
