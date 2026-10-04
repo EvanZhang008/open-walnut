@@ -29,6 +29,7 @@ import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../../src/lib/caller-or
 import { addDays, localDate, zonedTime } from '../../src/core/health/day-key.js'
 import { MARKER_HR, WATCH, uuid } from '../core/health/fixtures.js'
 import { createDevice } from '../../src/core/device-auth.js'
+import { notSyncingMessage } from '../../src/web/routes/health.js'
 
 const TZ = 'America/New_York'
 let server: HttpServer
@@ -89,7 +90,18 @@ describe('Apple Health through a real server', () => {
     const r = await executeOp('health_sleep', { last_nights: 3 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
     expect(r.ok).toBe(true)
     expect((r as any).result).toMatchObject({ connected: false })
+    // The agent is told the phone asks by itself, never to send the user through Settings.
+    expect((r as any).result.message).toMatch(/asks for access by itself/)
+    expect((r as any).result.message).not.toMatch(/Settings, Apple Health/)
     expect(fs.existsSync(path.join(WALNUT_HOME, 'health'))).toBe(false)
+  })
+
+  it('a store the phone never synced into says the same thing on health_status', async () => {
+    expect((await json('GET', '/api/v1/health/status')).status).toBe(200)
+    const st = await executeOp('health_status', {}, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
+    expect((st as any).result).toMatchObject({ connected: false, lastUploadAt: null })
+    expect((st as any).result.message).toMatch(/asks for access by itself/)
+    expect(notSyncingMessage('2026-09-17T12:00:00.000Z')).toMatch(/^Nothing has synced from the iPhone since 2026-09-17\./)
   })
 
   it('accepts the phone batches, and a re-post stores nothing twice', async () => {

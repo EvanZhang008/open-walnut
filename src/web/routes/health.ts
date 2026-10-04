@@ -25,7 +25,15 @@ export const healthRouter = Router()
 
 healthRouter.use(requireThisMachine)
 
-const NOT_CONNECTED = 'Apple Health is not connected yet. Turn it on in Walnut on the iPhone (Settings, Apple Health); the phone then keeps this Mac up to date by itself.'
+const NOT_CONNECTED = 'Apple Health is not connected yet. Walnut on the iPhone asks for access by itself: when the app opens, and right away when a health question comes up in it. ' +
+  'Ask the user to open Walnut on the iPhone and allow Apple Health there; the phone then keeps this Mac up to date by itself. Do not send the user looking through Settings.'
+
+/** health_status with a store whose phone never synced, or stopped: the agent tells the user the same thing. */
+export function notSyncingMessage(lastUploadAt: unknown): string {
+  if (typeof lastUploadAt !== 'string') return NOT_CONNECTED
+  return `Nothing has synced from the iPhone since ${lastUploadAt.slice(0, 10)}. Walnut on the iPhone syncs whenever it is open, and in the background unless it was force-quit, `
+    + 'Low Power Mode is on or Background App Refresh is off. Ask the user to open Walnut on the iPhone once.'
+}
 
 function q(req: Request, name: string): string | undefined {
   const v = req.query[name]
@@ -57,6 +65,7 @@ function route(name: string, empty: () => Record<string, unknown>, read: Reader)
         return
       }
       const body = await read(req)
+      if (body.connected === false && body.message === undefined) body.message = notSyncingMessage(body.lastUploadAt)
       log.web.debug('health read served', { read: name, items: countItems(body) })
       res.json(body)
     } catch (err) {
