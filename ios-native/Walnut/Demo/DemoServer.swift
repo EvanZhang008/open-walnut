@@ -214,6 +214,10 @@ final class DemoServer: @unchecked Sendable {
     private func routeV1(_ r: DemoRequest, _ s: [String]) -> DemoReply? {
         if match(r, "GET", s, "status") != nil { return .object(DemoFixtures.status(now)) }
         if match(r, "POST", s, "devices", "self") != nil { return .ok }
+        // The demo lives at one address: no other route to learn or probe.
+        if match(r, "GET", s, "instance") != nil { return .object(["instance": "walnut-demo", "mode": "LIVE"]) }
+        if match(r, "GET", s, "routes") != nil { return .object(["routes": [Any](), "device": DemoMode.deviceName]) }
+        if match(r, "GET", s, "ordering") != nil { return .object(["projects": DemoFixtures.projectOrder]) }
         if match(r, "GET", s, "events") != nil { return DemoReply(status: 200, body: .stream(.events, lastEventID: r.lastEventID)) }
         if match(r, "GET", s, "agents") != nil { return .encoded(DemoFixtures.agents) }
         if match(r, "GET", s, "config") != nil { return .object(DemoFixtures.serverConfig) }

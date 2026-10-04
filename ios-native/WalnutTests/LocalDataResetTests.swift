@@ -65,6 +65,7 @@ final class LocalDataResetTests: XCTestCase {
         tasks.tasks = seeded.tasks.map(\.wire)
         tasks.sessions = seeded.sessions.map { seeded.wireSession($0) }
         tasks.taskFolders = seeded.wireFolders
+        tasks.projectOrder = DemoFixtures.projectOrder
         chat.conversations = [ConversationSummary(id: "c1", title: marker, updatedAt: "2026-09-30T10:00:00Z", messageCount: 1)]
         chat.messages = [ChatMessage(id: "m1", role: "user", text: marker, createdAt: "2026-09-30T10:00:00Z", kind: nil)]
         chat.activeID = "c1"
@@ -93,6 +94,11 @@ final class LocalDataResetTests: XCTestCase {
         let futureCache = caches.appendingPathComponent("reset-test-future-cache", isDirectory: true)
         try fm.createDirectory(at: futureCache, withIntermediateDirectories: true)
         try Data(marker.utf8).write(to: futureCache.appendingPathComponent("entry.bin"))
+
+        // Where each session stream left off (kept in memory and on disk).
+        let streamKey = "https://demo.walnut.invalid/api/v1/sessions/s-reset/stream"
+        SessionStreamResumeIDs.shared.save(42, for: streamKey)
+        XCTAssertEqual(SessionStreamResumeIDs.shared.id(for: streamKey), 42)
 
         // A voice recording waiting to upload.
         let voice = VoiceRecordingStore()
@@ -136,6 +142,7 @@ final class LocalDataResetTests: XCTestCase {
         XCTAssertTrue(tasks.tasks.isEmpty)
         XCTAssertTrue(tasks.sessions.isEmpty)
         XCTAssertTrue(tasks.taskFolders.isEmpty)
+        XCTAssertTrue(tasks.projectOrder.isEmpty)
         XCTAssertTrue(chat.conversations.isEmpty)
         XCTAssertTrue(chat.messages.isEmpty)
         XCTAssertNil(chat.activeID)
@@ -158,6 +165,7 @@ final class LocalDataResetTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: attachments.path))
         XCTAssertFalse(fm.fileExists(atPath: bodies.path))
         XCTAssertFalse(fm.fileExists(atPath: futureCache.path), "a cache folder nobody listed is swept too")
+        XCTAssertNil(SessionStreamResumeIDs.shared.id(for: streamKey), "stream positions are forgotten")
 
         // Voice and attention time.
         XCTAssertTrue(VoiceRecordingStore().pending().isEmpty)
@@ -178,6 +186,20 @@ final class LocalDataResetTests: XCTestCase {
         XCTAssertNil(URLCache.shared.cachedResponse(for: URLRequest(url: cachedURL)))
         // The log files themselves are emptied in place, not deleted.
         XCTAssertFalse(removed.contains("walnut-applog.jsonl"))
+    }
+
+    /// The chat's "answered on Cloud" memory (ChatStore erases it through this).
+    func testCloudAnswerMarksForgetEverything() {
+        let suite = "cloud-marks-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var marks = CloudAnswerMarks(defaults: defaults)
+        marks.remember(conversationID: "c1", text: "Hello", atMs: 1)
+        XCTAssertFalse(marks.marks.isEmpty)
+        marks.removeAll()
+        XCTAssertTrue(marks.marks.isEmpty)
+        XCTAssertNil(defaults.object(forKey: CloudAnswerMarks.storageKey))
+        XCTAssertTrue(CloudAnswerMarks(defaults: defaults).marks.isEmpty)
     }
 
     func testPairingAgainStartsClean() async throws {

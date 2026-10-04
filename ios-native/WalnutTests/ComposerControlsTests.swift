@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import Walnut
 
@@ -5,8 +6,8 @@ import XCTest
 ///
 /// The bug class these gate is "the phone tells the user something that isn't
 /// true": a pill claiming a model the session isn't running, a picker offering an
-/// effort level the model rejects, or a cheerful "Cloud" that hides the fact that
-/// the Mac is unreachable and nothing the user does will land. Every assertion
+/// effort level the model rejects, or a "Cloud" headline while the Mac is the one
+/// answering (and the reverse: a "Mac" that hides that it is unreachable). Every assertion
 /// below is about a claim being either correct or visibly absent.
 @MainActor
 final class ComposerControlsTests: XCTestCase {
@@ -302,16 +303,19 @@ final class ComposerControlsTests: XCTestCase {
 
     // MARK: - Host provenance: the main-agent chat
 
-    private func status(_ mode: ServerStatus.Mode, bridges: [String]?) -> ServerStatus {
+    private func status(
+        _ mode: ServerStatus.Mode, bridges: [String]?, cloudChat: ServerStatus.CloudChat? = nil
+    ) -> ServerStatus {
         ServerStatus(
             mode: mode, cloud: mode == .replica, version: "1.0", serverTime: "",
             lastSyncAt: nil,
-            bridgeHosts: bridges?.map { .init(hostAlias: $0, since: nil) }
+            bridgeHosts: bridges?.map { .init(hostAlias: $0, since: nil) },
+            cloudChat: cloudChat
         )
     }
 
-    /// Talking straight to the Mac: one word, no second line.
-    func testPrimaryChatSaysMacAndNothingElse() {
+    /// Talking straight to the Mac: the headline is the machine, plainly "Mac".
+    func testPrimaryChatSaysMac() {
         let p = ComposerHostProvenance.chat(status: status(.live, bridges: nil), online: true)
         XCTAssertEqual(p.label, "Mac")
         XCTAssertNil(p.detail, "a healthy row is the machine's name and nothing else")
@@ -319,92 +323,149 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertFalse(p.degraded)
     }
 
-    /// The reported bug (2026-10-03, and build 82 before it): the phone on the
-    /// cloud companion with the Mac bridged said "Cloud · Mac connected" over
-    /// "Answers relay to your Mac.". The Mac computes the reply, so the row says
-    /// "Mac", and the relay is plumbing the row does not mention at all.
+    /// The reported bug: build 82 said "Cloud · Mac connected" / "Answers relay to
+    /// your Mac." while the Mac was computing the reply. The headline names where
+    /// the reply is computed (the Mac); the relay is only the path, in the detail.
     func testReplicaWithThePrimaryBridgedSaysMacNotCloud() {
-        let p = ComposerHostProvenance.chat(
-            status: status(.replica, bridges: ["__local__", "clouddev"]), online: true
-        )
-        XCTAssertEqual(p.label, "Mac")
-        XCTAssertNil(p.detail, "the relay path is not the user's business")
-        XCTAssertEqual(p.icon, "laptopcomputer")
-        XCTAssertFalse(p.degraded)
-        XCTAssertFalse(p.label.contains("Cloud"), "never headline the network path")
+        for cloudChat in [nil, ServerStatus.CloudChat.available, .unavailable] {
+            let p = ComposerHostProvenance.chat(
+                status: status(.replica, bridges: ["__local__", "clouddev"], cloudChat: cloudChat),
+                online: true
+            )
+            XCTAssertEqual(p.label, "Mac", "the Mac answers whatever the cloud could do on its own")
+            XCTAssertNil(p.detail, "the relay path is not the user's business")
+            XCTAssertEqual(p.icon, "laptopcomputer")
+            XCTAssertFalse(p.degraded)
+            XCTAssertFalse(p.label.contains("Cloud"), "never headline the network path")
+        }
     }
 
-    /// The phone is on the cloud box and the Mac is gone: the cloud answers, so
-    /// the row says "Cloud", and the second line names the consequence, because
-    /// that is exactly when sends to Mac sessions cannot land.
-    func testReplicaWithThePrimaryMissingSaysCloudAndNamesTheConsequence() {
+    /// The Mac is gone and the cloud box SAYS it can answer: now the cloud really
+    /// computes the reply, so "Cloud" is the honest headline, and the detail says
+    /// what that costs (text only, no Mac sessions).
+    func testMacOfflineWithCloudChatAvailableSaysCloudAndTheConsequence() {
         let p = ComposerHostProvenance.chat(
-            status: status(.replica, bridges: ["clouddev"]), online: true
+            status: status(.replica, bridges: ["clouddev"], cloudChat: .available), online: true
         )
         XCTAssertEqual(p.label, "Cloud")
         XCTAssertEqual(p.icon, "cloud")
         XCTAssertTrue(p.degraded)
-        let detail = p.detail ?? ""
-        XCTAssertTrue(detail.contains("Mac is offline"), "detail must state the Mac is offline: \(detail)")
-        XCTAssertTrue(detail.contains("can't be reached"), "detail must state the consequence: \(detail)")
+        XCTAssertEqual(
+            p.detail,
+            "Your Mac is offline, so the cloud server answers text messages for now. Mac sessions can't be reached."
+        )
+    }
+
+    /// The Mac is gone and the cloud box says it CANNOT answer: claiming "Cloud"
+    /// would promise replies that never come. Say the Mac is offline and that new
+    /// messages fail (the server ends the turn with its "primary is unreachable" error).
+    func testMacOfflineWithCloudChatUnavailableDoesNotClaimCloud() {
+        let p = ComposerHostProvenance.chat(
+            status: status(.replica, bridges: [], cloudChat: .unavailable), online: true
+        )
+        XCTAssertEqual(p.label, "Mac offline")
+        XCTAssertEqual(p.icon, "laptopcomputer.slash")
+        XCTAssertTrue(p.degraded)
+        XCTAssertEqual(
+            p.detail,
+            "The cloud server can't answer without your Mac, so new messages get an error until it's back."
+        )
+    }
+
+    /// The Mac is gone and the box is too old to say whether it can answer. The
+    /// deployed older replica answers on its own; a later one fails the turn. The
+    /// copy must not promise either, so it says "may".
+    func testMacOfflineOnAServerThatDoesNotReportCloudChatSaysMay() {
+        let p = ComposerHostProvenance.chat(
+            status: status(.replica, bridges: ["clouddev"], cloudChat: nil), online: true
+        )
+        XCTAssertEqual(p.label, "Mac offline")
+        XCTAssertEqual(p.icon, "laptopcomputer.slash")
+        XCTAssertTrue(p.degraded)
+        XCTAssertEqual(
+            p.detail,
+            "Your Mac isn't connected. The cloud server may answer on its own, without your Mac's sessions."
+        )
     }
 
     /// An EMPTY bridge list is a real verdict ("nothing is connected"); an ABSENT
     /// key means the server is too old to say. Conflating them would claim the Mac
-    /// is offline on a server that never reports bridges at all.
+    /// is offline on a server that never reports bridges at all. An unknown relay
+    /// still sends every turn to the Mac first, so the headline is the Mac.
     func testAbsentBridgeHostsIsUnknownNotOffline() {
         let absent = ComposerHostProvenance.chat(status: status(.replica, bridges: nil), online: true)
-        XCTAssertEqual(absent.label, "Cloud")
-        XCTAssertNil(absent.detail, "an old server can't tell us: don't claim the Mac is offline")
+        XCTAssertEqual(absent.label, "Mac", "an old server can't tell us: don't claim offline")
+        XCTAssertNil(absent.detail)
+        XCTAssertEqual(absent.icon, "laptopcomputer")
         XCTAssertFalse(absent.degraded)
 
         let empty = ComposerHostProvenance.chat(status: status(.replica, bridges: []), online: true)
-        XCTAssertEqual(empty.label, "Cloud")
-        XCTAssertNotNil(empty.detail, "an empty list IS a verdict")
+        XCTAssertEqual(empty.label, "Mac offline", "an empty list IS a verdict")
         XCTAssertTrue(empty.degraded)
     }
 
     /// Transport down: say that, rather than reporting a mode we can't confirm.
-    /// A stale "Mac" must not survive the phone going offline.
     func testOfflineIsReportedForBothModes() {
         let live = ComposerHostProvenance.chat(status: status(.live, bridges: nil), online: false)
         XCTAssertEqual(live.label, "Offline")
         XCTAssertEqual(live.detail, "Your Mac isn't responding right now.")
+        XCTAssertEqual(live.icon, "laptopcomputer.slash")
         XCTAssertTrue(live.degraded)
 
         let replica = ComposerHostProvenance.chat(
-            status: status(.replica, bridges: ["__local__"]), online: false
+            status: status(.replica, bridges: ["__local__"], cloudChat: .available), online: false
         )
-        XCTAssertEqual(replica.label, "Offline")
-        XCTAssertEqual(replica.detail, "The cloud server isn't responding right now.")
+        XCTAssertEqual(replica.label, "Offline", "a stale 'Mac connected' must not survive the phone going offline")
+        XCTAssertEqual(replica.detail, "The cloud relay to your Mac isn't responding right now.")
+        XCTAssertEqual(replica.icon, "wifi.slash")
         XCTAssertTrue(replica.degraded)
     }
 
-    /// Every chat state is one of the two machine names or a state word, never a
-    /// compound with a "·" (the shape the user asked to be rid of).
-    func testNoChatLabelIsACompound() {
-        let cases: [(ServerStatus?, Bool)] = [
-            (nil, true), (nil, false),
-            (status(.live, bridges: nil), true), (status(.live, bridges: nil), false),
-            (status(.replica, bridges: ["__local__"]), true),
-            (status(.replica, bridges: ["__local__"]), false),
-            (status(.replica, bridges: []), true),
-            (status(.replica, bridges: nil), true),
-        ]
-        for (s, online) in cases {
-            let label = ComposerHostProvenance.chat(status: s, online: online).label
-            XCTAssertFalse(label.contains("·"), "compound label: \(label)")
-            XCTAssertTrue(["Mac", "Cloud", "Offline", "Connecting…"].contains(label), "unexpected label: \(label)")
-        }
+    func testNoStatusYetSaysConnectingOrOffline() {
+        let connecting = ComposerHostProvenance.chat(status: nil, online: true)
+        XCTAssertEqual(connecting.label, "Connecting…")
+        XCTAssertNil(connecting.detail)
+        XCTAssertFalse(connecting.degraded)
+
+        let offline = ComposerHostProvenance.chat(status: nil, online: false)
+        XCTAssertEqual(offline.label, "Offline")
+        XCTAssertEqual(offline.detail, "Can't reach Walnut right now. Reconnecting.")
+        XCTAssertTrue(offline.degraded)
     }
 
-    func testNoStatusYetSaysConnecting() {
-        XCTAssertEqual(
-            ComposerHostProvenance.chat(status: nil, online: true).label, "Connecting…"
-        )
-        XCTAssertEqual(
-            ComposerHostProvenance.chat(status: nil, online: false).label, "Offline"
-        )
+    /// Every state the row can be in, with the rules that hold across all of
+    /// them: "This Mac" never appears, "Cloud" is a headline only where the
+    /// cloud answers, and every icon is a real SF Symbol (a typo renders blank).
+    func testEveryProvenanceStateKeepsTheHeadlineRule() {
+        var states: [(String, ComposerHostProvenance)] = [
+            ("connecting", .chat(status: nil, online: true)),
+            ("offline, no status", .chat(status: nil, online: false)),
+            ("session on the Mac", .session(hostAlias: "", cwd: "/x")),
+            ("session remote", .session(hostAlias: "clouddev", cwd: nil)),
+        ]
+        for online in [true, false] {
+            states.append(("live online=\(online)", .chat(status: status(.live, bridges: nil), online: online)))
+            for bridges in [nil, [], ["clouddev"], ["__local__"]] as [[String]?] {
+                for cloudChat in [nil, ServerStatus.CloudChat.available, .unavailable] {
+                    states.append((
+                        "replica online=\(online) bridges=\(String(describing: bridges)) cloudChat=\(String(describing: cloudChat))",
+                        .chat(status: status(.replica, bridges: bridges, cloudChat: cloudChat), online: online)
+                    ))
+                }
+            }
+        }
+        for (name, p) in states {
+            XCTAssertFalse(p.label.contains("This Mac"), "\(name): \(p.label)")
+            XCTAssertFalse((p.label + (p.detail ?? "")).contains("\u{2014}"), "\(name): no em dashes in UI copy")
+            XCTAssertNotNil(UIImage(systemName: p.icon), "\(name): \(p.icon) is not an SF Symbol")
+            if p.label == "Cloud" {
+                guard case .chat(let s?, true) = p else {
+                    return XCTFail("\(name): only a reachable replica can headline Cloud")
+                }
+                XCTAssertEqual(s.cloudChat, .available, name)
+                XCTAssertEqual(ComposerHostProvenance.primaryReachability(s), .offline, name)
+            }
+        }
     }
 
     // MARK: - Host provenance: a coding session
@@ -445,5 +506,26 @@ final class ComposerControlsTests: XCTestCase {
         let junk = #"{"mode":"REPLICA","cloud":true,"version":"1.0","serverTime":"t","bridgeHosts":"nope"}"#
         let c = try JSONDecoder().decode(ServerStatus.self, from: Data(junk.utf8))
         XCTAssertNil(c.bridgeHosts, "a malformed additive field must degrade, not throw")
+    }
+
+    /// `cloudChat` is additive and replica-only: absent on the primary and on a
+    /// replica older than the field; an unknown value from a newer server reads
+    /// as "does not say", never as a failed probe.
+    func testServerStatusDecodesCloudChatPresentAbsentAndUnknown() throws {
+        func decode(_ json: String) throws -> ServerStatus {
+            try JSONDecoder().decode(ServerStatus.self, from: Data(json.utf8))
+        }
+        XCTAssertNil(try decode(#"{"mode":"REPLICA","cloud":true,"version":"0.4.5","serverTime":"t","bridgeHosts":[]}"#).cloudChat)
+        XCTAssertEqual(
+            try decode(#"{"mode":"REPLICA","cloud":true,"version":"1","serverTime":"t","bridgeHosts":[],"cloudChat":"available"}"#).cloudChat,
+            .available
+        )
+        XCTAssertEqual(
+            try decode(#"{"mode":"REPLICA","cloud":true,"version":"1","serverTime":"t","bridgeHosts":[],"cloudChat":"unavailable"}"#).cloudChat,
+            .unavailable
+        )
+        let newer = try decode(#"{"mode":"REPLICA","cloud":true,"version":"9","serverTime":"t","bridgeHosts":[],"cloudChat":"sometimes"}"#)
+        XCTAssertNil(newer.cloudChat)
+        XCTAssertEqual(newer.bridgeHosts?.count, 0, "one odd field must not cost the rest")
     }
 }

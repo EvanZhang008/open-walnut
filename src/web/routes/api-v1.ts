@@ -54,7 +54,7 @@ import { getNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { armLateMirror, mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import {
-  PRIMARY_UNREACHABLE_MESSAGE, cloudTurnRows, mergeRowsByTime, mergeCloudRowsIntoRelayedPage,
+  PRIMARY_UNREACHABLE_MESSAGE, cloudTurnRows, mergeRowsByTime, mergeCloudRowsIntoRelayedPage, cloudChatCapability,
 } from './cloud-chat-fallback.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
@@ -191,6 +191,24 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
       cloudExec = cloudExecStatus(await getConfig(), true) as unknown as Record<string, unknown>
     } catch { /* config unreadable — omit rather than claim a posture */ }
   }
+  // Can the paired Mac host its own sessions here through /daemon-tunnel? The
+  // key's PRESENCE is the capability (an older build lacks the route), and
+  // `enabled` follows the same operator switch as cloud exec. The Mac reads it
+  // to show or grey its "Cloud" host (core/hosts/cloud-box-probe.ts).
+  const daemonTunnel = CLOUD_MODE
+    ? (cloudExec
+      ? { enabled: cloudExec.enabled === true, ...(cloudExec.enabled === true ? {} : { reason: cloudExec.reason }) }
+      : { enabled: false, reason: 'config_unreadable' })
+    : undefined
+  // Could this companion answer a text chat turn itself when the primary is
+  // provably unreachable? The fallback's own predicate (cloudChatCapability), so
+  // what the phone is told and what a turn then does cannot disagree.
+  let cloudChat: 'available' | 'unavailable' | undefined
+  if (CLOUD_MODE) {
+    try {
+      cloudChat = (await cloudChatCapability()).kind === 'run' ? 'available' : 'unavailable'
+    } catch { /* cannot tell: omit rather than guess */ }
+  }
   res.json({
     mode: CLOUD_MODE ? 'REPLICA' : 'LIVE',
     cloud: CLOUD_MODE,
@@ -200,6 +218,8 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
     ...(lastSyncAt ? { lastSyncAt } : {}),
     ...(bridgeHostsList ? { bridgeHosts: bridgeHostsList } : {}),
     ...(cloudExec ? { cloudExec } : {}),
+    ...(daemonTunnel ? { daemonTunnel } : {}),
+    ...(cloudChat ? { cloudChat } : {}),
   })
 })
 
@@ -318,6 +338,11 @@ interface ApiV1Message {
   /** kind:'tool' on a Task/Agent row only (additive) — the delegated subagent's
    *  label, so the phone can say WHICH agent a delegation belongs to. */
   agent?: string
+  /** kind:'tool' only (additive) — the call's result came back `is_error`. The
+   *  phone folds consecutive tool rows into one "Ran 3 commands ›" line and
+   *  counts these for its "N failed" badge, as the web console does. Absent =
+   *  succeeded, including on a server that predates the field. */
+  isError?: true
   /** kind:'tool' | kind:'thinking' (additive) — opaque handle on this row's FULL
    *  text (`GET /api/v1/activity/detail?ref=…`), present only when the excerpts
    *  above had to cut something. See core/activity-detail.ts for the identity
@@ -333,6 +358,10 @@ interface ApiV1Message {
    *  intermediate text ("I will run the first command...") lands as a row mid-turn.
    *  Absent means "not in flight", including on a server that predates the field. */
   inFlight?: true
+  /** Additive, on an assistant TEXT row only: the cloud companion answered this
+   *  turn while the primary was unreachable (an adopted turn here, a banked one
+   *  on the companion, see cloudTurnRows). Absent for a primary-answered row. */
+  answeredBy?: 'cloud'
 }
 
 /**
@@ -407,14 +436,17 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
   }
 
   // Pre-scan tool_result carriers (user entries skipped below) so tool rows
-  // can carry a clipped output preview alongside the input summary.
+  // can carry a clipped output preview alongside the input summary, and say
+  // when the call failed.
   const resultsById = new Map<string, string>()
+  const errorIds = new Set<string>()
   for (const entry of entries) {
     if (entry.role !== 'user' || !Array.isArray(entry.content)) continue
     for (const block of entry.content as Array<Record<string, unknown>>) {
       if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
         const text = toolResultText(block.content)
         if (text) resultsById.set(block.tool_use_id, text)
+        if (block.is_error === true) errorIds.add(block.tool_use_id)
       }
     }
   }
@@ -468,13 +500,20 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
       continue
     }
     // assistant
+    const answeredBy = cloudAnsweredBy(entry)
     if (typeof entry.content === 'string') {
-      if (entry.content) push({ role: 'assistant', text: stripEntityRefs(entry.content), createdAt })
+      if (entry.content) push({ role: 'assistant', text: stripEntityRefs(entry.content), createdAt, ...answeredBy })
       continue
     }
     if (!Array.isArray(entry.content)) continue
+    // One API message is thinking, then text, then the tool calls it ends on, and
+    // that is the order the rows keep: the text is pushed BEFORE the tool rows
+    // (the same order buildSessionTranscript produces), so a client folding
+    // consecutive tool rows into one line sees "Let me check…" above the calls it
+    // announces rather than below them, splitting the run.
+    const blocks = entry.content as Array<Record<string, unknown>>
     const textParts: string[] = []
-    for (const block of entry.content as Array<Record<string, unknown>>) {
+    for (const block of blocks) {
       if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
         // Same two fields the lane branch produces (see laneTranscriptToApiV1):
         // the two sources must look identical to the client, which is why the
@@ -484,23 +523,40 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
           role: 'assistant', text: thinkingLine(block.thinking), createdAt, kind: 'thinking',
           ...(excerpt ? { thinkingText: excerpt } : {}),
         })
-      } else if (block.type === 'tool_use' && typeof block.name === 'string') {
-        const detail = toolDetail(block.name, block.input as Record<string, unknown> | undefined)
-        const inputPreview = toolInputPreview(block.input as Record<string, unknown> | undefined)
-        const result = typeof block.id === 'string' ? resultsById.get(block.id) : undefined
-        push({
-          role: 'assistant', text: block.name, createdAt, kind: 'tool',
-          ...(detail ? { detail } : {}),
-          ...(inputPreview ? { inputPreview } : {}),
-          ...(result ? { resultPreview: toolResultPreview(result) } : {}),
-        })
       } else if (block.type === 'text' && typeof block.text === 'string' && block.text) {
         textParts.push(block.text)
       }
     }
-    if (textParts.length > 0) push({ role: 'assistant', text: stripEntityRefs(textParts.join('')), createdAt })
+    if (textParts.length > 0) {
+      push({ role: 'assistant', text: stripEntityRefs(textParts.join('')), createdAt, ...answeredBy })
+    }
+    for (const block of blocks) {
+      if (block.type !== 'tool_use' || typeof block.name !== 'string') continue
+      const detail = toolDetail(block.name, block.input as Record<string, unknown> | undefined)
+      const inputPreview = toolInputPreview(block.input as Record<string, unknown> | undefined)
+      const result = typeof block.id === 'string' ? resultsById.get(block.id) : undefined
+      const isError = typeof block.id === 'string' && errorIds.has(block.id)
+      push({
+        role: 'assistant', text: block.name, createdAt, kind: 'tool',
+        ...(detail ? { detail } : {}),
+        ...(inputPreview ? { inputPreview } : {}),
+        ...(result ? { resultPreview: toolResultPreview(result) } : {}),
+        ...(isError ? { isError: true as const } : {}),
+      })
+    }
   }
   return out
+}
+
+/**
+ * `{ answeredBy: 'cloud' }` for an answer the cloud companion gave: adopted into
+ * this store, or (a synced copy on the companion) stamped with its lane's engine.
+ */
+function cloudAnsweredBy(entry: ChatEntry): { answeredBy?: 'cloud' } {
+  const engine = chatHistory.entryEngine(entry)
+  return chatHistory.isAdoptedCloudEntry(entry) || engine?.startsWith(chatHistory.CLOUD_ENGINE_PREFIX)
+    ? { answeredBy: 'cloud' }
+    : {}
 }
 
 /**
@@ -745,6 +801,7 @@ function laneTranscriptToApiV1(rows: ProjectedTranscriptMessage[]): Array<Omit<A
         // subagent label; this mapping dropped it, so the phone could never say
         // which agent a delegation belonged to even though it decodes the field.
         ...(row.agent ? { agent: row.agent } : {}),
+        ...(row.isError ? { isError: true as const } : {}),
       })
       continue
     }
@@ -3620,6 +3677,13 @@ apiV1Router.use(timeV1Router)
 import { healthV1Router } from './health-v1.js'
 
 apiV1Router.use(healthV1Router)
+
+// ─── Instance identity + routes (tailnet / LAN / cloud direct access) ──────
+// /instance is public (auth.ts PUBLIC_GET_PATHS); /routes needs the device token.
+
+import { instanceRoutesV1Router } from './instance-routes-v1.js'
+
+apiV1Router.use(instanceRoutesV1Router)
 
 // ─── Router-level error handler: frozen error shape ────────────────────────
 

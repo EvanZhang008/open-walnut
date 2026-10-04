@@ -15,6 +15,8 @@ enum DemoFixtures {
     static let macCodeRoot = "/Users/demo/code"
     static let buildBoxRoot = "/home/demo"
     static let buildBoxAlias = "build-box"
+    /// The hand-arranged project order the board follows (`GET /ordering`).
+    static let projectOrder = ["Pebble", "Acme Website", "Home", "Travel", "Learning"]
 
     /// The fixed sentence demo voice input "hears".
     static let transcriptionSentence = "Remind me to send the counter quotes to the contractor on Friday morning."

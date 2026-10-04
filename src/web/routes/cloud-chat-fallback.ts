@@ -75,8 +75,8 @@ function refuse(reason: string, why?: string): CloudFallbackDecision {
 }
 
 /**
- * May this box answer the turn itself? Cheapest checks first; the only I/O is a
- * config read and one mkdir, and only once the turn provably went nowhere.
+ * May this box answer the turn itself? Cheapest checks first; the I/O (see
+ * cloudChatCapability) only runs once the turn provably went nowhere.
  */
 export async function decideCloudFallback(input: {
   provablyUnsent: boolean
@@ -85,6 +85,17 @@ export async function decideCloudFallback(input: {
   // Not provable → the primary may be answering it right now. Today's error.
   if (!input.provablyUnsent) return refuse('ambiguous')
   if (input.hasImages) return refuse('images', 'The cloud companion does not answer picture messages on its own.')
+  return cloudChatCapability()
+}
+
+/**
+ * Could this box answer a text turn on its own at all, whatever the turn? The
+ * turn-independent half of decideCloudFallback, and what GET /api/v1/status
+ * reports as `cloudChat`: ONE predicate, so the phone's view of the box and what
+ * a turn then does cannot drift. The I/O is a config read, a few CLI path
+ * probes and one mkdir.
+ */
+export async function cloudChatCapability(): Promise<CloudFallbackDecision> {
   const { cloudExecActive } = await import('../../core/cloud-owned-session.js')
   if (!(await cloudExecActive())) {
     return refuse('cloud_exec_off', 'Cloud exec is not enabled on the cloud companion, so it has no engine of its own.')
@@ -195,11 +206,20 @@ export async function runCloudFallbackTurn(input: {
 /** The fields of a message row this module places (the rest pass through). */
 interface TimedRow { createdAt?: string }
 
+/** One banked-turn row in the route's mobile shape (no id). */
+export interface CloudTurnRow {
+  role: 'user' | 'assistant'
+  text: string
+  createdAt: string
+  /** On the answer only: the same provenance an adopted answer carries on the
+   *  primary (api-v1 normalizeEntries), so a row reads the same before and after
+   *  the hand-over. */
+  answeredBy?: 'cloud'
+}
+
 /** The rows a banked turn contributes, in the route's mobile shape (no ids). */
-export function cloudTurnRows(entries: CloudChatOutboxEntry[]): Array<{
-  role: 'user' | 'assistant'; text: string; createdAt: string
-}> {
-  const rows: Array<{ role: 'user' | 'assistant'; text: string; createdAt: string }> = []
+export function cloudTurnRows(entries: CloudChatOutboxEntry[]): CloudTurnRow[] {
+  const rows: CloudTurnRow[] = []
   for (const e of entries) {
     const userText = stripEntityRefs(e.userText)
     if (userText) rows.push({ role: 'user', text: userText, createdAt: e.userAt })
@@ -207,7 +227,10 @@ export function cloudTurnRows(entries: CloudChatOutboxEntry[]): Array<{
     // words alone, exactly like a failed primary turn (its error card is a
     // notification, never a timeline row).
     if (e.state === 'answered' && e.answerText) {
-      rows.push({ role: 'assistant', text: stripEntityRefs(e.answerText), createdAt: e.answeredAt ?? e.updatedAt })
+      rows.push({
+        role: 'assistant', text: stripEntityRefs(e.answerText), createdAt: e.answeredAt ?? e.updatedAt,
+        answeredBy: 'cloud',
+      })
     }
   }
   return rows

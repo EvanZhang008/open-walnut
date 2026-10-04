@@ -30,9 +30,10 @@ function entry(over: Partial<CloudChatOutboxEntry>): CloudChatOutboxEntry {
 
 describe('cloudTurnRows', () => {
   it('an answered turn is two rows; a running or failed one is the user row alone', () => {
+    // The answer says who computed it (additive `answeredBy`); the user's own row does not.
     expect(cloudTurnRows([entry({})])).toEqual([
       { role: 'user', text: 'q', createdAt: at(1) },
-      { role: 'assistant', text: 'a', createdAt: at(2) },
+      { role: 'assistant', text: 'a', createdAt: at(2), answeredBy: 'cloud' },
     ])
     expect(cloudTurnRows([entry({ state: 'running', answerText: undefined })])).toHaveLength(1)
     expect(cloudTurnRows([entry({ state: 'failed', answerText: undefined, error: 'x' })])).toHaveLength(1)

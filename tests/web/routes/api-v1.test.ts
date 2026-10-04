@@ -692,6 +692,37 @@ describe('message normalization: tool detail + result preview (additive)', () =>
     expect(tools[3].inputPreview).toBeUndefined()
     expect(tools[3].detail).toBeUndefined()
   })
+
+  it('keeps one message as thinking, text, then its tool calls, and flags the failed call', async () => {
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const entries = [
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: 'run both' }], timestamp: '2026-07-10T00:00:00Z' },
+      {
+        tag: 'ai', role: 'assistant', timestamp: '2026-07-10T00:00:01Z',
+        content: [
+          { type: 'thinking', thinking: 'Two commands.' },
+          { type: 'text', text: 'Running both now.' },
+          { type: 'tool_use', id: 'tu-ok', name: 'Bash', input: { command: 'true' } },
+          { type: 'tool_use', id: 'tu-bad', name: 'Bash', input: { command: 'false' } },
+        ],
+      },
+      {
+        tag: 'ai', role: 'user', timestamp: '2026-07-10T00:00:02Z',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu-ok', content: '' },
+          { type: 'tool_result', tool_use_id: 'tu-bad', content: 'exit 1', is_error: true },
+        ],
+      },
+      { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: 'done' }], timestamp: '2026-07-10T00:00:03Z' },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = normalizeEntries(entries as any)
+    // The text the model wrote BEFORE calling its tools sits above them: a phone
+    // folding consecutive tool rows into one line must not have it split the run.
+    expect(out.map((m) => m.kind ?? m.role)).toEqual(['user', 'thinking', 'assistant', 'tool', 'tool', 'assistant'])
+    expect(out[2].text).toBe('Running both now.')
+    expect(out.filter((m) => m.kind === 'tool').map((m) => m.isError)).toEqual([undefined, true])
+  })
 })
 
 describe('GET /api/v1/media (additive)', () => {

@@ -19,25 +19,38 @@ struct ServerStatus: Codable, Equatable {
         let since: Double?
     }
 
+    /// Can the cloud companion answer a chat message ITSELF when the Mac is out
+    /// of reach? Additive and replica-only (the /status route's `cloudChat`,
+    /// computed from the same check its fallback runs before answering a turn).
+    /// nil = the server does not say: the primary never sends it, and neither does
+    /// a replica older than the field.
+    enum CloudChat: String, Codable, Equatable {
+        case available
+        case unavailable
+    }
+
     let mode: Mode
     let cloud: Bool
     let version: String
     let serverTime: String
     let lastSyncAt: String?
     let bridgeHosts: [BridgeHost]?
+    let cloudChat: CloudChat?
 
     private enum CodingKeys: String, CodingKey {
-        case mode, cloud, version, serverTime, lastSyncAt, bridgeHosts
+        case mode, cloud, version, serverTime, lastSyncAt, bridgeHosts, cloudChat
     }
 
     init(mode: Mode, cloud: Bool, version: String, serverTime: String,
-         lastSyncAt: String? = nil, bridgeHosts: [BridgeHost]? = nil) {
+         lastSyncAt: String? = nil, bridgeHosts: [BridgeHost]? = nil,
+         cloudChat: CloudChat? = nil) {
         self.mode = mode
         self.cloud = cloud
         self.version = version
         self.serverTime = serverTime
         self.lastSyncAt = lastSyncAt
         self.bridgeHosts = bridgeHosts
+        self.cloudChat = cloudChat
     }
 
     /// Lenient on the additive fields only: `mode`/`cloud`/`version` stay
@@ -52,6 +65,9 @@ struct ServerStatus: Codable, Equatable {
         serverTime = (try? c.decode(String.self, forKey: .serverTime)) ?? ""
         lastSyncAt = try? c.decodeIfPresent(String.self, forKey: .lastSyncAt)
         bridgeHosts = try? c.decodeIfPresent([BridgeHost].self, forKey: .bridgeHosts)
+        // An unknown value from a newer server reads as "does not say", never as
+        // a failed probe.
+        cloudChat = try? c.decodeIfPresent(CloudChat.self, forKey: .cloudChat)
     }
 }
 
@@ -129,6 +145,18 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// tool row was rendered from the list with no `resultPreview` yet, which
     /// the drawer reported as "No output".
     let inFlight: Bool?
+    /// Who computed this assistant reply when it was NOT the Mac: `"cloud"` for a
+    /// turn the cloud companion answered on its own while the Mac was out of reach
+    /// (additive 2026-09, history rows of such turns; the live turn's SSE frames
+    /// carry the same word). nil means the Mac answered, and is also what an older
+    /// server sends. `var` because a live turn stamps its provisional reply before
+    /// the canonical row lands (see ChatStore.finalizeTurn).
+    var answeredBy: String?
+    /// kind == .tool only — the call's result came back as an error (additive
+    /// 2026-10). The folded "Ran 3 commands" row counts these for its "N failed"
+    /// badge, exactly as the web console does. nil on a succeeded call and on an
+    /// older server, where every run simply reports no failures.
+    let isError: Bool?
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -154,13 +182,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
-        case thinkingText, inputPreview, detailRef, inFlight
+        case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
          detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
          thinkingText: String? = nil, inputPreview: String? = nil, detailRef: String? = nil,
-         inFlight: Bool? = nil) {
+         inFlight: Bool? = nil, answeredBy: String? = nil, isError: Bool? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -174,9 +202,14 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.inputPreview = inputPreview
         self.detailRef = detailRef
         self.inFlight = inFlight
+        self.answeredBy = answeredBy
+        self.isError = isError
     }
 
     var isUser: Bool { role == "user" }
+
+    /// An assistant reply the cloud companion computed, not the Mac.
+    var answeredOnCloud: Bool { !isUser && kind == nil && answeredBy == "cloud" }
 }
 
 struct NoteTreeNode: Codable, Identifiable, Equatable {
@@ -599,10 +632,13 @@ struct SessionTranscript: Codable {
         /// kind == "tool" only — compact redacted tool input for the expanded
         /// card's Input section (additive 2026-09).
         let inputPreview: String?
+        /// kind == "tool" only — the call's result came back as an error
+        /// (additive 2026-10; nil on a succeeded call and on an older server).
+        let isError: Bool?
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
-             thinkingText: String? = nil, inputPreview: String? = nil) {
+             thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -612,6 +648,7 @@ struct SessionTranscript: Codable {
             self.agent = agent
             self.thinkingText = thinkingText
             self.inputPreview = inputPreview
+            self.isError = isError
         }
     }
 

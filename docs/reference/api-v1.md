@@ -63,6 +63,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `host_unreachable` | 409 | `POST /sessions`: a fresh connect attempt to the host just failed; `kind`, `headline` and `hint` describe that attempt |
 | `host_off` | 409 | `POST /sessions`: remote hosts are off on this test server (never dialled) |
 | `host_removed` | 409 | `POST /sessions`: the `host` alias is not an enabled host in Settings (removed, disabled, or never configured) |
+| `host_reconnecting` | 503 | `GET /sessions/:id/history`, `GET /sessions/:id/changes` and `GET /sessions/list-dirs`: the host is still connecting, or did not connect within 5 s of this request starting the dial. Nothing was read. Retry in a few seconds; the dial goes on without the request |
 | `task_has_no_session` | 409 | `POST /messages` named a task with nothing running; start one with `POST /tasks/:id/start` |
 | `ambiguous_target` | 400 | `POST /messages` handle matched several sessions/tasks (`candidates`); use a longer id |
 | `unknown_target` | 404 | `POST /messages` handle matched no session, task, or title |
@@ -287,6 +288,28 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 `mode` is `REPLICA` on a cloud box today; when the reverse-WS bridge to the
 primary lands (Phase 2), a bridged cloud box will report `LIVE`.
 
+`cloudChat` (additive, 2026-09, REPLICA only): `"available"` or `"unavailable"`.
+It says whether the cloud companion can answer a chat turn by itself when the
+primary is provably unreachable (see "When the primary cannot be reached, the
+companion may answer itself" under `POST /api/v1/conversations/:id/messages`).
+`"available"` means cloud exec is on, the `claude` CLI is installed, and the chat
+working folder is usable, so a TEXT turn that provably never reached the primary
+is answered on the companion. A picture turn, or a relay failure that may have
+reached the primary, still ends in the `error` frame either way. The value is
+computed by the same check a turn runs, so it agrees with what a turn sent right
+now would do. The key is absent on the primary (`LIVE`), on a replica that
+predates the field, and when the replica could not work it out; treat absent as
+"unknown", not as either value.
+
+`daemonTunnel` (additive, 2026-09, REPLICA only): `{ "enabled": true }`, or
+`{ "enabled": false, "reason": "..." }` with a cloud exec reason (`not_enabled`,
+`no_cwd_roots`, `cwd_roots_not_absolute`) or `config_unreadable`. Its presence
+says the companion serves `/daemon-tunnel`, the WebSocket the paired Mac uses to
+run its own sessions on the box (see "The Mac's sessions on the companion" in
+[cloud-sync.md](./cloud-sync.md)). `enabled` follows `cloud.exec.enabled`. The
+Mac reads it to show its "Cloud" host: absent means the companion is too old
+("Cloud companion needs an update"), `enabled: false` means hosting is turned off.
+
 `capabilities` (additive, 2026-09): the v1 features this server offers beyond
 the frozen base, by name. Absent on a server that predates the field; treat that
 as an empty list. `"asks"`: this server can serve `GET /api/v1/asks`. On a
@@ -419,6 +442,18 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
     so the command itself is only in `inputPreview`.
   - `agent` (additive) — on a `Task`/`Agent` row, the delegated subagent's
     label, so the row can read `Task — investigate the crash · reviewer`.
+  - `isError: true` (additive, 2026-10) — the call's result came back as an
+    error. Absent on a call that succeeded and on an older server. A client
+    folding consecutive tool rows into one `Ran 3 commands ›` line counts these
+    for its `N failed` badge, the way the web console does.
+  - **Row order within one assistant message** (2026-10): `kind: "thinking"`
+    rows first, then the message's text row, then its `kind: "tool"` rows. That
+    is the order of one API message (the model reasons, says what it is about
+    to do, and the message ends at the tool calls), and it is what lets a
+    client fold the tool rows that follow a text row into one line with the
+    next message's calls. Before 2026-10 the text row came AFTER the tool rows;
+    a client must not assume either order for data served by a server it did
+    not ship with.
   - `detail`, `inputPreview` and `resultPreview` are **all redacted** by one
     rule: recognised secret shapes (API keys, bearer tokens, AWS credentials,
     `password=`/`token=` pairs, URL userinfo, private-key blocks) come through
@@ -457,6 +492,14 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
   or `error` frame is sent, so a refetch triggered by that frame is already clean.
   A cloud replica returns the primary's rows verbatim, so the field means the same
   thing on either box.
+- `answeredBy` (additive, 2026-09): `"cloud"` on the assistant text row (no
+  `kind`) of a turn the cloud companion answered by itself while the primary was
+  unreachable, so a reloaded conversation can still label that reply. It is set
+  the same way before the hand-over (the companion's own banked copy) and after
+  it (the turn the primary adopted), and it never appears on the user row, on a
+  `kind` row, or on a reply the primary gave. A companion turn that failed has no
+  assistant row at all. Absent on older servers, so treat absent as "answered by
+  the primary". It matches the `answeredBy` on the live SSE frames.
 - `kind: "notification"` — a system-generated card (additive); `source` says
   which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
   `"compaction"`, …). Render as a distinct card, not a chat bubble. Noisy
@@ -534,7 +577,10 @@ installed, the companion answers the turn with its own `claude` session. The
 stream is the same frames as a relayed turn, and `message-start`, `message-end`
 and `error` carry the additive `"answeredBy": "cloud"` so a client can label the
 reply (for example "answered from the cloud"). Clients that ignore the field keep
-working. That session is deliberately narrow: it has no Walnut tools, no shell
+working. The reply's row in `GET /conversations/:id/messages` carries the same
+`"answeredBy": "cloud"`, so the label survives a reload, and `GET /api/v1/status`
+reports ahead of time whether the companion can answer at all (`cloudChat`).
+That session is deliberately narrow: it has no Walnut tools, no shell
 and no file editing, only reads inside its own working folder and web search. It
 starts from the conversation history the companion already has, which is every
 turn sent from the phone or the web chat. Turns typed into a session panel on
@@ -1071,6 +1117,27 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
     `backlog` is accepted and lands in `wait`); anything else →
     `400 bad_request`.
   - `GET /api/v1/focus/tiers` → `{ "tiers": [ { "id": "ct_…", "label" } ] }`.
+- Board order (additive, 2026-09). A client that draws a pinned tier must
+  draw it in the console's order, which is ONE rule:
+  `web/src/utils/pinned-tier-order.ts` (`orderPinnedTier`), twinned on iOS by
+  `ios-native/Walnut/Views/Tasks/PinnedTierOrder.swift` and pinned for both by
+  the shared fixture `tests/fixtures/pinned-tier-order/`. Its inputs are all
+  server-side:
+  - the tier's rows in the `TierResult` order (`pin_order` ascending),
+    completed rows left out;
+  - the tier's view mode (`project` = By project, `custom` = Custom order);
+  - `projects` from `GET /api/v1/ordering`;
+  - each row's folder, from the `member_ids` of `GET /api/v1/tasks/groups`.
+
+  `custom` keeps pin order and gathers each folder at its first member.
+  `project` groups the rows by project (the projects named in `ordering`
+  first, in that order and case-insensitively, then the others where their
+  first row appears), loose rows ahead of folder blocks. A new pin gets the
+  highest `pin_order`, so it lands at the FOOT of its group. Date and search
+  filters hide rows afterwards and never reorder what stays. A client that
+  shows completed rows (iOS `show done`) still orders the open rows without
+  them, draws each completed row in its pin place inside its own group, and
+  puts a group that only completed rows have after the others.
 
 ### Sessions (read-only)
 
@@ -1133,7 +1200,7 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   `503 unavailable` on a fresh companion).
 - `GET /api/v1/sessions/:id/transcript?fresh=1&rich=1` →
   `{ "sessionId", "exportedAt", "truncated", "rich"?, "messages": [ { role, text,
-  timestamp, kind?, detail?, resultPreview?, agent?, inputPreview?,
+  timestamp, kind?, detail?, resultPreview?, agent?, isError?, inputPreview?,
   thinkingText?, detailRef? } ] }`: a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row, or 12 KB for a row that
   carries HTML, and the cut is made where it cannot leave half a tag behind so a
@@ -1148,7 +1215,12 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   unclipped. `agent` (additive, 2026-08) appears on
   `Task`/`Agent` tool rows and names the delegated subagent (team agent name,
   the tool input's `name`, or its `subagent_type`) — render it as a badge on
-  the delegation row; the subagent's own transcript is not inlined. The primary
+  the delegation row; the subagent's own transcript is not inlined. `isError:
+  true` (additive, 2026-10) marks a tool row whose result came back as an error,
+  on the slim tail too (a folded `Ran 3 commands · 1 failed` line needs it
+  before any card is expanded). Rows of one message come as thinking, then the
+  text, then the tool calls (see the `/conversations/:id/messages` notes on
+  row order). The primary
   box exports tails for every session it can reach — local from disk, remote
   over its SSH channel — so this works for sessions on ANY machine without
   the phone talking to that machine. `404 not_found` when no tail was
@@ -1382,7 +1454,11 @@ primary box the same endpoints serve directly — no bridge involved.
     running (idle-reaped). Waking a dead session stays a primary-box action;
     show "wake it from your desktop".
   - `503 { "error": { "code": "bridge_offline" } }` — no live bridge to that
-    session's host (cloud only). Disable the composer; keep polling.
+    session's host (cloud only), for a send the replica could not bank (an
+    image send). Retry with the same `messageId`; keep the composer enabled.
+    A text send made while the bridge is down is banked instead:
+    `202 { "messageId", "queued": true }`, delivered when the bridge returns.
+    A `queued` 202 is therefore not proof the bridge is up.
 - `GET /api/v1/sessions/:id/stream` — SSE (same framing as conversation
   streams: monotonic `id:`, `Last-Event-ID` replay, `:` pings). Events:
   - `snapshot { blocks, isStreaming, completedLen, processStatus }` — sent
@@ -1398,8 +1474,16 @@ primary box the same endpoints serve directly — no bridge involved.
   - `turn-end {}` — refetch the transcript here to reconcile.
   - `error { message }`
   - `bridge-online {}` / `bridge-offline {}` (cloud only) — sent on attach
-    and whenever the daemon bridge for this session's host comes/goes; on
-    offline fall back to `fresh=1` polling and disable the composer.
+    (id-less) and whenever the daemon bridge for this session's host comes or
+    goes (with an id, into the replay ring). A bridge redial takes about 1.3 s,
+    so a client should show an outage only after continuous absence (the iOS
+    page shows a "Reconnecting…" chip and starts `fresh=1` polling after 3 s,
+    and a banner after 10 s) and never lock the composer for it.
+  - Replay: the cloud replica's ring is never reset at a turn start (up to 512
+    frames of turn-ends and bridge pairs), and a connect without
+    `Last-Event-ID` replays all of it. Clients must resume with the newest
+    applied id, must not re-apply a frame at or below it, and must coalesce
+    the transcript refetches that `turn-end` / `bridge-online` trigger.
   - `404 not_found` on servers without this endpoint — fall back to polling.
 - `/api/v1/status` additive field (cloud only):
   `bridgeHosts: [ { hostAlias, since } ]` — hosts with a live daemon bridge.
@@ -1904,7 +1988,11 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   (cascade needs the primary's provider plugins).
 - `GET /api/v1/ordering` → `{ "projects": [names in display order] }`;
   `PUT /api/v1/ordering/projects` body `{ "order": [names] }` → same shape.
-  Class A (config rides git-sync).
+  The order lives in the primary's config.yaml, which is machine-local (it
+  does not ride git-sync). A REPLICA's `GET` therefore serves the copy the
+  primary pushes on its task projection (`project_order`, additive 2026-09),
+  and falls back to its own config only while the primary predates that
+  field.
 - `POST /api/v1/favorites/projects/:name` / `DELETE …/:name` →
   `{ "projects" }` — case-insensitive, idempotent; stored under the
   registry's canonical spelling. Completes the Wave-1 note-favorites pair.
@@ -1959,7 +2047,12 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   REPLICA** (`group_id` and the group registry are not in the outbox update
   whitelist, so replica-local writes would silently revert; an honest error
   beats a silent revert):
-  - `GET /api/v1/tasks/groups` → `{ "groups" }` (reads work on both boxes).
+  - `GET /api/v1/tasks/groups` → `{ "groups": [ { group_id, label, hidden,
+    member_ids, project, parent_id? } ] }` (reads work on both boxes). A
+    REPLICA's own rows carry no `group_id`, so it serves the listing the
+    primary pushes on its task projection (`groups`, additive 2026-09,
+    `member_ids` narrowed to the rows the projection ships), and falls back
+    to its own store only while the primary predates that field.
   - `POST /api/v1/tasks/groups` body `{ "task_ids": [≥2], "label"? }` →
     `201 { group_id, label, … }`. Unlike the web route, no async AI label
     refinement fires — mobile reads the response synchronously.
@@ -2516,6 +2609,26 @@ Generic types (additive, 2026-10): every HealthKit type outside the catalog, und
 `DELETE /api/v1/health/data` with optional `{ "categories": [...] }` → `{ deleted: "all" | [...], storeId, paused: true, removed }`. Deleting `other` removes every generic row with its unit and agg pins. Any delete rotates the `storeId` and pauses syncing, so the phone's next sync answers `409 store_mismatch` instead of silently refilling what was removed. A full delete removes the database file itself.
 
 Agent reads live on the primary's internal routes (`GET /api/health/status|sleep|daily|series|samples`, callers on this Mac only, 501 on a replica) behind the `health_status`, `health_sleep`, `health_daily`, `health_series`, `health_samples` and `day_review` ops. `health_series` takes a catalog metric or any `q.` type (raw samples fold to avg/min/max plus sum, buckets by the pinned `agg`; a covered name reads its catalog metric). `health_samples` (`GET /api/health/samples?type=&from=&to=&limit=`, limit 1 to 500, default 100, window at most 90 days, default the 90 days ending today) returns one raw type's rows newest first: `{ type, unit, tz, from, to, rows: [ { start, end, value, code, unit, source, device, tz, meta } ], truncated }`; a characteristic ignores the window. `day_review` takes `connected` from `health_status`, so a phone that stopped syncing reads as not connected with the date of its last sync, not as missing data. A session on the Mac itself may call them; every other caller is refused (the rule above). A sleep night reads `status: ok`, `in_bed_only` (In Bed samples only, as an iPhone without an Apple Watch records: bedtime, wake and `inBedMin` from the in-bed span, `asleepMin` null, plus a `caveat`), `no_main_night` (naps only) or `missing`. Sleep pieces form one night unless 60 min or more between them has no awake or in-bed record from the same source; recorded awake time inside the night counts as awake. Sleep split off that way but ending on the same wake date within 3 h of the night is reported, never joined: the night carries `unrecordedGaps: [ { side: before|after, start, end, min, unrecordedMin, otherSleepMin } ]` and a `caveat`, and that sleep stays under `naps`. Nothing in the samples tells a real wake from a recording gap (a flat Watch battery), and Apple documents no rule for joining across one, so the agent is told to say the recording has a gap rather than state that night's wake time as fact.
+
+### Instance identity and routes (additive, 2026-09): `/instance`, `/routes`, tailnet direct access
+
+A paired phone can reach the same Walnut at several addresses: the Mac on the Wi-Fi, the Mac over a tailnet (Tailscale, Headscale or Netbird, all in `100.64.0.0/10`), and the cloud companion. These two endpoints tell it which addresses its token works at, and let it check that an address leads to the box it expects.
+
+`GET /api/v1/instance` needs no token, in both modes, and is GET only → `{ "instance": "<32 hex>", "mode": "LIVE" | "REPLICA" }` and nothing else. The id is 16 random bytes minted once per box and kept in that box's `auth.json` (machine-local, never synced), so it survives restarts and never moves to another box.
+
+`GET /api/v1/routes` (device token) → `{ "routes": [ { "kind": "lan" | "tailnet" | "cloud", "origin": "http://192.168.1.20:3456", "label": "This network (Wi-Fi)", "instance": "<32 hex>" } ], "device": "<this pairing's name>" | null }`, best first (`lan`, `tailnet`, `cloud`). `instance` is the id of the box behind that origin; compare it with `/instance` there before trusting an address. Asking also makes the caller's token work on the other box ("adoption"): the box the phone is paired with copies the pairing's sha256 hash, never the token, into the other box's registry.
+
+- On the primary: `lan` and `tailnet` on the port the request came in on, plus `cloud` once the companion has adopted the pairing.
+- On a replica: `cloud` (this box), plus the primary's `lan` and `tailnet` once the primary has adopted the pairing over the bridge (`server.devices.adopt`).
+- A caller with no device (an API key, the Mac's own console) gets the routes that need no adoption.
+- Anything failing on the far side (no companion, a companion or primary on an older build, the bridge offline) leaves that route out. The answer is still `200`; ask again later.
+- On the primary the answer also carries `tailscale: { installed, running, dnsName? }` (the same summary as the console's `GET /api/devices/tailscale`: `installed` = the Tailscale CLI is found, `running` = its backend runs, or with no answer from the CLI, this Mac has a tailnet address anyway), so the app can tell "set up Tailscale on your Mac first" from "install Tailscale on this phone". A replica forwards the summary the primary put in its adopt reply (`server.devices.adopt` over the bridge), so a phone that only reaches the cloud still gets it. Absent while the first check of the CLI is still running, when the bridge is down, and from a primary older than the field; treat a missing field as "no guidance".
+
+Removing or re-pairing a device on either box removes its copy on the other one (`POST /api/devices/unadopt`, or `server.devices.revoke-by-hash` from a replica), in the background, so a revoked token stops working everywhere. While the other box is unreachable the removal is retried every minute for 30 minutes by the running server; a revoke made with the `walnut device` CLI does not reach the other box. The pairing that owns a companion's machine credentials (the Mac itself) is never copied or removed this way.
+
+Box-to-box endpoints behind this (device token; a phone gets `403 phone_cannot_pair`; flat `{ error, code }` errors like the rest of `/api/devices`): `POST /api/devices/adopt` with `{ name, token_hash, id?, platform?, info? }` → `{ name, instance, adopted }`. The same hash again answers `adopted: false` and changes nothing; a name already taken by another pairing gets the first free `name-2`, `name-3` and so on, and an existing record is never replaced. `POST /api/devices/unadopt` with `{ token_hash }` → `{ name, instance, revoked }` (`name: null, revoked: false` when nothing had that hash).
+
+Pairing a phone for the tailnet: `GET /api/devices` lists a `tailnet` entry in `targets` when this Mac has a tailnet address (`{ kind: "tailnet", origin: "http://100.x.y.z:3456", label: "Tailscale (anywhere this machine is on)" }`, or `Tailnet …` when the Tailscale CLI is not installed), and carries `tailscale: { installed, running, dnsName? }` for an install hint. The field is absent on a replica and while the first check of the CLI is still running. `POST /api/devices` with `target: "tailnet"` puts that origin in the QR's `server=`. Browser pages on a tailnet origin (a `100.64.0.0/10` address or a `*.ts.net` name) get the same CORS grant as private LAN origins; every request from them still needs a device token.
 
 ## Offline write matrix (REPLICA behavior contract, 2026-08)
 

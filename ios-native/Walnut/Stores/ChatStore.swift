@@ -228,6 +228,9 @@ final class ChatStore {
     /// session can't accumulate photo data.
     @ObservationIgnored private var sentImages: [(text: String, datas: [Data])] = []
     private static let maxRememberedSentImages = 12
+    /// Replies the phone watched the cloud companion answer, for servers whose
+    /// history rows do not say so (see CloudAnswerMarks). Persisted and bounded.
+    @ObservationIgnored private var cloudMarks: CloudAnswerMarks
     /// Latest tool/thinking status, e.g. "Read" — shown as an activity row.
     var activity: String?
     var errorMessage: String?
@@ -275,9 +278,11 @@ final class ChatStore {
     /// `transport` / `sendTransport` nil (production) = this store's own
     /// `WalnutAPI` instance. WalnutTests pass scripted ones to drive the real
     /// conversation-switch ordering and the real queue drain without a network.
-    init(transport: ChatMessagesTransport? = nil, sendTransport: ChatSendTransport? = nil) {
+    init(transport: ChatMessagesTransport? = nil, sendTransport: ChatSendTransport? = nil,
+         cloudMarksDefaults: UserDefaults = .standard) {
         self.transport = transport ?? api
         self.sendTransport = sendTransport ?? api
+        self.cloudMarks = CloudAnswerMarks(defaults: cloudMarksDefaults)
         LifecycleHub.shared.register(self)
     }
 
@@ -509,9 +514,12 @@ final class ChatStore {
         lastFetchSettledTurn = nil
         do {
             let agentID = activeAgentID
-            let fetched = try await transport.messages(
+            let page = try await transport.messages(
                 conversationID: id, agentID: agentID, limit: Self.pageSize, before: nil
             )
+            // Before anything reads the page: every consumer below (the install,
+            // the disk cache, the settle verdict) sees the same attribution.
+            let fetched = cloudMarks.apply(to: page, conversationID: id)
             guard isActive, !Task.isCancelled else { return }
             connection?.reportReachability(true, source: "chat-rest", endpoint: "/api/v1/conversations/messages")
             // Apply-time check, not request-time: this answer describes `id`, and
@@ -781,11 +789,12 @@ final class ChatStore {
         loadingMessages = true
         defer { loadingMessages = false }
         do {
-            let older = try await transport.messages(
+            let olderPage = try await transport.messages(
                 conversationID: id, agentID: activeAgentID,
                 limit: Self.pageSize, before: oldest.id
             )
             guard !Task.isCancelled, stillViewing(id) else { return }
+            let older = cloudMarks.apply(to: olderPage, conversationID: id)
             messages.insert(contentsOf: older, at: 0)
             hasOlder = older.count >= Self.pageSize
         } catch {
@@ -1512,7 +1521,15 @@ final class ChatStore {
     }
 
     private struct DeltaPayload: Codable { let delta: String }
-    private struct EndPayload: Codable { let turnId: String; let fullText: String }
+    /// `answeredBy` / `engine` are additive: `"cloud"` when the cloud companion
+    /// computed the reply itself, and `walnut-agent-fallback` as the engine of an
+    /// older replica answering with its built-in agent (see CloudAnswerMarks).
+    private struct EndPayload: Codable {
+        let turnId: String
+        let fullText: String
+        let answeredBy: String?
+        let engine: String?
+    }
     private struct ErrorPayload: Codable { let message: String }
 
     /// Equality-gated writes for the per-SSE-event flags — same fix as
@@ -1599,7 +1616,12 @@ final class ChatStore {
             // loadMessages paint the canonical row (fullText, when present,
             // is server-authoritative and unaffected).
             let fallback = streamTextTruncated ? "" : streamText
-            finalizeTurn(conversationID: conversationID, fullText: payload?.fullText ?? fallback)
+            finalizeTurn(
+                conversationID: conversationID, fullText: payload?.fullText ?? fallback,
+                answeredOnCloud: CloudAnswerMarks.frameSaysCloud(
+                    answeredBy: payload?.answeredBy, engine: payload?.engine
+                )
+            )
         case "error":
             let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
             AppLog.error("chat", "turn failed", ["message": payload?.message ?? "?"])
@@ -2018,7 +2040,7 @@ final class ChatStore {
         return history[(userIdx + 1)...].contains { $0.role == "assistant" && $0.kind == nil }
     }
 
-    private func finalizeTurn(conversationID: String, fullText: String) {
+    private func finalizeTurn(conversationID: String, fullText: String, answeredOnCloud: Bool = false) {
         turnWatchdog?.cancel()
         turnWatchdog = nil
         watchedUserText = nil
@@ -2047,12 +2069,25 @@ final class ChatStore {
                 $0.role == "assistant"
                     && MarkdownParser.replaceEntityRefs($0.text, bold: false) == normalized
             } ?? false
+            // The cloud answered this one: remember it BEFORE the refetch below,
+            // so the canonical row that replaces the provisional one keeps the
+            // caption even on a server whose history does not carry it.
+            if answeredOnCloud {
+                cloudMarks.remember(
+                    conversationID: conversationID, text: fullText,
+                    atMs: Date().timeIntervalSince1970 * 1000
+                )
+                if isDuplicate, let last = messages.indices.last, messages[last].answeredBy == nil {
+                    messages[last].answeredBy = "cloud"
+                }
+            }
             if !isDuplicate {
                 let turnID = "turn-\(Date().timeIntervalSince1970)"
                 messages.append(ChatMessage(
                     id: turnID,
                     role: "assistant", text: fullText,
-                    createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+                    createdAt: ISO8601DateFormatter().string(from: .now), kind: nil,
+                    answeredBy: answeredOnCloud ? "cloud" : nil
                 ))
                 // Tag the provisional reply with its conversation, so a later
                 // merge can tell "the canonical reply has not landed yet" from
@@ -2262,6 +2297,7 @@ extension ChatStore {
         activeAgentID = Self.mainAgentID
         localRowConversation.removeAll()
         sentImages.removeAll()
+        cloudMarks.removeAll()
         liveTurnID = nil
         stallNotice = nil
         errorMessage = nil

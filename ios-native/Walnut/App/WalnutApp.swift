@@ -327,6 +327,9 @@ struct MainTabView: View {
         .onChange(of: selection) { _, tab in
             AttentionContext.shared.setBase(Self.attentionTarget(for: tab))
             filePreview?.setComposerSurfaceBase(Self.composerSurface(for: tab))
+            // Leaving the Inbox ends the visit the Unread filter was keeping read
+            // rows for (the console clears them when its panel closes).
+            if tab != .inbox { inbox.forgetKeptRows() }
         }
         .onChange(of: quickAction.pending) { _, request in
             if request != nil { selection = .chat }

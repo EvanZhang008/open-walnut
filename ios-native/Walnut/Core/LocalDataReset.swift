@@ -101,6 +101,7 @@ enum LocalDataReset {
         ComposerDrafts.shared.clearAll()
         LetterReplyStore.shared.eraseAll()
         AttachmentLoader.shared.eraseAll()
+        SessionStreamResumeIDs.shared.removeAll()
         TimeHeartbeatReporter.shared.eraseLocalData()
         PushRegistration.shared.forgetServer()
         DemoServer.shared.reset()

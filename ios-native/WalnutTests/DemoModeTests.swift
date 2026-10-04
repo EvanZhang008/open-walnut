@@ -198,6 +198,15 @@ final class DemoModeTests: XCTestCase {
             XCTAssertNotNil(UIImage(data: data))
         }
 
+        // Connection routes: the demo has one address, so nothing to learn, and
+        // the identity probe (its own URLSession) is answered in-process too.
+        let order = try await api.projectOrder()
+        XCTAssertEqual(order, DemoFixtures.projectOrder)
+        let routes = try await api.routes()
+        XCTAssertEqual(routes.routes, [], "no other route for the selector to try")
+        let probe = await InstanceProbe.probe(.custom(DemoMode.baseURLString))
+        guard case .ok = probe else { return XCTFail("the identity probe got \(probe)") }
+
         XCTAssertEqual(DemoServer.shared.unansweredRoutes, [], "every route above has a demo answer")
         XCTAssertEqual(DemoURLProtocol.blockedRequests, [], "nothing went to any other host")
     }
