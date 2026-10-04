@@ -437,6 +437,39 @@ export async function fetchSessionsForTask(taskId: string): Promise<SessionRecor
   return res.sessions;
 }
 
+const requestAskers = new Map<string, Promise<string | null>>();
+
+/**
+ * The session that asked a request (`rq-…`), for a reply card whose tool output
+ * no longer names it. One GET per id per page: an asker never changes, so a found
+ * row and a 404 (pruned or unknown) are both kept; a failed fetch is forgotten,
+ * so a later mount may try again.
+ */
+export function fetchRequestAsker(requestId: string): Promise<string | null> {
+  let pending = requestAskers.get(requestId);
+  if (!pending) {
+    pending = apiGet<{ request?: { fromSessionId?: unknown } }>(
+      `/api/v1/requests/${encodeURIComponent(requestId)}`, undefined, { timeoutMs: 10_000, quietStatuses: [404] },
+    ).then((res) => {
+      const sid = res?.request?.fromSessionId;
+      return typeof sid === 'string' && sid ? sid : null;
+    }).catch((err) => {
+      if (!(err instanceof ApiError && err.status === 404)) {
+        requestAskers.delete(requestId);
+        log.warn('session', 'request asker lookup failed', { requestId, error: String(err) });
+      }
+      return null;
+    });
+    requestAskers.set(requestId, pending);
+  }
+  return pending;
+}
+
+/** Test seam: forget every looked-up asker. */
+export function _clearRequestAskers(): void {
+  requestAskers.clear();
+}
+
 /**
  * Fetch one session record. Returns null ONLY when the session genuinely does
  * not exist (404). Any other failure (network, timeout, empty-body parse error)

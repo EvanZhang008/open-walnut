@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { SessionHistoryTool } from '../../web/src/types/session';
-import { detectOutboundSend } from '../../web/src/components/sessions/session-outbound';
+import { detectOutboundSend, replyRequestToLookUp } from '../../web/src/components/sessions/session-outbound';
 
 function bash(command: string, extra: Partial<SessionHistoryTool> = {}): SessionHistoryTool {
   return { name: 'Bash', input: { command }, ...extra };
@@ -245,5 +245,46 @@ describe('detectOutboundSend — never throws', () => {
     const send = detectOutboundSend(bash(`walnut tools call session_send '{"to":"ab12cd34","text":"go"}'`), noisy);
     expect(send!.delivery).toBe('queued');
     expect(send!.requestId).toBe('rq-09cd2ef25e57');
+  });
+});
+
+describe('replyRequestToLookUp', () => {
+  // The 2026-10-04 case: a worker answered its leader and piped the CLI through
+  // `tail -3`, so the transcript kept only the closing lines of the server's answer.
+  const cutCommand = `walnut tools call task_send '{"in_reply_to":"rq-023db702061f","text":"Ack: now the only worker."}' 2>&1 | tail -3`;
+  const cutResult = [
+    '  "outcome": "Message queued for task-9f1. Accepted for delivery, not a completed reply. Do NOT resend.",',
+    '  "next": "Its reply arrives in your session on its own; do not poll."',
+    '}',
+  ].join('\n');
+
+  it('asks for the request when a reply lost the answer that names its target', () => {
+    const send = detectOutboundSend(bash(cutCommand), cutResult)!;
+    expect(send.kind).toBe('reply');
+    expect(send.target).toBeUndefined();
+    expect(send.body).toBe('Ack: now the only worker.');
+    expect(replyRequestToLookUp(send)).toBe('rq-023db702061f');
+  });
+
+  it('asks while the call is still running (no output yet)', () => {
+    const send = detectOutboundSend(mcp({ in_reply_to: 'rq-023db702061f', text: 'done' }))!;
+    expect(replyRequestToLookUp(send)).toBe('rq-023db702061f');
+  });
+
+  it('never asks when the server already named the target', () => {
+    const full = JSON.stringify({
+      delivery: 'queued', targetSessionId: 'ab12cd34-5678-4aaa-8bbb-000000000001',
+      target: { handle: 'Fable rollout on the Mac [ab12cd34]', sessionId: 'ab12cd34-5678-4aaa-8bbb-000000000001' },
+      repliedTo: 'rq-023db702061f',
+    });
+    const send = detectOutboundSend(mcp({ in_reply_to: 'rq-023db702061f', text: 'done' }), full)!;
+    expect(replyRequestToLookUp(send)).toBeUndefined();
+  });
+
+  it('never asks for a send that is not a reply, or for an id the server would refuse', () => {
+    expect(replyRequestToLookUp(detectOutboundSend(mcp({ to: 'ab12cd34', text: 'go' }))!)).toBeUndefined();
+    expect(replyRequestToLookUp(detectOutboundSend(mcp({ in_reply_to: 'rq-1', text: 'go' }))!)).toBeUndefined();
+    expect(replyRequestToLookUp(detectOutboundSend(mcp({ in_reply_to: '../config', text: 'go' }))!)).toBeUndefined();
+    expect(replyRequestToLookUp(detectOutboundSend(mcp({ in_reply_to: 'rq-ZZZZZZZZ', text: 'go' }))!)).toBeUndefined();
   });
 });

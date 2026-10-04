@@ -30,9 +30,11 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   outboundDirectionGlyph,
   outboundDirectionLabel,
+  replyRequestToLookUp,
   splitOutboundHandle,
   type OutboundSend,
 } from './session-outbound';
+import { fetchRequestAsker } from '@/api/sessions';
 import { resolveRefInIndex } from '@/components/chat/session-mention';
 import {
   ensureSessionMentionIndex,
@@ -70,6 +72,8 @@ function hostLabel(host: string | undefined): string | undefined {
  * the message actually reached), then the short id inside the printed handle, then
  * the raw `to` the model typed, which only earns a link when it happens to be a
  * unique session-id prefix (it may equally be a task id or a title substring).
+ * A reply whose answer was cut from the transcript asks the server who sent the
+ * request (`replyRequestToLookUp`), and resolves that session the same way.
  */
 function useResolvedTarget(send: OutboundSend): ResolvedTarget {
   const candidates = useSyncExternalStore(
@@ -79,8 +83,20 @@ function useResolvedTarget(send: OutboundSend): ResolvedTarget {
   );
   useEffect(() => { void ensureSessionMentionIndex(); }, []);
 
+  const lookUp = replyRequestToLookUp(send);
+  const [asker, setAsker] = useState<{ requestId: string; sessionId: string } | null>(null);
+  useEffect(() => {
+    if (!lookUp) return;
+    let alive = true;
+    void fetchRequestAsker(lookUp).then((sessionId) => {
+      if (alive && sessionId) setAsker({ requestId: lookUp, sessionId });
+    });
+    return () => { alive = false; };
+  }, [lookUp]);
+  const askerSid = lookUp && asker?.requestId === lookUp ? asker.sessionId : undefined;
+
   const resolved = useMemo<ResolvedTarget>(() => {
-    const target = send.target ?? {};
+    const target = askerSid ? { ...send.target, sessionId: askerSid } : send.target ?? {};
     const handle = splitOutboundHandle(target.handle);
     const printedTitle = handle.title ?? target.title;
     if (target.sessionId) {
@@ -116,7 +132,7 @@ function useResolvedTarget(send: OutboundSend): ResolvedTarget {
       ...(target.taskId ? { taskId: target.taskId } : {}),
       ambiguous: matches > 1,
     };
-  }, [candidates, send]);
+  }, [candidates, send, askerSid]);
 
   // The WS-fed status store is fresher than the index after a task move.
   const taskId = resolved.taskId
@@ -224,9 +240,10 @@ export function SessionOutboundCard({
   const resolved = useResolvedTarget(send);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, undefined, sessionHost, sessionId);
 
+  // A reply always went to the session that asked, even when nothing names it.
   const headline = resolved.title
     || send.to
-    || (resolved.shortId ? `Session ${resolved.shortId}` : 'Unknown session');
+    || (resolved.shortId ? `Session ${resolved.shortId}` : send.kind === 'reply' ? 'The session that asked' : 'Unknown session');
   const note = payloadNote(send);
   const status = send.error
     ? send.error

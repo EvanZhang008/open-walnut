@@ -363,8 +363,10 @@ test('an injected skill dump that quotes an envelope stays a collapsed context r
 
 /** The outbound card renders SOLO in the timeline: a send is conversation, so
  *  it must never fold into a collapsed "Ran a command" run (that is asserted). */
-async function revealOutboundCard(panel: Locator): Promise<Locator> {
-  const outbound = panel.locator('.provenance-card[data-envelope-kind="outbound"]')
+async function revealOutboundCard(panel: Locator, marker = 'ENVELOPE_OUTBOUND_BODY'): Promise<Locator> {
+  // Two sends in the fixture: the peer note, then a reply whose answer was cut.
+  await expect(panel.locator('.provenance-card[data-envelope-kind="outbound"]')).toHaveCount(2)
+  const outbound = panel.locator('.provenance-card[data-envelope-kind="outbound"]').filter({ hasText: marker })
   await expect(outbound).toHaveCount(1)
   await expect(outbound).toBeVisible()
   await expect(panel.locator('.tool-run-toggle', { hasText: 'Ran a command' })).toHaveCount(0)
@@ -406,6 +408,35 @@ test('this session messaging another one cards too, mirroring the inbound card',
 
   // Existing counts are untouched: a send is a new kind, not a fifth peer note.
   await expect(card(panel, 'peer-note')).toHaveCount(4)
+})
+
+test('a reply whose answer was cut from the transcript still names the session that asked', async ({ page }) => {
+  test.setTimeout(60_000)
+  // The card asks the server who sent the request: watch that call happen, once.
+  const lookups: string[] = []
+  page.on('request', (r) => { if (r.url().includes('/api/v1/requests/')) lookups.push(r.url()) })
+  await page.goto('/')
+  const panel = await openSession(page)
+  const title = await peerTitle(page)
+
+  // `walnut tools call task_send … | tail -3` kept only the answer's closing lines,
+  // so nothing in the transcript names the target. This card used to say "Unknown session".
+  const reply = await revealOutboundCard(panel, 'ENVELOPE_CUT_REPLY_BODY')
+  await expect(reply.locator('.provenance-label')).toHaveText('Reply to another session')
+  await expect(reply.locator('.provenance-rq')).toHaveText('rq-0c07a5e1e7a1')
+  await expect(reply.locator('.provenance-title')).toHaveText(title)
+  await expect(reply.locator('.provenance-title')).not.toHaveText('Unknown session')
+  const chip = reply.locator('a.provenance-chip-session')
+  await expect(chip).toHaveText(`@${PEER_SHORT}`)
+  await expect(chip).toHaveAttribute('data-session-id', PEER_ID)
+  await expect(reply.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
+  // Nothing claims a delivery state the transcript does not hold.
+  await expect(reply.locator('.provenance-status')).toHaveCount(0)
+  expect(lookups.filter((u) => u.endsWith('/api/v1/requests/rq-0c07a5e1e7a1'))).toHaveLength(1)
+  // The full answer card above it asked nothing: the server had named its target.
+  expect(lookups.filter((u) => !u.endsWith('/rq-0c07a5e1e7a1'))).toEqual([])
+
+  await shotCard(page, panel, reply, `${SCREENSHOT_DIR}/card-outbound-cut-reply.png`)
 })
 
 test('a real API send shows the peer words, never the envelope prose', async ({ page }) => {

@@ -2311,7 +2311,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
   {
     const { buildPeerWrapper } = await import('../../../src/core/peers/peer-wrapper.js')
     const {
-      buildReplyDeliveryText, buildReplyTrailer, buildRequestNotification,
+      buildReplyDeliveryText, buildReplyTrailer, buildRequestNotification, importOfflineRequest,
     } = await import('../../../src/core/session-requests.js')
     const { buildTriggerMessage } = await import('../../../src/core/routines/trigger-envelope.js')
     const { buildSubtaskNoticeText } = await import('../../../src/core/sessions/subtask-notices.js')
@@ -2437,6 +2437,29 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
       messageId: 'qm-0utb0und',
       queueDepth: 1,
     })
+    // A REPLY whose answer the model cut short (2026-10-04: `| tail -3` kept only the
+    // closing lines, so nothing in the transcript names the target). The card asks the
+    // server who sent the request; the row is seeded settled, as the reply left it.
+    const cutReplyRequestId = 'rq-0c07a5e1e7a1'
+    await importOfflineRequest({
+      id: cutReplyRequestId,
+      fromSessionId: 'pw-envelope-peer-session',
+      toSessionId: 'pw-provenance-session',
+      toTaskId: 'pw-task-provenance',
+      preview: 'You are now the only worker for this event',
+      status: 'replied',
+      createdAt: new Date(sessionFixtureNow - 80_000).toISOString(),
+      deadlineAt: sessionFixtureNow + 3_600_000,
+      settledAt: new Date(sessionFixtureNow - 70_000).toISOString(),
+    })
+    const cutReplyCommand = 'walnut tools call task_send '
+      + `'{"in_reply_to":"${cutReplyRequestId}","text":"Ack, I am the only worker now. ENVELOPE_CUT_REPLY_BODY"}' 2>&1 | tail -3`
+    const cutReplyResult = [
+      '  "outcome": "Message queued for pw-task-001. Accepted for delivery, not a completed reply. Do NOT resend.",',
+      '  "next": "Its reply arrives in your session on its own; do not poll."',
+      '}',
+    ].join('\n')
+    const cutReplyToolUseId = 'toolu_pw_outbound_cut_reply'
     // Parent chain: the send follows the LAST assistant row the loop below emits.
     const lastLoopAssistant = `0199bb03-0000-4aaa-8bbb-${String(userTurns.length - 1).padStart(12, '0')}`
     const outboundToolUseId = 'toolu_pw_outbound_1'
@@ -2500,6 +2523,36 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
           message: {
             role: 'user',
             content: [{ type: 'tool_result', tool_use_id: outboundToolUseId, content: outboundResult }],
+          },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          uuid: '0199bb06-0000-4aaa-8bbb-000000000000',
+          parentUuid: '0199bb05-0000-4aaa-8bbb-000000000000',
+          sessionId: 'pw-provenance-session',
+          timestamp: new Date(sessionFixtureNow - 70_000).toISOString(),
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Answering the leader.' },
+              {
+                type: 'tool_use',
+                id: cutReplyToolUseId,
+                name: 'Bash',
+                input: { command: cutReplyCommand, description: 'Reply to the leader' },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          uuid: '0199bb07-0000-4aaa-8bbb-000000000000',
+          parentUuid: '0199bb06-0000-4aaa-8bbb-000000000000',
+          sessionId: 'pw-provenance-session',
+          timestamp: new Date(sessionFixtureNow - 69_000).toISOString(),
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: cutReplyToolUseId, content: cutReplyResult }],
           },
         }),
         '',

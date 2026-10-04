@@ -391,6 +391,23 @@ export function detectOutboundSend(
   };
 }
 
+const REQUEST_ID = /^rq-[a-f0-9]{6,}$/;
+
+/**
+ * The request a reply card must look up to name its target, or undefined.
+ *
+ * A reply goes to the session that asked, and the server's answer names it. The
+ * model sometimes cuts that answer before it reaches the transcript (`walnut
+ * tools call task_send … | tail -3` keeps only the closing lines), which left the
+ * card titled "Unknown session". The request id rides the command itself, and the
+ * server still holds the row that names the asker.
+ */
+export function replyRequestToLookUp(send: OutboundSend): string | undefined {
+  if (send.kind !== 'reply' || send.target?.sessionId || send.target?.handle) return undefined;
+  const id = send.repliedTo;
+  return id && REQUEST_ID.test(id) ? id : undefined;
+}
+
 /** Human label for a send — the mirror of `envelopeDirectionLabel`. */
 export function outboundDirectionLabel(kind: OutboundSend['kind']): string {
   return kind === 'reply' ? 'Reply to another session' : 'Message to another session';
