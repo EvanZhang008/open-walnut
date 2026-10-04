@@ -440,6 +440,11 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     onEscape: () => {
       if (!activeRef.current) return false;
       if (drawerModeRef.current !== 'closed') { setDrawerMode('closed'); return true; }
+      // Conversation Mode: the path is the composer's target, not a page, and
+      // Esc is not how it is let go (the composer chip's × is). Esc goes on to
+      // the panel: once the card is closed, the next Esc leaves fullscreen
+      // (2026-10-03: it took three, the second one silently moving the target).
+      if (!argsRef.current.stackView) return false;
       const c = argsRef.current.composer;
       const decision = escapeDecision({ depth: stateRef.current.path.length - 1, composerFocused: c.focused(), composerText: c.text() });
       if (decision !== 'pop') return false;
@@ -457,12 +462,14 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   const depth = state.path.length - 1;
   // `data-thread-depth` on the panel root: useFullscreen and the key router read
   // it, so one Esc never pops a page AND leaves fullscreen.
+  // Tree Mode only: Conversation Mode has no pages for an Esc to pop.
+  const pagesOnScreen = active && args.stackView;
   useEffect(() => {
     const el = args.panelRef.current;
     if (!el) return;
-    if (active) el.setAttribute('data-thread-depth', String(depth));
+    if (pagesOnScreen) el.setAttribute('data-thread-depth', String(depth));
     else el.removeAttribute('data-thread-depth');
-  }, [args.panelRef, active, depth]);
+  }, [args.panelRef, pagesOnScreen, depth]);
 
   // The leaf rides the URL (`t<n>` beside the column's `s<n>`).
   const leafKey = state.path[state.path.length - 1];

@@ -2,7 +2,7 @@
  * What a trigger DOES, in the words of whoever set it up, on every surface a
  * user meets it: the task's TRIGGER pill (hover text + flyout), the Routines
  * card, and the routine form, plus the composer "+" menu row that starts a
- * message with /walnut-trigger.
+ * message describing a trigger or cron job.
  *
  * Triggers are created through POST /api/v1/routines/trigger, the call an agent
  * makes, so the description rides the real create path. A trigger with no
@@ -205,9 +205,9 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
   }
 })
 
-const CMD = '/walnut-trigger'
+const PROMPT = 'Set up a trigger or cron job: '
 const triggerRow = (menu: Locator): Locator =>
-  menu.locator('button.chat-plus-menu-item[role=menuitem]', { hasText: 'Set up a trigger' })
+  menu.getByRole('menuitem', { name: 'Set up a trigger or cron job' })
 
 async function caretAtEnd(box: Locator): Promise<boolean> {
   return await box.evaluate((el) => {
@@ -216,49 +216,52 @@ async function caretAtEnd(box: Locator): Promise<boolean> {
   })
 }
 
-test('"Set up a trigger" in the composer + menu starts the message with /walnut-trigger', async ({ page, request }) => {
+test('the schedule shortcut preserves drafts and leaves the choice of trigger or cron open', async ({ page, request }) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-trigger-row-'))
   const sid = await startSessionAt(request, cwd)
   const [panel] = await openPanels(page, [sid])
   const box = composerTextarea(panel)
 
-  // Typed first: that text becomes what the command is about.
-  await box.click()
   await box.fill('tell me when the nightly build goes red')
   const menu = await openPlusMenu(panel)
   await expect(triggerRow(menu)).toBeVisible()
   await shot(menu, 'plus-menu')
   await triggerRow(menu).click()
   await expect(menu).toBeHidden()
-  await expect(box).toHaveValue(`${CMD} tell me when the nightly build goes red`)
+  await expect(box).toHaveValue(`${PROMPT}tell me when the nightly build goes red`)
   await expect(box).toBeFocused()
   expect(await caretAtEnd(box)).toBe(true)
-  // The trailing space means the slash palette is not asking which command.
   await expect(panel.locator('.command-palette')).toHaveCount(0)
 
-  // Chosen again: nothing doubles.
   await triggerRow(await openPlusMenu(panel)).click()
-  await expect(box).toHaveValue(`${CMD} tell me when the nightly build goes red`)
+  await expect(box).toHaveValue(`${PROMPT}tell me when the nightly build goes red`)
 
-  // From empty: the command and a space, then the user keeps typing.
+  await box.fill('/compact consider the schedule')
+  await triggerRow(await openPlusMenu(panel)).click()
+  await expect(box).toHaveValue('/compact \nSet up a trigger or cron job: consider the schedule')
+  await triggerRow(await openPlusMenu(panel)).click()
+  await expect(box).toHaveValue('/compact \nSet up a trigger or cron job: consider the schedule')
   await box.fill('')
-  await triggerRow(await openPlusMenu(panel)).click()
-  await expect(box).toHaveValue(`${CMD} `)
-  await page.keyboard.type('watch PR 123')
-  await expect(box).toHaveValue(`${CMD} watch PR 123`)
-  await expect(panel.locator('.command-palette')).toHaveCount(0)
+  await page.setViewportSize({ width: 900, height: 420 })
+  const shortMenu = await openPlusMenu(panel)
+  const menuBox = await shortMenu.boundingBox()
+  expect(menuBox).toBeTruthy()
+  expect(menuBox!.y).toBeGreaterThanOrEqual(0)
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(420)
+  await triggerRow(shortMenu).scrollIntoViewIfNeeded()
+  await triggerRow(shortMenu).click()
+  await expect(box).toHaveValue(PROMPT)
+  await page.keyboard.type('run a report every weekday')
+  await expect(box).toHaveValue(`${PROMPT}run a report every weekday`)
   await shot(panel.locator('.chat-input-container'), 'composer-armed')
   await box.fill('')
 
-  // The draft column has the same row.
   await openDraft(page)
   const draft = draftPanel(page)
   await expect(plusButton(draft)).toBeVisible()
   const draftBox = composerTextarea(draft)
-  await draftBox.click()
   await draftBox.fill('watch the deploy')
   await triggerRow(await openPlusMenu(draft)).click()
-  await expect(draftBox).toHaveValue(`${CMD} watch the deploy`)
-  // The session's composer was not touched by the draft's row.
+  await expect(draftBox).toHaveValue(`${PROMPT}watch the deploy`)
   await expect(box).toHaveValue('')
 })

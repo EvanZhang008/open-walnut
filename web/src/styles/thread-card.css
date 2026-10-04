@@ -180,24 +180,11 @@
 .chat-input-thread-pill .thread-map-num { flex: none; }
 .chat-input-thread-pill[data-pending="true"] .pill-title { font-weight: 500; font-style: italic; }
 
-/* Expanded (ThreadCommentCard's ⤢): the card over its whole session panel. */
-.thread-card-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 20px 16px;
-  background: rgba(15, 18, 24, 0.28);
-  animation: thread-card-backdrop-in 120ms ease-out;
-}
-@keyframes thread-card-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .thread-card-backdrop { animation: none; } }
-.thread-card.is-expanded {
-  position: relative;
-  width: min(960px, 100%);
-  max-height: 100%;
-}
+/* Expanded (ThreadCommentCard's ⤢): the same card grown where it is. The
+   owner's grown box sets left / width / max height; the size change glides
+   (`is-sizing` for GROW_MS in ThreadCommentCard, so a re-measure or another
+   question never glides). */
+.thread-card.is-sizing { transition: left 160ms ease, width 160ms ease, max-height 160ms ease; }
+@media (prefers-reduced-motion: reduce) { .thread-card.is-sizing { transition: none; } }
 .thread-card.is-expanded .thread-card-body { padding: 10px 18px 8px; }
 .thread-card-expand svg { width: 12px; height: 12px; }

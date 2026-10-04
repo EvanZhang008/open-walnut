@@ -249,7 +249,13 @@ show inline after the open ones, other completed hits that show the query fold i
   **Every mark a question paints is also the way back to it**: a mark in an answer (CSS Custom
   Highlight, hit-tested by caret position in `utils/thread-mark-hit.ts`) pushes its page, the
   quote head and the sliver pop to the passage, and in Conversation Mode the 2px turn rule
-  jumps to the origin (`jumpToThreadOrigin`).
+  opens the question's card exactly like its label (`openCard(key, 'bar')`, so a file question
+  opens its file with the card beside the passage; `jumpToThreadOrigin` only for a row the tree
+  does not know yet). Esc in Conversation Mode never moves the composer's target (the chip's ×
+  does): `useThreadStack` claims Esc and sets `data-thread-depth` in Tree Mode only, so with
+  the card closed the next Esc leaves fullscreen (2026-10-03: it took three). Esc pressed inside
+  the HTML preview's frame is handed on from the frame element (`FileContentView`), else the
+  panel's Esc stayed dead until a click outside the page.
   **Two views, one pill, one sidebar (2026-09-29).** `SessionViewMode`: `linear` is
   **Conversation Mode**, the DEFAULT, every row in order with ONE `ThreadTurnLabel` (number,
   title, status word) above each question turn's user row and a grey rule down the turn
@@ -298,10 +304,12 @@ show inline after the open ones, other completed hits that show the query fold i
   target** (`ComposerThreadPill`, `threads.composerTarget`, Conversation Mode only): `Replying in
   [n] title` or `Asking about title`, the title reopening the card and × (`stack.replyInMain`)
   sending to the main conversation with the typed words carried into its draft. The user asked to
-  see and take back the choice the placeholder alone hid. **The card expands**: its ⤢ portals it
-  into `.session-panel` over a backdrop (inside the panel, so the panel's styles still reach the
-  turns; `.thread-card-backdrop` is exempt from the outside closer), Esc or the backdrop brings it
-  back, × closes. The card shows the question's turns
+  see and take back the choice the placeholder alone hid. **The card expands in place**: its ⤢
+  keeps the card's top below its passage and grows it to the owner's `place.grown` (left, width up
+  to `CARD_GROWN_WIDTH`, max height; `useThreadCardPlace` and `placeFileCard` compute it), gliding
+  only while `is-sizing`; Esc brings it back to its size, × closes. A first version lifted it over
+  the panel on a backdrop, which the user read as a different place, not the card made bigger.
+  The card shows the question's turns
   (`cardTurnsOf`: the question without the quote block it was sent with, `questionBodyOf`, then the
   reply's prose rows with `suppressTools`), the optimistic row and the live text blocks of the turn
   being answered, and a composer that sends through `threadsApi.sendToTarget` (the same anchored

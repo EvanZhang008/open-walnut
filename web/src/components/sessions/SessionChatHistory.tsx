@@ -1536,17 +1536,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     jumpToPlace(parent, quote, `thread-origin:${threadKey}`);
   }, [threadTree, anchorByRowId, jumpToPlace, onFileOpen]);
 
+  /** `openCard` (declared further down): the bar opens the question's card. */
+  const openCardRef = useRef<((key: string, via: string) => void) | null>(null);
+
   /**
    * Gutter-bar click for ONE row wrapper: only a press on the wrapper's own box
    * inside the bar's strip (border + padding, `THREAD_BAR_HIT_PX`) counts; the
-   * message content is a child and keeps its own clicks.
+   * message content is a child and keeps its own clicks. The bar is the question
+   * itself, the same as its label: its card opens beside the passage (a file
+   * question's in the Files tab), which brings the passage on screen. A row the
+   * tree does not know yet (a just-sent bubble) only jumps to the passage.
    */
   const onThreadBarClick = useCallback((e: React.MouseEvent<HTMLDivElement>, threadKey: string, rowId: string | undefined) => {
     if (e.target !== e.currentTarget) return;
     const rect = e.currentTarget.getBoundingClientRect();
     if (e.clientX > rect.left + THREAD_BAR_HIT_PX) return;
+    const open = openCardRef.current;
+    if (open && threadTree.byKey.has(threadKey)) { open(threadKey, 'bar'); return; }
     jumpToThreadOrigin(threadKey, rowId);
-  }, [jumpToThreadOrigin]);
+  }, [jumpToThreadOrigin, threadTree]);
 
   /**
    * Row wrapper props. Conversation Mode: a question's rows wear the grey
@@ -2894,6 +2902,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const onScreen = !!r && (r.width || r.height) && r.top >= box.top && r.bottom <= box.bottom - 40;
     if (!onScreen) jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false });
   }, [threadsApi.viewMode, threadsApi.fileCardHost?.path, stack, passageOf, filePlaceOf, onFileOpen, quotePaint, jumpToPlace, sessionId, cardLeave]);
+  openCardRef.current = openCard;
 
   // The Files tab (a mark in a file, Ask here on a selection) and the sidebar
   // ask for a card through the threads api; the timeline owns it. Once per request.
@@ -3142,7 +3151,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A click outside the card (and outside the controls that open one) closes it.
   useEffect(() => {
     if (!cardKey) return;
-    const exempt = '.thread-card, .thread-card-backdrop, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill';
+    const exempt = '.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill';
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       if (!t || t.closest(exempt)) return;

@@ -1471,8 +1471,18 @@ export function FileContentView({
       }
     };
 
+    // Esc pressed while the reader is in the page (a click into it gave the frame
+    // focus) never reaches this document, so the panel's Esc (leave fullscreen,
+    // close a drawer) was dead until a click outside (2026-10-03). Handed on as
+    // the same key from the frame element, after the page's own handlers.
+    const onFrameKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      frame.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+    };
+
     const attach = (fromLoad: boolean) => {
       doc?.removeEventListener('click', onFrameClick);
+      doc?.removeEventListener('keydown', onFrameKey);
       doc = null;
       try { docHref = frame.contentWindow?.location.href ?? ''; } catch {
         // Another origin now owns the frame; nothing of ours is reachable inside.
@@ -1484,6 +1494,7 @@ export function FileContentView({
         setStrayed(null);
         try { doc = frame.contentDocument; } catch { doc = null; }
         doc?.addEventListener('click', onFrameClick);
+        doc?.addEventListener('keydown', onFrameKey);
         return;
       }
       // Only a real load is a navigation. Before `src` has loaded the frame
@@ -1498,6 +1509,7 @@ export function FileContentView({
     return () => {
       frame.removeEventListener('load', onLoad);
       doc?.removeEventListener('click', onFrameClick);
+      doc?.removeEventListener('keydown', onFrameKey);
     };
   }, [htmlPreviewLive, filePath, host]);
 

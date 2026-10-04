@@ -8,7 +8,7 @@
  */
 import { useState, useRef, useEffect } from 'react';
 import { copyTextRobust } from '@/utils/clipboard';
-import { ICON_SEARCH, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
+import { ICON_CHAT, ICON_COPY, ICON_NOTE, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
 import { openSessionInVscode } from './openSessionInVscode';
 import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { inboxChipTitle } from '@/components/inbox/session-letters';
@@ -128,7 +128,7 @@ function CopyItem({ label, value, onAfter }: { label: string; value: string; onA
       }}
       title={`Copy: ${value}`}
     >
-      <span className="task-kebab-icon">⧉</span>
+      <span className="task-kebab-icon">{ICON_COPY}</span>
       <span>{copied ? 'Copied!' : label}</span>
     </button>
   );
@@ -213,7 +213,7 @@ export function SessionKebabSection({
         className={`task-kebab-item${notesOpen ? ' task-kebab-item-active' : ''}`}
         onClick={(e) => { e.stopPropagation(); onToggleNotes(); onAfterAction?.(); }}
       >
-        <span className="task-kebab-icon">📝</span>
+        <span className="task-kebab-icon">{ICON_NOTE}</span>
         <span>Notes</span>
       </button>
 
@@ -221,7 +221,7 @@ export function SessionKebabSection({
         className={`task-kebab-item${messagesOpen ? ' task-kebab-item-active' : ''}`}
         onClick={(e) => { e.stopPropagation(); onToggleMessages(); onAfterAction?.(); }}
       >
-        <span className="task-kebab-icon">💬</span>
+        <span className="task-kebab-icon">{ICON_CHAT}</span>
         <span>Msgs{msgCount && msgCount > 0 ? ` (${msgCount})` : ''}</span>
       </button>
 
@@ -241,40 +241,14 @@ export function SessionKebabSection({
       </button>
       <CopyItem label="Copy session ID" value={sessionId} onAfter={onAfterAction} />
       <CopyItem label="Copy resume cmd" value={`${cdPrefix}claude -r ${sessionId}`} onAfter={onAfterAction} />
-
-      <div className="task-kebab-divider" />
-
-      {!archived && (
-        <button
-          className="task-kebab-item"
-          onClick={(e) => { e.stopPropagation(); onRestart(); }}
-          disabled={restartBusy}
-          title="Respawn the CLI so it re-reads settings (CLAUDE.md, .claude, skills, MCP) and re-runs the SessionStart hook — no message sent, conversation preserved"
-        >
-          <span className="task-kebab-icon">{ICON_REFRESH}</span>
-          <span>{restartBusy ? 'Restarting…' : 'Restart'}</span>
-        </button>
-      )}
-
-      {!archived && (
-        <button
-          className="task-kebab-item"
-          onClick={(e) => { e.stopPropagation(); onTerminate(); }}
-          disabled={terminateBusy}
-          title="Close the CLI process — does not respawn. The session goes stopped; your next message resumes it."
-        >
-          <span className="task-kebab-icon">{ICON_STOP}</span>
-          <span>{terminateBusy ? 'Terminating…' : 'Terminate'}</span>
-        </button>
-      )}
-
+      {/* A copy too: it captures the evidence bundle, then copies every related id. */}
       <button
         className="task-kebab-item"
         onClick={(e) => { e.stopPropagation(); onInvestigate(); }}
         disabled={investigating}
         title="Capture a debug snapshot — evidence bundle (logs + CLI stream + daemon), open an incident, and copy all related ids to the clipboard"
       >
-        <span className="task-kebab-icon">{ICON_SEARCH}</span>
+        <span className="task-kebab-icon">{ICON_COPY}</span>
         <span>
           {investigating
             ? 'Capturing…'
@@ -282,9 +256,33 @@ export function SessionKebabSection({
               ? `Copied — ${investigateResult.id} ✓`
               : investigateResult?.kind === 'error'
                 ? 'Capture failed'
-                : 'Debug snapshot'}
+                : 'Copy debug snapshot'}
         </span>
       </button>
+
+      {!archived && (
+        <>
+          <div className="task-kebab-divider" />
+          <button
+            className="task-kebab-item"
+            onClick={(e) => { e.stopPropagation(); onRestart(); }}
+            disabled={restartBusy}
+            title="Respawn the CLI so it re-reads settings (CLAUDE.md, .claude, skills, MCP) and re-runs the SessionStart hook — no message sent, conversation preserved"
+          >
+            <span className="task-kebab-icon">{ICON_REFRESH}</span>
+            <span>{restartBusy ? 'Restarting…' : 'Restart'}</span>
+          </button>
+          <button
+            className="task-kebab-item"
+            onClick={(e) => { e.stopPropagation(); onTerminate(); }}
+            disabled={terminateBusy}
+            title="Close the CLI process — does not respawn. The session goes stopped; your next message resumes it."
+          >
+            <span className="task-kebab-icon">{ICON_STOP}</span>
+            <span>{terminateBusy ? 'Terminating…' : 'Terminate'}</span>
+          </button>
+        </>
+      )}
 
       {/* Read-only footer: the session's created / updated time and its host. */}
       <div className="task-kebab-divider" />

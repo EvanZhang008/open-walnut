@@ -371,6 +371,9 @@ test.describe('Question map', () => {
     // The flash lands with the press; the scroll to the passage follows it.
     await expect.poll(() => history.evaluate((el) => el.scrollTop), { timeout: 10_000 }).toBeLessThan(before)
     await expect(map.locator('.thread-map-overlay')).toHaveCount(0)
+    // The bar is the question, the same as its label: its card opens there.
+    await expect(panel.locator('.thread-card')).toBeVisible()
+    await expect(panel.locator('.thread-card .thread-card-title')).toHaveText(MAP_TITLES.Q2)
   })
 
   test('a narrow column: the rail is always there, clear of the text; hover, focus or a tap opens the list (C3, C18, C19)', async ({ page }) => {

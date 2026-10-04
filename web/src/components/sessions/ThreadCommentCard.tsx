@@ -10,18 +10,21 @@
  * is the card's shape and behaviour. Esc closes it; the number, title and
  * status word are the same ones the sidebar and the turn label show.
  *
- * Expand (the header's ⤢) lifts the card over its whole session panel for a
- * long answer: portalled into `.session-panel` (inside it, so the panel's own
- * styles still reach the turns) over a dimmed backdrop. Esc or a press on the
- * backdrop brings it back beside its passage; × still closes it.
+ * Expand (the header's ⤢) makes the card bigger where it is, for a long answer:
+ * the same top below its passage, wider and taller as far as the owner's
+ * `style.grown` reaches. Esc or the button again brings it back to its size;
+ * × still closes it.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import '@/styles/thread-card.css';
+
+/** The grow animation (`.thread-card.is-sizing` in thread-card.css). */
+const GROW_MS = 160;
 
 export const CARD_ASK_PLACEHOLDER = 'Ask about this passage…';
 export const cardFollowUpPlaceholder = (title: string): string => {
@@ -53,8 +56,9 @@ export interface ThreadCommentCardProps {
   initialText?: string;
   /** Every change of the box's text (the owner keeps an unsent Ask's words). */
   onTextChange?: (text: string) => void;
-  /** Where the card sits (content coordinates of its layer) and how tall it may grow. */
-  style: { top: number; left: number; width: number; maxHeight: number };
+  /** Where the card sits (content coordinates of its layer) and how tall it may
+   *  grow; `grown`, how far it reaches expanded (no ⤢ without it). */
+  style: { top: number; left: number; width: number; maxHeight: number; grown?: CardGrown };
 }
 
 export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommentCardProps) {
@@ -66,7 +70,6 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const initialRef = useRef(p.initialText);
   initialRef.current = p.initialText;
   const [expanded, setExpanded] = useState(false);
-  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
 
   // A new question (or a draft) opens with the composer ready; the body starts
   // at its newest turn, where the answer is.
@@ -81,21 +84,19 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const onTextChange = p.onTextChange;
   useEffect(() => { onTextChange?.(text); }, [text, onTextChange]);
 
-  const toggleExpanded = useCallback(() => {
-    if (expanded) { setExpanded(false); return; }
-    const panel = cardRef.current?.closest<HTMLElement>('.session-panel') ?? null;
-    if (!panel) return;
-    setPanelEl(panel);
-    setExpanded(true);
-  }, [expanded]);
-  // The card moves between its place and the panel (a new element): the box
-  // keeps the keyboard, and the body starts at the newest turn again.
+  const [sizing, setSizing] = useState(false);
+  const toggleExpanded = useCallback(() => { setSizing(true); setExpanded((v) => !v); }, []);
+  // The box keeps the keyboard across a size change; once the glide is over, a
+  // card grown below the fold is scrolled whole into view.
   const firstRender = useRef(true);
   useEffect(() => {
     if (firstRender.current) { firstRender.current = false; return; }
-    const body = bodyRef.current;
-    if (body) body.scrollTop = body.scrollHeight;
     if (p.canAsk) boxRef.current?.focus({ preventScroll: true });
+    const t = window.setTimeout(() => {
+      setSizing(false);
+      if (expanded) cardRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }, GROW_MS + 40);
+    return () => window.clearTimeout(t);
   }, [expanded, p.canAsk]);
 
   // Placed below a passage near the bottom of the box, the card would hang
@@ -138,7 +139,11 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     }
   }, [text, sending, p]);
 
-  const onEscape = () => { if (expanded) setExpanded(false); else p.onClose(); };
+  const g = p.style.grown;
+  // Worth a button only when expanding gains real room.
+  const canGrow = !!g && (g.width > p.style.width + 24 || g.maxHeight > p.style.maxHeight + 24);
+  const grown = expanded && canGrow && g ? g : null;
+  const onEscape = () => { if (grown) setExpanded(false); else p.onClose(); };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); return; }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -151,18 +156,20 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   };
 
   const placeholder = p.draft ? CARD_ASK_PLACEHOLDER : cardFollowUpPlaceholder(p.title);
-  const lifted = expanded && !!panelEl;
-  const card = (
+  const box = grown
+    ? { left: grown.left, width: grown.width, maxHeight: grown.maxHeight }
+    : { left: p.style.left, width: p.style.width, maxHeight: p.style.maxHeight };
+  return (
     <div
       ref={cardRef}
-      className={`thread-card${lifted ? ' is-expanded' : ''}`}
+      className={`thread-card${grown ? ' is-expanded' : ''}${sizing ? ' is-sizing' : ''}`}
       role="dialog"
       aria-label={p.draft ? 'New question' : `Question ${p.number ?? ''}: ${p.title}`.trim()}
       data-thread-key={p.threadKey}
       data-draft={p.draft ? 'true' : undefined}
       data-answering={p.answering ? 'true' : undefined}
-      data-expanded={lifted ? 'true' : undefined}
-      style={lifted ? undefined : { top: p.style.top, left: p.style.left, width: p.style.width, ['--thread-card-maxh' as string]: `${p.style.maxHeight}px` }}
+      data-expanded={grown ? 'true' : undefined}
+      style={{ top: p.style.top, left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px` }}
       onKeyDown={onCardKeyDown}
     >
       <div className="thread-card-head">
@@ -178,16 +185,18 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         {!p.draft && <ThreadStatusWord status={p.status} unread={p.unread} className="thread-card-status" />}
         <span className="thread-card-head-actions">
           {p.menu}
-          <button
-            type="button"
-            className="thread-card-expand"
-            aria-label={lifted ? 'Back beside the passage' : 'Expand'}
-            aria-pressed={lifted}
-            title={lifted ? 'Back beside the passage (Esc)' : 'Expand over the panel'}
-            onClick={toggleExpanded}
-          >
-            {lifted ? ICON_COLLAPSE : ICON_EXPAND}
-          </button>
+          {canGrow && (
+            <button
+              type="button"
+              className="thread-card-expand"
+              aria-label={grown ? 'Shrink back' : 'Expand'}
+              aria-pressed={!!grown}
+              title={grown ? 'Back to its size (Esc)' : 'Expand'}
+              onClick={toggleExpanded}
+            >
+              {grown ? ICON_COLLAPSE : ICON_EXPAND}
+            </button>
+          )}
           <button type="button" className="thread-card-close" aria-label="Close" title="Close (Esc)" onClick={p.onClose}>
             <ThreadCloseIcon size={12} />
           </button>
@@ -228,16 +237,5 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         </button>
       </div>
     </div>
-  );
-  if (!lifted) return card;
-  return createPortal(
-    <div
-      className="thread-card-backdrop"
-      data-testid="thread-card-backdrop"
-      onPointerDown={(e) => { if (e.target === e.currentTarget) setExpanded(false); }}
-    >
-      {card}
-    </div>,
-    panelEl,
   );
 });

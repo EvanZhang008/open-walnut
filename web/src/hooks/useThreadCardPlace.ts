@@ -10,7 +10,9 @@
  * screen. Nothing is drawn until the first measurement lands.
  */
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { placeCard, type CardAnchorRect, type CardPlacement } from '@/utils/thread-card';
+import {
+  CARD_GROWN_HEADROOM, CARD_GROWN_WIDTH, placeCard, type CardAnchorRect, type CardGrown, type CardPlacement,
+} from '@/utils/thread-card';
 
 export interface UseThreadCardPlaceArgs {
   /** The card is open on this key (null: closed). */
@@ -23,6 +25,8 @@ export interface UseThreadCardPlaceArgs {
 
 export interface ThreadCardPlace extends CardPlacement {
   maxHeight: number;
+  /** Expanded (⤢): wider, taller, the same top. */
+  grown: CardGrown;
 }
 
 /** The last line of a passage: a multi-line quote hangs its card off its end. */
@@ -66,12 +70,16 @@ export function useThreadCardPlace(args: UseThreadCardPlaceArgs): ThreadCardPlac
         const top = boxRect.top - layerRect.top + 12;
         anchor = { top, bottom: top, left: 0, right: layerRect.width };
       }
+      const maxHeight = Math.max(200, Math.round(el.clientHeight * 0.6));
+      const wide = placeCard(anchor, layerRect.width, CARD_GROWN_WIDTH);
       const next: ThreadCardPlace = {
         ...placeCard(anchor, layerRect.width),
-        maxHeight: Math.max(200, Math.round(el.clientHeight * 0.6)),
+        maxHeight,
+        grown: { left: wide.left, width: wide.width, maxHeight: Math.max(maxHeight, el.clientHeight - CARD_GROWN_HEADROOM) },
       };
       setPlace((prev) => (prev && prev.top === next.top && prev.left === next.left && prev.width === next.width
-        && prev.maxHeight === next.maxHeight ? prev : next));
+        && prev.maxHeight === next.maxHeight && prev.grown.left === next.grown.left && prev.grown.width === next.grown.width
+        && prev.grown.maxHeight === next.grown.maxHeight ? prev : next));
     };
     measure();
     let raf = 0;

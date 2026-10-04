@@ -91,6 +91,7 @@ import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErr
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord, useSessionStatus } from '@/hooks/useSessionStatus';
 import { ComposerThreadPill } from './ComposerThreadPill';
+import { useHostStatus } from '@/hooks/useHostStatus';
 import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -822,6 +823,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // null = none open. Opening any view promotes the panel to fullscreen.
   const [activeView, setActiveView] = useState<SessionSplitView | null>(null);
   const splitOpen = activeView !== null;
+  // A host that cannot open a terminal (the cloud box has no SSH) offers no
+  // Terminal tab. The host's own capability says so (its status frame), never
+  // its alias; a host the server has not described yet keeps the tab.
+  const terminalOffered = useHostStatus(session?.host)?.terminal !== false;
   const {
     unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
   } = useSessionLetters(sessionId);
@@ -1920,15 +1925,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     Board
                   </button>
                 )}
-                <button
-                  className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
-                  onClick={() => toggleView('terminal')}
-                  title="Open a terminal in the session working directory, full-screen alongside the chat"
-                  data-header-id="terminal"
-                  data-hidden={hid('terminal')}
-                >
-                  Terminal
-                </button>
+                {terminalOffered && (
+                  <button
+                    className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => toggleView('terminal')}
+                    title="Open a terminal in the session working directory, full-screen alongside the chat"
+                    data-header-id="terminal"
+                    data-hidden={hid('terminal')}
+                  >
+                    Terminal
+                  </button>
+                )}
               </>
             )}
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}

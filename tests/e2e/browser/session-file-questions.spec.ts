@@ -260,6 +260,24 @@ test.describe('Questions about a file passage (Files tab)', () => {
     expect(cb.y).toBeGreaterThanOrEqual(passage.top + passage.height - 1)
     expect(cb.y - (passage.top + passage.height)).toBeLessThan(40)
     await shot(page, 'file-q-from-sidebar')
+
+    // The question's turn rule in the timeline is the question too, the same as
+    // its label: from another file, the Files tab goes to its file with the card
+    // beside the passage (it used to open the file with no card).
+    await card2.locator('.thread-card-input').press('Escape')
+    await expect(card2).toHaveCount(0)
+    const other = await openFile(page, panel, HTML_FILE)
+    await expect(other.frameLocator('.fv-html-preview').locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
+    const bar = panel.locator('.session-history .session-msg--threaded', { hasText: 'Is the ledger bounded?' }).first()
+    await bar.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(200)
+    const bb = (await bar.boundingBox())!
+    await page.mouse.click(bb.x + 1, bb.y + Math.min(bb.height / 2, 20))
+    const view3 = panel.locator('.session-file-explorer .file-content-view')
+    await expect(view3.locator('.fv-wysiwyg-editor .ProseMirror')).toContainText(MD_PASSAGE_FULL, { timeout: 15_000 })
+    const card3 = fileCard(view3)
+    await expect(card3).toBeVisible({ timeout: 15_000 })
+    await expect(card3.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
   })
 
   test('the inline Ask on a hovered block asks about the whole block; Tree Mode names the file on the page', async ({ page, request }) => {
@@ -456,5 +474,37 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await rail.locator('.thread-map-rail').hover()
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
+
+    // ⤢ grows the card where it is: the same top under the passage, wider,
+    // inside the view; Esc brings it back to its size.
+    await expect(card).toBeVisible()
+    await page.waitForTimeout(300)
+    const small = (await card.boundingBox())!
+    await card.locator('.thread-card-expand').click()
+    await expect(card).toHaveAttribute('data-expanded', 'true')
+    await expect.poll(async () => (await card.boundingBox())!.width).toBeGreaterThan(small.width + 100)
+    await page.waitForTimeout(300)
+    const big = (await card.boundingBox())!
+    expect(Math.abs(big.y - small.y)).toBeLessThan(2)
+    const vb2 = (await view.boundingBox())!
+    expect(big.x).toBeGreaterThanOrEqual(vb2.x)
+    expect(big.x + big.width).toBeLessThanOrEqual(vb2.x + vb2.width + 1)
+    await shot(page, 'file-q-long-expanded')
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).not.toHaveAttribute('data-expanded', 'true')
+    await expect.poll(async () => Math.round((await card.boundingBox())!.width)).toBe(Math.round(small.width))
+
+    // Esc from inside the page (a click gave the frame focus) reaches the panel:
+    // with the card closed, fullscreen ends.
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).toHaveCount(0)
+    if (!(await panel.evaluate((el) => el.classList.contains('open-walnut-fullscreen')))) {
+      await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+    }
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await frame.locator('td', { hasText: /^slot 66$/ }).click()
+    expect(await frame.locator('body').evaluate(() => document.hasFocus())).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
   })
 })

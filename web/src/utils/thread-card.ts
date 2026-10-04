@@ -102,6 +102,21 @@ export interface CardPlacement {
 export const CARD_WIDTH = 440;
 export const CARD_MIN_WIDTH = 260;
 export const CARD_GAP = 8;
+/** The expanded card (its ⤢) grows in place: the same top, below its passage,
+ *  as wide as the layer allows up to this, its right edge still on the passage's
+ *  when there is room (2026-10-03: lifted to a panel overlay it read as a new
+ *  place, not the same card made bigger). */
+export const CARD_GROWN_WIDTH = 960;
+/** Room an expanded timeline card leaves above it in the box, so the passage's
+ *  last line stays in view once the card is scrolled whole into view. */
+export const CARD_GROWN_HEADROOM = 72;
+
+/** How far the expanded card reaches (its top stays the card's own). */
+export interface CardGrown {
+  left: number;
+  width: number;
+  maxHeight: number;
+}
 
 /**
  * Below the passage, its right edge on the passage's right edge (a comment

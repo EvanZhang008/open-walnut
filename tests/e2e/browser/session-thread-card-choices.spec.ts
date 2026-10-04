@@ -8,8 +8,11 @@
  * (number and title) and its × sends to the main conversation instead, carrying
  * what was typed; a click into the composer during an Ask keeps the Ask as the
  * composer's target ("Asking about") and brings the card's words along, and ×
- * lets go of it; the card's expand button lifts it over the panel, Esc and the
- * backdrop bring it back, × closes.
+ * lets go of it; the card's expand button grows it where it is (same top below
+ * its passage, wider, taller), Esc brings it back to its size, × closes; in
+ * fullscreen, Esc closes the card and the next Esc leaves fullscreen without
+ * letting go of the composer's question; the rule beside a question's turn
+ * opens its card like its label.
  *
  * Chromium and WebKit. The tagged fixture session.
  */
@@ -172,45 +175,79 @@ test.describe('Choices around the comment card', () => {
     await expect(composer(panel)).toHaveValue('A second thought')
   })
 
-  test('the expand button lifts the card over the panel; Esc and the backdrop bring it back; × closes', async ({ page }) => {
+  test('the expand button grows the card where it is; Esc brings it back to its size; × closes', async ({ page }) => {
     const panel = await open(page)
     await panel.locator('.thread-map .thread-map-row[data-kind="thread"]').nth(0).click()
     const c = card(panel)
     await expect(c).toBeVisible()
+    await page.waitForTimeout(200)
+    const passageBottom = async () => {
+      const r = (await passageRects(panel, PASSAGE)).at(-1)!
+      return r.top + r.height
+    }
+    const maxHeight = () => c.evaluate((el) => parseFloat(getComputedStyle(el).maxHeight))
     const placed = (await c.boundingBox())!
+    const gap = placed.y - (await passageBottom())
+    const placedMax = await maxHeight()
     await c.locator('.thread-card-expand').click()
     await expect(c).toHaveAttribute('data-expanded', 'true')
-    const backdrop = panel.locator('[data-testid="thread-card-backdrop"]')
-    await expect(backdrop).toBeVisible()
-    const pb = (await panel.boundingBox())!
-    const bb = (await backdrop.boundingBox())!
-    expect(Math.abs(bb.x - pb.x)).toBeLessThan(2)
-    expect(Math.abs(bb.width - pb.width)).toBeLessThan(2)
+    // Grown in place: no overlay, the same card below its passage at the same
+    // gap, wider and allowed to be taller, inside the timeline.
+    await expect(panel.locator('.thread-card-backdrop')).toHaveCount(0)
+    await expect.poll(async () => (await c.boundingBox())!.width).toBeGreaterThan(placed.width + 100)
+    await page.waitForTimeout(400)
     const big = (await c.boundingBox())!
-    expect(big.width).toBeGreaterThan(placed.width + 100)
-    expect(big.x).toBeGreaterThanOrEqual(pb.x)
-    expect(big.x + big.width).toBeLessThanOrEqual(pb.x + pb.width + 1)
+    expect(Math.abs(big.y - (await passageBottom()) - gap)).toBeLessThan(2)
+    expect(await maxHeight()).toBeGreaterThan(placedMax + 100)
+    const hb = (await panel.locator('.session-history').boundingBox())!
+    expect(big.x).toBeGreaterThanOrEqual(hb.x)
+    expect(big.x + big.width).toBeLessThanOrEqual(hb.x + hb.width + 1)
+    // The passage's last line is still in view above it.
+    expect(await passageBottom()).toBeGreaterThan(hb.y)
     await expect(c.locator('.thread-card-input')).toBeFocused()
-    await page.waitForTimeout(200)
     await shot(page, 'card-expanded', panel)
-    // Esc: back beside the passage, still open.
+    // Esc: back to its size, still open, in the same place.
     await c.locator('.thread-card-input').press('Escape')
     await expect(c).not.toHaveAttribute('data-expanded', 'true')
+    await expect.poll(async () => Math.round((await c.boundingBox())!.width)).toBe(Math.round(placed.width))
     await expect(c).toBeVisible()
-    await expect(backdrop).toHaveCount(0)
-    const back = (await c.boundingBox())!
-    const passage = await passageRects(panel, PASSAGE)
-    expect(back.y).toBeGreaterThanOrEqual(passage[passage.length - 1].top)
-    // The backdrop: back as well.
+    expect(Math.abs((await c.boundingBox())!.y - (await passageBottom()) - gap)).toBeLessThan(2)
+    // × closes from the grown state too.
     await c.locator('.thread-card-expand').click()
     await expect(c).toHaveAttribute('data-expanded', 'true')
-    await page.mouse.click(pb.x + 6, pb.y + pb.height - 6)
-    await expect(c).not.toHaveAttribute('data-expanded', 'true')
-    await expect(c).toBeVisible()
-    // × closes from either state.
-    await c.locator('.thread-card-expand').click()
     await c.locator('.thread-card-close').click()
     await expect(card(panel)).toHaveCount(0)
-    await expect(backdrop).toHaveCount(0)
+  })
+
+  test('fullscreen: Esc closes the card, the next Esc leaves fullscreen, and the composer keeps its question', async ({ page }) => {
+    const panel = await open(page)
+    await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await panel.locator('.thread-map .thread-map-row[data-kind="thread"]').nth(0).click()
+    await expect(card(panel)).toBeVisible()
+    await card(panel).locator('.thread-card-input').press('Escape')
+    await expect(card(panel)).toHaveCount(0)
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    // The second Esc is the panel's: it does not let go of the question first.
+    await page.keyboard.press('Escape')
+    await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
+    await expect(chip(panel)).toContainText('Replying in')
+    await expect(chip(panel).locator('.thread-map-num')).toHaveText('1')
+    // Not fullscreen, Esc with no card open does nothing to the target either.
+    await page.keyboard.press('Escape')
+    await expect(chip(panel)).toContainText('Replying in')
+  })
+
+  test('the rule beside a question\'s turn opens its card, the same as its label', async ({ page }) => {
+    const panel = await open(page)
+    // The rule beside the question's ANSWER row: any row of the turn counts.
+    const bar = panel.locator(`.session-history .session-msg--threaded[data-message-id="${IDS.Q1.a}"]`)
+    await expect(bar).toHaveCount(1)
+    await centreInHistory(page, panel, bar, { capRow: true })
+    const r = (await bar.boundingBox())!
+    await page.mouse.click(r.x + 1, r.y + Math.min(r.height / 2, 20))
+    await expect(card(panel)).toBeVisible()
+    await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText('1')
+    await expect(chip(panel)).toContainText('Replying in')
   })
 })

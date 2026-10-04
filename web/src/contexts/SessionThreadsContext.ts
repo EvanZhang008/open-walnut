@@ -6,6 +6,7 @@ import type {
   ThreadActions, ThreadDraftRow, ThreadDrawerFilter, ThreadLiveState, ThreadMetaIndex, ThreadNavVia, ThreadPendingPage,
 } from '@/components/sessions/thread-ui-contract';
 import type { PageLanding } from '@/utils/thread-stack-state';
+import type { CardGrown } from '@/utils/thread-card';
 
 /** One navigation, as the timeline's landing reads it (nonce'd by `seq`). */
 export interface ThreadStackNav {
@@ -85,6 +86,8 @@ export interface ThreadCardPlace {
   left: number;
   width: number;
   maxHeight: number;
+  /** Where the card reaches when the reader expands it (same top). */
+  grown?: CardGrown;
 }
 
 /**

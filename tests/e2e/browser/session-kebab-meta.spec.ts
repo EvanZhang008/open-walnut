@@ -96,6 +96,17 @@ test('the menu ends with Created, Updated and Host from the session record', asy
   // The host lives in the metadata rows now: no separate SSH line.
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 
+  // Every Session row draws an SVG icon, never an emoji or text glyph, and the
+  // debug capture reads as the copy it is, beside the other Copy rows.
+  const icons = await menu.locator('.task-kebab-section').last().locator('.task-kebab-icon').evaluateAll((els) =>
+    els.map((el) => ({ row: (el.parentElement?.textContent ?? '').trim(), svg: !!el.querySelector('svg'), text: (el.textContent ?? '').trim() })))
+  expect(icons.length).toBeGreaterThanOrEqual(10)
+  for (const icon of icons) expect(icon, icon.row).toMatchObject({ svg: true, text: '' })
+  const copyRows = menu.locator('.task-kebab-item').filter({ hasText: /^Copy / })
+  await expect(copyRows).toHaveText(['Copy session ID', 'Copy resume cmd', 'Copy debug snapshot'])
+  const shape = (row: Locator) => row.locator('.task-kebab-icon').innerHTML()
+  expect(await shape(copyRows.nth(2))).toBe(await shape(copyRows.nth(0)))
+
   // Still inside the viewport.
   const box = await menu.boundingBox()
   const vp = page.viewportSize()!
@@ -135,7 +146,7 @@ test('a remote session shows its host alias, the full hostname on hover', async 
       c.classList.contains('task-kebab-divider') ? 'divider'
         : c.getAttribute('data-testid') === 'session-kebab-meta' ? 'meta'
           : (c.textContent ?? '').trim()))
-  expect(tail).toEqual(['Debug snapshot', 'divider', 'meta'])
+  expect(tail).toEqual(['Terminate', 'divider', 'meta'])
   await host.evaluate((el) => el.scrollIntoView({ block: 'end' }))
   await expect(host).toBeInViewport()
   await menu.screenshot({ path: shot('03-remote') })

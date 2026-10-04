@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildThreadTree, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
-import { CARD_GAP, CARD_WIDTH } from '@/utils/thread-card';
+import { CARD_GAP, CARD_GROWN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
 import { FILE_CARD_MIN_HEIGHT, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
 
 const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
@@ -58,6 +58,19 @@ describe('placeFileCard', () => {
     const place = placeFileCard({ top: 100, bottom: 120, left: 0, right: 600 }, { width: 900, height: 300 });
     expect(place.top).toBe(300 - FILE_CARD_MIN_HEIGHT - CARD_GAP);
     expect(place.maxHeight).toBe(FILE_CARD_MIN_HEIGHT);
+  });
+  it('expanded, the card grows where it is: the same top, wider toward the passage start, all the room below', () => {
+    const place = placeFileCard({ top: 100, bottom: 120, left: 40, right: 600 }, host);
+    // 900 wide: capped by the view, right edge kept on the passage's when there is room.
+    expect(place.grown!.width).toBe(host.width - 2 * CARD_GAP);
+    expect(place.grown!.left).toBe(CARD_GAP);
+    expect(place.grown!.maxHeight).toBe(host.height - place.top - CARD_GAP);
+    const wide = placeFileCard({ top: 100, bottom: 120, left: 40, right: 1300 }, { width: 1400, height: 700 });
+    expect(wide.grown!.width).toBe(CARD_GROWN_WIDTH);
+    expect(wide.grown!.left + wide.grown!.width).toBe(1300);
+    // Never narrower than the card itself.
+    const narrow = placeFileCard({ top: 0, bottom: 10, left: 0, right: 300 }, { width: 320, height: 700 });
+    expect(narrow.grown!.width).toBe(narrow.width);
   });
 });
 

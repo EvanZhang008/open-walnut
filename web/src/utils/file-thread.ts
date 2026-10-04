@@ -14,7 +14,7 @@ import type { ThreadMetaIndex, ThreadViewStatus } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf, statusOf } from '@/utils/thread-meta';
 import { questionNumbers } from '@/utils/question-tag';
 import type { PassageMarkSpec } from '@/utils/thread-card';
-import { CARD_GAP, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
+import { CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
 import { ROOT_THREAD_KEY, fileOfParent, type ThreadTree } from '@/utils/thread-tree';
 import { quoteFromRange, type QuoteTextIndex, type TextQuote } from '@/utils/text-quote-anchor';
 
@@ -156,7 +156,13 @@ export function placeFileCard(anchor: HostRect, host: { width: number; height: n
   const top = Math.max(CARD_GAP, Math.min(anchor.bottom + CARD_GAP, lowest));
   const room = host.height - top - CARD_GAP;
   const maxHeight = Math.max(Math.min(FILE_CARD_MIN_HEIGHT, room), Math.min(Math.round(host.height * 0.6), room));
-  return { top: Math.round(top), left: Math.round(left), width: Math.round(width), maxHeight: Math.round(maxHeight) };
+  // Expanded: the same top, as wide as the view allows, all the room below it.
+  const wide = Math.max(Math.min(CARD_GROWN_WIDTH, host.width - 2 * CARD_GAP), width);
+  const wideLeft = Math.max(CARD_GAP, Math.min(anchor.right - wide, host.width - wide - CARD_GAP));
+  return {
+    top: Math.round(top), left: Math.round(left), width: Math.round(width), maxHeight: Math.round(maxHeight),
+    grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
+  };
 }
 
 /** A rect of the file's surface translated into host coordinates; a rect inside

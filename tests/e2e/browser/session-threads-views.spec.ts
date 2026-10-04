@@ -142,21 +142,6 @@ test.describe('Question stack views', () => {
     await expect(label.locator('.thread-map-num')).toHaveText(/^\d+$/)
     await expect(label.locator('.thread-status-word')).toBeVisible()
     await shot(page, 'c35-linear')
-    // The bar is the way back to where that question was asked. Q9 sits ~26000px
-    // below this spot in the full transcript, past what the wheel loop covers:
-    // bring it near first, then settle it with real wheels.
-    await bar.evaluate((el) => el.scrollIntoView({ block: 'center' }))
-    await page.waitForTimeout(300)
-    await centre(page, panel, bar)
-    const r = (await bar.boundingBox())!
-    await page.mouse.click(r.x + 1, r.y + Math.min(r.height / 2, 30))
-    await expect.poll(() => flashText(page), { timeout: 10_000 }).toContain('Point 9:')
-    // The jump may glide there: wait until the passage sits inside the box.
-    const hb = (await history.boundingBox())!
-    await expect.poll(async () => {
-      const top = (await passageRects(panel, densePassage('Q9')))[0].top
-      return top > hb.y && top < hb.y + hb.height
-    }, { timeout: 10_000 }).toBe(true)
     // The choice is remembered per session across a reload.
     expect(await page.evaluate((k) => localStorage.getItem(k), `walnut:session-view.v2:${DENSE_SESSION}`)).toBe('linear')
     await page.reload()
@@ -170,6 +155,28 @@ test.describe('Question stack views', () => {
     await expect.poll(() => panel.locator('.session-history').evaluate((el) => el.scrollTop)).toBeGreaterThan(before - 9)
     const after = await panel.locator('.session-history').evaluate((el) => el.scrollTop)
     expect(Math.abs(after - before)).toBeLessThanOrEqual(8)
+    // Conversation Mode again. The rule is the way back to where that question
+    // was asked, and it is the question, the same as its label: its card opens
+    // beside the passage. Q9 sits ~26000px below this spot in the full
+    // transcript, past what the wheel loop covers: bring it near first, then
+    // settle it with real wheels.
+    await switchView(panel, 'linear')
+    const rule = panel.locator(`.session-msg--threaded[data-message-id="${IDS.head.Q9}"]`)
+    await expect(rule).toBeAttached()
+    const num = (await rule.locator('.thread-turn-label .thread-map-num').innerText()).trim()
+    await rule.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    await page.waitForTimeout(300)
+    await centre(page, panel, rule)
+    const r = (await rule.boundingBox())!
+    await page.mouse.click(r.x + 1, r.y + Math.min(r.height / 2, 30))
+    await expect.poll(() => flashText(page), { timeout: 10_000 }).toContain('Point 9:')
+    // The jump may glide there: wait until the passage sits inside the box.
+    const hb = (await panel.locator('.session-history').boundingBox())!
+    await expect.poll(async () => {
+      const top = (await passageRects(panel, densePassage('Q9')))[0].top
+      return top > hb.y && top < hb.y + hb.height
+    }, { timeout: 10_000 }).toBe(true)
+    await expect(panel.locator('.thread-card .thread-card-head .thread-map-num')).toHaveText(num)
   })
 
   test('a view saved under the old key opens as Stack; the new choice is what persists', async ({ page }) => {

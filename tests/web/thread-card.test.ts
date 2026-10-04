@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildThreadTree, quoteBlockOf, type ThreadTreeMessage } from '@/utils/thread-tree';
-import { allPassageMarks, cardTurnsOf, placeCard, questionBodyOf, CARD_GAP, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, placeCard, questionBodyOf, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
 import type { SessionThreadAnchor } from '@/types/session';
 
 const quote = { exact: 'the flush order', prefix: '', suffix: '' };
@@ -72,6 +72,11 @@ describe('placeCard', () => {
   const anchor = { top: 100, bottom: 120, left: 40, right: 500 };
   it('sits below the passage, right edges aligned, at the preferred width', () => {
     expect(placeCard(anchor, 900)).toEqual({ top: 120 + CARD_GAP, left: 500 - CARD_WIDTH, width: CARD_WIDTH });
+  });
+  it('expanded (the grown width): the same top, its right edge still on the passage when there is room', () => {
+    const wide = { ...anchor, right: 1200 };
+    expect(placeCard(wide, 1400, CARD_GROWN_WIDTH)).toEqual({ top: 120 + CARD_GAP, left: 1200 - CARD_GROWN_WIDTH, width: CARD_GROWN_WIDTH });
+    expect(placeCard(anchor, 900, CARD_GROWN_WIDTH)).toEqual({ top: 120 + CARD_GAP, left: 0, width: 900 });
   });
   it('never leaves the layer on the left or the right', () => {
     expect(placeCard({ ...anchor, right: 200 }, 900).left).toBe(0);
