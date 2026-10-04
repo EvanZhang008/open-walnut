@@ -138,6 +138,25 @@ describe('test-baseline.mjs check', () => {
     expect(r.out).toContain('AssertionError: new one broke')
   })
 
+  it('names the failing line in the repo, past the matcher frames', async () => {
+    const root = fs.realpathSync(tmp)
+    const rep = report([A, B]) as { testResults: FileResult[] }
+    rep.testResults[1].status = 'failed'
+    rep.testResults[1].assertionResults.push({
+      fullName: 'one card', status: 'failed', failureMessages: [[
+        'AssertionError: expected [] to have a length of 1 but got +0',
+        `    at Proxy.<anonymous> (file://${root}/node_modules/@vitest/expect/dist/index.js:1257:20)`,
+        `    at Proxy.<anonymous> (file://${root}/node_modules/@vitest/expect/dist/index.js:1029:14)`,
+        `    at ${root}/${B}:568:21`,
+        `    at file://${root}/node_modules/@vitest/runner/dist/chunk-hooks.js:155:11`,
+      ].join('\n')],
+    })
+    const r = await run('check', { report: rep, baseline: baseline([]) })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain(`↳ AssertionError: expected [] to have a length of 1 but got +0 | at ${B}:568:21`)
+    expect(r.out).not.toContain('@vitest/expect')
+  })
+
   it('counts a file that failed to load', async () => {
     const r = await run('check', { report: report([A, B], {}, [B]), baseline: baseline([]) })
     expect(r.code).toBe(1)

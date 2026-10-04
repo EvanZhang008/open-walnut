@@ -115,9 +115,25 @@ const failures = new Set();
 // without this a CI regression is a bare test name and the cause has to be
 // reproduced elsewhere (impossible for a Linux-only failure from a Mac).
 const reasons = new Map();
+// The message, then WHERE: the first stack frame in the repo's own code. A
+// matcher's frames come first (node_modules/@vitest/expect), so the first lines
+// alone read "expected [] to have a length of 1 | at Proxy.<anonymous>
+// (…/node_modules/@vitest/expect/…)", and finding the failing line meant
+// reproducing the run (2026-10-04, an e2e regression).
+const REPO = `${process.cwd()}/`;
+/** A stack line's location relative to the repo, or '' when it is not the repo's own code. */
+const ownFrame = (line) => {
+  const loc = /(?:\(|\s)(?:file:\/\/)?(\/[^()\s]+:\d+(?::\d+)?)\)?$/.exec(line)?.[1] ?? '';
+  return loc.startsWith(REPO) && !loc.includes('/node_modules/') ? loc.slice(REPO.length) : '';
+};
 const firstLine = (msgs) => {
   const m = (Array.isArray(msgs) ? msgs : [msgs]).find((x) => typeof x === 'string' && x.trim());
-  return m ? m.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 3).join(' | ').slice(0, 400) : '';
+  if (!m) return '';
+  const lines = m.split('\n').map((l) => l.trim()).filter(Boolean);
+  const isFrame = (l) => l.startsWith('at ');
+  const own = lines.filter(isFrame).map(ownFrame).find(Boolean);
+  if (!own) return lines.slice(0, 3).join(' | ').slice(0, 400);
+  return `${lines.filter((l) => !isFrame(l)).slice(0, 2).join(' | ').slice(0, 340)} | at ${own}`;
 };
 const report = JSON.parse(fs.readFileSync(reportFile, 'utf-8'));
 for (const file of report.testResults ?? []) {
