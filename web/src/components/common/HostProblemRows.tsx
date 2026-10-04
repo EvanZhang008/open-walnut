@@ -15,7 +15,7 @@
  */
 import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
-  autofixProgressText, autofixVerbFor, firstSentence, formatElapsed, joinLabels, type HostActionId,
+  DETAILS_NOT_SSH_KINDS, autofixProgressText, autofixVerbFor, firstSentence, formatElapsed, joinLabels, type HostActionId,
 } from '@open-walnut/host-problem';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { getHostActionSnapshot, runHostAction, subscribeHostActions } from '@/utils/host-action-store';
@@ -224,13 +224,18 @@ function ConnectBody({ row, expanded, onToggle, singleLine, after, receipt }: {
   receipt?: boolean;
 }) {
   const foldable = !!(row.hint?.trim() || row.summary?.trim());
+  // A non-SSH kind's raw text is "details" too, the same word as the row's fold
+  // toggle: it opens with the row instead of behind a second toggle (one toggle,
+  // one state; both used to show at once, reading "Show details" and "Hide details").
+  // An SSH kind keeps "Show SSH output": a different thing, often long.
+  const summaryInline = !!row.kind && DETAILS_NOT_SSH_KINDS.includes(row.kind);
   // No lastFrameAt for the countdown: frames keep arriving for any reason (other hosts,
   // heartbeats), so a newer frame proves no attempt. A real attempt turns the row into
   // 'trying'; a failed row whose retryAt passed 30s ago is a stale promise and drops its line (N3-19).
   return (
     <>
       <HostFailureText
-        headline={row.headline ?? ''} kind={row.kind} collapsed={!expanded}
+        headline={row.headline ?? ''} kind={row.kind} collapsed={!expanded} summaryInline={summaryInline}
         {...(expanded ? { hint: receipt ? undefined : row.hint, summary: row.summary } : {})}
         {...((singleLine && !expanded) || receipt ? {} : { retryAt: row.retryAt })}
         afterHeadline={after}

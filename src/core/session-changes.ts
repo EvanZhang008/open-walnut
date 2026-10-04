@@ -607,6 +607,20 @@ export async function computeSessionChangesSwr(
 }
 
 /**
+ * The last list computed for a session, light, WITHOUT touching its host
+ * (memory, then the disk snapshot). For a host that is still connecting: the
+ * Changed tab paints what it had and keeps polling (stale:true) until the host
+ * answers. null = nothing was ever computed here.
+ */
+export async function peekSessionChanges(sessionId: string, host?: string): Promise<SessionChangesResult | null> {
+  const key = cacheKey(sessionId, host);
+  const entry = cacheGet(key);
+  if (entry) return { ...toLightResult(entry.result), stale: true, light: true };
+  const disk = await readDiskSnapshot(key);
+  return disk && disk.sessionId === sessionId ? { ...disk, stale: true, light: true } : null;
+}
+
+/**
  * Non-blocking peek at ONE file's change record from the in-memory cache,
  * even when the cache is outdated (mtime moved). Serves the Changed tab's
  * per-file diff while a background recompute holds the in-flight chain —

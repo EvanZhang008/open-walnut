@@ -200,6 +200,14 @@ export interface LocalDaemonOptions {
   binaryPath?: string
   /** Override the wait for a live-but-slow daemon's hello (default 15s). */
   busyHelloMs?: number
+  /**
+   * Outlive this server even from an isolated dir: no parent watchdog. The
+   * cloud companion's tunnel daemon (providers/cloud-tunnel-daemon.ts) owns
+   * another server's sessions, so the replica process exiting must not end them.
+   */
+  persistent?: boolean
+  /** Applied last to the spawn env (undefined deletes a key). */
+  envOverrides?: Record<string, string | undefined>
 }
 
 export class LocalDaemon {
@@ -228,6 +236,8 @@ export class LocalDaemon {
   private readonly ownerFile: string
   private readonly overrideBinaryPath: string | undefined
   private readonly busyHelloMs: number
+  private readonly persistent: boolean
+  private readonly envOverrides: Record<string, string | undefined>
 
   constructor(opts: LocalDaemonOptions = {}) {
     this.daemonDir = opts.daemonDir ?? DEFAULT_DAEMON_DIR
@@ -237,6 +247,8 @@ export class LocalDaemon {
     this.ownerFile = path.join(this.daemonDir, DAEMON_OWNER_FILE)
     this.overrideBinaryPath = opts.binaryPath
     this.busyHelloMs = opts.busyHelloMs ?? BUSY_DAEMON_HELLO_MS
+    this.persistent = opts.persistent === true
+    this.envOverrides = opts.envOverrides ?? {}
   }
 
   get port(): number | null { return this._port }
@@ -718,6 +730,39 @@ export class LocalDaemon {
 
     log.session.info('spawning local daemon', { binary: binaryPath })
 
+    const env = await this.buildSpawnEnv()
+
+    // Preflight the ONE thing a daemon cannot recover from: the CLI it exists to
+    // spawn. The daemon inherits this env verbatim, and its spawn preamble looks
+    // in the same places this resolver does (PATH, then $HOME/.toolbox/bin,
+    // $HOME/.local/bin, …). A miss here means every session will exit 127, so
+    // say it once, loudly, at the moment of spawn — the 2026-08-28 outage
+    // reported itself only as a per-session "claude: not found" 20 times over.
+    // Not fatal: the preamble also sources the user's shell rc, which can still
+    // put claude on PATH, so a miss is a strong warning rather than a verdict.
+    // Under vitest, sessions run the harness's stand-in instead (test-claude-guard.ts).
+    this._spawnClaudeCli = testRunnerClaude() ?? resolveClaudeCliExecutable(env)
+    if (!this._spawnClaudeCli) {
+      log.session.error(
+        'spawning the local daemon with an environment where the claude CLI cannot be resolved — '
+        + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',
+        {
+          daemonDir: this.daemonDir,
+          envHome: env.HOME,
+          realHome: currentProdClaimPosture().realHome,
+          pathEntries: (env.PATH ?? '').split(path.delimiter).length,
+        },
+      )
+    }
+    return this.spawnDaemonWithEnv(binaryPath, env)
+  }
+
+  /**
+   * The environment the daemon is started with. Its own method so tests can
+   * read what a daemon would inherit (a watchdog parent or not, the overrides)
+   * without starting one.
+   */
+  async buildSpawnEnv(): Promise<NodeJS.ProcessEnv> {
     // Scrub test-runner identity before spawning. The daemon is long-lived shared
     // infrastructure: if a vitest-spawned process warms it, the inherited VITEST /
     // NODE_ENV=test / OPEN_WALNUT_HOME would flow daemon → every Claude CLI it
@@ -760,7 +805,7 @@ export class LocalDaemon {
     // the isolated-dir reap is in play). Same env-carrier chain as VITEST_*.
     delete env.WALNUT_DAEMON_PARENT_PID
     // Isolated-dir daemons die with us (see parentWatchdogEnv); prod never gets the var.
-    Object.assign(env, parentWatchdogEnv(this.daemonDir))
+    if (!this.persistent) Object.assign(env, parentWatchdogEnv(this.daemonDir))
     delete env.VITEST
     delete env.VITEST_MODE
     delete env.VITEST_WORKER_ID
@@ -775,30 +820,17 @@ export class LocalDaemon {
     // server an agent starts inside a session was not raised, so it must not
     // inherit the request through the daemon and the CLI.
     delete env[QOS_CLAMP_ENV]
-
-    // Preflight the ONE thing a daemon cannot recover from: the CLI it exists to
-    // spawn. The daemon inherits this env verbatim, and its spawn preamble looks
-    // in the same places this resolver does (PATH, then $HOME/.toolbox/bin,
-    // $HOME/.local/bin, …). A miss here means every session will exit 127, so
-    // say it once, loudly, at the moment of spawn — the 2026-08-28 outage
-    // reported itself only as a per-session "claude: not found" 20 times over.
-    // Not fatal: the preamble also sources the user's shell rc, which can still
-    // put claude on PATH, so a miss is a strong warning rather than a verdict.
-    // Under vitest, sessions run the harness's stand-in instead (test-claude-guard.ts).
-    this._spawnClaudeCli = testRunnerClaude() ?? resolveClaudeCliExecutable(env)
-    if (!this._spawnClaudeCli) {
-      log.session.error(
-        'spawning the local daemon with an environment where the claude CLI cannot be resolved — '
-        + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',
-        {
-          daemonDir: this.daemonDir,
-          envHome: env.HOME,
-          realHome: currentProdClaimPosture().realHome,
-          pathEntries: (env.PATH ?? '').split(path.delimiter).length,
-        },
-      )
+    // The keep-sessions switch is one daemon's own exit policy (the cloud tunnel
+    // daemon sets it through envOverrides): never inherit it.
+    delete env.WALNUT_DAEMON_KEEP_SESSIONS
+    for (const [key, value] of Object.entries(this.envOverrides)) {
+      if (value === undefined) delete env[key]
+      else env[key] = value
     }
+    return env
+  }
 
+  private async spawnDaemonWithEnv(binaryPath: string, env: NodeJS.ProcessEnv): Promise<number> {
     // Source-fallback daemons are plain .cjs scripts (no compiled binary in
     // published npm installs) — run them under the current Node runtime.
     const isSourceScript = binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')

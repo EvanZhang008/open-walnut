@@ -17,9 +17,16 @@ import { log } from '../../src/logging/index.js'
 // RPC + recording path under test.
 const bridgeConfigMock = vi.hoisted(() => ({
   payload: { enabled: false } as Record<string, unknown>,
+  /** What revalidateBridgeToken answers, call by call (then false). */
+  reminted: [] as boolean[],
+  revalidated: [] as string[],
 }))
 vi.mock('../../src/integrations/cloud-bridge-config.js', () => ({
   getBridgeConfigForHost: vi.fn(async () => bridgeConfigMock.payload),
+  revalidateBridgeToken: vi.fn(async (host: string) => {
+    bridgeConfigMock.revalidated.push(host)
+    return bridgeConfigMock.reminted.shift() ?? false
+  }),
 }))
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
@@ -62,6 +69,34 @@ describe('DaemonConnection bridge visibility', () => {
     expect(warnSpy.mock.calls.some(
       ([msg]) => typeof msg === 'string' && msg.includes('bridge enabled but NOT connected'),
     )).toBe(true)
+  })
+
+  it('an enabled bridge that is not connected asks the companion about its token; a re-mint is pushed at once', async () => {
+    bridgeConfigMock.payload = { enabled: true, url: 'wss://cloud.example/bridge', token: 't', hostAlias: 'h-remint' }
+    bridgeConfigMock.reminted = [true]
+    bridgeConfigMock.revalidated = []
+    daemon.setBridgeConnected(false)
+
+    conn = new DaemonConnection('bridge-vis-remint', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+
+    // The first push, the question about the token, then a second push with the new one.
+    await waitFor(() => daemon.getCommandHistory().filter((c) => c.cmd === 'bridge.configure').length >= 2)
+    expect(bridgeConfigMock.revalidated[0]).toBe('bridge-vis-remint')
+  })
+
+  it('a token the companion still accepts is not pushed again (the network is the problem)', async () => {
+    bridgeConfigMock.payload = { enabled: true, url: 'wss://cloud.example/bridge', token: 't', hostAlias: 'h-ok' }
+    bridgeConfigMock.reminted = []
+    bridgeConfigMock.revalidated = []
+    daemon.setBridgeConnected(false)
+
+    conn = new DaemonConnection('bridge-vis-no-remint', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+
+    await waitFor(() => bridgeConfigMock.revalidated.length === 1)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(daemon.getCommandHistory().filter((c) => c.cmd === 'bridge.configure')).toHaveLength(1)
   })
 
   it('records lastBridgeConnected=true when the daemon reports a live bridge', async () => {

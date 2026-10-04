@@ -64,7 +64,9 @@ async function fetchViaDaemon(host: string, remotePath: string): Promise<Buffer 
     const config = await getConfig()
     const hostDef = config.hosts?.[host]
     if (!hostDef?.hostname) return null
-    const conn = await getDaemonConnection(host, { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port })
+    // Within the host-read deadline: a host still connecting gives no image now (boundHostRead).
+    const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
+    const conn = await boundHostRead(host, () => getDaemonConnection(host, { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }))
     let result = await conn.send('fs.readImage', { path: remotePath }).catch(() => null)
     if (!result?.ok) {
       // Old daemon without fs.readImage — trusted SSH channel, fs.read is fine.

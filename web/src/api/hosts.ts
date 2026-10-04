@@ -113,6 +113,8 @@ export interface HostStatus {
   /** Informational lines for Settings (never a banner row). */
   warnings?: string[];
   daemonDir?: { path: string; display: string; fallback: boolean; reason?: string; freeMb?: number };
+  /** false: the host cannot open a terminal (the cloud box: no SSH), so its sessions show no Terminal tab. */
+  terminal?: false;
   /** Tombstone on the host:status event: the host left the config (or was disabled). */
   removed?: true;
   /** Server clock (ms epoch) when this snapshot was built: the ordering key. */

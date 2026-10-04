@@ -664,17 +664,26 @@ else
   record engine-auth skipped "out of scope: sign $ENGINE in on the box yourself (sudo -u $WALNUT_USER -H ${ENGINE_CLI:-$ENGINE})"
 fi
 
-# ── 4. systemd drop-in: a real shell for the session daemon ──────────────────
+# ── 4. systemd drop-in: a real shell for the session daemon, and sessions that
+#       outlive a restart ─────────────────────────────────────────────────────
+# KillMode=process: a stop or restart signals the server alone. The default
+# (control-group) also kills every session daemon the server started and their
+# agent CLIs, on every restart and so on every deploy. With it, the next server
+# adopts the running daemons from their pid and port files, as a Mac's daemon
+# outlives its server. What else lives in the unit is the server's short-lived
+# children (git http-backend, probes), which finish on their own timeouts.
 step "systemd drop-in ($DROPIN_FILE)"
 DROPIN_CONTENT="# Written by scripts/cloud/ensure-harness.sh. The session daemon spawns the
 # agent CLI through \$SHELL, and systemd sets SHELL from passwd for a unit with
-# User=, which for this service user is a nologin shell.
+# User=, which for this service user is a nologin shell. KillMode=process keeps
+# the session daemons and their CLIs running across a restart of the server.
 [Service]
-Environment=SHELL=/bin/bash"
+Environment=SHELL=/bin/bash
+KillMode=process"
 if [ -f "$DROPIN_FILE" ] && [ "$(cat "$DROPIN_FILE")" = "$DROPIN_CONTENT" ]; then
-  record "systemd drop-in" present "SHELL=/bin/bash"
+  record "systemd drop-in" present "SHELL=/bin/bash, KillMode=process"
 elif [ "$DRY_RUN" = 1 ]; then
-  record "systemd drop-in" planned "SHELL=/bin/bash, then systemctl daemon-reload"
+  record "systemd drop-in" planned "SHELL=/bin/bash, KillMode=process, then systemctl daemon-reload"
 else
   mkdir -p "$(dirname "$DROPIN_FILE")"
   tmp="$DROPIN_FILE.tmp-harness-$$"
@@ -684,7 +693,7 @@ else
   RESTART_NEEDED=1
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
-    record "systemd drop-in" written "SHELL=/bin/bash (daemon-reload done)"
+    record "systemd drop-in" written "SHELL=/bin/bash, KillMode=process (daemon-reload done)"
   else
     record "systemd drop-in" warned "written, but systemctl is missing; reload systemd yourself"
   fi

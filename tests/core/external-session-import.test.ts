@@ -83,6 +83,8 @@ import {
   importFolderLabel,
   isStaleImportTitle,
   _resetImportAuditForTesting,
+  extendImportLifecycle,
+  importAutoCompleteAfterDays,
 } from '../../src/core/sessions/external-session-import.js';
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../../src/core/types.js';
 import {
@@ -690,6 +692,44 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     setHost('__local__', { candidates: [] });
     expect((await importExternalSessions({ now: AUG10 + 365 * DAY })).completed).toBe(0);
     expect((await getTask(task.id)).phase).toBe('TODO');
+  });
+
+  it('keeps the sweep on a project a plugin extended it to: only there, only imports, only while held', async () => {
+    setHost('__local__', { candidates: ['ext-filed', 'ext-adopted', 'ext-elsewhere', 'ext-late'].map((sessionId) => candidate({ sessionId })) });
+    await importExternalSessions({ now: AUG10 });
+    const [filed, adopted, elsewhere, late] = await Promise.all(['ext-filed', 'ext-adopted', 'ext-elsewhere', 'ext-late'].map(taskForSession));
+    for (const task of [filed, adopted, late]) await updateTask(task.id, { project: 'virtual-teammate-import' }, { source: 'api' });
+    await updateTask(elsewhere.id, { project: 'My real work' }, { source: 'api' });
+    await adoptImportedTask(adopted.id, 'test');
+
+    // Two holders (a plugin reload overlaps its old instance): releasing one keeps the sweep.
+    const releaseFirst = extendImportLifecycle('Virtual-Teammate-Import');
+    const releaseSecond = extendImportLifecycle('virtual-teammate-import');
+    setHost('__local__', { candidates: [] });
+    try {
+      expect((await importExternalSessions({ now: AUG10 + 6 * DAY, limits: { sweep: 1 } })).completed).toBe(0);
+      releaseFirst();
+      releaseFirst(); // idempotent: never releases the other holder
+      expect((await importExternalSessions({ now: AUG10 + 8 * DAY, limits: { sweep: 1 } })).completed).toBe(1);
+    } finally {
+      releaseSecond();
+    }
+    const phases = await Promise.all([filed, late, adopted, elsewhere].map(async (task) => (await getTask(task.id)).phase));
+    // One of the two unadopted runs went (the cap was 1); the adopted and the user-filed ones stay open.
+    expect(phases.slice(0, 2).sort()).toEqual(['COMPLETE', 'TODO']);
+    expect(phases.slice(2)).toEqual(['TODO', 'TODO']);
+    // Released: the rest of that project is out of the sweep's reach again.
+    expect((await importExternalSessions({ now: AUG10 + 30 * DAY })).completed).toBe(0);
+  });
+
+  it("answers the importer's idle window for plugins: the configured days, else 7", async () => {
+    autoCompleteDays = 3;
+    expect(await importAutoCompleteAfterDays()).toBe(3);
+    autoCompleteDays = 0;
+    expect(await importAutoCompleteAfterDays()).toBe(0);
+    autoCompleteDays = undefined;
+    expect(await importAutoCompleteAfterDays()).toBe(7);
+    expect(() => extendImportLifecycle('   ')).toThrow(/cannot be empty/);
   });
 
   it('never completes a task the importer does not own, even inside the import project', async () => {

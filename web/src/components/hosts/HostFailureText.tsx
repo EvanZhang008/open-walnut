@@ -28,6 +28,12 @@ export interface HostFailureTextProps {
   lastFrameAt?: number;
   /** Headline only; hint and summary behind 'Show details' (banner rows after the first). */
   collapsed?: boolean;
+  /**
+   * Show the summary as is, without its own toggle: the caller's fold toggle
+   * already is the "details" one (a banner row for a non-SSH kind, whose inner
+   * toggle would also read "details" and showed "Show" beside "Hide").
+   */
+  summaryInline?: boolean;
   testId?: string;
   /** Rendered right after the headline (the banner row's buttons: the host is named before Retry). */
   afterHeadline?: ReactNode;
@@ -51,17 +57,19 @@ function RetryWhen({ retryAt, lastFrameAt }: { retryAt: number; lastFrameAt?: nu
   return <div className="hft-when" aria-hidden="true">{text}</div>;
 }
 
-export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFrameAt, collapsed, testId, afterHeadline }: HostFailureTextProps) {
+export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFrameAt, collapsed, summaryInline, testId, afterHeadline }: HostFailureTextProps) {
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
   const cleanHint = hint?.trim() ?? '';
   const cleanSummary = summary?.trim() ?? '';
-  const hidden = collapsed ? (cleanHint || cleanSummary) : cleanSummary;
+  const inline = !collapsed && !!summaryInline;
+  const hidden = collapsed ? (cleanHint || cleanSummary) : (inline ? '' : cleanSummary);
   return (
     <div className="hft" data-testid={testId} {...(kind ? { 'data-kind': kind } : {})}>
       {headline && <div className="hft-headline" title={headline}>{headline}</div>}
       {afterHeadline}
       {!collapsed && cleanHint && <div className="hft-hint"><InlineCodeText text={cleanHint} /></div>}
+      {inline && cleanSummary && <pre className="hft-summary">{cleanSummary}</pre>}
       {typeof retryAt === 'number' && <RetryWhen retryAt={retryAt} lastFrameAt={lastFrameAt} />}
       {hidden && (
         <button

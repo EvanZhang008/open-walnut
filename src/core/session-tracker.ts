@@ -34,6 +34,7 @@ import {
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
+import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 
 let sessionInitialized = false;
 
@@ -820,13 +821,16 @@ export async function checkSessionLimit(
   sessionConfig?: { idle_timeout_minutes?: number; max_idle?: number },
 ): Promise<SessionLimitResult> {
   const key = host || 'local';
+  // The cloud box is a small instance shared with the companion itself: its
+  // defaults are the cloud-exec ones, not a dev box's (session_limits wins).
+  const cloudBox = key === CLOUD_BOX_HOST_ALIAS;
   const rawLimit = sessionLimits?.[key]
-    ?? (key === 'local' ? DEFAULT_LOCAL_LIMIT : DEFAULT_REMOTE_LIMIT);
+    ?? (key === 'local' ? DEFAULT_LOCAL_LIMIT : cloudBox ? CLOUD_BOX_DEFAULT_LIMIT : DEFAULT_REMOTE_LIMIT);
   const limit = Math.max(1, rawLimit); // Floor at 1 to prevent zero/negative blocking all sessions
 
   // Idle limit: from config.session.max_idle, or per-host defaults
   const maxIdle = sessionConfig?.max_idle
-    ?? (key === 'local' ? DEFAULT_LOCAL_IDLE_LIMIT : DEFAULT_REMOTE_IDLE_LIMIT);
+    ?? (key === 'local' ? DEFAULT_LOCAL_IDLE_LIMIT : cloudBox ? CLOUD_BOX_DEFAULT_IDLE_LIMIT : DEFAULT_REMOTE_IDLE_LIMIT);
 
   // Single store read — avoids double-read race and double PID-liveness scan.
   const candidates = (await readStoreView()).filter((s) => {

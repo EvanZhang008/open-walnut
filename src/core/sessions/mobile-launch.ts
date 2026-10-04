@@ -214,10 +214,13 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
       aliases: [...reserved],
     });
   }
+  // The cloud box row is offered only while its companion can take sessions:
+  // the phone has no greyed state, so an old or hosting-off companion is hidden.
+  const { cloudBoxRefusal } = await import('../hosts/cloud-box-host.js');
   const hosts = [
     { alias: '', label: 'This Mac' },
     ...Object.entries(hostsCfg)
-      .filter(([alias, h]) => h.enabled !== false && !reserved.has(alias))
+      .filter(([alias, h]) => h.enabled !== false && !reserved.has(alias) && !(h.cloud_box === true && cloudBoxRefusal()))
       .map(([alias, h]) => ({ alias, label: h.label ?? alias })),
   ];
   // NOTE: the cloud companion's own host row is NOT added here. This function

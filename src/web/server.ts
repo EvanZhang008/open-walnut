@@ -33,6 +33,9 @@ import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
 import { devicesRouter } from './routes/devices.js'
+import { deviceAdoptionRouter } from './routes/devices-adopt.js'
+import { devicesTailscaleRouter } from './routes/devices-tailscale.js'
+import { isTailnetHost } from '../core/tailnet.js'
 import { focusRouter } from './routes/focus.js'
 import { orderingRouter } from './routes/ordering.js'
 import { chatHistoryRouter } from './routes/chat-history.js'
@@ -472,7 +475,8 @@ function corsOriginAllowed(
     const isPrivateLan = /^10\./.test(host)
       || /^192\.168\./.test(host)
       || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-    cb(null, isLoopback || isPrivateLan)
+    // A tailnet (100.64/10 or a MagicDNS *.ts.net name) is the LAN reached from anywhere.
+    cb(null, isLoopback || isPrivateLan || isTailnetHost(host))
   } catch {
     cb(null, false)
   }
@@ -1177,6 +1181,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
     // Don't throw — remote sessions may still work, and user can fix daemon issues
   }
+  // The paired cloud companion as an exec host ("Cloud"): read the pairing now
+  // (bounded, async git) so the session reconciler and the first host lists
+  // already see its row; the companion's status probe runs in the background.
+  if (!CLOUD_MODE) {
+    try {
+      const { startCloudBoxHost } = await import('../core/hosts/cloud-box-probe.js')
+      await startCloudBoxHost()
+    } catch (err) {
+      log.web.warn('cloud box host: pairing read failed at startup', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
   // This machine's Claude Code (missing / not signed in / too old for the model),
   // for the setup banner. After the daemon start, so the probe can use it. A
   // vitest server, and the Playwright fixture (WALNUT_LOCAL_CLAUDE_PROBE=0, its
@@ -1578,6 +1593,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/projects', projectsRouter)
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
+  app.use('/api/devices/tailscale', devicesTailscaleRouter)
+  app.use('/api/devices', deviceAdoptionRouter)
   app.use('/api/devices', devicesRouter)
   app.use('/api/focus', focusRouter)
   app.use('/api/ordering', orderingRouter)
@@ -3249,6 +3266,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
     unsubscribeHostPhase?.()
     const offPhase = addOnDaemonPhaseChange((state) => emitHostStatus(state.host))
+    // The cloud box row comes and goes with the PAIRING and the companion's
+    // answer (core/hosts/cloud-box-probe.ts), never with a config write, so the
+    // config:changed refresh above cannot see it: refresh the map here, push the
+    // frame, and tell open pickers their host list moved (a direct broadcast,
+    // not a bus CONFIG_CHANGED, which would also restart the heartbeat).
+    const { onCloudBoxStateChange, CLOUD_BOX_HOST_ALIAS } = await import('../core/hosts/cloud-box-host.js')
+    const { clearDaemonFailureCache, expediteReconnect } = await import('../providers/daemon-connection.js')
+    const offCloudBox = onCloudBoxStateChange((next) => {
+      void refreshHostDefs(true).then(() => {
+        // A companion that can now host (updated, or hosting turned on) is
+        // dialled at once instead of after the standing-failure wait.
+        if (next?.capability === 'ready') {
+          clearDaemonFailureCache(CLOUD_BOX_HOST_ALIAS)
+          expediteReconnect(CLOUD_BOX_HOST_ALIAS)
+        }
+        emitHostStatus(CLOUD_BOX_HOST_ALIAS)
+        broadcastEvent('config:changed', { key: 'hosts' })
+      })
+    })
     // After each handshake, ask the host what it can run (claude, node, gcc) and
     // re-push its status with the answer. Never on the connect path itself.
     const offReadiness = wireHostReadiness({
@@ -3256,7 +3292,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       isKnownHost: (host) => Object.hasOwn(hostDefs, host),
       emit: emitHostStatus,
     })
-    unsubscribeHostPhase = () => { offPhase(); offReadiness() }
+    unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox() }
 
     const warmupGate = hostWarmupGateReason({
       cloudMode: CLOUD_MODE, ephemeral: isEphemeral, env: process.env, config: await getConfig(),
@@ -5501,6 +5537,15 @@ export async function stopServer(): Promise<void> {
   try {
     const { closeAllBridges } = await import('./ws/bridge-registry.js')
     closeAllBridges()
+  } catch { /* best-effort */ }
+  // The cloud box: stop the pairing probe (primary), drop the tunnels (replica;
+  // the tunnel daemon and its sessions stay up).
+  try {
+    const [{ stopCloudBoxHost }, { closeAllDaemonTunnels }] = await Promise.all([
+      import('../core/hosts/cloud-box-probe.js'), import('./ws/daemon-tunnel.js'),
+    ])
+    stopCloudBoxHost()
+    closeAllDaemonTunnels()
   } catch { /* best-effort */ }
   // Cancel pending deferred-markDone callbacks so they don't mutate
   // sessionStreamBuffer after shutdown.

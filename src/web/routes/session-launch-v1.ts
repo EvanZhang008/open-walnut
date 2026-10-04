@@ -327,9 +327,14 @@ sessionLaunchV1Router.get('/sessions/launch-options', async (_req: Request, res:
       if (captured.status() === 200 && relayed && typeof relayed === 'object') {
         const body = relayed as { hosts?: Array<{ alias: string; label: string }> }
         const hosts = Array.isArray(body.hosts) ? body.hosts : []
+        // The Mac already lists THIS box as its own "Cloud" host (its daemon
+        // here, reached over /daemon-tunnel): a second row for the same box
+        // would only ask the user to pick between two names for one machine.
+        const { CLOUD_BOX_HOST_ALIAS } = await import('../../core/hosts/cloud-box-host.js')
+        const primaryListsThisBox = hosts.some((h) => h.alias === CLOUD_BOX_HOST_ALIAS)
         res.status(200).json({
           ...body,
-          hosts: entry && !hosts.some((h) => h.alias === entry.alias) ? [...hosts, entry] : hosts,
+          hosts: entry && !primaryListsThisBox && !hosts.some((h) => h.alias === entry.alias) ? [...hosts, entry] : hosts,
         })
         return
       }

@@ -21,9 +21,21 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { log } from '../logging/index.js'
+import { CLOUD_MODE } from '../constants.js'
+import {
+  DeviceChangeRefused, LOCAL_ACTOR, deviceChangeDecision, liveOwnerOf, newDeviceId, platformFromInfo,
+  type DeviceActor, type DevicePlatform,
+} from './device-actor.js'
 
 export interface DeviceRecord {
   name: string
+  /**
+   * Minted at pairing and never changed: a rotation the device makes itself
+   * keeps it, any other re-pairing of the name gets a new one. Ownership of
+   * machine credentials is keyed by it, never by the name (device-actor.ts).
+   * Records from before it existed get one in their first locked write.
+   */
+  id?: string
   /** sha256 hex of the plaintext token — the token itself is never stored. */
   tokenHash: string
   createdAt: string
@@ -34,12 +46,40 @@ export interface DeviceRecord {
    */
   kind?: 'machine'
   /**
+   * What the device is, recorded once: at its first self-report (its claim),
+   * or from the report it had when this field was introduced. A later report
+   * never changes it, so a phone cannot report its way out of being one.
+   */
+  platform?: DevicePlatform
+  /**
+   * Machine credentials only: the `id` of the paired device whose token minted
+   * it (the Mac). Only that device may replace or revoke it, and while it holds
+   * one no other device may mint any (machine-credentials.ts). Absent on a
+   * credential minted before ownership was recorded.
+   */
+  ownerId?: string
+  /**
+   * Machine credentials only: which of the companion's tunnel daemons serves
+   * it (cloud-tunnel-daemon.ts), kept across the owner's rotations. Absent =
+   * the unkeyed daemon, which a credential from before ownership was recorded
+   * has always used.
+   */
+  daemonKey?: string
+  /**
+   * Owning devices only: the tunnel daemon its machine credentials get when it
+   * mints one ({} = the unkeyed one it adopted, `key` = its own). Kept on the
+   * device, so a credential revoked and minted again lands on the same daemon.
+   */
+  tunnelDaemon?: { key?: string }
+  /**
    * Self-reported hardware/app identity, refreshed by the client on every
    * launch (POST /api/v1/devices/self). Absent for devices paired before the
    * reporting build shipped — they backfill on their next launch, and the
    * console falls back to the pairing name until then.
    */
   info?: DeviceSelfInfo
+  /** Copied here from the other box's registry so the same token works on both (device-adoption.ts). */
+  adoptedFrom?: 'cloud' | 'primary'
 }
 
 /** What a paired client tells us about itself. All fields optional/untrusted. */
@@ -58,7 +98,12 @@ export interface DeviceSelfInfo {
 
 interface AuthFile {
   devices: DeviceRecord[]
+  /** This box's identity (getInstanceId). Here because auth.json is machine-local and never synced. */
+  instanceId?: string
 }
+
+const INSTANCE_ID_RE = /^[0-9a-f]{32}$/
+const keptInstanceId = (raw: unknown) => (typeof raw === 'string' && INSTANCE_ID_RE.test(raw) ? { instanceId: raw } : {})
 
 /** Public device info — never includes hashes. */
 export interface DeviceInfo {
@@ -69,6 +114,8 @@ export interface DeviceInfo {
   kind?: 'machine'
   /** Self-reported model/OS/app — absent until the client reports once. */
   info?: DeviceSelfInfo
+  /** Set when this row is the other box's pairing, copied here (the console shows it once). */
+  adoptedFrom?: 'cloud' | 'primary'
 }
 
 const SETUP_TOKEN_TTL_MS = 15 * 60 * 1000
@@ -138,7 +185,7 @@ async function loadAuth(): Promise<AuthFile> {
   try {
     const parsed = JSON.parse(raw) as AuthFile
     if (!Array.isArray(parsed.devices)) throw new Error('devices is not an array')
-    return { devices: parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string') }
+    return { ...keptInstanceId(parsed.instanceId), devices: parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string') }
   } catch (err) {
     log.web.error('auth.json is corrupt — treating as zero devices (claim flow reopens)', {
       file,
@@ -165,7 +212,7 @@ async function readAuthBackup(): Promise<AuthFile | null> {
     const parsed = JSON.parse(raw) as AuthFile
     if (!Array.isArray(parsed.devices)) return null
     const devices = parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string')
-    return devices.length > 0 ? { devices } : null
+    return devices.length > 0 ? { ...keptInstanceId(parsed.instanceId), devices } : null
   } catch {
     return null
   }
@@ -202,13 +249,34 @@ async function updateAuth<R>(
 ): Promise<R> {
   return withFileLock(authFilePath(), async () => {
     const auth = await loadAuth()
+    const normalized = normalizeDevices(auth.devices)
     const { persist, result } = await mutate(auth)
-    if (persist) await saveAuth(auth)
+    if (persist || normalized) await saveAuth(auth)
     return result
   })
 }
 
-function validateDeviceName(name: string): void {
+/**
+ * Bring records from older builds up to date, in the locked write, before any
+ * rule reads them: every record gets an id, a device that reported itself gets
+ * the platform that report said (from then on it is fixed), and the name-keyed
+ * `owner` of an earlier build is dropped (such a credential counts as one from
+ * before ownership, which the Mac adopts again with proof). True = changed.
+ */
+function normalizeDevices(devices: DeviceRecord[]): boolean {
+  let changed = false
+  for (const d of devices) {
+    if (!d.id) { d.id = newDeviceId(); changed = true }
+    if (!d.platform && d.kind !== 'machine') {
+      const p = platformFromInfo(d.info)
+      if (p) { d.platform = p; changed = true }
+    }
+    if ('owner' in d) { delete (d as { owner?: unknown }).owner; changed = true }
+  }
+  return changed
+}
+
+export function validateDeviceName(name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name)) {
     throw new Error('Invalid device name: use 1-64 chars of letters, digits, dot, dash, underscore')
   }
@@ -218,18 +286,77 @@ function validateDeviceName(name: string): void {
  * Create a new device. Returns the plaintext token ONCE — it is never stored
  * or shown again. 128-bit random → 32 hex chars.
  */
-export async function createDevice(name: string, opts?: { kind?: 'machine' }): Promise<{ name: string; token: string; createdAt: string }> {
+export async function createDevice(
+  name: string,
+  opts?: { kind?: 'machine'; by?: DeviceActor },
+): Promise<{ name: string; token: string; createdAt: string }> {
   validateDeviceName(name)
   return updateAuth((auth) => {
     if (auth.devices.some((d) => d.name === name)) {
       throw new Error(`Device "${name}" already exists`)
     }
-    const token = crypto.randomBytes(16).toString('hex')
-    const createdAt = new Date().toISOString()
-    auth.devices.push({ name, tokenHash: sha256Hex(token), createdAt, ...(opts?.kind ? { kind: opts.kind } : {}) })
+    const decision = deviceChangeDecision(auth.devices, opts?.by ?? LOCAL_ACTOR, 'create', name, CLOUD_MODE)
+    if (!decision.ok) throw decision.refusal
+    const { record, token } = freshRecord(name, opts?.kind)
+    auth.devices.push(record)
     log.web.info('device-auth: device created', { name, kind: opts?.kind ?? 'device' })
-    return { persist: true, result: { name, token, createdAt } }
+    return { persist: true, result: { name, token, createdAt: record.createdAt } }
   })
+}
+
+/** A new pairing's record and its plaintext token (returned once, never stored). */
+function freshRecord(name: string, kind?: 'machine'): { record: DeviceRecord; token: string } {
+  const token = crypto.randomBytes(16).toString('hex')
+  return {
+    token,
+    record: { name, id: newDeviceId(), tokenHash: sha256Hex(token), createdAt: new Date().toISOString(), ...(kind ? { kind } : {}) },
+  }
+}
+
+/**
+ * "Show a new QR" for `name`: a new token, the old one stops working (its
+ * open sockets are told). A device rotating its OWN token stays the same
+ * device (id, platform, what it owns). A rotation by anyone else allowed to
+ * (the Mac this companion serves, a local caller) is a new pairing of the
+ * name: a new id, and whatever the old pairing owned goes as with a revoke.
+ * No record yet: a plain pairing.
+ */
+export async function rotateDevice(
+  name: string,
+  opts: { by: DeviceActor },
+): Promise<{ name: string; token: string; createdAt: string; replaced: boolean }> {
+  validateDeviceName(name)
+  const out = await updateAuth((auth) => {
+    const target = auth.devices.find((d) => d.name === name)
+    const decision = deviceChangeDecision(auth.devices, opts.by, target ? 'rotate' : 'create', name, CLOUD_MODE)
+    if (!decision.ok) throw decision.refusal
+    if (target?.kind === 'machine') throw new Error(`Device "${name}" is a machine credential`)
+    const fresh = freshRecord(name)
+    if (target && decision.by === 'self') {
+      target.tokenHash = fresh.record.tokenHash
+      delete target.lastUsedAt
+      return { persist: true, result: { name, token: fresh.token, createdAt: target.createdAt, replaced: true, gone: [name], by: decision.by } }
+    }
+    const gone = target ? revokedWith(auth.devices, target) : []
+    auth.devices = [...auth.devices.filter((d) => !gone.includes(d)), fresh.record]
+    return { persist: true, result: { name, token: fresh.token, createdAt: fresh.record.createdAt, replaced: !!target, gone: gone.map((d) => d.name), by: decision.by } }
+  })
+  for (const n of out.gone) lastUsedWriteAt.delete(n)
+  notifyRevoked(out.gone)
+  log.web.info('device-auth: device rotated', { name, by: out.by, replaced: out.replaced, ...(out.gone.length > 1 ? { ownedCredentials: out.gone.filter((n) => n !== name) } : {}) })
+  return { name: out.name, token: out.token, createdAt: out.createdAt, replaced: out.replaced }
+}
+
+/**
+ * The records that go when `target` does: itself, and when it owns machine
+ * credentials here, those and the unowned ones from before ownership was
+ * recorded (one companion serves one Mac, so they were its too, and leaving
+ * them would keep the next Mac out).
+ */
+function revokedWith(devices: DeviceRecord[], target: DeviceRecord): DeviceRecord[] {
+  const owner = target.kind !== 'machine' && devices.some((d) => d.kind === 'machine' && liveOwnerOf(d, devices) === target)
+  return devices.filter((d) => d === target
+    || (owner && d.kind === 'machine' && (liveOwnerOf(d, devices) === target || liveOwnerOf(d, devices) === undefined)))
 }
 
 /**
@@ -274,23 +401,88 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
   return matched.kind ? { name: matched.name, kind: matched.kind } : { name: matched.name }
 }
 
-/** Revoke a device by name. Returns true if it existed. */
-export async function revokeDevice(name: string): Promise<boolean> {
+/**
+ * Revoke a device by name. Returns true if it existed.
+ *
+ * `by` is who asks (device-actor.ts); absent = this machine itself (the
+ * `walnut device` CLI). A paired device may revoke only itself, unless it is
+ * the Mac that owns this companion's machine credentials.
+ *
+ * The machine credentials it owns go with it (a Mac's pairing revoked is that
+ * Mac disconnected from this companion), and so do the unowned ones from
+ * before ownership was recorded (revokedWith).
+ */
+export async function revokeDevice(name: string, opts: { by?: DeviceActor; tokenHash?: string } = {}): Promise<boolean> {
   const removed = await updateAuth((auth) => {
-    const before = auth.devices.length
-    auth.devices = auth.devices.filter((d) => d.name !== name)
-    return { persist: auth.devices.length !== before, result: auth.devices.length !== before }
+    // `tokenHash`: only this pairing of the name, never one that replaced it meanwhile.
+    const target = auth.devices.find((d) => d.name === name && (opts.tokenHash === undefined || d.tokenHash === opts.tokenHash))
+    if (!target) return { persist: false, result: [] as string[] }
+    const by = opts.by ?? LOCAL_ACTOR
+    // A machine credential through this path: only this machine itself (the
+    // routes send a paired device's request to machine-credentials.ts).
+    const decision = target.kind === 'machine' && !('local' in by)
+      ? { ok: false as const, refusal: new DeviceChangeRefused(403, 'device_change_refused', `${name} is a machine credential`) }
+      : deviceChangeDecision(auth.devices, by, 'revoke', name, CLOUD_MODE)
+    if (!decision.ok) throw decision.refusal
+    const gone = revokedWith(auth.devices, target)
+    auth.devices = auth.devices.filter((d) => !gone.includes(d))
+    return { persist: true, result: gone.map((d) => d.name) }
   })
-  if (!removed) return false
-  lastUsedWriteAt.delete(name)
-  log.web.info('device-auth: device revoked', { name })
+  if (!removed.includes(name)) return false
+  for (const n of removed) lastUsedWriteAt.delete(n)
+  log.web.info('device-auth: device revoked', { name, ...(removed.length > 1 ? { ownedCredentials: removed.filter((n) => n !== name) } : {}) })
+  notifyRevoked(removed)
   return true
+}
+
+type RevokeListener = (names: string[]) => void
+const revokeListeners = new Set<RevokeListener>()
+
+/**
+ * Hear every credential this process revokes (a device and the machine
+ * credentials that went with it), so a socket opened with one can be closed at
+ * once. A revoke by the `walnut device` CLI (another process) is not heard:
+ * holders re-verify on their own clock as well.
+ */
+export function onCredentialsRevoked(listener: RevokeListener): () => void {
+  revokeListeners.add(listener)
+  return () => { revokeListeners.delete(listener) }
+}
+
+export function notifyRevoked(names: string[]): void {
+  if (names.length === 0) return
+  for (const l of revokeListeners) {
+    try { l(names) } catch { /* a listener must never fail a revoke */ }
+  }
+}
+
+/** Locked read-modify-write for machine-credentials.ts (same lock as every other auth.json writer). */
+export async function mutateDeviceRecords<R>(
+  mutate: (devices: DeviceRecord[]) => { devices?: DeviceRecord[]; result: R },
+): Promise<R> {
+  return updateAuth((auth) => {
+    const { devices, result } = mutate(auth.devices)
+    if (devices) auth.devices = devices
+    return { persist: devices !== undefined, result }
+  })
+}
+
+/** A fresh token and its record, for machine-credentials.ts (plaintext returned once, never stored). */
+export function newMachineRecord(name: string, ownerId: string, daemonKey: string | undefined): { record: DeviceRecord; token: string } {
+  validateDeviceName(name)
+  const { record, token } = freshRecord(name, 'machine')
+  return { token, record: { ...record, ownerId, ...(daemonKey ? { daemonKey } : {}) } }
+}
+
+/** Does `token` hash to `tokenHash`? Constant time. */
+export function tokenMatchesHash(token: string, tokenHash: string): boolean {
+  return hashesEqual(sha256Hex(token), tokenHash)
 }
 
 /** List devices — never exposes token hashes. */
 export async function listDevices(): Promise<DeviceInfo[]> {
   const auth = await loadAuth()
-  return auth.devices.map(({ name, createdAt, lastUsedAt, kind, info }) => ({ name, createdAt, lastUsedAt, kind, info }))
+  return auth.devices.map(({ name, createdAt, lastUsedAt, kind, info, adoptedFrom }) => ({ name, createdAt, lastUsedAt, kind, info, ...(adoptedFrom ? { adoptedFrom } : {}) }))
 }
 
 /** Max accepted length per self-reported string — these are untrusted input. */
@@ -320,13 +512,18 @@ export async function setDeviceInfo(name: string, info: DeviceSelfInfo): Promise
   const outcome = await updateAuth((auth) => {
     const device = auth.devices.find((d) => d.name === name)
     if (!device) return { persist: false, result: 'unknown' as const }
+    // The first report is the device's claim of what it is, and the platform it
+    // says is kept for good: no later report (a cleared one, a Mac model sent by
+    // a phone) changes it. The report itself is display only.
+    const claimed = !device.platform && device.kind !== 'machine' ? platformFromInfo(next) : undefined
+    if (claimed) device.platform = claimed
     // Don't churn the file when nothing meaningful changed — clients report on
     // every launch, and each auth.json write also rewrites the .bak sidecar.
     const prev = device.info
     if (prev
       && prev.model === next.model && prev.os === next.os
       && prev.deviceName === next.deviceName && prev.appVersion === next.appVersion) {
-      return { persist: false, result: 'unchanged' as const }
+      return { persist: claimed !== undefined, result: 'unchanged' as const }
     }
     device.info = next
     return { persist: true, result: 'updated' as const }
@@ -347,6 +544,32 @@ export async function setDeviceInfo(name: string, info: DeviceSelfInfo): Promise
  */
 export async function listDeviceRecords(): Promise<DeviceRecord[]> {
   return (await loadAuth()).devices
+}
+
+let volatileInstanceId: string | null = null
+
+/**
+ * This box's identity, so a client can tell whether an address leads to the
+ * box it expects (GET /api/v1/instance). 16 random bytes in hex, minted once in
+ * the locked write. A file that exists but does not parse is left alone (the
+ * write would replace it and its .bak, which is what an operator recovers from):
+ * this process answers with an id it keeps in memory instead.
+ */
+export async function getInstanceId(): Promise<string> {
+  const known = (await loadAuth()).instanceId
+  if (known) return known
+  return updateAuth(async (auth) => {
+    if (auth.instanceId) return { persist: false, result: auth.instanceId }
+    const raw = await fs.readFile(authFilePath(), 'utf-8').catch((err: NodeJS.ErrnoException) => (err.code === 'ENOENT' ? null : ''))
+    let readable = raw === null
+    try { readable ||= Array.isArray((JSON.parse(raw ?? '') as AuthFile).devices) } catch { /* unreadable */ }
+    if (!readable) {
+      volatileInstanceId ??= crypto.randomBytes(16).toString('hex')
+      return { persist: false, result: volatileInstanceId }
+    }
+    auth.instanceId = crypto.randomBytes(16).toString('hex')
+    return { persist: true, result: auth.instanceId }
+  })
 }
 
 /** True once at least one device is paired (claim path closed). */
@@ -509,4 +732,5 @@ export async function claimInstance(candidateToken: string, deviceName: string):
 export function _resetDeviceAuthForTesting(): void {
   setupToken = null
   lastUsedWriteAt.clear()
+  volatileInstanceId = null
 }

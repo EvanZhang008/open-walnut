@@ -10,7 +10,7 @@
 export type HostFailureKind =
   | 'auth' | 'host_key' | 'cert_expired' | 'agent_missing' | 'proxy_login' | 'proxy' | 'shell_noise'
   | 'dns' | 'unreachable' | 'refused' | 'timeout' | 'runtime' | 'daemon'
-  | 'ephemeral' | 'listing' | 'unknown'
+  | 'ephemeral' | 'listing' | 'cloud_update' | 'cloud_exec_off' | 'cloud_other_mac' | 'cloud_tunnel' | 'unknown'
 
 export type HostPhaseWire =
   | 'idle' | 'ssh' | 'probe' | 'install-runtime' | 'upload' | 'start' | 'tunnel'
@@ -95,9 +95,12 @@ export const CREDENTIAL_WAIT_KINDS: readonly string[] = ['cert_expired', 'agent_
 /** Opening the picker never re-dials a host that failed with one of these (key taps, agent prompts). */
 export const NO_PREWARM_KINDS: readonly string[] = [
   'auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'dns', 'shell_noise', 'runtime',
+  'cloud_update', 'cloud_exec_off', 'cloud_other_mac',
 ]
+/** The cloud box host's own failures: fixed on the companion, never in Settings › Remote Hosts. */
+export const CLOUD_BOX_KINDS: readonly string[] = ['cloud_update', 'cloud_exec_off', 'cloud_other_mac', 'cloud_tunnel']
 /** Their detail is a filesystem or daemon log line, not SSH output. */
-export const DETAILS_NOT_SSH_KINDS: readonly string[] = ['listing', 'daemon', 'runtime']
+export const DETAILS_NOT_SSH_KINDS: readonly string[] = ['listing', 'daemon', 'runtime', ...CLOUD_BOX_KINDS]
 /** Readiness notes that explain, never ask for action. */
 export const INFO_ONLY_KINDS: readonly string[] = ['daemon_dir_fallback']
 
@@ -150,6 +153,11 @@ export function hostFailureHeadline(
     case 'ephemeral': return `${label} is off on this test server`
     case 'listing':
       return opts.path ? `Could not list ${middleTruncatePath(opts.path)} on ${label}` : `Could not list this folder on ${label}`
+    // Hardcoded twins of CLOUD_BOX_NEEDS_UPDATE / _EXEC_OFF / _OTHER_MAC (this file stays import-free).
+    case 'cloud_update': return 'Cloud companion needs an update'
+    case 'cloud_exec_off': return 'Cloud companion has session hosting turned off'
+    case 'cloud_other_mac': return 'Another Mac is connected to this cloud companion'
+    case 'cloud_tunnel': return `Could not reach ${label} through the cloud companion`
     default: return `Could not connect to ${label}`
   }
 }
@@ -389,7 +397,8 @@ export function hostActionsFor(
       // Retry is always there (the hint says "then Retry"); retryable only
       // decides whether Walnut retries by itself.
       out = ['retry']
-      if (!problem.retryable && surface !== 'settings') out.push('openSettings')
+      // The cloud box has no Settings row: its fix lives on the companion.
+      if (!problem.retryable && surface !== 'settings' && !CLOUD_BOX_KINDS.includes(problem.kind)) out.push('openSettings')
       break
     case 'reconnecting':
       if (surface === 'settings') out = ['connectNow']

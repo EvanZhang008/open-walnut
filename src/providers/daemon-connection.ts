@@ -66,6 +66,8 @@ import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential
 import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
+// Leaf (no runtime imports): the cloud box alias and the companion's last answer.
+import { CLOUD_BOX_HOST_ALIAS, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -366,6 +368,8 @@ export class DaemonConnection {
   private _credentialReconnects = 0
   /** Last WebSocket URL opened — logged on close for troubleshooting. */
   private _lastWsUrl: string | null = null
+  /** Upgrade headers of the last dial (the cloud tunnel's bearer), for the bulk channel. */
+  private _lastWsHeaders: Record<string, string> | null = null
   /**
    * Daemon instance ID from the most recent successful `hello`. Null until the
    * first handshake. Comparing against the daemon.instance file (or a later
@@ -441,6 +445,8 @@ export class DaemonConnection {
 
   /** Command timeout in ms. Generous for initial deploy operations. */
   private static COMMAND_TIMEOUT_MS = 30_000
+  /** The companion answers the tunnel upgrade only after its daemon is up (a cold start is ~10s). */
+  private static CLOUD_TUNNEL_UPGRADE_TIMEOUT_MS = 30_000
   /**
    * Commands whose responses can be MB-scale frames (1MB JSONL chunks,
    * base64 images, git diffs up to 64MB) — routed to the bulk channel when
@@ -552,6 +558,15 @@ export class DaemonConnection {
    */
   private get ephemeralRemoteRefused(): boolean {
     return this.isReadOnlyRemote && process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS !== '1'
+  }
+
+  /**
+   * The paired cloud box (core/hosts/cloud-box-host.ts): reached through the
+   * companion's authenticated /daemon-tunnel WebSocket, never SSH. Everything
+   * above the socket (commands, streams, file reads, git, changes) is the same.
+   */
+  private get isCloudTunnel(): boolean {
+    return this.hostKey === CLOUD_BOX_HOST_ALIAS
   }
 
   // ── Binary deployment helpers ──
@@ -795,6 +810,11 @@ export class DaemonConnection {
           log.session.warn('DaemonConnection: bridge enabled but NOT connected on daemon', {
             host: this.hostKey,
           })
+          // The network, or a machine token the cloud box stopped accepting
+          // (401)? Ask it (at most every 10 minutes); a new token is pushed at once.
+          void import('../integrations/cloud-bridge-config.js')
+            .then((m) => m.revalidateBridgeToken(this.hostKey))
+            .then((reminted) => { if (reminted) setTimeout(() => this.pushBridgeConfig(), 0) }, () => { /* next re-push */ })
         } else {
           log.session.info('DaemonConnection: bridge config pushed', {
             host: this.hostKey, enabled: cfg.enabled, bridgeConnected: this._lastBridgeConnected,
@@ -1179,6 +1199,20 @@ export class DaemonConnection {
         )
       }
 
+      // The cloud box: no SSH, no deploy. The companion's own build ships the
+      // daemon, and its /daemon-tunnel route pipes this socket to it.
+      if (this.isCloudTunnel) {
+        await this.dialCloudTunnel()
+        this.setConnected(true)
+        this.startPing()
+        this._connecting = false
+        log.session.info('DaemonConnection: cloud box connected (tunnel)', {
+          host: this.hostKey, instanceId: this._daemonInstanceId,
+        })
+        this.recoverDisconnectedSessions().catch(() => {})
+        return
+      }
+
       // Step 0: Establish SSH ControlMaster (one connection for all subsequent commands)
       this.setPhase('ssh')
       await this.ensureControlMaster()
@@ -1270,7 +1304,7 @@ export class DaemonConnection {
       // Ask the local agent why an auth failure happened (expired certificate,
       // no agent) before anyone reads the error. Still inside _connecting, so a
       // second caller keeps waiting on this attempt.
-      const annotated = this.sshTarget ? await annotateCredentialFailure(err, this.sshHostString) : err
+      const annotated = this.sshTarget && !this.isCloudTunnel ? await annotateCredentialFailure(err, this.sshHostString) : err
       this._connecting = false
       this.setPhase('failed')
       if (resumeLoop) void this.handleReconnectFailure(annotated, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS, true)
@@ -1649,6 +1683,11 @@ export class DaemonConnection {
    * URL with it, so a service bound to one external interface still answers.
    */
   ensurePortForward(remotePort: number, target = '127.0.0.1', opts: { evictable?: boolean } = {}): Promise<number> {
+    // A forward is an `ssh -L`; the cloud box is reached over the daemon
+    // tunnel only, so there is nothing to forward through. Say so plainly.
+    if (this.isCloudTunnel) {
+      return Promise.reject(new Error('Port forwarding is not available on Cloud: this Mac reaches it through the cloud companion, not SSH'))
+    }
     const key = `${target}:${remotePort}`
     const dialing = this.portForwardDials.get(key)
     if (dialing) return dialing
@@ -3402,19 +3441,93 @@ export class DaemonConnection {
   }
 
   /**
+   * Open the cloud box's socket: resolve the companion and this Mac's machine
+   * credential, upgrade /daemon-tunnel (the companion starts this Mac's daemon
+   * on the box first, so the upgrade may take a cold start), then hello.
+   *
+   * Never deploys or restarts anything: the companion builds its own daemon.
+   * A daemon missing capabilities is used as is (capability-gated commands
+   * degrade), since there is nothing this side could redeploy. Every failure
+   * reads "Cloud companion ..." so the host classifier gives it cloud words.
+   */
+  private async dialCloudTunnel(): Promise<void> {
+    const probe = await import('../core/hosts/cloud-box-probe.js')
+    // A standing refusal is re-asked first (bounded, single-flight), so Retry
+    // after the operator updated the box or turned hosting on works at once.
+    if (probe.refusalBeforeDial()) await probe.refreshCloudBoxHost()
+    const refusal = probe.refusalBeforeDial()
+    if (refusal) throw new Error(refusal)
+    this.setPhase('tunnel')
+    try {
+      // A 401 re-mints this Mac's machine credential once and dials again.
+      await probe.openCloudTunnel((endpoint) => this.connectWebSocket(endpoint.url, {
+        headers: endpoint.headers,
+        timeoutMs: DaemonConnection.CLOUD_TUNNEL_UPGRADE_TIMEOUT_MS,
+        describeRefusal: probe.describeTunnelRefusal,
+      }))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw /^Cloud companion/.test(msg) ? err : new Error(`Cloud companion tunnel failed: ${msg}`)
+    }
+    this.setPhase('handshake')
+    this._capabilities = null // so "no hello at all" is told apart from "hello, missing caps"
+    const ok = await this.verifyCapabilities()
+    if (!ok && this._capabilities === null) {
+      // No hello at all: the socket is open but nothing sane answers behind it.
+      this.closeTransport()
+      throw new Error('Cloud companion tunnel failed: the session daemon on the box did not answer')
+    }
+    if (!ok) {
+      log.session.warn('DaemonConnection: cloud box daemon lacks capabilities this Mac expects; using it as is', {
+        host: this.hostKey,
+      })
+    }
+    probe.noteCloudBoxCapability('ready')
+  }
+
+  /**
    * Connect WebSocket through the SSH tunnel (or directly via URL).
    */
-  private connectWebSocket(urlOrPort: number | string): Promise<void> {
+  private connectWebSocket(
+    urlOrPort: number | string,
+    opts: {
+      /** Upgrade headers (the cloud tunnel's bearer); the bulk channel reuses them. */
+      headers?: Record<string, string>
+      timeoutMs?: number
+      /** A non-101 answer becomes this sentence instead of "Unexpected server response". */
+      describeRefusal?: (status: number, refusal: string | undefined, body: string) => string
+    } = {},
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = typeof urlOrPort === 'string' ? urlOrPort : `ws://127.0.0.1:${urlOrPort}`
       this._lastWsUrl = url
+      this._lastWsHeaders = opts.headers ?? null
+      const timeoutMs = opts.timeoutMs ?? 10_000
       // maxPayload stays at the ws default (100MB) DELIBERATELY — it is the
       // tripwire that caught inc-1783842393500 (134MB one-frame fs.read of a
       // whale JSONL → "Max payload size exceeded"). DaemonFileReader chunks all
       // big file reads to 1MB frames now; the largest remaining legit frame is
       // a git.diff response (git stdout capped at 64MB in cmdGitDiff), so do
       // NOT lower this without chunking git.diff first.
-      const ws = new WebSocket(url, { handshakeTimeout: 10_000 })
+      const ws = new WebSocket(url, { handshakeTimeout: timeoutMs, ...(opts.headers ? { headers: opts.headers } : {}) })
+
+      if (opts.describeRefusal) {
+        const describe = opts.describeRefusal
+        // Registering this listener makes `ws` hand us the refusal instead of
+        // an opaque error; read a short body, then drop the request.
+        ws.on('unexpected-response', (req, res) => {
+          const refusal = res.headers[TUNNEL_REFUSAL_HEADER]
+          let body = ''
+          res.on('data', (chunk: Buffer) => { if (body.length < 400) body += chunk.toString() })
+          const done = () => {
+            clearTimeout(timer)
+            reject(new Error(describe(res.statusCode ?? 0, typeof refusal === 'string' ? refusal : undefined, body)))
+            try { req.destroy() } catch {}
+          }
+          res.on('end', done)
+          res.on('error', done)
+        })
+      }
 
       ws.on('open', () => {
         this.ws = ws
@@ -3455,6 +3568,14 @@ export class DaemonConnection {
             localDaemonPidAlive,
           })
           this.handleConnectionLost()
+        } else if (this.isCloudTunnel && this.ws === ws) {
+          // The companion dropped the tunnel mid-handshake (its daemon died,
+          // or it restarted): fail the hello now rather than after 30s.
+          for (const [, pending] of this.pendingCommands) {
+            clearTimeout(pending.timer)
+            pending.reject(new Error('Cloud companion tunnel failed: the companion closed the tunnel'))
+          }
+          this.pendingCommands.clear()
         }
       })
 
@@ -3472,7 +3593,7 @@ export class DaemonConnection {
       const timer = setTimeout(() => {
         ws.close()
         reject(new Error('WebSocket connection timeout'))
-      }, 10_000)
+      }, timeoutMs)
 
       ws.on('open', () => clearTimeout(timer))
     })
@@ -3636,10 +3757,12 @@ export class DaemonConnection {
     if (!url || !this._connected || this._destroyed) return
     const seq = ++this.bulkDialSeq
     const isCurrent = () => seq === this.bulkDialSeq && this._connected && !this._destroyed
+    const headers = this._lastWsHeaders
 
     let ws: WebSocket
     try {
-      ws = new WebSocket(url, { handshakeTimeout: 10_000 })
+      // The cloud tunnel authenticates every socket, the bulk one included.
+      ws = new WebSocket(url, { handshakeTimeout: 10_000, ...(headers ? { headers } : {}) })
     } catch (err) {
       log.session.debug('DaemonConnection: bulk channel dial failed', {
         host: this.hostKey, url, error: err instanceof Error ? err.message : String(err),
@@ -3919,7 +4042,7 @@ export class DaemonConnection {
   private async handleReconnectFailure(rawErr: unknown, chainDelayMs: number, annotated = false): Promise<unknown> {
     // Same local evidence as a first connect: an expired certificate on a
     // host that WAS connected must read as cert_expired, not plain auth.
-    const err = annotated || !this.sshTarget ? rawErr : await annotateCredentialFailure(rawErr, this.sshHostString)
+    const err = annotated || !this.sshTarget || this.isCloudTunnel ? rawErr : await annotateCredentialFailure(rawErr, this.sshHostString)
     if (this._destroyed || this._connected) return err
     const msg = err instanceof Error ? err.message : String(err)
     // Standing failures: retrying every 30s can't fix an expired SSH cert
@@ -3971,6 +4094,27 @@ export class DaemonConnection {
     if (this._destroyed) return
 
     log.session.info('DaemonConnection: attempting reconnect', { host: this.hostKey })
+
+    // The cloud box: re-dial the tunnel. Its CLIs belong to the daemon on the
+    // box, so a dropped tunnel costs a reconnect, never a session.
+    if (this.isCloudTunnel) {
+      if (!getCloudBoxState()) {
+        // Unpaired since the drop: there is no box to come back to. End the
+        // loop; a later pairing dials afresh through getDaemonConnection.
+        log.session.info('DaemonConnection: cloud box no longer paired, stopping reconnects', { host: this.hostKey })
+        this.disconnect()
+        return
+      }
+      this.closeBulkChannel()
+      await this.dialCloudTunnel()
+      this.setConnected(true)
+      this.startPing()
+      log.session.info('DaemonConnection: cloud box reconnected (tunnel)', {
+        host: this.hostKey, instanceId: this._daemonInstanceId,
+      })
+      this.recoverDisconnectedSessions().catch(() => {})
+      return
+    }
 
     // Local daemon path: no SSH tunnel / ControlMaster — just re-ensure the
     // in-process daemon is running and reconnect the WebSocket. Going through
@@ -5087,6 +5231,24 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
   }
   foldReconnectCause(state, conn, failure)
   return state
+}
+
+/**
+ * Would getDaemonConnection(hostKey) wait on a dial right now? Mirrors its
+ * branches, reading the pool only: 'connected' and 'fails-fast' (a cached
+ * failure, a standing cause) answer at once; 'dialing' = a connect or reconnect
+ * attempt is running, and joining it waits for its whole handshake; 'cold' = a
+ * call starts one, or expedites a reconnect waiting out its backoff. For
+ * request-path deadlines (core/hosts/remote-read-bound.ts).
+ */
+export function daemonConnectWouldWait(hostKey: string): 'connected' | 'fails-fast' | 'dialing' | 'cold' {
+  const conn = connectionPool.get(hostKey)
+  if (conn?.connected) return 'connected'
+  if (conn?.reconnectInFlight || connectingPromises.has(hostKey)) return 'dialing'
+  if (conn?.reconnectPending) return getReconnectCause(hostKey)?.standing ? 'fails-fast' : 'cold'
+  const cached = failureCache.get(hostKey)
+  if (cached && Date.now() - cached.time < FAILURE_CACHE_TTL_MS) return 'fails-fast'
+  return 'cold'
 }
 
 /** The reconnect loop's cause (daemon-reconnect-cause.ts) and the attempt clocks. */

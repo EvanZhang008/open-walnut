@@ -348,8 +348,10 @@ describe('a fresh box', () => {
     expect(fs.statSync(path.dirname(sb.settings)).mode & 0o777).toBe(0o700)
     expect(row(res.stdout, 'settings.json')?.detail).toContain('instance role WalnutTestRole')
 
-    // The unit gets a real shell; systemd reloaded, the service NOT restarted.
-    expect(fs.readFileSync(sb.dropin, 'utf-8').endsWith('[Service]\nEnvironment=SHELL=/bin/bash\n')).toBe(true)
+    // The unit gets a real shell, and a restart signals the server alone (the
+    // session daemons and their CLIs outlive it); systemd reloaded, the service
+    // NOT restarted.
+    expect(fs.readFileSync(sb.dropin, 'utf-8').endsWith('[Service]\nEnvironment=SHELL=/bin/bash\nKillMode=process\n')).toBe(true)
     expect(log.filter((c) => c.startsWith('systemctl'))).toEqual(['systemctl daemon-reload'])
 
     // Cloud exec on, sandboxed to the work dir, default engine recorded.
@@ -381,6 +383,21 @@ describe('a fresh box', () => {
       expect(row(res.stdout, item)?.status, item).toBe('present')
     }
     expect(res.stdout).toMatch(/restart:\s+no/)
+  })
+
+  it('upgrades a drop-in an older run wrote (SHELL only) to keep sessions across restarts', async () => {
+    const sb = makeSandbox()
+    expect((await run(sb, [])).status).toBe(0)
+    const old = fs.readFileSync(sb.dropin, 'utf-8').replace(/KillMode=process\n$/, '')
+    fs.writeFileSync(sb.dropin, old)
+    const callsBefore = calls(sb).length
+
+    const res = await run(sb, [])
+    expect(res.status, res.stderr).toBe(0)
+    expect(fs.readFileSync(sb.dropin, 'utf-8')).toMatch(/\nKillMode=process\n$/)
+    expect(row(res.stdout, 'systemd drop-in')?.status).toBe('written')
+    expect(calls(sb).slice(callsBefore)).toContain('systemctl daemon-reload')
+    expect(res.stdout).toMatch(/restart:\s+needed/)
   })
 })
 

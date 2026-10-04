@@ -23,7 +23,7 @@ import {
 } from '../../core/session-tracker.js'
 import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory, HISTORY_COLD_TAIL_READ_BYTES } from '../../core/session-history.js'
 import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
-import { computeSessionChanges } from '../../core/session-changes.js'
+import { computeSessionChanges, peekSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
 import { listTasksByIds, getTask, getCustomTiers } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
@@ -257,6 +257,8 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response) => {
     res.json(await listSessionDirs(req.query.prefix, host, req.query.depth, { pending, waitMs }))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
+    // The host is still connecting: 503 at once, never a wait on its dial.
+    if (err instanceof HostReconnectingError) { sendControlError(res, err); return }
     // SSH failures return 400, not 500 (SessionControlError carries 400 too);
     // an unknown or disabled host is a 404 answered without dialling.
     res.status(err instanceof SessionControlError && err.statusCode === 404 ? 404 : 400).json({ error: msg })
@@ -748,6 +750,13 @@ import {
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
+import { HostReconnectingError, boundHostRead } from '../../core/hosts/remote-read-bound.js'
+
+/** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
+function sendControlError(res: Response, err: SessionControlError): void {
+  const code = typeof err.extra?.code === 'string' ? err.extra.code : undefined
+  res.status(err.statusCode).json({ error: err.message, ...(code ? { code } : {}) })
+}
 
 /**
  * Stamp `unsettled: true` on rows whose content can still change (an Agent row awaiting
@@ -1258,8 +1267,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // Tail-bounded request → bound a COLD read to the last few MB too
       // (inc-1786572252481: ?tail=400 bounded the response but the server still
       // pulled the whole 9.5 MB remote JSONL over SSH on every cold panel open).
-      const history = await readProviderSessionHistory(sessionId, record, record?.host, true,
-        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+      // A host still connecting answers at once from the caches below, or
+      // degraded: this request never waits out a dial (remote-read-bound.ts).
+      const history = await boundHostRead(record?.host, () => readProviderSessionHistory(sessionId, record, record?.host, true,
+        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined))
       messages = history.messages
       historySourceAvailable = history.sourceAvailable
       historyWindowed = history.windowed
@@ -1301,6 +1312,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             messages: diskCached.messages, total: diskCached.messages.length, stale: true, staleReason: condenseStaleReason(msg),
             ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
           })
+          return
+        }
+        // Nothing cached and the host is still connecting: an empty stale
+        // answer, so the client shows "Reconnecting" and retries on its own.
+        if (err instanceof HostReconnectingError) {
+          res.json({ messages: [], total: 0, stale: true, staleReason: msg })
           return
         }
       }
@@ -1706,17 +1723,24 @@ sessionsRouter.get('/:sessionId/workflow', async (req: Request, res: Response, n
 sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
+    const host = (await getSessionByClaudeId(sessionId))?.host
     try {
-      res.json(await getSessionChanges(sessionId, {
+      // A host still connecting answers at once (remote-read-bound.ts).
+      res.json(await boundHostRead(host, () => getSessionChanges(sessionId, {
         base: req.query.base,
         scope: req.query.scope,
         light: req.query.light === '1',
         refresh: req.query.refresh === '1' || req.query.refresh === 'true',
         swr: req.query.swr === '1',
-      }))
+      })))
     } catch (err) {
+      // The session's own edits list it had: paint that, the tab polls on.
+      if (err instanceof HostReconnectingError && req.query.swr === '1' && (req.query.base === undefined || req.query.base === 'session')) {
+        const cached = await peekSessionChanges(sessionId, host)
+        if (cached) { res.json(cached); return }
+      }
       if (err instanceof SessionControlError) {
-        res.status(err.statusCode).json({ error: err.message })
+        sendControlError(res, err)
         return
       }
       throw err
@@ -1734,10 +1758,12 @@ sessionsRouter.get('/:sessionId/changes/file', async (req: Request, res: Respons
     const filePath = String(req.query.path ?? '')
     if (!filePath) { res.status(400).json({ error: 'path query param required' }); return }
     try {
-      res.json(await getSessionFileChange(String(req.params.sessionId), filePath))
+      const sessionId = String(req.params.sessionId)
+      const host = (await getSessionByClaudeId(sessionId))?.host
+      res.json(await boundHostRead(host, () => getSessionFileChange(sessionId, filePath)))
     } catch (err) {
       if (err instanceof SessionControlError) {
-        res.status(err.statusCode).json({ error: err.message })
+        sendControlError(res, err)
         return
       }
       throw err

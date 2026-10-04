@@ -183,6 +183,11 @@ const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 const DAEMON_STATE_DIR = process.env.WALNUT_DAEMON_STATE_DIR
 const SERVICE_MODE = process.argv[2] === '--service'
+// An isolated dir whose sessions must outlive this process anyway: the cloud
+// companion's daemon for the paired Mac (providers/cloud-tunnel-daemon.ts). A
+// companion upgrade replaces it the way prod's is replaced, and the successor
+// adopts the CLIs, so exiting must not reap them. Keep in sync with daemon-source.ts.
+const KEEP_SESSIONS_ON_EXIT = process.env.WALNUT_DAEMON_KEEP_SESSIONS === '1'
 // Home dir used to expand `~/...` paths from the app (e.g. ~/.claude/projects/...).
 // In production this is the real HOME (daemon runs as the same user as walnut, so both
 // resolve `~` identically). WALNUT_HOME_OVERRIDE lets a test point the daemon at the same
@@ -918,7 +923,7 @@ function runningGroupsSync(pids: number[]): number[] {
  */
 function shouldReapOnExit(): boolean {
   try {
-    return !SERVICE_MODE && !handoverPrepared && !IS_PROD_DAEMON_DIR
+    return !SERVICE_MODE && !handoverPrepared && !IS_PROD_DAEMON_DIR && !KEEP_SESSIONS_ON_EXIT
   } catch {
     return false // unresolvable → treat as prod (never kill)
   }
@@ -3272,6 +3277,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // (with the isolated-dir reap) kill live prod sessions. Same env-carrier
       // chain as the VITEST_* leak. Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_PARENT_PID: undefined,
+      // Same for the keep-sessions switch (the cloud tunnel daemon's): it is this
+      // daemon's own exit policy, and a CLI that starts a daemon of its own must
+      // not hand it on. Keep in sync with daemon-source.ts.
+      WALNUT_DAEMON_KEEP_SESSIONS: undefined,
     },
   }
   let barrier: ReturnType<typeof spawnBehindRegistry> | null = null

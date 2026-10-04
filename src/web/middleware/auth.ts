@@ -17,6 +17,8 @@
  *   monitoring health check (/api/system/health). Static SPA assets are served
  *   outside the /api mount, so they are inherently exempt.
  * - Auth failures are rate-limited in-app (10/min per IP → 429).
+ *
+ * Both modes: `GET /api/v1/instance` is public (PUBLIC_GET_PATHS below).
  */
 
 import type { Request, Response, NextFunction } from 'express'
@@ -36,6 +38,15 @@ const CLOUD_EXEMPT_PATHS = new Set(['/system/health'])
 function isCloudExemptPath(mountRelativePath: string): boolean {
   if (CLOUD_EXEMPT_PATHS.has(mountRelativePath)) return true
   return CLOUD_EXEMPT_PREFIXES.some((p) => mountRelativePath.startsWith(p))
+}
+
+// GETs (relative to the /api mount) that are public in BOTH modes:
+// - /v1/instance: which box this is ({ instance, mode }), so a client can check an
+//   address before it sends its token there. It answers nothing else.
+const PUBLIC_GET_PATHS = new Set(['/v1/instance'])
+
+function isPublicGet(req: Request): boolean {
+  return req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path)
 }
 
 function requestIp(req: Request): string {
@@ -86,6 +97,11 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return
   }
 
+  if (isPublicGet(req)) {
+    next()
+    return
+  }
+
   const ip = requestIp(req)
   if (!bearer) {
     if (isCrossSiteRefusal(trust)) {
@@ -131,7 +147,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
  */
 async function cloudAuthMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   // req.path here is relative to the /api mount point (e.g. '/tasks').
-  if (isCloudExemptPath(req.path)) {
+  if (isCloudExemptPath(req.path) || isPublicGet(req)) {
     next()
     return
   }

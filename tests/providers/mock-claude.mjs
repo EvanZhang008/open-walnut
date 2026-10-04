@@ -35,7 +35,10 @@ function persistMockTurn(sessionId, prompt, answer) {
   const shared = { sessionId, cwd, timestamp: new Date().toISOString(), isSidechain: false };
   fs.appendFileSync(path.join(dir, `${sessionId}.jsonl`), [
     { ...shared, type: 'user', uuid: userId, parentUuid: transcriptParent, message: { role: 'user', content: prompt } },
-    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, message: { ...answer.message, id: assistantId } },
+    // The real CLI files the API message id it streamed; the stream→archive
+    // convergence check (src/core/observability/stream-convergence.ts) compares
+    // exactly those, so a made-up id here raised a false "never saved" alarm.
+    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, message: { ...answer.message, id: answer.message?.id ?? assistantId } },
   ].map(row => JSON.stringify(row)).join('\n') + '\n');
   transcriptParent = assistantId;
 }
@@ -851,16 +854,21 @@ if (outputFormat === 'stream-json') {
     //         snapshot mode on the SAME live process — that's how the real CLI
     //         behaves and it keeps an E2E to one CLI process for several turns.
     if (effectiveMessage === 'snapshot-clean-turn' || effectiveMessage.startsWith('snapshot-clean-turn:')) {
-      const text = effectiveMessage.includes(':')
+      // `{env:NAME}` in the text becomes that variable as this CLI sees it
+      // (`<unset>` when absent), so a test can check what a spawn passed down.
+      const text = (effectiveMessage.includes(':')
         ? effectiveMessage.split('\n\n[Rich output mode')[0].split(':').slice(1).join(':')
-        : 'Clean turn done; process stays alive.';
+        : 'Clean turn done; process stays alive.')
+        .replace(/\{env:([A-Z0-9_]+)\}/g, (_m, name) => process.env[name] ?? '<unset>');
       const sid = outputSessionId;
       const emit = (line) => {
         if (line.type === 'assistant') persistMockTurn(sid, effectiveMessage, line);
         process.stdout.write(JSON.stringify(line) + '\n');
       };
       const body = () => {
-        emit({ type: 'assistant', message: { id: 'msg_snap_clean_' + (++snapshotTurnSeq), type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
+        // Unique per process as a real API id is: a resumed process restarts
+        // the counter, and its turns share one transcript with the old ones.
+        emit({ type: 'assistant', message: { id: 'msg_snap_clean_' + (++snapshotTurnSeq) + '_' + process.pid, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
         armSnapshotNextTurn();

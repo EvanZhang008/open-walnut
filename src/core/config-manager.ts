@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
-import { CONFIG_FILE } from '../constants.js';
+import { CLOUD_MODE, CONFIG_FILE } from '../constants.js';
 import {
   VALID_PRIORITIES,
   type Config,
@@ -10,6 +10,7 @@ import {
 } from './types.js';
 import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
+import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
 
 const DEFAULT_CONFIG: Config = {
   version: 1,
@@ -246,6 +247,9 @@ export async function getConfig(): Promise<Config> {
     }
     // Merge auto-discovered SSH hosts
     await mergeSshDiscoveredHosts(config);
+    // The paired cloud box, reached over the daemon tunnel (in memory only:
+    // saveConfig / updateConfig strip it again, see withoutCloudBoxHost).
+    injectCloudBoxHost(config, CLOUD_MODE);
     return config;
   } catch (err) {
     // Was log.debug — invisible in prod, which is precisely why a wiped
@@ -336,7 +340,11 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
  */
 export async function saveConfig(config: Config): Promise<void> {
   return withWriteLock(async () => {
-    let content = yaml.dump(config, { indent: 2, lineWidth: 120 });
+    // A caller that read config through getConfig() holds the injected cloud
+    // box row; it is never persisted.
+    const hosts = withoutCloudBoxHost(config.hosts);
+    const toWrite = hosts === config.hosts ? config : { ...config, hosts };
+    let content = yaml.dump(toWrite, { indent: 2, lineWidth: 120 });
     // Add comment above available_models (js-yaml strips comments, so we inject after dump)
     content = content.replace(
       /^(\s+)available_models:/m,
@@ -375,6 +383,11 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
       if (value !== undefined) {
         merged[key] = value;
       }
+    }
+    // A whole `hosts` map sent back from a getConfig() read carries the
+    // injected cloud box row; it must never reach config.yaml.
+    if (merged.hosts && typeof merged.hosts === 'object') {
+      merged.hosts = withoutCloudBoxHost(merged.hosts as Record<string, unknown>);
     }
 
     let content = yaml.dump(merged, { indent: 2, lineWidth: 120 });

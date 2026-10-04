@@ -69,7 +69,9 @@ async function runLocal(
     res.status(successStatus).json(await fn())
   } catch (err) {
     if (err instanceof SessionControlError) {
-      const code = err.statusCode === 502 ? 'bad_gateway' : v1ErrorCode(err.statusCode)
+      // The host is still connecting: the documented v1 code (api-v1.md), not a generic one.
+      const named = err.extra?.code === 'host_reconnecting' ? 'host_reconnecting' : undefined
+      const code = named ?? (err.statusCode === 502 ? 'bad_gateway' : v1ErrorCode(err.statusCode))
       sendError(res, err.statusCode, code, err.message)
       return
     }

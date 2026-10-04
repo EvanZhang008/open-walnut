@@ -52,6 +52,7 @@ export function getWebAssetsReport(): WebAssetsReport | null {
 import { redactConfig } from '../../core/config-redact.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
+import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -115,7 +116,11 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     try { selfRepair = await getSelfRepairStatus() } catch { /* diagnostics only */ }
     // build: which commit this server was built from (package.json alone cannot
     // tell a source checkout of main from the last npm release).
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
+    // The injected cloud box row is not a Settings host (nothing to edit, and a
+    // save must never write it back): Settings sees config.yaml's hosts only.
+    const hosts = withoutCloudBoxHost(config.hosts)
+    const shown = hosts === config.hosts ? config : { ...config, hosts }
+    res.json({ config: CLOUD_MODE ? redactConfig(shown) : shown, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
   } catch (err) {
     next(err)
   }
@@ -580,7 +585,10 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
 
     await updateConfig(body)
     // Re-read merged config so the event carries the full picture
-    const merged = await getConfig()
+    const read = await getConfig()
+    // Same view as GET /api/config: the injected cloud box row is not a Settings host.
+    const shownHosts = withoutCloudBoxHost(read.hosts)
+    const merged = shownHosts === read.hosts ? read : { ...read, hosts: shownHosts }
     bus.emit(EventNames.CONFIG_CHANGED, { config: merged }, ['web-ui', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {

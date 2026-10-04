@@ -102,10 +102,35 @@ export function decideTerminalMode(r: DtachResolution, host?: string): TerminalM
 }
 
 /**
+ * A host that cannot open a terminal at all (the cloud box: no SSH door, its
+ * sessions ride the companion's daemon tunnel) is refused with its own words.
+ * Its session panel shows no Terminal tab; this answers an older window or an
+ * API caller, which would otherwise hear "check that `ssh __cloudbox__` works".
+ */
+async function noTerminalOn(host: string): Promise<SshFailedResult | null> {
+  const [{ getConfig }, { hostOffersTerminal }] = await Promise.all([
+    import('../../core/config-manager.js'), import('../../core/hosts/host-status.js'),
+  ])
+  let def: Parameters<typeof hostOffersTerminal>[0] | undefined
+  try { def = (await getConfig()).hosts?.[host] } catch { return null }
+  if (!def || hostOffersTerminal(def)) return null
+  const label = def.label ?? host
+  return {
+    ok: false,
+    code: 'SSH_FAILED',
+    host,
+    detail: `A terminal is not available on ${label}: this Mac reaches it through the cloud companion, not SSH`,
+    hint: `${label} runs this session through the cloud companion, which has no SSH, so there is no terminal there. Files and Changes still work.`,
+  }
+}
+
+/**
  * Probe (= provision) dtach for a session and decide how its terminal runs.
  * `fresh` (the UI's Retry) re-probes even when a failure was cached moments ago.
  */
 export async function probeTerminalMode(record: SessionRecord, opts: { fresh?: boolean } = {}): Promise<TerminalModeDecision> {
+  const refused = record.host ? await noTerminalOn(record.host) : null
+  if (refused) return refused
   const r = record.host ? await resolveRemoteDtach(record.host, opts) : await resolveLocalDtach(opts)
   const decision = decideTerminalMode(r, record.host)
   if (r.kind !== 'ok') {

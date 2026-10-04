@@ -45,6 +45,7 @@ import type { SessionRecord } from '../../core/types.js'
 import type { SshTarget } from '../../providers/session-io.js'
 import { shellQuote } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
+import { hostOffersTerminal } from '../../core/hosts/host-status.js'
 import { DTACH_SOCKET_DIR, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
@@ -156,6 +157,11 @@ export async function resolveSshTarget(host: string): Promise<SshTarget> {
   const config = await getConfig()
   const def = config.hosts?.[host]
   if (!def) throw new Error(`Unknown host: ${host}`)
+  // The cloud box has no SSH door (its sessions ride the companion's daemon
+  // tunnel), so a terminal there would dial the companion's web address and
+  // hang. The session panel hides the tab from the same capability; this is the
+  // server's own guard.
+  if (!hostOffersTerminal(def)) throw new Error(`A terminal is not available on ${def.label ?? host}: this Mac reaches it through the cloud companion, not SSH`)
   if (!def.hostname) throw new Error(`Host "${host}" has no hostname`)
   return { hostname: def.hostname, user: def.user, port: def.port, shell_setup: def.shell_setup }
 }
@@ -311,6 +317,11 @@ function localShell(): string {
  */
 export async function prewarmRemoteHost(host: string | undefined): Promise<void> {
   if (!host) return // local: nothing to warm
+  try {
+    // No SSH door, nothing to warm (the cloud box).
+    const def = (await getConfig()).hosts?.[host]
+    if (def && !hostOffersTerminal(def)) return
+  } catch { /* unreadable config: try as before */ }
   try {
     await remoteDtachPath(host) // warms ControlMaster + provisions dtach (memoized)
     log.web.info('terminal prewarm complete', { host })

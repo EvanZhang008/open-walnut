@@ -684,11 +684,16 @@ export async function listSessionDirs(
   });
   let conn;
   try {
-    const connecting = route.kind === 'fixture' ? route.connect() : dc.getDaemonConnection(host, sshTarget);
+    // Without `pending` the caller gets no progress answer, so the host-read
+    // deadline applies (remote-read-bound.ts): a host already connecting answers
+    // 503 host_reconnecting at once, and this request waits at most its cap.
+    const { boundHostRead } = await import('../hosts/remote-read-bound.js');
+    const dial = () => (route.kind === 'fixture' ? route.connect() : dc.getDaemonConnection(host, sshTarget));
+    const connecting = opts.pending || route.kind === 'fixture' ? dial() : boundHostRead(host, dial);
     const raced = await Promise.race([connecting, timeoutPromise])
       .finally(() => clearTimeout(timeoutId!));
     if (raced === STILL_CONNECTING) {
-      if (!opts.pending) throw new SessionControlError(`Remote connection to ${host} timed out`, 400);
+      if (!opts.pending) throw new SessionControlError(`Remote connection to ${hostLabel} timed out`, 400);
       const state = getDaemonConnectState(host);
       return {
         dirs: [], parent: dir, exists: true,

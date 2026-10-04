@@ -1119,6 +1119,9 @@ export interface Config {
      *  gcc under passwordless sudo, build dtach). Default on; `false` turns them
      *  off for this host. WALNUT_HOST_AUTOFIX=0 turns them off for every host. */
     autofix?: boolean;
+    /** Set only on the row config-manager injects for the paired cloud box
+     *  (core/hosts/cloud-box-host.ts). Never written to config.yaml. */
+    cloud_box?: boolean;
   }>;
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the

@@ -32,6 +32,9 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
   reconnectHostNow: () => null,
   getDaemonConnection: () => new Promise((resolve, reject) => { connectGate = { resolve, reject }; }),
   getDaemonConnectState: (host: string) => ({ host, connected: false, ...connectState }),
+  // No dial running yet: a request without `pending` starts it and waits at most
+  // the host-read cap (core/hosts/remote-read-bound.ts).
+  daemonConnectWouldWait: () => 'cold',
 }));
 vi.mock('../../../src/core/config-manager.js', () => ({
   getConfig: async () => ({

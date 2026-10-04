@@ -275,14 +275,14 @@ async function scanRemoteItems(host: string, cwd?: string): Promise<SlashCommand
   const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
   const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
 
-  let timeoutId: ReturnType<typeof setTimeout>
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`Remote connection to ${host} timed out`)), REMOTE_TIMEOUT_MS)
-  })
-  const conn = await Promise.race([
-    getDaemonConnection(host, sshTarget),
-    timeoutPromise,
-  ]).finally(() => clearTimeout(timeoutId!))
+  // The host-read deadline (remote-read-bound.ts): the palette degrades at once
+  // while the host is connecting instead of waiting on its dial.
+  const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
+  const label = hostDef.label?.trim() || host
+  const conn = await boundHostRead(host, () => new Promise<Awaited<ReturnType<typeof getDaemonConnection>>>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Remote connection to ${label} timed out`)), REMOTE_TIMEOUT_MS)
+    getDaemonConnection(host, sshTarget).then(resolve, reject).finally(() => clearTimeout(timer))
+  }))
 
   const [remoteSkills, remoteProjectCmds, remoteProjectSkills, openWalnutCmds] = await Promise.all([
     listRemoteSkills(conn).then((all) => all.map(pluginSkillItem)),

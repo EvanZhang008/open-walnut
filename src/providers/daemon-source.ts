@@ -914,6 +914,9 @@ const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR;
 // WALNUT_DAEMON_STATE_DIR, never in the /tmp runtime dir. Mirror daemon-standalone.ts.
 const DAEMON_STATE_DIR = process.env.WALNUT_DAEMON_STATE_DIR;
 const SERVICE_MODE = process.argv[2] === '--service';
+// Isolated dir whose sessions outlive this process anyway (the cloud companion's
+// daemon for the paired Mac): exiting never reaps them. Mirror daemon-standalone.ts.
+const KEEP_SESSIONS_ON_EXIT = process.env.WALNUT_DAEMON_KEEP_SESSIONS === '1';
 const STATE_DIR_OR_RUNTIME = SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR;
 // Home for ~/... expansion. WALNUT_HOME_OVERRIDE lets tests align the daemon's ~/.claude
 // with their mocked CLAUDE_HOME. Mirrors daemon-standalone.ts.
@@ -2345,7 +2348,7 @@ function shouldReapOnExit() {
   try {
     // A managed service keeps its CLIs across its own restarts even on an
     // isolated dir — that is the whole point of running as a service.
-    return !SERVICE_MODE && !handoverPrepared && !IS_PROD_DAEMON_DIR;
+    return !SERVICE_MODE && !handoverPrepared && !IS_PROD_DAEMON_DIR && !KEEP_SESSIONS_ON_EXIT;
   } catch {
     return false; // unresolvable → treat as prod (never kill)
   }
@@ -4196,6 +4199,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // daemon, whose watchdog would trip and (with the isolated-dir reap) kill
       // live prod sessions. Keep in sync with daemon-standalone.ts.
       WALNUT_DAEMON_PARENT_PID: undefined,
+      // Same for the keep-sessions switch (this daemon's own exit policy): a CLI
+      // that starts a daemon of its own must not hand it on.
+      WALNUT_DAEMON_KEEP_SESSIONS: undefined,
     },
   };
   let barrier = null;

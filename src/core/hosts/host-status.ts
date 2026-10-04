@@ -44,6 +44,8 @@ export interface HostDef {
   label?: string
   enabled?: boolean
   discovered?: boolean
+  /** The paired cloud box (core/hosts/cloud-box-host.ts): reached over the companion's tunnel, not SSH. */
+  cloud_box?: boolean
 }
 
 export interface HostStatus {
@@ -98,6 +100,8 @@ export interface HostStatus {
   daemonDir?: { path: string; display: string; fallback: boolean; reason?: string; freeMb?: number }
   /** Lines worth saying even when nothing is broken ("Using ~/.cache/open-walnut … because /tmp is read-only"). */
   warnings?: string[]
+  /** false: this host cannot open a terminal (hostOffersTerminal), so a session there shows no Terminal tab. */
+  terminal?: false
   /** When this snapshot was taken (ms epoch) — the client orders pushes by it. */
   at: number
 }
@@ -209,6 +213,14 @@ export function buildHostStatus(
   if (state.retryInMs !== undefined) status.retryInMs = state.retryInMs
   if (warmup) status.warmup = warmup
   if (hostDef.discovered) status.discovered = true
+  // The cloud box has two of the steps: the companion's tunnel (which, on a
+  // first connect, waits for the companion to start this Mac's daemon), then
+  // the daemon's hello. SSH, probe and deploy never happen there.
+  if (hostDef.cloud_box) {
+    status.steps = status.steps.filter((s) => s.phase === 'tunnel' || s.phase === 'handshake')
+    if (status.phase === 'tunnel') status.phaseLabel = `Reaching ${label} through the cloud companion`
+  }
+  if (!hostOffersTerminal(hostDef)) status.terminal = false
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
   if (readiness && state.connected) {
@@ -237,7 +249,17 @@ function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
     host: hostKey, label: def.label ?? hostKey, hostname: def.hostname, ...(def.user ? { user: def.user } : {}),
     connected: false, phase: 'off', phaseLabel: OFF_PHASE_LABEL, steps: describeConnectSteps('idle'),
     phaseElapsedMs: 0, connectElapsedMs: 0, at: now, serverNow: now,
+    ...(hostOffersTerminal(def) ? {} : { terminal: false as const }),
   }
+}
+
+/**
+ * Can a session on this host open a terminal? A terminal is an ssh + dtach
+ * session to the host (web/terminal/spawn.ts), so a host Walnut reaches any
+ * other way (the cloud box, through the companion's daemon tunnel) cannot.
+ */
+export function hostOffersTerminal(def: HostDef): boolean {
+  return def.cloud_box !== true
 }
 
 /**

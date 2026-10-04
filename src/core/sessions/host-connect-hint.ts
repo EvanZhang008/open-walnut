@@ -121,6 +121,12 @@ export type HostConnectErrorKind =
   | 'daemon'
   | 'ephemeral'
   | 'listing'
+  // The cloud box host (core/hosts/cloud-box-host.ts) is reached through the
+  // companion's web address, not SSH, so its failures have their own words.
+  | 'cloud_update'
+  | 'cloud_exec_off'
+  | 'cloud_other_mac'
+  | 'cloud_tunnel'
   | 'unknown'
 
 export interface HostConnectHint {
@@ -161,6 +167,7 @@ export const RETRYABLE: Record<HostConnectErrorKind, boolean> = {
   auth: false, host_key: false, cert_expired: false, agent_missing: false, proxy_login: false, proxy: true, shell_noise: false,
   dns: false, unreachable: true, refused: true, timeout: true, runtime: false, daemon: true,
   ephemeral: false, listing: true, unknown: true,
+  cloud_update: false, cloud_exec_off: false, cloud_other_mac: false, cloud_tunnel: true,
 }
 
 /**
@@ -216,6 +223,10 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
     case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (`curl -fsSL https://bun.sh/install | bash`, or Node.js from your package manager), then Retry.'
     case 'daemon': return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
     case 'listing': return `${who} is connected, but this directory could not be listed. Check that the path exists and is readable there, then Retry.`
+    case 'cloud_update': return `The cloud companion at ${hostname} runs an older Walnut build that cannot host this Mac's sessions. Deploy the current build there; ${who} connects on its own once it answers.`
+    case 'cloud_exec_off': return `The cloud companion at ${hostname} is not set up to run sessions. Set \`cloud.exec.enabled: true\` in its config.yaml and restart it, then Retry.`
+    case 'cloud_other_mac': return `The cloud companion at ${hostname} runs sessions for another Mac. To run them from this Mac instead, disconnect that Mac on the companion: \`walnut device list\` names it, \`walnut device revoke <name>\` removes it (its cloud sync stops). Then Retry.`
+    case 'cloud_tunnel': return `Walnut reaches ${who} through the cloud companion's web address (${hostname}), not SSH. Check that the companion is up and this Mac is still paired with it (Settings › Cloud Companion), then Retry.`
     case 'unknown':
     default:
       return `Retry, and if it keeps failing run \`ssh ${sshTarget}\` from a terminal to see what SSH itself says.`
@@ -231,6 +242,11 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
  * printed). Global flag: every occurrence is checked against the name spans.
  */
 const WALNUT_SENTENCES: Array<[HostConnectErrorKind, RegExp]> = [
+  // core/hosts/cloud-box-host.ts, cloud-box-probe.ts, providers/daemon-connection.ts
+  ['cloud_update', /cloud companion needs an update/g],
+  ['cloud_exec_off', /cloud companion has session hosting turned off/g],
+  ['cloud_other_mac', /another mac is connected to this cloud companion/g],
+  ['cloud_tunnel', /cloud companion tunnel failed/g],
   // providers/daemon-connection.ts (a test server) and providers/remote-sh.ts
   ['ephemeral', /ephemeral server|attach-only/g],
   ['shell_noise', /shell_noise:/g],

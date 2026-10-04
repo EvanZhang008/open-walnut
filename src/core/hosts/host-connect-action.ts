@@ -24,6 +24,7 @@ import {
   hostFixtureMode, isFixtureHost, seedFixtureReadiness,
 } from './host-fixture.js'
 import { maybeStartFixtureAutofix } from './host-fixture-autofix.js'
+import { CLOUD_BOX_HOST_ALIAS, cloudBoxRefusal } from './cloud-box-host.js'
 
 export type ConfigHostDef = HostDef & { shell_setup?: string }
 
@@ -41,7 +42,12 @@ export function hostStatusFrame(host: string, def: HostDef, now: number = Date.n
   }
   const warmup = getHostWarmup()
   const credentialRetryAt = warmup?.credentialRetryAt(host)
-  return buildHostStatus(host, def, getDaemonConnectState(host), warmup?.stateOf(host), now, getHostReadiness(host), {
+  let state = getDaemonConnectState(host)
+  // The companion already said it cannot host this Mac's sessions (an older
+  // build, or cloud.exec off): say so at once, before any dial reports it.
+  const refusal = host === CLOUD_BOX_HOST_ALIAS && !state.connected ? cloudBoxRefusal() : null
+  if (refusal) state = { ...state, phase: 'failed', error: refusal, retryInMs: undefined, kind: undefined }
+  return buildHostStatus(host, def, state, warmup?.stateOf(host), now, getHostReadiness(host), {
     off: remoteHostsOff(), ...(credentialRetryAt ? { credentialRetryAt } : {}),
   })
 }
@@ -125,6 +131,10 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number }
 
   clearDaemonFailureCache(host)
   resetHostAutofixAttempts(host)
+  // A person's Retry on Cloud may mint a new machine credential now: the
+  // cloudBox re-mint window only paces the automatic redials.
+  const cloudBox = def.cloud_box === true
+  if (cloudBox) (await import('../../integrations/cloud-bridge-config.js')).allowNextRemint('__local__')
   const target = { hostname: def.hostname, user: def.user, port: def.port }
   const before = getDaemonConnectState(host).phase
   // The reconnect loop owns the host: its attempt runs now, and a failure puts

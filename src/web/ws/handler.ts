@@ -13,6 +13,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
 import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
+import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
 
@@ -364,6 +365,15 @@ export function attachWss(server: HttpServer): WebSocketServer {
           attachBridge(ws, cred.name, { clientIp })
         })
       }).catch(() => socket.destroy())
+      return
+    }
+
+    // /daemon-tunnel (cloud mode only): the paired Mac driving its own daemon
+    // on this box. Only the primary's machine token opens it (daemon-tunnel.ts).
+    if (CLOUD_MODE && url.pathname === DAEMON_TUNNEL_PATH) {
+      import('./daemon-tunnel.js')
+        .then(({ handleDaemonTunnelUpgrade }) => handleDaemonTunnelUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) }))
+        .catch(() => socket.destroy())
       return
     }
 

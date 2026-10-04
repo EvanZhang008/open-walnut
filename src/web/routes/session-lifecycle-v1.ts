@@ -78,6 +78,17 @@ async function runLocal(
   }
 }
 
+/**
+ * A read that needs the session's host within a deadline: a host still
+ * connecting answers 503 host_reconnecting at once (core/hosts/remote-read-bound.ts).
+ */
+async function boundSessionRead<T>(sessionId: string, read: () => Promise<T>): Promise<T> {
+  const [{ getSessionByClaudeId }, { boundHostRead }] = await Promise.all([
+    import('../../core/session-tracker.js'), import('../../core/hosts/remote-read-bound.js'),
+  ])
+  return boundHostRead((await getSessionByClaudeId(sessionId))?.host, read)
+}
+
 // Existing clients treat every 2xx as stopped, so a pending confirmation must go through the error branch.
 function sendStopPending(res: Response): void {
   sendError(res, 503, 'stop_pending',
@@ -430,7 +441,7 @@ sessionLifecycleV1Router.get('/sessions/:id/changes', async (req: Request, res: 
       return
     }
     const { getSessionChanges } = await import('../../core/sessions/session-lifecycle.js')
-    await runLocal(res, next, 200, () => getSessionChanges(sessionId, input))
+    await runLocal(res, next, 200, () => boundSessionRead(sessionId, () => getSessionChanges(sessionId, input)))
   } catch (err) {
     next(err)
   }
@@ -459,7 +470,7 @@ sessionLifecycleV1Router.get('/sessions/:id/history', async (req: Request, res: 
       return
     }
     const { readSessionRichHistory } = await import('../../core/sessions/session-lifecycle.js')
-    await runLocal(res, next, 200, () => readSessionRichHistory(sessionId, tail))
+    await runLocal(res, next, 200, () => boundSessionRead(sessionId, () => readSessionRichHistory(sessionId, tail)))
   } catch (err) {
     next(err)
   }

@@ -24,7 +24,9 @@ import type { HostConnectErrorKind } from '../core/sessions/host-connect-hint.js
 /** A dns / unreachable / timeout this soon after a wake or network change is the network waking up. */
 export const WAKE_GRACE_MS = 90_000
 
-const SLOW_PROBE_KINDS: ReadonlySet<string> = new Set(['auth', 'host_key', 'dns'])
+// cloud_update / cloud_exec_off / cloud_other_mac: the companion answered and said no; only a
+// change on the companion fixes it, so the loop probes slowly (cloud-box-host.ts).
+const SLOW_PROBE_KINDS: ReadonlySet<string> = new Set(['auth', 'host_key', 'dns', 'cloud_update', 'cloud_exec_off', 'cloud_other_mac'])
 const CREDENTIAL_KINDS: ReadonlySet<string> = new Set(['cert_expired', 'agent_missing', 'proxy_login'])
 const WAKE_TRANSIENT_KINDS: ReadonlySet<string> = new Set(['dns', 'unreachable', 'timeout'])
 

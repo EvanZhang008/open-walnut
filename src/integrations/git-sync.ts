@@ -2735,19 +2735,33 @@ const LAST_SYNC_CACHE_MS = 30_000;
  */
 export function getCloudRemoteCredentials(): { domain: string; token: string; secure: boolean } | null {
   for (const remote of ['cloud', 'origin']) {
-    const url = gitSafe(`remote get-url ${remote}`);
-    if (!url) continue;
-    try {
-      const u = new URL(url);
-      if (!u.password || !u.pathname.startsWith('/git/')) continue;
-      return {
-        domain: u.host,
-        token: u.password,
-        secure: u.protocol === 'https:',
-      };
-    } catch {
-      continue;
-    }
+    const parsed = parseCloudRemoteUrl(gitSafe(`remote get-url ${remote}`));
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+/** A companion remote carries its device token as the URL password and serves /git/. */
+export function parseCloudRemoteUrl(url: string | null | undefined): { domain: string; token: string; secure: boolean } | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url.trim());
+    if (!u.password || !u.pathname.startsWith('/git/')) return null;
+    return { domain: u.host, token: u.password, secure: u.protocol === 'https:' };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Async twin of getCloudRemoteCredentials for callers on the server's event
+ * loop (the cloud box host probe runs at boot and every few minutes; the sync
+ * version would block every route for the length of two git spawns).
+ */
+export async function getCloudRemoteCredentialsAsync(): Promise<{ domain: string; token: string; secure: boolean } | null> {
+  for (const remote of ['cloud', 'origin']) {
+    const parsed = parseCloudRemoteUrl(await gitSafeAsync(`remote get-url ${remote}`));
+    if (parsed) return parsed;
   }
   return null;
 }

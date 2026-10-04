@@ -7,18 +7,61 @@
  * Auth: inherited from the global /api authMiddleware (device Bearer tokens
  * in cloud mode, LAN bypass otherwise) — same trust level as the rest of the
  * console. A paired device minting more devices is by design (the console
- * itself is a paired device in cloud mode).
+ * itself is a paired device in cloud mode), except a phone.
+ *
+ * Changing an EXISTING device (re-pair, remove) is for that device itself, the
+ * Mac that owns this companion's machine credentials, or this machine itself
+ * (core/device-actor.ts). The caller is the token it presented, never a name.
  */
 
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { createDevice, revokeDevice, listDevices, listDeviceRecords, type DeviceInfo } from '../../core/device-auth.js'
+import { createDevice, revokeDevice, rotateDevice, listDevices, listDeviceRecords, type DeviceInfo } from '../../core/device-auth.js'
+import { DeviceChangeRefused, LOCAL_ACTOR, type DeviceActor } from '../../core/device-actor.js'
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
+import { tailscaleSummary } from '../../core/tailnet.js'
+import { revokeAdoptionTwin } from './device-twins.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { classifyLocalRequest } from '../middleware/local-trust.js'
 import { revokePushTokensForDevice } from './push.js'
+import {
+  MACHINE_PROOF_HEADER, MachineCredentialRefused, adoptMachineCredential, mintMachineCredential, revokeMachineCredential,
+} from '../../core/machine-credentials.js'
 
 export const devicesRouter = Router()
+
+/**
+ * Who is asking. This machine itself (the primary's console over loopback;
+ * never on a companion, whose public traffic reaches it through a local
+ * proxy), else the bearer token the auth middleware accepted.
+ */
+export function actorOf(req: Request): DeviceActor {
+  if (!CLOUD_MODE && classifyLocalRequest(req).trusted) return LOCAL_ACTOR
+  const header = req.headers.authorization
+  if (header?.startsWith('Bearer ')) return { token: header.slice(7) }
+  return { apiKey: (req as Request & { apiKeyName?: string }).apiKeyName ?? '' }
+}
+
+/** Name of the caller for logs (the auth middleware's; absent for an API key). */
+function callerDevice(req: Request): string | undefined {
+  return (req as Request & { deviceName?: string }).deviceName
+}
+
+/** A refusal from the device rules, as the console shows it. */
+export function sendRefusal(res: Response, err: unknown): boolean {
+  if (err instanceof MachineCredentialRefused || err instanceof DeviceChangeRefused) {
+    res.status(err.status).json({ error: err.message, code: err.code })
+    return true
+  }
+  return false
+}
+
+/** A machine credential's current token, presented as proof of holding it. */
+function machineProof(req: Request): string | undefined {
+  const v = req.get(MACHINE_PROOF_HEADER)
+  return v && v.length <= 128 ? v : undefined
+}
 
 /**
  * Devices registered on the cloud companion. Best-effort — never throws, so an
@@ -91,9 +134,14 @@ async function mintOnCloud(
   try {
     if (replace) {
       // Rotate: the old hash must go before the cloud will accept the name.
-      await fetch(`${cloud.origin}/api/devices/${encodeURIComponent(name)}`, {
+      const del = await fetch(`${cloud.origin}/api/devices/${encodeURIComponent(name)}`, {
         method: 'DELETE', headers, signal: AbortSignal.timeout(15_000),
       }).catch(() => null)
+      // The companion's own rules said no (this Mac may not re-pair that device): say its words.
+      if (del && (del.status === 403 || del.status === 409)) {
+        const body = await del.json().catch(() => ({})) as { error?: string }
+        return { error: body.error ?? `Cloud refused to re-pair ${name} (HTTP ${del.status}).`, status: del.status }
+      }
     }
     const res = await fetch(`${cloud.origin}/api/devices`, {
       method: 'POST',
@@ -142,7 +190,7 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     const origin = `${req.protocol}://${req.get('host') ?? ''}`
     const targets = CLOUD_MODE
       ? [{ kind: 'cloud' as const, origin, label: 'This server', remoteMint: false }]
-      : getPairingTargets(origin, requestPort(req))
+      : await getPairingTargets(origin, requestPort(req))
     // Cloud-paired devices live in the cloud's auth.json — fetch them so the
     // console can list and revoke them (best-effort: a down cloud must not
     // break the local list).
@@ -157,12 +205,16 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     // the iOS simulator sit in the same list, and rendering all three
     // identically read as "3 phones I don't own" (reported 2026-07-29).
     const selfName = await getSelfCloudDeviceName()
+    const tailscale = CLOUD_MODE ? null : await tailscaleSummary()
     const classify = (name: string) =>
       name === selfName ? 'self' : /(^|-)sim(-|$)|simulator/i.test(name) ? 'simulator' : 'phone'
     res.json({
       devices: devices.map((d) => ({ ...d, role: classify(d.name) })),
       cloudDevices: cloudDevices.map((d) => ({ ...d, role: classify(d.name) })),
       targets: targets.map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
+      // So the console can say "install Tailscale" when no tailnet target exists.
+      // Absent = say nothing: on a companion, and while the first probe is still out.
+      ...(tailscale ? { tailscale } : {}),
     })
   } catch (err) {
     next(err)
@@ -183,7 +235,12 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
       res.status(400).json({ error: 'name is required' })
       return
     }
-    const kind = req.body?.kind === 'machine' ? 'machine' as const : undefined
+    // On the companion a name that already is a machine credential stays one:
+    // a "re-pair" of it (replace:true, no kind) goes through the machine rules
+    // too, or it would be a way around them.
+    const existingMachine = CLOUD_MODE && req.body?.kind !== 'machine'
+      && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')
+    const kind = req.body?.kind === 'machine' || existingMachine ? 'machine' as const : undefined
     const wantsCloud = req.body?.target === 'cloud' && !CLOUD_MODE
     // replace:true = "show me a new QR for this phone". Tokens are one-time and
     // unrecoverable, so re-pairing an existing phone (app reinstalled → iOS
@@ -207,26 +264,57 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     // that address only when it isn't loopback — otherwise fall back to this
     // machine's LAN IP (a QR carrying `localhost` points the phone at itself).
     const consoleOrigin = `${req.protocol}://${req.get('host') ?? ''}`
+    // `target: 'lan' | 'tailnet'` picks that address for the QR when this Mac has it.
+    const localTargets = CLOUD_MODE ? [] : await getPairingTargets(consoleOrigin, requestPort(req))
     const target = CLOUD_MODE
       ? { origin: consoleOrigin, kind: 'cloud' as const }
-      : getPairingTargets(consoleOrigin, requestPort(req))[0]
+      : localTargets.find((t) => t.kind === req.body?.target) ?? localTargets[0]
     // No reachable address (no LAN, no cloud)? Emit the URI WITHOUT `server=`
     // so the app asks for the address. A loopback `server=` is worse than
     // none: it silently points the phone at itself.
-    if (replace) await revokeDevice(name) // rotate: drop the old hash first
-    const { token, createdAt } = await createDevice(name, { kind })
+    const by = actorOf(req)
+    if (kind === 'machine' && CLOUD_MODE) {
+      // Machine credentials open /bridge and /daemon-tunnel on this box: who may
+      // mint or rotate one is machine-credentials.ts (one Mac per companion).
+      const minted = await mintMachineCredential(name, { by, replace, proof: machineProof(req) })
+      log.web.info('devices: machine credential created via console', { name, caller: callerDevice(req) })
+      res.status(201).json({ name, token: minted.token, pairingURI: buildPairingURI(name, minted.token, target?.origin), createdAt: minted.createdAt, target: target?.kind ?? null, server: target?.origin ?? null })
+      return
+    }
+    // A re-pair is one locked step with the rules in it (device-auth.ts rotateDevice).
+    const oldHash = replace ? (await listDeviceRecords()).find((d) => d.name === name)?.tokenHash : undefined
+    const { token, createdAt } = replace ? await rotateDevice(name, { by }) : await createDevice(name, { kind, by })
+    // The old token's copy on the other box must stop working too (best effort, not awaited).
+    if (oldHash) void revokeAdoptionTwin(oldHash)
     const pairingURI = buildPairingURI(name, token, target?.origin)
-    log.web.info('devices: created via console', { name, kind: kind ?? 'device', target: target?.kind ?? 'none' })
+    log.web.info('devices: created via console', { name, kind: kind ?? 'device', target: target?.kind ?? 'none', replace })
     res.status(201).json({
       name, token, pairingURI, createdAt,
       target: target?.kind ?? null, server: target?.origin ?? null,
     })
   } catch (err) {
+    if (sendRefusal(res, err)) return
     const message = err instanceof Error ? err.message : String(err)
     if (message.includes('already exists') || message.includes('Invalid device name')) {
       res.status(400).json({ error: message })
       return
     }
+    next(err)
+  }
+})
+
+// POST /api/devices/:name/adopt (cloud mode): the calling Mac records itself
+// as the owner of a machine credential from before ownership was recorded,
+// with the credential's current token as proof (machine-credentials.ts).
+// 200 {adopted|owned}, 404 missing, 409 another Mac owns one here.
+devicesRouter.post('/:name/adopt', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!CLOUD_MODE) { res.status(404).json({ error: 'Not found' }); return }
+    const outcome = await adoptMachineCredential(String(req.params.name ?? ''), { by: actorOf(req), proof: machineProof(req) })
+    if (outcome === 'missing') { res.status(404).json({ error: `Device "${String(req.params.name)}" not found` }); return }
+    res.json({ ok: true, outcome })
+  } catch (err) {
+    if (sendRefusal(res, err)) return
     next(err)
   }
 })
@@ -258,6 +346,12 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
         res.status(404).json({ error: `Device "${name}" not found on the cloud.` })
         return
       }
+      if (upstream.status === 403 || upstream.status === 409) {
+        // The companion's device rules said no: the console shows their sentence.
+        const body = await upstream.json().catch(() => ({})) as { error?: string; code?: string }
+        res.status(upstream.status).json({ error: body.error ?? `Cloud refused to remove ${name} (HTTP ${upstream.status}).`, ...(body.code ? { code: body.code } : {}) })
+        return
+      }
       if (!upstream.ok) {
         res.status(502).json({ error: `Cloud rejected the revoke (HTTP ${upstream.status}).` })
         return
@@ -266,11 +360,38 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
       res.json({ ok: true, target: 'cloud' })
       return
     }
-    const removed = await revokeDevice(name)
+    const by = actorOf(req)
+    try {
+      if (CLOUD_MODE && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')) {
+        // A machine credential: only the Mac that owns it may revoke it.
+        if (!await revokeMachineCredential(name, { by, proof: machineProof(req) })) {
+          res.status(404).json({ error: `Device "${name}" not found` })
+          return
+        }
+        res.json({ ok: true })
+        return
+      }
+    } catch (err) {
+      if (sendRefusal(res, err)) return
+      throw err
+    }
+    // A paired device: revoking it also revokes the machine credentials it
+    // minted (that Mac is disconnected from this companion). Only that device,
+    // the Mac this companion serves, or this machine itself may.
+    const twinHash = (await listDeviceRecords()).find((d) => d.name === name)?.tokenHash
+    let removed: boolean
+    try {
+      removed = await revokeDevice(name, { by })
+    } catch (err) {
+      if (sendRefusal(res, err)) return
+      throw err
+    }
     if (!removed) {
       res.status(404).json({ error: `Device "${name}" not found` })
       return
     }
+    // Its copy on the other box goes too (device-twins.ts), in the background.
+    if (twinHash) void revokeAdoptionTwin(twinHash)
     // Revoking the pairing has to stop the PUSHES too, or a lost phone keeps
     // showing letter subjects and previews on its lock screen with no way to log
     // in. The rows usually live on the primary (a replica relays registrations),

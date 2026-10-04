@@ -272,8 +272,14 @@ and converges the box to:
   upgraded for you. The engine's own login or API key is not set up for you:
   sign it in on the box (`sudo -u walnut -H <cli>`).
 - **A systemd drop-in**, `walnut.service.d/harness.conf`, with
-  `SHELL=/bin/bash`. The service user keeps its nologin shell; the daemon
-  spawns the CLI through `$SHELL`, so the unit needs a real one.
+  `SHELL=/bin/bash` and `KillMode=process`. The service user keeps its nologin
+  shell; the daemon spawns the CLI through `$SHELL`, so the unit needs a real
+  one. `KillMode=process` makes a stop or restart signal the server alone, so
+  the session daemons and their CLIs keep running and the next server adopts
+  them (the default, `control-group`, ended every session on every deploy).
+  The server's other children are short-lived (git http-backend, probes) and
+  finish on their own; systemd notes them as left-over processes on the next
+  start. To end the sessions as well, stop them from the Mac first.
 - **`config.yaml` keys**, each one only when absent:
   `cloud.exec.enabled: true`, `cloud.exec.cwd_roots: [/var/lib/walnut/work]`
   and `defaults.engine`. A key you already set, comments included, is never
@@ -352,6 +358,124 @@ that key and installs the CLI), then `systemctl restart walnut`.
 already set. A deploy that only pulls new code and restarts the service does
 not run the script, so run it by hand after such a deploy if the harness
 changed.
+
+### The Mac's sessions on the companion ("Cloud")
+
+A paired Mac lists the companion as a host named **Cloud** in the folder picker
+and the session host menus, with no setup: the row appears when the Mac is
+paired (a `cloud` remote with a device token, `cloud_bridge` not turned off) and
+the companion's `/api/v1/status` carries `daemonTunnel`. Browsing folders,
+starting, sending, stopping, Files and Changes all work as on an SSH host.
+
+```
+Mac server ──wss /daemon-tunnel (machine token)──▶ Caddy ──▶ replica
+                                                          │ ws 127.0.0.1
+                                                          ▼
+                                           the Mac's own daemon on the box ──▶ claude
+```
+
+- **No SSH and no AWS keys on the Mac.** The Mac's DaemonConnection dials
+  `wss://<companion>/daemon-tunnel` with its machine credential in an
+  `Authorization` header (the same `bridge-local` token its local daemon uses on
+  `/bridge`). The replica pipes frames to a daemon on loopback; nothing else
+  changes above the socket.
+- **Only that credential opens it.** A phone's device token, an API key,
+  another host's machine token or no token get 401/403. `cloud.exec.enabled`
+  off answers 403 with `x-walnut-tunnel-refusal: cloud_exec_off`, and the Mac
+  shows "Cloud companion has session hosting turned off". A tunnel that is
+  already open closes within 30 seconds of the switch going off (close code
+  4403); the daemon on the box stays up. An older companion
+  (no `daemonTunnel` in its status) shows "Cloud companion needs an update".
+- **Who is asking.** Every rule below identifies the caller by the token it
+  presented, never by a device name, and records ownership by the device's
+  `id`, minted at pairing. A device that re-pairs itself keeps its id; any
+  other re-pairing of a name is a new device and owns nothing.
+- **One companion serves one Mac.** A machine credential records the paired
+  device whose token minted it (its owner). While a Mac owns one, no other
+  device may mint, rotate, revoke or adopt any machine credential on that
+  companion: a second Mac hears `409 other_mac_connected`, and its Cloud card
+  says "Another Mac is connected to this cloud companion. Disconnect it there
+  first." A phone is refused outright (`403 phone_cannot_mint`), and so is an
+  API key. A device is a phone when its FIRST self-report (the iOS app sends one
+  on its first launch after pairing) said an iPhone, iPad or iOS; later reports
+  never change that. Credentials minted before the owner was recorded belong to
+  the Mac whose `bridge-local` token they include: the Mac proves it once per
+  start (`POST /api/devices/bridge-local/adopt`, that token in
+  `x-walnut-machine-proof`) and owns all of them from then on. The token of any
+  other credential proves nothing: a remote host's daemon holds its own.
+- **Changing a paired device.** Removing a device or showing a new QR for it
+  (`DELETE /api/devices/<name>`, `POST /api/devices {name, replace: true}`) is
+  for that device itself, the Mac that owns the companion's machine
+  credentials, or the box itself (`walnut device …`). Anyone else hears
+  `403 device_change_refused`. A phone pairs no devices (`403
+  phone_cannot_pair`).
+- **Handing it to another Mac.** On the companion, `walnut device list` names
+  the old Mac and `walnut device revoke <name>` removes it (the old Mac may
+  also remove itself with its own token). Its machine credentials go with it,
+  its open tunnel closes (at once for a revoke by the companion's server, within
+  one 30 second heartbeat for one by the CLI) and its cloud sync stops; then
+  Retry on the new Mac. A second Mac's Settings › Phones & Cloud cannot remove
+  the first one: that is the takeover these rules exist to stop. A credential
+  that is revoked or rotated while its tunnel is open closes that tunnel. The
+  Mac hears 401 on its redial, drops the dead token, mints a new one (once per
+  10 minutes on its own; a Retry on the Cloud card mints at once) and dials
+  again; the bridge does the same when the companion refuses its token. If only
+  the unowned credentials are left and this Mac lost its `bridge-local` token,
+  `walnut device revoke bridge-local` on the box clears the way.
+- **Its own daemon.** The replica starts a second daemon for the Mac on the
+  first tunnel connect, never the replica's own `__cloud__` daemon: two servers
+  never share one daemon. Each owning Mac gets its own dir,
+  `~/.local/state/open-walnut/primary-daemon.by-device/<device id>/daemon` of
+  the service user (streams beside it in `streams`), so a Mac never lands on
+  another Mac's sessions; a Mac that adopted the credentials from before
+  ownership keeps `primary-daemon` (streams in `primary-daemon-streams`), where
+  its sessions already run, also after it revokes and mints them again. A
+  rotation keeps the owner's daemon. The companion builds that daemon from its
+  own checkout; the Mac never pushes a binary to it.
+- **What the box does not isolate.** The tunnel daemon listens on loopback
+  without a credential of its own, like the Mac's own daemon: any process on
+  the box, as any user, can connect to its port and drive it. The Mac's CLIs
+  and the replica's own `__cloud__` sessions run as the same service user, so
+  either can read the other's files and signal the other's processes. The box
+  is one trust domain: give it only to the Mac that owns it, and run nothing
+  else on it. A per-start secret for the loopback port was considered and not
+  built: the replica would have to keep it in a file that same user can read,
+  which stops no process running as that user, and the only other users on a
+  companion box are its admins.
+- **Alias `__cloudbox__`, label Cloud.** `__cloud__` already names sessions the
+  replica runs for itself, so the Mac's sessions use their own alias. The row
+  lives in memory only and is never written to `config.yaml`, so Settings never
+  shows it.
+- **Resilience.** The Mac's sessions on the box outlive the companion the way
+  a Mac's sessions outlive its own server:
+  - a dropped tunnel reconnects with backoff, and the CLIs keep running (the
+    daemon has no parent watchdog);
+  - `systemctl restart walnut` ends the server only (`KillMode=process`, see
+    the drop-in above); the new server finds the running daemon by its pid and
+    port files, and the Mac re-attaches to the same CLI processes;
+  - a deploy of a new build replaces the daemon on the first tunnel connect
+    after it (a version check), and the old daemon leaves its CLIs to the new
+    one, which adopts them from its registry
+    (`WALNUT_DAEMON_KEEP_SESSIONS=1`, set for this daemon only). A box whose
+    running daemon predates that setting loses its sessions once, on the first
+    deploy that ships it; a later send resumes each from its transcript.
+- **Phone.** The Mac's host list, as the phone gets it through the companion,
+  includes Cloud, and the companion then does not add its own `__cloud__` row
+  for the same machine. The phone reaches a Cloud session's stream the usual
+  way: the box daemon dials the companion's `/bridge` as `__cloudbox__`.
+- **Limits.** Two running and three idle sessions by default, as a small box
+  that also runs the companion (`session_limits.__cloudbox__` on the Mac
+  overrides). No terminal and no port forwarding on Cloud: both need SSH. Its
+  host status carries `terminal: false`, so a Cloud session shows no Terminal
+  tab.
+- **A companion that stops answering.** Session history, Changes, the Files
+  tab, the folder picker, path links, the slash command list and phone images
+  never wait out a dial: while Cloud (or any remote host) is connecting, they
+  answer at once, history from its cache or empty with "Reconnecting to Cloud",
+  Changes from its last list, the rest with `503 host_reconnecting` (the picker
+  and the Files tab keep what they showed). A request that starts the dial
+  itself waits at most 5 seconds. Every sentence names the host by its label
+  (Cloud), never by its alias.
 
 ## Troubleshooting
 

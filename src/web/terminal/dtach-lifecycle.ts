@@ -278,6 +278,12 @@ export async function reapOrphanDtach(): Promise<void> {
   try {
     const config = await getConfig()
     for (const h of Object.keys(config.hosts ?? {})) hosts.add(h)
+    // A host that cannot open a terminal (the cloud box: no SSH) has no dtach
+    // sockets to sweep, and listing them would only fail on every start.
+    const { hostOffersTerminal } = await import('../../core/hosts/host-status.js')
+    for (const [h, def] of Object.entries(config.hosts ?? {})) {
+      if (def && !hostOffersTerminal(def)) hosts.delete(h)
+    }
   } catch (err) {
     log.web.warn('reapOrphanDtach: failed to load config hosts', { error: String(err) })
   }

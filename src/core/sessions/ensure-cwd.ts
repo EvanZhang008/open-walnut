@@ -44,7 +44,7 @@ export async function ensureCwd(cwd: string, host?: string): Promise<void> {
   const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
   let timeoutId: ReturnType<typeof setTimeout>
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`Remote connection to ${host} timed out`)), 15_000)
+    timeoutId = setTimeout(() => reject(new Error(`Remote connection to ${hostDef.label?.trim() || host} timed out`)), 15_000)
   })
   try {
     const conn = await Promise.race([

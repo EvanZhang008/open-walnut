@@ -25,11 +25,34 @@ import { recordMentionDir, getMentionDirs } from '../../core/mention-dirs.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { parsePathRef, isUnsafePathRef } from '../../providers/path-ref-parse.js'
+import { HOST_RECONNECTING, HostReconnectingError, boundHostRead } from '../../core/hosts/remote-read-bound.js'
+import type { DaemonConnection } from '../../providers/daemon-connection.js'
 
 export const filesRouter = Router()
 
 const MAX_ENTRIES = 1000
 const REMOTE_TIMEOUT_MS = 15_000
+
+/**
+ * A remote host's daemon, for a Files request. Within the host-read deadline
+ * (remote-read-bound.ts): while the host is connecting this throws
+ * HostReconnectingError at once, and a request that starts the dial waits at
+ * most its cap. A silent companion used to hold `files/list` for 15 to 30s and
+ * then answer "Remote connection to __cloudbox__ timed out", an alias no user
+ * knows; every sentence here names the host by its label.
+ */
+async function hostConnection(
+  host: string,
+  hostDef: { hostname?: string; user?: string; port?: number; label?: string },
+): Promise<DaemonConnection> {
+  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+  const sshTarget = { hostname: hostDef.hostname ?? host, user: hostDef.user, port: hostDef.port }
+  const label = hostDef.label?.trim() || host
+  return boundHostRead(host, () => new Promise<DaemonConnection>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new FilesOpError(`Remote connection to ${label} timed out`, 400)), REMOTE_TIMEOUT_MS)
+    getDaemonConnection(host, sshTarget).then(resolve, reject).finally(() => clearTimeout(timer))
+  }))
+}
 /** Search budget handed to a REMOTE host's resolver. Larger than the resolver's
  *  in-process default (a remote tree is usually a big monorepo on slower disk),
  *  and still comfortably inside REMOTE_TIMEOUT_MS so the RPC can't outlive its
@@ -103,16 +126,9 @@ async function resolveViaHost(
   const hostDef = config.hosts?.[host]
   if (!hostDef?.hostname) return null
 
-  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-  const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
   let conn
   try {
-    let timeoutId: ReturnType<typeof setTimeout>
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
-    })
-    conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
-      .finally(() => clearTimeout(timeoutId!))
+    conn = await hostConnection(host, hostDef)
   } catch {
     return null
   }
@@ -285,16 +301,9 @@ export async function resolveSessionPath(
     if (!hostDef?.hostname) {
       return { path: fallback, resolved: false, ...pos }
     }
-    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-    const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
     let conn
     try {
-      let timeoutId: ReturnType<typeof setTimeout>
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
-      })
-      conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
-        .finally(() => clearTimeout(timeoutId!))
+      conn = await hostConnection(host, hostDef)
     } catch {
       return { path: fallback, resolved: false, ...pos }
     }
@@ -441,18 +450,11 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
       res.status(404).json({ error: `Unknown host: ${host}` })
       return
     }
-    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-    const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
     let conn
     try {
-      let timeoutId: ReturnType<typeof setTimeout>
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
-      })
-      conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
-        .finally(() => clearTimeout(timeoutId!))
-    } catch {
-      res.status(503).json({ error: 'host unreachable' })
+      conn = await hostConnection(host, hostDef)
+    } catch (err) {
+      res.status(503).json(err instanceof HostReconnectingError ? { error: err.message, code: HOST_RECONNECTING } : { error: 'host unreachable' })
       return
     }
     if (!conn.hasCapability?.('grep-v1')) {
@@ -541,8 +543,9 @@ export async function listSessionFiles(
   try {
     return await listOneDir(reqPath, host, showHidden)
   } catch (err) {
-    // Only a listing failure is worth healing; a guard rejection above is final.
-    if (!ctx || (!ctx.cwd && !ctx.sessionId)) throw err
+    // Only a listing failure is worth healing; a guard rejection above is final,
+    // and so is a host still connecting (a heal would only dial it again).
+    if (!ctx || (!ctx.cwd && !ctx.sessionId) || err instanceof HostReconnectingError) throw err
     let healed: HostResolveResult | null = null
     try {
       healed = await resolveViaHost(reqPath, ctx.cwd, host, ctx.sessionId)
@@ -588,17 +591,7 @@ async function listOneDir(
     const hostname = hostDef.hostname
     if (!hostname) throw new FilesOpError(`Host "${host}" has no hostname`, 400)
 
-    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-    const sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
-
-    let timeoutId: ReturnType<typeof setTimeout>
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new FilesOpError(`Remote connection to ${host} timed out`, 400)), REMOTE_TIMEOUT_MS)
-    })
-    const conn = await Promise.race([
-      getDaemonConnection(host, sshTarget),
-      timeoutPromise,
-    ]).finally(() => clearTimeout(timeoutId!))
+    const conn = await hostConnection(host, hostDef)
 
     let result = await conn.send('fs.ls', { path: dirPath })
     let remoteSelectedFile: string | undefined
@@ -684,6 +677,11 @@ filesRouter.get('/list', async (req: Request, res: Response, next: NextFunction)
   } catch (err) {
     if (err instanceof FilesOpError) {
       res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    if (err instanceof HostReconnectingError) {
+      // The Files tab keeps its cached tree and says the host is reconnecting.
+      res.status(503).json({ error: err.message, code: HOST_RECONNECTING })
       return
     }
     next(err)
