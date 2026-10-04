@@ -149,7 +149,10 @@ enum ModelCatalogRowLabel {
     /// runtime model id is. The order is the server's and is load-bearing: exact
     /// id, then a concrete row by `resolvedModel`, then `default` by it (a
     /// concrete row must beat the `default` alias sharing its resolved model),
-    /// then the same three compared without `[1m]` and provider version suffixes.
+    /// then a legacy picker alias by the CLI value it runs as (the fallback
+    /// catalog's `sonnet-1m` runs as `sonnet[1m]`, which the next step would
+    /// strip to the plain `sonnet` row), then the same three compared without
+    /// `[1m]` and provider version suffixes.
     static func activeRow(
         in models: [SessionModelOptions.Model], for model: String?
     ) -> SessionModelOptions.Model? {
@@ -161,6 +164,7 @@ enum ModelCatalogRowLabel {
         if let alias = models.first(where: { $0.id == "default" && $0.resolvedModel == model }) {
             return alias
         }
+        if let legacy = models.first(where: { legacyAliasCLIModel[$0.id] == model }) { return legacy }
         let needle = normalizedID(model)
         return models.first { row in
             normalizedID(row.id) == needle || row.resolvedModel.map { normalizedID($0) == needle } == true
@@ -177,6 +181,16 @@ enum ModelCatalogRowLabel {
     }
 
     private static let providerVersion = try! NSRegularExpression(pattern: "[-_]v[0-9]+(:[0-9]+)?$")
+
+    /// `SESSION_MODEL_CLI_MAP` (src/core/types.ts, derived from SESSION_MODELS):
+    /// each legacy picker alias and the CLI value it runs as. A test reads the
+    /// server's table and holds this copy to it.
+    static let legacyAliasCLIModel: [String: String] = [
+        "opus": "opus", "opus-1m": "opus[1m]",
+        "sonnet": "sonnet", "sonnet-1m": "sonnet[1m]",
+        "haiku": "haiku",
+        "fable": "fable", "fable-1m": "fable[1m]",
+    ]
 
     /// The web's `shortModelLabel` (ModelPicker.tsx:224-229), which names the
     /// `current` row: the id after `….claude-`, without a provider version,

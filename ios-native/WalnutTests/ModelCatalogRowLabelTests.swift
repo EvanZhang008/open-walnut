@@ -113,6 +113,38 @@ final class ModelCatalogRowLabelTests: XCTestCase {
         }
     }
 
+    /// A fallback 1M pick is stored as its CLI value ('sonnet[1m]'). Stripping
+    /// '[1m]' before the alias step checked the plain "Sonnet" row, as the server
+    /// did until 2026-10-03; the twin keeps the server's order.
+    func testAFallbackPickChecksItsOwnRowByTheCLIValueItRunsAs() {
+        let rows = ["opus", "opus-1m", "sonnet", "sonnet-1m", "haiku", "fable", "fable-1m"].map {
+            Row(id: $0, label: $0, supportsEffort: nil, supportedEffortLevels: nil)
+        }
+        for (id, cli) in ModelCatalogRowLabel.legacyAliasCLIModel {
+            XCTAssertEqual(ModelCatalogRowLabel.activeRow(in: rows, for: cli)?.id, id, cli)
+            XCTAssertEqual(ModelCatalogRowLabel.activeRow(in: rows, for: id)?.id, id, id)
+        }
+        XCTAssertEqual(ModelCatalogRowLabel.activeRow(in: rows, for: "opus-v1")?.id, "opus",
+                       "an id the registry never lists still finds its family loosely")
+    }
+
+    /// The alias table is a copy of the server's SESSION_MODELS (id, cliModel)
+    /// pairs, read from the source so the two can never drift apart.
+    func testTheAliasTableIsTheServersTable() throws {
+        let types = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("src/core/types.ts")
+        let source = try String(contentsOf: types, encoding: .utf8)
+        let row = try NSRegularExpression(pattern: "\\{ id: '([^']+)',[^\\n]*cliModel: '([^']+)'")
+        var table: [String: String] = [:]
+        for match in row.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
+            guard let id = Range(match.range(at: 1), in: source), let cli = Range(match.range(at: 2), in: source) else { continue }
+            table[String(source[id])] = String(source[cli])
+        }
+        XCTAssertFalse(table.isEmpty, "SESSION_MODELS rows were found in \(types.path)")
+        XCTAssertEqual(table, ModelCatalogRowLabel.legacyAliasCLIModel)
+    }
+
     /// Why this is its own twin instead of reusing the pill's name function: the
     /// two disagree on exactly the rows the user looks at.
     func testShortModelNameIsNotATwinOfFormatModelName() {

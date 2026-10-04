@@ -452,11 +452,15 @@ export function normalizeSessionModelCatalogId(model: string): string {
 
 /** Find the catalog row for a runtime model id. Match ORDER is load-bearing:
  *  exact value → concrete row by resolvedModel → 'default' row by resolvedModel
- *  → normalized (strips '[1m]' + provider version suffixes, which the CLI's
- *  runtime id carries but catalog values may not). A concrete row must beat the
- *  'default' row that shares its resolvedModel — 'default' means "CLI picks",
- *  and reporting it as the active row would hide the real row's effort
- *  capabilities. Reordering these steps selects the wrong active picker row. */
+ *  → a legacy picker alias by its CLI value → normalized (strips '[1m]' +
+ *  provider version suffixes, which the CLI's runtime id carries but catalog
+ *  values may not). A concrete row must beat the 'default' row that shares its
+ *  resolvedModel — 'default' means "CLI picks", and reporting it as the active
+ *  row would hide the real row's effort capabilities. The alias step must run
+ *  before the normalized one: the fallback catalog's 'sonnet-1m' row runs as
+ *  'sonnet[1m]', and stripping '[1m]' first lands on the plain 'sonnet' row, so
+ *  a 1M pick read back as the 200K model. Reordering these steps selects the
+ *  wrong active picker row. */
 export function matchSessionModelCatalogEntry(
   models: SessionModelCatalogEntry[],
   model?: string | null,
@@ -468,6 +472,8 @@ export function matchSessionModelCatalogEntry(
   if (resolved) return resolved;
   const defaultEntry = models.find((entry) => entry.value === 'default' && entry.resolvedModel === model);
   if (defaultEntry) return defaultEntry;
+  const alias = models.find((entry) => SESSION_MODEL_CLI_MAP[entry.value] === model);
+  if (alias) return alias;
   const needle = normalizeSessionModelCatalogId(model);
   return models.find((entry) =>
     normalizeSessionModelCatalogId(entry.value) === needle

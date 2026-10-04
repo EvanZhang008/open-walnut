@@ -131,10 +131,13 @@ test.describe('Model Switch UI', () => {
     // Fallback registry: 7 model rows (incl. 1M + Fable variants) in the
     // flat two-column list (design pick 2026-08-15: no cards, no per-row
     // Switch buttons — the row itself is the switch).
-    const options = picker.locator('.model-picker-col-models .model-picker-row')
+    // Catalog rows only: a model saved by an earlier test that is not in the
+    // catalog shows as its own checked row (data-testid picker-out-of-catalog).
+    const catalogRows = '.model-picker-col-models .model-picker-row:not([data-testid="picker-out-of-catalog"])'
+    const options = picker.locator(catalogRows)
     await expect(options).toHaveCount(7)
 
-    const names = picker.locator('.model-picker-col-models .model-picker-row-name')
+    const names = picker.locator(`${catalogRows} .model-picker-row-name`)
     await expect(names.nth(0)).toHaveText('Haiku')
     await expect(names.nth(1)).toHaveText('Sonnet')
     await expect(names.nth(2)).toHaveText('Sonnet 1M')

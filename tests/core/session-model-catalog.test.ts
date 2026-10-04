@@ -68,6 +68,30 @@ describe('matchSessionModelCatalogEntry', () => {
   it('returns null when no row matches', () => {
     expect(matchSessionModelCatalogEntry(models, 'gpt-unknown')).toBeNull()
   })
+
+  // A fallback pick of 'sonnet-1m' runs (and is stored) as 'sonnet[1m]'. Before
+  // the alias step, the normalized match stripped '[1m]' and found the plain
+  // 'sonnet' row, so the picker reopened with the 200K row checked.
+  it('a fallback row is found by the CLI value its alias runs as, 1M rows included', () => {
+    const fallback = sessionModelsAsCatalog()
+    for (const m of SESSION_MODELS) {
+      expect(matchSessionModelCatalogEntry(fallback, m.cliModel)?.value, m.cliModel).toBe(m.id)
+      expect(matchSessionModelCatalogEntry(fallback, m.id)?.value, m.id).toBe(m.id)
+    }
+    // A runtime id the registry never lists still finds its family row loosely.
+    expect(matchSessionModelCatalogEntry(fallback, 'opus-v1')?.value).toBe('opus')
+  })
+
+  it('the alias step never outranks a live catalog row matched exactly or by resolvedModel', () => {
+    const live = [
+      { value: 'default', resolvedModel: 'global.anthropic.claude-sonnet-5[1m]', displayName: 'Default' },
+      { value: 'sonnet', resolvedModel: 'global.anthropic.claude-sonnet-5', displayName: 'Sonnet' },
+      { value: 'global.anthropic.claude-sonnet-5[1m]', resolvedModel: 'global.anthropic.claude-sonnet-5[1m]', displayName: 'Sonnet (1M context)' },
+    ]
+    expect(matchSessionModelCatalogEntry(live, 'sonnet')?.displayName).toBe('Sonnet')
+    expect(matchSessionModelCatalogEntry(live, 'global.anthropic.claude-sonnet-5[1m]')?.displayName).toBe('Sonnet (1M context)')
+    expect(matchSessionModelCatalogEntry(live, 'global.anthropic.claude-sonnet-5')?.displayName).toBe('Sonnet')
+  })
 })
 
 describe('resolveModelSwitchValue', () => {

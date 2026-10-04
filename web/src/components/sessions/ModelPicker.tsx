@@ -481,7 +481,11 @@ export function ModelPicker({
   // Active row = catalog row matching the LIVE model (applied wins over record).
   // No match ⇒ the session runs a model OUTSIDE the catalog — we show that
   // truthfully (synthetic row below) instead of pretending a row is active.
-  const liveModel = applied?.model ?? currentModel;
+  // Not live, the picker shows the SAVED settings (its header says so), the same
+  // way the effort column does: a pick on a stopped session lives only in the
+  // record, so reading the pill's model checked nothing, or the old model.
+  const savedModel = liveSettings && !liveSettings.live ? liveSettings.requested?.model : undefined;
+  const liveModel = applied?.model ?? savedModel ?? currentModel;
   const activeRow = matchSessionModelCatalogEntry(models, liveModel);
   const requestedModel = liveSettings?.requested?.model ?? currentModel;
   const requestedRow = matchSessionModelCatalogEntry(models, requestedModel);
@@ -1036,7 +1040,9 @@ export function ModelPicker({
                   data-testid="picker-out-of-catalog"
                   role="option"
                   aria-selected="true"
-                  title="Current model — not in this session's selectable catalog"
+                  title={!applied && savedModel
+                    ? 'Saved model — not in this session\'s selectable catalog; it applies on the next start'
+                    : 'Current model — not in this session\'s selectable catalog'}
                 >
                   <span className="model-picker-row-check" aria-hidden>✓</span>
                   <span className="model-picker-row-name">{shortModelLabel(row.model)}</span>

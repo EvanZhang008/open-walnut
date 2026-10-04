@@ -94,6 +94,22 @@ describe('GET /api/v1/sessions/:id/model-options', () => {
     expect(res.body.currentEffort).toBe('high')
   })
 
+  // The phone's model sheet checks the row `current` names. A 1M pick from the
+  // fallback catalog is stored as its CLI value ('sonnet[1m]'), and `current`
+  // used to read it back as 'sonnet', so a cold start checked the 200K row.
+  it('a 1M pick from the fallback catalog reads back as its own row', async () => {
+    await createSessionRecord('ctl-options-1m', 'task-o1m', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+    })
+    const app = createApp()
+    for (const id of ['sonnet-1m', 'opus-1m', 'fable-1m', 'sonnet', 'opus']) {
+      expect((await request(app).post('/api/v1/sessions/ctl-options-1m/model').send({ model: id })).status).toBe(200)
+      const res = await request(app).get('/api/v1/sessions/ctl-options-1m/model-options')
+      expect(res.status).toBe(200)
+      expect(res.body.current, id).toBe(id)
+    }
+  })
+
   // Regression (same root cause as the web pill / picker mismatch): the level
   // frequently lives in the CLI's OWN settings.json, so nothing ever REQUESTED
   // it and `record.effort` stays undefined. Reading only that field made the

@@ -187,6 +187,33 @@ test.describe('ModelPicker fallback registry', () => {
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-fallback-7-options.png') })
   })
 
+  // A 1M pick is stored as its CLI value ('sonnet[1m]'). The active-row match
+  // used to strip '[1m]' first and check the plain 'Sonnet' row, so the user saw
+  // the 200K model selected and picking it "again" really switched to 200K.
+  // Runs before the Haiku switch below, which leaves the session as it found it.
+  test('a 1M pick is the checked row after a reload', async ({ page }) => {
+    const rowNamed = (picker: import('@playwright/test').Locator, name: string) =>
+      picker.locator('.model-picker-col-models .model-picker-row')
+        .filter({ has: page.locator('.model-picker-row-name', { hasText: new RegExp(`^${name}$`) }) })
+    let input = await openSessionPanel(page)
+    let picker = await openModelPicker(page, input)
+    const [req] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
+      rowNamed(picker, 'Sonnet 1M').click(),
+    ])
+    expect(req.postDataJSON()).toEqual({ model: 'sonnet-1m' })
+    expect((await req.response())?.ok()).toBe(true)
+    await expect(picker).toBeHidden({ timeout: 3000 })
+
+    // Cold: the server's record is the only memory of the pick.
+    input = await openSessionPanel(page)
+    picker = await openModelPicker(page, input)
+    const active = picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')
+    await expect(active).toHaveCount(1)
+    await expect(active).toHaveText('Sonnet 1M')
+    await picker.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-fallback-1m-checked.png') })
+  })
+
   test('Switch in fallback mode sends the legacy alias id', async ({ page }) => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
@@ -403,6 +430,32 @@ test.describe('ModelPicker CLI catalog', () => {
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-custom-input.png') })
   })
 
+  // Not live, the picker shows the SAVED settings (its header says so). A pick
+  // on a stopped session lives only in the record, and the picker used to read
+  // the model from the pill alone, so it checked nothing, or the old model.
+  test('a saved out-of-catalog pick is the checked row while the session is not live', async ({ page }) => {
+    await interceptCatalog(page, CLI_CATALOG)
+    let input = await openSessionPanel(page)
+    let picker = await openModelPicker(page, input)
+    const custom = picker.locator('[data-testid="picker-custom-model"]')
+    await custom.locator('.model-picker-custom-input').fill('global.anthropic.claude-mythos-1')
+    const [req] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
+      custom.locator('.model-picker-btn').click(),
+    ])
+    // The reload must not cancel the save (WebKit aborts a request in flight).
+    expect((await req.response())?.ok()).toBe(true)
+
+    input = await openSessionPanel(page)
+    picker = await openModelPicker(page, input)
+    await expect(picker.getByText('Not live', { exact: false })).toBeVisible()
+    const saved = picker.getByTestId('picker-out-of-catalog')
+    await expect(saved).toHaveCount(1)
+    await expect(saved.locator('.model-picker-row-name')).toHaveText('mythos-1')
+    await expect(saved).toHaveAttribute('title', /^Saved model/)
+    await expect(picker.locator('.model-picker-col-models .model-picker-row-active')).toHaveCount(1)
+  })
+
   test('header Current label uses the active row displayName', async ({ page }) => {
     await interceptCatalog(page, CLI_CATALOG)
     await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
@@ -461,7 +514,8 @@ test.describe('ModelPicker requested before the session loads', () => {
     await expect(pill).toHaveCount(1, { timeout: 10_000 })
     await expect(picker).toBeVisible({ timeout: 5000 })
     await expect(picker).toHaveCount(1)
-    await expect(picker.locator('.model-picker-col-models .model-picker-row')).toHaveCount(7)
+    // The 7 catalog rows (a saved out-of-catalog model adds its own checked row).
+    await expect(picker.locator('.model-picker-col-models .model-picker-row:not([data-testid="picker-out-of-catalog"])')).toHaveCount(7)
 
     // Served once: closed, it stays closed.
     await page.keyboard.press('Escape')
