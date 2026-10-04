@@ -46,7 +46,9 @@ which it does only when no health store exists at all), run
 sync (`lastUploadAt`) and say the missing nights are missing because the phone
 has not synced. Also say which types have data. A type in `unknown_or_denied`
 means either the permission is off or there is no such data: say both, never
-pick one.
+pick one. When `health_status` carries a `message`, it already knows which
+case this is (every type empty means access is off): tell the user what it
+says, in your own words, and nothing about how the data reaches the Mac.
 
 Then read the prior day for context:
 

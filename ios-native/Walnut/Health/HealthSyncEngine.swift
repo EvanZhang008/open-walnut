@@ -188,6 +188,10 @@ actor HealthSyncEngine {
             device: HealthSyncHeader.Device(installId: state.read().installId, model: env.deviceModel, os: env.deviceOS)
         )
         let selected = only.map { names in plan.filter { names.contains($0.name) } } ?? plan
+        let forget = Self.typesWithoutMacData(selected, status: status)
+        if !forget.isEmpty {
+            state.update(generation: generation) { $0.forget(forget) }
+        }
         refreshDone(plan: plan, status: status)
 
         for spec in selected {
@@ -237,6 +241,19 @@ actor HealthSyncEngine {
             case .buckets: return buckets?.contains(spec.name) ?? true
             }
         }
+    }
+
+    /// Types the Mac holds nothing of, read again from their beginning on every
+    /// run. While Apple Health access is off, HealthKit answers every query empty
+    /// but still hands out an anchor past the whole history; keeping that anchor
+    /// would skip everything recorded before access was turned on (2026-10-03:
+    /// a phone that tapped Don't Allow, then turned access on, never sent its
+    /// history). An empty type costs one empty query per run. A status without
+    /// `types` (an older server) forgets nothing.
+    static func typesWithoutMacData(_ plan: [HealthTypeSpec], status: HealthStatusResponse) -> Set<String> {
+        guard let types = status.types else { return [] }
+        let held = Set(types.filter { $0.lastSampleAt != nil }.map(\.type))
+        return Set(plan.map(\.name)).subtracting(held)
     }
 
     /// The server takes `q.` / `c.` / `x.` names, and their category (`other`,

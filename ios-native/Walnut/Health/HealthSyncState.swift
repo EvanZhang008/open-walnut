@@ -34,6 +34,19 @@ struct HealthSyncSnapshot: Codable, Equatable, Sendable {
     /// Oldest sample date sent so far.
     var oldestDate: Date?
 
+    /// Read these types again from their beginning.
+    mutating func forget(_ names: Set<String>) {
+        for name in names {
+            anchors[name] = nil
+            bucketPendingFrom[name] = nil
+            bucketEarliest[name] = nil
+            bucketSentThrough[name] = nil
+        }
+        primed.subtract(names)
+        completed.subtract(names)
+        bucketPendingDeletes.subtract(names)
+    }
+
     /// The Mac's store changed: start over under the new id, keep only the install id.
     mutating func reset(storeId: String?) {
         let install = installId

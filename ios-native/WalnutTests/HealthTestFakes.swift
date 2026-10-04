@@ -27,6 +27,9 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
     private var _queried: [String] = []
     private var _statisticsCalls: [StatisticsCall] = []
     var lockedTypes: Set<String> = []
+    /// Read access off for these types, as HealthKit answers it: every query
+    /// empty, yet the anchor still moves past the whole history.
+    var deniedTypes: Set<String> = []
     var characteristicValues: [HealthCharacteristicValue] = []
     var bucketsPerCall: [HealthWireBucket] = [
         HealthWireBucket(start: "2026-09-20T00:00:00-04:00", intervalSec: 86_400, sum: 1234),
@@ -75,6 +78,11 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
         try lock.withLock {
             try touch(spec.name)
             let after = anchor.flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
+            if deniedTypes.contains(spec.name) {
+                let latest = max(after, nextSeq - 1)
+                return HealthAnchoredPage(samples: [], deleted: [], anchor: Data(String(latest).utf8),
+                                          fetched: 0, earliestStart: nil)
+            }
             var events: [(seq: Int, sample: Sample?, deleted: String?)] =
                 (samples[spec.name] ?? []).filter { $0.seq > after }.map { ($0.seq, $0, nil) }
             events += (deletions[spec.name] ?? []).filter { $0.seq > after }.map { ($0.seq, nil, $0.uuid) }
@@ -95,6 +103,7 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
     func recent(_ spec: HealthTypeSpec, since: Date, limit: Int, batchTimeZone: TimeZone) async throws -> [HealthWireSample] {
         try lock.withLock {
             try touch(spec.name)
+            if deniedTypes.contains(spec.name) { return [] }
             return (samples[spec.name] ?? []).filter { $0.start >= since }
                 .sorted { $0.start > $1.start }.prefix(limit).map(\.wire)
         }
@@ -106,7 +115,7 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
             try touch(spec.name)
             _statisticsCalls.append(StatisticsCall(type: spec.name, interval: interval.seconds, from: from, to: to,
                                                    includeEmpty: includeEmpty))
-            return (samples[spec.name] ?? []).isEmpty ? [] : bucketsPerCall
+            return (samples[spec.name] ?? []).isEmpty || deniedTypes.contains(spec.name) ? [] : bucketsPerCall
         }
     }
 
@@ -142,13 +151,20 @@ final class FakeHealthTransport: HealthSyncTransport, @unchecked Sendable {
         bodies.filter { ($0["type"] as? String ?? $0["metric"] as? String) == type }
     }
 
+    /// `held` lists the types the Mac has samples of; nil leaves `types` out
+    /// (an older server), so nothing is read again from the beginning.
     static func status(storeId: String = "hs-1", paused: Bool = false, generic: Bool = true,
-                       raw: [String]? = nil, buckets: [String]? = nil) -> HealthStatusResponse {
+                       raw: [String]? = nil, buckets: [String]? = nil, held: [String: String?]? = nil) -> HealthStatusResponse {
         var supported: [String: Any] = [:]
         if let raw { supported["raw"] = raw }
         if let buckets { supported["buckets"] = buckets }
         if generic { supported["generic"] = ["prefixes": ["q", "c", "x"], "covered": [String]()] }
-        let object: [String: Any] = ["storeId": storeId, "paused": paused, "supported": supported]
+        var object: [String: Any] = ["storeId": storeId, "paused": paused, "supported": supported]
+        if let held {
+            object["types"] = held.map { name, last in
+                ["type": name, "enabled": true, "lastSampleAt": last.map { $0 as Any } ?? NSNull()] as [String: Any]
+            }
+        }
         let data = try! JSONSerialization.data(withJSONObject: object)
         return try! JSONDecoder().decode(HealthStatusResponse.self, from: data)
     }

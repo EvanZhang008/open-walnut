@@ -20,19 +20,51 @@ import { Router, type Request, type Response } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { requireThisMachine } from '../middleware/health-access.js'
+import { GENERIC_CHARACTERISTICS } from '../../core/health/catalog.js'
 
 export const healthRouter = Router()
 
 healthRouter.use(requireThisMachine)
 
-const NOT_CONNECTED = 'Apple Health is not connected yet. Walnut on the iPhone asks for access by itself: when the app opens, and right away when a health question comes up in it. ' +
-  'Ask the user to open Walnut on the iPhone and allow Apple Health there; the phone then keeps this Mac up to date by itself. Do not send the user looking through Settings.'
+// What the agent tells the user. Walnut on the iPhone asks for access only when a
+// health question comes up in a conversation open on it (never on app open), and
+// iOS shows its permission sheet only once, so the words differ by state. The agent
+// is kept to the one thing the user does: no talk of how the data reaches the Mac,
+// no route through Settings (the phone shows the way itself).
+const NOT_CONNECTED = 'Apple Health is not connected yet. Walnut on the iPhone asks for access itself, at the moment a health question comes up in a conversation open on the phone. ' +
+  'If the user is asking from Walnut on the iPhone, that request is on their screen now: tell them to allow it, then ask again. ' +
+  'If they are asking anywhere else, tell them to ask the same question in Walnut on the iPhone. ' +
+  'Keep it to that: do not explain how the data reaches this Mac, and do not walk the user through Settings or the Health app.'
+
+const NOTHING_READABLE = 'Walnut on the iPhone is connected, but Apple Health gives it nothing to read: Health access for Walnut is off on the phone, and iOS asks only once, so it will not ask again. ' +
+  'When the user asks a health question in Walnut on the iPhone, the app shows them a note with the way to the switch and a button that opens Settings. ' +
+  'Tell them to follow that note (or to ask the same question in Walnut on the iPhone), turn access on, and ask again. ' +
+  'Do not say the app will ask for permission, do not explain how the data reaches this Mac, and do not recite a path through Settings.'
 
 /** health_status with a store whose phone never synced, or stopped: the agent tells the user the same thing. */
 export function notSyncingMessage(lastUploadAt: unknown): string {
   if (typeof lastUploadAt !== 'string') return NOT_CONNECTED
-  return `Nothing has synced from the iPhone since ${lastUploadAt.slice(0, 10)}. Walnut on the iPhone syncs whenever it is open, and in the background unless it was force-quit, `
+  return `Nothing has come from the iPhone since ${lastUploadAt.slice(0, 10)}. Walnut on the iPhone keeps this Mac current whenever it is open, and in the background unless it was force-quit, `
     + 'Low Power Mode is on or Background App Refresh is off. Ask the user to open Walnut on the iPhone once.'
+}
+
+/** A status whose store holds no sample of any type: only characteristics, or nothing. */
+export function nothingReadable(body: Record<string, unknown>): boolean {
+  if (body.connected !== true || !Array.isArray(body.types)) return false
+  return !(body.types as Array<{ type?: unknown; lastSampleAt?: unknown }>).some((t) =>
+    typeof t.lastSampleAt === 'string' && !GENERIC_CHARACTERISTICS.has(String(t.type)))
+}
+
+/** The message health_status carries for the agent, when it needs one. */
+export function statusMessage(body: Record<string, unknown>): string | undefined {
+  if (body.connected === false) return notSyncingMessage(body.lastUploadAt)
+  if (nothingReadable(body)) return NOTHING_READABLE
+  return undefined
+}
+
+async function currentStatusMessage(): Promise<string | undefined> {
+  const { healthStatus } = await import('../../core/health/index.js')
+  return statusMessage(healthStatus() as unknown as Record<string, unknown>)
 }
 
 function q(req: Request, name: string): string | undefined {
@@ -65,7 +97,13 @@ function route(name: string, empty: () => Record<string, unknown>, read: Reader)
         return
       }
       const body = await read(req)
-      if (body.connected === false && body.message === undefined) body.message = notSyncingMessage(body.lastUploadAt)
+      // Every read carries the same note when access is off or nothing arrives:
+      // an agent that read only health_sleep must not fall back on an older,
+      // now wrong, idea of where access stands.
+      if (body.message === undefined) {
+        const message = name === 'status' ? statusMessage(body) : await currentStatusMessage()
+        if (message !== undefined) body.message = message
+      }
       log.web.debug('health read served', { read: name, items: countItems(body) })
       res.json(body)
     } catch (err) {

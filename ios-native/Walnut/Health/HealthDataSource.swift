@@ -72,6 +72,10 @@ final class HealthKitDataSource: HealthDataSource, @unchecked Sendable {
         do {
             try await store.requestAuthorization(toShare: [], read: read)
         } catch {
+            let ns = error as NSError
+            AppLog.error("health", "HealthKit authorization error", [
+                "domain": ns.domain, "code": String(ns.code), "description": ns.localizedDescription,
+            ])
             throw Self.map(error)
         }
     }
@@ -82,6 +86,29 @@ final class HealthKitDataSource: HealthDataSource, @unchecked Sendable {
         let read = HealthTypeCatalog.readTypes(for: specs, characteristics: true)
         let status = try? await store.statusForAuthorizationRequest(toShare: [], read: read)
         return status != .unnecessary
+    }
+
+    /// The types nearly every iPhone has samples of: the phone counts steps and
+    /// distance by itself, and a Watch adds heart rate, energy and sleep.
+    static let probeTypes: [HKSampleType] = [
+        HKQuantityType(.stepCount), HKQuantityType(.distanceWalkingRunning), HKQuantityType(.heartRate),
+        HKQuantityType(.activeEnergyBurned), HKCategoryType(.sleepAnalysis), HKQuantityType(.bodyMass),
+    ]
+
+    /// Whether HealthKit hands Walnut any sample at all. Apps cannot see a read
+    /// denial, but with access off every query answers empty, and an iPhone with
+    /// none of these types is all but unheard of. One sample per type at most.
+    func canReadAnySample() async -> Bool {
+        for type in Self.probeTypes {
+            let found: Bool = await withCheckedContinuation { continuation in
+                let query = HKSampleQuery(sampleType: type, predicate: nil, limit: 1, sortDescriptors: nil) { _, samples, _ in
+                    continuation.resume(returning: !(samples ?? []).isEmpty)
+                }
+                store.execute(query)
+            }
+            if found { return true }
+        }
+        return false
     }
 
     func anchored(_ spec: HealthTypeSpec, anchor: Data?, limit: Int, encode: Bool,

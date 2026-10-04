@@ -29,7 +29,7 @@ import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../../src/lib/caller-or
 import { addDays, localDate, zonedTime } from '../../src/core/health/day-key.js'
 import { MARKER_HR, WATCH, uuid } from '../core/health/fixtures.js'
 import { createDevice } from '../../src/core/device-auth.js'
-import { notSyncingMessage } from '../../src/web/routes/health.js'
+import { notSyncingMessage, statusMessage } from '../../src/web/routes/health.js'
 
 const TZ = 'America/New_York'
 let server: HttpServer
@@ -90,9 +90,10 @@ describe('Apple Health through a real server', () => {
     const r = await executeOp('health_sleep', { last_nights: 3 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
     expect(r.ok).toBe(true)
     expect((r as any).result).toMatchObject({ connected: false })
-    // The agent is told the phone asks by itself, never to send the user through Settings.
-    expect((r as any).result.message).toMatch(/asks for access by itself/)
-    expect((r as any).result.message).not.toMatch(/Settings, Apple Health/)
+    // The agent is told the phone asks by itself when a health question comes up there,
+    // never to send the user through Settings.
+    expect((r as any).result.message).toMatch(/asks for access itself, at the moment a health question comes up/)
+    expect((r as any).result.message).not.toMatch(/Settings, Apple Health|when the app opens/)
     expect(fs.existsSync(path.join(WALNUT_HOME, 'health'))).toBe(false)
   })
 
@@ -100,8 +101,28 @@ describe('Apple Health through a real server', () => {
     expect((await json('GET', '/api/v1/health/status')).status).toBe(200)
     const st = await executeOp('health_status', {}, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
     expect((st as any).result).toMatchObject({ connected: false, lastUploadAt: null })
-    expect((st as any).result.message).toMatch(/asks for access by itself/)
-    expect(notSyncingMessage('2026-09-17T12:00:00.000Z')).toMatch(/^Nothing has synced from the iPhone since 2026-09-17\./)
+    expect((st as any).result.message).toMatch(/asks for access itself/)
+    expect(notSyncingMessage('2026-09-17T12:00:00.000Z')).toMatch(/^Nothing has come from the iPhone since 2026-09-17\./)
+  })
+
+  it('a phone that can read only the characteristics is told apart: access is off, iOS will not ask again', async () => {
+    // 2026-10-03: Don't Allow on the sheet; iOS still handed out birth date and sex.
+    const characteristic = {
+      device, tz: TZ, kind: 'raw', type: 'x.BiologicalSex',
+      samples: [{ uuid: 'char-biologicalsex-2', start: iso(TODAY, 8), end: iso(TODAY, 8), code: 2, source: { bundleId: 'com.apple.Health', name: 'Health' } }],
+      deleted: [],
+    }
+    expect((await json('POST', '/api/v1/health/sync', characteristic)).status).toBe(200)
+    const st = await executeOp('health_status', {}, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
+    expect((st as any).result).toMatchObject({ connected: true })
+    expect((st as any).result.message).toMatch(/Apple Health gives it nothing to read/)
+    expect((st as any).result.message).toMatch(/will not ask again/)
+    // A read other than health_status says the same, so the agent never answers from an older state.
+    const sleep = await executeOp('health_sleep', { last_nights: 3 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
+    expect((sleep as any).result.message).toMatch(/Apple Health gives it nothing to read/)
+    expect(statusMessage({ connected: true, types: [{ type: 'sleep', lastSampleAt: null }, { type: 'x.DateOfBirth', lastSampleAt: '2026-10-03T08:00:00Z' }] }))
+      .toMatch(/nothing to read/)
+    expect(statusMessage({ connected: true, types: [{ type: 'sleep', lastSampleAt: '2026-10-03T07:00:00Z' }] })).toBeUndefined()
   })
 
   it('accepts the phone batches, and a re-post stores nothing twice', async () => {
@@ -123,6 +144,7 @@ describe('Apple Health through a real server', () => {
 
     const sleep = await executeOp('health_sleep', { last_nights: 3 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
     expect(sleep.ok, JSON.stringify(sleep)).toBe(true)
+    expect((sleep as any).result.message, 'no note once samples arrived').toBeUndefined()
     const nights = (sleep as any).result.nights as Array<Record<string, any>>
     const last = nights.find((n) => n.date === D1)!
     expect(last).toMatchObject({ status: 'ok', asleepMin: 470, awakeMin: 10 })

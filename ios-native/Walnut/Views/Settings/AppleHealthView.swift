@@ -129,7 +129,7 @@ struct AppleHealthView: View {
             }
             .accessibilityIdentifier("health.permissions")
         } footer: {
-            Text("To change what Walnut may read, open the Health app, tap your picture, then Apps, then Walnut.")
+            Text("To change what Walnut may read, go to Settings, then Privacy & Security, then Health, then Walnut.")
         }
     }
 

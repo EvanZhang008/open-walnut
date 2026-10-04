@@ -59,6 +59,51 @@ final class HealthSyncEngineTests: XCTestCase {
         XCTAssertEqual(last["deleted"] as? [String], ["old1"])
     }
 
+    // MARK: - Access turned on after Don't Allow
+
+    /// 2026-10-03: Don't Allow on Apple's sheet, runs while access was off, then
+    /// access turned on: the history recorded before must still go out.
+    func testHistoryReadWhileAccessWasOffGoesOutOnceAccessIsOn() async {
+        source.add("sleep", start: now.addingTimeInterval(-30 * 86_400), uuid: "old1")
+        source.add("sleep", start: now.addingTimeInterval(-1 * 86_400), uuid: "recent1")
+        source.add("steps", start: now.addingTimeInterval(-3 * 86_400))
+        source.deniedTypes = ["sleep", "steps"]
+        transport.status = FakeHealthTransport.status(held: ["sleep": nil, "steps": nil])
+        let catalog: [HealthTypeSpec] = [.testRaw("sleep"), .testBuckets("steps")]
+
+        let off = await engine(catalog).run(reason: "turned-on", budget: 60)
+        XCTAssertEqual(off, .synced)
+        XCTAssertTrue(transport.bodies.isEmpty, "nothing readable, nothing sent")
+        XCTAssertNotNil(state.read().anchors["sleep"], "HealthKit still handed out an anchor")
+
+        source.deniedTypes = []
+        await engine(catalog).run(reason: "active", budget: 60)
+        XCTAssertEqual(Set(transport.bodies(for: "sleep").flatMap(uuids)), ["old1", "recent1"])
+        XCTAssertFalse(transport.bodies(for: "steps").isEmpty, "the bucket type is recomputed too")
+    }
+
+    func testTypesTheMacHoldsKeepTheirAnchors() async {
+        source.add("sleep", start: now.addingTimeInterval(-2 * 86_400), uuid: "s1")
+        await engine([.testRaw("sleep")]).run(reason: "first", budget: 60)
+        let sent = transport.bodies(for: "sleep").count
+        XCTAssertGreaterThan(sent, 0)
+
+        transport.status = FakeHealthTransport.status(held: ["sleep": "2026-09-30T08:00:00Z"])
+        await engine([.testRaw("sleep")]).run(reason: "again", budget: 60)
+        XCTAssertEqual(transport.bodies(for: "sleep").count, sent, "nothing new, nothing sent again")
+    }
+
+    func testATypeTheMacLostIsReadFromTheBeginning() async {
+        source.add("sleep", start: now.addingTimeInterval(-40 * 86_400), uuid: "s1")
+        await engine([.testRaw("sleep")]).run(reason: "first", budget: 60)
+        let before = transport.bodies(for: "sleep").count
+
+        transport.status = FakeHealthTransport.status(held: ["sleep": nil])
+        await engine([.testRaw("sleep")]).run(reason: "again", budget: 60)
+        let again = transport.bodies(for: "sleep").dropFirst(before)
+        XCTAssertEqual(Set(again.flatMap(uuids)), ["s1"])
+    }
+
     // MARK: - The commit rule
 
     func testAnchorMovesOnlyAfterEveryPartIsStored() async {

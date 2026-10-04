@@ -1,56 +1,51 @@
 import HealthKit
 import UIKit
 
-/// When Walnut asks for Apple Health by itself. Pure, so the rules are tested.
+/// When Walnut asks for Apple Health. Pure, so the rules are tested.
 ///
-/// Nobody should have to find the switch: the app shows Apple's own permission
-/// sheet the first time it is open on a paired phone, and again whenever an agent
-/// reads health data in a conversation open on this phone while Apple Health is
-/// off here. The sheet is Apple's consent screen; Walnut never starts sending
-/// without it, or without a tap on its own Turn On.
+/// Only when it is needed: an agent starts reading health data in a conversation
+/// open on this phone. Never on app open: a sheet that comes up before the user
+/// asked anything reads as a demand and gets Don't Allow (2026-10-03), and iOS
+/// shows that sheet only once. What the phone shows depends on where access stands:
+/// Apple's sheet while it still has something to ask, a one-tap Turn On when sync
+/// is off here, a note with the way to the switch and a button to Settings when
+/// iOS gives Walnut nothing to read, and a sync right away when everything is on.
 enum HealthAccessDecision {
-    enum Trigger: String, Equatable { case appOpen, healthRead }
-    enum Action: String, Equatable { case nothing, syncNow, showSheet, offerTurnOn }
+    enum Action: String, Equatable { case nothing, syncNow, showSheet, offerTurnOn, showAccessOff }
 
     struct State: Equatable {
         /// HealthKit present, paired with a real Mac, not the demo.
         var available: Bool
         var enabled: Bool
-        /// Walnut showed the Health sheet before, by itself or from Turn On.
-        var offered: Bool
         /// Apple's sheet still has something to ask, so asking shows it.
         var sheetWillShow: Bool
+        /// HealthKit hands Walnut at least one sample.
+        var readable: Bool
         /// A turn-on, an ask or an offer is already under way.
         var busy: Bool
-        var lastOfferAt: Date?
+        /// No sheet or note before this (the user just answered one).
+        var quietUntil: Date?
         var lastNudgeAt: Date?
         var now: Date
     }
 
-    /// An offer the user turned down is not repeated sooner than this.
-    static let offerInterval: TimeInterval = 600
+    /// After a note the user turned down.
+    static let declinedQuiet: TimeInterval = 600
+    /// After Apple's sheet: the rest of that turn's health reads stay quiet.
+    static let afterSheetQuiet: TimeInterval = 120
     /// A run of health reads in one turn starts one sync, not one each.
     static let nudgeInterval: TimeInterval = 60
 
-    static func decide(_ trigger: Trigger, _ s: State) -> Action {
+    /// An agent started reading Apple Health in a conversation open on this phone.
+    static func decide(_ s: State) -> Action {
         guard s.available, !s.busy else { return .nothing }
-        if s.enabled {
-            // On already: a health read gets the Mac current now, not at the next wake-up.
-            guard trigger == .healthRead else { return .nothing }
+        if s.enabled && s.readable && !s.sheetWillShow {
             if let last = s.lastNudgeAt, s.now.timeIntervalSince(last) < nudgeInterval { return .nothing }
             return .syncNow
         }
-        switch trigger {
-        case .appOpen:
-            // Once, and only when Apple's sheet will really ask. A phone paired again
-            // after Disconnect (sheet answered long ago, maybe for another Mac)
-            // never starts sending on its own.
-            return !s.offered && s.sheetWillShow ? .showSheet : .nothing
-        case .healthRead:
-            if s.sheetWillShow { return .showSheet }
-            if let last = s.lastOfferAt, s.now.timeIntervalSince(last) < offerInterval { return .nothing }
-            return .offerTurnOn
-        }
+        if let quiet = s.quietUntil, s.now < quiet { return .nothing }
+        if s.sheetWillShow { return .showSheet }
+        return s.enabled ? .showAccessOff : .offerTurnOn
     }
 
     /// The Walnut ops that read Apple Health.
@@ -66,43 +61,39 @@ enum HealthAccessDecision {
     }
 }
 
-/// Carries out `HealthAccessDecision`: shows the sheet, the one-tap offer, and a
-/// short note once the Mac has the data.
+/// Carries out `HealthAccessDecision`: Apple's sheet, the one-tap notes, and a
+/// short line once the Mac has the data.
 @MainActor
 final class HealthAccessPrompt {
     static let shared = HealthAccessPrompt()
-    /// Erased with every other preference by Disconnect.
-    static let offeredKey = "walnut.health.offered"
-    /// After an activation, so the app is on screen and settled when the sheet comes up.
-    static let appOpenDelay: Duration = .milliseconds(1200)
-    /// How long the note after turning on waits for the Mac to have data.
+    /// How long the line after turning on waits for the Mac to have data.
     static let firstSyncWait: TimeInterval = 60
 
-    static var offered: Bool {
-        get { UserDefaults.standard.bool(forKey: offeredKey) }
-        set { UserDefaults.standard.set(newValue, forKey: offeredKey) }
-    }
-
     private var busy = false
-    private var lastOfferAt: Date?
+    private var quietUntil: Date?
     private var lastNudgeAt: Date?
-
-    /// From HealthBackground's activation observer.
-    func appBecameActive() {
-        guard !HealthBackground.isHostedUnitTestProcess else { return }
-        Task { @MainActor in
-            try? await Task.sleep(for: Self.appOpenDelay)
-            guard UIApplication.shared.applicationState == .active else { return }
-            await self.consider(.appOpen)
-        }
-    }
+    /// Set when the user went to Settings from the access note; their return
+    /// is when access may have changed.
+    private var awaitingReturn = false
 
     /// From both live streams (LiveStreamEvents): an agent started reading Apple
     /// Health in a conversation open on this phone.
     func healthReadStarted() {
         guard !HealthBackground.isHostedUnitTestProcess,
               UIApplication.shared.applicationState == .active else { return }
-        Task { @MainActor in await self.consider(.healthRead) }
+        Task { @MainActor in await self.consider() }
+    }
+
+    /// From HealthBackground's activation observer. Asks nothing: it only tells
+    /// the user when access they just turned on in Settings has reached the Mac.
+    func appBecameActive() {
+        guard awaitingReturn, !HealthBackground.isHostedUnitTestProcess else { return }
+        awaitingReturn = false
+        Task { @MainActor in
+            guard HealthSync.isEnabled, await HealthKitDataSource.shared.canReadAnySample() else { return }
+            AppLog.info("health", "access turned on in Settings")
+            await self.announceFirstSync(askAgain: true)
+        }
     }
 
     private var available: Bool {
@@ -110,23 +101,21 @@ final class HealthAccessPrompt {
             && AppConfig.serverURL != nil && !(AppConfig.token ?? "").isEmpty
     }
 
-    func consider(_ trigger: HealthAccessDecision.Trigger) async {
+    func consider() async {
         guard !busy, available else { return }
-        // Opening the app only ever asks once: skip the HealthKit lookup after that.
-        if trigger == .appOpen && (Self.offered || HealthSync.isEnabled) { return }
         busy = true
         defer { busy = false }
+        let source = HealthKitDataSource.shared
         let enabled = HealthSync.isEnabled
-        let sheetWillShow = enabled
-            ? false
-            : await HealthKitDataSource.shared.shouldRequestAuthorization(for: HealthTypeCatalog.all)
         let state = HealthAccessDecision.State(
-            available: true, enabled: enabled, offered: Self.offered, sheetWillShow: sheetWillShow,
-            busy: HealthSyncStore.shared.busy != nil, lastOfferAt: lastOfferAt, lastNudgeAt: lastNudgeAt, now: Date()
+            available: true, enabled: enabled,
+            sheetWillShow: await source.shouldRequestAuthorization(for: HealthTypeCatalog.all),
+            readable: await source.canReadAnySample(),
+            busy: HealthSyncStore.shared.busy != nil, quietUntil: quietUntil, lastNudgeAt: lastNudgeAt, now: Date()
         )
-        let action = HealthAccessDecision.decide(trigger, state)
+        let action = HealthAccessDecision.decide(state)
         guard action != .nothing else { return }
-        AppLog.info("health", "access prompt", ["trigger": trigger.rawValue, "action": action.rawValue])
+        AppLog.info("health", "access prompt", ["action": action.rawValue, "readable": String(state.readable)])
         switch action {
         case .nothing:
             return
@@ -134,17 +123,42 @@ final class HealthAccessPrompt {
             lastNudgeAt = Date()
             HealthBackground.shared.syncNow()
         case .showSheet:
-            await turnOn(trigger)
+            quietUntil = Date().addingTimeInterval(HealthAccessDecision.afterSheetQuiet)
+            await HealthSyncStore.shared.turnOn()
+            guard HealthSync.isEnabled else { return }
+            // Don't Allow on the sheet is an answer: say nothing more now. The
+            // next health question after the quiet spell shows the access note.
+            if await source.canReadAnySample() { await announceFirstSync(askAgain: true) }
         case .offerTurnOn:
-            lastOfferAt = Date()
-            if await confirmOffer() { await turnOn(trigger) }
+            guard await confirm(.turnOn) else {
+                quietUntil = Date().addingTimeInterval(HealthAccessDecision.declinedQuiet)
+                return
+            }
+            await HealthSyncStore.shared.turnOn()
+            guard HealthSync.isEnabled else { return }
+            if await source.canReadAnySample() {
+                await announceFirstSync(askAgain: true)
+            } else {
+                await showAccessOff()
+            }
+        case .showAccessOff:
+            await showAccessOff()
         }
     }
 
-    private func turnOn(_ trigger: HealthAccessDecision.Trigger) async {
-        await HealthSyncStore.shared.turnOn()
-        guard HealthSync.isEnabled else { return }
-        await announceFirstSync(askAgain: trigger == .healthRead)
+    /// iOS gives Walnut nothing to read, and it never shows its sheet twice: one
+    /// tap to Settings, and the note names the rest of the way (Privacy &
+    /// Security, Health, Walnut). Apple has no public link to that page, and on
+    /// a 2026-10 simulator the Health app's own Apps list stayed empty for Walnut.
+    private func showAccessOff() async {
+        guard await confirm(.accessOff) else {
+            quietUntil = Date().addingTimeInterval(HealthAccessDecision.declinedQuiet)
+            return
+        }
+        guard let settings = URL(string: UIApplication.openSettingsURLString) else { return }
+        awaitingReturn = true
+        AppLog.info("health", "opening Settings for access")
+        await UIApplication.shared.open(settings)
     }
 
     /// Say what happened once the Mac has data, or why it does not yet.
@@ -154,7 +168,7 @@ final class HealthAccessPrompt {
         while Date() < deadline {
             try? await Task.sleep(for: .seconds(4))
             await store.refresh()
-            if store.macDataFrom != nil {
+            if store.macHasSamples {
                 HealthToast.show(askAgain
                     ? "Apple Health is on. Your Mac has your recent health data now, so ask again."
                     : "Apple Health is on. Your Mac has your recent health data now.")
@@ -165,25 +179,36 @@ final class HealthAccessPrompt {
                 return
             }
         }
-        if store.progress.lastOutcome == .synced {
-            HealthToast.show("Walnut can't read any Apple Health data yet. To allow it, open the Health app, tap your picture, then Apps, then Walnut.")
-        }
     }
 
-    /// Apple's sheet was answered before, so it will not show again: one tap here.
-    private func confirmOffer() async -> Bool {
+    private enum Note { case turnOn, accessOff }
+
+    private func confirm(_ note: Note) async -> Bool {
         guard let top = HealthToast.topViewController() else { return false }
         return await withCheckedContinuation { done in
-            let alert = UIAlertController(
-                title: "Let Walnut Use Apple Health?",
-                message: "Your AI is asking about your health. Turn on Apple Health and Walnut keeps your Mac up to date with your sleep, heart, activity and the rest. It goes only to your Mac.",
-                preferredStyle: .alert
-            )
+            let alert: UIAlertController
+            let yes: UIAlertAction
+            switch note {
+            case .turnOn:
+                alert = UIAlertController(
+                    title: "Let Walnut Use Apple Health?",
+                    message: "Your AI is asking about your health. Turn on Apple Health and Walnut keeps your Mac up to date with your sleep, heart, activity and the rest. It goes only to your Mac.",
+                    preferredStyle: .alert
+                )
+                yes = UIAlertAction(title: "Turn On", style: .default) { _ in done.resume(returning: true) }
+                alert.view.accessibilityIdentifier = "health.offer"
+            case .accessOff:
+                alert = UIAlertController(
+                    title: "Walnut Can't Read Apple Health",
+                    message: "Your AI is asking about your health, but Apple Health access for Walnut is off, and iOS asks only once. In Settings, go to Privacy & Security, then Health, then Walnut, and tap Turn On All.",
+                    preferredStyle: .alert
+                )
+                yes = UIAlertAction(title: "Open Settings", style: .default) { _ in done.resume(returning: true) }
+                alert.view.accessibilityIdentifier = "health.access-off"
+            }
             alert.addAction(UIAlertAction(title: "Not Now", style: .cancel) { _ in done.resume(returning: false) })
-            let turnOn = UIAlertAction(title: "Turn On", style: .default) { _ in done.resume(returning: true) }
-            alert.addAction(turnOn)
-            alert.preferredAction = turnOn
-            alert.view.accessibilityIdentifier = "health.offer"
+            alert.addAction(yes)
+            alert.preferredAction = yes
             top.present(alert, animated: true)
         }
     }
@@ -207,6 +232,7 @@ enum HealthToast {
 
     static func show(_ text: String) {
         guard let window = keyWindow() else { return }
+        AppLog.info("health", "toast shown", ["text": text])
         let toast = UIView()
         toast.translatesAutoresizingMaskIntoConstraints = false
         toast.isUserInteractionEnabled = false

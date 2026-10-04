@@ -20,6 +20,9 @@ final class HealthSyncStore {
     private(set) var macPaused: Bool?
     /// The first local date the Mac has data for.
     private(set) var macDataFrom: Date?
+    /// The Mac holds samples, not only the characteristics (birth date, sex),
+    /// which iOS may hand out while every sample type stays unreadable.
+    private(set) var macHasSamples = false
     private(set) var macUnreachable = false
     private(set) var busy: Busy?
     private(set) var errorMessage: String?
@@ -67,6 +70,8 @@ final class HealthSyncStore {
             let status = try await transport.healthStatus(timeout: 30)
             macPaused = status.paused
             macDataFrom = status.coverage?.from.flatMap(Self.parseDay)
+            let characteristics = Set(HealthTypeCatalog.characteristicNames.map { "x.\($0)" })
+            macHasSamples = (status.types ?? []).contains { $0.lastSampleAt != nil && !characteristics.contains($0.type) }
             macUnreachable = false
         } catch {
             macUnreachable = HealthSyncEngine.outcome(for: error) == .macUnreachable
@@ -88,7 +93,6 @@ final class HealthSyncStore {
         }
         busy = .turningOn
         defer { busy = nil }
-        HealthAccessPrompt.offered = true
         if !isDemo {
             do {
                 try await HealthKitDataSource.shared.requestReadAuthorization(
@@ -161,7 +165,8 @@ final class HealthSyncStore {
     }
 
     /// Offer the read sheet again when an update added types nobody was asked
-    /// about; otherwise open the Health app, where access is changed.
+    /// about; otherwise open Settings, where Privacy & Security, Health, Walnut
+    /// holds the switches.
     func openHealthPermissions() async {
         if !isDemo, HKHealthStore.isHealthDataAvailable(),
            await HealthKitDataSource.shared.shouldRequestAuthorization(for: HealthTypeCatalog.all) {
@@ -169,10 +174,6 @@ final class HealthSyncStore {
                 for: HealthTypeCatalog.all, characteristics: true
             )
             return
-        }
-        if let health = URL(string: "x-apple-health://") {
-            let opened = await UIApplication.shared.open(health)
-            if opened { return }
         }
         if let settings = URL(string: UIApplication.openSettingsURLString) {
             await UIApplication.shared.open(settings)
@@ -185,6 +186,7 @@ final class HealthSyncStore {
         progress = HealthSyncProgress()
         macPaused = nil
         macDataFrom = nil
+        macHasSamples = false
         macUnreachable = false
         errorMessage = nil
     }

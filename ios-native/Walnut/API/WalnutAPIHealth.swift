@@ -37,6 +37,8 @@ struct HealthStatusResponse: Decodable, Sendable {
         let type: String
         let category: String?
         let enabled: Bool?
+        /// The newest sample the Mac holds; nil when it holds none of this type.
+        let lastSampleAt: String?
     }
 
     let connected: Bool?
