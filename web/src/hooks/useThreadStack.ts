@@ -19,7 +19,7 @@ import { usePanelKeyRouter } from '@/hooks/usePanelKeyRouter';
 import { ROOT_THREAD_KEY, fileOfParent, findSamePassageThread, type ThreadTree } from '@/utils/thread-tree';
 import { fallbackTitle } from '@/utils/thread-meta';
 import {
-  DRAFT_ROW_LABEL, composerDraftKey, escapeDecision, isPendingKey, pendingPageKey, planNavigation,
+  DRAFT_ROW_LABEL, composerDraftKey, escapeDecision, isPendingKey, pageLeave, pendingPageKey, planNavigation, readComposerDraft,
   stackPathOf, widthTier, type PageLanding,
 } from '@/utils/thread-stack-state';
 import {
@@ -131,6 +131,14 @@ function writeDraft(key: string, text: string) {
   } catch { /* private browsing */ }
 }
 
+interface LeaveOpts {
+  /** The open comment card's box: for a pending page, the Ask's words (the
+   *  composer probe cannot see them). Absent when no card is open. */
+  leftText?: string;
+  /** The words go with the reader to the main conversation's composer. */
+  carryToRoot?: boolean;
+}
+
 export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   const { sessionId, tree } = args;
   const [state, setState] = useState<StackState>(ROOT_STATE);
@@ -198,20 +206,31 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   /** Every navigation goes through here: plan, capture the page being left,
    *  keep or drop a pending page's draft, then swap the path. */
-  const navigate = useCallback((toPath: string[], via: ThreadNavVia, toPending?: ThreadPendingPage) => {
+  const navigate = useCallback((toPath: string[], via: ThreadNavVia, toPending?: ThreadPendingPage, opts?: LeaveOpts) => {
     const s = stateRef.current;
     const plan = planNavigation(s.path, toPath);
     if (plan.direction === 'none') return;
     // The reader moved before a waiting reload restore found its page: his move wins.
     restored.current = true;
     const a = argsRef.current;
-    const text = a.composer.text();
-    writeDraft(composerDraftKey(a.sessionId, plan.from, a.tree), text);
-    if (s.pending && plan.from === s.pending.pageKey) {
+    const leavingPending = !!s.pending && plan.from === s.pending.pageKey;
+    const rootKey = composerDraftKey(a.sessionId, ROOT_THREAD_KEY, a.tree);
+    const leave = pageLeave({
+      leavingPending,
+      leavingRoot: plan.from === ROOT_THREAD_KEY,
+      composerText: a.composer.text(),
+      ...(opts?.leftText !== undefined ? { cardText: opts.leftText } : {}),
+      ...(opts?.carryToRoot ? { carryToRoot: true, rootDraft: readComposerDraft(rootKey) } : { rootDraft: '' }),
+    });
+    writeDraft(composerDraftKey(a.sessionId, plan.from, a.tree), leave.fromDraft);
+    if (leave.rootDraft !== undefined) writeDraft(rootKey, leave.rootDraft);
+    if (leavingPending && s.pending) {
       const left = s.pending;
+      const keep = leave.keepPendingDraft;
       setDrafts((prev) => {
+        if (!keep && !prev.has(left.pageKey)) return prev;
         const next = new Map(prev);
-        if (text.trim()) next.set(left.pageKey, left); else next.delete(left.pageKey);
+        if (keep) next.set(left.pageKey, left); else next.delete(left.pageKey);
         return next;
       });
     }
@@ -235,20 +254,20 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     queueMicrotask(persist);
   }, [landings, markViewed, headOf, persist]);
 
-  const pushTo = useCallback((key: string, via: ThreadNavVia) => {
+  const pushTo = useCallback((key: string, via: ThreadNavVia, opts?: LeaveOpts) => {
     const draft = draftsRef.current.get(key);
     if (draft) {
-      navigate([...stackPathOf(argsRef.current.tree, draft.parentKey), draft.pageKey], via, draft);
+      navigate([...stackPathOf(argsRef.current.tree, draft.parentKey), draft.pageKey], via, draft, opts);
       return;
     }
     // The pending page is no tree node: its path is its parent's plus itself
     // (the tree would path an unknown key to Main and drop the page).
     const pending = stateRef.current.pending;
     if (pending && key === pending.pageKey) {
-      navigate([...stackPathOf(argsRef.current.tree, pending.parentKey), pending.pageKey], via, pending);
+      navigate([...stackPathOf(argsRef.current.tree, pending.parentKey), pending.pageKey], via, pending, opts);
       return;
     }
-    navigate(stackPathOf(argsRef.current.tree, key), via);
+    navigate(stackPathOf(argsRef.current.tree, key), via, undefined, opts);
   }, [navigate]);
 
   const popTo = useCallback((key: string, via: ThreadNavVia) => {
@@ -304,6 +323,18 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   }, [navigate]);
 
   const openDraft = useCallback((pageKey: string) => pushTo(pageKey, 'draft'), [pushTo]);
+
+  const leavePending = useCallback((cardText: string | undefined, via: ThreadNavVia) => {
+    const s = stateRef.current;
+    const p = s.pending;
+    if (!p || s.path[s.path.length - 1] !== p.pageKey) return false;
+    navigate(s.path.slice(0, -1), via, undefined, cardText !== undefined ? { leftText: cardText } : undefined);
+    return true;
+  }, [navigate]);
+
+  const replyInMain = useCallback((via: ThreadNavVia) => {
+    navigate([ROOT_THREAD_KEY], via, undefined, { carryToRoot: true });
+  }, [navigate]);
 
   /** The first send of a pending page: the page becomes the question in place
    *  (same scroll box, no animation), its draft row and draft text go away. */
@@ -463,8 +494,10 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     drafts: draftRows,
     draftPages,
     openDraft,
+    leavePending,
+    replyInMain,
     persist,
-  }), [state, leafKey, depth, pushTo, popTo, back, ask, landings, setCapture, draftRows, draftPages, openDraft, persist]);
+  }), [state, leafKey, depth, pushTo, popTo, back, ask, landings, setCapture, draftRows, draftPages, openDraft, leavePending, replyInMain, persist]);
 
   const bridge = useMemo<ThreadNavBridge>(() => ({
     currentKey: leafKey, depth, pushTo, popTo, popToVisibleAncestor,

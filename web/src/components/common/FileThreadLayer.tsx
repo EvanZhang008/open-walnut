@@ -77,15 +77,26 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
 
   const body = useCallback(() => bodyOf(rootRef.current, frameRef.current, argsRef.current.surface), [rootRef, frameRef]);
 
+  // Another file (or none) takes the view while an Ask about this one is open
+  // and unwritten: the card closes, which leaves nothing of it behind.
+  useEffect(() => () => {
+    const t = argsRef.current.threads;
+    const p = t.stack.pending;
+    if (p && fileOfParent(p.parentMsgId) === filePath && t.openCardKey === p.pageKey) t.requestCard(null, 'file-left');
+  }, [filePath]);
+
   // ── Marks on this file's asked passages (top document) ──
   const pending = threads.stack.pending;
-  const specs = useMemo(() => fileQuestionMarks(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending),
-    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending]);
+  const draftPages = threads.stack.draftPages;
+  // The Ask being written, then the drafts left with words (each a dashed mark).
+  const unsent = useMemo(() => (pending ? [pending, ...draftPages] : draftPages), [pending, draftPages]);
+  const specs = useMemo(() => fileQuestionMarks(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent),
+    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent]);
   // The rail's rows: the same questions, the open card (else the target) current.
   const railCurrent = threads.openCardKey ?? threads.currentThreadKey;
   const railRows = useMemo(
-    () => fileQuestionRows(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending, railCurrent, threads.unreadKeys),
-    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, pending, railCurrent, threads.unreadKeys],
+    () => fileQuestionRows(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, railCurrent, threads.unreadKeys),
+    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, railCurrent, threads.unreadKeys],
   );
   // Where the rail sits: under the view's toolbar, at the left edge. The toolbar
   // is sticky, so when the view's PARENT scrolls (the HTML preview is a plain
@@ -248,6 +259,11 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const set = argsRef.current.threads.setFileCardHost;
     if (!layer || !root) return;
     if (!openKey || !mine) {
+      // Closed: the next open of any card, the same one included (the rail, a
+      // mark, the sidebar), brings its passage on screen again. Kept per key,
+      // a reopen after the reader scrolled away docked the card at the edge
+      // over whatever was showing (2026-10-03).
+      if (!openKey) scrolledForRef.current = null;
       set({ path: filePath, el: layer, place: null });
       return;
     }

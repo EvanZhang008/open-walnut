@@ -60,7 +60,8 @@
 .thread-card-status { flex: none; }
 .thread-card-head-actions { display: inline-flex; align-items: center; gap: 2px; flex: none; margin-left: 2px; }
 .thread-card-head-actions .thread-stack-more { margin: 0; }
-.thread-card-close {
+.thread-card-close,
+.thread-card-expand {
   display: inline-grid;
   place-items: center;
   width: 22px;
@@ -71,8 +72,10 @@
   color: var(--fg-muted);
   cursor: pointer;
 }
-.thread-card-close:hover { background: var(--bg-tertiary); color: var(--fg); }
-.thread-card-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.thread-card-close:hover,
+.thread-card-expand:hover { background: var(--bg-tertiary); color: var(--fg); }
+.thread-card-close:focus-visible,
+.thread-card-expand:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 .thread-card-body {
   flex: 1 1 auto;
@@ -152,3 +155,49 @@
 }
 .thread-card-send:disabled { background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }
 .thread-card-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The composer's question chip (ComposerThreadPill): rides the task pill's
+   shape at the top of the composer box. */
+.chat-input-thread-pill .pill-verb {
+  flex: none;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.chat-input-thread-pill .pill-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-input-thread-pill .pill-target:hover { background: var(--bg-secondary); }
+.chat-input-thread-pill .thread-map-num { flex: none; }
+.chat-input-thread-pill[data-pending="true"] .pill-title { font-weight: 500; font-style: italic; }
+
+/* Expanded (ThreadCommentCard's ⤢): the card over its whole session panel. */
+.thread-card-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 20px 16px;
+  background: rgba(15, 18, 24, 0.28);
+  animation: thread-card-backdrop-in 120ms ease-out;
+}
+@keyframes thread-card-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .thread-card-backdrop { animation: none; } }
+.thread-card.is-expanded {
+  position: relative;
+  width: min(960px, 100%);
+  max-height: 100%;
+}
+.thread-card.is-expanded .thread-card-body { padding: 10px 18px 8px; }
+.thread-card-expand svg { width: 12px; height: 12px; }

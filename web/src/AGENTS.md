@@ -286,7 +286,22 @@ show inline after the open ones, other completed hits that show the query fold i
   `SessionChatHistory` (`cardOpen`); WHICH question is the stack's target, so a sidebar row, a turn
   label, a drawer row (`requestHeadJump`), a click on the marked passage and an Ask on a selection
   all open or swap it by moving the target, Esc / an outside click / the mode pill close it, and a
-  pending question promoted by its first send stays on screen. The card shows the question's turns
+  pending question promoted by its first send stays on screen. **An Ask nobody wrote leaves
+  nothing (2026-10-03):** every close (`closeCard` → `stack.leavePending(cardText)`; the frame's
+  outside press and the Files tab losing the file go through `requestCard(null)`) drops a pending
+  page with no words, so no draft row, no dashed mark, no rail entry and no target survive; words
+  typed in the card's own box (`onTextChange`, which the composer probe cannot see) or the composer
+  keep it a draft that reopens with them (`initialText`; the rule is `pageLeave` in
+  `utils/thread-stack-state.ts`). One exception: a press into the panel's composer closes the card
+  but keeps the Ask as the target, since the reader is writing it there, and appends the card's
+  words to the composer (`COMPOSER_INSERT_EVENT`, mode `append`). **The composer names its
+  target** (`ComposerThreadPill`, `threads.composerTarget`, Conversation Mode only): `Replying in
+  [n] title` or `Asking about title`, the title reopening the card and × (`stack.replyInMain`)
+  sending to the main conversation with the typed words carried into its draft. The user asked to
+  see and take back the choice the placeholder alone hid. **The card expands**: its ⤢ portals it
+  into `.session-panel` over a backdrop (inside the panel, so the panel's styles still reach the
+  turns; `.thread-card-backdrop` is exempt from the outside closer), Esc or the backdrop brings it
+  back, × closes. The card shows the question's turns
   (`cardTurnsOf`: the question without the quote block it was sent with, `questionBodyOf`, then the
   reply's prose rows with `suppressTools`), the optimistic row and the live text blocks of the turn
   being answered, and a composer that sends through `threadsApi.sendToTarget` (the same anchored
@@ -346,7 +361,11 @@ show inline after the open ones, other completed hits that show the query fold i
   file area just under the Preview/Source toolbar (`.fv-file-rail`, measured against
   `.fv-html-toolbar`), never inside the HTML iframe. Hover or focus opens "In this file"; a row
   calls `requestCard(key, 'file-rail')`. The user asked for it after not knowing what they had
-  asked in a document. The rail pitch is `MAP_RAIL_PITCH` = 10px (was 14: two marks read as two
+  asked in a document. Every open brings its passage on screen when it is off it: the once-per-key
+  guard (`scrolledForRef`) resets when the card closes, because kept per key a reopen after the
+  reader scrolled away docked the card at the bottom edge over unrelated content (a real long
+  explainer page, 2026-10-03; pinned by `cache-handbook.html` in the browser fixture). Drafts kept
+  with words show on the rail and the passage too (dashed). The rail pitch is `MAP_RAIL_PITCH` = 10px (was 14: two marks read as two
   unrelated dashes); `.thread-map-mark { height }` must match it.
   Ratchets: `tests/web/file-thread.test.ts`, `tests/e2e/browser/session-file-questions.spec.ts`.
 - **Side question vs Ask: two features, pick by context.** A side question (`SideQuestionDrawer`,

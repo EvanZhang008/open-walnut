@@ -44,6 +44,38 @@ export function composerDraftKey(sessionId: string, pageKey: string, tree: Threa
   return `${base}:${head || hashText(pageKey)}`;
 }
 
+/**
+ * What a navigation does with the words typed for the page it leaves. An Ask
+ * (a pending page) left with no words leaves nothing: no draft row, no mark,
+ * no stored text; only a sent question, or one with words typed for it, stays.
+ * An open card's own box (`cardText`, given only while the card is open) is the
+ * Ask's text for a pending page: the composer probe cannot see it, and a draft
+ * reopened into the card also sits in the composer's draft, stale once the card
+ * is edited. `carryToRoot` (the composer chip's ×) moves the words to
+ * the main conversation's draft, after any it already holds.
+ */
+export function pageLeave(a: {
+  leavingPending: boolean;
+  leavingRoot: boolean;
+  composerText: string;
+  cardText?: string;
+  carryToRoot?: boolean;
+  rootDraft: string;
+}): { fromDraft: string; rootDraft?: string; keepPendingDraft: boolean } {
+  const text = a.leavingPending && a.cardText !== undefined ? a.cardText : a.composerText;
+  if (a.carryToRoot && !a.leavingRoot) {
+    const rootDraft = !text.trim() ? a.rootDraft
+      : a.rootDraft.trim() ? `${a.rootDraft.trimEnd()}\n\n${text}` : text;
+    return { fromDraft: '', rootDraft, keepPendingDraft: false };
+  }
+  return { fromDraft: text, keepPendingDraft: a.leavingPending && !!text.trim() };
+}
+
+/** The text stored under a composer draft key ('' when none or no storage). */
+export function readComposerDraft(key: string): string {
+  try { return localStorage.getItem(key) ?? ''; } catch { return ''; }
+}
+
 /** Root..key as thread keys. A pending page sits on top of its parent's path.
  *  An unknown key resolves to the root alone (never an empty path). */
 export function stackPathOf(

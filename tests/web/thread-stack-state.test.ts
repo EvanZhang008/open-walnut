@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   composerDraftKey, deriveThreadStats, escapeDecision, hashText, isPendingKey, isStillClick, landingCorrection,
-  contextSide, needsFallbackJump, pendingPageKey, planNavigation, quoteHeadParts, samePath, sliverBarWidth,
+  contextSide, needsFallbackJump, pageLeave, pendingPageKey, planNavigation, quoteHeadParts, samePath, sliverBarWidth,
   sliverBars, stackPathOf, wordCount,
 } from '@/utils/thread-stack-state';
 import { ROOT_THREAD_KEY, buildThreadTree, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
@@ -290,5 +290,31 @@ describe('a finished turn is matched to the delivery that started it', () => {
     const { newTurnBook, trackTurn } = await load();
     const b = newTurnBook();
     expect(trackTurn(b, [], false, true)).toBeNull();
+  });
+});
+
+describe('pageLeave: what leaving a page keeps', () => {
+  const base = { leavingPending: true, leavingRoot: false, composerText: '', rootDraft: '' };
+  it('an Ask left with no words keeps nothing (no draft row, no stored text)', () => {
+    expect(pageLeave(base)).toEqual({ fromDraft: '', keepPendingDraft: false });
+    expect(pageLeave({ ...base, cardText: '   ' })).toEqual({ fromDraft: '   ', keepPendingDraft: false });
+    // A reopened draft emptied in the card goes, whatever its stale copy in the composer says.
+    expect(pageLeave({ ...base, cardText: '', composerText: 'old words' })).toEqual({ fromDraft: '', keepPendingDraft: false });
+  });
+  it('words typed in the card (while open) or the composer keep the Ask as a draft', () => {
+    expect(pageLeave({ ...base, cardText: 'why?' })).toEqual({ fromDraft: 'why?', keepPendingDraft: true });
+    expect(pageLeave({ ...base, composerText: 'how?' })).toEqual({ fromDraft: 'how?', keepPendingDraft: true });
+    expect(pageLeave({ ...base, cardText: 'why?', composerText: 'how?' }).fromDraft).toBe('why?');
+  });
+  it("the card's words count only for a pending page", () => {
+    expect(pageLeave({ ...base, leavingPending: false, cardText: 'why?', composerText: 'how?' }))
+      .toEqual({ fromDraft: 'how?', keepPendingDraft: false });
+  });
+  it('carryToRoot moves the words to the main draft after what it holds, and drops the Ask', () => {
+    expect(pageLeave({ ...base, composerText: 'how?', carryToRoot: true }))
+      .toEqual({ fromDraft: '', rootDraft: 'how?', keepPendingDraft: false });
+    expect(pageLeave({ ...base, leavingPending: false, composerText: 'how?', carryToRoot: true, rootDraft: 'earlier\n' }))
+      .toEqual({ fromDraft: '', rootDraft: 'earlier\n\nhow?', keepPendingDraft: false });
+    expect(pageLeave({ ...base, carryToRoot: true, rootDraft: 'earlier' }).rootDraft).toBe('earlier');
   });
 });

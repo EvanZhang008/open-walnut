@@ -29,9 +29,11 @@ const MD_PASSAGE = 'A late flush can hide an'
 const MD_PASSAGE_FULL = 'A late flush can hide an earlier update to the same slot'
 const MD_BLOCK = 'Orphaned ledger rows stay until the next compaction'
 const HTML_PASSAGE = 'The p99 rose to 180 ms on Thursday'
+const LONG_FILE = 'cache-handbook.html'
+const LONG_PASSAGE = 'The tie rule reads slot numbers only'
 
 async function shot(page: Page, name: string): Promise<void> {
-  const dir = `/tmp/one-sidebar/e2e/${test.info().project.name}`
+  const dir = `/tmp/thread-choices/e2e/${test.info().project.name}`
   await fs.mkdir(dir, { recursive: true })
   await page.screenshot({ path: `${dir}/${name}.png` })
 }
@@ -59,6 +61,25 @@ async function openFile(page: Page, panel: Locator, name: string): Promise<Locat
 
 const fileCard = (view: Locator) => view.locator('.fv-thread-layer .thread-card')
 const fileRail = (view: Locator) => view.locator('[data-testid="file-question-rail"]')
+
+/** Viewport rects of `needle` inside the view's HTML frame (top-document coordinates). */
+async function frameTextRects(view: Locator, needle: string) {
+  const frameBox = (await view.locator('.fv-html-preview').boundingBox())!
+  const rects = await view.frameLocator('.fv-html-preview').locator('body').evaluate((el, phrase) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const at = (n as Text).data.indexOf(phrase)
+      if (at === -1) continue
+      const r = document.createRange()
+      r.setStart(n, at)
+      r.setEnd(n, at + phrase.length)
+      return Array.from(r.getClientRects()).map((b) => ({ left: b.left, right: b.right, top: b.top, height: b.height }))
+    }
+    return null
+  }, needle)
+  expect(rects, `"${needle}" is not in the frame`).not.toBeNull()
+  return rects!.map((b) => ({ ...b, left: b.left + frameBox.x, right: b.right + frameBox.x, top: b.top + frameBox.y }))
+}
 
 /** Viewport rects of `needle` inside `root` (the top document). */
 async function textRects(root: Locator, needle: string) {
@@ -348,5 +369,92 @@ test.describe('Questions about a file passage (Files tab)', () => {
     expect(opaque.opacity).toBe('1')
     expect(opaque.bg).not.toMatch(/rgba\(\d+, \d+, \d+, 0\)|transparent/)
     await shot(page, 'file-q-html')
+  })
+
+  test('an Ask here closed with nothing written leaves no card, no mark and no rail', async ({ page }) => {
+    const panel = await openSession(page)
+    const view = await openFile(page, panel, MD_FILE)
+    const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
+    await expect(editor).toContainText(MD_PASSAGE_FULL)
+    await expect(view.locator('.fv-thread-layer')).toHaveCount(1)
+    await expect(fileRail(view)).toHaveCount(0)
+    const askOnce = async () => {
+      const askHere = page.locator('[data-testid="bubble-ask-here"]')
+      // Measured on each try: a banner from the previous test's turn can move the
+      // panel between the measure and the drag (seen once at load ~15).
+      await expect(async () => {
+        await dragSelect(page, await textRects(editor, MD_PASSAGE_FULL))
+        await expect(askHere).toBeVisible({ timeout: 3_000 })
+      }).toPass({ timeout: 30_000 })
+      await askHere.dispatchEvent('mousedown')
+      await expect(fileCard(view)).toHaveAttribute('data-draft', 'true')
+      await expect(fileRail(view).locator('.thread-map-mark[data-kind="pending"]')).toHaveCount(1)
+    }
+    const nothingLeft = async () => {
+      await expect(fileCard(view)).toHaveCount(0)
+      await expect(fileRail(view)).toHaveCount(0)
+      await expect(panel.locator('.thread-map .thread-map-row[data-kind="draft"], .thread-map .thread-map-row[data-kind="pending"]')).toHaveCount(0)
+      await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
+    }
+    await askOnce()
+    await fileCard(view).locator('.thread-card-input').press('Escape')
+    await nothingLeft()
+    await askOnce()
+    await fileCard(view).locator('.thread-card-close').click()
+    await nothingLeft()
+    // Another file takes the view while the Ask is open: it goes too.
+    await askOnce()
+    await openFile(page, panel, HTML_FILE)
+    await expect(view.frameLocator('.fv-html-preview').locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
+    await nothingLeft()
+  })
+
+  test('a long HTML page: a question reopened from the rail after scrolling away brings its passage back, card beside it', async ({ page }) => {
+    const panel = await openSession(page)
+    const view = await openFile(page, panel, LONG_FILE)
+    const frame = view.frameLocator('.fv-html-preview')
+    await expect(frame.locator('body')).toContainText(LONG_PASSAGE, { timeout: 15_000 })
+    await frame.locator('body').evaluate((el, phrase) => {
+      Array.from(el.querySelectorAll('td')).find((t) => t.textContent === phrase)!.scrollIntoView({ block: 'center' })
+    }, LONG_PASSAGE)
+    await page.waitForTimeout(300)
+    await dragSelect(page, await frameTextRects(view, LONG_PASSAGE))
+    await page.locator('[data-testid="file-ask-here"]').click()
+    const card = fileCard(view)
+    await card.locator('.thread-card-input').fill('Which slot wins?')
+    await card.locator('.thread-card-input').press('Enter')
+    await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).toHaveCount(0)
+    // Away to the top of the page, then the rail's row.
+    await frame.locator('body').evaluate(() => window.scrollTo(0, 0))
+    await page.waitForTimeout(300)
+    const vb = (await view.boundingBox())!
+    expect((await frameTextRects(view, LONG_PASSAGE))[0].top, 'scrolled away').toBeGreaterThan(vb.y + vb.height)
+    const rail = fileRail(view)
+    await rail.locator('.thread-map-rail').hover()
+    await rail.locator('.thread-map-overlay .thread-map-row').click()
+    await expect(card).toBeVisible()
+    // The passage is on screen again and the card sits just below it, not
+    // docked at an edge over whatever was showing.
+    const onScreen = async () => {
+      const box = (await view.boundingBox())!
+      const q = (await frameTextRects(view, LONG_PASSAGE))[0]
+      return q.top > box.y && q.top + q.height < box.y + box.height
+    }
+    await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
+    await page.waitForTimeout(300)
+    const p = (await frameTextRects(view, LONG_PASSAGE)).at(-1)!
+    const cb = (await card.boundingBox())!
+    expect(cb.y).toBeGreaterThanOrEqual(p.top + p.height - 1)
+    expect(cb.y - (p.top + p.height)).toBeLessThan(40)
+    await shot(page, 'file-q-long-reopen')
+    // Twice in a row: the same question, after scrolling away again.
+    await card.locator('.thread-card-input').press('Escape')
+    await frame.locator('body').evaluate(() => window.scrollTo(0, 0))
+    await page.waitForTimeout(300)
+    await rail.locator('.thread-map-rail').hover()
+    await rail.locator('.thread-map-overlay .thread-map-row').click()
+    await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
   })
 })

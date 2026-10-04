@@ -115,6 +115,15 @@ describe('fileQuestionRows (the rail)', () => {
     expect(rows.map((r) => [r.kind, r.current])).toEqual([['thread', false], ['pending', true]]);
     expect(rows[1]).toMatchObject({ key: draft.pageKey, title: 'New question', status: 'pending' });
   });
+  it('lists every unsent Ask about this file: the one being written and the drafts kept with words', () => {
+    const writing = { pageKey: 'pending:file:/d/cache.md:a', parentMsgId: 'file:/d/cache.md', quote: { exact: 'one' }, title: 'One' };
+    const kept = { pageKey: 'pending:file:/d/cache.md:b', parentMsgId: 'file:/d/cache.md', quote: { exact: 'two' }, title: 'Two' };
+    const elsewhere = { pageKey: 'pending:file:/d/other.md:c', parentMsgId: 'file:/d/other.md', quote: { exact: 'three' }, title: 'Three' };
+    const rows = fileQuestionRows(tree, new Set(), new Map(), '/d/cache.md', [writing, kept, elsewhere], writing.pageKey, new Set());
+    expect(rows.filter((r) => r.kind === 'pending').map((r) => [r.title, r.current])).toEqual([['One', true], ['Two', false]]);
+    expect(fileQuestionMarks(tree, new Set(), new Map(), '/d/cache.md', [writing, kept, elsewhere]).filter((m) => m.key.startsWith('pending:')).map((m) => m.title))
+      .toEqual(['One', 'Two']);
+  });
   it('is empty for a file nobody asked about', () => {
     expect(fileQuestionRows(tree, new Set(), new Map(), '/d/none.md', null, null, new Set())).toEqual([]);
   });

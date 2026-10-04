@@ -21,17 +21,25 @@ import { quoteFromRange, type QuoteTextIndex, type TextQuote } from '@/utils/tex
 /** The draft question's place, when one is being written (ThreadPendingPage). */
 export type PendingFileMark = Pick<ThreadPendingPage, 'pageKey' | 'parentMsgId' | 'quote' | 'title'>;
 
+/** Asks not sent yet: the one being written and the drafts left with words. */
+type PendingMarks = PendingFileMark | ReadonlyArray<PendingFileMark> | null | undefined;
+function pendingList(p: PendingMarks): ReadonlyArray<PendingFileMark> {
+  if (!p) return [];
+  return Array.isArray(p) ? p : [p as PendingFileMark];
+}
+
 /** The questions about passages of `path`, as marks (one neutral grey style),
  *  the draft being written about one included: its selection is gone once the
  *  card opens, so the mark is what says which passage it is about. */
 export function fileQuestionMarks(
-  tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, path: string, pending?: PendingFileMark | null,
+  tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, path: string, pending?: PendingMarks,
 ): PassageMarkSpec[] {
   const out: PassageMarkSpec[] = [];
-  if (pending?.quote?.exact && fileOfParent(pending.parentMsgId) === path && !tree.byKey.has(pending.pageKey)) {
+  for (const p of pendingList(pending)) {
+    if (!p.quote?.exact || fileOfParent(p.parentMsgId) !== path || tree.byKey.has(p.pageKey)) continue;
     out.push({
-      key: pending.pageKey, headId: pending.pageKey, parentMsgId: pending.parentMsgId,
-      quote: pending.quote, hue: 0, resolved: false, title: pending.title, neutral: true,
+      key: p.pageKey, headId: p.pageKey, parentMsgId: p.parentMsgId,
+      quote: p.quote, hue: 0, resolved: false, title: p.title, neutral: true,
     });
   }
   for (const node of tree.threads) {
@@ -72,7 +80,7 @@ export interface FileRailRow {
  */
 export function fileQuestionRows(
   tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, path: string,
-  pending: PendingFileMark | null | undefined, currentKey: string | null, unreadKeys: ReadonlySet<string>,
+  pending: PendingMarks, currentKey: string | null, unreadKeys: ReadonlySet<string>,
 ): FileRailRow[] {
   const numbers = questionNumbers(tree, index);
   const out: FileRailRow[] = [];
@@ -85,10 +93,11 @@ export function fileQuestionRows(
       status: statusOf(node, index), current: node.key === currentKey, unread: unreadKeys.has(node.key),
     });
   }
-  if (pending && fileOfParent(pending.parentMsgId) === path && !tree.byKey.has(pending.pageKey)) {
+  for (const p of pendingList(pending)) {
+    if (fileOfParent(p.parentMsgId) !== path || tree.byKey.has(p.pageKey)) continue;
     out.push({
-      key: pending.pageKey, kind: 'pending', title: pending.title, naming: false, status: 'pending',
-      current: pending.pageKey === currentKey, unread: false,
+      key: p.pageKey, kind: 'pending', title: p.title, naming: false, status: 'pending',
+      current: p.pageKey === currentKey, unread: false,
     });
   }
   return out;

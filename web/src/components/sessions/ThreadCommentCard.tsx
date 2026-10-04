@@ -9,9 +9,16 @@
  * Placement is the owner's (SessionChatHistory measures the passage); this file
  * is the card's shape and behaviour. Esc closes it; the number, title and
  * status word are the same ones the sidebar and the turn label show.
+ *
+ * Expand (the header's ⤢) lifts the card over its whole session panel for a
+ * long answer: portalled into `.session-panel` (inside it, so the panel's own
+ * styles still reach the turns) over a dimmed backdrop. Esc or a press on the
+ * backdrop brings it back beside its passage; × still closes it.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
+import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import '@/styles/thread-card.css';
@@ -42,6 +49,10 @@ export interface ThreadCommentCardProps {
   menu?: ReactNode;
   onSend: (text: string) => Promise<boolean> | boolean;
   onClose: () => void;
+  /** What the box opens with for a draft (words kept from an earlier visit). */
+  initialText?: string;
+  /** Every change of the box's text (the owner keeps an unsent Ask's words). */
+  onTextChange?: (text: string) => void;
   /** Where the card sits (content coordinates of its layer) and how tall it may grow. */
   style: { top: number; left: number; width: number; maxHeight: number };
 }
@@ -52,15 +63,40 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const initialRef = useRef(p.initialText);
+  initialRef.current = p.initialText;
+  const [expanded, setExpanded] = useState(false);
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
 
   // A new question (or a draft) opens with the composer ready; the body starts
   // at its newest turn, where the answer is.
   useEffect(() => {
-    setText('');
+    setText(p.draft ? initialRef.current ?? '' : '');
+    setExpanded(false);
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
     if (p.draft || p.canAsk) boxRef.current?.focus({ preventScroll: true });
   }, [p.threadKey, p.draft, p.canAsk]);
+
+  const onTextChange = p.onTextChange;
+  useEffect(() => { onTextChange?.(text); }, [text, onTextChange]);
+
+  const toggleExpanded = useCallback(() => {
+    if (expanded) { setExpanded(false); return; }
+    const panel = cardRef.current?.closest<HTMLElement>('.session-panel') ?? null;
+    if (!panel) return;
+    setPanelEl(panel);
+    setExpanded(true);
+  }, [expanded]);
+  // The card moves between its place and the panel (a new element): the box
+  // keeps the keyboard, and the body starts at the newest turn again.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    const body = bodyRef.current;
+    if (body) body.scrollTop = body.scrollHeight;
+    if (p.canAsk) boxRef.current?.focus({ preventScroll: true });
+  }, [expanded, p.canAsk]);
 
   // Placed below a passage near the bottom of the box, the card would hang
   // under the fold: the smallest scroll that shows it whole (none when it is).
@@ -102,28 +138,31 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     }
   }, [text, sending, p]);
 
+  const onEscape = () => { if (expanded) setExpanded(false); else p.onClose(); };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); p.onClose(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); return; }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void send();
     }
   };
   const onCardKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); p.onClose(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); }
   };
 
   const placeholder = p.draft ? CARD_ASK_PLACEHOLDER : cardFollowUpPlaceholder(p.title);
-  return (
+  const lifted = expanded && !!panelEl;
+  const card = (
     <div
       ref={cardRef}
-      className="thread-card"
+      className={`thread-card${lifted ? ' is-expanded' : ''}`}
       role="dialog"
       aria-label={p.draft ? 'New question' : `Question ${p.number ?? ''}: ${p.title}`.trim()}
       data-thread-key={p.threadKey}
       data-draft={p.draft ? 'true' : undefined}
       data-answering={p.answering ? 'true' : undefined}
-      style={{ top: p.style.top, left: p.style.left, width: p.style.width, ['--thread-card-maxh' as string]: `${p.style.maxHeight}px` }}
+      data-expanded={lifted ? 'true' : undefined}
+      style={lifted ? undefined : { top: p.style.top, left: p.style.left, width: p.style.width, ['--thread-card-maxh' as string]: `${p.style.maxHeight}px` }}
       onKeyDown={onCardKeyDown}
     >
       <div className="thread-card-head">
@@ -139,6 +178,16 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         {!p.draft && <ThreadStatusWord status={p.status} unread={p.unread} className="thread-card-status" />}
         <span className="thread-card-head-actions">
           {p.menu}
+          <button
+            type="button"
+            className="thread-card-expand"
+            aria-label={lifted ? 'Back beside the passage' : 'Expand'}
+            aria-pressed={lifted}
+            title={lifted ? 'Back beside the passage (Esc)' : 'Expand over the panel'}
+            onClick={toggleExpanded}
+          >
+            {lifted ? ICON_COLLAPSE : ICON_EXPAND}
+          </button>
           <button type="button" className="thread-card-close" aria-label="Close" title="Close (Esc)" onClick={p.onClose}>
             <ThreadCloseIcon size={12} />
           </button>
@@ -179,5 +228,16 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         </button>
       </div>
     </div>
+  );
+  if (!lifted) return card;
+  return createPortal(
+    <div
+      className="thread-card-backdrop"
+      data-testid="thread-card-backdrop"
+      onPointerDown={(e) => { if (e.target === e.currentTarget) setExpanded(false); }}
+    >
+      {card}
+    </div>,
+    panelEl,
   );
 });

@@ -53,7 +53,7 @@ import type { TreeRow } from '@/utils/thread-tree-rows';
 import { pageRowsBefore, pageWindowLimit } from '@/utils/thread-page-window';
 import { deriveThreadLiveStates, displayTitleOf, metaOf, viewStatusOf } from '@/utils/thread-meta';
 import {
-  MAIN_TITLE, askedFromGroups, blockPageKey, deliveryEntries, deriveThreadStats, markSpecsFor, newTurnBook,
+  MAIN_TITLE, askedFromGroups, blockPageKey, composerDraftKey, deliveryEntries, readComposerDraft, deriveThreadStats, markSpecsFor, newTurnBook,
   recordTurnSegments, sliverBars, trackTurn, type AskedFromRow, type MarkSpec, type StreamTurnSegment, type TurnBook,
 } from '@/utils/thread-stack-state';
 import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
@@ -71,6 +71,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { useSelectionScrollGuard, useSelectionFrozenWith, useSelectionAnchoredScroll } from '@/utils/selection-guard';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
+import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -1245,7 +1246,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardKey = threadsApi.viewMode === 'linear' && cardOpen && threadsApi.currentThreadKey !== ROOT_THREAD_KEY
     ? threadsApi.currentThreadKey : null;
   useEffect(() => { setCardOpen(false); }, [sessionId, threadsApi.viewMode]);
-  const closeCard = useCallback(() => setCardOpen(false), []);
+  /** What the open card's own box holds (the stack's composer probe sees only
+   *  the panel composer). */
+  const cardTextRef = useRef('');
+  const onCardText = useCallback((text: string) => { cardTextRef.current = text; }, []);
+  const cardKeyRef = useRef(cardKey);
+  cardKeyRef.current = cardKey;
+  /** The open card's words for a navigation away (none when no card is open,
+   *  so the composer's own words decide). */
+  const cardLeave = useCallback((): { leftText: string } | undefined => (cardKeyRef.current ? { leftText: cardTextRef.current } : undefined), []);
+  const leavePending = stack.leavePending;
+  /** The card closes; an Ask on it that was never written goes with it (only a
+   *  sent question, or one with words typed for it, is kept). */
+  const closeCard = useCallback((via: string = 'card-close') => {
+    setCardOpen(false);
+    const leave = cardLeave();
+    cardTextRef.current = '';
+    leavePending(leave?.leftText, via);
+  }, [leavePending, cardLeave]);
   // Published: the Files tab measures the passage of a FILE question's card.
   const publishOpenCardKey = threadsApi.publishOpenCardKey;
   useEffect(() => { publishOpenCardKey(cardKey); }, [cardKey, publishOpenCardKey]);
@@ -2857,7 +2875,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    */
   const openCard = useCallback((key: string, via: string) => {
     if (threadsApi.viewMode !== 'linear') { stack.pushTo(key, via); return; }
-    if (key !== stack.currentKey) stack.pushTo(key, via);
+    if (key !== stack.currentKey) stack.pushTo(key, via, cardLeave());
     setCardOpen(true);
     // A FILE question's card lives in the Files tab beside its passage: open
     // that file there when it is not the one on show; the timeline stays put.
@@ -2875,7 +2893,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const r = range?.getBoundingClientRect();
     const onScreen = !!r && (r.width || r.height) && r.top >= box.top && r.bottom <= box.bottom - 40;
     if (!onScreen) jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false });
-  }, [threadsApi.viewMode, threadsApi.fileCardHost?.path, stack, passageOf, filePlaceOf, onFileOpen, quotePaint, jumpToPlace, sessionId]);
+  }, [threadsApi.viewMode, threadsApi.fileCardHost?.path, stack, passageOf, filePlaceOf, onFileOpen, quotePaint, jumpToPlace, sessionId, cardLeave]);
 
   // The Files tab (a mark in a file, Ask here on a selection) and the sidebar
   // ask for a card through the threads api; the timeline owns it. Once per request.
@@ -2884,7 +2902,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEffect(() => {
     if (!cardRequest || cardRequest.seq === cardRequestSeenRef.current) return;
     cardRequestSeenRef.current = cardRequest.seq;
-    if (cardRequest.key === null) { setCardOpen(false); return; }
+    if (cardRequest.key === null) { closeCard(cardRequest.via); return; }
     openCard(cardRequest.key, cardRequest.via);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
   }, [cardRequest?.seq]);
@@ -2907,7 +2925,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         // Conversation Mode: the row is the composer's target, and its card
         // opens beside the passage. Tree Mode: its page.
         if (convMode) {
-          if (row.kind === 'root') { if (!row.current) stack.pushTo(row.key, 'map'); closeCard(); return; }
+          if (row.kind === 'root') { if (!row.current) stack.pushTo(row.key, 'map', cardLeave()); closeCard(); return; }
           openCard(row.key, 'map');
           return;
         }
@@ -2916,7 +2934,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         return;
       default:
     }
-  }, [handleTocJump, stack, convMode, openCard, closeCard]);
+  }, [handleTocJump, stack, convMode, openCard, closeCard, cardLeave]);
   const openMapList = useCallback(() => threadsApi.openDrawer(), [threadsApi]);
   const markDoneFromRow = useCallback((key: string) => { void threadsApi.actions?.done(key); }, [threadsApi.actions]);
   const notYetFromRow = useCallback((key: string) => { void threadsApi.actions?.notYet(key); }, [threadsApi.actions]);
@@ -3124,16 +3142,31 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A click outside the card (and outside the controls that open one) closes it.
   useEffect(() => {
     if (!cardKey) return;
-    const exempt = '.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill';
+    const exempt = '.thread-card, .thread-card-backdrop, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill';
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       if (!t || t.closest(exempt)) return;
-      setCardOpen(false);
+      // Into the panel's composer: the question is written there now (its chip
+      // names it, and its × lets go), so an Ask not sent yet stays the target,
+      // and the words typed in the card come along into the composer.
+      if (t.closest('.session-panel-input')) {
+        const words = cardTextRef.current;
+        setCardOpen(false);
+        cardTextRef.current = '';
+        if (words.trim()) {
+          const detail: ComposerInsertDetail = { sessionId, text: words, mode: 'append', handled: false };
+          window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail }));
+        }
+        return;
+      }
+      closeCard('outside');
     };
     document.addEventListener('pointerdown', onDown, true);
     return () => document.removeEventListener('pointerdown', onDown, true);
-  }, [cardKey]);
+  }, [cardKey, closeCard, sessionId]);
   const cardTurns = useMemo(() => cardTurnsOf(messages, cardNode), [messages, cardNode]);
+  // A draft (an Ask left with words) opens with them in the card's box again.
+  const cardInitialText = cardPending && !cardNode ? readComposerDraft(composerDraftKey(sessionId, cardPending.pageKey, threadTree)) : '';
   const cardStatus = cardNode ? viewStatusOf(cardNode, threadsApi.metaIndex, threadDerived.live) : undefined;
   const cardTitle = cardKey ? displayTitleOf(cardNode, threadsApi.metaIndex) : undefined;
   const cardBody = cardKey ? (
@@ -3324,6 +3357,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 answering={threadDerived.answering.has(cardKey)}
                 canAsk={threadsApi.canAsk}
                 menu={cardMenu}
+                initialText={cardInitialText}
+                onTextChange={onCardText}
                 onSend={sendFromCard}
                 onClose={closeCard}
                 style={cardPlace}
@@ -3347,6 +3382,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             answering={threadDerived.answering.has(cardKey)}
             canAsk={threadsApi.canAsk}
             menu={cardMenu}
+            initialText={cardInitialText}
+            onTextChange={onCardText}
             onSend={sendFromCard}
             onClose={closeCard}
             style={cardFileHost.place}

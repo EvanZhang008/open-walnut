@@ -32,7 +32,9 @@ export interface ThreadStackApi {
   depth: number;
   pending?: ThreadPendingPage;
   nav: ThreadStackNav | null;
-  pushTo: (key: string, via: ThreadNavVia) => void;
+  /** `leftText`: words typed for the page being left where the composer probe
+   *  cannot see them (the comment card's box); a pending page keeps them as a draft. */
+  pushTo: (key: string, via: ThreadNavVia, opts?: { leftText?: string }) => void;
   popTo: (key: string, via: ThreadNavVia) => void;
   /** One level up (the back button, Esc). */
   back: (via: ThreadNavVia) => void;
@@ -52,6 +54,14 @@ export interface ThreadStackApi {
   draftPages: ThreadPendingPage[];
   /** Open a draft row's pending page again. */
   openDraft: (pageKey: string) => void;
+  /** The comment card of a pending page closed: leave the page. It stays a draft
+   *  only when words were typed for it (`cardText`: the open card's box, else the
+   *  composer's); an Ask that was never written leaves nothing behind. False when
+   *  the page on screen is not a pending one. */
+  leavePending: (cardText: string | undefined, via: ThreadNavVia) => boolean;
+  /** The composer stops replying in the question: back to the main conversation,
+   *  carrying what was typed into its composer (a pending page is dropped). */
+  replyInMain: (via: ThreadNavVia) => void;
   /** Write the stack (path, landings, last viewed) to sessionStorage now. */
   persist: () => void;
 }
@@ -188,6 +198,8 @@ export const NO_STACK: ThreadStackApi = {
   samePassageKey: null,
   drafts: [],
   draftPages: [],
+  leavePending: () => false,
+  replyInMain: NOOP,
   openDraft: NOOP,
   persist: NOOP,
 };

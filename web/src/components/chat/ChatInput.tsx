@@ -148,6 +148,9 @@ interface ChatInputProps {
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
+  /** A removable chip at the top of the box saying where the send goes (the
+   *  session's question target). The owner renders it, × included. */
+  contextPill?: React.ReactNode;
   /** Mounted session controls that the add menu activates without copying state. */
   addMenuControls?: {
     handleRef: RefObject<ComposerControlsBarHandle | null>;
@@ -206,7 +209,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1409,6 +1412,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           spacer · mic · send. Mic stays next to send. */}
       <div className="chat-input-row">
         <div className="chat-input-box" data-mic-bubble-anchor="">
+          {contextPill}
           {/* Inline task context pill */}
           {focusedTask && onClearFocus && (
             <div className={`chat-input-task-pill${focusedTask.unread ? ' pill-unread' : ''}`}>

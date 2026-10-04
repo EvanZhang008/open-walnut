@@ -90,6 +90,7 @@ import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord, useSessionStatus } from '@/hooks/useSessionStatus';
+import { ComposerThreadPill } from './ComposerThreadPill';
 import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -743,6 +744,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   });
   const threadsApi = threads.api;
   const threadTree = threadsApi.tree;
+  const openComposerTarget = useCallback((key: string) => threadsApi.requestCard(key, 'composer-chip'), [threadsApi]);
+  const replyInMain = threads.stack.api.replyInMain;
+  const clearComposerTarget = useCallback(() => {
+    threadsApi.requestCard(null, 'composer-chip');
+    replyInMain('composer-chip');
+    focusComposerKeep();
+  }, [threadsApi, replyInMain, focusComposerKeep]);
 
   /**
    * Dictated text is about to take focus in the composer, which collapses the page's
@@ -2484,6 +2492,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
             ) : undefined}
             addMenuControls={{ handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
+            contextPill={threads.composerTarget ? (
+              <ComposerThreadPill target={threads.composerTarget} onOpen={openComposerTarget} onClear={clearComposerTarget} />
+            ) : undefined}
             onSend={handleSend}
             onInterruptSend={handleInterruptSend}
             onStop={handleStopTurn}

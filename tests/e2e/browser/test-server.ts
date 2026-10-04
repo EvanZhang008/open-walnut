@@ -1573,6 +1573,28 @@ which confirms that skipping copies older than the index is enough on its own.</
 </body></html>
 `
 await fs.writeFile(path.join(vscodeFixtureRoot, 'cache-report.html'), FILE_QUESTION_HTML)
+// A LONG explainer page (session-file-questions.spec.ts): a fixed table of contents
+// and a fixed button at the top left, a dozen sections of tables and code, and the
+// asked cell far down. Shaped after a real one where reopening a question from the
+// file's rail left the page where it was and docked the card at the bottom edge.
+const handbookSections = Array.from({ length: 12 }, (_, i) => {
+  const rows = Array.from({ length: 8 }, (_, r) => `<tr><td>slot ${i * 8 + r}</td><td>${(r + 3) * 7} ms</td><td>owner ${String.fromCharCode(97 + r)}</td></tr>`).join('')
+  const code = Array.from({ length: 14 }, (_, l) => `<span class="line"><span class="ln">${i * 14 + l + 1}</span>  "slot-${i}-${l}": { "mode": "${l % 3 ? 'shadow' : 'owned'}" },</span>`).join('')
+  const target = i === 8 ? '<table><tr><th>stage</th><th>rows</th></tr><tr><td>The tie rule reads slot numbers only</td><td>1, owned</td></tr></table>' : ''
+  return `<section id="s${i}"><h2>${i}. Section ${i}</h2><p>Section ${i} explains one more part of the cache in a few plain sentences, so the page reads like a long report.</p>`
+    + `<table><tr><th>slot</th><th>p99</th><th>owner</th></tr>${rows}</table>${target}<pre class="codeblk">${code}</pre></section>`
+}).join('\n')
+await fs.writeFile(path.join(vscodeFixtureRoot, 'cache-handbook.html'), `<!doctype html>
+<html><head><meta charset="utf-8"><title>Cache handbook</title>
+<style>body{margin:0;font:15px/1.7 system-ui,sans-serif;color:#222}#toc{position:fixed;top:0;left:0;width:200px;height:100vh;background:#1f2430;color:#cbd5e1;padding-top:56px}
+#toc a{display:block;padding:4px 16px;color:#cbd5e1;text-decoration:none;font-size:13px}#tocbtn{position:fixed;top:10px;left:10px;z-index:20;border:0;background:#ff7a45;color:#fff;border-radius:6px;padding:6px 12px}
+main{margin-left:200px;padding:40px 32px 120px}table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #ccc;padding:4px 10px}
+pre.codeblk{background:#16181d;color:#c9d1d9;padding:12px 0;white-space:pre}pre .line{display:block}pre .ln{display:inline-block;width:40px;color:#565f6e}</style></head>
+<body><button id="tocbtn">Contents</button><nav id="toc">${Array.from({ length: 12 }, (_, i) => `<a href="#s${i}">${i}. Section ${i}</a>`).join('')}</nav>
+<main><h1>Cache handbook</h1>
+${handbookSections}
+</main></body></html>
+`)
 // In-file search + reference-lookup fixtures (file-search-and-references.spec.ts):
 // a definition in one file, calls in another, so cmd+click has something to find.
 await fs.writeFile(

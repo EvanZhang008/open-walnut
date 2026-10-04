@@ -254,6 +254,18 @@ export interface PanelThreads {
   sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean) => Promise<boolean>;
   composerPlaceholder?: string;
   draftKey: string;
+  /** Conversation Mode, the composer replying in a question (or asking a new
+   *  one): what its chip names. Absent when it posts to the main conversation. */
+  composerTarget?: ComposerTarget;
+}
+
+export interface ComposerTarget {
+  key: string;
+  /** The question's number; none for a question not asked yet. */
+  number?: number;
+  title: string;
+  /** An Ask not sent yet (`title` is then its passage). */
+  pending: boolean;
 }
 
 function samePlace(a: ThreadCardPlace | null, b: ThreadCardPlace | null): boolean {
@@ -503,10 +515,29 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   const composerPlaceholder = !stack.active || pageKey === ROOT_THREAD_KEY ? undefined
     : stack.api.pending?.pageKey === pageKey ? ASK_PLACEHOLDER
       : followUpPlaceholder(displayTitleOf(tree.byKey.get(pageKey), meta.index).title);
+  // Tree Mode's page already says which question it is; Conversation Mode shows
+  // one timeline, so the composer names where its send goes, and lets go of it.
+  // An Ask not sent yet is named by its passage (the fallback title is cut short).
+  const pendingTitle = stack.api.pending?.pageKey === pageKey
+    ? stack.api.pending.quote?.exact?.replace(/\s+/g, ' ').trim() || stack.api.pending.title : undefined;
+  const targetNumber = pageKey === ROOT_THREAD_KEY || pendingTitle !== undefined ? undefined
+    : questionNumbers(tree, meta.index).get(pageKey);
+  const composerTarget = useMemo<ComposerTarget | undefined>(() => {
+    if (viewMode !== 'linear' || pageKey === ROOT_THREAD_KEY) return undefined;
+    if (pendingTitle !== undefined) return { key: pageKey, title: pendingTitle, pending: true };
+    if (!tree.byKey.has(pageKey)) return undefined;
+    return {
+      key: pageKey,
+      title: displayTitleOf(tree.byKey.get(pageKey), meta.index).title,
+      ...(targetNumber !== undefined ? { number: targetNumber } : {}),
+      pending: false,
+    };
+  }, [viewMode, pageKey, pendingTitle, tree, meta.index, targetNumber]);
 
   return {
     api, stack, meta, counts: threadCount, hasQuestions, hiddenCount, toast, toastRef, sendAnchored,
     ...(composerPlaceholder ? { composerPlaceholder } : {}),
     draftKey: composerDraftKey(sessionId, pageKey, tree),
+    ...(composerTarget ? { composerTarget } : {}),
   };
 }
