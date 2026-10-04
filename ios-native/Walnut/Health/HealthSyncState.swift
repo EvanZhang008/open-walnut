@@ -33,6 +33,18 @@ struct HealthSyncSnapshot: Codable, Equatable, Sendable {
     var lastOutcome: String?
     /// Oldest sample date sent so far.
     var oldestDate: Date?
+    /// The `HealthSyncEngine.historyEpoch` this progress was made under; an older
+    /// one is read again from the beginning once.
+    var historyEpoch: Int?
+
+    /// Read every type again from its beginning.
+    mutating func forgetAll() {
+        var names = Set(anchors.keys).union(primed).union(completed).union(bucketPendingDeletes)
+        names.formUnion(bucketPendingFrom.keys)
+        names.formUnion(bucketEarliest.keys)
+        names.formUnion(bucketSentThrough.keys)
+        forget(names)
+    }
 
     /// Read these types again from their beginning.
     mutating func forget(_ names: Set<String>) {

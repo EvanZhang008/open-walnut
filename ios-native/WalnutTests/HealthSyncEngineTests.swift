@@ -74,12 +74,71 @@ final class HealthSyncEngineTests: XCTestCase {
         let off = await engine(catalog).run(reason: "turned-on", budget: 60)
         XCTAssertEqual(off, .synced)
         XCTAssertTrue(transport.bodies.isEmpty, "nothing readable, nothing sent")
-        XCTAssertNotNil(state.read().anchors["sleep"], "HealthKit still handed out an anchor")
+        XCTAssertNil(state.read().anchors["sleep"], "an empty page keeps the anchor it started from")
 
         source.deniedTypes = []
         await engine(catalog).run(reason: "active", budget: 60)
         XCTAssertEqual(Set(transport.bodies(for: "sleep").flatMap(uuids)), ["old1", "recent1"])
         XCTAssertFalse(transport.bodies(for: "steps").isEmpty, "the bucket type is recomputed too")
+    }
+
+    /// 2026-10-04, the real phone: after access was turned on, a step recorded
+    /// that day went out, so the Mac held steps, and every older day stayed on the
+    /// phone. The anchor never moved while access was off, so all of it goes.
+    func testHistoryGoesOutEvenOnceTheMacHoldsTheTypesNewestSamples() async {
+        source.add("sleep", start: now.addingTimeInterval(-90 * 86_400), uuid: "old1")
+        source.add("steps", start: now.addingTimeInterval(-90 * 86_400))
+        source.deniedTypes = ["sleep", "steps"]
+        transport.status = FakeHealthTransport.status(held: ["sleep": nil, "steps": nil])
+        let catalog: [HealthTypeSpec] = [.testRaw("sleep"), .testBuckets("steps")]
+        await engine(catalog).run(reason: "while-off", budget: 60)
+
+        source.deniedTypes = []
+        source.add("sleep", start: now, uuid: "today1")
+        source.add("steps", start: now)
+        transport.status = FakeHealthTransport.status(held: ["sleep": "2026-10-04T07:00:00Z", "steps": "2026-10-04T07:00:00Z"])
+        await engine(catalog).run(reason: "observer", budget: 60)
+        XCTAssertEqual(Set(transport.bodies(for: "sleep").flatMap(uuids)), ["old1", "today1"])
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let oldDay = calendar.startOfDay(for: now.addingTimeInterval(-90 * 86_400))
+        XCTAssertTrue(source.statisticsCalls.contains { $0.type == "steps" && $0.interval == 86_400 && $0.from == oldDay },
+                      "day buckets are recomputed from the oldest step")
+    }
+
+    func testSamplesRecordedWhileAccessWasOffGoOutOnceItIsBack() async {
+        source.add("sleep", start: now.addingTimeInterval(-10 * 86_400), uuid: "before")
+        transport.status = FakeHealthTransport.status(held: ["sleep": "2026-09-20T08:00:00Z"])
+        await engine([.testRaw("sleep")]).run(reason: "on", budget: 60)
+
+        source.deniedTypes = ["sleep"]
+        source.add("sleep", start: now.addingTimeInterval(-3 * 86_400), uuid: "while-off")
+        await engine([.testRaw("sleep")]).run(reason: "off", budget: 60)
+        let sent = transport.bodies(for: "sleep").count
+
+        source.deniedTypes = []
+        await engine([.testRaw("sleep")]).run(reason: "back-on", budget: 60)
+        let again = transport.bodies(for: "sleep").dropFirst(sent)
+        XCTAssertEqual(Set(again.flatMap(uuids)), ["while-off"])
+    }
+
+    /// Progress from a build that moved anchors on empty pages is read again once.
+    func testProgressFromAnEarlierEpochIsReadAgainOnce() async {
+        source.add("sleep", start: now.addingTimeInterval(-90 * 86_400), uuid: "old1")
+        source.add("sleep", start: now, uuid: "today1")
+        state.update { snapshot in
+            snapshot.anchors["sleep"] = Data("2".utf8)
+            snapshot.primed = ["sleep"]
+            snapshot.completed = ["sleep"]
+        }
+        transport.status = FakeHealthTransport.status(held: ["sleep": "2026-10-04T07:00:00Z"])
+        await engine([.testRaw("sleep")]).run(reason: "upgrade", budget: 60)
+        XCTAssertEqual(Set(transport.bodies(for: "sleep").flatMap(uuids)), ["old1", "today1"])
+        XCTAssertEqual(state.read().historyEpoch, HealthSyncEngine.historyEpoch)
+
+        let sent = transport.bodies(for: "sleep").count
+        await engine([.testRaw("sleep")]).run(reason: "again", budget: 60)
+        XCTAssertEqual(transport.bodies(for: "sleep").count, sent, "only once")
     }
 
     func testTypesTheMacHoldsKeepTheirAnchors() async {

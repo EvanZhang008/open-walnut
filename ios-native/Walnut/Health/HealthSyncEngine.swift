@@ -170,6 +170,12 @@ actor HealthSyncEngine {
             }
         }
         if status.paused == true { throw Stop.outcome(.paused) }
+        if state.read().historyEpoch != Self.historyEpoch {
+            state.update(generation: generation) { snapshot in
+                snapshot.forgetAll()
+                snapshot.historyEpoch = Self.historyEpoch
+            }
+        }
 
         let plan = Self.plan(catalog: catalog, status: status)
         progress.typesTotal = plan.count + (Self.genericSupported(status) ? 1 : 0)
@@ -256,6 +262,22 @@ actor HealthSyncEngine {
         return Set(plan.map(\.name)).subtracting(held)
     }
 
+    /// The anchor a page moves the type to, or nil to stay where it started. An
+    /// empty page stays: with access to a type off, HealthKit answers empty and
+    /// still hands out an anchor past everything recorded, and moving there would
+    /// skip it all once access is back. That covers more than the first sync: on
+    /// 2026-10-04 a phone that turned access on after Don't Allow sent only its
+    /// last few days of steps, and access switched off for a week would lose that week.
+    /// An empty page from the old anchor costs next to nothing.
+    static func anchorToKeep(_ page: HealthAnchoredPage) -> Data? {
+        page.fetched + page.deleted.count > 0 ? page.anchor : nil
+    }
+
+    /// Raised when progress made by an earlier build cannot be trusted. 1: builds
+    /// up to 95 moved anchors on empty pages, so a phone that ever read with
+    /// access off holds anchors past history it never sent.
+    static let historyEpoch = 1
+
     /// The server takes `q.` / `c.` / `x.` names, and their category (`other`,
     /// which such a server always lists while it is on) is not switched off.
     static func genericSupported(_ status: HealthStatusResponse) -> Bool {
@@ -325,7 +347,7 @@ actor HealthSyncEngine {
                 guard stored else { return .skipped }
             }
             state.update(generation: run.generation) { snapshot in
-                if let next = page.anchor { snapshot.anchors[spec.name] = next }
+                if let next = Self.anchorToKeep(page) { snapshot.anchors[spec.name] = next }
                 snapshot.oldestDate = Self.earlier(snapshot.oldestDate, page.earliestStart)
             }
             if page.fetched + page.deleted.count < Self.anchoredLimit { return .finished }

@@ -30,7 +30,7 @@ extension HealthSyncEngine {
             }
             let now = env.now()
             state.update(generation: run.generation) { snapshot in
-                if let next = page.anchor { snapshot.anchors[spec.name] = next }
+                if let next = Self.anchorToKeep(page) { snapshot.anchors[spec.name] = next }
                 if let start = page.earliestStart {
                     snapshot.bucketPendingFrom[spec.name] = Self.earlier(snapshot.bucketPendingFrom[spec.name], start)
                     snapshot.bucketEarliest[spec.name] = Self.earlier(snapshot.bucketEarliest[spec.name], start)
