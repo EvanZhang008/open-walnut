@@ -227,6 +227,29 @@ export function listRefusalRecoveryKey(pluginId: string, project: string): strin
   return `plugin:${pluginId}:list:${project.toLowerCase()}`;
 }
 
+/**
+ * The one thing the human can do about a refused list, per reason. This is the
+ * card's sentence (humanize.ts `plugin-list-refused`), so every reason needs
+ * its own: the fallback used to call a retired grouping name "claimed by
+ * another provider", and the unmatched path showed the bare reason code.
+ */
+export function refusalRemedy(
+  pluginId: string,
+  project: string,
+  info: { reason: RefusalReason; claimedBy?: string },
+): string {
+  switch (info.reason) {
+    case 'local-project':
+      return `A list named "${project}" exists in ${pluginId} and a LOCAL project here shares that name, with no link between them. Rename one of the two, or delete the list in the provider's app.`;
+    case 'deleted-project':
+      return `You deleted the project "${project}" here, but its list still exists in ${pluginId}. Delete the list there, or re-create the project to take the items back.`;
+    case 'retired-name':
+      return `"${project}" is a retired grouping name here, so items in that ${pluginId} list have nowhere to go. Rename the list in the provider's app, or move its items to another list.`;
+    case 'other-provider':
+      return `The project "${project}" belongs to ${info.claimedBy ?? 'another provider'} here, so ${pluginId} items cannot be filed under it. Rename the list in the provider's app, or move its items to a list whose name is free.`;
+  }
+}
+
 /** 2 min after the first failure, then 4, 8, 16, then the regular 30-min cadence. */
 export function failureBackoffMs(consecutiveFailures: number): number {
   const doublings = Math.min(Math.max(consecutiveFailures, 1), 10);
@@ -1030,11 +1053,7 @@ export class SyncReconciler {
         ...(info.claimedBy ? { claimedBy: info.claimedBy } : {}),
         items: info.items,
         consecutiveReconciles: streak,
-        remedy: info.reason === 'local-project'
-          ? `A list named "${project}" exists in ${pluginId} and a LOCAL project here shares that name, with no link between them. Rename one of the two, or delete the list in the provider's app.`
-          : info.reason === 'deleted-project'
-            ? `You deleted the project "${project}" here, but its list still exists in ${pluginId}. Delete the list there, or re-create the project to take the items back.`
-            : `The project "${project}" is claimed by ${info.claimedBy ?? 'another provider'}, so ${pluginId} items cannot be filed under it.`,
+        remedy: refusalRemedy(pluginId, project, info),
       });
     }
     // A refusal that stopped happening must not keep an old streak alive — the

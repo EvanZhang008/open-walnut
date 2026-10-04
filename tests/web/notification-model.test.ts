@@ -599,6 +599,7 @@ describe('categoryOf', () => {
     expect(c('backup')).toBe('Data & Sync');
     expect(c('disk')).toBe('Data & Sync');
     expect(c('server-lifecycle')).toBe('Server');
+    expect(c('web-assets')).toBe('Server');
     expect(c('task-db-writers')).toBe('Internal');
     expect(c('send-path')).toBe('Cloud');
   });

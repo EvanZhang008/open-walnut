@@ -21,7 +21,7 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 }));
 
 import { SYNC_DIR, WALNUT_HOME } from '../../src/constants.js';
-import { SyncReconciler, listRefusalRecoveryKey } from '../../src/core/sync-reconciler.js';
+import { SyncReconciler, listRefusalRecoveryKey, refusalRemedy } from '../../src/core/sync-reconciler.js';
 import { upsertNotification, listNotifications } from '../../src/core/notifications/store.js';
 import {
   _resetForTesting,
@@ -245,6 +245,21 @@ describe('the UNLINKED state: a remote list and a LOCAL project share a name', (
     });
     const { feed } = await listNotifications();
     expect(feed.find(n => n.dedupKey === 'error:plugin')?.resolved).toBeUndefined();
+  });
+
+  it('every refusal reason has its own remedy sentence naming the list and the plugin', () => {
+    // 2026-10-04: a retired grouping name fell through to the other-provider
+    // sentence ("claimed by another provider") because only two reasons had one.
+    const reasons = ['local-project', 'deleted-project', 'retired-name', 'other-provider'] as const;
+    const sentences = reasons.map((reason) => refusalRemedy('ms-todo', 'Quick Start', { reason, claimedBy: 'local' }));
+    for (const sentence of sentences) {
+      expect(sentence).toContain('"Quick Start"');
+      expect(sentence).toContain('ms-todo');
+      expect(sentence.endsWith('.')).toBe(true);
+    }
+    expect(new Set(sentences).size).toBe(reasons.length);
+    expect(refusalRemedy('ms-todo', 'Quick Start', { reason: 'retired-name' })).not.toContain('provider here');
+    expect(refusalRemedy('ms-todo', 'Walnut', { reason: 'other-provider', claimedBy: 'local' })).toContain('belongs to local');
   });
 
   it('a refusal that stops resets the streak — nothing is escalated for a mismatch that healed', async () => {

@@ -58,6 +58,7 @@ describe('category precedence', () => {
     expect(categoryFromRecoveryKey('backup')).toBe('Data & Sync');
     expect(categoryFromRecoveryKey('disk')).toBe('Data & Sync');
     expect(categoryFromRecoveryKey('server-lifecycle')).toBe('Server');
+    expect(categoryFromRecoveryKey('web-assets')).toBe('Server');
     expect(categoryFromRecoveryKey('task-db-writers')).toBe('Internal');
     expect(categoryFromRecoveryKey('send-path')).toBe('Cloud');
   });
@@ -369,6 +370,30 @@ describe('plugin sync families', () => {
     expect(out.message).toBe('API error (HTTP 400) during UpdateTask.');
   });
 
+  it('a refused remote list shows the REMEDY, not the reason code', () => {
+    // The live card read "other-provider." (the unmatched path's first meta
+    // string) while the producer had written the sentence the human needed.
+    const out = humanizeErrorNotification({
+      title: 'Task sync cannot import the remote list "Quick Start"',
+      subsystem: 'web',
+      recoveryKey: 'plugin:plugin-a:list:quick start',
+      meta: {
+        pluginId: 'plugin-a', project: 'Quick Start', reason: 'retired-name', items: 2,
+        remedy: '"Quick Start" is a retired grouping name here, so items in that plugin-a list have nowhere to go. Rename the list in the provider\'s app, or move its items to another list.',
+      },
+    });
+    expect(out.category).toBe('Plugin A');
+    expect(out.title).toBe('Task sync cannot import the remote list "Quick Start"');
+    expect(out.message).toBe('"Quick Start" is a retired grouping name here, so items in that plugin-a list have nowhere to go. Rename the list in the provider\'s app, or move its items to another list.');
+    // A producer that forgot the remedy still gets a sentence, never the code.
+    const bare = humanizeErrorNotification({
+      title: 'Task sync cannot import the remote list "Walnut"',
+      subsystem: 'web',
+      meta: { pluginId: 'plugin-a', reason: 'other-provider' },
+    });
+    expect(bare.message).toBe('Its items stay in the provider until the name clash is resolved.');
+  });
+
   it('repeated sync failure counts the attempts when there is no error string', () => {
     const out = humanizeErrorNotification({
       title: 'plugin-a sync failing repeatedly',
@@ -441,10 +466,16 @@ describe('plugin sync families', () => {
     });
     expect(out.category).toBe('Acme');
     expect(out.title).toBe('Acme API request failed');
-    expect(out.message).toBe('The request came back HTTP 302 (TaskCollections).');
+    // A redirect from a sync API is its sign-in page: the sentence says what to do.
+    expect(out.message).toBe('The request was redirected (HTTP 302) (TaskCollections), which usually means the sign-in has expired. Sign in again in the provider\'s app; the next sync retries on its own.');
     // The wrapper (and the redirect body) belong in Details, never in the message.
     expect(out.message).not.toContain('{');
     expect(out.message).not.toContain('Redirecting');
+    // A non-redirect status keeps the plain sentence.
+    const denied = humanizeErrorNotification({
+      title: 'Acme API error', subsystem: 'acme/client', meta: { statusCode: 500, operationName: 'TaskCollections' },
+    });
+    expect(denied.message).toBe('The request came back HTTP 500 (TaskCollections).');
   });
 
   it("anything else from a plugin's logger still gets the plugin's category", () => {
@@ -455,7 +486,13 @@ describe('plugin sync families', () => {
     });
     expect(out.category).toBe('Acme');
     expect(out.title).toBe('Sprint fetch failed');
-    expect(out.message).toBe('The request came back HTTP 307.');
+    // 2026-10-04: this exact card read "The request came back HTTP 307." 22 times
+    // while the one thing to do was sign in again.
+    expect(out.message).toBe('The request was redirected (HTTP 307), which usually means the sign-in has expired. Sign in again in the provider\'s app; the next sync retries on its own.');
+    const plain = humanizeErrorNotification({
+      title: 'sprint fetch failed', subsystem: 'acme/client', meta: { statusCode: 503 },
+    });
+    expect(plain.message).toBe('The request came back HTTP 503.');
   });
 });
 

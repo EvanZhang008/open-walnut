@@ -2004,16 +2004,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     refreshBundle()
     let staticRootOk = checkStaticRoot()
+    // One condition, 'web-assets': the primary static root is not servable. A
+    // deploy that swept dist from under the OLD server raised it, and the NEW
+    // server booting with its assets in place is what settles it; the running
+    // server seeing them come back settles it too. Keyless, the card sat until
+    // the 48h debris sweep (2026-10-04, raised by the cloud companion's deploy).
+    const WEB_ASSETS_RECOVERY_KEY = 'web-assets'
     if (!staticRootOk) {
-      log.web.error('web assets are NOT servable at startup', { staticDir, mirrorReady })
+      log.web.error('web assets are NOT servable at startup', { staticDir, mirrorReady, recoveryKey: WEB_ASSETS_RECOVERY_KEY })
+    } else {
+      void publishRecovery([WEB_ASSETS_RECOVERY_KEY])
     }
     const staticRootTimer = setInterval(() => {
       refreshBundle()
       const ok = checkStaticRoot()
       if (ok === staticRootOk) return
       staticRootOk = ok
-      if (ok) log.web.info('web assets are servable again', { staticDir })
-      else log.web.error('web assets VANISHED from under the running server', { staticDir, mirrorReady })
+      if (ok) {
+        log.web.info('web assets are servable again', { staticDir })
+        void publishRecovery([WEB_ASSETS_RECOVERY_KEY])
+      } else {
+        log.web.error('web assets VANISHED from under the running server', { staticDir, mirrorReady, recoveryKey: WEB_ASSETS_RECOVERY_KEY })
+      }
     }, 60_000)
     staticRootTimer.unref()
     setStaticRootReporter(() => ({ staticDir, ok: staticRootOk, mirrorDir, mirrorReady, bundle }))

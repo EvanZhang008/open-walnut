@@ -214,6 +214,7 @@ export function categoryFromRecoveryKey(recoveryKey: string | undefined): string
     case 'disk':
       return CATEGORY_DATA;
     case 'server-lifecycle':
+    case 'web-assets':
       return CATEGORY_SERVER;
     case 'task-db-writers':
       return CATEGORY_INTERNAL;
@@ -265,6 +266,23 @@ function metaError(meta: Record<string, unknown> | undefined): string | undefine
 /** An HTTP-ish status the producer recorded, for a "the API said no" sentence. */
 function metaStatus(meta: Record<string, unknown> | undefined): number | undefined {
   return num(meta?.statusCode) ?? num(meta?.status);
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * The sentence for a bare status when the producer wrote no error string. A
+ * redirect from a sync plugin's API is almost always its sign-in page: the live
+ * card read "The request came back HTTP 307." 22 times while the one thing the
+ * human could do was sign in again.
+ */
+function statusSentence(status: number | undefined, op?: string): string {
+  const where = op ? ` (${op})` : '';
+  if (status === undefined) return `The request failed${where}.`;
+  if (REDIRECT_STATUSES.has(status)) {
+    return `The request was redirected (HTTP ${status})${where}, which usually means the sign-in has expired. Sign in again in the provider's app; the next sync retries on its own.`;
+  }
+  return `The request came back HTTP ${status}${where}.`;
 }
 
 // ── The rule list ────────────────────────────────────────────────────────────
@@ -566,6 +584,19 @@ const RULES: Rule[] = [
     render: (i) => ({ title: i.title.trim(), message: (i.body ?? '').trim() }),
   },
   {
+    // src/core/sync-reconciler.ts noteRefusals: a remote list whose items have
+    // nowhere to go here. The producer's `remedy` IS the sentence the human
+    // needs; the unmatched path showed the bare reason code ("other-provider.").
+    id: 'plugin-list-refused',
+    category: (i) => pluginNameOf(i),
+    match: (i) => /^Task sync cannot import the remote list\b/i.test(i.title),
+    render: (i) => ({
+      title: i.title.trim(),
+      message: (str(i.meta?.remedy) ?? '').trim()
+        || 'Its items stay in the provider until the name clash is resolved.',
+    }),
+  },
+  {
     id: 'plugin-sync-repeating',
     category: (i) => pluginNameOf(i),
     match: (i) => !!pluginNameOf(i) && /sync failing repeatedly/i.test(i.title),
@@ -596,12 +627,7 @@ const RULES: Rule[] = [
       const op = str(i.meta?.operationName);
       return {
         title: `${pluginNameOf(i)} API request failed`,
-        message: firstSentence(metaError(i.meta))
-          || [
-            status !== undefined ? `The request came back HTTP ${status}` : 'The request failed',
-            op ? ` (${op})` : '',
-            '.',
-          ].join(''),
+        message: firstSentence(metaError(i.meta)) || statusSentence(status, op),
       };
     },
   },
@@ -619,7 +645,7 @@ const RULES: Rule[] = [
       return {
         title: fallbackTitle(i.title),
         message: firstSentence(metaError(i.meta))
-          || (status !== undefined ? `The request came back HTTP ${status}.` : ''),
+          || (status !== undefined ? statusSentence(status) : ''),
       };
     },
   },

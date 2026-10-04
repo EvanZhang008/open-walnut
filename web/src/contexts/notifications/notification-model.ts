@@ -412,7 +412,7 @@ export function categoryOf(n: Notification): string {
     if (key === 'git' || key === 'git:compaction' || key === 'backup' || key === 'disk') {
       return 'Data & Sync';
     }
-    if (key === 'server-lifecycle') return 'Server';
+    if (key === 'server-lifecycle' || key === 'web-assets') return 'Server';
     if (key === 'task-db-writers') return 'Internal';
     if (key === 'send-path') return 'Cloud';
   }
