@@ -35,6 +35,7 @@ struct SettingsView: View {
                 serverInfoSection
                 automationSection
                 notificationsSection
+                AppleHealthSettingsSection()
                 voiceSection
                 diagnosticsSection
                 actionsSection

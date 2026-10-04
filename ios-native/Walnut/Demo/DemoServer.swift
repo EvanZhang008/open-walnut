@@ -234,6 +234,7 @@ final class DemoServer: @unchecked Sendable {
         if s.first == "human-inbox" { return routeInbox(r, s) }
         if s.first == "routines" { return routeRoutines(r, s) }
         if s.first == "files" || s.first == "file-content" { return routeFiles(r, s) }
+        if s.first == "health" { return routeHealth(r, s) }
         return nil
     }
 

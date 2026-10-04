@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>dev.openwalnut.ios.health-refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -31,6 +35,10 @@
 	<string>Walnut shows your calendar events alongside tasks in the calendar view. Events are read-only and never leave your device.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Walnut reads the Apple Health data you allow and keeps your own Mac up to date, so your AI can answer questions about your sleep, activity, heart and other health data.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Walnut connects to the Walnut server you run on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -52,6 +60,7 @@
 	<array>
 		<string>audio</string>
 		<string>remote-notification</string>
+		<string>fetch</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

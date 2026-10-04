@@ -90,6 +90,9 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         LaunchGate.shared.whenActive {
             await PushRegistration.shared.refreshAuthorization()
         }
+        // Apple Health: HealthKit background delivery and the app refresh task
+        // wake the app in the background, so this is NOT behind LaunchGate.
+        HealthBackground.shared.start()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)

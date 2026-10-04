@@ -22,10 +22,12 @@ targets:
         excludes:
           - Support/PrivacyInfo.xcprivacy
       # The privacy manifest ships in the app bundle (App Store requirement):
-      # no tracking, no collected data, and a reason for each required-reason
-      # API the app calls (UserDefaults CA92.1, file timestamps C617.1 for the
-      # app's own caches and recordings, uptime clock 35F9.1 for the freeze
-      # watchdog).
+      # no tracking, and a reason for each required-reason API the app calls
+      # (UserDefaults CA92.1, file timestamps C617.1 for the app's own caches
+      # and recordings, uptime clock 35F9.1 for the freeze watchdog). It
+      # declares Health and Fitness data (not linked, no tracking, App
+      # Functionality): Apple Health data goes only to the user's own Walnut
+      # server, never to us or to anyone else.
       - path: Walnut/Support/PrivacyInfo.xcprivacy
         buildPhase: resources
     # Hosted unit tests: `xcodebuild test -scheme Walnut` runs WalnutTests
@@ -71,6 +73,16 @@ targets:
             UIApplicationShortcutItemTitle: Voice to Walnut
             UIApplicationShortcutItemSubtitle: Record and send to your AI
             UIApplicationShortcutItemIconSymbolName: mic.fill
+        # Apple Health (Settings, Apple Health): the app READS what the user
+        # allows and keeps their own Mac up to date. The update (write) string
+        # exists only for the DEBUG test-data seeder (HealthDebugSeed.swift),
+        # the one code that ever asks to write; Release builds never ask.
+        NSHealthShareUsageDescription: Walnut reads the Apple Health data you allow and keeps your own Mac up to date, so your AI can answer questions about your sleep, activity, heart and other health data.
+        NSHealthUpdateUsageDescription: Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data.
+        # The Health sync's app refresh task (HealthBackground.swift). Needs the
+        # `fetch` background mode below.
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.openwalnut.ios.health-refresh
         # Keep a live voice recording running across screen lock / app
         # background. Without this the audio session dies the moment the
         # phone auto-locks mid-dictation (field data-loss incident 2026-08-09).
@@ -81,6 +93,9 @@ targets:
           # the banner is never tapped. Without this the badge only catches up
           # on the next manual open.
           - remote-notification
+          # Apple Health: the hourly app refresh that keeps the Mac current
+          # when no HealthKit background delivery arrived.
+          - fetch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios

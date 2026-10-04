@@ -130,6 +130,11 @@ struct DemoState {
     var sessionQueue: [String: [String]] = [:]
     /// Bumped by every create so ids never collide inside one demo run.
     var serial = 0
+    /// Apple Health (DemoServerHealth.swift): the Mac's store id, its pause
+    /// switch, and how many times its data was deleted.
+    var healthStoreId = "hs-demo"
+    var healthPaused = false
+    var healthDeletes = 0
 
     mutating func nextID(_ prefix: String) -> String {
         serial += 1

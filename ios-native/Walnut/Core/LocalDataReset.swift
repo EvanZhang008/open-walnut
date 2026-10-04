@@ -133,6 +133,10 @@ enum LocalDataReset {
             }
         }
 
+        // 6. Apple Health: stop background delivery and forget every sync
+        // anchor (the Mac's copy is only removed by "Delete Health Data on Mac").
+        HealthSync.eraseLocalState()
+
         AppLog.info("reset", "local data erased", [
             "reason": reason,
             "removed": String(removed.count),
