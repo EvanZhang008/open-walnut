@@ -30,6 +30,17 @@ const SESSION_ID = 'pw-provenance-session'
 const TASK_ID = 'pw-task-provenance'
 const PEER_ID = 'pw-envelope-peer-session'
 const PEER_SHORT = 'pw-envel'
+/** The session the fixture's peer task (pw-task-001) currently runs: a task pill opens it. */
+const PEER_TASK_SESSION = 'pw-mode-test-session'
+
+/** No session id is on screen anywhere in a card: a reader knows work by its task. */
+async function expectNoIdsShown(target: Locator): Promise<void> {
+  const text = await target.innerText()
+  expect(text).not.toContain(PEER_SHORT)
+  expect(text).not.toContain(PEER_ID)
+  expect(text).not.toMatch(/\brq-[0-9a-f]{6,}/)
+  expect(text).not.toContain('copy id')
+}
 const SCREENSHOT_DIR = '/tmp/wn-envelope-v2/provenance-ui'
 
 test.describe.configure({ mode: 'serial' })
@@ -225,11 +236,15 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   await expect(subtask.locator('.provenance-fold-title'))
     .toHaveText('Stopped without completing its task; its last turn was started by the user.')
   await openCard(page, panel, subtask)
-  await expect(subtask.locator('.provenance-status')).toContainText('stopped without completing its task; '
-    + 'its last turn was started by the user. It is waiting for input. Its last message is quoted below.')
+  // Open, the whole outcome reads, still without the child's name and task id.
+  await expect(subtask.locator('.provenance-status')).toHaveText('Stopped without completing its task; '
+    + 'its last turn was started by the user. It is waiting for input. Its last message is quoted below. '
+    + 'A status notice, not a request: nothing waits on an answer.')
   await expect(subtask.locator('.provenance-quote')).toHaveCount(1)
   await expect(subtask.locator('.provenance-quote .provenance-body')).toContainText('ENVELOPE_SUBTASK_QUOTE')
-  await expect(subtask.locator('a.provenance-chip-session')).toHaveCount(1)
+  await expect(subtask.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
+  await expect(subtask.locator('a.provenance-chip-session')).toHaveCount(0)
+  await expectNoIdsShown(subtask)
   expect(await subtask.innerText()).not.toContain('<walnut-message')
 
   // A walnut-trigger fire comes from a routine, not a session: the card names the
@@ -278,7 +293,7 @@ test('a folded card is two short lines, opens and closes by click or keyboard, a
   await shotCard(page, panel, reply, `${SCREENSHOT_DIR}/card-reply-open.png`)
 
   // A chip inside the open card is a link, not the toggle.
-  await expect(reply.locator('a.provenance-chip-session')).toHaveAttribute('data-session-id', PEER_ID)
+  await expect(reply.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
 
   await fold.click()
   await expect(reply).toHaveAttribute('data-folded', 'true')
@@ -293,33 +308,36 @@ test('a folded card is two short lines, opens and closes by click or keyboard, a
   await shotCard(page, panel, reply, `${SCREENSHOT_DIR}/card-reply-folded.png`)
 })
 
-test('the short id resolves to a chip that opens that session; the task is a pill', async ({ page }) => {
+test('the sender is named by its task, a pill that opens it; no session id is shown', async ({ page }) => {
   test.setTimeout(60_000)
   await page.goto('/')
   const panel = await openSession(page)
   await openCard(page, panel, v2PeerNote(panel))
   await openCard(page, panel, legacyPeerNote(panel))
 
-  const chip = v2PeerNote(panel).locator('a.provenance-chip-session')
-  await expect(chip).toHaveText(`@${PEER_SHORT}`)
-  await expect(chip).toHaveAttribute('data-session-id', PEER_ID)
-
   const taskPill = v2PeerNote(panel).locator('a.provenance-chip-task')
   await expect(taskPill).toHaveAttribute('data-task-id', 'pw-task-001')
   await expect(taskPill).toHaveText('Playwright test task')
+  // The session id was a chip of its own, and "copy id" beside it: neither shows any more.
+  await expect(v2PeerNote(panel).locator('a.provenance-chip-session')).toHaveCount(0)
+  await expectNoIdsShown(v2PeerNote(panel))
 
-  // The legacy shape prints ONLY the 8-char short id, so its chip proves the
+  // The legacy shape prints ONLY the 8-char short id, so its pill proves the
   // unique-prefix resolution path (the same rule session_send uses server-side)
-  // still turns a fragment into the full session the card links to.
-  const legacyChip = legacyPeerNote(panel).locator('a.provenance-chip-session')
-  await expect(legacyChip).toHaveText(`@${PEER_SHORT}`)
-  await expect(legacyChip).toHaveAttribute('data-session-id', PEER_ID)
+  // still turns a fragment into the task the card names.
+  await expect(legacyPeerNote(panel).locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
+  await expectNoIdsShown(legacyPeerNote(panel))
 
   await shotCard(page, panel, v2PeerNote(panel), `${SCREENSHOT_DIR}/card-header-chips.png`)
 
-  // Clicking the chip opens THAT session's own column (the only session surface).
-  await chip.click()
-  await expect(page.locator(`.session-panel[data-session-id="${PEER_ID}"]`))
+  // The ids are still there for whoever needs them, inside the details.
+  await v2PeerNote(panel).locator('.provenance-details > summary').click()
+  await expect(v2PeerNote(panel).locator('.provenance-ids')).toContainText(PEER_ID)
+  await expect(v2PeerNote(panel).locator('.provenance-ids')).toContainText('rq-09cd2ef25e57')
+
+  // Clicking the pill opens that task's session in its own column.
+  await taskPill.click()
+  await expect(page.locator(`.session-panel[data-session-id="${PEER_TASK_SESSION}"]`))
     .toBeVisible({ timeout: 15_000 })
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/chip-opened-peer-column.png` })
@@ -356,8 +374,9 @@ test('machine framing hides behind the disclosure and the body stays the content
   await expect(raw).toBeVisible()
   await expect(raw).toContainText('<walnut-message kind="peer-note"')
   await expect(raw).toContainText('carries no user authorization')
-  // The trailer line that rode on this note is surfaced as a chip.
-  await expect(peerNote.locator('.provenance-reply-request')).toContainText('rq-09cd2ef25e57')
+  // The trailer line that rode on this note is surfaced as a row with its command, no id.
+  await expect(peerNote.locator('.provenance-reply-request')).toContainText('Reply requested')
+  await expect(peerNote.locator('.provenance-reply-request')).not.toContainText('rq-')
 
   await shotCard(page, panel, peerNote, `${SCREENSHOT_DIR}/card-details-open.png`)
 })
@@ -477,11 +496,10 @@ test('this session messaging another one cards too, mirroring the inbound card',
   await openCard(page, panel, outbound)
   await expect(outbound.locator('.provenance-body')).toContainText('ENVELOPE_OUTBOUND_BODY')
 
-  // Same chips, same click contract as the receiving side.
-  const chip = outbound.locator('a.provenance-chip-session')
-  await expect(chip).toHaveText(`@${PEER_SHORT}`)
-  await expect(chip).toHaveAttribute('data-session-id', PEER_ID)
+  // Same pill, same click contract as the receiving side; no session id on screen.
   await expect(outbound.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
+  await expect(outbound.locator('a.provenance-chip-session')).toHaveCount(0)
+  await expectNoIdsShown(outbound)
 
   // The whole point: the send is provenance, so its generic Bash block is gone.
   await expect(panel.locator('.chat-tool-block').filter({ hasText: 'task_send' })).toHaveCount(0)
@@ -517,11 +535,12 @@ test('a reply whose answer was cut from the transcript still names the session t
   await expect(reply.locator('.provenance-fold-sender')).toHaveText('Playwright test task')
   await expect(reply.locator('.provenance-fold-sender')).toHaveAttribute('title', title)
   await openCard(page, panel, reply)
-  await expect(reply.locator('.provenance-rq')).toHaveText('rq-0c07a5e1e7a1')
-  const chip = reply.locator('a.provenance-chip-session')
-  await expect(chip).toHaveText(`@${PEER_SHORT}`)
-  await expect(chip).toHaveAttribute('data-session-id', PEER_ID)
   await expect(reply.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
+  await expectNoIdsShown(reply)
+  // The request id is in the details, with the asker's session id.
+  await reply.locator('.provenance-details > summary').click()
+  await expect(reply.locator('.provenance-ids')).toContainText('rq-0c07a5e1e7a1')
+  await expect(reply.locator('.provenance-ids')).toContainText(PEER_ID)
   // Nothing claims a delivery state the transcript does not hold.
   await expect(reply.locator('.provenance-status')).toHaveCount(0)
   expect(lookups.filter((u) => u.endsWith('/api/v1/requests/rq-0c07a5e1e7a1'))).toHaveLength(1)

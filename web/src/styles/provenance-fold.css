@@ -89,6 +89,17 @@
   margin-bottom: 2px;
 }
 
-.provenance-card .provenance-chips .provenance-rq {
-  margin-left: auto;
+/* The ids a reader never needs, kept in the details for whoever does. */
+.provenance-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.provenance-ids code {
+  font-family: var(--font-mono);
+  font-size: 10px;
 }

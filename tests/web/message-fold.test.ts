@@ -4,7 +4,7 @@
  * words, as one plain line.
  */
 import { describe, expect, it } from 'vitest';
-import { FOLD_TITLE_MAX, fallbackTitle, foldKey, noticeTitle } from '../../web/src/components/sessions/message-fold';
+import { FOLD_TITLE_MAX, fallbackTitle, foldKey, noticeText, noticeTitle } from '../../web/src/components/sessions/message-fold';
 
 describe('fallbackTitle', () => {
   it('is the first sentence once it can stand alone', () => {
@@ -50,6 +50,12 @@ describe('noticeTitle', () => {
       .toBe('Stopped without completing its task; its last turn was started by the user.');
     expect(noticeTitle('Your subtask "Ship it" (pw-task-001) completed its task. Its last message is quoted below.'))
       .toBe('Completed its task.');
+  });
+
+  it('shows the whole outcome without the child, and leaves any other notice whole', () => {
+    expect(noticeText('Your subtask "Ship it" (pw-task-001) completed its task. Its last message is quoted below.'))
+      .toBe('Completed its task. Its last message is quoted below.');
+    expect(noticeText('It is now WAITING ON A HUMAN. Check back later.')).toBe('It is now WAITING ON A HUMAN. Check back later.');
   });
 
   it('keeps any other notice as its first sentence', () => {

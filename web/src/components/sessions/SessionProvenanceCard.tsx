@@ -52,7 +52,7 @@ import { sessionStatusStore } from '@/stores/session-status-store';
 import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
-import { fallbackTitle, foldKey, noticeTitle, useMessageFold } from './message-fold';
+import { fallbackTitle, foldKey, noticeText, noticeTitle, useMessageFold } from './message-fold';
 import { MessageFoldSummary } from './MessageFoldSummary';
 import '@/styles/provenance-quote.css';
 import '@/styles/provenance-fold.css';
@@ -157,42 +157,33 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
   );
 }
 
-/** The other session: a clickable chip when resolved, plain text when not. */
-function PeerChips({ peer, resolved, requestId }: { peer: SessionEnvelopePeer; resolved: ResolvedPeer; requestId?: string }) {
+/**
+ * Where the other side lives, by name: its task (a click opens that task's
+ * session), else its session by title. An id means nothing to a reader, so
+ * none shows here; the ids live in the details.
+ */
+function PeerChips({ resolved }: { resolved: ResolvedPeer }) {
   const taskLabel = useTaskLabel(resolved.taskId);
-  // Last fallback: an id the envelope printed but the index could not confirm
-  // still names the sender, so it shows as a dim chip rather than disappearing.
-  const shortId = peer.shortId ?? resolved.fullId?.slice(0, 8) ?? peer.sessionId?.slice(0, 8);
+  const chip = resolved.taskId ? (
+    <a
+      className="provenance-chip provenance-chip-task task-link"
+      data-task-id={resolved.taskId}
+      href={`/tasks/${resolved.taskId}`}
+      title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : taskLabel?.title}
+    >{taskLabel?.title ?? 'Open task'}</a>
+  ) : resolved.fullId ? (
+    <a
+      className="provenance-chip provenance-chip-session session-link"
+      data-session-id={resolved.fullId}
+      href={`/sessions?id=${resolved.fullId}`}
+      title={resolved.title ? `Open ${resolved.title}` : 'Open the session'}
+    >{resolved.title || 'Open session'}</a>
+  ) : null;
+  if (!chip && !resolved.host) return null;
   return (
     <div className="provenance-chips">
-      {resolved.fullId && shortId ? (
-        <a
-          className="provenance-chip provenance-chip-session session-link"
-          data-session-id={resolved.fullId}
-          href={`/sessions?id=${resolved.fullId}`}
-          title={`Open session ${resolved.fullId}`}
-        >{`@${shortId}`}</a>
-      ) : shortId ? (
-        <span
-          className="provenance-chip provenance-chip-dim"
-          title={resolved.ambiguous
-            ? `${shortId} matches more than one session — no unique target to open`
-            : `${shortId} is not in the current session list`}
-        >{`@${shortId}`}</span>
-      ) : null}
-      {resolved.taskId && (
-        <a
-          className="provenance-chip provenance-chip-task task-link"
-          data-task-id={resolved.taskId}
-          href={`/tasks/${resolved.taskId}`}
-          title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : resolved.taskId}
-        >{taskLabel?.title ?? `task ${resolved.taskId.slice(0, 8)}`}</a>
-      )}
+      {chip}
       {resolved.host && <span className="provenance-host">{resolved.host}</span>}
-      {resolved.fullId && (
-        <CopyChip value={resolved.fullId} label="copy id" title={resolved.fullId} />
-      )}
-      {requestId && <span className="provenance-rq">{requestId}</span>}
     </div>
   );
 }
@@ -253,11 +244,23 @@ function EnvelopeBody({ body, sessionCwd }: { body: string; sessionCwd?: string 
   );
 }
 
-/** Everything the model was told that a human does not need on screen. */
-function EnvelopeDetails({ envelope }: { envelope: SessionEnvelope }) {
+/** Everything the model was told that a human does not need on screen, ids included. */
+function EnvelopeDetails({ envelope, sessionId }: { envelope: SessionEnvelope; sessionId?: string }) {
+  const requestId = envelope.requestId ?? envelope.replyRequest?.requestId;
   return (
     <details className="provenance-details">
       <summary>Envelope details</summary>
+      {(requestId || sessionId) && (
+        <div className="provenance-ids">
+          {requestId && <span>Request <code className="provenance-rq">{requestId}</code></span>}
+          {sessionId && (
+            <span>
+              Session <code>{sessionId}</code>
+              <CopyChip value={sessionId} label="copy" title="Copy the session id" />
+            </span>
+          )}
+        </div>
+      )}
       {envelope.followUp && (
         <div className="provenance-followup">
           <code>{envelope.followUp}</code>
@@ -290,7 +293,6 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
       <div className="provenance-card provenance-card-slim" data-envelope-kind={kind}>
         <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
         <span className="provenance-label">{envelopeDirectionLabel(kind, source)}</span>
-        {envelope.requestId && <span className="provenance-rq">{envelope.requestId}</span>}
         <EnvelopeDetails envelope={envelope} />
       </div>
     );
@@ -326,13 +328,15 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
     );
   }
 
+  // A session is named by its title, never by its id.
   const headline = peer.anonymous
     ? 'Unidentified process (no tracked session)'
-    : resolved.title || (peer.shortId ? `Session ${peer.shortId}` : 'Unknown session');
+    : resolved.title || 'another session';
   // Who sent it, as the reader knows them: the task, then the session's own title.
   const sender = peer.anonymous ? 'an unidentified process' : taskLabel?.title || headline;
   // A notice's outcome IS its folded title; open, it is repeated only when the fold cut it.
-  const statusIsTitle = kind === 'notification' && !envelope.title && title === envelope.statusLine;
+  const status = envelope.statusLine && kind === 'notification' ? noticeText(envelope.statusLine) : envelope.statusLine;
+  const statusIsTitle = kind === 'notification' && !envelope.title && title === status;
 
   return (
     <div
@@ -354,14 +358,14 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
       />
       {open && (
         <>
-          <PeerChips peer={peer} resolved={resolved} requestId={envelope.requestId} />
+          <PeerChips resolved={resolved} />
           {envelope.askedPreview && (
             <div className="provenance-asked">
               <span className="provenance-asked-label">You asked</span>
               <span className="provenance-asked-text">{envelope.askedPreview}</span>
             </div>
           )}
-          {envelope.statusLine && !statusIsTitle && <div className="provenance-status">{envelope.statusLine}</div>}
+          {status && !statusIsTitle && <div className="provenance-status">{status}</div>}
           {envelope.quote?.map((section, i) => (
             <NoticeQuote key={i} section={section} sessionCwd={sessionCwd} />
           ))}
@@ -369,7 +373,6 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
           {envelope.replyRequest && (
             <div className="provenance-reply-request">
               <span className="provenance-reply-request-label">Reply requested</span>
-              <span className="provenance-rq">{envelope.replyRequest.requestId}</span>
               {envelope.replyRequest.command && (
                 <CopyChip
                   value={envelope.replyRequest.command}
@@ -379,7 +382,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
               )}
             </div>
           )}
-          <EnvelopeDetails envelope={envelope} />
+          <EnvelopeDetails envelope={envelope} sessionId={resolved.fullId} />
         </>
       )}
     </div>

@@ -51,14 +51,19 @@ export function fallbackTitle(text: string | undefined, max = FOLD_TITLE_MAX): s
 const SUBTASK_WHO = /^Your subtask ".*" \([^()\s]+\) /;
 
 /**
- * A Walnut notice's folded title: the first sentence of its outcome. A subtask
- * notice opens by naming the child, which the card's sender line already does
- * (and a long task title would push the outcome past the cut), so that part goes.
+ * A Walnut notice's outcome as the card shows it. A subtask notice opens by
+ * naming the child (title and task id), which the card's sender line already
+ * does, so that part goes: a long task title would push the outcome past the
+ * cut, and the id means nothing to a reader.
  */
-export function noticeTitle(statusLine: string | undefined): string | undefined {
-  if (!statusLine) return undefined;
+export function noticeText(statusLine: string): string {
   const rest = statusLine.replace(SUBTASK_WHO, '');
-  return fallbackTitle(rest === statusLine ? rest : rest.charAt(0).toUpperCase() + rest.slice(1));
+  return rest === statusLine ? rest : rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
+/** A Walnut notice's folded title: the first sentence of its outcome. */
+export function noticeTitle(statusLine: string | undefined): string | undefined {
+  return statusLine ? fallbackTitle(noticeText(statusLine)) : undefined;
 }
 
 /** A stable key for one card: the text it was built from. */

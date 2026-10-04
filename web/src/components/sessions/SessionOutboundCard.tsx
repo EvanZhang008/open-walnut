@@ -164,39 +164,33 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
   );
 }
 
-/** The target session: a clickable chip when resolved, plain text when not. */
-function TargetChips({ resolved, requestId }: { resolved: ResolvedTarget; requestId?: string }) {
+/**
+ * Where the message went, by name: the target's task (a click opens that task's
+ * session), else its session by title. Ids mean nothing to a reader; they live
+ * in the details.
+ */
+function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
   const taskLabel = useTaskLabel(resolved.taskId);
+  const chip = resolved.taskId ? (
+    <a
+      className="provenance-chip provenance-chip-task task-link"
+      data-task-id={resolved.taskId}
+      href={`/tasks/${resolved.taskId}`}
+      title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : taskLabel?.title}
+    >{taskLabel?.title ?? 'Open task'}</a>
+  ) : resolved.fullId ? (
+    <a
+      className="provenance-chip provenance-chip-session session-link"
+      data-session-id={resolved.fullId}
+      href={`/sessions?id=${resolved.fullId}`}
+      title={resolved.title ? `Open ${resolved.title}` : 'Open the session'}
+    >{resolved.title || 'Open session'}</a>
+  ) : null;
+  if (!chip && !resolved.host) return null;
   return (
     <div className="provenance-chips">
-      {resolved.fullId && resolved.shortId ? (
-        <a
-          className="provenance-chip provenance-chip-session session-link"
-          data-session-id={resolved.fullId}
-          href={`/sessions?id=${resolved.fullId}`}
-          title={`Open session ${resolved.fullId}`}
-        >{`@${resolved.shortId}`}</a>
-      ) : resolved.shortId ? (
-        <span
-          className="provenance-chip provenance-chip-dim"
-          title={resolved.ambiguous
-            ? `${resolved.shortId} matches more than one session — no unique target to open`
-            : `${resolved.shortId} is not in the current session list`}
-        >{`@${resolved.shortId}`}</span>
-      ) : null}
-      {resolved.taskId && (
-        <a
-          className="provenance-chip provenance-chip-task task-link"
-          data-task-id={resolved.taskId}
-          href={`/tasks/${resolved.taskId}`}
-          title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : resolved.taskId}
-        >{taskLabel?.title ?? `task ${resolved.taskId.slice(0, 8)}`}</a>
-      )}
+      {chip}
       {resolved.host && <span className="provenance-host">{resolved.host}</span>}
-      {resolved.fullId && (
-        <CopyChip value={resolved.fullId} label="copy id" title={resolved.fullId} />
-      )}
-      {requestId && <span className="provenance-rq">{requestId}</span>}
     </div>
   );
 }
@@ -209,11 +203,23 @@ function OutboundBody({ body, sessionCwd }: { body: string; sessionCwd?: string 
   );
 }
 
-/** The command and the server's answer: present, never dominant. */
-function OutboundDetails({ send, result }: { send: OutboundSend; result?: string }) {
+/** The command and the server's answer, ids included: present, never dominant. */
+function OutboundDetails({ send, result, sessionId }: { send: OutboundSend; result?: string; sessionId?: string }) {
+  const requestId = send.repliedTo ?? send.requestId;
   return (
     <details className="provenance-details">
       <summary>{send.via === 'cli' ? 'Command & response' : 'Call & response'}</summary>
+      {(requestId || sessionId) && (
+        <div className="provenance-ids">
+          {requestId && <span>Request <code className="provenance-rq">{requestId}</code></span>}
+          {sessionId && (
+            <span>
+              Session <code>{sessionId}</code>
+              <CopyChip value={sessionId} label="copy" title="Copy the session id" />
+            </span>
+          )}
+        </div>
+      )}
       <pre className="provenance-raw">{send.raw}</pre>
       {result !== undefined && result !== '' && (
         <>
@@ -251,9 +257,10 @@ export function SessionOutboundCard({
   const [open, toggle] = useMessageFold(foldKey(send.raw));
 
   // A reply always went to the session that asked, even when nothing names it.
+  // A session is named by its title, never by its id.
   const headline = resolved.title
     || send.to
-    || (resolved.shortId ? `Session ${resolved.shortId}` : send.kind === 'reply' ? 'The session that asked' : 'Unknown session');
+    || (send.kind === 'reply' ? 'The session that asked' : 'another session');
   const note = payloadNote(send);
   const status = send.error
     ? send.error
@@ -286,11 +293,11 @@ export function SessionOutboundCard({
       />
       {open && (
         <>
-          <TargetChips resolved={resolved} requestId={send.repliedTo ?? send.requestId} />
+          <TargetChips resolved={resolved} />
           {status && <div className="provenance-status">{status}</div>}
           {send.body !== undefined && <OutboundBody body={send.body} sessionCwd={sessionCwd} />}
           {note && <div className="provenance-outbound-payload">{note}</div>}
-          <OutboundDetails send={send} result={result} />
+          <OutboundDetails send={send} result={result} sessionId={resolved.fullId} />
         </>
       )}
     </div>
