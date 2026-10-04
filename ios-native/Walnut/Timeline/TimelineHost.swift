@@ -127,6 +127,8 @@ struct TimelineHost: UIViewControllerRepresentable {
             let width = controller.contentWidth
             guard width > 0 else { return } // pre-layout; onWidthChange re-fires
             input.width = width
+            expandedRowIDs = TimelineRowBuilder.forgettingEndedLiveRun(
+                expandedRowIDs, liveTools: input.liveTools, scope: input.scope)
             input.expandedRowIDs = expandedRowIDs
             input.sizeCategory = controller.traitCollection.preferredContentSizeCategory
             Task { [actor] in

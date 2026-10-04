@@ -930,8 +930,9 @@ final class TimelineRowBuilder {
     /// calls that have RETURNED collapse into one "Ran 3 commands ›" run row, and a
     /// call still in flight stays a breathing chip of its own under it, so the
     /// reader watches the current call and not the pile of finished ones. A call
-    /// folds into the run the moment its result lands; the run keeps ONE id for the
-    /// whole turn, so a reader who opened it keeps it open as calls join.
+    /// folds into the run the moment its result lands (unless it is one the web
+    /// never folds, `TimelineToolRunFold.staysOutOfRuns`); the run keeps ONE id for
+    /// the whole turn, so a reader who opened it keeps it open as calls join.
     ///
     /// The live run never reports failures: the `tool-result` frame carries no
     /// error flag, and a wrong zero is better than a guessed count. The transcript
@@ -943,7 +944,11 @@ final class TimelineRowBuilder {
             guard !call.name.isEmpty else { return nil }
             return (call, liveToolChip(call, index: index, scope: scope))
         }
-        let finished = chips.filter { $0.call.finished }
+        func folds(_ call: LiveToolCall) -> Bool {
+            call.finished && !TimelineToolRunFold.staysOutOfRuns(
+                name: call.name, detail: call.detail, inputPreview: call.inputPreview)
+        }
+        let finished = chips.filter { folds($0.call) }
         var rows: [TimelineRow] = []
         if !finished.isEmpty {
             let runID = TimelineScope.namespace(scope, Self.liveRunID)
@@ -956,12 +961,24 @@ final class TimelineRowBuilder {
             ))
             if expanded { rows.append(contentsOf: finished.map(\.row)) }
         }
-        rows.append(contentsOf: chips.filter { !$0.call.finished }.map(\.row))
+        rows.append(contentsOf: chips.filter { !folds($0.call) }.map(\.row))
         return rows
     }
 
     /// Message id of the live turn's folded run (scoped by the caller).
     static let liveRunID = "live-run"
+
+    /// The live run is ONE id per conversation, reused by every turn. Once the
+    /// turn's calls are gone (it ended, or the next one has called nothing yet)
+    /// the reader's "open" is forgotten, or every later turn's run would arrive
+    /// already open.
+    static func forgettingEndedLiveRun(_ expanded: Set<String>, liveTools: [LiveToolCall],
+                                       scope: String) -> Set<String> {
+        guard liveTools.isEmpty else { return expanded }
+        var kept = expanded
+        kept.remove(TimelineScope.namespace(scope, liveRunID))
+        return kept
+    }
 
     private func liveToolChip(_ call: LiveToolCall, index: Int, scope: String) -> TimelineRow {
         let stacked = Self.stacksDetail(call.detail)

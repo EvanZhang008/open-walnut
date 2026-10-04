@@ -76,6 +76,13 @@ final class ToolRunFoldTests: XCTestCase {
         return (phrase, failCount, running, expanded)
     }
 
+    /// The id a run gets: where its first member sits, never that member's own id
+    /// or payload (`TimelineToolRunFold.runKey`). Every fixture shares one time.
+    private func runID(_ kind: String, _ name: String = "", _ n: Int = 0,
+                       scope: String = TimelineScope.unscoped) -> String {
+        TimelineToolRunFold.rowID(scope: scope, key: "assistant|2026-10-03T00:00:00Z|\(kind)|\(name)#\(n)")
+    }
+
     private func member(_ name: String, _ detail: String? = nil) -> TimelineToolRunPhrase.Member {
         TimelineToolRunPhrase.Member(name: name, detail: detail)
     }
@@ -133,7 +140,8 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertEqual(run.phrase, "Ran 2 commands, read a file")
         XCTAssertEqual(run.failCount, 0)
         XCTAssertFalse(run.expanded)
-        XCTAssertEqual(built[1].id, "t1#run", "the run is identified by its first member")
+        XCTAssertEqual(built[1].id, "assistant|2026-10-03T00:00:00Z|tool|Bash#0#run",
+                       "the run is named by where its first member sits")
     }
 
     func testASingleToolIsStillARun() async throws {
@@ -144,7 +152,7 @@ final class ToolRunFoldTests: XCTestCase {
 
     func testOpeningTheRunLaysItsMembersOutUnderItInOrder() async throws {
         let messages = [tool("t1", "Bash", "npm test"), thinking("k1"), tool("t2", "Read", "/r/a.ts"), prose("p")]
-        let built = await rows(messages, expanded: ["t1#run"])
+        let built = await rows(messages, expanded: [runID("tool", "Bash")])
         XCTAssertEqual(kinds(built), ["toolRun", "toolChip", "thinking", "toolChip", "text"])
         XCTAssertTrue(try runPayload(built[0]).expanded)
         // The members are the SAME rows they were before the fold existed: the chip
@@ -163,7 +171,7 @@ final class ToolRunFoldTests: XCTestCase {
         let built = await rows([thinking("k0"), tool("t1", "Bash", "ls"), thinking("k1"),
                                 tool("t2", "Bash", "pwd"), prose("p")])
         XCTAssertEqual(kinds(built), ["toolRun", "text"])
-        XCTAssertEqual(built[0].id, "k0#run", "a leading thought is the run's first member")
+        XCTAssertEqual(built[0].id, runID("thinking"), "a leading thought is the run's first member")
     }
 
     func testReasoningThatLedToTheReplySplitsOffAboveIt() async throws {
@@ -195,8 +203,10 @@ final class ToolRunFoldTests: XCTestCase {
                                 user("u"), tool("t4", "Grep", "TODO")])
         XCTAssertEqual(kinds(built), ["toolRun", "text", "toolRun", "notification", "toolRun",
                                       "bubble", "toolRun"])
+        // Two runs start with a Bash call at the same time: the count tells them apart.
         XCTAssertEqual(built.filter { $0.content.reuseKind == "toolRun" }.map(\.id),
-                       ["t1#run", "t2#run", "t3#run", "t4#run"])
+                       [runID("tool", "Bash"), runID("tool", "Bash", 1), runID("tool", "Read"),
+                        runID("tool", "Grep")])
     }
 
     /// Both wire shapes carry the flag: the session transcript (its own row type,
@@ -230,24 +240,93 @@ final class ToolRunFoldTests: XCTestCase {
 
     func testTheRunRowIsScopedLikeItsMembers() async throws {
         let built = await rows([tool("t1", "Bash", "ls"), prose("p")], scope: "conv-A")
-        XCTAssertEqual(built[0].id, "conv-A|t1#run")
-        let open = await rows([tool("t1", "Bash", "ls"), prose("p")], expanded: ["conv-A|t1#run"],
-                              scope: "conv-A")
+        XCTAssertEqual(built[0].id, runID("tool", "Bash", scope: "conv-A"))
+        XCTAssertTrue(built[0].id.hasPrefix("conv-A|"))
+        let open = await rows([tool("t1", "Bash", "ls"), prose("p")],
+                              expanded: [runID("tool", "Bash", scope: "conv-A")], scope: "conv-A")
         XCTAssertEqual(kinds(open), ["toolRun", "toolChip", "text"])
         XCTAssertEqual(open[1].id, "conv-A|t1#0")
     }
 
     func testTheRunKeepsItsIDAndStaysOpenAsCallsJoinAtTheTail() async throws {
         let actor = TimelineLayoutActor()
-        let first = await actor.buildSnapshot(input([tool("t1", "Bash", "ls")], expanded: ["t1#run"])).rows
+        let first = await actor.buildSnapshot(input([tool("t1", "Bash", "ls")],
+                                                    expanded: [runID("tool", "Bash")])).rows
         XCTAssertEqual(kinds(first), ["toolRun", "toolChip"])
         let grown = await actor.buildSnapshot(input([tool("t1", "Bash", "ls"), tool("t2", "Read", "/r/a.ts")],
-                                                    expanded: ["t1#run"])).rows
+                                                    expanded: [runID("tool", "Bash")])).rows
         XCTAssertEqual(kinds(grown), ["toolRun", "toolChip", "toolChip"])
         XCTAssertEqual(grown[0].id, first[0].id)
         XCTAssertEqual(try runPayload(grown[0]).phrase, "Ran a command, read a file")
         // The phrase moved under a stable id, so the diff must hand the row to its cell.
         XCTAssertNotEqual(grown[0].revision, first[0].revision)
+    }
+
+    /// The review's case: a session row's id hashes its payload, so the cached
+    /// slim read, the rich read that replaces it, and the first call's result
+    /// landing each give the first member a NEW id. The run must not follow it,
+    /// or the run the reader just opened snaps shut.
+    func testAnOpenRunStaysOpenWhenItsFirstMemberIsReRead() async throws {
+        let actor = TimelineLayoutActor()
+        let slim = ChatMessage(id: "assistant|slim#0", role: "assistant", text: "Bash",
+                               createdAt: "2026-10-03T00:00:00Z", kind: .tool, detail: "npm test")
+        let opened = runID("tool", "Bash")
+        let before = await actor.buildSnapshot(input([slim, prose("p")], expanded: [opened])).rows
+        XCTAssertEqual(kinds(before), ["toolRun", "toolChip", "text"])
+        let rich = ChatMessage(id: "assistant|rich#0", role: "assistant", text: "Bash",
+                               createdAt: "2026-10-03T00:00:00Z", kind: .tool, detail: "npm test",
+                               resultPreview: "12 passed", inputPreview: "command: npm test", isError: true)
+        let after = await actor.buildSnapshot(input([rich, prose("p")], expanded: [opened])).rows
+        XCTAssertEqual(after[0].id, before[0].id)
+        XCTAssertEqual(kinds(after), ["toolRun", "toolChip", "text"], "still open")
+        XCTAssertEqual(try runPayload(after[0]).failCount, 1, "the new payload still reaches the run")
+        guard case .toolChip(_, _, _, let result, _, _, _, _) = after[1].content else {
+            return XCTFail("member is not a tool chip")
+        }
+        XCTAssertEqual(result, "12 passed", "and its member")
+    }
+
+    /// The calls the web never folds (`isMergeableHistoryTool`) stay rows of their
+    /// own and split the run around them: a message to another session is
+    /// conversation, and folded into "Ran a command" it would vanish.
+    func testCallsTheWebNeverFoldsStayOutOfTheRun() async throws {
+        let send = ChatMessage(id: "s", role: "assistant", text: "Bash", createdAt: "2026-10-03T00:00:01Z",
+                               kind: .tool, detail: "Tell the reviewer",
+                               inputPreview: "command: walnut tools call task_send '{\"task_id\":\"t\"}'\ndescription: Tell the reviewer")
+        let plan = ChatMessage(id: "w", role: "assistant", text: "Write", createdAt: "2026-10-03T00:00:02Z",
+                               kind: .tool, detail: "/h/.claude/plans/the-plan.md")
+        let exit = ChatMessage(id: "x", role: "assistant", text: "ExitPlanMode",
+                               createdAt: "2026-10-03T00:00:03Z", kind: .tool)
+        let mcp = ChatMessage(id: "m", role: "assistant", text: "mcp__walnut__session_send",
+                              createdAt: "2026-10-03T00:00:04Z", kind: .tool)
+        let built = await rows([tool("t1", "Bash", "ls"), send, tool("t2", "Bash", "pwd"), plan, exit, mcp,
+                                tool("t3", "Read", "/r/a.ts"), prose("p")])
+        XCTAssertEqual(kinds(built), ["toolRun", "toolChip", "toolRun", "toolChip", "toolChip", "toolChip",
+                                      "toolRun", "text"])
+        guard case .toolChip(let name, let detail, _, _, _, _, _, _) = built[1].content else {
+            return XCTFail("the send is not a chip of its own")
+        }
+        XCTAssertEqual(name, "Bash")
+        XCTAssertEqual(detail, "Tell the reviewer")
+    }
+
+    func testOnlyARealSendAtACommandPositionCounts() {
+        func sends(_ command: String) -> Bool {
+            TimelineToolRunFold.staysOutOfRuns(name: "Bash", detail: nil,
+                                               inputPreview: "command: \(command)\ndescription: x")
+        }
+        XCTAssertTrue(sends("walnut tools call task_send '{}'"))
+        XCTAssertTrue(sends("walnut tools call session_send - <<'EOF'"))
+        XCTAssertTrue(sends("cd /r && WALNUT_X=1 /usr/local/bin/walnut tools call task_send @msg.json"))
+        XCTAssertTrue(sends("env walnut tools call task_send '{}'"))
+        XCTAssertTrue(sends("python3 build.py | open-walnut tools call task_send -"))
+        XCTAssertFalse(sends("walnut tools call task_send --help"), "asking for the schema sends nothing")
+        XCTAssertFalse(sends("echo walnut tools call task_send"), "an argument, not a command")
+        XCTAssertFalse(sends("grep -rn \"walnut tools call task_send\" docs"))
+        XCTAssertFalse(sends("walnut tools call task_get '{}'"))
+        XCTAssertFalse(TimelineToolRunFold.staysOutOfRuns(name: "Bash", detail: "x", inputPreview: nil))
+        XCTAssertFalse(TimelineToolRunFold.staysOutOfRuns(name: "Write", detail: "/r/notes/plans.md",
+                                                          inputPreview: nil))
     }
 
     func testToggleReachesTheCellThroughTheContentKey() {
@@ -321,6 +400,34 @@ final class ToolRunFoldTests: XCTestCase {
         let built = await rows([], scope: "conv-B", streaming: true,
                                liveTools: [call("a", "Bash", "ls", finished: true)])
         XCTAssertEqual(built.first?.id, "conv-B|live-run")
+    }
+
+    func testALiveSendStaysAChipOfItsOwn() async throws {
+        let send = LiveToolCall(id: "s", name: "Bash", detail: "Tell the reviewer", finished: true,
+                                inputPreview: "command: walnut tools call task_send '{}'", resultPreview: "ok")
+        let built = await rows([], streaming: true,
+                               liveTools: [call("a", "Bash", "ls", finished: true), send,
+                                           call("b", "Read", "/r/a.ts", finished: true)])
+        XCTAssertEqual(kinds(built), ["toolRun", "toolChip", "activity"])
+        XCTAssertEqual(try runPayload(built[0]).phrase, "Ran a command, read a file")
+        guard case .toolChip(_, let detail, _, _, _, let phase, _, _) = built[1].content else {
+            return XCTFail("the send is not a chip")
+        }
+        XCTAssertEqual(detail, "Tell the reviewer")
+        XCTAssertEqual(phase, TimelineToolPhase.liveFinished)
+    }
+
+    /// The live run is one id reused by every turn: opening it in one turn must
+    /// not open the next turn's.
+    func testTheLiveRunsOpenStateEndsWithItsTurn() {
+        let open: Set<String> = ["conv-C|live-run", "conv-C|t1#run"]
+        let during = TimelineRowBuilder.forgettingEndedLiveRun(
+            open, liveTools: [call("a", "Bash", "ls", finished: true)], scope: "conv-C")
+        XCTAssertEqual(during, open, "kept while the turn's calls are on screen")
+        let after = TimelineRowBuilder.forgettingEndedLiveRun(open, liveTools: [], scope: "conv-C")
+        XCTAssertEqual(after, ["conv-C|t1#run"], "a transcript run the reader opened stays open")
+        XCTAssertEqual(TimelineRowBuilder.forgettingEndedLiveRun(open, liveTools: [], scope: "conv-D"), open,
+                       "another conversation's live run is not this one")
     }
 
     func testNoFinishedCallMeansNoRunRow() async {

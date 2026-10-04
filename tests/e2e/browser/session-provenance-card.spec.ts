@@ -392,14 +392,14 @@ test('this session messaging another one cards too, mirroring the inbound card',
   await expect(outbound.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
 
   // The whole point: the send is provenance, so its generic Bash block is gone.
-  await expect(panel.locator('.chat-tool-block').filter({ hasText: 'session_send' })).toHaveCount(0)
+  await expect(panel.locator('.chat-tool-block').filter({ hasText: 'task_send' })).toHaveCount(0)
   // The command and the server's answer stay recoverable, folded.
   const raw = outbound.locator('.provenance-raw').first()
   await expect(raw).toBeHidden()
   expect(await outbound.innerText()).not.toContain('walnut tools call')
   await revealCard(page, panel, outbound.locator('.provenance-details > summary'))
   await outbound.locator('.provenance-details > summary').click()
-  await expect(raw).toContainText('walnut tools call session_send')
+  await expect(raw).toContainText('walnut tools call task_send')
   await expect(outbound.locator('.provenance-raw').last()).toContainText('"delivery":"queued"')
 
   await shotCard(page, panel, outbound, `${SCREENSHOT_DIR}/card-outbound.png`)

@@ -10,9 +10,8 @@ extension TimelineInput {
     func openingAllRuns() -> TimelineInput {
         var copy = self
         for part in TimelineToolRunFold.fold(messages) {
-            if case .run(let members) = part {
-                copy.expandedRowIDs.insert(
-                    TimelineToolRunFold.rowID(scope: scope, firstMemberID: members[0].id))
+            if case .run(let key, _) = part {
+                copy.expandedRowIDs.insert(TimelineToolRunFold.rowID(scope: scope, key: key))
             }
         }
         copy.expandedRowIDs.insert(TimelineScope.namespace(scope, TimelineRowBuilder.liveRunID))

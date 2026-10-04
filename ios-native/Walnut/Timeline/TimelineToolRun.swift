@@ -90,24 +90,83 @@ enum TimelineToolRunPhrase {
 enum TimelineToolRunFold {
     /// One stretch of the timeline after folding.
     enum Part: Equatable {
-        /// A message drawn as itself (prose, a user bubble, a notification, and a
-        /// stretch of reasoning with no tool call in it).
+        /// A message drawn as itself (prose, a user bubble, a notification, a
+        /// call the web keeps out of runs, and a stretch of reasoning with no tool
+        /// call in it).
         case message(ChatMessage)
         /// Consecutive tool and thinking rows with at least one tool among them.
-        /// `members` keep their order; the run's identity is its first member.
-        case run(members: [ChatMessage])
+        /// `members` keep their order; `key` names the run (see `runKey`).
+        case run(key: String, members: [ChatMessage])
     }
 
     /// Does this message ride a run? Tool and thinking rows do; anything else
-    /// (prose, user bubbles, notifications) closes the run it follows.
+    /// (prose, user bubbles, notifications) closes the run it follows, and so
+    /// does a call the web console keeps out of its runs.
     static func isRunMember(_ message: ChatMessage) -> Bool {
         guard !message.isUser else { return false }
-        return message.kind == .tool || message.kind == .thinking
+        if message.kind == .thinking { return true }
+        guard message.kind == .tool else { return false }
+        return !staysOutOfRuns(name: message.text, detail: message.detail,
+                               inputPreview: message.inputPreview)
+    }
+
+    /// The calls the web console never folds (`isMergeableHistoryTool`): leaving
+    /// plan mode, writing the plan file, and a message to another session. That
+    /// last one is conversation, not plumbing; folded into "Ran a command" it
+    /// would vanish from the timeline the way an incoming message never does.
+    static func staysOutOfRuns(name: String, detail: String?, inputPreview: String?) -> Bool {
+        if name == "ExitPlanMode" { return true }
+        if name == "Write", let path = detail, path.contains(".claude/plans/") { return true }
+        if name.hasPrefix("mcp__"), sendOps.contains(where: { name.hasSuffix("__\($0)") }) { return true }
+        if name == "Bash" { return isCliSessionSend(inputPreview) }
+        return false
+    }
+
+    /// The ops that message another session: `task_send`, and `session_send`, its
+    /// older name (the only one the web's detector knows today).
+    private static let sendOps = ["task_send", "session_send"]
+
+    /// `walnut tools call task_send …` at a command position of a Bash call, read
+    /// off the relayed input render (`command: …`). A cheap form of the web's
+    /// tokenizer (`findCliSend`): a quoted mention or `--help` sends nothing.
+    private static func isCliSessionSend(_ inputPreview: String?) -> Bool {
+        guard let inputPreview, inputPreview.contains("_send"),
+              let line = inputPreview.split(separator: "\n", omittingEmptySubsequences: true)
+                .first(where: { $0.hasPrefix("command: ") }) else { return false }
+        let words = line.dropFirst("command: ".count)
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+        var atHead = true
+        for (i, word) in words.enumerated() {
+            if word.allSatisfy({ ";|&(){}".contains($0) }) { atHead = true; continue }
+            let binary = word.split(separator: "/").last ?? word
+            if atHead, binary == "walnut" || binary == "open-walnut", i + 3 < words.count,
+               words[i + 1] == "tools", words[i + 2] == "call", sendOps.contains(String(words[i + 3])) {
+                let arg = i + 4 < words.count ? words[i + 4] : ""
+                return arg != "--help" && arg != "-h"
+            }
+            atHead = word.contains("=") && !word.hasPrefix("-")
+                || ["env", "exec", "sudo", "time", "nice", "command", "builtin"].contains(String(word))
+        }
+        return false
     }
 
     static func fold(_ messages: [ChatMessage]) -> [Part] {
         var parts: [Part] = []
         var run: [ChatMessage] = []
+        var keyCounts: [String: Int] = [:]
+        func emit(_ members: ArraySlice<ChatMessage>) {
+            guard let first = members.first else { return }
+            // A stretch with a tool in it is a run; reasoning alone is drawn as
+            // the rows it already was (a run with an empty phrase would be a lie).
+            guard members.contains(where: { $0.kind == .tool }) else {
+                parts.append(contentsOf: members.map { .message($0) })
+                return
+            }
+            let base = runKey(first)
+            let n = keyCounts[base, default: 0]
+            keyCounts[base] = n + 1
+            parts.append(.run(key: "\(base)#\(n)", members: Array(members)))
+        }
         func flush(ended: Bool) {
             guard !run.isEmpty else { return }
             // Reasoning at the END of a run that a visible message follows led to
@@ -119,8 +178,8 @@ enum TimelineToolRunFold {
             if ended {
                 while split > 0, run[split - 1].kind == .thinking { split -= 1 }
             }
-            parts.append(contentsOf: stretch(Array(run[..<split])))
-            parts.append(contentsOf: stretch(Array(run[split...])))
+            emit(run[..<split])
+            emit(run[split...])
             run.removeAll()
         }
         for message in messages {
@@ -135,12 +194,15 @@ enum TimelineToolRunFold {
         return parts
     }
 
-    /// A stretch with a tool in it is a run; reasoning alone is drawn as the
-    /// rows it already was (a run with an empty phrase would be a lie).
-    private static func stretch(_ members: [ChatMessage]) -> [Part] {
-        guard !members.isEmpty else { return [] }
-        if members.contains(where: { $0.kind == .tool }) { return [.run(members: members)] }
-        return members.map { .message($0) }
+    /// What names a run: where its FIRST member sits (role, time, kind, and a
+    /// tool's name), never what it carries. A session row's id hashes its payload,
+    /// so it moves when a cached slim read is replaced by the rich one or the
+    /// first call's result lands; a run named by that id snapped shut under the
+    /// reader who had just opened it. An occurrence count, assigned in timeline
+    /// order, tells apart runs that start at the same place.
+    private static func runKey(_ first: ChatMessage) -> String {
+        let name = first.kind == .tool ? first.text : ""
+        return "\(first.role)|\(first.createdAt)|\(first.kind?.rawValue ?? "")|\(name)"
     }
 
     /// The members of a run as the phrase wants them.
@@ -154,11 +216,11 @@ enum TimelineToolRunFold {
         members.filter { $0.kind == .tool && $0.isError == true }.count
     }
 
-    /// The run row's id: its FIRST member's namespace plus a suffix no member row
-    /// uses. Stable while the run grows at the tail of a live turn (rows fold
-    /// into it, the first one stays), which is what keeps a run the reader has
-    /// opened open; and it is the id `expandedRowIDs` remembers.
-    static func rowID(scope: String, firstMemberID: String) -> String {
-        "\(TimelineScope.namespace(scope, firstMemberID))#run"
+    /// The run row's id: its key in the conversation's namespace plus a suffix no
+    /// member row uses. Stable while the run grows at the tail of a live turn and
+    /// while its rows are re-read, which is what keeps a run the reader opened
+    /// open; and it is the id `expandedRowIDs` remembers.
+    static func rowID(scope: String, key: String) -> String {
+        "\(TimelineScope.namespace(scope, key))#run"
     }
 }

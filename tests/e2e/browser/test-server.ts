@@ -2418,9 +2418,10 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     // peer, as the CLI records it — a Bash tool_use whose payload is a
     // single-quoted JSON literal, answered by the server's stdout. The sender's
     // card is parsed straight out of these two rows (session-outbound.ts), so the
-    // shape here is the real transport shape and not a hand-made summary.
+    // shape here is the real transport shape and not a hand-made summary. The op
+    // is `task_send`, the name sessions use; `session_send` is its older alias.
     const outboundHandle = `${ENVELOPE_PEER_TITLE.slice(0, 80)}… [pw-envel]`
-    const outboundCommand = 'walnut tools call session_send '
+    const outboundCommand = 'walnut tools call task_send '
       + `'{"to":"pw-envelope-peer-session","text":"Both blockers cleared on my side. ENVELOPE_OUTBOUND_BODY","expect_reply":true}'`
     const outboundResult = JSON.stringify({
       delivery: 'queued',

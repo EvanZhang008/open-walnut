@@ -71,6 +71,9 @@ describe('detectOutboundSend — MCP transport', () => {
 
   it('accepts any MCP server key, and no other tool', () => {
     expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__personal__session_send'))).not.toBeNull();
+    // task_send is the op's current name; session_send is its deprecated alias.
+    expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__walnut__task_send'))).not.toBeNull();
+    expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__walnut__task_start'))).toBeNull();
     expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__walnut__session_start'))).toBeNull();
     expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp____session_send'))).toBeNull();
     expect(detectOutboundSend({ name: 'Read', input: { file_path: '/tmp/session_send.md' } })).toBeNull();
@@ -87,6 +90,21 @@ describe('detectOutboundSend — MCP transport', () => {
 });
 
 describe('detectOutboundSend — CLI transport', () => {
+  it('knows the op by its current name, task_send', () => {
+    // The 2026-10-03 phone review found every session's sends going out as
+    // `task_send`, which this detector did not know: they folded into
+    // "Ran a command" in the web console.
+    const send = detectOutboundSend(
+      bash(`walnut tools call task_send '{"to":"ab12cd34","text":"Review is done."}'`),
+      SEND_RESULT,
+    );
+    expect(send!.via).toBe('cli');
+    expect(send!.to).toBe('ab12cd34');
+    expect(send!.body).toBe('Review is done.');
+    expect(detectOutboundSend(bash(`walnut tools call task_send --help`))).toBeNull();
+    expect(detectOutboundSend(bash(`walnut tools call task_get '{"id":"ab12cd34"}'`))).toBeNull();
+  });
+
   it('parses a single-quoted JSON payload', () => {
     const send = detectOutboundSend(
       bash(`walnut tools call session_send '{"to":"ab12cd34","text":"Both blockers cleared.\\nShipping now.","expect_reply":true}'`),

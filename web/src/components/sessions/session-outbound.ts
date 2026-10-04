@@ -68,9 +68,14 @@ export interface OutboundSend {
   raw: string;
 }
 
-/** `mcp__<server>__session_send`. The server key is per-install, so it is a
- *  pattern; `[^_]` after the prefix keeps `mcp____…` out. */
-const MCP_SEND = /^mcp__[^_].*__session_send$/;
+/** `mcp__<server>__task_send` (or `session_send`, its older name). The server
+ *  key is per-install, so it is a pattern; `[^_]` after the prefix keeps
+ *  `mcp____…` out. */
+const MCP_SEND = /^mcp__[^_].*__(?:task|session)_send$/;
+
+/** The op names that send: `task_send`, and `session_send`, the deprecated alias
+ *  that takes the same arguments. */
+const SEND_OPS = new Set(['task_send', 'session_send']);
 
 /** Shell metacharacters that end a word and start a new command position. */
 const OPERATOR_CHARS = new Set([';', '|', '&', '(', ')', '{', '}', '\n']);
@@ -178,7 +183,7 @@ function isWalnutBinary(word: string): boolean {
  */
 function findCliSend(command: string): { arg?: ShellToken } | null {
   // Cheap gate first: this runs for every Bash row in a whale transcript.
-  if (!command.includes('session_send')) return null;
+  if (!command.includes('_send')) return null;
   if (command.length > MAX_COMMAND_CHARS) return null;
   const tokens = tokenizeCommand(command);
   for (let i = 0; i + 3 < tokens.length; i++) {
@@ -186,7 +191,7 @@ function findCliSend(command: string): { arg?: ShellToken } | null {
     if (head.op || head.quoted || !isWalnutBinary(head.value)) continue;
     const [tools, call, op] = [tokens[i + 1], tokens[i + 2], tokens[i + 3]];
     if ([tools, call, op].some((t) => t.op || t.quoted)) continue;
-    if (tools.value !== 'tools' || call.value !== 'call' || op.value !== 'session_send') continue;
+    if (tools.value !== 'tools' || call.value !== 'call' || !SEND_OPS.has(op.value)) continue;
     if (!atCommandPosition(tokens, i)) continue;
     const arg = tokens[i + 4];
     // `--help` after the op asks for the schema; nothing is sent.

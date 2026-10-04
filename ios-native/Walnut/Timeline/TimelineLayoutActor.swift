@@ -149,9 +149,8 @@ actor TimelineLayoutActor {
             case .message(let message):
                 rows.append(contentsOf: memoizedRows(for: message,
                                                      queued: input.queuedMessageStates[message.id]))
-            case .run(let members):
-                let runID = TimelineToolRunFold.rowID(scope: input.scope,
-                                                      firstMemberID: members[0].id)
+            case .run(let key, let members):
+                let runID = TimelineToolRunFold.rowID(scope: input.scope, key: key)
                 let expanded = input.expandedRowIDs.contains(runID)
                 rows.append(builder.toolRunRow(
                     id: runID,
