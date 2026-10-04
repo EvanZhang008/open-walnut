@@ -62,7 +62,7 @@ export * from './view-filter-model';
 
 export type SortBy = 'manual' | 'priority' | 'date' | 'updated';
 export type GroupBy = 'project' | 'none';
-export type DateFilter = '' | 'now' | 'overdue' | 'this-week' | 'no-date';
+export type DateFilter = '' | 'now' | 'overdue' | 'this-week';
 
 // Tab sentinels live in ./task-tabs so ViewDropdown, TodoPanel, MainPage and
 // useUrlSync share ONE definition. Re-exported here for existing importers.

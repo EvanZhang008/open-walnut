@@ -115,18 +115,18 @@ describe('FilterHome: the first page', () => {
     expect(doc.querySelector('.fb-prop[data-filter-dim="status"]')?.getAttribute('title')).toBe('Status: Open')
   })
 
-  it('C4: Status, Project, Date, Source rows, then More filters with the folded names; no Pinned; fold closed', () => {
+  it('C4: Status, Project, Date rows, then More filters with the folded names (Source among them); no Pinned; fold closed', () => {
     const doc = home(controller({ lists: lists({ sources: TWO_SOURCES }) }))
-    expect(shownDims(doc)).toEqual(['status', 'project', 'date', 'source'])
+    expect(shownDims(doc)).toEqual(['status', 'project', 'date'])
     expect(doc.querySelectorAll('[data-filter-dim="pinned"]').length).toBe(0)
     const more = doc.querySelector('#fb-more-body')!
     expect(more.hasAttribute('hidden')).toBe(true)
-    expect(foldedDims(doc)).toEqual(['blocked', 'time'])
+    expect(foldedDims(doc)).toEqual(['source', 'blocked', 'time'])
     const toggle = doc.querySelector('.fb-item.fb-more-toggle')!
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.getAttribute('aria-controls')).toBe('fb-more-body')
     expect(toggle.querySelector('.fb-item-text')?.textContent).toBe('More filters')
-    expect(toggle.querySelector('.fb-prop-summary')?.textContent).toBe('Blocked, Time window')
+    expect(toggle.querySelector('.fb-prop-summary')?.textContent).toBe('Source, Blocked, Time window')
     expect(home(controller(), true).querySelector('#fb-more-body')?.hasAttribute('hidden')).toBe(false)
   })
 
@@ -140,7 +140,7 @@ describe('FilterHome: the first page', () => {
     expect(doc.querySelector('.fb-group-action')).toBeNull()
     expect(doc.body.textContent).not.toContain('Clear')
     const items = Array.from(doc.querySelectorAll('.fb-item')).filter((el) => !el.closest('#fb-more-body'))
-    expect(items.map((el) => el.getAttribute('data-filter-dim') ?? 'more')).toEqual(['status', 'project', 'date', 'source', 'more'])
+    expect(items.map((el) => el.getAttribute('data-filter-dim') ?? 'more')).toEqual(['status', 'project', 'date', 'more'])
   })
 
   it('a set filter puts Clear in the Filter title; it clears every filter', () => {
@@ -203,7 +203,7 @@ describe('FilterValuesPage: the second page', () => {
     const date = page(controller(), 'date')
     expect(date.querySelector('[data-date-value="now"]')?.getAttribute('aria-pressed')).toBe('true')
     expect(Array.from(date.querySelectorAll('.fb-opt-body')).map((el) => el.getAttribute('data-date-value')))
-      .toEqual(['now', '', 'overdue', 'this-week', 'no-date'])
+      .toEqual(['now', '', 'overdue', 'this-week'])
   })
 
   it('head: Back to all filters, the property name, Reset only while the property is set', () => {
@@ -245,7 +245,7 @@ describe('FilterValuesPage: the second page', () => {
 
   it('single-select rows draw a bare tick slot, no count and no Only', () => {
     const doc = page(controller(), 'date')
-    expect(doc.querySelectorAll('.fb-check').length).toBe(5)
+    expect(doc.querySelectorAll('.fb-check').length).toBe(4)
     expect(doc.querySelectorAll('.fb-check-box').length).toBe(0)
     expect(doc.querySelectorAll('.fb-only, .tp-count').length).toBe(0)
     expect(doc.querySelector('[data-date-value="now"] .fb-check svg')).not.toBeNull()

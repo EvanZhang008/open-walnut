@@ -136,7 +136,6 @@ export const DATE_FILTER_OPTIONS: readonly DateFilterOption[] = [
   { value: '', label: 'Any date', title: 'Show every task, including ones that start later.', firstLayer: true },
   { value: 'overdue', label: 'Overdue', title: "Only tasks whose due date, or a parent's due date, has passed.", firstLayer: false },
   { value: 'this-week', label: 'Starting within 7 days', title: 'Hide only tasks that start more than 7 days from now.', firstLayer: false },
-  { value: 'no-date', label: 'No dates', title: "Only tasks with no start or due date of their own. A parent's dates do not count.", firstLayer: false },
 ];
 
 export function dateLabel(value: DateFilterValue): string {

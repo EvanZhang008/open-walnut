@@ -77,9 +77,6 @@ export function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task
       const startMs = effectiveStart ? parseDateLocal(effectiveStart).getTime() : null;
       return !startMs || startMs <= now + 7 * 86_400_000;
     }
-    case 'no-date':
-      // no-date means the task itself is unscheduled (not inherited)
-      return !task.due_date && !task.start_date;
     default:
       return true;
   }

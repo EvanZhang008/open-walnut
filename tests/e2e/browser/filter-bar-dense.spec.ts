@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator } from '@playwright/test'
 import {
-  addFilter, closeFilterMenu, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterSearch,
+  addFilter, closeFilterMenu, expandMoreFilters, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterSearch,
   filterValue, openFilterMenu, openFilterPage, openViewsPage, setStatus,
 } from './filter-bar-helpers'
 import { SHOTS, box, clipAround, focusedLabel, openHome, ownerSeeds, row, settled, stubBoard } from './filter-bar-fixtures'
@@ -24,15 +24,15 @@ test.describe('Owner: dense board', () => {
     await expect(row(page, 'fb-own-1')).toBeAttached({ timeout: 30_000 })
   })
 
-  test('C4: a fresh user sees exactly Status, Project, Date, Source and More filters under the Filter title, then the display rows', async ({ page }) => {
+  test('C4: a fresh user sees exactly Status, Project, Date and More filters under the Filter title (Source folds), then the display rows', async ({ page }) => {
     await openFilterMenu(page)
     const items = await filterMenu(page).locator('.fb-home .fb-item').evaluateAll((els) => els
       .filter((e) => (e as HTMLElement).offsetParent !== null)
       .map((e) => (e.classList.contains('fb-more-toggle') ? 'more' : e.getAttribute('data-filter-dim'))))
-    expect(items).toEqual(['status', 'project', 'date', 'source', 'more'])
+    expect(items).toEqual(['status', 'project', 'date', 'more'])
     const toggle = filterMenu(page).getByRole('button', { name: /^More filters/ })
     await expect(toggle.locator('.fb-item-text')).toHaveText('More filters')
-    await expect(toggle.locator('.fb-prop-summary')).toHaveText('Blocked, Tags, Time window')
+    await expect(toggle.locator('.fb-prop-summary')).toHaveText('Source, Blocked, Tags, Time window')
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await expect(filterMenu(page).locator('#fb-more-body')).toBeHidden()
     // Nothing set: one group titled Filter with no Clear, no search results, no page two.
@@ -53,6 +53,7 @@ test.describe('Owner: dense board', () => {
 
   test('S7 + C28 + C34 + C29: the Project page holds all 30 in board order behind a focused search; Source by name; the menu caps and scrolls', async ({ page }) => {
     await openFilterMenu(page)
+    await expandMoreFilters(page)
     await expect(filterDimRow(page, 'source').locator('.fb-prop-summary')).toHaveText('Any')
     await expect(filterDimRow(page, 'priority')).toHaveCount(0)
     const homeH = (await box(filterMenu(page))).height

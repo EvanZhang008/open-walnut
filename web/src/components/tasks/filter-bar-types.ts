@@ -25,11 +25,12 @@ export type FilterDim =
 export const FILTER_DIMS: readonly FilterDim[] = [
   'status', 'project', 'date', 'source', 'priority', 'blocked', 'tags', 'sprint', 'time',
 ];
-export const FIRST_LAYER_DIMS: readonly FilterDim[] = ['status', 'project', 'date', 'source'];
-export const MORE_DIMS: readonly FilterDim[] = ['priority', 'blocked', 'tags', 'sprint', 'time'];
+/** The first page's rows; Source folds with the rest (2026-10-03: "source is not important"). */
+export const FIRST_LAYER_DIMS: readonly FilterDim[] = ['status', 'project', 'date'];
+export const MORE_DIMS: readonly FilterDim[] = ['source', 'priority', 'blocked', 'tags', 'sprint', 'time'];
 
 /** The legacy client-side date filter ids (`data-date-value`). */
-export type DateFilterValue = '' | 'now' | 'overdue' | 'this-week' | 'no-date';
+export type DateFilterValue = '' | 'now' | 'overdue' | 'this-week';
 
 export interface FilterTime {
   basis: TimeBasis;

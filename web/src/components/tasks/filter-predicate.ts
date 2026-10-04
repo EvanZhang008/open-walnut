@@ -112,7 +112,7 @@ export function dimPasses(task: Task, dim: FilterDim, ctx: FilterEvalContext): b
     const date = ctx.state.date;
     // The default `now` only hides work that has not started, which means nothing
     // for a finished task, so completed tasks skip it (the old list's rule). A Date
-    // the user picked (Overdue, Starting within 7 days, No dates) is a real
+    // the user picked (Overdue, Starting within 7 days) is a real
     // condition and applies to every task, search included (5.7).
     if (!date || (date === 'now' && task.status === 'done')) return true;
     return matchesDateFilter(task, date, ctx.allTasks);

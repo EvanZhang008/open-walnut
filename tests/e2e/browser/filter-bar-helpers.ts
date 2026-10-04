@@ -32,7 +32,7 @@ export const STATUS_LABELS = ['To Do', 'In Progress', 'Need Action', 'Waiting', 
 
 /** Date labels to their `data-date-value` ids (4.1); ids pass through unchanged. */
 const DATE_IDS: Record<string, string> = {
-  'Available now': 'now', 'Any date': '', Overdue: 'overdue', 'Starting within 7 days': 'this-week', 'No dates': 'no-date',
+  'Available now': 'now', 'Any date': '', Overdue: 'overdue', 'Starting within 7 days': 'this-week',
 }
 
 const TOOLBAR = '#home-task-navigation .todo-panel-toolbar'

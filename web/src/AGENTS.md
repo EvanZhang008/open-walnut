@@ -111,8 +111,10 @@ show inline after the open ones, other completed hits that show the query fold i
   active-filter count as a badge, `components/tasks/DisplayMenu.tsx` for the button, `FilterMenu.tsx`
   `PanelMenu` for the menu) is a SMALL two-page menu, 320px, one search box on top. Page one, top to
   bottom: `Filter` (`FilterHome.tsx`: one row per property with its value at the right, Status,
-  Project, Date, Source; Priority, Blocked, Tags, Sprint, Time window folded behind `More filters`
-  unless set; `Clear` in the title while something is set), then the display rows
+  Project, Date; Source, Priority, Blocked, Tags, Sprint, Time window folded behind `More filters`
+  unless set, Source included because "source is not important"; Date has four values, Available
+  now, Any date, Overdue, Starting within 7 days, the old `No dates` is gone; `Clear` in the title
+  while something is set), then the display rows
   (`DisplaySections.tsx`): Sort and Group, then View (one row, the current view's name at the right),
   Show tab bar, Session columns, and last the rows only some views have (Collapse all, Tier layout,
   Recent order). A property row opens page two (`FilterValuesPage.tsx`), that property's values as a

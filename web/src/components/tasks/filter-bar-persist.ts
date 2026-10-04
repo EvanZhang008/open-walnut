@@ -32,7 +32,8 @@ export const FILTERS_VERSION = 1;
 /** Stored history is longer than the 4 shown, so dropped values do not shrink the row. */
 export const RECENT_STORE_LIMIT = 12;
 
-const DATE_VALUES: readonly DateFilterValue[] = ['', 'now', 'overdue', 'this-week', 'no-date'];
+// A stored value this list no longer names (the retired `no-date`) reads as the default.
+const DATE_VALUES: readonly DateFilterValue[] = ['', 'now', 'overdue', 'this-week'];
 const PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'];
 const BASES: readonly FilterTime['basis'][] = ['created', 'updated', 'created_or_updated'];
 const PRESETS: readonly NonNullable<FilterTime['preset']>[] = ['1h', '6h', '24h', '7d', '30d', 'custom'];

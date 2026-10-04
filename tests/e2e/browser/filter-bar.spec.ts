@@ -334,8 +334,8 @@ test.describe('Mia: menu layout and words', () => {
   test('C39 + C60: Date lists all five values in one page; single-select picks close; value-only Blocked and Time chips', async ({ page }) => {
     await openFilterPage(page, 'date')
     const rows = filterPage(page, 'date').locator('.fb-opt-body')
-    await expect(rows.locator('.fb-opt-label')).toHaveText(['Available now', 'Any date', 'Overdue', 'Starting within 7 days', 'No dates'])
-    expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-date-value')))).toEqual(['now', '', 'overdue', 'this-week', 'no-date'])
+    await expect(rows.locator('.fb-opt-label')).toHaveText(['Available now', 'Any date', 'Overdue', 'Starting within 7 days'])
+    expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-date-value')))).toEqual(['now', '', 'overdue', 'this-week'])
     await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('title', 'Hide tasks that start later. Tasks with no start date stay.')
     await expect(filterValue(page, 'date', 'Any date')).toHaveAttribute('title', 'Show every task, including ones that start later.')
     await expect(filterValue(page, 'date', 'this-week')).toHaveAttribute('title', 'Hide only tasks that start more than 7 days from now.')
@@ -439,15 +439,18 @@ test.describe('Themes, narrow panels and the view item', () => {
     await page.locator('.fb-toolbar-scope').evaluate((el) => { (el as HTMLElement).style.width = '320px' })
     const plus = filterRow(page).locator('.fb-chip-plus')
     await expect(plus).toBeVisible()
-    // The fit settles over a frame or two after the width change: wait for a stable split of 7.
-    const split = async () => (await filterRow(page).locator('.fb-chip[data-chip-dim]').count()) + Number((await plus.innerText()).replace('+', ''))
+    // The fit settles over a frame or two after the width change, and again whenever the
+    // tail's count changes width (`Loading completed` to `N tasks`): wait for the count,
+    // then for a split of 7, and read `+N` again at each step rather than trusting an
+    // earlier read (WebKit: a read straddling a refit came back one short).
+    await expect(page.getByTestId('filter-count')).toHaveText(/^\d+ tasks?$/, { useInnerText: true })
+    const plusN = async () => Number((await plus.innerText()).replace('+', ''))
+    const split = async () => (await filterRow(page).locator('.fb-chip[data-chip-dim]').count()) + await plusN()
     await expect.poll(split).toBe(7)
-    const n = Number((await plus.innerText()).replace('+', ''))
-    await expect(plus).toHaveAttribute('aria-label', `${n} more filters`)
-    const shown = await filterRow(page).locator('.fb-chip[data-chip-dim]').count()
-    expect(shown + n).toBe(7)
+    await expect.poll(async () => (await plus.getAttribute('aria-label')) === `${await plusN()} more filters`).toBe(true)
     await plus.click()
     const over = page.locator('.fb-overflow-menu')
+    const n = await plusN()
     await expect(over.locator('.fb-chip[data-chip-dim]')).toHaveCount(n)
     await settled(over)
     const ob = await box(over)

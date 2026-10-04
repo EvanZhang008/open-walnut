@@ -21,16 +21,18 @@
   padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .todo-panel-hide:hover { color: var(--fg); background: var(--bg-hover); }
-/* One quiet toolbar, no accent colour (the user's call, 2026-09-23): New task wears the
-   search field's outline, and the filter icon is a plain glyph like the hide button. An
-   active filter keeps its dot, in grey. */
+/* One quiet toolbar, no accent colour (the user's call, 2026-09-23), and every button the
+   same quiet shape as Display (.tp-btn; 2026-10-03: "the frame around New task is not
+   needed, keep the UI consistent"): no border, no fill until hover, the icon a plain glyph. */
 .app-shell-navigation .todo-panel-toolbar .new-launcher-btn {
-  border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg);
-  font-weight: 500; box-shadow: none;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--fg-secondary);
+  gap: 4px; padding: 0 8px; font-weight: 500; box-shadow: none;
 }
-.app-shell-navigation .todo-panel-toolbar .new-launcher-btn:hover { background: var(--bg-hover); box-shadow: none; transform: none; }
+.app-shell-navigation .todo-panel-toolbar .new-launcher-btn:hover { background: var(--bg-hover); color: var(--fg); box-shadow: none; transform: none; }
+.app-shell-navigation .todo-panel-toolbar .new-launcher-btn:active { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.app-shell-navigation .todo-panel-toolbar .new-launcher-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @container (max-width: 275px) {
-  .app-shell-navigation .todo-panel-toolbar .new-launcher-btn { border-radius: 7px; }
+  .app-shell-navigation .todo-panel-toolbar .new-launcher-btn { border-radius: 6px; }
 }
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon,
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter { width: 24px; border-radius: 6px; color: var(--fg-muted); }

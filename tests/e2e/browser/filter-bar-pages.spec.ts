@@ -194,9 +194,9 @@ test('a short page focuses its first selected row', async ({ page }) => {
   await openFilterPage(page, 'status')
   await expect(filterValue(page, 'status', 'Waiting')).toBeFocused()
   await closeFilterMenu(page)
-  await addFilter(page, 'date', 'No dates')
+  await addFilter(page, 'date', 'Overdue')
   await openFilterPage(page, 'date')
-  await expect(filterValue(page, 'date', 'No dates')).toBeFocused()
+  await expect(filterValue(page, 'date', 'Overdue')).toBeFocused()
 })
 
 test('search ranking: a value picked more often leads its hits; ties keep the list order; a click from the search counts too', async ({ page }) => {

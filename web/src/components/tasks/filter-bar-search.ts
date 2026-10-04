@@ -41,7 +41,6 @@ const VALUE_ALIASES: Partial<Record<FilterDim, Record<string, readonly string[]>
   // The old quick filter called it "This week" (F27).
   date: {
     'this-week': ['week', 'thisweek', 'soon'],
-    'no-date': ['nodate', 'undated'],
   },
 };
 

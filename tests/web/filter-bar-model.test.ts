@@ -209,11 +209,10 @@ describe('popover values (4.1, G9)', () => {
   it('Date values and titles match 4.1 exactly', () => {
     expect(DATE_FILTER_OPTIONS.map((o) => [o.value, o.label, o.firstLayer])).toEqual([
       ['now', 'Available now', true], ['', 'Any date', true], ['overdue', 'Overdue', false],
-      ['this-week', 'Starting within 7 days', false], ['no-date', 'No dates', false],
+      ['this-week', 'Starting within 7 days', false],
     ]);
     expect(DATE_FILTER_OPTIONS[0].title).toBe('Hide tasks that start later. Tasks with no start date stay.');
     expect(DATE_FILTER_OPTIONS[3].title).toBe('Hide only tasks that start more than 7 days from now.');
-    expect(DATE_FILTER_OPTIONS[4].title).toBe("Only tasks with no start or due date of their own. A parent's dates do not count.");
   });
   it('selected-but-missing values come first and stay selectable', () => {
     const vals = dimValues('project', { ...S0, projects: ['Gone'] }, lists);

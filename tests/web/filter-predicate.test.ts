@@ -73,7 +73,7 @@ describe('passesChips', () => {
     expect(ids([dep, blocked], { ...S0, blocked: true })).toEqual(['blocked']);
     expect(ids([dep, blocked], { ...S0, blocked: false })).toEqual(['dep']);
   });
-  it('Date: any date shows the future task; overdue and no-date use the moved filter', () => {
+  it('Date: any date shows the future task; overdue uses the moved filter', () => {
     expect(ids(tasks, { ...S0, date: '' })).toContain('future');
     const late = mk({ title: 'late', due_date: '2020-01-01' });
     expect(ids([...tasks, late], { ...S0, date: 'overdue' })).toEqual(['late']);

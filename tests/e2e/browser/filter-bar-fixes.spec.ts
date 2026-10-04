@@ -9,7 +9,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  chooseDisplayOption, closeFilterMenu, displayMenu, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterValue,
+  chooseDisplayOption, closeFilterMenu, displayMenu, expandMoreFilters, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterValue,
   openDisplayMenu, openFilterMenu, openFilterPage, openViewsPage, settled, viewRow, viewsPage,
 } from './filter-bar-helpers'
 import { MIA, MIA_PINS, box, openHome, ownerSeeds, row, stubBoard } from './filter-bar-fixtures'
@@ -227,7 +227,8 @@ test('F34: a menu opened while tasks load grows to its loaded content, has no me
   await expect(page.getByTestId('todo-pinned-empty')).toHaveCount(0)
   const loadingH = (await box(filterMenu(page))).height
   await expect(filterDimRow(page, 'project').locator('.fb-prop-summary')).toHaveText('Any', { timeout: 20_000 })
-  // The page is listed again once the tasks arrive: two sources bring the Source row.
+  // The page is listed again once the tasks arrive: two sources bring the Source row (folded).
+  await expandMoreFilters(page)
   await expect(filterDimRow(page, 'source')).toBeVisible()
   await expect.poll(async () => (await box(filterMenu(page))).height).toBeGreaterThan(loadingH)
   // No fixed height from any frame: the box is its content, under a cap.

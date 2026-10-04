@@ -80,23 +80,23 @@ describe('homeRows: shown rows and the More filters fold', () => {
     expect(homeRows(S0, lists())).toEqual({ shown: ['status', 'project', 'date'], folded: ['blocked', 'time'] });
   });
 
-  it('two sources add Source to the first rows; tags, sprints and priority fold in registry order', () => {
+  it('two sources list Source, folded with tags, sprints and priority in registry order', () => {
     const l = lists({ sources: TWO_SOURCES, tags: ['label:a'], sprints: ['S1'], showPriority: true });
     expect(homeRows(S0, l)).toEqual({
-      shown: ['status', 'project', 'date', 'source'],
-      folded: ['priority', 'blocked', 'tags', 'sprint', 'time'],
+      shown: ['status', 'project', 'date'],
+      folded: ['source', 'priority', 'blocked', 'tags', 'sprint', 'time'],
     });
   });
 
   it('a folded property that is set is promoted out of the fold, in registry order', () => {
     const l = lists({ sources: TWO_SOURCES, tags: ['label:a'] });
     expect(homeRows(st({ blocked: false }), l)).toEqual({
-      shown: ['status', 'project', 'date', 'source', 'blocked'],
-      folded: ['tags', 'time'],
+      shown: ['status', 'project', 'date', 'blocked'],
+      folded: ['source', 'tags', 'time'],
     });
     expect(homeRows(st({ time: { ...S0.time, preset: '7d' }, tagsAny: ['label:a'] }), l)).toEqual({
-      shown: ['status', 'project', 'date', 'source', 'tags', 'time'],
-      folded: ['blocked'],
+      shown: ['status', 'project', 'date', 'tags', 'time'],
+      folded: ['source', 'blocked'],
     });
   });
 
