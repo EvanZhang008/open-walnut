@@ -399,8 +399,11 @@ test.describe('Questions about a file passage (Files tab)', () => {
     const askOnce = async () => {
       const askHere = page.locator('[data-testid="bubble-ask-here"]')
       // Measured on each try: a banner from the previous test's turn can move the
-      // panel between the measure and the drag (seen once at load ~15).
+      // panel between the measure and the drag (seen once at load ~15). The view
+      // reopens at the scroll an earlier test left, and rects of text off screen
+      // still measure: bring the passage into view first.
       await expect(async () => {
+        await editor.locator('p', { hasText: MD_PASSAGE_FULL }).first().scrollIntoViewIfNeeded()
         await dragSelect(page, await textRects(editor, MD_PASSAGE_FULL))
         await expect(askHere).toBeVisible({ timeout: 3_000 })
       }).toPass({ timeout: 30_000 })

@@ -981,7 +981,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // File-path click target for the Files split view. When set, the explorer roots
   // at the clicked file (backend lists its parent + preselects it, VS Code style)
   // instead of the session cwd. Cleared when the split closes / view switches.
-  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; term?: string } | null>(null);
+  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; term?: string; nonce: number } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
   //
   // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
@@ -1047,7 +1047,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     // A nested column has no Files split: the file opens in a tab of its own (the
     // preview's own "Open in new tab"), so the Board and this chat stay put.
     if (inset) { openPopout('file', { path, host: session?.host, line }); return; }
-    setFileViewTarget({ path, line, term });
+    // A new nonce every time: the same path again still lands on it (the explorer
+    // resets on it) after the reader browsed to another file in the tree.
+    setFileViewTarget((prev) => ({ path, line, term, nonce: (prev?.nonce ?? 0) + 1 }));
     setActiveView('files');
     enterFullscreen();
   }, [enterFullscreen, inset, session?.host]);
@@ -2323,6 +2325,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         sessionId={sessionId}
                         initialLine={fileViewTarget?.line}
                         initialTerm={fileViewTarget?.term}
+                        openNonce={fileViewTarget?.nonce}
                         // ONE memory key for both ways in, and one PER SESSION. `cwd`
                         // above differs per entry (chat file click → the file's parent
                         // dir; Files chip → session cwd), so a root-keyed "last file

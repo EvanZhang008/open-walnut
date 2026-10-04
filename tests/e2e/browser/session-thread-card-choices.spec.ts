@@ -198,12 +198,14 @@ test.describe('Choices around the comment card', () => {
     await page.waitForTimeout(400)
     const big = (await c.boundingBox())!
     expect(Math.abs(big.y - (await passageBottom()) - gap)).toBeLessThan(2)
-    expect(await maxHeight()).toBeGreaterThan(placedMax + 100)
+    expect(await maxHeight()).toBeGreaterThan(placedMax * 1.25)
     const hb = (await panel.locator('.session-history').boundingBox())!
     expect(big.x).toBeGreaterThanOrEqual(hb.x)
     expect(big.x + big.width).toBeLessThanOrEqual(hb.x + hb.width + 1)
-    // The passage's last line is still in view above it.
+    // The passage's last line is still in view above it, and the history's
+    // jump-to-bottom button (8px + 36px from the bottom) stays clear of it.
     expect(await passageBottom()).toBeGreaterThan(hb.y)
+    expect(big.y + big.height).toBeLessThanOrEqual(hb.y + hb.height - 44)
     await expect(c.locator('.thread-card-input')).toBeFocused()
     await shot(page, 'card-expanded', panel)
     // Esc: back to its size, still open, in the same place.

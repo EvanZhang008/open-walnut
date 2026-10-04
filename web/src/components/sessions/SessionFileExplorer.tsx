@@ -57,6 +57,11 @@ interface SessionFileExplorerProps {
   /** Keyword to flash at `initialLine` (a reference jump from the Changed tab
    *  lands on the symbol, not just the row). */
   initialTerm?: string;
+  /** Bumped by every open of a path (a chat path click, a question's file): the
+   *  same path opened again lands on it even after the reader browsed to another
+   *  file in the tree, which a reset keyed on `cwd` alone never noticed
+   *  (2026-10-03: a file question reopened from another file did nothing). */
+  openNonce?: number;
   /**
    * Stable key for "which file was I reading" + the back/forward history.
    *
@@ -156,7 +161,7 @@ function lastSegment(p: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialTerm, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
   const [root, setRoot] = useState<string>(cwd || '~');
   const [showHidden, setShowHidden] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -482,8 +487,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   }, [host, showHidden, clearStale]);
   loadDirsBatchRef.current = loadDirsBatch;
 
-  // Full reset + load root only when the session (cwd/host) changes — NOT when
-  // showHidden flips (that's handled below without nuking expand/selection state).
+  // Full reset + load root only when the session (cwd/host) changes or a path is
+  // opened again (`openNonce`) — NOT when showHidden flips (that's handled below
+  // without nuking expand/selection state).
   // loadDir is intentionally omitted: it changes with showHidden, which must not reset.
   useEffect(() => {
     const gen = ++resetGenRef.current;
@@ -542,7 +548,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     // is the answer. Every restored dir gets refetched from inside this call.
     void loadDir(initialRoot, { isRoot: true, restoreExpanded: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, host]);
+  }, [cwd, host, openNonce]);
 
   // Keep the open-state key in sync when ~ resolves to the canonical absolute
   // root, restoring any persisted open sections (survives Refresh + reload) and

@@ -107,9 +107,10 @@ export const CARD_GAP = 8;
  *  when there is room (2026-10-03: lifted to a panel overlay it read as a new
  *  place, not the same card made bigger). */
 export const CARD_GROWN_WIDTH = 960;
-/** Room an expanded timeline card leaves above it in the box, so the passage's
- *  last line stays in view once the card is scrolled whole into view. */
-export const CARD_GROWN_HEADROOM = 72;
+/** Room an expanded timeline card leaves in the box: the passage's last line
+ *  above it, and the history's jump-to-bottom button below it (the card's
+ *  `scroll-margin-bottom`), once the card is scrolled whole into view. */
+export const CARD_GROWN_HEADROOM = 96;
 
 /** How far the expanded card reaches (its top stays the card's own). */
 export interface CardGrown {
