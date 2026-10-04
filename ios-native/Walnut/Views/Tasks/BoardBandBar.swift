@@ -105,6 +105,25 @@ struct BoardBandRailGeometry: Hashable {
 
     // MARK: - The chip rail's own metrics
 
+    /// How far the rail's viewport stays inside the card's top and bottom edges.
+    ///
+    /// This is the fix for the pinned bar that kept its card and lost its chips
+    /// (2026-10-04, still seen on iOS 27 after the first fix). The pinned card sits flush
+    /// under the navigation bar, and SwiftUI stretches a scroll view whose edge touches
+    /// the safe area edge up into it: the rail's `UIScrollView` measured 168pt tall for
+    /// 52pt of chips (280pt with the large title out), so the OS treated it as a scroll
+    /// view under the bar and gave it a scroll edge pocket the size of the whole rail.
+    /// Hiding that effect held on iOS 26 only. A rail that does not touch the card's edge
+    /// cannot stretch, so it is exactly its strip and no pocket exists. The card stays
+    /// flush on purpose: its page background running up behind the bar is the bar's
+    /// opaque background (see `BoardBandBar.body`).
+    ///
+    /// Pixel-neutral: the chips are centred in the rail, and the rail stays centred in the
+    /// card. 4pt still leaves the tallest chip (the `chipTypeCap` size, about 32pt) its
+    /// room, and a chip's own frame is what takes a tap, so no tap target shrinks.
+    /// `BoardRailScrollEdgeTests` measures the platform frame.
+    var railVerticalInset: CGFloat = 4
+
     /// Leading gutter of the scroll content.
     var contentLeadingInset: CGFloat = 10
     /// Gap between chips.
@@ -280,7 +299,10 @@ struct BoardBandRailGeometry: Hashable {
         return BoardBandBarLayout(
             card: CGRect(x: inset, y: 0, width: cardWidth, height: height),
             cardCornerRadius: cardCornerRadius,
-            rail: CGRect(x: 0, y: 0, width: rail, height: height),
+            rail: CGRect(
+                x: 0, y: railVerticalInset,
+                width: rail, height: height - 2 * railVerticalInset
+            ),
             filters: CGRect(
                 x: filtersColumnMinX(cardWidth: cardWidth), y: 0,
                 width: filtersControlWidth, height: height
@@ -773,6 +795,12 @@ struct BoardBandBar: View {
                     // trading a ghost for a visible seam. Inline gets nothing: it IS in
                     // the content flow, and painting there would draw the page over the
                     // page.
+                    //
+                    // A `Color` background ignores the safe area, so with the pinned copy
+                    // flush under the navigation bar this paper also runs up behind the
+                    // whole bar, and that is the bar's opaque background on the board: on
+                    // iOS 26 the bar draws none of its own, and without this the rows read
+                    // through it (measured 2026-10-04 when a 1pt gap broke the adjacency).
                     .background(placement == .pinnedOverlay
                         ? BoardBandCard.page : Color.clear)
                     .opacity(drawing ? 1 : 0)
@@ -799,6 +827,7 @@ struct BoardBandBar: View {
             chipRail(layout)
                 .frame(width: layout.rail.width, height: layout.rail.height)
                 .padding(.leading, layout.rail.minX)
+                .padding(.top, layout.rail.minY)
             filtersControl(drawing: drawing)
                 .frame(width: layout.filters.width, height: layout.filters.height)
                 .padding(.leading, layout.filters.minX)
@@ -894,17 +923,16 @@ struct BoardBandBar: View {
                 .padding(.trailing, layout.railTrailingContentInset)
                 .frame(height: layout.rail.height)
             }
-            // No scroll edge effect on the rail, on ANY edge: this is the fix for the
-            // pinned bar that kept its card and lost its chips (2026-10-04).
-            //
-            // SwiftUI stretches this horizontal scroll view's platform view up into the
-            // top safe area (measured: 52pt of chips in a 280pt `UIScrollView` at rest,
-            // 168pt once the large title collapses), and iOS 26 gives every scroll view
-            // under a bar a top edge pocket sized to that bar. With the title collapsed
-            // the pocket ran from the window top to y=168, i.e. over the WHOLE visible
-            // strip (116...168), so the edge effect drew over the chips while the card,
-            // which sits outside the scroll view, stayed. The rail never scrolls
+            // No scroll edge effect on the rail, on ANY edge. The rail never scrolls
             // vertically, so it has no edge for an effect to mark.
+            //
+            // This was the first fix for the pinned bar that kept its card and lost its
+            // chips (2026-10-04): the rail's `UIScrollView` was stretched up under the
+            // navigation bar (52pt of chips in a 168pt scroll view), the OS gave it an
+            // edge pocket the size of the whole rail, and the effect drew over the chips.
+            // Hiding the effect held on iOS 26 only. The real fix is
+            // `BoardBandRailGeometry.railVerticalInset`, which stops the stretch, so no
+            // pocket is created; this stays as the second guard.
             .hiddenScrollEdgeEffects()
             // The rail is exactly the card minus the reserved column, so the filters
             // control is not "beside" the chips by negotiation — it is outside a frame

@@ -14,6 +14,8 @@ import SwiftUI
 struct TasksView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(TasksStore.self) private var tasks
+    /// Read only to pin the navigation bar's appearance to it (`toolbarColorScheme` below).
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var activeFilter: TaskFilter = .sessions
     @State private var selected: WalnutTask?
@@ -285,10 +287,17 @@ struct TasksView: View {
             // `.visible` needs no availability gate (iOS 16+, deployment target 18.0), so
             // it ships to every supported OS. `scrollEdgeEffectStyle(.hard, for: .top)` is
             // the platform's OWN answer on iOS 26 and rides the List below
-            // (`hardTopScrollEdge`), gated — complementary, not alternatives: this one
+            // (`topScrollEdge`), gated — complementary, not alternatives: this one
             // gives the BAR a background, that one stops the content reading through the
             // top edge in the first place.
             .toolbarBackground(.visible, for: .navigationBar)
+            // The bar's appearance is the app's, stated. Left to iOS 26 it is inferred from
+            // what scrolls under the bar, and on the board, once the chip rail stopped being
+            // stretched up under the bar (`BoardBandRailGeometry.railVerticalInset`), it
+            // inferred LIGHT in dark mode: the clock and the inline "Tasks" went dark on the
+            // black page and vanished. The rail's stretched edge layers had been steering
+            // that inference by accident.
+            .toolbarColorScheme(colorScheme, for: .navigationBar)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 // No server-mode pill here: Live/Replica is plumbing the person adding
@@ -805,7 +814,14 @@ struct TasksView: View {
             // instead of the default progressive one. The opaque toolbar above already
             // stops the reported ghost on every supported OS; this stops the content
             // reading through the edge in the first place where the OS can do it.
-            .hardTopScrollEdge()
+            //
+            // EXCEPT on the board, which keeps the platform's default edge. There the
+            // pinned band bar's own page background already covers the top of the screen
+            // behind the bar, and a HARD edge under it put the bar's glass in its light
+            // appearance in dark mode (a pale `+` on the black page); the board never
+            // showed that before only because the rail's stretched edge layers overrode
+            // it. A value, not a branch, so a filter switch does not rebuild the List.
+            .topScrollEdge(hard: !TasksChromeMetrics.hasPinnedChips(activeFilter))
             .accessibilityIdentifier("tasks.list")
             // Watch how far the list is scrolled and flip the two floating rows. The
             // OBSERVER is what makes the header chrome disposable: the nav row, the
@@ -1988,7 +2004,8 @@ struct InlineAddTaskRow: View {
 // MARK: - The iOS 26 top scroll edge
 
 private extension View {
-    /// `scrollEdgeEffectStyle(.hard, for: .top)` where the OS has it.
+    /// `scrollEdgeEffectStyle(.hard, for: .top)` where the OS has it (`.automatic`, the
+    /// platform default, when `hard` is false).
     ///
     /// A helper and not an inline `if #available`, because the modifier changes the
     /// view's TYPE: branching inline would need `AnyView` or a `@ViewBuilder` wrapper at
@@ -2000,9 +2017,9 @@ private extension View {
     /// edge — the reason `ChatView`'s bar and this one now behave the same way while the
     /// board keeps its own paper colour underneath.
     @ViewBuilder
-    func hardTopScrollEdge() -> some View {
+    func topScrollEdge(hard: Bool) -> some View {
         if #available(iOS 26.0, *) {
-            self.scrollEdgeEffectStyle(.hard, for: .top)
+            self.scrollEdgeEffectStyle(hard ? .hard : .automatic, for: .top)
         } else {
             self
         }
