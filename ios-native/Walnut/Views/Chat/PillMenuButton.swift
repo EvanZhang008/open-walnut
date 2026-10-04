@@ -9,6 +9,9 @@ struct PillMenu: Equatable {
     enum Choice: Equatable {
         case model(String)
         case effort(String)
+        /// A permission mode, chosen before a session exists (the new-session
+        /// draft's mode pill). A live composer never builds one.
+        case mode(String)
         case retry
         /// An informational row (read-only reason, a current model the catalog
         /// does not list). Rendered disabled; a tap cannot reach it.

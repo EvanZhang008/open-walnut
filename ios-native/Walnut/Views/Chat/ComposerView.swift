@@ -60,6 +60,14 @@ import AVFoundation
 ///    the composer's width usage and never its height.
 /// The cost of the shape is one extra row of vertical space at all times. That is
 /// the trade the reference makes, and the one the user picked.
+///
+/// Both rows live in ONE floating card (`ComposerCard`): a rounded box inset from
+/// the screen edges, on the page's own color, the way ChatGPT and the other chat
+/// apps draw their input (the user asked for exactly that on 2026-10-03, with the
+/// model and the mode on its bottom row). The field is no longer a
+/// pill of its own inside a full-width material band; the card is the field, and
+/// the controls row is its bottom edge. Notices stay ABOVE the card, outside it:
+/// they talk about the message, they are not part of it.
 struct ComposerBar: View {
     let placeholder: String
     var busy: Bool = false
@@ -110,6 +118,11 @@ struct ComposerBar: View {
     /// The model string already known from the row, shown while the catalog loads
     /// and kept as the label if it never arrives.
     var fallbackModel: String? = nil
+    /// The owner's own pills for the bottom row, drawn right after the `+` where the
+    /// model pill sits on a live composer. The new-session draft puts its model and
+    /// permission-mode pills here: it has no session for `modelSource` to read, and
+    /// those two choices ride the create call. nil = nothing extra.
+    var controlsAccessory: AnyView? = nil
     /// Bumps each time the owner's live stream (re)connects. A reconnect is the
     /// moment the box can talk again after a gap, which is exactly when a model
     /// answer fetched during that gap needs re-asking. 0 = the owner has no stream.
@@ -309,15 +322,24 @@ struct ComposerBar: View {
             // waiting for the network still gets Retry, and a take the engine has
             // already answered on still gets the truth and a Discard.
             VoiceNoticeRows(voice: voice, idPrefix: "chat") { text in appendToDraft(text) }
-            if voice.state == .recording {
-                recordingRow
-            } else {
-                if !selectedImages.isEmpty { thumbnailStrip }
-                fieldRow
-                bottomControlRow
+            // The floating card. A live recording takes the card's place inside it,
+            // so the box keeps its shape and spot while the mic is open.
+            VStack(spacing: 0) {
+                if voice.state == .recording {
+                    recordingRow
+                } else {
+                    if !selectedImages.isEmpty { thumbnailStrip }
+                    fieldRow
+                    bottomControlRow
+                }
             }
+            .composerCard()
         }
-        .background(.bar)
+        // The page's own color behind the card (it used to be the `.bar` material
+        // band), so the card is what reads as the composer. Opaque on purpose: the
+        // transcript scrolls under this inset and must not show through around the
+        // card. Extends through the home-indicator area like the band did.
+        .background(ComposerCard.backdrop, ignoresSafeAreaEdges: .all)
         // Publish the composer's WHOLE height (notices + voice-retry row +
         // thumbnail strip + field + control row) so the file-preview dock bar can
         // seat itself above all of it.
@@ -815,11 +837,12 @@ struct ComposerBar: View {
         }
     }
 
-    /// The text field, alone on a full-width row.
+    /// The text field, alone on a full-width row: the top of the card.
     ///
     /// Nothing shares this row, which is the whole point of the two-row shape: the
     /// field's width is now independent of how long the model's name is and of how
-    /// many buttons the composer carries.
+    /// many buttons the composer carries. It draws no box of its own: the card is
+    /// the box.
     private var fieldRow: some View {
         // Long drafts (a big paste, or several dictations appended together) move
         // to a viewport-bounded UITextView. The plain TextField must lay the WHOLE
@@ -827,10 +850,10 @@ struct ComposerBar: View {
         // and there is no cap on the draft; the editor's cost is constant. Text is
         // never truncated either way: only the MEASUREMENT is bounded.
         //
-        // Both branches get IDENTICAL row treatment: full width, the same rounded
-        // background, and the same `chat.composer` identifier (the editor sets that
-        // one on its own UITextView). So crossing the threshold mid-draft changes
-        // the field's cost model and nothing a user or a maestro flow can observe.
+        // Both branches get IDENTICAL row treatment: full width, the same insets,
+        // and the same `chat.composer` identifier (the editor sets that one on its
+        // own UITextView). So crossing the threshold mid-draft changes the field's
+        // cost model and nothing a user or a maestro flow can observe.
         Group {
             if useLongDraftEditor {
                 LongDraftEditor(text: draft, isFocused: $longDraftFocused)
@@ -844,9 +867,7 @@ struct ComposerBar: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.top, 5)
     }
 
     /// The bottom control row: `+`, model pill, then mic and send pushed right.
@@ -874,6 +895,11 @@ struct ComposerBar: View {
             if showsModelPill {
                 ComposerModelPill(controls: controls)
             }
+            // The owner's pills (the new-session draft's model and mode), in the
+            // seat the model pill takes on a live composer.
+            if let controlsAccessory {
+                controlsAccessory
+            }
             Spacer(minLength: 0)
             // Mic is ALWAYS present — transcription appends to the draft, so
             // voice input composes with typed text instead of replacing it.
@@ -885,8 +911,8 @@ struct ComposerBar: View {
                 primaryButton
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
+        .padding(.horizontal, 8)
+        .padding(.top, 4)
         .padding(.bottom, 8)
     }
 
@@ -1822,6 +1848,56 @@ struct ComposerView: View {
         }
         return await chat.sendReportingOutcome(text, images: images).keptTheWords
     }
+}
+
+// MARK: - The floating card
+
+/// The composer's floating card and the page color around it, named once so
+/// everything that sits next to the composer (the new-session launch rows, the
+/// chat tab's drawer band) matches it.
+enum ComposerCard {
+    static let cornerRadius: CGFloat = 24
+    /// Room between the card and the screen edges.
+    static let sideInset: CGFloat = 10
+    /// The page behind the card: the transcript's own background, so the card is
+    /// the only shape that reads as the composer.
+    static let backdrop = Color(.systemBackground)
+    /// White on the white page in light mode (the shadow and hairline lift it),
+    /// one step up from the black page in dark mode. These are the two backgrounds
+    /// `ComposerPillContrastTests` measures the pills on.
+    static let fill = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
+    })
+
+    static var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+}
+
+private struct ComposerCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            // The shadow belongs to the card's SHAPE only: on the whole stack it
+            // would also shadow every glyph and button inside.
+            .background {
+                ComposerCard.shape
+                    .fill(ComposerCard.fill)
+                    .shadow(color: .black.opacity(0.08), radius: 12, y: 3)
+            }
+            .overlay(
+                ComposerCard.shape
+                    .strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            )
+            .padding(.horizontal, ComposerCard.sideInset)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+    }
+}
+
+extension View {
+    /// Draw this as the composer's floating card.
+    func composerCard() -> some View { modifier(ComposerCardModifier()) }
 }
 
 // MARK: - Banners

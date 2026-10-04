@@ -140,8 +140,10 @@ struct ChatView: View {
             // all, which keeps the everyday closed state untouched.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if tabBarCompensation > 0 {
+                    // The composer's own backdrop, so the band reads as more page
+                    // under the card rather than a strip of material.
                     Rectangle()
-                        .fill(.bar)
+                        .fill(ComposerCard.backdrop)
                         .frame(height: tabBarCompensation)
                 }
             }

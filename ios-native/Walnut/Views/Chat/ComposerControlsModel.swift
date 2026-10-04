@@ -410,7 +410,9 @@ final class ComposerControlsModel {
             "staged": stagedPlan == nil ? "no" : "yes", "current": token == menuToken ? "yes" : "no",
         ])
         switch choice {
-        case .none:
+        case .none, .mode:
+            // `.mode` belongs to the new-session draft's own pill; this model
+            // never builds a menu with one.
             return
         case .retry:
             refresh()

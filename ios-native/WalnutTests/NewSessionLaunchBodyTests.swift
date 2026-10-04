@@ -151,4 +151,36 @@ final class NewSessionLaunchBodyTests: XCTestCase {
             "proj · Big box"
         )
     }
+
+    // MARK: - The model and mode pills on the composer's bottom row
+
+    /// The model menu: Default first (the empty id, which the pick maps back to no
+    /// model at all), then the aliases the launch route accepts, the pick checked.
+    func testDraftModelMenuOffersDefaultThenTheLaunchAliases() {
+        let menu = NewSessionChatView.modelMenu(selected: nil)
+        let items = menu.sections.flatMap(\.items)
+        XCTAssertEqual(items.map(\.title), ["Default", "Opus", "Sonnet", "Haiku"])
+        XCTAssertEqual(items.map(\.choice), [.model(""), .model("opus"), .model("sonnet"), .model("haiku")])
+        XCTAssertEqual(items.filter(\.checked).map(\.title), ["Default"])
+
+        let picked = NewSessionChatView.modelMenu(selected: "sonnet").sections.flatMap(\.items)
+        XCTAssertEqual(picked.filter(\.checked).map(\.title), ["Sonnet"], "exactly one row is checked")
+    }
+
+    /// The mode menu lists every mode the launch can carry, by its wire spelling,
+    /// so a pick round-trips into the create call unchanged.
+    func testDraftModeMenuListsEveryModeByItsWireSpelling() {
+        let items = NewSessionChatView.modeMenu(selected: .plan).sections.flatMap(\.items)
+        XCTAssertEqual(items.map(\.choice), NewSessionSheet.PermissionMode.allCases.map { .mode($0.rawValue) })
+        XCTAssertEqual(items.filter(\.checked).map(\.title), ["Plan"])
+        for case .mode(let raw) in items.map(\.choice) {
+            XCTAssertNotNil(NewSessionSheet.PermissionMode(rawValue: raw), "\(raw) must parse back")
+        }
+    }
+
+    /// The pill's words: the picked alias, or a plain statement of the default.
+    func testDraftModelPillLabel() {
+        XCTAssertEqual(NewSessionChatView.modelLabel(nil), "Default model")
+        XCTAssertEqual(NewSessionChatView.modelLabel("opus"), "Opus")
+    }
 }

@@ -7,12 +7,14 @@ import SwiftUI
 /// This is the phone's version of the web console's draft column
 /// (`DraftLaunchBar.tsx` + the composer beneath it), and it keeps that layout's
 /// two decisions:
-///  - **The launch config sits directly ABOVE the composer**, closest to the verb
-///    it configures, with the cwd/host pill and the project pill LEFT-ALIGNED on
-///    the last row so "where does this run" stays glued to the message that
-///    answers it.
-///  - **The model lives IN the composer's controls row**, exactly where a live
-///    session's model pill sits, rather than being asked again up here.
+///  - **Where it runs sits directly ABOVE the composer**: the quick-folder row,
+///    then the folder/host pill LEFT-ALIGNED on the last row, so "where does this
+///    run" stays glued to the message that answers it.
+///  - **The model and the permission mode live IN the composer's bottom row**
+///    (`launchPills`), where a live session's model pill sits and where the web
+///    draft puts its mode and model pills, inside the floating card the way
+///    ChatGPT draws its composer (user, 2026-10-03). They used to be two more
+///    pills up in the folder row.
 ///
 /// It replaces the old form-shaped `NewSessionSheet` as the DEFAULT entry (that
 /// sheet is still the right shape when launching FROM a task, where the folder is
@@ -44,6 +46,7 @@ struct NewSessionChatView: View {
     let onCreated: (WalnutSession) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(TasksStore.self) private var tasks: TasksStore?
     @Environment(ConnectionStore.self) private var connection: ConnectionStore?
 
@@ -89,9 +92,10 @@ struct NewSessionChatView: View {
                     // doesn't exist yet, so text typed before launching survives
                     // a path change and a backgrounding.
                     draftKey: "draft:new-session",
-                    // No model pill here: a draft has no session yet, so there is
-                    // nothing to switch live. The model is chosen in the launch
-                    // bar above and RIDES the create call.
+                    // No live model pill (`modelSource`): a draft has no session to
+                    // switch. Its own model and mode pills take that seat, and both
+                    // choices RIDE the create call.
+                    controlsAccessory: AnyView(launchPills),
                     hostProvenance: connection.map {
                         .chat(status: $0.status, online: $0.online)
                     },
@@ -203,8 +207,9 @@ struct NewSessionChatView: View {
 
     /// The launch bar, the web draft's two rows in the web's order: the quick-folder
     /// row on top (the row whose CONTENT changes most between launches, so it never
-    /// sits where a fixed control is aimed for), then the folder/host, model and
-    /// mode pills, LEFT-ALIGNED and glued to the composer they configure.
+    /// sits where a fixed control is aimed for), then the folder/host pill,
+    /// LEFT-ALIGNED and glued to the composer card below it. On the page's own
+    /// color, like the card's surroundings: the rows sit on the page, above the box.
     private var launchBar: some View {
         VStack(spacing: 0) {
             if !quickDirs.isEmpty {
@@ -213,7 +218,7 @@ struct NewSessionChatView: View {
             }
             pillRow
         }
-        .background(.bar)
+        .background(ComposerCard.backdrop, ignoresSafeAreaEdges: [])
     }
 
     /// Quick folders: the most-used and most-recent directories, one tap each,
@@ -285,48 +290,69 @@ struct NewSessionChatView: View {
                     )
                 }
                 .accessibilityIdentifier("newSessionChat.pathPill")
-
-                Menu {
-                    Section("Model") {
-                        Button {
-                            model = nil
-                        } label: {
-                            if model == nil { Label("Default", systemImage: "checkmark") } else { Text("Default") }
-                        }
-                        // The launch route validates against the shared model-id
-                        // set, so a draft (which has no session and therefore no
-                        // live catalog) offers the stable aliases rather than
-                        // inventing ids the server would 400.
-                        ForEach(Self.launchModels, id: \.0) { id, label in
-                            Button {
-                                model = id
-                            } label: {
-                                if model == id { Label(label, systemImage: "checkmark") } else { Text(label) }
-                            }
-                        }
-                    }
-                } label: {
-                    pill(model.flatMap { id in
-                        Self.launchModels.first { $0.0 == id }?.1
-                    } ?? "Default model", icon: "cpu", active: model != nil)
-                }
-                .accessibilityIdentifier("newSessionChat.modelPill")
-
-                Menu {
-                    ForEach(NewSessionSheet.PermissionMode.allCases) { m in
-                        Button {
-                            mode = m
-                        } label: {
-                            if m == mode { Label(m.label, systemImage: "checkmark") } else { Text(m.label) }
-                        }
-                    }
-                } label: {
-                    pill(mode.label, icon: "lock.shield", active: mode != .bypass)
-                }
-                .accessibilityIdentifier("newSessionChat.modePill")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+        }
+    }
+
+    // MARK: - Model and mode, on the composer's bottom row
+
+    /// The draft's model and permission-mode pills, handed to the composer for its
+    /// bottom row. The same `PillChip` a live session's model pill is, so the row
+    /// reads like one: with the keyboard up the first tap puts the keyboard away
+    /// and the next opens the menu above the pill (a SwiftUI `Menu` in this row lost
+    /// taps over the keyboard, see `ComposerBar.plusButton`). Side by side, stacked
+    /// at the accessibility sizes, as `ComposerModelPill` does.
+    private var launchPills: some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 6))
+        // A pick while the create call runs would be a choice the launch already
+        // went without.
+        let state: ComposerControlsModel.PillState = creating ? .waiting : .ready
+        return layout {
+            PillChip(
+                text: modelLabel,
+                glyph: .chevron,
+                state: state,
+                wraps: stacked,
+                rawID: false,
+                menu: Self.modelMenu(selected: model),
+                menuID: "launchModel",
+                accessibilityID: "newSessionChat.modelPill",
+                accessibilityLabel: "Model: \(model == nil ? "Default" : modelLabel)",
+                onSelect: { choice, _ in pick(choice) },
+                onPresentedChange: { _, _ in }
+            )
+            .layoutPriority(1)
+            PillChip(
+                text: mode.label,
+                glyph: .chevron,
+                state: state,
+                wraps: stacked,
+                rawID: false,
+                menu: Self.modeMenu(selected: mode),
+                menuID: "launchMode",
+                accessibilityID: "newSessionChat.modePill",
+                accessibilityLabel: "Permission mode: \(mode.label)",
+                onSelect: { choice, _ in pick(choice) },
+                onPresentedChange: { _, _ in }
+            )
+        }
+    }
+
+    private var modelLabel: String { Self.modelLabel(model) }
+
+    private func pick(_ choice: PillMenu.Choice) {
+        switch choice {
+        case .model(let id):
+            model = id.isEmpty ? nil : id
+        case .mode(let raw):
+            if let picked = NewSessionSheet.PermissionMode(rawValue: raw) { mode = picked }
+        case .effort, .retry, .none:
+            return
         }
     }
 
@@ -338,6 +364,41 @@ struct NewSessionChatView: View {
         ("sonnet", "Sonnet"),
         ("haiku", "Haiku"),
     ]
+
+    /// The model pill's words: the picked alias, or "Default model" for none.
+    static func modelLabel(_ model: String?) -> String {
+        model.flatMap { id in launchModels.first { $0.0 == id }?.1 } ?? "Default model"
+    }
+
+    /// The draft's menus never go stale (they are rebuilt from two @State values,
+    /// and a pick lands synchronously), so one fixed token serves every one.
+    private static let draftMenuToken = ComposerControlsModel.MenuToken(generation: 0, version: 0)
+
+    /// Default, then the stable aliases; the current pick checked. Default is the
+    /// empty id (`pick` maps it back to nil, which sends no model).
+    static func modelMenu(selected: String?) -> PillMenu {
+        let items = [PillMenu.Item(
+            title: "Default", choice: .model(""), checked: selected == nil,
+            accessibilityID: "newSessionChat.model.default"
+        )] + launchModels.map { id, label in
+            PillMenu.Item(
+                title: label, choice: .model(id), checked: selected == id,
+                accessibilityID: "newSessionChat.model.\(id)"
+            )
+        }
+        return PillMenu(sections: [.init(title: "Model", items: items)], token: draftMenuToken)
+    }
+
+    /// Every permission mode, the current one checked.
+    static func modeMenu(selected: NewSessionSheet.PermissionMode) -> PillMenu {
+        let items = NewSessionSheet.PermissionMode.allCases.map { m in
+            PillMenu.Item(
+                title: m.label, choice: .mode(m.rawValue), checked: m == selected,
+                accessibilityID: "newSessionChat.mode.\(m.rawValue)"
+            )
+        }
+        return PillMenu(sections: [.init(title: "Permission mode", items: items)], token: draftMenuToken)
+    }
 
     private func pill(_ text: String, icon: String, active: Bool) -> some View {
         HStack(spacing: 4) {

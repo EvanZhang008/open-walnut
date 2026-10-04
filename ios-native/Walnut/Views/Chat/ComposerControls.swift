@@ -23,8 +23,11 @@ import SwiftUI
 /// user can't see.
 ///
 /// What is deliberately NOT in this row (a 44pt row is not a settings screen):
-///  - Permission mode stays in the session menu (Session Controls). It is a
-///    spawn-shaped safety setting, not a per-message choice.
+///  - A live session's permission mode stays in the session menu (Session
+///    Controls). It is a spawn-shaped safety setting, not a per-message choice.
+///    The new-session draft is where it IS chosen, so its composer carries a mode
+///    pill beside its model pill (`NewSessionChatView.launchPills`, the same
+///    `PillChip`), as the web draft's controls row does.
 ///  - Path/host are not in a live session's composer at all: they are facts of a
 ///    running CLI, and belong to session CREATION (see NewSessionChatView).
 ///
@@ -72,7 +75,8 @@ struct ComposerModelPill: View {
                     menuID: "model",
                     accessibilityID: "composer.modelPill",
                     accessibilityLabel: controls.pillAccessibilityLabel,
-                    controls: controls
+                    onSelect: { choice, token in controls.menuSelect(choice, token: token) },
+                    onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) }
                 )
                 // Side by side, the effort pill ("High") gives way first: the
                 // model name is the one that must stay readable.
@@ -95,7 +99,8 @@ struct ComposerModelPill: View {
                     menuClearance: stacked && controls.pillLabel != nil ? modelPillHeight + Self.spacing : 0,
                     accessibilityID: "composer.effortPill",
                     accessibilityLabel: controls.effortPillAccessibilityLabel,
-                    controls: controls
+                    onSelect: { choice, token in controls.menuSelect(choice, token: token) },
+                    onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) }
                 )
             }
         }
@@ -104,7 +109,10 @@ struct ComposerModelPill: View {
 
 /// One capsule: the SwiftUI label the user sees, with the UIKit button that owns
 /// its menu laid exactly over it (see `PillMenuButton` for why the menu is UIKit).
-private struct PillChip: View {
+/// Shared by the live composer's model/effort pills and the new-session draft's
+/// model/mode pills, so every pill on a composer's bottom row looks and opens the
+/// same way; the owner answers the taps.
+struct PillChip: View {
     enum Glyph { case chevron, warning, none }
 
     let text: String
@@ -120,7 +128,10 @@ private struct PillChip: View {
     var menuClearance: CGFloat = 0
     let accessibilityID: String
     let accessibilityLabel: String
-    let controls: ComposerControlsModel
+    /// A row was tapped (with the token of the menu it was on).
+    let onSelect: (PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void
+    /// The menu opened or closed (`menuID`, open).
+    let onPresentedChange: (String, Bool) -> Void
     @State private var pressed = false
     /// The glyph grows with the text: a fixed 8pt chevron sat cramped and tiny
     /// against an XXXL label.
@@ -169,8 +180,8 @@ private struct PillChip: View {
                 accessibilityLabel: accessibilityLabel,
                 menuID: menuID,
                 menuClearance: menuClearance,
-                onSelect: { choice, token in controls.menuSelect(choice, token: token) },
-                onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) },
+                onSelect: onSelect,
+                onPresentedChange: onPresentedChange,
                 onHighlightChange: { pressed = $0 }
             )
             // SwiftUI writes this onto the UIButton's `isEnabled` after every

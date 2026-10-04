@@ -48,9 +48,9 @@ final class ComposerBottomRowTests: XCTestCase {
 
     /// No source = this composer has nowhere for a model to live. The new-session
     /// draft is the real instance of this: it passes `modelSource: nil` because the
-    /// session does not exist yet and the model rides the create call from the
-    /// launch bar above. A pill there would offer to switch a model on a session
-    /// that has not been spawned.
+    /// session does not exist yet, and its own model pill (`controlsAccessory`)
+    /// rides the create call instead. A LIVE pill there would offer to switch a
+    /// model on a session that has not been spawned.
     func testNoSourceMeansNoPillEvenWithALabelInHand() {
         XCTAssertFalse(
             ComposerBar.showsModelPill(modelSource: nil, pillLabel: "Opus 5"),
