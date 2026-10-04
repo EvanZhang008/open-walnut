@@ -27,6 +27,8 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
     private var _queried: [String] = []
     private var _statisticsCalls: [StatisticsCall] = []
     var lockedTypes: Set<String> = []
+    /// Runs on every anchored query (a test clock can move with it).
+    var onAnchoredQuery: () -> Void = {}
     /// Read access off for these types, as HealthKit answers it: every query
     /// empty, yet the anchor still moves past the whole history.
     var deniedTypes: Set<String> = []
@@ -75,7 +77,8 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
 
     func anchored(_ spec: HealthTypeSpec, anchor: Data?, limit: Int, encode: Bool,
                   batchTimeZone: TimeZone) async throws -> HealthAnchoredPage {
-        try lock.withLock {
+        onAnchoredQuery()
+        return try lock.withLock {
             try touch(spec.name)
             let after = anchor.flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
             if deniedTypes.contains(spec.name) {
@@ -134,6 +137,8 @@ final class FakeHealthTransport: HealthSyncTransport, @unchecked Sendable {
     var statusError: Error?
     /// Decides each sync reply; default: stored.
     var reply: (_ body: [String: Any], _ index: Int) -> HealthSyncReply = { _, _ in .ok(FakeHealthTransport.stored) }
+    /// An error the call with this index throws instead of answering (its body is still recorded).
+    var syncError: (_ index: Int) -> Error? = { _ in nil }
     private var _bodies: [[String: Any]] = []
     var onCall: () -> Void = {}
 
@@ -182,6 +187,7 @@ final class FakeHealthTransport: HealthSyncTransport, @unchecked Sendable {
             _bodies.append(object)
             return _bodies.count - 1
         }
+        if let error = syncError(index) { throw error }
         return reply(object, index)
     }
 

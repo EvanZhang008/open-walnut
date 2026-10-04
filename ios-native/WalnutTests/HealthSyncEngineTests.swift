@@ -182,6 +182,108 @@ final class HealthSyncEngineTests: XCTestCase {
         XCTAssertNotNil(state.read().anchors["sleep"])
     }
 
+    // MARK: - Recent days while the history is still being read
+
+    /// A long backfill reads oldest first: a sample recorded since it began must
+    /// not wait behind years of history (2026-10-04: the Mac had no step after
+    /// midnight and not last night's sleep while the phone was mid-backfill).
+    func testWhatWasRecordedLatelyGoesOutWhileTheHistoryIsStillBeingRead() async {
+        for i in 0..<9000 { source.add("sleep", start: now.addingTimeInterval(-Double(60 + i) * 3600), uuid: "S\(i)") }
+        transport.onCall = { [clock] in clock?.advance(1) }
+        let shared = engine([.testRaw("sleep")])
+        let first = await shared.run(reason: "active", budget: 8)
+        XCTAssertEqual(first, .budget)
+        XCTAssertFalse(state.read().completed.contains("sleep"))
+
+        source.add("sleep", start: clock.now.addingTimeInterval(-3600), uuid: "last-night")
+        clock.advance(HealthSyncEngine.catchUpInterval)
+        let sent = transport.bodies(for: "sleep").count
+        await shared.run(reason: "active+more", budget: 8)
+        let again = transport.bodies(for: "sleep").dropFirst(sent)
+        XCTAssertEqual(again.first.map(uuids), ["last-night"], "the last two days go first")
+        XCTAssertFalse(state.read().completed.contains("sleep"), "the history is still being read")
+    }
+
+    func testRecentDaysGoOutAgainAtMostEveryFewMinutesUnlessADeliveryNamesTheType() async {
+        for i in 0..<9000 { source.add("sleep", start: now.addingTimeInterval(-Double(60 + i) * 3600), uuid: "S\(i)") }
+        transport.onCall = { [clock] in clock?.advance(1) }
+        // One engine across runs, as the app has (HealthSync.engine).
+        let shared = engine([.testRaw("sleep")])
+        await shared.run(reason: "active", budget: 8)
+        source.add("sleep", start: clock.now.addingTimeInterval(-60), uuid: "new1")
+
+        var sent = transport.bodies(for: "sleep").count
+        await shared.run(reason: "active+more", budget: 8)
+        XCTAssertFalse(transport.bodies(for: "sleep").dropFirst(sent).flatMap(uuids).contains("new1"),
+                       "a minute later, the backfill goes on")
+
+        sent = transport.bodies(for: "sleep").count
+        await shared.run(reason: "observer", budget: 8, only: ["sleep"])
+        XCTAssertEqual(transport.bodies(for: "sleep").dropFirst(sent).first.map(uuids), ["new1"],
+                       "HealthKit said sleep changed: its last two days go now")
+    }
+
+    func testABucketTypeMidBackfillSendsItsLastTwoDays() async {
+        for i in 0..<25_000 { source.add("steps", start: now.addingTimeInterval(-Double(30 + i) * 600)) }
+        transport.onCall = { [clock] in clock?.advance(1) }
+        source.onAnchoredQuery = { [clock] in clock?.advance(1) }
+        let shared = engine([.testBuckets("steps")])
+        await shared.run(reason: "active", budget: 8)
+        XCTAssertFalse(state.read().completed.contains("steps"), "still paging")
+
+        clock.advance(HealthSyncEngine.catchUpInterval)
+        let calls = source.statisticsCalls.count
+        await shared.run(reason: "active+more", budget: 8)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let twoDays = calendar.startOfDay(for: clock.now.addingTimeInterval(-HealthSyncEngine.lateWindow))
+        let newCalls = source.statisticsCalls.dropFirst(calls)
+        XCTAssertTrue(newCalls.contains { $0.interval == 86_400 && abs($0.from.timeIntervalSince(twoDays)) < 86_400 },
+                      "day buckets of the last two days")
+    }
+
+    /// 2026-10-04, the real phone: the first call after coming back to Walnut
+    /// failed with "connection lost" (-1005) and ended the history read each time.
+    func testADroppedConnectionSendsTheBatchAgainAndGoesOn() async {
+        source.add("sleep", start: now.addingTimeInterval(-30 * 86_400), uuid: "old1")
+        source.add("sleep", start: now.addingTimeInterval(-1 * 86_400), uuid: "recent1")
+        let lost = APIError.network(underlying: URLError(.networkConnectionLost))
+        transport.syncError = { index in index == 0 ? lost : nil }
+        let outcome = await engine([.testRaw("sleep")]).run(reason: "active", budget: 60)
+        XCTAssertEqual(outcome, .synced)
+        let bodies = transport.bodies(for: "sleep")
+        XCTAssertEqual(bodies.count, 3, "the dropped batch went once more, then the backfill")
+        XCTAssertEqual(uuids(bodies[0]), uuids(bodies[1]))
+        XCTAssertTrue(state.read().completed.contains("sleep"))
+    }
+
+    func testAConnectionDroppedTwiceStopsWithTheAnchorKept() async {
+        source.add("sleep", start: now.addingTimeInterval(-30 * 86_400), uuid: "old1")
+        let lost = APIError.network(underlying: URLError(.networkConnectionLost))
+        transport.syncError = { _ in lost }
+        let outcome = await engine([.testRaw("sleep")]).run(reason: "active", budget: 60)
+        XCTAssertEqual(outcome, .macUnreachable)
+        XCTAssertEqual(transport.bodies.count, 2, "one more try, not a loop")
+        XCTAssertNil(state.read().anchors["sleep"])
+    }
+
+    func testOtherNetworkErrorsAreNotSentAgain() async {
+        source.add("sleep", start: now.addingTimeInterval(-30 * 86_400), uuid: "old1")
+        transport.syncError = { _ in APIError.network(underlying: URLError(.timedOut)) }
+        let outcome = await engine([.testRaw("sleep")]).run(reason: "active", budget: 60)
+        XCTAssertEqual(outcome, .macUnreachable)
+        XCTAssertEqual(transport.bodies.count, 1, "a timeout already took its time; the next run resends")
+    }
+
+    func testTheForegroundLoopGoesOnAfterAMacItCouldNotReach() {
+        XCTAssertEqual(HealthBackground.foregroundNext(after: .budget, misses: 0), 0)
+        XCTAssertEqual(HealthBackground.foregroundNext(after: .macUnreachable, misses: 0), 3)
+        XCTAssertEqual(HealthBackground.foregroundNext(after: .macUnreachable, misses: 2), 30)
+        XCTAssertNil(HealthBackground.foregroundNext(after: .macUnreachable, misses: 3), "then it stops")
+        XCTAssertNil(HealthBackground.foregroundNext(after: .synced, misses: 0))
+        XCTAssertNil(HealthBackground.foregroundNext(after: .locked, misses: 0))
+    }
+
     func testMacUnreachableKeepsTheAnchorAndTheNextRunResends() async {
         source.add("sleep", start: now.addingTimeInterval(-60 * 86_400), uuid: "A")
         transport.reply = { _, _ in .unavailable }

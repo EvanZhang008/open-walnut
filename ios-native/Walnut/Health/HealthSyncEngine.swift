@@ -27,6 +27,9 @@ actor HealthSyncEngine {
     static let bucketPagesPerRound = 10
     static let hourlyWindow: TimeInterval = 30 * 86_400
     static let lateWindow: TimeInterval = 2 * 86_400
+    /// While a type's history is still being read, its last `lateWindow` goes
+    /// out again at most this often (and at once for a type a delivery named).
+    static let catchUpInterval: TimeInterval = 300
     /// A call is not started with less time than this left in the budget.
     static let minimumCallTime: TimeInterval = 2
     static let callTimeout: TimeInterval = 30
@@ -42,6 +45,9 @@ actor HealthSyncEngine {
     private var rerunRequested = false
     /// What the rerun covers: nil = everything.
     private var rerunOnly: Set<String>? = []
+    private var lastCatchUpAt: Date?
+    /// Types a background delivery named since the last catch-up.
+    private var catchUpNamed: Set<String> = []
     private var progress = HealthSyncProgress()
     /// Types the Mac declined in this run (unsupported, unit mismatch, category
     /// off) or HealthKit would not read: counted as done for the progress line,
@@ -74,6 +80,7 @@ actor HealthSyncEngine {
     @discardableResult
     func run(reason: String, budget: TimeInterval, only: Set<String>? = nil) async -> HealthRunOutcome {
         if running {
+            catchUpNamed.formUnion(only ?? [])
             rerunRequested = true
             rerunOnly = Self.union(rerunOnly, only)
             return .coalesced
@@ -116,6 +123,8 @@ actor HealthSyncEngine {
         let generation: Int
         let zone: TimeZone
         let device: HealthSyncHeader.Device
+        let catchUpAll: Bool
+        let catchUpNames: Set<String>
     }
 
     private func runOnce(reason: String, deadline: Date, only: Set<String>?) async -> HealthRunOutcome {
@@ -189,10 +198,14 @@ actor HealthSyncEngine {
         if state.read().installId == nil {
             state.update(generation: generation) { $0.installId = UUID().uuidString.lowercased() }
         }
+        let catchUpAll = lastCatchUpAt.map { env.now().timeIntervalSince($0) >= Self.catchUpInterval } ?? true
+        if catchUpAll { lastCatchUpAt = env.now() }
         let run = Run(
             deadline: deadline, generation: generation, zone: env.timeZone(),
-            device: HealthSyncHeader.Device(installId: state.read().installId, model: env.deviceModel, os: env.deviceOS)
+            device: HealthSyncHeader.Device(installId: state.read().installId, model: env.deviceModel, os: env.deviceOS),
+            catchUpAll: catchUpAll, catchUpNames: catchUpNamed.union(only ?? [])
         )
+        catchUpNamed = []
         let selected = only.map { names in plan.filter { names.contains($0.name) } } ?? plan
         let forget = Self.typesWithoutMacData(selected, status: status)
         if !forget.isEmpty {
@@ -292,12 +305,21 @@ actor HealthSyncEngine {
     /// first (the backfill sends them again later and the Mac ignores the
     /// repeats); bucket types send 7 days of day and hour buckets (the full
     /// recompute replaces them by key).
+    ///
+    /// Until the backfill reaches the end, what was recorded lately waits behind
+    /// years of history (it reads oldest first), so the last 2 days go out again
+    /// on later runs too: every `catchUpInterval`, and at once for a type a
+    /// background delivery named. 2026-10-04: mid-backfill, the Mac had no step
+    /// after midnight and not last night's sleep, both already on the phone.
     private func prime(_ spec: HealthTypeSpec, _ run: Run) async throws {
         let snapshot = state.read()
-        guard snapshot.anchors[spec.name] == nil, !snapshot.primed.contains(spec.name) else { return }
+        let first = snapshot.anchors[spec.name] == nil && !snapshot.primed.contains(spec.name)
+        let catchUp = !first && snapshot.primed.contains(spec.name) && !snapshot.completed.contains(spec.name)
+            && (run.catchUpAll || run.catchUpNames.contains(spec.name))
+        guard first || catchUp else { return }
         try check(run)
         let now = env.now()
-        let since = now.addingTimeInterval(-Self.primeWindow)
+        let since = now.addingTimeInterval(first ? -Self.primeWindow : -Self.lateWindow)
         let items: [Data]
         do {
             switch spec.kind {
@@ -325,7 +347,7 @@ actor HealthSyncEngine {
                 return
             }
         }
-        state.update(generation: run.generation) { $0.primed.insert(spec.name) }
+        if first { state.update(generation: run.generation) { $0.primed.insert(spec.name) } }
     }
 
     // MARK: - Raw types
@@ -381,7 +403,21 @@ actor HealthSyncEngine {
         try check(run)
         let reply: HealthSyncReply
         do {
-            reply = try await transport.healthSync(body: batch.body, timeout: callTimeout(run.deadline))
+            do {
+                reply = try await transport.healthSync(body: batch.body, timeout: callTimeout(run.deadline))
+            } catch where Self.isDroppedConnection(error) {
+                // iOS drops the connections an app held while it was in the
+                // background, and the first call after it is back fails at once
+                // ("connection lost"). On 2026-10-04 that ended the history read
+                // every time the user came back to Walnut. The Mac ignores a batch
+                // it already has, so send this one once more.
+                AppLog.info("health", "connection dropped, batch sent again", ["type": Self.logLabel(type)])
+                try? await Task.sleep(for: .milliseconds(500))
+                try check(run)
+                reply = try await transport.healthSync(body: batch.body, timeout: callTimeout(run.deadline))
+            }
+        } catch let stop as Stop {
+            throw stop
         } catch {
             throw Stop.outcome(Self.outcome(for: error))
         }
@@ -452,6 +488,14 @@ actor HealthSyncEngine {
         }
         if error is URLError { return .macUnreachable }
         return .failed
+    }
+
+    /// NSURLErrorNetworkConnectionLost (-1005), as the transport reports it.
+    static func isDroppedConnection(_ error: Error) -> Bool {
+        let underlying: Error
+        if case APIError.network(let inner) = error { underlying = inner } else { underlying = error }
+        let ns = underlying as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorNetworkConnectionLost
     }
 
     /// A generic name in a log line keeps only its prefix (the app log reaches the

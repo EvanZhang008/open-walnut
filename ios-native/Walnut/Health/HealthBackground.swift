@@ -232,15 +232,36 @@ final class HealthBackground {
         guard Self.shouldSync, foregroundTask == nil else { return }
         foregroundTask = Task { @MainActor in
             defer { HealthBackground.shared.foregroundTask = nil }
+            var misses = 0
             for round in 0..<30 {
                 let outcome = await withCheckedContinuation { (done: CheckedContinuation<HealthRunOutcome, Never>) in
                     HealthBackground.shared.runInBackground(
                         reason: round == 0 ? reason : "\(reason)+more", budget: Self.foregroundBudget, only: nil
                     ) { done.resume(returning: $0) }
                 }
-                guard outcome == .budget, UIApplication.shared.applicationState == .active,
-                      !Task.isCancelled else { break }
+                guard UIApplication.shared.applicationState == .active, !Task.isCancelled,
+                      let wait = Self.foregroundNext(after: outcome, misses: misses) else { break }
+                misses = outcome == .macUnreachable ? misses + 1 : 0
+                if wait > 0 {
+                    try? await Task.sleep(for: .seconds(wait))
+                    guard UIApplication.shared.applicationState == .active, !Task.isCancelled else { break }
+                }
             }
+        }
+    }
+
+    /// Waits before trying again after the Mac could not be reached, while the app is open.
+    nonisolated static let foregroundRetryWaits: [TimeInterval] = [3, 10, 30]
+
+    /// After a foreground run: the seconds to wait before the next one, or nil
+    /// to stop. A run that used its budget goes on at once. A Mac that could not
+    /// be reached is tried again a few times: a short gap in the network should
+    /// not end the history read while the user has Walnut open.
+    nonisolated static func foregroundNext(after outcome: HealthRunOutcome, misses: Int) -> TimeInterval? {
+        switch outcome {
+        case .budget: return 0
+        case .macUnreachable: return misses < foregroundRetryWaits.count ? foregroundRetryWaits[misses] : nil
+        default: return nil
         }
     }
 
