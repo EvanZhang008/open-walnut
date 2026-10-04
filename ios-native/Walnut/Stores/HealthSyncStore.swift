@@ -88,6 +88,7 @@ final class HealthSyncStore {
         }
         busy = .turningOn
         defer { busy = nil }
+        HealthAccessPrompt.offered = true
         if !isDemo {
             do {
                 try await HealthKitDataSource.shared.requestReadAuthorization(

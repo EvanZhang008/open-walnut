@@ -249,6 +249,11 @@ enum LiveStreamEvents {
             }
             live.toolStarted(id: payload.toolUseId ?? "", name: payload.name,
                              detail: payload.detail, inputPreview: payload.inputPreview)
+            // An agent reading Apple Health while it is off on this phone: ask now,
+            // here, instead of answering "turn it on in Settings".
+            if HealthAccessDecision.isHealthRead(name: payload.name, detail: payload.inputPreview ?? payload.detail) {
+                Task { @MainActor in HealthAccessPrompt.shared.healthReadStarted() }
+            }
             return Handled(impliesStreaming: true, toolName: payload.name,
                            needsFlush: false)
         case "tool-result":

@@ -93,7 +93,10 @@ final class HealthBackground {
         registerRefreshTask()
         let center = NotificationCenter.default
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { HealthBackground.shared.runInForeground(reason: "active") }
+            MainActor.assumeIsolated {
+                HealthBackground.shared.runInForeground(reason: "active")
+                HealthAccessPrompt.shared.appBecameActive()
+            }
         }
         center.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
                            queue: .main) { _ in
