@@ -322,8 +322,9 @@ export function buildReplyDeliveryText(
   request: SessionRequest,
   sender: { title: string; shortId: string; host: string; sessionId?: string; taskId?: string },
   text: string,
+  opts?: { title?: string },
 ): string {
-  return kit.buildReplyDeliveryText(request, sender, text);
+  return kit.buildReplyDeliveryText(request, sender, text, opts);
 }
 
 /** How much of the target's last message a notice quotes. The asker reads this

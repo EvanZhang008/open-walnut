@@ -1,0 +1,94 @@
+/* A session-message card folded to who + title (message-fold.ts). The whole
+   line is one button; the card frame and its kind colours stay as they are. */
+
+.provenance-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.provenance-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.provenance-fold-from {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.provenance-fold-dir {
+  flex: none;
+}
+
+.provenance-fold-sender {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.provenance-fold-chevron {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--fg-muted);
+  transition: transform 120ms ease;
+}
+
+.provenance-fold[aria-expanded="true"] .provenance-fold-chevron {
+  transform: rotate(90deg);
+}
+
+.provenance-fold-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.provenance-fold:hover .provenance-fold-title {
+  text-decoration: underline;
+  text-decoration-color: var(--fg-muted);
+  text-underline-offset: 2px;
+}
+
+.provenance-fold[aria-expanded="true"] .provenance-fold-title {
+  display: block;
+}
+
+/* Folded, the card is two lines: tighter than the open card. */
+.provenance-card[data-folded="true"] {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.provenance-card[data-folded="false"] .provenance-fold {
+  margin-bottom: 2px;
+}
+
+.provenance-card .provenance-chips .provenance-rq {
+  margin-left: auto;
+}

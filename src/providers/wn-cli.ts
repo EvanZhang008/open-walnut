@@ -221,11 +221,11 @@ THE VERBS (keep it simple)
                    lands beside your task   same project, folder, host and directory; "project" files it elsewhere
                    placeholder only         walnut tools call task_create '{"title":"...","record_only":true}'
   task_start       start an existing task   walnut tools call task_start '{"id":"<task-id>","message":"..."}'
-  task_send        message any task         walnut tools call task_send '{"to":"<task-id>","text":"..."}'
+  task_send        message any task         walnut tools call task_send '{"to":"<task-id>","title":"<TL;DR>","text":"..."}'
   task_history     read its conversation    walnut tools call task_history '{"id":"<task-id>"}'
   Start work only when the user asked for it; follow-ups you find are yours to do here, now.
   Either send/start tells you when the work finishes BY DEFAULT (pass "expect_reply":false to opt out);
-  answer such a request with task_send '{"in_reply_to":"rq-...","text":"..."}'.
+  answer such a request with task_send '{"in_reply_to":"rq-...","title":"<TL;DR>","text":"..."}'.
   Replies and Walnut fallback notifications arrive in YOUR session automatically —
   do NOT sleep or poll for them; use \`walnut wait\` only when you cannot continue
   without the answer.

@@ -2348,12 +2348,14 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
       + `${legacyMarker} (end of peer note)`
     const envelopes = [
       // ① peer note + the one trailer line that rides on it
+      //   (with the sender's one-line title: the card folds to it)
       `${buildPeerWrapper(
         'Daemon is on 2.1.255 and the proxy restarted clean. ENVELOPE_PEER_BODY',
         { ...peerSender, requestId: rq.id },
+        { title: 'Proxy restarted clean, daemon on 2.1.255' },
       )}\n${buildReplyTrailer(rq)}`,
       // ② the reply the asker reads
-      buildReplyDeliveryText(rq, peerSender, 'Both blockers cleared. ENVELOPE_REPLY_BODY'),
+      buildReplyDeliveryText(rq, peerSender, 'Both blockers cleared. ENVELOPE_REPLY_BODY', { title: 'Both blockers cleared' }),
       // ③ the Walnut status notice
       //   (a child that closed its own task: its last words + the calls after them)
       buildRequestNotification(rq, 'completed', {
@@ -2422,7 +2424,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     // is `task_send`, the name sessions use; `session_send` is its older alias.
     const outboundHandle = `${ENVELOPE_PEER_TITLE.slice(0, 80)}… [pw-envel]`
     const outboundCommand = 'walnut tools call task_send '
-      + `'{"to":"pw-envelope-peer-session","text":"Both blockers cleared on my side. ENVELOPE_OUTBOUND_BODY","expect_reply":true}'`
+      + `'{"to":"pw-envelope-peer-session","title":"Blockers cleared on my side","text":"Both blockers cleared on my side. ENVELOPE_OUTBOUND_BODY","expect_reply":true}'`
     const outboundResult = JSON.stringify({
       delivery: 'queued',
       targetSessionId: 'pw-envelope-peer-session',

@@ -71,7 +71,7 @@ describe('task start confirmation and reply contract', () => {
       status: 'pending', fromSessionId: 'asker-1', toTaskId: 'task-1', toSessionId: result.sessionId,
     });
     expect(mocks.startSession.mock.calls[0][0].message).toBe('Fix the flake.\n'
-      + `Reply when done: walnut tools call task_send '{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
+      + `Reply when done: walnut tools call task_send '{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
   });
 
   it.each(['human', 'external'])('does not request a reply from an untracked %s caller', async (kind) => {

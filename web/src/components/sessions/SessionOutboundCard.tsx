@@ -20,6 +20,10 @@
  *  · It never re-parses the body. The body is the text this session sent, rendered
  *    as markdown and nothing more.
  *
+ * Folded by default, like the inbound card: who it went to and the title the
+ * sender gave (else the first sentence of the words); a click opens the rest.
+ * A failed send keeps its error visible while folded.
+ *
  * Clicks: the card is rendered from GenericToolCall, which sits inside
  * `.session-msg-content` for an in-message tool and OUTSIDE it for a merged
  * cross-message tool run — so the card carries its own `useEntityClickHandler`
@@ -45,6 +49,9 @@ import { sessionStatusStore } from '@/stores/session-status-store';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
+import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
+import { MessageFoldSummary } from './MessageFoldSummary';
+import '@/styles/provenance-fold.css';
 
 interface ResolvedTarget {
   /** Full session id — present only when it is unambiguous. */
@@ -158,7 +165,7 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
 }
 
 /** The target session: a clickable chip when resolved, plain text when not. */
-function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
+function TargetChips({ resolved, requestId }: { resolved: ResolvedTarget; requestId?: string }) {
   const taskLabel = useTaskLabel(resolved.taskId);
   return (
     <div className="provenance-chips">
@@ -189,6 +196,7 @@ function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
       {resolved.fullId && (
         <CopyChip value={resolved.fullId} label="copy id" title={resolved.fullId} />
       )}
+      {requestId && <span className="provenance-rq">{requestId}</span>}
     </div>
   );
 }
@@ -239,6 +247,8 @@ export function SessionOutboundCard({
 }) {
   const resolved = useResolvedTarget(send);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, undefined, sessionHost, sessionId);
+  const taskLabel = useTaskLabel(resolved.taskId);
+  const [open, toggle] = useMessageFold(foldKey(send.raw));
 
   // A reply always went to the session that asked, even when nothing names it.
   const headline = resolved.title
@@ -256,25 +266,33 @@ export function SessionOutboundCard({
       className="provenance-card"
       data-envelope-kind="outbound"
       data-outbound-via={send.via}
+      data-folded={open ? 'false' : 'true'}
+      aria-label={`${outboundDirectionLabel(send.kind)}: ${taskLabel?.title || headline}`}
       {...(send.error ? { 'data-outbound-error': 'true' } : {})}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('a.session-link, a.task-link')) e.stopPropagation();
         handleClick(e);
       }}
     >
-      <div className="provenance-head">
-        <span className="provenance-glyph">{outboundDirectionGlyph(send.kind)}</span>
-        <span className="provenance-label">{outboundDirectionLabel(send.kind)}</span>
-        {(send.requestId || send.repliedTo) && (
-          <span className="provenance-rq">{send.repliedTo ?? send.requestId}</span>
-        )}
-      </div>
-      <div className="provenance-title" title={headline}>{headline}</div>
-      <TargetChips resolved={resolved} />
-      {status && <div className="provenance-status">{status}</div>}
-      {send.body !== undefined && <OutboundBody body={send.body} sessionCwd={sessionCwd} />}
-      {note && <div className="provenance-outbound-payload">{note}</div>}
-      <OutboundDetails send={send} result={result} />
+      <MessageFoldSummary
+        glyph={outboundDirectionGlyph(send.kind)}
+        direction={send.kind === 'reply' ? 'Reply to' : 'To'}
+        sender={taskLabel?.title || headline}
+        senderTitle={headline}
+        title={send.title || fallbackTitle(send.body) || note || undefined}
+        open={open}
+        onToggle={toggle}
+        after={!open && send.error ? <div className="provenance-status">{send.error}</div> : undefined}
+      />
+      {open && (
+        <>
+          <TargetChips resolved={resolved} requestId={send.repliedTo ?? send.requestId} />
+          {status && <div className="provenance-status">{status}</div>}
+          {send.body !== undefined && <OutboundBody body={send.body} sessionCwd={sessionCwd} />}
+          {note && <div className="provenance-outbound-payload">{note}</div>}
+          <OutboundDetails send={send} result={result} />
+        </>
+      )}
     </div>
   );
 }

@@ -65,11 +65,12 @@ function v2PeerNote(panel: Locator): Locator {
   return card(panel, 'peer-note').first()
 }
 
-/** The frozen pre-v2 prose envelope, pinned by its body marker: it is no longer
- *  the last peer note (the Claude Code native card follows it), and a legacy
- *  card carries no `data-envelope-source` (absent means Walnut). */
+/** The frozen pre-v2 prose envelope, pinned by its folded title (the first
+ *  sentence of its body): it is no longer the last peer note (the Claude Code
+ *  native card follows it), and a legacy card carries no `data-envelope-source`
+ *  (absent means Walnut). */
 function legacyPeerNote(panel: Locator): Locator {
-  return card(panel, 'peer-note').filter({ hasText: 'ENVELOPE_LEGACY_BODY' })
+  return card(panel, 'peer-note').filter({ hasText: "last August's note." })
 }
 
 /** Claude Code's own cross-session delivery, pinned by source. */
@@ -123,6 +124,14 @@ async function shotCard(page: Page, panel: Locator, target: Locator, file: strin
   else await panel.screenshot({ path: file })
 }
 
+/** Open a folded card: its who + title line is the toggle. */
+async function openCard(page: Page, panel: Locator, target: Locator): Promise<void> {
+  const fold = target.locator('.provenance-fold').first()
+  await revealCard(page, panel, fold)
+  await fold.click()
+  await expect(fold).toHaveAttribute('aria-expanded', 'true')
+}
+
 /** The peer's live title, read from the API so the spec never copies the fixture. */
 async function peerTitle(page: Page): Promise<string> {
   const res = await page.request.get(`/api/sessions/${PEER_ID}`)
@@ -144,29 +153,47 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   await expect(card(panel, 'reply')).toHaveCount(1)
   await expect(card(panel, 'notification')).toHaveCount(2)
 
+  // Every card starts FOLDED to who + title: no session's words are on screen yet.
+  await expect(panel.locator('.provenance-card[data-folded="true"]')).toHaveCount(10)
+  await expect(panel.locator('.provenance-card[data-folded="false"]')).toHaveCount(0)
+  await expect(panel.locator('.provenance-body')).toHaveCount(0)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await panel.screenshot({ path: `${SCREENSHOT_DIR}/cards-all-folded.png` })
+
   const peerNote = v2PeerNote(panel)
   await expect(peerNote).toHaveAttribute('data-envelope-source', 'walnut')
-  await expect(peerNote.locator('.provenance-label')).toHaveText('Message from another session')
-  // FULL title, not the envelope's 80-char clip.
-  await expect(peerNote.locator('.provenance-title')).toHaveText(title)
+  await expect(peerNote.locator('.provenance-fold-dir')).toHaveText('From')
+  // Who: the sender's task; its FULL session title (not the envelope's 80-char clip) is the tooltip.
+  await expect(peerNote.locator('.provenance-fold-sender')).toHaveText('Playwright test task')
+  await expect(peerNote.locator('.provenance-fold-sender')).toHaveAttribute('title', title)
+  // What: the title the sender gave.
+  await expect(peerNote.locator('.provenance-fold-title')).toHaveText('Proxy restarted clean, daemon on 2.1.255')
+  await openCard(page, panel, peerNote)
+  await expect(peerNote).toHaveAttribute('data-folded', 'false')
   await expect(peerNote.locator('.provenance-body')).toContainText('ENVELOPE_PEER_BODY')
 
-  // The pre-v2 prose still cards, with the same header the v2 tag gets.
+  // The pre-v2 prose still cards; with no title its first sentence stands in.
   const legacy = legacyPeerNote(panel)
-  await expect(legacy.locator('.provenance-label')).toHaveText('Message from another session')
-  await expect(legacy.locator('.provenance-title')).toHaveText(title)
+  await expect(legacy.locator('.provenance-fold-sender')).toHaveText('Playwright test task')
+  await expect(legacy.locator('.provenance-fold-title')).toHaveText("last August's note.")
+  await openCard(page, panel, legacy)
   await expect(legacy.locator('.provenance-body')).toContainText('ENVELOPE_LEGACY_BODY')
 
   const reply = card(panel, 'reply')
-  await expect(reply.locator('.provenance-label')).toHaveText('Reply from session')
-  await expect(reply.locator('.provenance-title')).toHaveText(title)
+  await expect(reply.locator('.provenance-fold-dir')).toHaveText('Reply from')
+  await expect(reply.locator('.provenance-fold-title')).toHaveText('Both blockers cleared')
+  await openCard(page, panel, reply)
   await expect(reply.locator('.provenance-asked-text'))
     .toHaveText('Good, and thanks for flagging both blockers')
   await expect(reply.locator('.provenance-body')).toContainText('ENVELOPE_REPLY_BODY')
 
   const notice = card(panel, 'notification').filter({ hasText: 'WITHOUT an explicit reply' })
   await expect(notice).toHaveCount(1)
-  await expect(notice.locator('.provenance-label')).toHaveText('Walnut notification')
+  await expect(notice.locator('.provenance-fold-dir')).toHaveText('Walnut, about')
+  // A notice folds to the first sentence of its outcome; open, the whole outcome reads.
+  await expect(notice.locator('.provenance-fold-title'))
+    .toHaveText('It marked its task COMPLETE WITHOUT an explicit reply to your request.')
+  await openCard(page, panel, notice)
   await expect(notice.locator('.provenance-status')).toHaveText('It marked its task COMPLETE WITHOUT an explicit reply '
     + 'to your request. Its last message and the actions after it are quoted below.')
   // "Quoted below" is true on screen: the child's words (markdown), then the calls
@@ -190,10 +217,14 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   // A subtask's status notice has no request behind it: the same card, the status
   // line says what happened and who started the turn, the child's words are the
   // one quote, and the child's session resolves to its full title and a chip.
-  const subtask = card(panel, 'notification').filter({ hasText: 'Your subtask' })
+  const subtask = card(panel, 'notification').filter({ hasText: 'Stopped without completing' })
   await expect(subtask).toHaveCount(1)
-  await expect(subtask.locator('.provenance-label')).toHaveText('Walnut notification')
-  await expect(subtask.locator('.provenance-title')).toHaveText(title)
+  await expect(subtask.locator('.provenance-fold-sender')).toHaveText('Playwright test task')
+  await expect(subtask.locator('.provenance-fold-sender')).toHaveAttribute('title', title)
+  // The sender line names the child, so the title is the outcome alone, even under a long task title.
+  await expect(subtask.locator('.provenance-fold-title'))
+    .toHaveText('Stopped without completing its task; its last turn was started by the user.')
+  await openCard(page, panel, subtask)
   await expect(subtask.locator('.provenance-status')).toContainText('stopped without completing its task; '
     + 'its last turn was started by the user. It is waiting for input. Its last message is quoted below.')
   await expect(subtask.locator('.provenance-quote')).toHaveCount(1)
@@ -206,9 +237,10 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   // (prompt + items JSON + input) as the body, and offers no session chip.
   const fire = card(panel, 'trigger')
   await expect(fire).toHaveCount(1)
-  await expect(fire.locator('.provenance-label')).toHaveText('Trigger fired')
-  await expect(fire.locator('.provenance-title')).toHaveText('PR comments')
-  await expect(fire.locator('.provenance-status')).toContainText(/^fired 20\d\d-.*, 2 new items$/)
+  await expect(fire.locator('.provenance-fold-dir')).toHaveText('Trigger')
+  await expect(fire.locator('.provenance-fold-sender')).toHaveText('PR comments')
+  await expect(fire.locator('.provenance-fold-title')).toHaveText(/^fired 20\d\d-.*, 2 new items$/)
+  await openCard(page, panel, fire)
   await expect(fire.locator('.provenance-body')).toContainText('ENVELOPE_TRIGGER_BODY')
   await expect(fire.locator('.provenance-body')).toContainText('"id": "c1"')
   await expect(fire.locator('.provenance-body')).toContainText('two threads')
@@ -216,17 +248,57 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   const fireText = await fire.innerText()
   expect(fireText).not.toContain('<walnut-message')
 
-  await page.setViewportSize({ width: 1280, height: 900 })
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/cards-all-shapes.png` })
   await shotCard(page, panel, fire, `${SCREENSHOT_DIR}/card-trigger-fire.png`)
   await shotCard(page, panel, notice, `${SCREENSHOT_DIR}/card-notification-quote.png`)
   await shotCard(page, panel, subtask, `${SCREENSHOT_DIR}/card-subtask-notice.png`)
 })
 
+test('a folded card is two short lines, opens and closes by click or keyboard, and only itself', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/')
+  const panel = await openSession(page)
+  const reply = card(panel, 'reply')
+  const peerNote = v2PeerNote(panel)
+  const fold = reply.locator('.provenance-fold')
+
+  await revealCard(page, panel, fold)
+  // Who + title: two lines, nothing else.
+  const folded = (await reply.boundingBox())!
+  expect(folded.height).toBeLessThanOrEqual(72)
+  await expect(fold).toHaveAttribute('aria-expanded', 'false')
+
+  await fold.click()
+  await expect(reply).toHaveAttribute('data-folded', 'false')
+  await expect(reply.locator('.provenance-body')).toContainText('ENVELOPE_REPLY_BODY')
+  expect((await reply.boundingBox())!.height).toBeGreaterThan(folded.height + 40)
+  // Opening one card opens nothing else.
+  await expect(peerNote).toHaveAttribute('data-folded', 'true')
+  await expect(panel.locator('.provenance-card[data-folded="false"]')).toHaveCount(1)
+  await shotCard(page, panel, reply, `${SCREENSHOT_DIR}/card-reply-open.png`)
+
+  // A chip inside the open card is a link, not the toggle.
+  await expect(reply.locator('a.provenance-chip-session')).toHaveAttribute('data-session-id', PEER_ID)
+
+  await fold.click()
+  await expect(reply).toHaveAttribute('data-folded', 'true')
+  await expect(reply.locator('.provenance-body')).toHaveCount(0)
+
+  // The keyboard reaches the same toggle, twice in a row.
+  await fold.focus()
+  await page.keyboard.press('Enter')
+  await expect(reply).toHaveAttribute('data-folded', 'false')
+  await page.keyboard.press('Space')
+  await expect(reply).toHaveAttribute('data-folded', 'true')
+  await shotCard(page, panel, reply, `${SCREENSHOT_DIR}/card-reply-folded.png`)
+})
+
 test('the short id resolves to a chip that opens that session; the task is a pill', async ({ page }) => {
   test.setTimeout(60_000)
   await page.goto('/')
   const panel = await openSession(page)
+  await openCard(page, panel, v2PeerNote(panel))
+  await openCard(page, panel, legacyPeerNote(panel))
 
   const chip = v2PeerNote(panel).locator('a.provenance-chip-session')
   await expect(chip).toHaveText(`@${PEER_SHORT}`)
@@ -267,10 +339,16 @@ test('machine framing hides behind the disclosure and the body stays the content
   const raw = peerNote.locator('.provenance-raw')
   await expect(raw).toBeHidden()
   const folded = await peerNote.innerText()
-  expect(folded).toContain('ENVELOPE_PEER_BODY')
+  expect(folded).not.toContain('ENVELOPE_PEER_BODY')
   expect(folded).not.toContain('<walnut-message')
   expect(folded).not.toContain('user authorization')
-  expect(folded).not.toContain('walnut tools call')
+  await openCard(page, panel, peerNote)
+  await expect(raw).toBeHidden()
+  const opened = await peerNote.innerText()
+  expect(opened).toContain('ENVELOPE_PEER_BODY')
+  expect(opened).not.toContain('<walnut-message')
+  expect(opened).not.toContain('user authorization')
+  expect(opened).not.toContain('walnut tools call')
 
   // The first card sits above the fold once the cards below it are tall.
   await revealCard(page, panel, peerNote.locator('.provenance-details > summary'))
@@ -291,6 +369,7 @@ test('the legacy prose envelope folds its fence away just the same', async ({ pa
   const legacy = legacyPeerNote(panel)
 
   const raw = legacy.locator('.provenance-raw')
+  await openCard(page, panel, legacy)
   await expect(raw).toBeHidden()
   const folded = await legacy.innerText()
   expect(folded).toContain('ENVELOPE_LEGACY_BODY')
@@ -312,9 +391,10 @@ test('an unidentified sender gets no clickable session chip', async ({ page }) =
   const panel = await openSession(page)
 
   const anon = anonPeerNote(panel)
-  await expect(anon.locator('.provenance-label'))
-    .toHaveText('Message from an unidentified process')
-  await expect(anon.locator('.provenance-title')).toContainText('Unidentified process')
+  await expect(anon.locator('.provenance-fold-dir')).toHaveText('From')
+  await expect(anon.locator('.provenance-fold-sender')).toHaveText('an unidentified process')
+  await expect(anon.locator('.provenance-fold-title')).toHaveText('cron finished on the box.')
+  await openCard(page, panel, anon)
   await expect(anon.locator('a.provenance-chip-session')).toHaveCount(0)
   await expect(anon.locator('.provenance-host')).toHaveText('devbox')
   await expect(anon.locator('.provenance-body')).toContainText('ENVELOPE_ANON_BODY')
@@ -331,8 +411,11 @@ test("Claude Code's own cross-session message cards, framing folded, no context 
   // as the routing system, and NOT a collapsed "Injected context" row.
   const native = nativePeerNote(panel)
   await expect(native).toHaveCount(1)
-  await expect(native.locator('.provenance-label')).toHaveText('Message from another Claude Code session')
-  await expect(native.locator('.provenance-title')).toHaveText('marina-api-71')
+  await expect(native).toHaveAttribute('aria-label', 'Message from another Claude Code session: marina-api-71')
+  await expect(native.locator('.provenance-fold-dir')).toHaveText('Claude Code session')
+  await expect(native.locator('.provenance-fold-sender')).toHaveText('marina-api-71')
+  await expect(native.locator('.provenance-fold-title')).toHaveText('Rebased onto main, tests green.')
+  await openCard(page, panel, native)
   await expect(native.locator('.provenance-body')).toContainText('ENVELOPE_NATIVE_BODY')
   await expect(native.locator('.provenance-body')).not.toContainText('permission laundering')
   // A CLI `[ref]` is not a Walnut id: no chip can be minted from it.
@@ -358,15 +441,17 @@ test('an injected skill dump that quotes an envelope stays a collapsed context r
   const rows = panel.locator('.tool-run-label', { hasText: /skill|context/i })
   await expect(rows).toHaveCount(1)
   await expect(panel.locator('.provenance-body', { hasText: 'example body only' })).toHaveCount(0)
+  await expect(panel.locator('.provenance-fold-title', { hasText: 'example body only' })).toHaveCount(0)
   await expect(panel.getByText('ENVELOPE_SKILL_DUMP')).toHaveCount(0)
 })
 
 /** The outbound card renders SOLO in the timeline: a send is conversation, so
  *  it must never fold into a collapsed "Ran a command" run (that is asserted). */
-async function revealOutboundCard(panel: Locator, marker = 'ENVELOPE_OUTBOUND_BODY'): Promise<Locator> {
+async function revealOutboundCard(panel: Locator, foldTitle = 'Blockers cleared on my side'): Promise<Locator> {
   // Two sends in the fixture: the peer note, then a reply whose answer was cut.
   await expect(panel.locator('.provenance-card[data-envelope-kind="outbound"]')).toHaveCount(2)
-  const outbound = panel.locator('.provenance-card[data-envelope-kind="outbound"]').filter({ hasText: marker })
+  const outbound = panel.locator('.provenance-card[data-envelope-kind="outbound"]')
+    .filter({ has: panel.page().locator('.provenance-fold-title', { hasText: foldTitle }) })
   await expect(outbound).toHaveCount(1)
   await expect(outbound).toBeVisible()
   await expect(panel.locator('.tool-run-toggle', { hasText: 'Ran a command' })).toHaveCount(0)
@@ -381,10 +466,15 @@ test('this session messaging another one cards too, mirroring the inbound card',
 
   const outbound = await revealOutboundCard(panel)
   await expect(outbound).toHaveAttribute('data-outbound-via', 'cli')
-  await expect(outbound.locator('.provenance-label')).toHaveText('Message to another session')
+  await expect(outbound).toHaveAttribute('aria-label', 'Message to another session: Playwright test task')
+  // Folded: to whom (the target's task) and the title this session gave.
+  await expect(outbound.locator('.provenance-fold-dir')).toHaveText('To')
+  await expect(outbound.locator('.provenance-fold-sender')).toHaveText('Playwright test task')
   // The FULL live title, same as the inbound card: the server's answer only
   // printed an 80-char clip, so anything longer proves the target was resolved.
-  await expect(outbound.locator('.provenance-title')).toHaveText(title)
+  await expect(outbound.locator('.provenance-fold-sender')).toHaveAttribute('title', title)
+  await expect(outbound.locator('.provenance-body')).toHaveCount(0)
+  await openCard(page, panel, outbound)
   await expect(outbound.locator('.provenance-body')).toContainText('ENVELOPE_OUTBOUND_BODY')
 
   // Same chips, same click contract as the receiving side.
@@ -421,11 +511,13 @@ test('a reply whose answer was cut from the transcript still names the session t
 
   // `walnut tools call task_send … | tail -3` kept only the answer's closing lines,
   // so nothing in the transcript names the target. This card used to say "Unknown session".
-  const reply = await revealOutboundCard(panel, 'ENVELOPE_CUT_REPLY_BODY')
-  await expect(reply.locator('.provenance-label')).toHaveText('Reply to another session')
+  // No title on this one: the first sentence of the words stands in.
+  const reply = await revealOutboundCard(panel, 'Ack, I am the only worker now.')
+  await expect(reply.locator('.provenance-fold-dir')).toHaveText('Reply to')
+  await expect(reply.locator('.provenance-fold-sender')).toHaveText('Playwright test task')
+  await expect(reply.locator('.provenance-fold-sender')).toHaveAttribute('title', title)
+  await openCard(page, panel, reply)
   await expect(reply.locator('.provenance-rq')).toHaveText('rq-0c07a5e1e7a1')
-  await expect(reply.locator('.provenance-title')).toHaveText(title)
-  await expect(reply.locator('.provenance-title')).not.toHaveText('Unknown session')
   const chip = reply.locator('a.provenance-chip-session')
   await expect(chip).toHaveText(`@${PEER_SHORT}`)
   await expect(chip).toHaveAttribute('data-session-id', PEER_ID)

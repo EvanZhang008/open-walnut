@@ -96,6 +96,9 @@ export interface SessionEnvelope {
   peer: SessionEnvelopePeer;
   /** One-line clip of what the asker originally asked (reply + notification). */
   askedPreview?: string;
+  /** The sender's one-line TL;DR (`title` attribute; peer-note + reply). Sender
+   *  text like the body: it labels the folded card, it never names anyone. */
+  title?: string;
   /** The outcome sentence, verbatim (notification only) — this IS its content.
    *  For a trigger: the `note` attribute ("fired <ISO>, N new items" / "scheduled"). */
   statusLine?: string;
@@ -562,6 +565,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(attrs.request ? { requestId: attrs.request } : {}),
       peer,
       ...(attrs.asked ? { askedPreview: attrs.asked } : {}),
+      ...(attrs.title && (kind === 'peer-note' || kind === 'reply') ? { title: attrs.title } : {}),
       ...(notify ? { statusLine } : trigger ? { statusLine, body } : { body }),
       ...(replyRequest ? { replyRequest } : {}),
       ...(followUp ? { followUp } : {}),

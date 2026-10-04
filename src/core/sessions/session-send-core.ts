@@ -70,6 +70,9 @@ export interface SessionSendInput {
   replyTimeoutSecs?: number;
   /** rq-… id — this send IS the reply; `to` may be omitted (routes to the asker). */
   inReplyTo?: string;
+  /** The sender's one-line TL;DR of `text`: the envelope's `title`, the line the
+   *  reader's card shows until opened. Only a fenced (non-human) send carries one. */
+  title?: string;
   /** Idempotency id (qm-…) forwarded to the durable queue. */
   messageId?: string;
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
@@ -373,7 +376,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
           ? displayHost(input.callerHost.trim().slice(0, 64))
           : 'unknown',
         anonymous: true,
-      });
+      }, { title: input.title });
   }
   // One `\n`, one line, and only when a request exists to answer.
   if (request) enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
@@ -485,7 +488,7 @@ async function performReply(
     sessionId: caller.record.claudeSessionId,
     taskId: caller.record.taskId,
     host: displayHost(caller.record.host),
-  }, text);
+  }, text, { title: input.title });
 
   const { delivery, messageId } = await deliverToSession(origin, {
     busText: text, enqueueText: wrapped, source: 'peer',

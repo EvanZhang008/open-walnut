@@ -55,6 +55,8 @@ export interface OutboundSend {
   to?: string;
   /** The words that were sent. Absent when the payload never rode the command. */
   body?: string;
+  /** The one-line TL;DR the sender gave (`title`), the folded card's line. */
+  title?: string;
   requestId?: string;
   repliedTo?: string;
   target?: OutboundTarget;
@@ -381,6 +383,7 @@ export function detectOutboundSend(
     kind: inReplyTo || str(res?.repliedTo) ? 'reply' : 'peer-note',
     ...(to ? { to } : {}),
     ...(typeof args?.text === 'string' && args.text ? { body: args.text } : {}),
+    ...(str(args?.title) ? { title: str(args?.title)!.replace(/\s+/g, ' ').trim() } : {}),
     ...(requestId ? { requestId } : {}),
     ...(repliedTo ? { repliedTo } : {}),
     ...(target ? { target } : {}),

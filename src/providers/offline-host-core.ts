@@ -444,7 +444,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     const slice = slices.get(home)!
     const wrapped = kit.buildReplyDeliveryText(row, {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
-    }, text)
+    }, text, { title: typeof args.title === 'string' ? args.title : undefined })
     const mid = messageId(args.messageId)
     const delivered = await deps.deliver(row.fromSessionId, wrapped, mid)
     if (!delivered.ok) return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
@@ -529,7 +529,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     let envelope = kit.buildPeerWrapper(text, {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
-    })
+    }, { title: typeof args.title === 'string' ? args.title : undefined })
     if (row) envelope = `${envelope}\n${kit.buildReplyTrailer(row)}`
     const mid = messageId(args.messageId)
     // The row exists before the envelope that names it can be read.

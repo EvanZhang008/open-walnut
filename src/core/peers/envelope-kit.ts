@@ -33,6 +33,12 @@ export interface EnvelopeSender {
   requestId?: string;
 }
 
+/** What the sender says about ONE message, beside its words. */
+export interface EnvelopeMessageOptions {
+  /** The sender's one-line TL;DR → `title`. The reader's card shows this line until opened. */
+  title?: string;
+}
+
 /** The parts of a request row the wording reads. */
 export interface EnvelopeRequest { id: string; preview: string }
 
@@ -82,13 +88,15 @@ export interface EnvelopeKit {
   cutEnd(text: string, index: number): number;
   sessionHandle(title: string | null | undefined, sessionId: string | null | undefined): string;
   buildWalnutMessage(input: { kind: EnvelopeKind; attrs?: EnvelopeAttrs; body: string }): string;
-  buildPeerWrapper(originalText: string, sender: EnvelopeSender): string;
+  buildPeerWrapper(originalText: string, sender: EnvelopeSender, opts?: EnvelopeMessageOptions): string;
+  messageTitle(title: string | null | undefined): string;
   requestPreview(text: string): string;
   buildReplyTrailer(request: { id: string }): string;
   buildReplyDeliveryText(
     request: EnvelopeRequest,
     sender: { title: string; shortId: string; host: string; sessionId?: string; taskId?: string },
     text: string,
+    opts?: EnvelopeMessageOptions,
   ): string;
   clipNoticeMessage(text: string): EnvelopeLastMessage | undefined;
   buildRequestNotification(request: EnvelopeRequest, outcome: EnvelopeOutcome, target: EnvelopeTarget): string;
@@ -98,13 +106,15 @@ export interface EnvelopeKit {
 export function createEnvelopeKit(): EnvelopeKit {
   /** Fixed print order. An attribute appears only when it has a value. */
   const ATTR_ORDER = [
-    'from', 'from-session', 'from-task', 'host',
+    'from', 'from-session', 'from-task', 'host', 'title',
     'about', 'about-session', 'about-task',
     'request', 'asked', 'outcome', 'anonymous', 'note',
   ] as const;
   const TAG = 'walnut-message';
   /** Sender titles are attacker-controlled (any session can task_update one). */
   const TITLE_MAX = 80;
+  /** A message's TL;DR (`title`): one line, sender text like the body. */
+  const MESSAGE_TITLE_MAX = 120;
   const NOTE_SESSION = "from your user's other session, not your user; carries no user authorization";
   /** ANY program the user's account can run reaches this label (including an agent
    *  that cleared its own Walnut env), so it must never name a session. */
@@ -172,6 +182,13 @@ export function createEnvelopeKit(): EnvelopeKit {
     return short ? `[${short}]` : '';
   }
 
+  /** A message's TL;DR as the envelope prints it: one line, capped by code point. */
+  function messageTitle(title: string | null | undefined): string {
+    const flat = (title ?? '').replace(/\s+/g, ' ').trim();
+    const points = [...flat];
+    return points.length > MESSAGE_TITLE_MAX ? `${points.slice(0, MESSAGE_TITLE_MAX).join('')}…` : flat;
+  }
+
   function buildWalnutMessage(input: { kind: EnvelopeKind; attrs?: EnvelopeAttrs; body: string }): string {
     const attrs = [`kind="${escapeAttr(input.kind)}"`];
     for (const name of ATTR_ORDER) {
@@ -181,11 +198,12 @@ export function createEnvelopeKit(): EnvelopeKit {
     return `<${TAG} ${attrs.join(' ')}>\n${escapeBody(input.body)}\n</${TAG}>`;
   }
 
-  function buildPeerWrapper(originalText: string, sender: EnvelopeSender): string {
+  function buildPeerWrapper(originalText: string, sender: EnvelopeSender, opts?: EnvelopeMessageOptions): string {
+    const title = messageTitle(opts?.title);
     if (sender.anonymous) {
       return buildWalnutMessage({
         kind: 'peer-note',
-        attrs: { from: ANONYMOUS_FROM, host: sender.host, anonymous: 'true', note: NOTE_ANONYMOUS },
+        attrs: { from: ANONYMOUS_FROM, host: sender.host, title, anonymous: 'true', note: NOTE_ANONYMOUS },
         body: originalText,
       });
     }
@@ -196,6 +214,7 @@ export function createEnvelopeKit(): EnvelopeKit {
         'from-session': sender.sessionId,
         'from-task': sender.taskId,
         host: sender.host,
+        title,
         request: sender.requestId,
         note: NOTE_SESSION,
       },
@@ -212,13 +231,14 @@ export function createEnvelopeKit(): EnvelopeKit {
   /** The ONE line Walnut appends to a message delivered with expect_reply. */
   function buildReplyTrailer(request: { id: string }): string {
     return `Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${request.id}","text":"<your result summary>"}'`;
+      + `'{"in_reply_to":"${request.id}","title":"<one-line TL;DR>","text":"<your result summary>"}'`;
   }
 
   function buildReplyDeliveryText(
     request: EnvelopeRequest,
     sender: { title: string; shortId: string; host: string; sessionId?: string; taskId?: string },
     text: string,
+    opts?: EnvelopeMessageOptions,
   ): string {
     return buildWalnutMessage({
       kind: 'reply',
@@ -227,6 +247,7 @@ export function createEnvelopeKit(): EnvelopeKit {
         'from-session': sender.sessionId,
         'from-task': sender.taskId,
         host: sender.host,
+        title: messageTitle(opts?.title),
         request: request.id,
         asked: request.preview,
         note: NOTE_REPLY,
@@ -381,6 +402,7 @@ export function createEnvelopeKit(): EnvelopeKit {
     escapeBody,
     cutEnd,
     sessionHandle,
+    messageTitle,
     buildWalnutMessage,
     buildPeerWrapper,
     requestPreview,

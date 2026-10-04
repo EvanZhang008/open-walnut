@@ -26,6 +26,11 @@
  * Clicks ride the existing `.session-link` / `.task-link` delegation on
  * `.session-msg-content` (useEntityClickHandler), so the chips open the Home
  * session column / focus the task through exactly the same path as chat pills.
+ *
+ * Every card starts FOLDED to one line of who and one line of what: the sender's
+ * own TL;DR (`title`), a notice's outcome sentence, or the first sentence of the
+ * words (message-fold.ts). A click opens the rest; a slim reply-request row has
+ * nothing to fold.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -47,7 +52,10 @@ import { sessionStatusStore } from '@/stores/session-status-store';
 import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
+import { fallbackTitle, foldKey, noticeTitle, useMessageFold } from './message-fold';
+import { MessageFoldSummary } from './MessageFoldSummary';
 import '@/styles/provenance-quote.css';
+import '@/styles/provenance-fold.css';
 
 /** '__local__' is the wire value; the envelope prints 'local'. */
 function hostLabel(host: string | undefined): string | undefined {
@@ -150,7 +158,7 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
 }
 
 /** The other session: a clickable chip when resolved, plain text when not. */
-function PeerChips({ peer, resolved }: { peer: SessionEnvelopePeer; resolved: ResolvedPeer }) {
+function PeerChips({ peer, resolved, requestId }: { peer: SessionEnvelopePeer; resolved: ResolvedPeer; requestId?: string }) {
   const taskLabel = useTaskLabel(resolved.taskId);
   // Last fallback: an id the envelope printed but the index could not confirm
   // still names the sender, so it shows as a dim chip rather than disappearing.
@@ -184,8 +192,32 @@ function PeerChips({ peer, resolved }: { peer: SessionEnvelopePeer; resolved: Re
       {resolved.fullId && (
         <CopyChip value={resolved.fullId} label="copy id" title={resolved.fullId} />
       )}
+      {requestId && <span className="provenance-rq">{requestId}</span>}
     </div>
   );
+}
+
+/** "Reply from", "From", … — the word before the sender on the folded line. */
+function foldDirection(envelope: SessionEnvelope): string {
+  if (envelope.peer.anonymous) return 'From';
+  switch (envelope.kind) {
+    case 'reply': return 'Reply from';
+    case 'notification': return 'Walnut, about';
+    case 'trigger': return 'Trigger';
+    default: return envelope.source === 'claude-code' ? 'Claude Code session' : 'From';
+  }
+}
+
+/**
+ * The folded title, best source first; never empty when the card has words. A
+ * notice's outcome runs to several sentences (measured on real notices: median
+ * 183 characters), so it folds to its first.
+ */
+function foldTitle(envelope: SessionEnvelope): string | undefined {
+  if (envelope.title) return envelope.title;
+  if (envelope.kind === 'notification' && envelope.statusLine) return noticeTitle(envelope.statusLine);
+  if (envelope.kind === 'trigger' && envelope.statusLine && envelope.statusLine !== 'scheduled') return envelope.statusLine;
+  return fallbackTitle(envelope.body) ?? fallbackTitle(envelope.quote?.[0]?.text);
 }
 
 /**
@@ -247,6 +279,8 @@ function EnvelopeDetails({ envelope }: { envelope: SessionEnvelope }) {
 
 function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; sessionCwd?: string }) {
   const resolved = useResolvedPeer(envelope.peer, envelope.source);
+  const taskLabel = useTaskLabel(resolved.taskId);
+  const [open, toggle] = useMessageFold(foldKey(envelope.raw));
   const { kind, peer, source } = envelope;
 
   // A bare reply-requested trailer names no peer and carries no words — it is a
@@ -262,23 +296,32 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
     );
   }
 
+  const title = foldTitle(envelope);
+
   // A trigger comes from a routine, not a session: no peer to resolve, no chips.
-  // The head says what happened (fired vs. a plain scheduled run), the title is
-  // the routine's name, the status line is the daemon's "fired <when>, N new
-  // items", and the body is the delivery the model was given.
+  // The fold line names the routine (and says when it was a plain scheduled run),
+  // the title is the daemon's "fired <when>, N new items", and the open card is
+  // the delivery the model was given.
+
   if (kind === 'trigger') {
     const name = (peer.title ?? '').replace(/^Trigger:\s*/, '') || 'Routine';
     const scheduled = envelope.statusLine === 'scheduled';
     return (
-      <div className="provenance-card" data-envelope-kind={kind}>
-        <div className="provenance-head">
-          <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
-          <span className="provenance-label">{scheduled ? 'Routine ran on schedule' : envelopeDirectionLabel(kind, source)}</span>
-        </div>
-        <div className="provenance-title" title={name}>{name}</div>
-        {envelope.statusLine && !scheduled && <div className="provenance-status">{envelope.statusLine}</div>}
-        {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
-        <EnvelopeDetails envelope={envelope} />
+      <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
+        <MessageFoldSummary
+          glyph={envelopeDirectionGlyph(kind)}
+          direction={scheduled ? 'Routine ran on schedule' : foldDirection(envelope)}
+          sender={name}
+          title={title}
+          open={open}
+          onToggle={toggle}
+        />
+        {open && (
+          <>
+            {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
+            <EnvelopeDetails envelope={envelope} />
+          </>
+        )}
       </div>
     );
   }
@@ -286,50 +329,59 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
   const headline = peer.anonymous
     ? 'Unidentified process (no tracked session)'
     : resolved.title || (peer.shortId ? `Session ${peer.shortId}` : 'Unknown session');
+  // Who sent it, as the reader knows them: the task, then the session's own title.
+  const sender = peer.anonymous ? 'an unidentified process' : taskLabel?.title || headline;
+  // A notice's outcome IS its folded title; open, it is repeated only when the fold cut it.
+  const statusIsTitle = kind === 'notification' && !envelope.title && title === envelope.statusLine;
 
   return (
     <div
       className="provenance-card"
       data-envelope-kind={kind}
+      data-folded={open ? 'false' : 'true'}
+      aria-label={`${envelopeDirectionLabel(kind, source)}: ${sender}`}
       {...(peer.anonymous ? { 'data-anonymous': 'true' } : {})}
       {...(source ? { 'data-envelope-source': source } : {})}
     >
-      <div className="provenance-head">
-        <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
-        <span className="provenance-label">
-          {peer.anonymous
-            ? 'Message from an unidentified process'
-            : envelopeDirectionLabel(kind, source)}
-        </span>
-        {envelope.requestId && <span className="provenance-rq">{envelope.requestId}</span>}
-      </div>
-      <div className="provenance-title" title={headline}>{headline}</div>
-      <PeerChips peer={peer} resolved={resolved} />
-      {envelope.askedPreview && (
-        <div className="provenance-asked">
-          <span className="provenance-asked-label">You asked</span>
-          <span className="provenance-asked-text">{envelope.askedPreview}</span>
-        </div>
-      )}
-      {envelope.statusLine && <div className="provenance-status">{envelope.statusLine}</div>}
-      {envelope.quote?.map((section, i) => (
-        <NoticeQuote key={i} section={section} sessionCwd={sessionCwd} />
-      ))}
-      {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
-      {envelope.replyRequest && (
-        <div className="provenance-reply-request">
-          <span className="provenance-reply-request-label">Reply requested</span>
-          <span className="provenance-rq">{envelope.replyRequest.requestId}</span>
-          {envelope.replyRequest.command && (
-            <CopyChip
-              value={envelope.replyRequest.command}
-              label="copy reply command"
-              title={envelope.replyRequest.command}
-            />
+      <MessageFoldSummary
+        glyph={envelopeDirectionGlyph(kind)}
+        direction={foldDirection(envelope)}
+        sender={sender}
+        senderTitle={headline}
+        title={title}
+        open={open}
+        onToggle={toggle}
+      />
+      {open && (
+        <>
+          <PeerChips peer={peer} resolved={resolved} requestId={envelope.requestId} />
+          {envelope.askedPreview && (
+            <div className="provenance-asked">
+              <span className="provenance-asked-label">You asked</span>
+              <span className="provenance-asked-text">{envelope.askedPreview}</span>
+            </div>
           )}
-        </div>
+          {envelope.statusLine && !statusIsTitle && <div className="provenance-status">{envelope.statusLine}</div>}
+          {envelope.quote?.map((section, i) => (
+            <NoticeQuote key={i} section={section} sessionCwd={sessionCwd} />
+          ))}
+          {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
+          {envelope.replyRequest && (
+            <div className="provenance-reply-request">
+              <span className="provenance-reply-request-label">Reply requested</span>
+              <span className="provenance-rq">{envelope.replyRequest.requestId}</span>
+              {envelope.replyRequest.command && (
+                <CopyChip
+                  value={envelope.replyRequest.command}
+                  label="copy reply command"
+                  title={envelope.replyRequest.command}
+                />
+              )}
+            </div>
+          )}
+          <EnvelopeDetails envelope={envelope} />
+        </>
       )}
-      <EnvelopeDetails envelope={envelope} />
     </div>
   );
 }

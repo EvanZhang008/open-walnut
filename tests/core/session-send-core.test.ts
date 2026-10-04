@@ -481,7 +481,7 @@ describe('performSessionSend — expect_reply', () => {
     });
     expect(deliveredText()).toContain(`request="${result.requestId}"`);
     expect(deliveredText()).toContain(`Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
+      + `'{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
   });
 
   it('the DEFAULT degrades to no request for the human — it must not 400 like an explicit true does', async () => {
@@ -541,7 +541,7 @@ describe('performSessionSend — expect_reply', () => {
     // newline after the closing tag, then exactly one line and nothing more.
     expect(text).toBe(`${parsed.raw}\n`
       + `Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
+      + `'{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
   });
 });
 

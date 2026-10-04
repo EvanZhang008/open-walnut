@@ -371,7 +371,7 @@ describe('buildReplyTrailer', () => {
     const trailer = buildReplyTrailer(request({ id: 'rq-aaaabbbbcccc' }));
 
     expect(trailer).toBe(
-      `Reply when done: walnut tools call task_send '{"in_reply_to":"rq-aaaabbbbcccc","text":"<your result summary>"}'`,
+      `Reply when done: walnut tools call task_send '{"in_reply_to":"rq-aaaabbbbcccc","title":"<one-line TL;DR>","text":"<your result summary>"}'`,
     );
     // A trailer with its own newlines would break the "one \n + one line" rule
     // the sender glues it on with, and the card that reads back from there.

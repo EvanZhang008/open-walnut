@@ -1,7 +1,7 @@
 /**
  * /api/v1/messages + /api/v1/requests — the unified send surface.
  *
- *   POST /messages        { to?, text, expect_reply?, reply_timeout?, in_reply_to?, messageId? }
+ *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, messageId? }
  *                         → 202 SessionSendResult (session-send-core.ts)
  *   GET  /requests/:id    → { request } — status read for `walnut wait rq-…`
  *
@@ -47,6 +47,7 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         expectReply: typeof b.expect_reply === 'boolean' ? b.expect_reply : undefined,
         replyTimeoutSecs: num(b.reply_timeout),
         inReplyTo: str(b.in_reply_to),
+        title: str(b.title),
         messageId: str(b.messageId),
         callerSid: header(req, 'x-walnut-caller-sid'),
         callerHost: header(req, 'x-walnut-caller-host'),

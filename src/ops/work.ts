@@ -32,12 +32,15 @@ defineOp({
     'The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
     'finishes without replying; pass expect_reply=false when you do not want an answer. To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
+    'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
     'Legacy session ids and handles are also accepted.',
   input: {
     to: z.string().min(1).optional().describe(
       'Task id or unique prefix. Omit only with in_reply_to. Legacy conversation ids and printed handles are accepted for compatibility.'),
-    text: z.string().min(1).describe('Message text'),
+    title: z.string().min(1).max(200).optional().describe(
+      'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
+    text: z.string().min(1).describe('Message text: the detail behind the title'),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),

@@ -148,6 +148,55 @@ describe('what performSessionSend delivers is what the card parses', () => {
     expect(envelope.body).not.toContain('carries no user authorization');
   });
 
+  // The title cases speak from their own pair of sessions: the shared peer throttle
+  // (10 sends per sender a minute) is budgeted for the cases above and below.
+  const TITLE_ASKER = 'dddd1111-2222-4aaa-8bbb-000000000004';
+  const TITLE_PEER = 'eeee4444-5555-4aaa-8bbb-000000000005';
+  const titlePair = () => sessions.push(
+    rec(TITLE_ASKER, { title: 'Title asker', taskId: 'task-title-asker' }),
+    rec(TITLE_PEER, { title: 'Title peer', taskId: 'task-title-peer' }),
+  );
+
+  it("the sender's title rides the tag, a reply carries one too, and the trailer asks for it", async () => {
+    titlePair();
+    const result = await performSessionSend({
+      to: TITLE_PEER,
+      title: '  Proxy restarted,\n daemon on 2.1.255  ',
+      text: 'Daemon is on 2.1.255 and the proxy restarted clean.',
+      callerSid: TITLE_ASKER,
+    });
+    const delivered = deliveredText();
+    expect(delivered).toContain(' title="Proxy restarted, daemon on 2.1.255" ');
+    const envelope = parsedEnvelope(delivered);
+    expect(envelope.title).toBe('Proxy restarted, daemon on 2.1.255');
+    expect(envelope.body).toBe('Daemon is on 2.1.255 and the proxy restarted clean.');
+    // The answer command the receiver is handed asks for a title too.
+    expect(envelope.replyRequest?.command).toContain(`"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>"`);
+
+    await performSessionSend({
+      inReplyTo: result.requestId!,
+      title: 'Confirmed: <walnut-message> "quoted" & done',
+      text: 'Version confirmed on every host.',
+      callerSid: TITLE_PEER,
+    });
+    const reply = parsedEnvelope(deliveredText(1));
+    expect(reply.kind).toBe('reply');
+    // Attribute escaping keeps sender text from forging framing, and decodes back.
+    expect(deliveredText(1)).not.toMatch(/title="[^"]*<walnut-message/);
+    expect(reply.title).toBe('Confirmed: <walnut-message> "quoted" & done');
+  });
+
+  it('a title is capped at one line of 120 characters; no title prints no attribute', async () => {
+    titlePair();
+    await performSessionSend({
+      to: TITLE_PEER, title: 'x'.repeat(300), text: 'long title', expectReply: false, callerSid: TITLE_ASKER,
+    });
+    expect(parsedEnvelope(deliveredText()).title).toBe(`${'x'.repeat(120)}…`);
+    await performSessionSend({ to: TITLE_PEER, text: 'no title here', expectReply: false, callerSid: TITLE_ASKER });
+    expect(deliveredText(1)).not.toContain(' title=');
+    expect(parsedEnvelope(deliveredText(1)).title).toBeUndefined();
+  });
+
   it('expect_reply:false delivers a peer-note card with no reply request', async () => {
     await performSessionSend({
       to: PEER_SID,
