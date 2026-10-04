@@ -102,7 +102,12 @@ function channelKey(sessionId: string): string {
 // between unsubscribe and resubscribe.
 
 const LINGER_MS = 30_000
-const interested = new Map<string, { conns: number; linger?: NodeJS.Timeout }>()
+const interested = new Map<string, {
+  conns: number
+  linger?: NodeJS.Timeout
+  /** Highest statusRevision relayed for this session (see the status case). */
+  statusRevision?: number
+}>()
 let busSubscribed = false
 /** Latched by the first cloud-OWNED stream attach — see ensureBusSubscriber. */
 let busAllowedOnCloud = false
@@ -199,6 +204,17 @@ function ensureBusSubscriber(): void {
       case 'session:status-changed': {
         const ps = typeof d.process_status === 'string' ? d.process_status : ''
         if (!ps) return
+        // Every status event is a whole record stamped with its statusRevision,
+        // and two writers' events can reach the bus out of order (the runner's
+        // echo of an older record landing after the snapshot's newer one). The
+        // web console drops the older one by revision; the phone's frame has no
+        // revision to sort by, so the older one is dropped here.
+        const entry = interested.get(sid)
+        const rev = typeof d.statusRevision === 'number' ? d.statusRevision : undefined
+        if (entry && rev !== undefined) {
+          if (entry.statusRevision !== undefined && rev < entry.statusRevision) return
+          entry.statusRevision = rev
+        }
         // 'running' from session-runner = a real turn is starting → reset the
         // replay window. daemon-reconnect's 'running' is a reconciliation
         // artifact (SSH flap), NOT a turn — treating it as one gave phones

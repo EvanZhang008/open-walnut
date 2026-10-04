@@ -6727,11 +6727,16 @@ export class ClaudeCodeSession {
         updateSessionRecord,
       } = await import('../core/session-tracker.js')
       const record = await updateSessionRecord(sessionId, updates)
+      // When the C2 gate strips our status, `record` still carries the
+      // snapshot's previous verdict. Publishing it as 'session-runner' turned a
+      // stale 'running' at turn end into a fresh turn-start edge, which wiped
+      // the phone's replayed turn-end and left it on "Thinking…".
+      const statusSuppressed = record.process_status !== updates.process_status
       emitSessionStatusChanged(
         record,
         { phase },
         ['*'],
-        { source: 'session-runner', urgency: 'urgent' },
+        { source: statusSuppressed ? 'session-tracker' : 'session-runner', urgency: 'urgent' },
       )
     })
     this._statusCommit = commit.catch((err) => {

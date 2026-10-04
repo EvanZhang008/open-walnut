@@ -1502,14 +1502,19 @@ primary box the same endpoints serve directly — no bridge involved.
   streams: monotonic `id:`, `Last-Event-ID` replay, `:` pings). Events:
   - `snapshot { blocks, isStreaming, completedLen, processStatus }` — sent
     once on attach (primary box only; carries no id).
-  - `turn-start {}` — a new turn began (resets the replay window).
+  - `turn-start {}` — a new turn began (resets the replay window). Only a
+    turn's own start sends it: a status write the snapshot gate held back, or
+    one replayed after a reconnect, never does, so a turn-end is not wiped by
+    a stale `running` echo (2026-10).
   - `text-delta { delta }` / `thinking { delta }` — main-lane streaming text.
   - `tool { name, toolUseId, detail?, inputPreview? }` /
     `tool-result { toolUseId, resultPreview? }` — `detail` (additive) is the
     one-line input summary; `inputPreview` (≤2000 chars) and `resultPreview`
     (≤700 chars + `…`) are additive, masked excerpts, the same ones the
     message rows carry. The full text stays off this channel.
-  - `status { processStatus }` — running | idle | stopped | error.
+  - `status { processStatus }` — running | idle | stopped | error. Sent in
+    status-revision order: a status older than one already sent on this
+    stream is dropped, the rule the web console applies by `statusRevision`.
   - `turn-end {}` — refetch the transcript here to reconcile.
   - `error { message }`
   - `bridge-online {}` / `bridge-offline {}` (cloud only) — sent on attach
