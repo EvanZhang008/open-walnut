@@ -13,13 +13,14 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { Server as HttpServer } from 'node:http';
 import { WebSocket } from 'ws';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME } from '../../src/constants.js';
+import { WALNUT_HOME, UI_PREFS_FILE } from '../../src/constants.js';
 import {
   startServer, stopServer, setErrorNotificationRepeatTtlMs, publishRecovery, getDiskWatermarkHandle,
 } from '../../src/web/server.js';
@@ -524,14 +525,63 @@ describe('Notification feed API', () => {
   // REAL server (its own middleware, its own bus, its own publishers) rather than a
   // re-implementation of them in the test.
 
+  // The 5xx generator for the ROUTE cases: a prefs file that does not parse makes
+  // GET /api/ui-prefs throw inside its own handler (a 500, the endpoint's own
+  // failure, the shape of the nine-cards incident) until the file is valid again.
+  const PREFS_ROUTE_KEY = 'route:GET /api/ui-prefs';
+  async function breakPrefsFile(): Promise<void> {
+    await fs.mkdir(dirname(UI_PREFS_FILE), { recursive: true });
+    await fs.writeFile(UI_PREFS_FILE, '{"cut off mid-write": ');
+  }
+
   it('ROUTE: repeated 5xx on one endpoint = ONE card, retired by the next success', async () => {
     // Driven through the SERVER's real request-logger middleware — the failing-route
     // memory lives inside that module, so a test that logged the line itself would
     // pass while production's recovery edge stayed unwired.
-    //
-    // The 5xx generator is the disk guard: a critically-full disk answers every
-    // mutating /api request 507 (a 5xx), which is exactly a route failing for a
-    // reason outside the route. Freeing the disk makes the same request succeed.
+    const key = PREFS_ROUTE_KEY;
+    try {
+      await breakPrefsFile();
+
+      // Three occurrences with different query strings and latencies. Under the OLD
+      // log shape (`GET /api/ui-prefs?attempt=0 → 500 (23ms)`) each hashed to its own
+      // card — that is how one broken endpoint became nine unresolved cards in the
+      // live feed.
+      for (const attempt of [0, 1, 2]) {
+        const res = await fetch(apiUrl(`/api/ui-prefs?attempt=${attempt}`));
+        expect(res.status).toBe(500);
+        await delay(30);
+      }
+
+      const failing = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === key));
+      const cards = failing.feed.filter((n) => n.recoveryKey === key);
+      // ONE card for one condition, whatever the latency and query were.
+      expect(cards).toHaveLength(1);
+      expect(cards[0].title).toBe('GET /api/ui-prefs → 500');
+      expect(cards[0].title).not.toMatch(/ms\)/);
+      expect(cards[0].resolved).toBeUndefined();
+      const dedupKey = cards[0].dedupKey;
+
+      // File valid again → the SAME endpoint now answers <500, and the middleware's
+      // failing→healthy edge fires publishRecovery through the injected publisher.
+      await fs.writeFile(UI_PREFS_FILE, '{}');
+      const ok = await fetch(apiUrl('/api/ui-prefs'));
+      expect(ok.status).toBe(200);
+
+      const settled = await pollFeed((f) =>
+        f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
+      const rec = settled.feed.find((n) => n.dedupKey === dedupKey)!;
+      expect(rec.resolved).toBe('recovered');
+      expect(rec.severity).toBe('info');
+    } finally {
+      await fs.rm(UI_PREFS_FILE, { force: true });
+    }
+  });
+
+  it('ROUTE: a 507 from the disk guard raises no route card; the disk monitor owns that outage', async () => {
+    // 502/503/504/507 report a DEPENDENCY, not the endpoint (isDependencyStatus in
+    // request-logger.ts): the disk monitor already raises the one card for a full
+    // disk, with its own recovery, so the route logs the 507 at warn. Driven
+    // through the real 507 gate and the real middleware.
     const { _setStatfsForTest, resetDiskWatermarkForTest } =
       await import('../../src/core/disk-watermark.js');
     const handle = getDiskWatermarkHandle();
@@ -543,53 +593,36 @@ describe('Notification feed API', () => {
       _setStatfsForTest(async () => ({ bsize, blocks, bfree: bavail, bavail }));
     };
 
-    const path = '/api/tasks';
-    const key = 'route:POST /api/tasks';
     try {
       resetDiskWatermarkForTest();
       stubUsedPct(96);
       await handle!.poll(); // arms the 507 gate
-
-      // Three occurrences with different bodies/latencies. Under the OLD log shape
-      // (`POST /api/tasks → 507 (23ms)`) each hashed to its own card — that is how
-      // one broken endpoint became nine unresolved cards in the live feed.
       for (const title of ['a', 'bb', 'ccc']) {
-        const res = await fetch(apiUrl(path), {
+        const res = await fetch(apiUrl('/api/tasks'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title }),
         });
         expect(res.status).toBe(507);
-        await delay(30);
       }
-
-      const failing = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === key));
-      const cards = failing.feed.filter((n) => n.recoveryKey === key);
-      // ONE card for one condition, whatever the latency and body were.
-      expect(cards).toHaveLength(1);
-      expect(cards[0].title).toBe('POST /api/tasks → 507');
-      expect(cards[0].title).not.toMatch(/ms\)/);
-      expect(cards[0].resolved).toBeUndefined();
-      const dedupKey = cards[0].dedupKey;
-
-      // Disk freed → the SAME request now answers <500, and the middleware's
-      // failing→healthy edge fires publishRecovery through the injected publisher.
       stubUsedPct(40);
       await handle!.poll();
-      const ok = await fetch(apiUrl(path), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'recovered' }),
-      });
-      expect(ok.status).toBeLessThan(500);
 
-      const settled = await pollFeed((f) =>
-        f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
-      const rec = settled.feed.find((n) => n.dedupKey === dedupKey)!;
-      expect(rec.resolved).toBe('recovered');
-      expect(rec.severity).toBe('info');
+      // A real endpoint failure AFTER the 507s: once its card is in the feed, any
+      // card the 507s had raised would be in it too.
+      await breakPrefsFile();
+      expect((await fetch(apiUrl('/api/ui-prefs?after=507'))).status).toBe(500);
+      const feed = await pollFeed((f) =>
+        f.feed.some((n) => n.recoveryKey === PREFS_ROUTE_KEY && n.resolved === undefined));
+      expect(feed.feed.some((n) => n.recoveryKey === PREFS_ROUTE_KEY && n.resolved === undefined)).toBe(true);
+      expect(feed.feed.filter((n) => n.recoveryKey === 'route:POST /api/tasks')).toEqual([]);
+
+      await fs.writeFile(UI_PREFS_FILE, '{}');
+      expect((await fetch(apiUrl('/api/ui-prefs'))).status).toBe(200);
     } finally {
       _setStatfsForTest(null);
       resetDiskWatermarkForTest();
       await handle!.poll();
+      await fs.rm(UI_PREFS_FILE, { force: true });
     }
   });
 

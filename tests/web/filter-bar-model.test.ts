@@ -15,7 +15,7 @@ import {
   foldQueryStatus, isDefaultStatus, isDimVisible, migrateLegacy, moreSetCount, pickValue, readFilterState,
   readStatusSet, statusChipLabel, timeChipText, writeFilterState, writeProjectSet, writeStatusSet,
 } from '../../web/src/components/tasks/filter-bar-model';
-import { ICON_CHECK, ICON_PHASE_COMPLETE, ICON_FILTER, ICON_SLIDERS, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '../../web/src/components/common/Icons';
+import { ICON_CHECK, ICON_PHASE_COMPLETE, ICON_SLIDERS, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '../../web/src/components/common/Icons';
 
 const L0: LegacyFilterFields = { dateFilter: 'now', phaseFilter: '', activeProject: '', showCompleted: false, showWaiting: false };
 const S0: FilterState = DEFAULT_FILTER_STATE;
@@ -275,13 +275,11 @@ describe('icons (C61)', () => {
     expect((html(ICON_CHECK).match(/<(path|polyline)/g) ?? []).length).toBe(1);
     expect(html(ICON_CHECK)).not.toContain('<circle');
   });
-  it('new icons share the viewBox and stroke of their siblings, no hard-coded color', () => {
-    expect(html(ICON_FILTER)).toContain('viewBox="0 0 16 16"');
-    expect(html(ICON_FILTER)).toContain('stroke-width="1.5"');
-    expect(html(ICON_FILTER)).toMatch(/width="15" height="15"/);
+  it('the Display button icon shares the viewBox and stroke of its siblings, no hard-coded color', () => {
+    expect(html(ICON_SLIDERS)).toContain('viewBox="0 0 16 16"');
+    expect(html(ICON_SLIDERS)).toContain('stroke-width="1.5"');
     expect(html(ICON_SLIDERS)).toMatch(/width="15" height="15"/);
-    expect(html(ICON_FILTER)).toContain('stroke="currentColor"');
-    expect(html(ICON_FILTER)).not.toMatch(/#[0-9a-f]{3,6}/i);
+    expect(html(ICON_SLIDERS)).toContain('stroke="currentColor"');
     expect(html(ICON_CHEVRON_DOWN)).toContain('stroke-width="1.6"');
     expect(html(ICON_CHEVRON_RIGHT)).toContain('stroke-width="1.6"');
   });

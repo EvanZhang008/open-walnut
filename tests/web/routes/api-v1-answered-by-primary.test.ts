@@ -165,12 +165,14 @@ describe('a plain chat-history conversation', () => {
     await chatHistory.addUserMessage('check the notes', {
       displayText: 'check the notes', turnId: crypto.randomUUID(), agentId: 'general', conversationId: conv.id,
     })
+    // One API message in the model's own order: thinking, the text, then the tool
+    // call it ends on. The rows keep that order (text above the calls it announces).
     await chatHistory.addAIMessages([{
       role: 'assistant',
       content: [
         { type: 'thinking', thinking: 'The notes file should say.' },
-        { type: 'tool_use', id: 'tu-notes-1', name: 'Read', input: { file_path: '/srv/notes.md' } },
         { type: 'text', text: 'The notes say water the plants.' },
+        { type: 'tool_use', id: 'tu-notes-1', name: 'Read', input: { file_path: '/srv/notes.md' } },
       ],
     }] as never, { agentId: 'general', conversationId: conv.id, engine: chatHistory.cloudEngineLabel('companion-lane-2') })
 
@@ -178,8 +180,8 @@ describe('a plain chat-history conversation', () => {
     expect(rows.map((r) => [r.role, r.kind ?? '-', r.answeredBy ?? '-'])).toEqual([
       ['user', '-', '-'],
       ['assistant', 'thinking', '-'],
-      ['assistant', 'tool', '-'],
       ['assistant', '-', 'cloud'],
+      ['assistant', 'tool', '-'],
     ])
   })
 

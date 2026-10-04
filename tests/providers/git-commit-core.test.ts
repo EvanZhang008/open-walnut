@@ -123,9 +123,22 @@ beforeAll(() => {
   fs.mkdirSync(home)
   const gitconfig = path.join(ROOT, 'gitconfig')
   fs.writeFileSync(gitconfig, '[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgSign = false\n')
+  // The system dirs' tools, and never a real gh (the PR cases bring their own).
+  // The dirs themselves are not enough: CI's Ubuntu image ships gh in /usr/bin,
+  // so the "no gh" case saw one there. Every system tool but gh is linked into
+  // one directory of this root, the first dir in PATH order winning a name.
+  const sysbin = path.join(ROOT, 'sysbin')
+  fs.mkdirSync(sysbin)
+  for (const dir of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) {
+    let names: string[] = []
+    try { names = fs.readdirSync(dir) } catch { continue }
+    for (const name of names) {
+      if (name === 'gh' || fs.existsSync(path.join(sysbin, name))) continue
+      try { fs.symlinkSync(path.join(dir, name), path.join(sysbin, name)) } catch { /* a racing duplicate */ }
+    }
+  }
   ENV = {
-    // System dirs only: git and sh, and never a real gh (the PR cases bring their own).
-    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    PATH: sysbin,
     HOME: home,
     TMPDIR: ROOT,
     LANG: 'C',
@@ -397,6 +410,7 @@ describe('push and PR', () => {
   it('offers a PR only for a GitHub remote with gh on PATH', async () => {
     const { dir } = remoteSetup()
     sh(dir, ['remote', 'set-url', 'origin', 'https://user:secret-token@github.com/acme/widget.git'])
+    expect(ENV.PATH.split(':').filter((d) => fs.existsSync(path.join(d, 'gh'))), 'a gh on the test PATH').toEqual([])
     const noGh = await planOne(core(), dir, [])
     expect(noGh.pr).toEqual({ available: false, reason: 'no-gh' })
     expect(noGh.pushTarget?.url).toBe('https://github.com/acme/widget.git')
