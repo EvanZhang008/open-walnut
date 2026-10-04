@@ -703,13 +703,15 @@ final class ActivityDrawerPolishTests: XCTestCase {
         XCTAssertEqual(decoded[0].detailRef, "s/abc#3")
         XCTAssertNil(decoded[2].detailRef, "an absent field decodes to nil, never a throw")
 
+        // The three rows fold into one run; opened, the members follow the run row.
         let rows = await TimelineLayoutActor().buildSnapshot(TimelineInput(
             messages: decoded, streaming: false, liveText: "", liveTextTruncated: false,
             activity: nil, showLoadEarlier: false, width: pageWidth,
-            expandedRowIDs: [])).rows
-        guard case .thinking(_, _, _, _, let reasoningRef, _) = rows[0].content,
-              case .toolChip(_, _, _, _, _, _, let toolRef, _) = rows[1].content,
-              case .thinking(_, _, _, _, let noRef, _) = rows[2].content else {
+            expandedRowIDs: []).openingAllRuns()).rows
+        guard case .toolRun = rows[0].content,
+              case .thinking(_, _, _, _, let reasoningRef, _) = rows[1].content,
+              case .toolChip(_, _, _, _, _, _, let toolRef, _) = rows[2].content,
+              case .thinking(_, _, _, _, let noRef, _) = rows[3].content else {
             return XCTFail("unexpected row kinds: \(rows.map(\.content.reuseKind))")
         }
         XCTAssertEqual(reasoningRef, "s/abc#3")

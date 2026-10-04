@@ -207,6 +207,16 @@ enum TimelineRowContent {
     /// no cap because it scrolls.
     case thinking(line: String?, preview: String?, fullText: String,
                   maxLines: Int, detailRef: String?, stacked: Bool)
+    /// The folded tool run: ONE muted line, "Ran 3 commands, read a file ›", standing
+    /// for consecutive tool and thinking rows (see `TimelineToolRunFold`). Tapping
+    /// it toggles `expanded`, and the actor then lays the member rows out under it
+    /// (`toggleExpanded`, the notification card's mechanism); it never grows in
+    /// place, so it keeps exactly one pre-measured height in both states.
+    ///
+    /// `failCount` is the "N failed" badge; `running` pulses the line while a
+    /// member is still receiving tokens. The phrase is the web console's, word for
+    /// word (`TimelineToolRunPhrase`), so a turn reads the same on both.
+    case toolRun(phrase: String, failCount: Int, running: Bool, expanded: Bool)
     /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
@@ -247,6 +257,7 @@ extension TimelineRowContent {
         case .table: return "table"
         case .toolChip: return "toolChip"
         case .thinking: return "thinking"
+        case .toolRun: return "toolRun"
         case .chip: return "chip"
         case .notification: return "notification"
         case .richHTML: return "richHTML"
@@ -319,6 +330,13 @@ extension TimelineRowContent {
             hasher.combine(maxLines)
             hasher.combine(detailRef)
             hasher.combine(stacked)
+        case .toolRun(let phrase, let failCount, let running, let expanded):
+            hasher.combine(phrase)
+            hasher.combine(failCount)
+            hasher.combine(running)
+            // Drawn (the chevron turns) under a stable id and an unchanged height:
+            // without it the toggle would never reach the cell.
+            hasher.combine(expanded)
         case .chip(let icon, let text):
             hasher.combine(icon)
             hasher.combine(text)
@@ -345,15 +363,16 @@ extension TimelineRowContent {
         return hasher.finalize()
     }
 
-    /// Is this row a CHIP the reader taps to open the activity drawer?
+    /// Is this row a CHIP the reader taps (to open the activity drawer, or to open
+    /// a folded run)?
     ///
     /// Drives the cell's hit-target expansion (`TimelineHostedRowCell`), which is
     /// the one thing a chip row needs and no other hosted row does: the capsule is
     /// ~21pt of ink inside a ~27pt cell on a ~37pt pitch, so a thumb landing
     /// between two chips used to hit nothing at all.
-    var opensActivityDrawer: Bool {
+    var isTappableChip: Bool {
         switch self {
-        case .toolChip, .thinking: return true
+        case .toolChip, .thinking, .toolRun: return true
         default: return false
         }
     }
@@ -567,6 +586,21 @@ enum TimelineChipAccessibility {
             parts.append(detail)
         }
         if running { parts.append("running") }
+        return parts.joined(separator: ", ")
+    }
+
+    /// The "N failed" badge on a folded run, as drawn.
+    static func failedBadge(_ failCount: Int) -> String {
+        "\(failCount) failed"
+    }
+
+    /// The phrase, the failures when there are any, then the state: a folded run
+    /// says what will happen on the tap ("collapsed" opens it), the same way the
+    /// chevron's direction does for a sighted reader.
+    static func toolRun(phrase: String, failCount: Int, expanded: Bool) -> String {
+        var parts = [phrase]
+        if failCount > 0 { parts.append(failedBadge(failCount)) }
+        parts.append(expanded ? "expanded" : "collapsed")
         return parts.joined(separator: ", ")
     }
 }

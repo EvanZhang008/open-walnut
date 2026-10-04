@@ -411,6 +411,10 @@ export interface ProjectedTranscriptMessage {
    *  which agent a delegated run belongs to. The subagent's own transcript
    *  lives in a separate subagents/*.jsonl and is not inlined here. */
   agent?: string
+  /** kind:'tool' only (additive) — the call's result came back `is_error`, so a
+   *  client folding consecutive tool rows into one line can count the failures
+   *  the way the web console's "N failed" badge does. Absent = succeeded. */
+  isError?: true
 }
 
 export interface SessionTranscript {
@@ -525,14 +529,17 @@ export async function buildSessionTranscript(
     // not something the human typed — Claude Code hides them entirely; the
     // slim phone tail drops them too (a 4K skill dump would eat the preview).
     if (m.role === 'user' && m.injected) continue
-    // Thinking FIRST, then tools, then text: `kind?: 'thinking'` has been part of
+    // Thinking FIRST, then text, then tools: `kind?: 'thinking'` has been part of
     // this shape (and of the api-v1 doc) all along with nobody producing it, so
     // the phone had no reasoning to show at all and rendered a bare blinking
-    // "Thinking…". The order matches the other producer of these rows
-    // (api-v1 normalizeEntries: thinking → tool → text) and the real sequence —
-    // the model reasons, then acts. It cannot be taken from the block order
-    // itself: SessionHistoryMessage collapses one message's thinking blocks into
-    // a single joined string.
+    // "Thinking…". The order matches the other producers of these rows (api-v1
+    // normalizeEntries, the cloud's bridge builder) and the real sequence of one
+    // API message: the model reasons, says what it is about to do, then calls
+    // the tools, and the message ends at the tool calls. It cannot be taken from
+    // the block order itself: SessionHistoryMessage collapses one message's
+    // thinking blocks into a single joined string and its tools into a list. A
+    // client that folds consecutive tool rows into one line relies on the text
+    // sitting ABOVE its tools: below them it would split the run that follows.
     if (m.thinking) {
       const line = thinkingLine(m.thinking)
       // `rich` only (and `full`, which implies it) — see the tool row below for
@@ -551,6 +558,14 @@ export async function buildSessionTranscript(
           ...(ref ? { detailRef: ref } : {}),
         })
       }
+    }
+    const text = (m.text || '').trim()
+    if (text) {
+      messages.push({
+        role: m.role,
+        text: opts?.full ? text : clipTranscriptText(text),
+        timestamp: m.timestamp,
+      })
     }
     // Indexed: the tool's position in ITS OWN message is what makes a row
     // addressable for the drawer's full-text read (core/activity-detail.ts) — the
@@ -616,14 +631,7 @@ export async function buildSessionTranscript(
         ...(resultPreview ? { resultPreview } : {}),
         ...(ref ? { detailRef: ref } : {}),
         ...(agent ? { agent } : {}),
-      })
-    }
-    const text = (m.text || '').trim()
-    if (text) {
-      messages.push({
-        role: m.role,
-        text: opts?.full ? text : clipTranscriptText(text),
-        timestamp: m.timestamp,
+        ...(t.isError ? { isError: true as const } : {}),
       })
     }
   }

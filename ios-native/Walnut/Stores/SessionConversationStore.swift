@@ -49,12 +49,20 @@ enum SessionLaunchContext {
 ///    the live accumulation.
 ///
 /// Fallback ladder: SSE 404 (older server, no stream route) → 5s `fresh=1`
-/// transcript polling; bridge-offline → keep polling + disable the composer.
+/// transcript polling; a bridge that stays offline past the reconnect grace:
+/// keep polling. The composer never locks for a bridge outage: text sends are
+/// banked durably by the replica and image sends ride the retry ladder.
+///
+/// Stream replay and transcript refresh: see SessionStreamGate.swift for why a
+/// new connection resumes with Last-Event-ID, why replayed frames are never
+/// applied, and why every stream-driven transcript read is single-flight.
 @Observable
 @MainActor
 final class SessionConversationStore {
     private let api: SessionSendTransport
     private let sessionId: String
+    private let clock: SessionStreamClock
+    private let resumeIDs: SessionStreamResumeIDs
     /// Where this session's CLI runs — "Mac" or the remote host alias. The
     /// offline notices name THIS host: a clouddev session going read-only is
     /// a clouddev bridge problem, and saying "Mac offline" there sent the
@@ -152,8 +160,18 @@ final class SessionConversationStore {
     @ObservationIgnored var bottomPinned = true
     /// Bumped when a layout-shifting mutation should restore pinned intent.
     private(set) var scrollToBottomSignal = 0
-    /// No live bridge to this session's host (503 / bridge-offline event).
-    var offline = false
+    /// What the page says about the link to the session's host. Only CONTINUOUS
+    /// absence raises it (see SessionConnectionNotice): a bridge redial is ~1.3 s,
+    /// and the old immediate banner flashed for every one of them.
+    private(set) var connectionNotice: SessionConnectionNotice = .none
+    /// The full "unreachable" banner is up (10 s of continuous absence).
+    var offline: Bool { connectionNotice == .unreachable }
+    /// Raw link state: a bridge-offline frame or a 503 bridge_offline said the
+    /// host is gone and nothing has said it is back. Drives the grace timers and
+    /// the polling fallback; the UI reads `connectionNotice` instead.
+    @ObservationIgnored private(set) var bridgeDown = false
+    @ObservationIgnored private var bridgeDownSince: TimeInterval?
+    @ObservationIgnored private var bridgeGraceTask: Task<Void, Never>?
     /// The CLI process is gone (409 session_dead / terminal status).
     var dead = false
     var errorMessage: String?
@@ -161,6 +179,28 @@ final class SessionConversationStore {
     var loadedOnce = false
 
     private static let pollSeconds: Double = 5
+    /// Stream-driven transcript reads wait this long so a burst of triggers
+    /// (a replay, rapid turn-ends, a turn-end right after bridge-online) costs
+    /// ONE read. Invisible: the provisional row already shows the finished reply.
+    static let refreshDebounceSeconds: TimeInterval = 0.5
+
+    /// Single flight for `fresh=1` transcript reads (the 512 KB bridge read).
+    /// A trigger while a read is running marks it dirty; exactly one follow-up
+    /// runs after it, debounced. See requestTranscriptRefresh / runFreshLoad.
+    @ObservationIgnored private var refreshInFlight = false
+    @ObservationIgnored private var refreshDirty = false
+    @ObservationIgnored private var refreshDebounce: Task<Void, Never>?
+    /// Bumped by suspend(): a read cancelled there must not, on its late
+    /// completion, clear a NEWER read's in-flight flag.
+    @ObservationIgnored private var refreshGen = 0
+
+    /// Replay filter for the stream (see SessionStreamReplayGate).
+    @ObservationIgnored private var gate = SessionStreamReplayGate()
+    @ObservationIgnored private var gateExpiryTask: Task<Void, Never>?
+    /// Which server the stream talks to, from its attach frame. Decides whether a
+    /// new connection resumes with Last-Event-ID (cloud) or asks for the turn's
+    /// full replay after its snapshot (primary, unchanged behaviour).
+    @ObservationIgnored private(set) var streamKind: SessionStreamKind = .unknown
     /// Hard cap on rows kept for rendering (see reconcile() — unbounded merge
     /// growth was the root cause of the watchdog freeze-kills on builds 16-20).
     private static let maxRenderedRows = 150
@@ -175,9 +215,16 @@ final class SessionConversationStore {
 
     /// `transport` is the WalnutTests seam (nil = the real WalnutAPI) — same
     /// injection pattern as TasksStore's WalnutTaskTransport.
-    init(session: WalnutSession, transport: SessionSendTransport? = nil) {
+    init(
+        session: WalnutSession,
+        transport: SessionSendTransport? = nil,
+        clock: SessionStreamClock = SystemSessionStreamClock(),
+        resumeIDs: SessionStreamResumeIDs? = nil
+    ) {
         self.api = transport ?? WalnutAPI()
         self.sessionId = session.id
+        self.clock = clock
+        self.resumeIDs = resumeIDs ?? .shared
         self.hostLabel = session.isLocal ? "Mac" : session.host
         self.processStatus = session.processStatus
         LifecycleHub.shared.register(self)
@@ -213,16 +260,16 @@ final class SessionConversationStore {
 
     var statusKind: SessionStatus { SessionStatus(processStatus) }
 
-    /// Send needs a working bridge, nothing more. An ENDED session is still
-    /// sendable — the server resumes it (`--resume` respawn on its host), so
-    /// gating on isAlive here wrongly bricked the composer for every idle/
-    /// stopped session. `dead` flips only after the server itself answers
-    /// 409 session_dead (no resumable record on that host).
-    var canSend: Bool { !offline && !dead }
+    /// Only a session the server declared unresumable (409 session_dead) locks
+    /// the composer. An ENDED session is still sendable (the server resumes it),
+    /// and so is one whose bridge is down: the replica banks a text send durably
+    /// and delivers it when the bridge returns (core/send-queue.ts), and an image
+    /// send rides the retry ladder under the same `qm-*` id. Locking the composer
+    /// for a bridge outage (the old behaviour) did it for every ~1.3 s redial.
+    var canSend: Bool { !dead }
 
     /// Notice shown under the composer when it can't send.
     var composerNotice: String? {
-        if offline { return "\(hostLabel) unreachable, read-only" }
         if dead { return "Session can't be woken. Reopen it from your desktop." }
         return nil
     }
@@ -250,7 +297,7 @@ final class SessionConversationStore {
         connectStream()
         await loadTranscript(fresh: false, rich: false)
         FreezeContext.shared.note("sc-open-cached", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
-        await loadTranscript(fresh: true, rich: true)
+        await runFreshLoad(rich: true)
         FreezeContext.shared.note("sc-open-fresh", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
     }
 
@@ -267,10 +314,29 @@ final class SessionConversationStore {
     /// callbacks and fetch completions cannot revive polling or mutate the UI.
     func suspend() {
         isActive = false
+        rememberResumeID()
         sse?.stop()
         sse = nil
         pollTask?.cancel()
         pollTask = nil
+        // Refresh single flight: the cancelled read's completion is fenced by
+        // refreshGen, so the next open/resume starts clean.
+        refreshDebounce?.cancel()
+        refreshDebounce = nil
+        refreshInFlight = false
+        refreshDirty = false
+        refreshGen += 1
+        // Held replay candidates die with their connection; the next one
+        // replays or delivers them again.
+        gate.dropHeld()
+        gateExpiryTask?.cancel()
+        gateExpiryTask = nil
+        // The link state is KEPT across a suspend (only its timer stops): an
+        // outage that was on screen must not vanish on return and reappear 10 s
+        // later. resume() re-arms the timer from the original start, and the new
+        // connection's attach frame settles it either way.
+        bridgeGraceTask?.cancel()
+        bridgeGraceTask = nil
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
         pendingDelta = ""
@@ -296,7 +362,17 @@ final class SessionConversationStore {
         isActive = true
         connectStream()
         rearmPendingRetries()
-        trackTask { [weak self] in await self?.loadTranscript(fresh: true, rich: true) }
+        scheduleBridgeGrace()
+        trackTask { [weak self] in await self?.runFreshLoad(rich: true) }
+    }
+
+    /// Route switch (RouteCoordinator): the same Walnut at another origin, so the
+    /// stream is rebuilt there (connectStream reads the new URL) and the
+    /// transcript is reloaded fresh from it.
+    func restartForRouteChange() {
+        guard isActive, !viewClosed else { return }
+        suspend()
+        resume()
     }
 
     // MARK: - Transcript
@@ -316,9 +392,10 @@ final class SessionConversationStore {
             loadedOnce = true
             // Failure-fallback polling (below) has done its job once a load
             // lands and the normal delivery paths are healthy again. Keep
-            // polling while offline (it IS the data path then) or when SSE was
-            // abandoned (404 fallback, sse == nil) — those own their lifecycle.
-            if !offline && sse != nil { stopPolling() }
+            // polling while the bridge is down (it IS the data path then) or
+            // when SSE was abandoned (404 fallback, sse == nil): those own
+            // their lifecycle.
+            if !bridgeDown && sse != nil { stopPolling() }
         } catch let error as APIError where error.isCancelled {
             return
         } catch {
@@ -371,7 +448,8 @@ final class SessionConversationStore {
                 resultPreview: m.resultPreview,
                 agent: m.agent,
                 thinkingText: m.thinkingText,
-                inputPreview: m.inputPreview
+                inputPreview: m.inputPreview,
+                isError: m.isError
             )
         }
         var merged: [ChatMessage]
@@ -479,6 +557,7 @@ final class SessionConversationStore {
             digest.combine(m.resultPreview)
             digest.combine(m.thinkingText)
             digest.combine(m.agent)
+            digest.combine(m.isError)
             let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(digest.finalize())"
             let n = counts[base, default: 0]
             counts[base] = n + 1
@@ -486,7 +565,7 @@ final class SessionConversationStore {
                                createdAt: m.createdAt, kind: m.kind,
                                detail: m.detail, resultPreview: m.resultPreview,
                                agent: m.agent, thinkingText: m.thinkingText,
-                               inputPreview: m.inputPreview)
+                               inputPreview: m.inputPreview, isError: m.isError)
         }
     }
 
@@ -562,7 +641,7 @@ final class SessionConversationStore {
             return false
         }
         do {
-            _ = try await api.sendSessionMessage(
+            let receipt = try await api.sendSessionMessage(
                 id: sessionId, text: text, images: payloads, messageId: messageId
             )
             guard isActive, !Task.isCancelled else { return true }
@@ -571,12 +650,11 @@ final class SessionConversationStore {
                 pendingUser[idx].failed = false
                 pendingUser[idx].retryNotice = nil
             }
-            // A 202 proves the bridge is up: clear a sticky offline banner a
-            // previous attempt raised, same reasoning as a delivered snapshot.
-            if offline {
-                offline = false
-                stopPolling()
-            }
+            // A relayed 202 proves the bridge is up: clear an outage a previous
+            // attempt raised, same reasoning as a delivered snapshot. A BANKED
+            // 202 proves the opposite (the replica queued it because the bridge
+            // is down), so it leaves the link state alone.
+            if !receipt.queued { noteBridgeUp() }
             return true
         } catch {
             // Cancelled/suspended sends settle silently but must NOT leave a
@@ -598,8 +676,7 @@ final class SessionConversationStore {
             //    idempotent end-to-end (see SendRetryPolicy).
             if SendRetryPolicy.isRetryable(error) {
                 if (error as? APIError)?.isBridgeOffline == true {
-                    offline = true
-                    startPolling()
+                    noteBridgeDown()
                 }
                 // Retryable: ride it out on the backoff ladder rather than
                 // making the user the retry loop. The bubble stays visible and
@@ -716,12 +793,11 @@ final class SessionConversationStore {
     /// same queued row instead of delivering the message twice. Minting a fresh
     /// id here would bypass the dedupe entirely.
     ///
-    /// Deliberately NOT gated on `canSend`. `canSend` is false while `offline`,
-    /// and a bridge_offline is the single most likely reason a bubble is sitting
-    /// here failed — so gating on it made "tap to retry" a no-op in precisely
-    /// the case it exists for, leaving the bubble un-retryable until a
-    /// bridge-online frame happened to arrive. Attempting the POST is also how
-    /// we FIND OUT the bridge is back (a 202 clears `offline` in deliver()).
+    /// Deliberately NOT gated on the link state. A bridge_offline is the single
+    /// most likely reason a bubble is sitting here failed, and gating on it (as
+    /// `canSend` once did) made "tap to retry" a no-op in precisely the case it
+    /// exists for. Attempting the POST is also how we FIND OUT the bridge is back
+    /// (a relayed 202 clears the outage in deliver()).
     /// Only a session the server itself declared unresumable (409 → `dead`) is
     /// hopeless enough to refuse.
     func retry(_ message: ChatMessage) async {
@@ -764,9 +840,13 @@ final class SessionConversationStore {
               let token = AppConfig.token
         else { return }
         let sid = sessionId
+        streamKey = url.absoluteString
+        let resumeFrom = resumeIDForNextConnection()
+        if gate.lastAppliedID == nil, let resumeFrom { gate = SessionStreamReplayGate(lastAppliedID: resumeFrom) }
         sse = SSEClient(
             url: url,
             token: token,
+            lastEventID: resumeFrom.map(String.init),
             onEvent: { [weak self] event in
                 Task { @MainActor in self?.handle(event) }
             },
@@ -783,7 +863,36 @@ final class SessionConversationStore {
             }
         )
         sse?.start()
-        AppLog.info("session-chat", "stream attached", ["sessionId": sid])
+        AppLog.info("session-chat", "stream attached", [
+            "sessionId": sid, "resumedFrom": resumeFrom.map(String.init) ?? "-",
+        ])
+    }
+
+    /// The stream URL the resume id is stored under (server + session).
+    @ObservationIgnored private var streamKey: String?
+
+    /// The Last-Event-ID the live stream client will send on its next connect.
+    /// Internal for WalnutTests.
+    var currentStreamResumeID: String? { sse?.resumeEventID }
+
+    /// Last-Event-ID for the next connection. Only a CLOUD stream resumes: the
+    /// primary's attach snapshot plus its turn-scoped replay is already exact,
+    /// and a resumed primary connection would append the missed deltas on top
+    /// of a snapshot that already contains them. Internal for WalnutTests.
+    func resumeIDForNextConnection() -> Int? {
+        switch streamKind {
+        case .primary: return nil
+        case .cloud: return gate.lastAppliedID
+        case .unknown:
+            // A fresh page: the id this device last applied on this stream,
+            // which is only ever stored for a cloud stream.
+            return gate.lastAppliedID ?? streamKey.flatMap { resumeIDs.id(for: $0) }
+        }
+    }
+
+    private func rememberResumeID() {
+        guard streamKind == .cloud, let key = streamKey, let id = gate.lastAppliedID else { return }
+        resumeIDs.save(id, for: key)
     }
 
     private struct DeltaPayload: Codable { let delta: String }
@@ -826,6 +935,40 @@ final class SessionConversationStore {
     /// main-thread cost of the attach + live-tick paths against real payloads.
     func handle(_ event: SSEEvent) {
         guard isActive else { return }
+        let admitted = gate.admit(event, now: clock.now())
+        armGateExpiry()
+        for frame in admitted { process(frame) }
+    }
+
+    /// Release held replay candidates once the gate's window has passed (a
+    /// restarted server's new frames never present the old anchor).
+    private func armGateExpiry() {
+        guard let deadline = gate.holdDeadline else {
+            gateExpiryTask?.cancel()
+            gateExpiryTask = nil
+            return
+        }
+        guard gateExpiryTask == nil else { return }
+        let clock = self.clock
+        gateExpiryTask = Task { [weak self] in
+            try? await clock.sleep(seconds: deadline - clock.now())
+            guard !Task.isCancelled, let self, self.isActive else { return }
+            self.gateExpiryTask = nil
+            let released = self.gate.expire(now: clock.now())
+            if !released.isEmpty {
+                AppLog.info("session-chat", "stream ids restarted, applying held frames", [
+                    "sessionId": self.sessionId, "count": String(released.count),
+                ])
+            }
+            for frame in released { self.process(frame) }
+            self.armGateExpiry()
+        }
+    }
+
+    /// Apply one admitted frame. Internal only through handle(); the decode
+    /// queue below replays through here so a frame is never gated twice.
+    private func process(_ event: SSEEvent) {
+        guard isActive else { return }
         if snapshotDecodeTask != nil {
             queuedWhileDecoding.append(event)
             return
@@ -853,6 +996,7 @@ final class SessionConversationStore {
         }
         switch event.event {
         case "snapshot":
+            streamKind = .primary
             if let snap = try? JSONDecoder().decode(SnapshotPayload.self, from: data) {
                 applySeed(Self.computeSeed(snap))
             }
@@ -882,16 +1026,21 @@ final class SessionConversationStore {
             activity = nil
             errorMessage = p?.message ?? "The session turn failed."
         case "bridge-offline":
-            offline = true
-            // Keep the SSE socket: it reaches the CLOUD fine — it's the
-            // cloud→daemon bridge that dropped, and bridge-online arrives on
-            // THIS stream. Killing it here (the old behavior) meant the page
-            // stayed "offline" forever after a bridge blip.
-            startPolling(keepStream: true)
+            if event.id == nil { streamKind = .cloud }
+            // Keep the SSE socket: it reaches the CLOUD fine, it is the
+            // cloud-to-daemon bridge that dropped, and bridge-online arrives on
+            // THIS stream. The notice waits for continuous absence (see
+            // noteBridgeDown); polling starts with the chip.
+            noteBridgeDown()
         case "bridge-online":
-            offline = false
-            stopPolling()
-            trackTask { [weak self] in await self?.loadTranscript(fresh: true, rich: true) }
+            let attachFrame = event.id == nil
+            if attachFrame { streamKind = .cloud }
+            let wasDown = noteBridgeUp()
+            // Catch up on what the bridge gap hid. Not on the attach frame of a
+            // stream's FIRST connection: open()/resume() is already reading.
+            if wasDown || !attachFrame || event.reconnect {
+                requestTranscriptRefresh()
+            }
         default:
             break
         }
@@ -962,7 +1111,7 @@ final class SessionConversationStore {
         // the primary stream ever cleared the flag, so the page stayed
         // "unreachable, read-only" on a healthy session (2026-08-16 field
         // report, plain claude session).
-        if offline { offline = false }
+        noteBridgeUp()
         // Snapshot content is PROOF a turn ran — retire the pre-spawn wait
         // BEFORE applyStatus so a terminal status in the same snapshot (app
         // backgrounded through the whole spawn→run→idle-reap arc) doesn't
@@ -1012,6 +1161,7 @@ final class SessionConversationStore {
             // (including the String→Data copy, itself O(payload)).
             let seed = await Self.decodeSeed(json)
             guard let self, self.snapshotDecodeGen == gen else { return }
+            self.streamKind = .primary
             self.snapshotDecodeTask = nil
             if self.isActive, !Task.isCancelled, let seed { self.applySeed(seed) }
             self.replayQueuedEvents()
@@ -1029,7 +1179,7 @@ final class SessionConversationStore {
         guard !queuedWhileDecoding.isEmpty else { return }
         MainWork.track("sc.replayQueued", count: queuedWhileDecoding.count) {
             while snapshotDecodeTask == nil, !queuedWhileDecoding.isEmpty {
-                handle(queuedWhileDecoding.removeFirst())
+                process(queuedWhileDecoding.removeFirst())
             }
             if snapshotDecodeTask == nil { queuedWhileDecoding = [] }
         }
@@ -1207,7 +1357,7 @@ final class SessionConversationStore {
         // The live row disappearing + provisional row appearing shifts layout;
         // keep the reader glued to the end of the reply they were watching.
         if isActive && wasPinned { scrollToBottomSignal += 1 }
-        trackTask { [weak self] in await self?.loadTranscript(fresh: true, rich: true) }
+        requestTranscriptRefresh()
     }
 
     // MARK: - Polling fallback
@@ -1221,15 +1371,19 @@ final class SessionConversationStore {
             sse?.stop()
             sse = nil
         }
+        let clock = self.clock
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.isActive else { return }
                 // NOT rich: this loop runs every 5s while degraded, and the
                 // fields it would add cost ~48 KB/min there. The chevron a
                 // reader taps was already put on the row by the open / turn-end
-                // read; a poll only has to keep the text current.
-                await self.loadTranscript(fresh: true, rich: false)
-                try? await Task.sleep(for: .seconds(Self.pollSeconds))
+                // read; a poll only has to keep the text current. A tick that
+                // finds a read running or about to run skips (single flight).
+                if !self.refreshInFlight && self.refreshDebounce == nil {
+                    await self.runFreshLoad(rich: false)
+                }
+                try? await clock.sleep(seconds: Self.pollSeconds)
             }
         }
     }
@@ -1237,6 +1391,115 @@ final class SessionConversationStore {
     private func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+    }
+
+    // MARK: - Transcript refresh (single flight)
+
+    /// Every STREAM-driven transcript read comes through here: turn-end,
+    /// bridge-online. At most one read runs; a trigger while it runs marks it
+    /// dirty and exactly one follow-up runs after it. The first read of a burst
+    /// waits `refreshDebounceSeconds`, so a replay or a run of turn-ends costs
+    /// one read. Internal for WalnutTests.
+    func requestTranscriptRefresh() {
+        guard isActive else { return }
+        if refreshInFlight {
+            refreshDirty = true
+            return
+        }
+        guard refreshDebounce == nil else { return }
+        let clock = self.clock
+        refreshDebounce = Task { [weak self] in
+            try? await clock.sleep(seconds: Self.refreshDebounceSeconds)
+            guard !Task.isCancelled, let self else { return }
+            self.refreshDebounce = nil
+            await self.runFreshLoad(rich: true)
+        }
+    }
+
+    /// The one place a `fresh=1` read starts. A read that STARTS now reflects
+    /// every trigger that arrived before it, so a rich read also satisfies a
+    /// pending debounced one (open() racing the attach frame costs one read, not
+    /// two). A non-rich poll does not: the turn-end read must carry the fields.
+    private func runFreshLoad(rich: Bool) async {
+        guard isActive else { return }
+        if refreshInFlight {
+            refreshDirty = true
+            return
+        }
+        if rich {
+            refreshDebounce?.cancel()
+            refreshDebounce = nil
+        }
+        refreshInFlight = true
+        let gen = refreshGen
+        await loadTranscript(fresh: true, rich: rich)
+        guard gen == refreshGen else { return }
+        refreshInFlight = false
+        if refreshDirty {
+            refreshDirty = false
+            requestTranscriptRefresh()
+        }
+    }
+
+    /// True while a fresh read runs or waits on its debounce. Internal for
+    /// WalnutTests.
+    var transcriptRefreshPending: Bool { refreshInFlight || refreshDebounce != nil }
+
+    // MARK: - Bridge grace
+
+    /// The host's bridge is down (bridge-offline frame, 503 bridge_offline). The
+    /// notice waits for CONTINUOUS absence: the chip after 3 s, the banner after
+    /// 10 s, polling from the chip on. A second report while already down keeps
+    /// the original start, so an outage is measured from its first evidence.
+    private func noteBridgeDown() {
+        guard !bridgeDown else { return }
+        bridgeDown = true
+        bridgeDownSince = clock.now()
+        AppLog.info("session-chat", "bridge down, grace started", ["sessionId": sessionId])
+        scheduleBridgeGrace()
+    }
+
+    /// The host is reachable again (bridge-online, a snapshot, a relayed 202).
+    /// Returns whether it had been down.
+    @discardableResult
+    private func noteBridgeUp() -> Bool {
+        bridgeGraceTask?.cancel()
+        bridgeGraceTask = nil
+        let wasDown = bridgeDown
+        bridgeDown = false
+        if wasDown, let since = bridgeDownSince {
+            AppLog.info("session-chat", "bridge back", [
+                "sessionId": sessionId, "downMs": String(Int((clock.now() - since) * 1_000)),
+            ])
+        }
+        bridgeDownSince = nil
+        setConnectionNotice(.none)
+        if wasDown && sse != nil { stopPolling() }
+        return wasDown
+    }
+
+    /// (Re)arm the notice timer from the outage's ORIGINAL start (resume() calls
+    /// this after a suspend cancelled it).
+    private func scheduleBridgeGrace() {
+        bridgeGraceTask?.cancel()
+        bridgeGraceTask = nil
+        guard isActive, bridgeDown, let since = bridgeDownSince else { return }
+        let clock = self.clock
+        bridgeGraceTask = Task { [weak self] in
+            let chipAt = since + SessionConnectionNotice.reconnectingAfter
+            if clock.now() < chipAt { try? await clock.sleep(seconds: chipAt - clock.now()) }
+            guard !Task.isCancelled, let self, self.isActive, self.bridgeDown else { return }
+            if self.connectionNotice == .none { self.setConnectionNotice(.reconnecting) }
+            self.startPolling(keepStream: true)
+            let bannerAt = since + SessionConnectionNotice.unreachableAfter
+            if clock.now() < bannerAt { try? await clock.sleep(seconds: bannerAt - clock.now()) }
+            guard !Task.isCancelled, self.isActive, self.bridgeDown else { return }
+            self.setConnectionNotice(.unreachable)
+        }
+    }
+
+    private func setConnectionNotice(_ notice: SessionConnectionNotice) {
+        if connectionNotice != notice { connectionNotice = notice }
     }
 
     private func trackTask(_ operation: @escaping @MainActor () async -> Void) {

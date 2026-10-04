@@ -76,17 +76,20 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                       queued: [String: QueuedSend.Status] = [:],
                       category: UIContentSizeCategory = .unspecified) async -> [TimelineRow] {
         let actor = TimelineLayoutActor()
+        // Every folded run opened, so the member rows this gate measures are laid
+        // out (the run row itself is measured as well; `testFoldedRunRowsFit…`
+        // covers it collapsed).
         let snapshot = await actor.buildSnapshot(TimelineInput(
             messages: messages, streaming: false, liveText: "", liveTextTruncated: false,
             activity: nil, showLoadEarlier: false, width: pageWidth, expandedRowIDs: expanded,
             queuedMessageStates: queued, sizeCategory: category
-        ))
+        ).openingAllRuns())
         return snapshot.rows
     }
 
     /// Which row kinds this gate is responsible for (everything hosted).
     private static let hostedKinds: Set<String> = [
-        "toolChip", "thinking", "chip", "notification", "image", "localImages", "table",
+        "toolChip", "thinking", "toolRun", "chip", "notification", "image", "localImages", "table",
         "truncationChip", "activity", "failedNotice", "queuedNotice", "loadEarlier",
     ]
 
@@ -104,7 +107,7 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     /// TextKit while SwiftUI renders it, which over-measures by 15 to 24pt on long
     /// bodies. Both only cost empty space; neither can shave ink.
     private static let tightKinds: Set<String> = [
-        "chip", "toolChip", "thinking", "table", "queuedNotice",
+        "chip", "toolChip", "thinking", "toolRun", "table", "queuedNotice",
     ]
 
     /// Extra round-up allowance for a row that models SEVERAL independent text
@@ -333,16 +336,60 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         ]
         for activity in ["Thinking", "Bash · npm run test:quick in the repo root",
                          "正在读取 /tmp 下的会话流文件并核对时间戳", nil] {
-            let snapshot = await actor.buildSnapshot(TimelineInput(
-                messages: [], streaming: true,
-                liveText: "第一段结论已经写完,继续第二段。\n\n- 一\n- 二",
-                liveTextTruncated: true, liveThinking: reasoning,
-                liveTools: tools,
-                activity: activity, showLoadEarlier: true,
-                width: pageWidth, expandedRowIDs: []))
-            let checked = assertFits(snapshot.rows, "live turn (\(activity ?? "no activity"))")
-            XCTAssertGreaterThanOrEqual(checked, 4, "gate checked nothing (n=\(checked))")
+            // Both shapes of the live turn: the finished calls folded into their run
+            // row, and the run opened onto its chips.
+            for opened in [false, true] {
+                var liveInput = TimelineInput(
+                    messages: [], streaming: true,
+                    liveText: "第一段结论已经写完,继续第二段。\n\n- 一\n- 二",
+                    liveTextTruncated: true, liveThinking: reasoning,
+                    liveTools: tools,
+                    activity: activity, showLoadEarlier: true,
+                    width: pageWidth, expandedRowIDs: [])
+                if opened { liveInput = liveInput.openingAllRuns() }
+                let snapshot = await actor.buildSnapshot(liveInput)
+                XCTAssertTrue(snapshot.rows.contains { $0.content.reuseKind == "toolRun" },
+                              "the finished live calls must fold into a run row")
+                let checked = assertFits(snapshot.rows,
+                                         "live turn (\(activity ?? "no activity"), run \(opened ? "open" : "folded"))")
+                XCTAssertGreaterThanOrEqual(checked, 4, "gate checked nothing (n=\(checked))")
+            }
         }
+    }
+
+    /// The folded run row itself, COLLAPSED, at both ends of the Dynamic Type range
+    /// and with the failure badge beside a long phrase: it is one line of caption
+    /// text in the chip capsule, and the row's height is the plain capsule's.
+    func testFoldedRunRowsFitAtEveryTextSizeWithAndWithoutFailures() async {
+        var checked = 0
+        for category in [UIContentSizeCategory.extraSmall, .large, .accessibilityExtraExtraExtraLarge] {
+            for failing in [false, true] {
+                let members = [
+                    ChatMessage(id: "r-1", role: "assistant", text: "Bash", createdAt: "2026-10-03T06:00:00Z",
+                                kind: .tool, detail: "npm run test:quick", isError: failing ? true : nil),
+                    ChatMessage(id: "r-2", role: "assistant", text: "Read", createdAt: "2026-10-03T06:00:00Z",
+                                kind: .tool, detail: "/repo/src/a.ts"),
+                    ChatMessage(id: "r-3", role: "assistant", text: "Edit", createdAt: "2026-10-03T06:00:00Z",
+                                kind: .tool, detail: "/repo/src/b.ts", isError: failing ? true : nil),
+                    ChatMessage(id: "r-4", role: "assistant", text: "WebFetch", createdAt: "2026-10-03T06:00:00Z",
+                                kind: .tool, detail: "https://example.com"),
+                    ChatMessage(id: "r-5", role: "assistant", text: "Task", createdAt: "2026-10-03T06:00:00Z",
+                                kind: .tool, detail: "explore", agent: "explorer"),
+                ]
+                let actor = TimelineLayoutActor()
+                let snapshot = await actor.buildSnapshot(TimelineInput(
+                    messages: members, streaming: false, liveText: "",
+                    liveTextTruncated: false, activity: nil, showLoadEarlier: false,
+                    width: pageWidth, expandedRowIDs: [], sizeCategory: category))
+                XCTAssertEqual(snapshot.rows.map(\.content.reuseKind), ["toolRun"],
+                               "five calls fold into exactly one collapsed row")
+                checked += assertFits(snapshot.rows,
+                                      "folded run at \(category.rawValue)\(failing ? " with failures" : "")",
+                                      category: category)
+            }
+        }
+        TimelineTextStyler.adopt(.unspecified)
+        XCTAssertGreaterThanOrEqual(checked, 6, "gate checked nothing (n=\(checked))")
     }
 
     /// The COLLAPSED rows at an accessibility text size, which is where a chip's
@@ -369,12 +416,32 @@ final class TimelineHostedHeightParityTests: XCTestCase {
             let snapshot = await actor.buildSnapshot(TimelineInput(
                 messages: [reasoning, tool], streaming: false, liveText: "",
                 liveTextTruncated: false, activity: nil, showLoadEarlier: false,
-                width: pageWidth, expandedRowIDs: [], sizeCategory: category))
+                width: pageWidth, expandedRowIDs: [], sizeCategory: category).openingAllRuns())
             checked += assertFits(snapshot.rows, "chips at \(category.rawValue)",
                                   category: category)
         }
         TimelineTextStyler.adopt(.unspecified)
         XCTAssertGreaterThanOrEqual(checked, 6, "gate checked nothing (n=\(checked))")
+    }
+
+    /// The "Answered on Cloud" caption under a reply the cloud companion computed
+    /// is a `.chip` row: it has to fit the capsule height at every text size.
+    func testCloudAnswerCaptionFitsAtEveryTextSize() async {
+        var checked = 0
+        for category in [UIContentSizeCategory.extraSmall, .large, .accessibilityExtraExtraExtraLarge] {
+            let reply = ChatMessage(id: "c-1", role: "assistant", text: "The cloud answered this one.",
+                                    createdAt: "2026-09-26T06:00:00Z", kind: nil, answeredBy: "cloud")
+            let actor = TimelineLayoutActor()
+            let snapshot = await actor.buildSnapshot(TimelineInput(
+                messages: [reply], streaming: false, liveText: "",
+                liveTextTruncated: false, activity: nil, showLoadEarlier: false,
+                width: pageWidth, expandedRowIDs: [], sizeCategory: category))
+            XCTAssertTrue(snapshot.rows.contains { $0.id.hasSuffix("#answeredBy") },
+                          "no caption row at \(category.rawValue)")
+            checked += assertFits(snapshot.rows, "cloud caption at \(category.rawValue)", category: category)
+        }
+        TimelineTextStyler.adopt(.unspecified)
+        XCTAssertGreaterThanOrEqual(checked, 3, "gate checked nothing (n=\(checked))")
     }
 
     func testFailedNoticeFitsBothWordings() async {

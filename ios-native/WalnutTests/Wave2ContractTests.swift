@@ -306,15 +306,21 @@ final class Wave2ContractTests: XCTestCase {
     @MainActor
     func testOnlyTheNonPollReadsPayForTheRichFields() async {
         let transport = MockSessionSendTransport()
-        let store = SessionConversationStore(session: ScriptedSSE.session(), transport: transport)
+        let clock = ManualStreamClock()
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(), transport: transport, clock: clock,
+            resumeIDs: SessionStreamResumeIDs(defaults: nil)
+        )
         await store.open()
         XCTAssertEqual(transport.transcriptReads.map(\.fresh), [false, true],
                        "the two-phase open is a cached read then a fresh one")
         XCTAssertEqual(transport.transcriptReads.map(\.rich), [false, true],
                        "the cached read cannot carry the fields; the fresh one must ask")
-        // Arm the degraded poll. Its loop reads BEFORE its first sleep, so the
+        // Arm the degraded poll. It starts with the reconnect chip (3 s of
+        // continuous absence), and its loop reads BEFORE its first sleep, so the
         // read it makes is observable without waiting out the 5s interval.
         store.handle(SSEEvent(id: nil, event: "bridge-offline", data: "{}"))
+        await clock.advance(by: SessionConnectionNotice.reconnectingAfter)
         for _ in 0..<20 where transport.transcriptReads.count < 3 {
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(20))

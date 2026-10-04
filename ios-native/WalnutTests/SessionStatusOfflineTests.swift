@@ -45,27 +45,43 @@ final class SessionStatusOfflineTests: XCTestCase {
 
     // MARK: - snapshot clears a sticky offline flag
 
+    /// The banner now waits out 10 s of continuous absence (SessionStreamStormTests
+    /// pins the timers); what this test keeps is the heal: a snapshot is proof.
     @MainActor
-    func testSnapshotClearsStaleOfflineFlag() {
-        let store = SessionConversationStore(session: ScriptedSSE.session(id: "offline-heal"))
-        // A transient bridge-offline marked the page unreachable/read-only…
+    func testSnapshotClearsStaleOfflineFlag() async {
+        let clock = ManualStreamClock()
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(id: "offline-heal"), clock: clock,
+            resumeIDs: SessionStreamResumeIDs(defaults: nil)
+        )
+        // A bridge-offline that outlasted the grace marked the page unreachable…
         store.handle(SSEEvent(id: nil, event: "bridge-offline", data: "{}"))
+        await clock.advance(by: SessionConnectionNotice.unreachableAfter)
         XCTAssertTrue(store.offline)
-        XCTAssertFalse(store.canSend)
+        XCTAssertTrue(store.canSend, "an outage never locks the composer: sends are banked")
 
         // …then the stream delivered a snapshot: we ARE talking to the host.
         store.handle(ScriptedSSE.snapshotEvent(megabytes: 0))
         XCTAssertFalse(store.offline,
                        "a delivered snapshot must clear the unreachable banner")
-        XCTAssertTrue(store.canSend, "composer must re-enable once proven online")
+        XCTAssertEqual(store.connectionNotice, .none)
+        XCTAssertTrue(store.canSend)
+        store.close()
     }
 
     @MainActor
-    func testBridgeOnlineStillClearsOffline() {
-        let store = SessionConversationStore(session: ScriptedSSE.session(id: "offline-online"))
+    func testBridgeOnlineStillClearsOffline() async {
+        let clock = ManualStreamClock()
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(id: "offline-online"), clock: clock,
+            resumeIDs: SessionStreamResumeIDs(defaults: nil)
+        )
         store.handle(SSEEvent(id: nil, event: "bridge-offline", data: "{}"))
+        await clock.advance(by: SessionConnectionNotice.unreachableAfter)
         XCTAssertTrue(store.offline)
         store.handle(SSEEvent(id: nil, event: "bridge-online", data: "{}"))
         XCTAssertFalse(store.offline)
+        XCTAssertFalse(store.bridgeDown)
+        store.close()
     }
 }

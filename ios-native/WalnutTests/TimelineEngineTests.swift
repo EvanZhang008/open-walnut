@@ -20,11 +20,13 @@ final class TimelineEngineTests: XCTestCase {
                     createdAt: "2026-08-08T06:00:\(String(format: "%02d", i % 60))Z", kind: kind)
     }
 
+    /// Every folded tool run opened (`openingAllRuns`): these gates are about the
+    /// rows a run opens to; the fold itself is `ToolRunFoldTests`' business.
     private func input(_ messages: [ChatMessage], streaming: Bool = false,
                        liveText: String = "", width: CGFloat = 393) -> TimelineInput {
         TimelineInput(messages: messages, streaming: streaming, liveText: liveText,
                       liveTextTruncated: false, activity: nil, showLoadEarlier: false,
-                      width: width, expandedRowIDs: [])
+                      width: width, expandedRowIDs: []).openingAllRuns()
     }
 
     // MARK: - Diff
@@ -123,7 +125,9 @@ final class TimelineEngineTests: XCTestCase {
         // build the plain one-line `.chip` capsule and now builds an expandable
         // reasoning row. `.chip` survives as the generic capsule with no
         // producer of its own.
-        for expected in ["text", "bubble", "toolChip", "thinking", "notification", "image",
+        // "toolRun" is the folded line consecutive tool/thinking rows collapse
+        // into; its members are present too because the fixture opens every run.
+        for expected in ["text", "bubble", "toolRun", "toolChip", "thinking", "notification", "image",
                          "table", "code", "failedNotice", "activity"] {
             XCTAssertTrue(kinds.contains(expected), "missing row kind \(expected); got \(kinds)")
         }
@@ -141,8 +145,10 @@ final class TimelineEngineTests: XCTestCase {
                               createdAt: "2026-08-08T06:00:00Z", kind: .tool,
                               detail: "explore", resultPreview: "out", agent: "researcher")
         let snapshot = await actor.buildSnapshot(input([msg]))
-        guard case .toolChip(_, _, _, _, let agent, _, _, _) = snapshot.rows.first?.content else {
-            return XCTFail("expected toolChip row")
+        // The chip sits under its (opened) run row.
+        let chip = snapshot.rows.first { $0.content.reuseKind == "toolChip" }
+        guard case .toolChip(_, _, _, _, let agent, _, _, _) = chip?.content else {
+            return XCTFail("expected toolChip row in \(snapshot.rows.map(\.content.reuseKind))")
         }
         XCTAssertEqual(agent, "researcher")
     }

@@ -462,7 +462,7 @@ struct SessionPathPicker: View {
     }
 
     private func hostLabel(_ key: String) -> String {
-        if key == PathRanking.localHostKey { return "This Mac" }
+        if key == PathRanking.localHostKey { return "Mac" }
         return options?.hosts.first { $0.alias == key }?.label ?? key
     }
 }

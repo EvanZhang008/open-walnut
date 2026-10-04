@@ -31,6 +31,12 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
     var permanentError: Error?
     /// Optional suspension so a test can assert mid-flight state.
     var gate: CheckedContinuationGate?
+    /// Answer successful sends the way a replica answers a BANKED send
+    /// (`queued: true`, the host's bridge is down).
+    var answerQueued = false
+    /// Optional suspension for transcript reads (the single-flight tests hold a
+    /// read open to see what arrives while it is in flight).
+    var transcriptGate: CheckedContinuationGate?
 
     var transcript = SessionTranscript(
         sessionId: "mock", exportedAt: "2026-08-18T00:00:00Z",
@@ -50,7 +56,7 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
 
     func sendSessionMessage(
         id: String, text: String, images: [ImagePayload], messageId: String?
-    ) async throws -> String {
+    ) async throws -> SessionSendReceipt {
         lock.lock()
         sendCalls.append(SendCall(
             sessionId: id, text: text, imageCount: images.count, messageId: messageId
@@ -58,19 +64,22 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
         let shouldFail = permanentError != nil || failuresRemaining > 0
         if permanentError == nil, failuresRemaining > 0 { failuresRemaining -= 1 }
         let error = permanentError ?? failureError
+        let queued = answerQueued
         lock.unlock()
 
         if let gate { await gate.wait() }
         if shouldFail { throw error }
         // The server echoes back the id it queued under — the client's own id
         // when it supplied one, which is what makes the retry idempotent.
-        return messageId ?? "qm-mobile-serverminted"
+        return SessionSendReceipt(messageId: messageId ?? "qm-mobile-serverminted", queued: queued)
     }
 
     func sessionTranscript(id: String, fresh: Bool, rich: Bool) async throws -> SessionTranscript {
         lock.lock()
         reads.append(TranscriptRead(fresh: fresh, rich: rich))
+        let gate = transcriptGate
         lock.unlock()
+        if let gate { await gate.wait() }
         return transcript
     }
 

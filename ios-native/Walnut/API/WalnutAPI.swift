@@ -338,9 +338,9 @@ struct WalnutAPI {
     /// only attempt, useless for retries).
     func sendSessionMessage(
         id: String, text: String, images: [ImagePayload] = [], messageId: String? = nil
-    ) async throws -> String {
+    ) async throws -> SessionSendReceipt {
         struct Body: Encodable { let text: String; let images: [ImagePayload]?; let messageId: String? }
-        struct Accepted: Codable { let messageId: String }
+        struct Accepted: Codable { let messageId: String; let queued: Bool? }
         let accepted: Accepted = try await send(
             "POST", "/sessions/\(escape(id))/messages",
             body: Body(
@@ -360,7 +360,7 @@ struct WalnutAPI {
             // attempt would double-deliver, so the flag follows the id.
             retrySafe: messageId.map(SendRetryPolicy.isValidMessageId) ?? false
         )
-        return accepted.messageId
+        return SessionSendReceipt(messageId: accepted.messageId, queued: accepted.queued == true)
     }
 
     /// Voice input: upload recorded audio, get the recognized text back.

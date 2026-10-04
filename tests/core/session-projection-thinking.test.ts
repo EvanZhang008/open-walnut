@@ -141,18 +141,46 @@ describe('kind:"thinking" rows', () => {
     expect(t.messages.some((m) => m.kind === 'thinking')).toBe(false);
   });
 
-  it('orders thinking before the tool calls of the same message', async () => {
+  it('orders one message as thinking, then its text, then the tool calls it ends on', async () => {
+    // The shape one API message really has: the model reasons, announces what it
+    // is about to do, and the message ends at the tool call. A phone folding
+    // consecutive tool rows into one line needs the text ABOVE the calls.
     await writeJsonl('sess-order', [
       userLine('check the docs'),
       assistantLine('msg_a', [
         { type: 'thinking', thinking: 'I will grep first.' },
+        { type: 'text', text: 'Let me grep for TODOs.' },
         { type: 'tool_use', id: 'toolu_1', name: 'Grep', input: { pattern: 'TODO' } },
-        { type: 'text', text: 'Found three.' },
       ]),
       toolResultLine('toolu_1', 'a.md:1:TODO'),
+      assistantLine('msg_b', [{ type: 'text', text: 'Found three.' }]),
     ]);
     const t = await buildSessionTranscript('sess-order', { full: true });
-    expect(t.messages.map((m) => m.kind ?? 'text')).toEqual(['text', 'thinking', 'tool', 'text']);
+    expect(t.messages.map((m) => m.kind ?? 'text')).toEqual(['text', 'thinking', 'text', 'tool', 'text']);
+    expect(t.messages.map((m) => m.text)).toEqual([
+      'check the docs', 'I will grep first.', 'Let me grep for TODOs.', 'Grep', 'Found three.',
+    ]);
+  });
+
+  it('marks a tool row whose result came back is_error, and only that one', async () => {
+    await writeJsonl('sess-err', [
+      userLine('run both'),
+      assistantLine('msg_a', [
+        { type: 'tool_use', id: 'toolu_ok', name: 'Bash', input: { command: 'true' } },
+        { type: 'tool_use', id: 'toolu_bad', name: 'Bash', input: { command: 'false' } },
+      ]),
+      toolResultLine('toolu_ok', ''),
+      {
+        type: 'user', timestamp: at(),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_bad', content: 'exit 1', is_error: true }] },
+      },
+    ]);
+    const t = await buildSessionTranscript('sess-err', { full: true });
+    const tools = t.messages.filter((m) => m.kind === 'tool');
+    expect(tools.map((m) => m.isError)).toEqual([undefined, true]);
+    // Slim reads carry it too: the fold's failure count is not an expanded-card field.
+    const slim = await buildSessionTranscript('sess-err');
+    expect(slim.messages.filter((m) => m.kind === 'tool').map((m) => m.isError)).toEqual([undefined, true]);
   });
 });
 

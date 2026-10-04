@@ -37,6 +37,8 @@ final class ChatRichnessRowTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    /// Every run opened (see `openingAllRuns`): these gates are about the member
+    /// rows a run opens to, and predate the fold.
     private func input(_ messages: [ChatMessage], expanded: Set<String> = [],
                        scope: String = TimelineScope.unscoped,
                        liveThinking: String = "", streaming: Bool = false,
@@ -46,7 +48,7 @@ final class ChatRichnessRowTests: XCTestCase {
                       liveTextTruncated: false, liveThinking: liveThinking,
                       liveTools: liveTools,
                       activity: activity, showLoadEarlier: false, width: pageWidth,
-                      expandedRowIDs: expanded, scope: scope)
+                      expandedRowIDs: expanded, scope: scope).openingAllRuns()
     }
 
     private func rows(_ messages: [ChatMessage], expanded: Set<String> = [],

@@ -617,22 +617,25 @@ async function readTranscriptViaBridge(host: string, sessionId: string): Promise
     try { lines.push(JSON.parse(line)) } catch { continue }
   }
 
-  // Pre-scan tool_result carrier lines so tool rows can attach output previews.
+  // Pre-scan tool_result carrier lines so tool rows can attach output previews
+  // and say when the call failed.
   const resultsById = new Map<string, string>()
+  const errorIds = new Set<string>()
   for (const parsed of lines) {
     if (parsed.type !== 'user') continue
     const content = (parsed.message as { content?: unknown } | undefined)?.content
     if (!Array.isArray(content)) continue
     for (const block of content) {
-      const b = block as { type?: string; tool_use_id?: string; content?: unknown }
+      const b = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: unknown }
       if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
         const text = toolResultText(b.content)
         if (text) resultsById.set(b.tool_use_id, text)
+        if (b.is_error === true) errorIds.add(b.tool_use_id)
       }
     }
   }
 
-  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string }> = []
+  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string; isError?: true }> = []
   for (const parsed of lines) {
     if (parsed.parent_tool_use_id) continue // subagent lane
     // CLI-injected user lines (skill dumps, compaction summaries) — same skip
@@ -688,6 +691,7 @@ async function readTranscriptViaBridge(host: string, sessionId: string): Promise
             ...(detail ? { detail } : {}),
             ...(result ? { resultPreview: toolResultPreview(result) } : {}),
             ...(agent ? { agent } : {}),
+            ...(typeof b.id === 'string' && errorIds.has(b.id) ? { isError: true as const } : {}),
           })
         }
       }

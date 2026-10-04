@@ -10,10 +10,20 @@ import Foundation
 // WalnutAPI is the live implementation; the requirements match its existing
 // methods 1:1, so conformance is an empty extension.
 
+/// A 202 from `POST /sessions/:id/messages`.
+struct SessionSendReceipt: Equatable {
+    let messageId: String
+    /// The cloud replica BANKED the send because the host's bridge is down
+    /// (`{ messageId, queued: true }`, core/send-queue.ts): accepted durably and
+    /// delivered when the bridge returns. It is therefore NOT proof the bridge is
+    /// up, which every other 202 is.
+    let queued: Bool
+}
+
 protocol SessionSendTransport {
     func sendSessionMessage(
         id: String, text: String, images: [ImagePayload], messageId: String?
-    ) async throws -> String
+    ) async throws -> SessionSendReceipt
     /// `rich` has no default in the protocol on purpose: it is a per-CALL-SITE
     /// bandwidth decision (see `WalnutAPI.sessionTranscriptPath`), and a default
     /// either silently spends ~48 KB/min in the degraded poll or silently drops

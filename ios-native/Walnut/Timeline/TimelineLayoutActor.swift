@@ -126,6 +126,8 @@ actor TimelineLayoutActor {
         // scrolled off. Held back and appended last, it lands where the user is
         // looking and reads as what it is: next in line.
         var queuedRows: [TimelineRow] = []
+        var inline: [ChatMessage] = []
+        inline.reserveCapacity(input.messages.count)
         for message in input.messages {
             let queued = input.queuedMessageStates[message.id]
             // An `undecided` entry renders as an ordinary FAILED bubble in place: it
@@ -134,7 +136,34 @@ actor TimelineLayoutActor {
             if let queued, queued != .undecided {
                 queuedRows.append(contentsOf: memoizedRows(for: message, queued: queued))
             } else {
-                rows.append(contentsOf: memoizedRows(for: message, queued: queued))
+                inline.append(message)
+            }
+        }
+        // Consecutive tool and thinking rows fold into ONE "Ran 3 commands ›" row
+        // (TimelineToolRunFold, the web console's rule). The member rows are still
+        // built through the memo, so an unchanged message costs a dictionary hit
+        // whether it is folded or open; only the run row itself is minted per
+        // build, and it is a one-line capsule with no measurement in it.
+        for part in TimelineToolRunFold.fold(inline) {
+            switch part {
+            case .message(let message):
+                rows.append(contentsOf: memoizedRows(for: message,
+                                                     queued: input.queuedMessageStates[message.id]))
+            case .run(let members):
+                let runID = TimelineToolRunFold.rowID(scope: input.scope,
+                                                      firstMemberID: members[0].id)
+                let expanded = input.expandedRowIDs.contains(runID)
+                rows.append(builder.toolRunRow(
+                    id: runID,
+                    members: TimelineToolRunFold.phraseMembers(members),
+                    failCount: TimelineToolRunFold.failCount(members),
+                    running: false, expanded: expanded
+                ))
+                if expanded {
+                    for member in members {
+                        rows.append(contentsOf: memoizedRows(for: member, queued: nil))
+                    }
+                }
             }
         }
         if rowCache.count > Self.rowCacheLimit {
@@ -149,7 +178,8 @@ actor TimelineLayoutActor {
                 liveText: input.liveText, storeTruncated: input.liveTextTruncated,
                 activity: input.activity, width: input.width,
                 tailRevision: tailRevision, cachedHead: headCache, scope: input.scope,
-                liveThinking: input.liveThinking, liveTools: input.liveTools
+                liveThinking: input.liveThinking, liveTools: input.liveTools,
+                expandedRowIDs: input.expandedRowIDs
             )
             headCache = live.headCache
             rows.append(contentsOf: live.rows)

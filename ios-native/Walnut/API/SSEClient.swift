@@ -5,6 +5,16 @@ struct SSEEvent {
     let id: String?
     let event: String
     let data: String
+    /// Which connection delivered the frame, unique in the process (0 = not
+    /// from a live connection). Consumers hop each event onto their own actor,
+    /// so connection boundaries are stamped here rather than inferred from
+    /// callback order.
+    var connection: UInt64 = 0
+    /// True when that connection sent `Last-Event-ID`: the server was asked to
+    /// replay only what came after it.
+    var resumed = false
+    /// True when that connection is a RECONNECT of its client (not the first).
+    var reconnect = false
 }
 
 /// Server-Sent Events client for the conversation turn stream.
@@ -40,6 +50,11 @@ final class SSEClient: @unchecked Sendable {
     /// duplicated or, worse, a skipped span of the turn).
     private var task: Task<Void, Never>?
     private var lastEventID: String?
+    /// Successful connections of THIS client so far (see `SSEEvent.reconnect`).
+    private var connections: UInt64 = 0
+    /// Process-wide connection ids (see `SSEEvent.connection`).
+    private static let connectionIDs = NSLock()
+    private nonisolated(unsafe) static var lastConnectionID: UInt64 = 0
 
     private func currentTask() -> Task<Void, Never>? {
         stallLock.lock()
@@ -75,6 +90,22 @@ final class SSEClient: @unchecked Sendable {
         stallLock.lock()
         defer { stallLock.unlock() }
         return lastEventID
+    }
+
+    /// The id the NEXT connection will send as Last-Event-ID. Internal for
+    /// WalnutTests (the seeding contract of `init(lastEventID:)`).
+    var resumeEventID: String? { currentLastEventID() }
+
+    /// (process-unique id, is a reconnect of this client)
+    private func nextConnection() -> (UInt64, Bool) {
+        Self.connectionIDs.lock()
+        Self.lastConnectionID &+= 1
+        let id = Self.lastConnectionID
+        Self.connectionIDs.unlock()
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        connections &+= 1
+        return (id, connections > 1)
     }
 
     /// Stall watchdog state. The server sends a `: ping` comment every 25s, so
@@ -159,18 +190,36 @@ final class SSEClient: @unchecked Sendable {
         return session
     }
 
+    /// `lastEventID` seeds the FIRST connection's Last-Event-ID. A client built
+    /// fresh for every page open used to start without one, so the server
+    /// replayed its whole ring each time (see SessionStreamGate.swift).
     init(
         url: URL,
         token: String,
+        lastEventID: String? = nil,
         onEvent: @escaping @Sendable (SSEEvent) -> Void,
         onConnectionChange: @escaping @Sendable (Bool) -> Void,
         onHTTPError: (@Sendable (Int) -> Void)? = nil
     ) {
         self.url = url
         self.token = token
+        self.lastEventID = lastEventID
         self.onEvent = onEvent
         self.onConnectionChange = onConnectionChange
         self.onHTTPError = onHTTPError
+    }
+
+    /// The stream request. Pure and internal for WalnutTests: the header is the
+    /// whole Last-Event-ID contract.
+    static func streamRequest(url: URL, token: String, resumeFrom: String?) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 3600
+        if let resumeFrom {
+            request.setValue(resumeFrom, forHTTPHeaderField: "Last-Event-ID")
+        }
+        return request
     }
 
     func start() {
@@ -286,13 +335,8 @@ final class SSEClient: @unchecked Sendable {
 
     @discardableResult
     private func streamOnce(generation streamGeneration: UInt64) async throws -> StreamOutcome {
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 3600
-        if let resumeFrom = currentLastEventID() {
-            request.setValue(resumeFrom, forHTTPHeaderField: "Last-Event-ID")
-        }
+        let resumeFrom = currentLastEventID()
+        let request = Self.streamRequest(url: url, token: token, resumeFrom: resumeFrom)
 
         // Dedicated session: the stream must outlive normal request timeouts.
         let config = URLSessionConfiguration.default
@@ -321,6 +365,8 @@ final class SSEClient: @unchecked Sendable {
             throw APIError.badResponse
         }
         if isCurrent(streamGeneration) { onConnectionChange(true) }
+        let (connection, reconnect) = nextConnection()
+        let resumed = resumeFrom != nil
         touchActivity()
         // Stream attach/detach is the spine of any "the app went quiet" report:
         // whether the phone still had a live turn stream, and for how long, is
@@ -377,7 +423,10 @@ final class SSEClient: @unchecked Sendable {
                 var line = lineBuffer
                 if line.last == UInt8(ascii: "\r") { line.removeLast() }
                 lineBuffer.removeAll(keepingCapacity: true)
-                if let frame = parser.consume(line: String(decoding: line, as: UTF8.self)) {
+                if var frame = parser.consume(line: String(decoding: line, as: UTF8.self)) {
+                    frame.connection = connection
+                    frame.resumed = resumed
+                    frame.reconnect = reconnect
                     if let id = frame.id { setLastEventID(id) }
                     deliveredFrame = true
                     if isCurrent(streamGeneration) { onEvent(frame) }

@@ -95,10 +95,11 @@ final class SendIdempotencyRetryTests: XCTestCase {
                      "a successful retry must clear the failed state")
     }
 
-    /// Regression: manual retry used to be gated on `canSend`, which is false
-    /// while `offline` — i.e. it no-op'd in exactly the situation it exists for.
+    /// Regression: manual retry used to be gated on `canSend`, which was false
+    /// while offline, so it no-op'd in exactly the situation it exists for.
     /// A bridge_offline bubble MUST stay manually retryable, and the attempt is
-    /// also how the app discovers the bridge came back.
+    /// also how the app discovers the bridge came back. (The composer itself no
+    /// longer locks for an outage at all; see SessionStreamStormTests.)
     @MainActor
     func testManualRetryWorksWhileOfflineAndClearsItOnSuccess() async {
         let transport = MockSessionSendTransport()
@@ -110,8 +111,9 @@ final class SendIdempotencyRetryTests: XCTestCase {
         await store.open()
         _ = await store.send("retry me while offline")
 
-        XCTAssertTrue(store.offline, "a 503 must raise the offline banner")
-        XCTAssertFalse(store.canSend, "the composer is correctly gated while offline")
+        XCTAssertTrue(store.bridgeDown, "a 503 must record the outage")
+        XCTAssertFalse(store.offline, "the banner waits for 10 s of continuous absence")
+        XCTAssertTrue(store.canSend, "the composer stays enabled through an outage")
         guard let failed = store.messages.last(where: { $0.failed == true }) else {
             return XCTFail("expected a failed bubble")
         }
@@ -119,7 +121,8 @@ final class SendIdempotencyRetryTests: XCTestCase {
         await store.retry(failed)
         XCTAssertEqual(transport.sendCallCount, 2,
                        "tap-to-retry must fire even while offline — that IS the common case")
-        XCTAssertFalse(store.offline, "a 202 proves the bridge is back; clear the banner")
+        XCTAssertFalse(store.bridgeDown, "a 202 proves the bridge is back; clear the outage")
+        XCTAssertFalse(store.offline)
         XCTAssertTrue(store.canSend)
         XCTAssertNil(store.messages.last(where: { $0.failed == true }),
                      "a successful retry must clear the failed bubble")
@@ -304,6 +307,8 @@ final class SendIdempotencyRetryTests: XCTestCase {
         await store.open()
         _ = await store.send("only this request died")
         XCTAssertFalse(store.offline,
+                       "a request timeout says nothing about the host's bridge")
+        XCTAssertFalse(store.bridgeDown,
                        "a request timeout says nothing about the host's bridge")
     }
 

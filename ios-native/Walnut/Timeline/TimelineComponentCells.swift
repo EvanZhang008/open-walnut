@@ -39,7 +39,7 @@ enum TimelineHostedCell {
         // keeps strictly to its own bounds (a text row must not steal touches from
         // the chip under it).
         (cell as? TimelineHostedRowCell)?.verticalHitOutset =
-            row.content.opensActivityDrawer
+            row.content.isTappableChip
                 ? max(0, (minimumTapHeight - row.height) / 2)
                 : 0
         cell.contentConfiguration = UIHostingConfiguration {
@@ -108,6 +108,11 @@ enum TimelineHostedCell {
                     delegate?.timelineCell(didRequest: .openActivity(
                         .thinking(id: row.id, text: fullText, detailRef: detailRef)))
                 }
+            )
+        case .toolRun(let phrase, let failCount, let running, let expanded):
+            TimelineToolRunView(
+                phrase: phrase, failCount: failCount, running: running, expanded: expanded,
+                onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
         case .chip(let icon, let text):
             HStack(spacing: 5) {
@@ -977,6 +982,66 @@ private struct TimelineThinkingChipView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The folded tool run: one muted capsule reading the phrase ("Ran 3 commands, read a
+/// file"), the failure count when there is one, and a chevron that points RIGHT while
+/// the run is folded and DOWN once it is open, because this row, unlike the two chips
+/// above, promises that rows will appear under it rather than a sheet over it.
+///
+/// Same shell as the tool and thinking chips (`TimelineChipRow`): the same ink, the
+/// same padding, the same whole-row tap target and the same single accessibility
+/// element, so the three rows cannot drift apart. What differs is the ACTION: a tap
+/// toggles `expanded` through the controller (`toggleExpanded`), and the layout actor
+/// then lays the member rows out under this one; the row itself never changes height.
+private struct TimelineToolRunView: View {
+    let phrase: String
+    let failCount: Int
+    let running: Bool
+    let expanded: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var breathing = false
+
+    private var animates: Bool { running && scenePhase == .active && !reduceMotion }
+
+    var body: some View {
+        TimelineChipRow(
+            identifier: "tool.run",
+            label: TimelineChipAccessibility.toolRun(phrase: phrase, failCount: failCount,
+                                                    expanded: expanded),
+            onOpen: onToggle
+        ) {
+            // The phrase is the row's whole content and wins the squeeze; the badge
+            // is short and must stay legible, so the phrase is what truncates. ONE
+            // line at every text size: the height was reserved for one.
+            Text(phrase)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+                .opacity(breathing ? ReadableText.shimmerFloor : 1)
+                .animation(
+                    animates
+                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                        : nil,
+                    value: breathing
+                )
+                .onAppear { breathing = animates }
+                .onChange(of: animates) { _, on in breathing = on }
+            if failCount > 0 {
+                Text(TimelineChipAccessibility.failedBadge(failCount))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(Theme.danger)
+                    .layoutPriority(2)
+            }
+            TimelineChipChevron()
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+        }
     }
 }
 

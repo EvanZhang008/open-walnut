@@ -59,8 +59,11 @@ struct SessionConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if store.offline {
-                OfflineBanner(text: "\(store.hostLabel) unreachable, showing the last synced transcript")
+            // Only after 10 s of continuous absence (SessionConnectionNotice):
+            // a ~1.3 s bridge redial never reaches the reader.
+            if store.connectionNotice == .unreachable {
+                OfflineBanner(text: "\(store.hostLabel) unreachable. Showing the last synced transcript.")
+                    .accessibilityIdentifier("session.offlineBanner")
             }
             if let error = store.errorMessage {
                 ErrorBanner(text: error) { store.errorMessage = nil }
@@ -93,6 +96,17 @@ struct SessionConversationView: View {
                 )
             }
             messageList
+                // The short-absence chip floats over the timeline instead of
+                // pushing it down: a transient state must not move the rows.
+                .overlay(alignment: .top) {
+                    if store.connectionNotice == .reconnecting {
+                        SessionReconnectingChip()
+                            .padding(.top, 6)
+                            .padding(.horizontal, 16)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: store.connectionNotice)
         }
         // Same keyboard-safety rule as ChatView, and this page needs it more: the
         // permission cards above are unbounded siblings (an AskUserQuestion with
@@ -415,5 +429,30 @@ struct SessionConversationView: View {
             guard !Task.isCancelled else { return }
             programmaticGeometryFrozen = false
         }
+    }
+}
+
+/// "Reconnecting…": the session page's link to its host has been gone for a few
+/// seconds (see SessionConnectionNotice). Small on purpose: most of these clear
+/// on their own, and the composer keeps working throughout.
+private struct SessionReconnectingChip: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.mini)
+            Text("Reconnecting…")
+                .font(.footnote.weight(.medium))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Reconnecting")
+        .accessibilityIdentifier("session.reconnectingChip")
     }
 }

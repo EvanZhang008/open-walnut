@@ -178,11 +178,26 @@ final class TimelineRowBuilder {
             return [notificationRow(message, namespace: namespace, width: width,
                                     expandedRowIDs: expandedRowIDs)]
         case nil:
-            return message.isUser
-                ? userRows(message, namespace: namespace, width: width, queued: queued)
-                : assistantRows(message, width: width, idPrefix: namespace)
+            if message.isUser {
+                return userRows(message, namespace: namespace, width: width, queued: queued)
+            }
+            var rows = assistantRows(message, width: width, idPrefix: namespace)
+            // The reply the cloud companion computed while the Mac was out of
+            // reach says so, under the reply, live and after a reload alike (both
+            // arrive here as `answeredBy`, see ChatStore.finalizeTurn and
+            // CloudAnswerMarks). A reply the Mac computed carries nothing.
+            if message.answeredOnCloud {
+                rows.append(chipRow(
+                    id: "\(namespace)#answeredBy", icon: "cloud",
+                    text: Self.answeredOnCloudCaption, width: width
+                ))
+            }
+            return rows
         }
     }
+
+    /// Caption under a reply the cloud companion answered on its own.
+    static let answeredOnCloudCaption = "Answered on Cloud"
 
     // MARK: - User bubble
 
@@ -530,7 +545,8 @@ final class TimelineRowBuilder {
         cachedHead: (key: String, rows: [TimelineRow])?,
         scope: String = TimelineScope.unscoped,
         liveThinking: String = "",
-        liveTools: [LiveToolCall] = []
+        liveTools: [LiveToolCall] = [],
+        expandedRowIDs: Set<String> = []
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
@@ -621,8 +637,10 @@ final class TimelineRowBuilder {
             headCache = nil
         }
         // This turn's tool calls, as REAL tool rows under the reply — running and
-        // finished alike, so none of them vanishes mid-turn.
-        rows.append(contentsOf: liveToolRows(liveTools, width: width, scope: scope))
+        // finished alike, so none of them vanishes mid-turn (the finished ones
+        // folded into one run row, see `liveToolRows`).
+        rows.append(contentsOf: liveToolRows(liveTools, width: width, scope: scope,
+                                             expandedRowIDs: expandedRowIDs))
         // The shimmer is the FALLBACK pulse and never a second copy of a row above
         // it. Two ways it used to duplicate one:
         //  - a RUNNING tool chip names the call and breathes, and `activity` is
@@ -841,6 +859,28 @@ final class TimelineRowBuilder {
         )
     }
 
+    /// The folded run's own row: one capsule line (see `TimelineToolRunFold`).
+    ///
+    /// Its height is the plain capsule's, in both states: opening a run does not
+    /// grow THIS row, it makes the actor lay the member rows out after it. The
+    /// revision is content-derived because the id is stable while the run grows
+    /// (a live turn folds each finished call into the same first-member id).
+    func toolRunRow(id: String, members: [TimelineToolRunPhrase.Member], failCount: Int,
+                    running: Bool, expanded: Bool) -> TimelineRow {
+        let phrase = TimelineToolRunPhrase.phrase(members)
+        var hasher = Hasher()
+        hasher.combine(phrase)
+        hasher.combine(failCount)
+        hasher.combine(running)
+        hasher.combine(expanded)
+        return TimelineRow(
+            id: id, revision: hasher.finalize(),
+            content: .toolRun(phrase: phrase, failCount: failCount, running: running,
+                              expanded: expanded),
+            height: Self.capsuleRowHeight(badged: false)
+        )
+    }
+
     /// Does this chip's detail need its own line? The rule lives in
     /// `TimelineChipLayout`; the CATEGORY comes from the styler the actor has already
     /// adopted for this build, so the height computed here and the shape the cell
@@ -885,36 +925,70 @@ final class TimelineRowBuilder {
     /// and a stable position is what keeps a chip's cell from being re-created on
     /// every tick. Since the list only ever grows within a turn (and its head is
     /// dropped only past `maxLiveTools`), position is stable in practice.
+    ///
+    /// FOLDED like the transcript (`TimelineToolRunFold`, the web's live rule): the
+    /// calls that have RETURNED collapse into one "Ran 3 commands ›" run row, and a
+    /// call still in flight stays a breathing chip of its own under it, so the
+    /// reader watches the current call and not the pile of finished ones. A call
+    /// folds into the run the moment its result lands; the run keeps ONE id for the
+    /// whole turn, so a reader who opened it keeps it open as calls join.
+    ///
+    /// The live run never reports failures: the `tool-result` frame carries no
+    /// error flag, and a wrong zero is better than a guessed count. The transcript
+    /// row that replaces it at turn end has `isError` and counts them.
     func liveToolRows(_ tools: [LiveToolCall], width: CGFloat,
-                      scope: String = TimelineScope.unscoped) -> [TimelineRow] {
-        tools.enumerated().compactMap { index, call in
+                      scope: String = TimelineScope.unscoped,
+                      expandedRowIDs: Set<String> = []) -> [TimelineRow] {
+        let chips: [(call: LiveToolCall, row: TimelineRow)] = tools.enumerated().compactMap { index, call in
             guard !call.name.isEmpty else { return nil }
-            let stacked = Self.stacksDetail(call.detail)
-            // The relayed input if there is one, `detail` otherwise: on an older
-            // server the one-line detail is the only input that exists, and an
-            // empty Input section would be worse than a description.
-            let input = call.inputPreview ?? call.detail
-            // Content-derived, over EVERY field that can move under this stable id:
-            // the call finishing, its output landing, its input being re-relayed.
-            // The row id is ordinal, so a revision that missed the result meant the
-            // drawer kept serving the payload from before it arrived.
-            var hasher = Hasher()
-            hasher.combine(call.detail)
-            hasher.combine(input)
-            hasher.combine(call.resultPreview)
-            hasher.combine(call.finished)
-            return TimelineRow(
-                id: TimelineScope.namespace(scope, "live-tool-\(index)"),
-                revision: hasher.finalize(),
-                content: .toolChip(name: call.name, detail: call.detail,
-                                   inputPreview: input,
-                                   resultPreview: call.resultPreview,
-                                   agent: nil,
-                                   phase: call.finished ? .liveFinished : .running,
-                                   detailRef: nil, stacked: stacked),
-                height: Self.capsuleRowHeight(badged: false, stacked: stacked)
-            )
+            return (call, liveToolChip(call, index: index, scope: scope))
         }
+        let finished = chips.filter { $0.call.finished }
+        var rows: [TimelineRow] = []
+        if !finished.isEmpty {
+            let runID = TimelineScope.namespace(scope, Self.liveRunID)
+            let expanded = expandedRowIDs.contains(runID)
+            rows.append(toolRunRow(
+                id: runID,
+                members: finished.map { TimelineToolRunPhrase.Member(name: $0.call.name,
+                                                                     detail: $0.call.detail) },
+                failCount: 0, running: false, expanded: expanded
+            ))
+            if expanded { rows.append(contentsOf: finished.map(\.row)) }
+        }
+        rows.append(contentsOf: chips.filter { !$0.call.finished }.map(\.row))
+        return rows
+    }
+
+    /// Message id of the live turn's folded run (scoped by the caller).
+    static let liveRunID = "live-run"
+
+    private func liveToolChip(_ call: LiveToolCall, index: Int, scope: String) -> TimelineRow {
+        let stacked = Self.stacksDetail(call.detail)
+        // The relayed input if there is one, `detail` otherwise: on an older
+        // server the one-line detail is the only input that exists, and an
+        // empty Input section would be worse than a description.
+        let input = call.inputPreview ?? call.detail
+        // Content-derived, over EVERY field that can move under this stable id:
+        // the call finishing, its output landing, its input being re-relayed.
+        // The row id is ordinal, so a revision that missed the result meant the
+        // drawer kept serving the payload from before it arrived.
+        var hasher = Hasher()
+        hasher.combine(call.detail)
+        hasher.combine(input)
+        hasher.combine(call.resultPreview)
+        hasher.combine(call.finished)
+        return TimelineRow(
+            id: TimelineScope.namespace(scope, "live-tool-\(index)"),
+            revision: hasher.finalize(),
+            content: .toolChip(name: call.name, detail: call.detail,
+                               inputPreview: input,
+                               resultPreview: call.resultPreview,
+                               agent: nil,
+                               phase: call.finished ? .liveFinished : .running,
+                               detailRef: nil, stacked: stacked),
+            height: Self.capsuleRowHeight(badged: false, stacked: stacked)
+        )
     }
 
     /// How many lines SwiftUI will wrap `text` into at `width` — a TextKit line
