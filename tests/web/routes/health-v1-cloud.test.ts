@@ -146,6 +146,21 @@ describe('/api/v1/health on a REPLICA', () => {
     expect(Buffer.byteLength(frame)).toBeLessThan(256 * 1024)
   })
 
+  it('relays generic types intact (unit, agg, codes) and stamps every call as generic-aware', async () => {
+    bridgeRequestMock.mockResolvedValue(primaryAnswer(200, { accepted: 1, deleted: 0, storeId: 'hs-one', paused: false }))
+    const at = (extra: Record<string, unknown>) => ({ uuid: uuid('G'), start: '2026-09-20T08:00:00-04:00', end: '2026-09-20T08:00:00-04:00', source: WATCH, ...extra })
+    await request(app()).post('/api/v1/health/sync').send(rawBatch('q.BodyMass', [at({ value: 72.4 })], { unit: 'kg' })).expect(200)
+    await request(app()).post('/api/v1/health/sync').send(rawBatch('c.Headache', [at({ code: 2 })])).expect(200)
+    await request(app()).post('/api/v1/health/sync')
+      .send(bucketBatch('q.FlightsClimbed', [{ start: '2026-09-20T08:00:00-04:00', intervalSec: 3600, sum: 4 }], { unit: 'count', agg: 'sum' })).expect(200)
+    await request(app()).get('/api/v1/health/status').expect(200)
+    const [weight, symptom, flights, status] = bridgeRequestMock.mock.calls.map((c) => (c[2] as any).params)
+    expect(weight).toMatchObject({ genericTypes: true, body: { type: 'q.BodyMass', unit: 'kg', samples: [{ value: 72.4 }] } })
+    expect(symptom).toMatchObject({ genericTypes: true, body: { type: 'c.Headache', samples: [{ code: 2 }] } })
+    expect(flights).toMatchObject({ genericTypes: true, body: { type: 'q.FlightsClimbed', unit: 'count', agg: 'sum', buckets: [{ sum: 4 }] } })
+    expect(status).toMatchObject({ genericTypes: true })
+  })
+
   it('forwards settings and delete bodies and passes the primary answer through', async () => {
     bridgeRequestMock.mockResolvedValue(primaryAnswer(200, { storeId: 'hs-three', paused: true, deleted: 'all' }))
     const res = await request(app()).delete('/api/v1/health/data').send({ categories: ['sleep'] })

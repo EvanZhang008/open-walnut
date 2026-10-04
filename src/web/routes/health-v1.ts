@@ -52,7 +52,7 @@ async function handle(res: Response, action: HealthAction, body: unknown): Promi
       return
     }
     const { runHealthAction } = await import('../../core/health/relay.js')
-    const out = await runHealthAction(action, { body })
+    const out = await runHealthAction(action, { body }, { direct: true })
     res.status(out.status).json(out.body)
   } catch (err) {
     log.web.warn('v1 health request failed', { action, error: err instanceof Error ? err.message : String(err) })
@@ -63,7 +63,8 @@ async function handle(res: Response, action: HealthAction, body: unknown): Promi
 
 /** REPLICA: narrow, bound, forward, and pass the primary's answer through verbatim. */
 async function relay(res: Response, action: HealthAction, body: unknown): Promise<void> {
-  let params: Record<string, unknown> = { body }
+  const { RELAY_GENERIC_FLAG } = await import('../../core/health/relay.js')
+  let params: Record<string, unknown> = { body, [RELAY_GENERIC_FLAG]: true }
   if (action === 'sync') {
     const { sanitizeHealthSync, relayPayload } = await import('../../core/health/sanitize.js')
     const clean = sanitizeHealthSync(body)
@@ -71,7 +72,7 @@ async function relay(res: Response, action: HealthAction, body: unknown): Promis
       res.status(413).json({ error: { code: clean.code, message: clean.message }, maxItems: clean.maxItems, maxBytes: clean.maxBytes })
       return
     }
-    params = { body: relayPayload(clean.batch), rejected: clean.rejected }
+    params = { body: relayPayload(clean.batch), rejected: clean.rejected, [RELAY_GENERIC_FLAG]: true }
   }
   const { serializedBytes } = await import('../../core/health/sanitize.js')
   if (serializedBytes(params) > RELAY_MAX_BYTES) {

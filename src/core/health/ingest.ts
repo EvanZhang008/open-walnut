@@ -276,12 +276,21 @@ function recordUploadMeta(batch: CleanBatch, now: number): void {
   if (Number.isFinite(earliest) && earliest < from) setMeta('backfillFrom', String(earliest))
 }
 
-export function ingestHealthSync(rawBody: unknown, opts: { now?: number; extraRejected?: number } = {}): HealthSyncOutcome {
+/**
+ * `genericAllowed: false` answers every generic call `unsupported` (deletions still
+ * apply): the call came through a relay that cannot carry generic types intact.
+ */
+export function ingestHealthSync(
+  rawBody: unknown, opts: { now?: number; extraRejected?: number; genericAllowed?: boolean } = {},
+): HealthSyncOutcome {
   const now = opts.now ?? Date.now()
-  const clean = sanitizeHealthSync(rawBody, now)
-  if (!clean.ok) {
-    return { status: 413, body: { error: { code: 'too_large', message: clean.message }, maxItems: clean.maxItems, maxBytes: clean.maxBytes } }
+  const sanitized = sanitizeHealthSync(rawBody, now)
+  if (!sanitized.ok) {
+    return { status: 413, body: { error: { code: 'too_large', message: sanitized.message }, maxItems: sanitized.maxItems, maxBytes: sanitized.maxBytes } }
   }
+  const clean = opts.genericAllowed === false && isGenericName(sanitized.batch.type)
+    ? { ...sanitized, unsupported: true as const, refused: undefined }
+    : sanitized
   const { batch } = clean
   const rejected = clean.rejected + (opts.extraRejected ?? 0)
   const db = getHealthDb()
