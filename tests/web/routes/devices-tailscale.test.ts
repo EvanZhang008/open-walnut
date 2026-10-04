@@ -45,7 +45,9 @@ function runningJson(): string {
     Self: { HostName: 'studio-mac', DNSName: 'studio-mac.tail1234.ts.net.', OS: 'macOS', TailscaleIPs: ['100.101.102.103'], Online: true },
     Peer: {
       'nodekey:aa': { HostName: 'build-box', DNSName: 'build-box.tail1234.ts.net.', OS: 'linux', Online: true, TailscaleIPs: ['100.70.0.2'] },
-      'nodekey:bb': { HostName: 'pocket-phone', DNSName: 'pocket-phone.tail1234.ts.net.', OS: 'iOS', Online: true, TailscaleIPs: ['100.70.0.3'] },
+      // A real iPhone (Tailscale 1.9x, 2026-10-03): HostName is the literal "localhost",
+      // the machine name is only in DNSName.
+      'nodekey:bb': { HostName: 'localhost', DNSName: 'pocket-phone.tail1234.ts.net.', OS: 'iOS', Online: true, TailscaleIPs: ['100.70.0.3'] },
       'nodekey:cc': { HostName: 'old-tablet', DNSName: 'old-tablet.tail1234.ts.net.', OS: 'android', Online: false, TailscaleIPs: ['100.70.0.4'] },
     },
   })
@@ -128,7 +130,7 @@ describe('GET /api/devices/tailscale', () => {
     expect(execCalls).toBe(0)
   })
 
-  it('running: the MagicDNS name, the tailnet address, peers with only hostName/os/online (online phones first)', async () => {
+  it('running: the MagicDNS name, the tailnet address, peers with only hostName/os/online (online phones first, named by their machine name)', async () => {
     vi.spyOn(os, 'networkInterfaces').mockReturnValue({ ...WIFI, ...TAILNET } as unknown as Ifaces)
     fakeCli(runningJson)
     const r = await get('/api/devices/tailscale')

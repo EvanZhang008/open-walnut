@@ -213,9 +213,11 @@ function extraOf(doc: StatusDoc): TailscaleExtra {
     for (const p of Object.values(doc.Peer as Record<string, unknown>)) {
       if (!p || typeof p !== 'object') continue
       const { HostName, DNSName, OS, Online } = p as { HostName?: unknown; DNSName?: unknown; OS?: unknown; Online?: unknown }
-      const hostName = typeof HostName === 'string' && HostName
-        ? HostName
-        : typeof DNSName === 'string' ? DNSName.split('.')[0] : ''
+      // The tailnet's machine name (the DNSName's first label, what the Tailscale
+      // app and admin console show) beats the OS hostname: an iPhone reports
+      // HostName "localhost" while its machine name is "iphone182".
+      const dnsLabel = typeof DNSName === 'string' ? DNSName.split('.')[0] : ''
+      const hostName = dnsLabel || (typeof HostName === 'string' ? HostName : '')
       if (!hostName) continue
       peers.push({ hostName: hostName.slice(0, 120), os: typeof OS === 'string' ? OS.slice(0, 40) : '', online: Online === true })
     }
