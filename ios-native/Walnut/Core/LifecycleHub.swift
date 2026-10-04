@@ -7,6 +7,14 @@ protocol LifecycleSuspendable: AnyObject {
     func resumeForForeground()
 }
 
+/// A participant holding a connection built for one server ORIGIN (an SSE
+/// stream captures its URL at construction). On a route switch the same Walnut
+/// is now reached at another origin, so the connection is rebuilt there.
+@MainActor
+protocol RouteRestartable: LifecycleSuspendable {
+    func restartForRouteChange()
+}
+
 /// App-scoped lifecycle fan-out. Participants are weak so dismissed screens and
 /// their stores are never kept alive solely by lifecycle registration.
 @MainActor
@@ -46,6 +54,15 @@ final class LifecycleHub {
     func resumeAll() {
         suspended = false
         forEachParticipant { $0.resumeForForeground() }
+    }
+
+    /// Route switch (RouteCoordinator): only participants that hold a
+    /// connection to the old origin take part, so a recording, an open preview
+    /// or a draft is never disturbed. Nothing to do while suspended: the
+    /// foreground resume builds every connection from the new URL anyway.
+    func restartForRouteChange() {
+        guard !suspended else { return }
+        forEachParticipant { ($0 as? any RouteRestartable)?.restartForRouteChange() }
     }
 
     private func forEachParticipant(_ action: (any LifecycleSuspendable) -> Void) {

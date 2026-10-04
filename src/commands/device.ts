@@ -8,7 +8,7 @@
 
 import chalk from 'chalk';
 import { createDevice, revokeDevice, listDevices } from '../core/device-auth.js';
-import { detectLanAddress } from '../core/pairing-targets.js';
+import { detectLanAddress, detectTailnetAddress } from '../core/pairing-targets.js';
 import { outputJson } from '../utils/json-output.js';
 import type { GlobalOptions } from '../core/types.js';
 
@@ -35,7 +35,13 @@ export async function runDeviceAdd(name: string, globals: GlobalOptions): Promis
     const lan = detectLanAddress();
     const server = lan ? `&server=${encodeURIComponent(`http://${lan}:${CLI_DEFAULT_PORT}`)}` : '';
     console.log(`  ${chalk.dim('Pairing URI:')} wn://pair?name=${encodeURIComponent(name)}&token=${token}${server}`);
-    if (!lan) {
+    // A tailnet address reaches this machine from anywhere the phone is on the same tailnet.
+    const tailnet = detectTailnetAddress();
+    if (tailnet) {
+      const tailnetServer = encodeURIComponent(`http://${tailnet.address}:${CLI_DEFAULT_PORT}`);
+      console.log(`  ${chalk.dim('Tailnet URI:')} wn://pair?name=${encodeURIComponent(name)}&token=${token}&server=${tailnetServer}`);
+    }
+    if (!lan && !tailnet) {
       console.log(chalk.dim('  (no LAN address detected — enter the server address in the app)'));
     }
     console.log('');

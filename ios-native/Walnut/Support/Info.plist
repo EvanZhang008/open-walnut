@@ -40,7 +40,7 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Walnut connects to the Walnut server you run on your local network.</string>
+	<string>Walnut connects straight to your Walnut on this Wi-Fi network when it can, which is faster than going through the cloud.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Walnut uses the microphone for voice input. Your speech is turned into text by your own Walnut server.</string>
 	<key>UIApplicationShortcutItems</key>

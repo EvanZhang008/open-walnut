@@ -9,10 +9,12 @@ import os from 'node:os'
 
 vi.mock('../../src/integrations/git-sync.js', () => ({
   getCloudRemoteCredentials: vi.fn(() => null),
+  getCloudRemoteCredentialsAsync: vi.fn(async () => null),
 }))
 
 import { detectLanAddress, isLoopbackOrigin, getPairingTargets } from '../../src/core/pairing-targets.js'
-import { getCloudRemoteCredentials } from '../../src/integrations/git-sync.js'
+import { getCloudRemoteCredentialsAsync } from '../../src/integrations/git-sync.js'
+import { _setTailscaleProbeForTesting } from '../../src/core/tailnet.js'
 
 type Ifaces = ReturnType<typeof os.networkInterfaces>
 
@@ -21,11 +23,14 @@ function mockIfaces(map: Record<string, Array<{ address: string; family: string;
 }
 
 beforeEach(() => {
-  vi.mocked(getCloudRemoteCredentials).mockReturnValue(null)
+  vi.mocked(getCloudRemoteCredentialsAsync).mockResolvedValue(null)
+  // Hermetic: never run a real Tailscale CLI from a unit test.
+  _setTailscaleProbeForTesting({ locate: async () => null })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  _setTailscaleProbeForTesting(null)
 })
 
 describe('isLoopbackOrigin', () => {
@@ -82,26 +87,26 @@ describe('detectLanAddress', () => {
 })
 
 describe('getPairingTargets', () => {
-  it('never offers a loopback console origin — substitutes the LAN address', () => {
+  it('never offers a loopback console origin — substitutes the LAN address', async () => {
     mockIfaces({ en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }] })
-    const targets = getPairingTargets('http://localhost:3456', 3456)
+    const targets = await getPairingTargets('http://localhost:3456', 3456)
     expect(targets).toHaveLength(1)
     expect(targets[0].origin).toBe('http://192.168.1.20:3456')
     expect(targets.every((t) => !isLoopbackOrigin(t.origin))).toBe(true)
   })
 
-  it('keeps a non-loopback console origin as-is (LAN / reverse proxy)', () => {
+  it('keeps a non-loopback console origin as-is (LAN / reverse proxy)', async () => {
     mockIfaces({ en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }] })
-    const targets = getPairingTargets('https://walnut.example.invalid', 3456)
+    const targets = await getPairingTargets('https://walnut.example.invalid', 3456)
     expect(targets[0].origin).toBe('https://walnut.example.invalid')
   })
 
-  it('offers Cloud when a cloud remote exists, and marks it remote-mint', () => {
+  it('offers Cloud when a cloud remote exists, and marks it remote-mint', async () => {
     mockIfaces({ en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }] })
-    vi.mocked(getCloudRemoteCredentials).mockReturnValue({
+    vi.mocked(getCloudRemoteCredentialsAsync).mockResolvedValue({
       domain: 'cloud.example.invalid', token: 'tok', secure: true,
     })
-    const targets = getPairingTargets('http://localhost:3456', 3456)
+    const targets = await getPairingTargets('http://localhost:3456', 3456)
     expect(targets.map((t) => t.kind)).toEqual(['lan', 'cloud'])
     const cloud = targets.find((t) => t.kind === 'cloud')!
     expect(cloud.origin).toBe('https://cloud.example.invalid')
@@ -109,17 +114,17 @@ describe('getPairingTargets', () => {
     expect(cloud.remoteMint).toBe(true)
   })
 
-  it('still offers Cloud when this machine has no usable LAN address', () => {
+  it('still offers Cloud when this machine has no usable LAN address', async () => {
     mockIfaces({ en0: [{ address: '192.0.0.2', family: 'IPv4', internal: false }] })
-    vi.mocked(getCloudRemoteCredentials).mockReturnValue({
+    vi.mocked(getCloudRemoteCredentialsAsync).mockResolvedValue({
       domain: 'cloud.example.invalid', token: 'tok', secure: true,
     })
-    const targets = getPairingTargets('http://localhost:3456', 3456)
+    const targets = await getPairingTargets('http://localhost:3456', 3456)
     expect(targets.map((t) => t.kind)).toEqual(['cloud'])
   })
 
-  it('returns nothing rather than a useless loopback QR', () => {
+  it('returns nothing rather than a useless loopback QR', async () => {
     mockIfaces({ lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }] })
-    expect(getPairingTargets('http://localhost:3456', 3456)).toEqual([])
+    expect(await getPairingTargets('http://localhost:3456', 3456)).toEqual([])
   })
 })

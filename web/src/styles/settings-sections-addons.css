@@ -79,6 +79,7 @@ a.settings-button { text-decoration: none; }
   image-rendering: pixelated;
 }
 .settings-addons-qr-row .settings-row-help { max-width: 60ch; }
+/* Phones & Cloud: the Tailscale line is its own muted line in the row's help. */
 
 .settings-addons-ellipsis {
   min-width: 0;

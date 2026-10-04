@@ -8,6 +8,8 @@
  *
  * - `lan`   — this Mac's private-network IPv4 (http://192.168.x.y:PORT). Works
  *   on the same Wi-Fi only. iOS allows plain http here via NSAllowsLocalNetworking.
+ * - `tailnet`: this Mac's tailnet IPv4 (http://100.x.y.z:PORT, see tailnet.ts).
+ *   Works from anywhere the phone is on the same tailnet, straight to this Mac.
  * - `cloud` — the cloud companion's public origin, derived from the data repo's
  *   git remote (the same source cloud-bridge-config.ts already trusts). Works
  *   from anywhere, which is what "connect to Cloud" means.
@@ -19,9 +21,12 @@
  */
 
 import os from 'node:os'
-import { getCloudRemoteCredentials } from '../integrations/git-sync.js'
+import { getCloudRemoteCredentials, getCloudRemoteCredentialsAsync } from '../integrations/git-sync.js'
+import { detectTailnetAddress, isTailnetHost, peekTailscaleStatus } from './tailnet.js'
 
-export type PairingTargetKind = 'lan' | 'cloud'
+export { detectTailnetAddress, isCgnatV4 } from './tailnet.js'
+
+export type PairingTargetKind = 'lan' | 'tailnet' | 'cloud'
 
 export interface PairingTarget {
   kind: PairingTargetKind
@@ -77,17 +82,35 @@ export function isLoopbackOrigin(origin: string): boolean {
   }
 }
 
+/** The tailnet target's label: name Tailscale only when its CLI is known to be here. */
+export async function tailnetLabel(): Promise<string> {
+  return (await peekTailscaleStatus())?.installed
+    ? 'Tailscale (anywhere this machine is on)'
+    : 'Tailnet (anywhere this machine is on)'
+}
+
+function hostOf(origin: string): string {
+  try {
+    return new URL(origin).hostname
+  } catch {
+    return ''
+  }
+}
+
 /**
- * Pairing targets for this instance, best-first.
+ * Pairing targets for this instance, best-first: `lan`, `tailnet`, `cloud`.
  *
  * `consoleOrigin` (the browser's own origin) is offered only when it is NOT
- * loopback — e.g. the console already reached over the LAN or through a
- * reverse proxy, in which case that exact origin is known to work.
+ * loopback (the console already reached over the LAN, the tailnet or a reverse
+ * proxy), in which case that exact origin is known to work. A tailnet console
+ * origin fills the `tailnet` slot, not the `lan` one.
  */
-export function getPairingTargets(consoleOrigin: string, port: number): PairingTarget[] {
+export async function getPairingTargets(consoleOrigin: string, port: number): Promise<PairingTarget[]> {
   const targets: PairingTarget[] = []
+  const usable = !!consoleOrigin && !isLoopbackOrigin(consoleOrigin)
+  const consoleOnTailnet = usable && isTailnetHost(hostOf(consoleOrigin))
 
-  if (consoleOrigin && !isLoopbackOrigin(consoleOrigin)) {
+  if (usable && !consoleOnTailnet) {
     targets.push({ kind: 'lan', origin: consoleOrigin, label: 'This network', remoteMint: false })
   } else {
     const lan = detectLanAddress()
@@ -96,7 +119,15 @@ export function getPairingTargets(consoleOrigin: string, port: number): PairingT
     }
   }
 
-  const cloud = getCloudRemoteCredentials()
+  const tailnet = consoleOnTailnet ? consoleOrigin : (() => {
+    const found = detectTailnetAddress()
+    return found ? `http://${found.address}:${port}` : null
+  })()
+  if (tailnet) {
+    targets.push({ kind: 'tailnet', origin: tailnet, label: await tailnetLabel(), remoteMint: false })
+  }
+
+  const cloud = await getCloudRemoteCredentialsAsync()
   if (cloud) {
     targets.push({
       kind: 'cloud',
@@ -112,6 +143,13 @@ export function getPairingTargets(consoleOrigin: string, port: number): PairingT
 /** The cloud companion's origin + the credential that can mint devices on it. */
 export function getCloudPairingEndpoint(): { origin: string; token: string } | null {
   const cloud = getCloudRemoteCredentials()
+  if (!cloud) return null
+  return { origin: `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`, token: cloud.token }
+}
+
+/** Async twin of getCloudPairingEndpoint for request paths (no blocking git spawn). */
+export async function getCloudPairingEndpointAsync(): Promise<{ origin: string; token: string } | null> {
+  const cloud = await getCloudRemoteCredentialsAsync()
   if (!cloud) return null
   return { origin: `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`, token: cloud.token }
 }

@@ -256,10 +256,16 @@ Read [Plugin development](docs/reference/plugin-development.md) for the full gui
 The beta SwiftUI app provides access to tasks, notes, and live sessions from an iPhone.
 It is not on the App Store yet: build it with Xcode from [`ios-native/`](ios-native/README.md).
 It pairs with the web app by QR code, and the QR carries the device token every
-request from the phone sends. An optional self-hosted cloud companion can connect the
-phone to your machines when you are away from your local network.
+request from the phone sends. The phone can reach your machine three ways, and one
+pairing covers all of them: the same Wi-Fi, a [Tailscale](https://tailscale.com) tailnet
+(Settings › Phones & Cloud walks you through installing Tailscale on the machine and the
+phone, step by step, and offers a Tailscale QR; this works from anywhere while the machine
+is on, with no server to run), or an optional
+self-hosted cloud companion that also answers while the machine sleeps. The app learns
+every address after it connects once and switches to the best one that answers.
 
-See [Cloud sync](docs/reference/cloud-sync.md) for the architecture and setup.
+See [Phone connection routes](docs/reference/phone-connection-routes.md) for how the
+switching works, and [Cloud sync](docs/reference/cloud-sync.md) for the companion.
 
 ## Data and Privacy
 

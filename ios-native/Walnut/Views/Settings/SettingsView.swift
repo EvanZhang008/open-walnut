@@ -4,6 +4,7 @@ import UIKit
 /// Typed navigation targets inside the Settings stack.
 enum SettingsRoute: Hashable {
     case routines
+    case connectionRoutes
 }
 
 /// Settings tab — connection status card, server info (Wave 2 /v1/config),
@@ -54,6 +55,7 @@ struct SettingsView: View {
             .navigationDestination(for: SettingsRoute.self) { route in
                 switch route {
                 case .routines: RoutinesView()
+                case .connectionRoutes: ConnectionRoutesView()
                 }
             }
             .confirmationDialog(
@@ -80,7 +82,14 @@ struct SettingsView: View {
 
     private var serverSection: some View {
         Section("Server") {
-            LabeledContent("Address", value: Self.addressText(connection.serverURL))
+            if connection.serverURL.isEmpty || DemoMode.isDemoURL(connection.serverURL) {
+                LabeledContent("Address", value: Self.addressText(connection.serverURL))
+            } else {
+                NavigationLink(value: SettingsRoute.connectionRoutes) {
+                    ConnectionRouteSummary()
+                }
+                .accessibilityIdentifier("settings.connectionRoute")
+            }
             LabeledContent("Device", value: connection.deviceName.isEmpty ? "Not set" : connection.deviceName)
             LabeledContent("Token", value: "••••••••••••")
             LabeledContent("Status") {

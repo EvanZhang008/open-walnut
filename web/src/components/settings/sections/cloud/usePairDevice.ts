@@ -11,9 +11,14 @@ import { useCallback, useState } from 'react';
 import QRCode from 'qrcode';
 import { apiPost } from '@/api/client';
 import { log } from '@/utils/log';
+import { devicesListChanged } from './devices-list';
 
-/** Where a scanned QR points the phone. `cloud` keeps working off Wi-Fi. */
-export type PairTargetKind = 'lan' | 'cloud';
+/**
+ * Which address a scanned QR points the phone at: `lan` (same Wi-Fi), `tailnet`
+ * (wherever the phone and this machine are both on the tailnet) or `cloud` (the
+ * companion, anywhere). The phone learns the other addresses once it connects.
+ */
+export type PairTargetKind = 'lan' | 'tailnet' | 'cloud';
 
 export interface PairingTarget {
   kind: PairTargetKind;
@@ -81,6 +86,9 @@ export function usePairDevice(): UsePairDevice {
       setError(err instanceof Error ? err.message : String(err));
       return null;
     } finally {
+      // Even a failed mint may have written (a timeout the server outlived), so the
+      // caller's next list read must not join one that began before it.
+      devicesListChanged();
       setBusy(false);
     }
   }, []);

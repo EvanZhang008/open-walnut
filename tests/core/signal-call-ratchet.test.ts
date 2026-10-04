@@ -66,6 +66,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/core/cloud-setup/providers/cli-exec.ts': 3, // same
   'src/core/plugin-npm-install.ts': 1,             // its own npm child's group
   'src/core/process-group-kill.ts': 1,             // safeKillProcessGroup itself (refuses pid <= 1)
+  'src/core/tailscale-install.ts': 1,              // its own brew child's group, on timeout
   'src/core/time-tracking/outside-collector.ts': 1,// its own collector child's group
   'src/integrations/git-bundle-client.ts': 1,      // its own git child's group
   'src/integrations/git-sync.ts': 2,               // its own git children's groups

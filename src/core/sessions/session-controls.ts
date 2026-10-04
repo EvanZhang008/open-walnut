@@ -794,6 +794,10 @@ export type SessionControlAction =
   // relays every /api/push route here — see core/push/relay.ts.
   | 'server.push.register' | 'server.push.unregister' | 'server.push.preferences'
   | 'server.push.active' | 'server.push.status' | 'server.push.revoke-device'
+  // Device adoption: a phone paired with the replica gets its pairing copied
+  // into the primary's registry (and removed again on revoke), so the same
+  // token reaches the Mac directly. See core/devices/relay.ts.
+  | 'server.devices.adopt' | 'server.devices.revoke-by-hash'
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
   | 'server.files.list' | 'server.files.resolve'
@@ -1465,6 +1469,21 @@ export async function handleSessionControlRelay(
           // 404 code the local path returns, which is the signal a client uses to
           // notice its token never landed and register again.
           if (err instanceof PushRegistryError) {
+            throw new SessionControlError(err.message, err.status, { code: err.code });
+          }
+          throw err;
+        }
+        break;
+      }
+      // ── Device adoption family: the primary's registry, same rules as its routes ──
+      case 'server.devices.adopt':
+      case 'server.devices.revoke-by-hash': {
+        const { handleDevicesRelayAction, DevicesRelayError } = await import('../devices/relay.js');
+        const sub = action.slice('server.devices.'.length);
+        try {
+          result = await handleDevicesRelayAction(sub, p);
+        } catch (err) {
+          if (err instanceof DevicesRelayError) {
             throw new SessionControlError(err.message, err.status, { code: err.code });
           }
           throw err;

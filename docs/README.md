@@ -62,6 +62,9 @@ must live under one of these top-level categories instead of directly under
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, the live-session bridge, and what the box installs
   to run sessions itself.
+- [Phone connection routes](reference/phone-connection-routes.md): the three ways the
+  iOS app reaches a Walnut (Wi-Fi, Tailscale, cloud companion), how one pairing works on
+  every box, and how the app picks and switches routes.
 - [Claude model configuration](reference/claude-model-configuration.md)
 - [Jev decisions](reference/jev-decisions.md) - optional System One backend for
   background classifications (session→project placement, quick-parse fields):

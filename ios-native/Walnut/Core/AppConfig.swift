@@ -4,7 +4,8 @@ import os
 /// Connection configuration — server URL + device name in UserDefaults,
 /// device token in the Keychain. Read synchronously by the API client.
 struct AppConfig {
-    private static let urlKey = "walnut.serverUrl"
+    /// Internal (not private) for the route store in ServerRoute.swift.
+    static let urlKey = "walnut.serverUrl"
     private static let nameKey = "walnut.deviceName"
     private static let tokenKey = "walnut.deviceToken"
 
@@ -135,6 +136,9 @@ struct AppConfig {
 
     static func save(serverURL: String, token: String, deviceName: String?) {
         UserDefaults.standard.set(normalize(serverURL), forKey: urlKey)
+        // A new pairing starts from the one origin the user gave; the server's
+        // other routes are learned from GET /routes once it answers.
+        storeRoutes([.custom(serverURL)], anchor: serverURL)
         if let deviceName, !deviceName.isEmpty {
             UserDefaults.standard.set(deviceName, forKey: nameKey)
         }
@@ -144,6 +148,7 @@ struct AppConfig {
 
     static func clear() {
         UserDefaults.standard.removeObject(forKey: urlKey)
+        clearRoutes()
         UserDefaults.standard.removeObject(forKey: nameKey)
         KeychainHelper.delete(tokenKey)
         cachedToken.withLock { $0 = .some(nil) }

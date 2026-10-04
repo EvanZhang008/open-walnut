@@ -50,15 +50,16 @@ targets:
         # cloud servers are HTTPS and unaffected.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Multi-route connection: the app asks whether the paired Mac answers
+        # directly on this network before it falls back to the cloud companion,
+        # which is what raises the iOS local network prompt.
+        NSLocalNetworkUsageDescription: Walnut connects straight to your Walnut on this Wi-Fi network when it can, which is faster than going through the cloud.
         # QR pairing (setup screen scans the wn://pair code) + photo attachments:
         # the chat composer's camera button and the note editor's Take Photo.
         NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
         NSMicrophoneUsageDescription: Walnut uses the microphone for voice input. Your speech is turned into text by your own Walnut server.
-        # Pairing with a Walnut server on the same Wi-Fi (an http://192.168.x.x
-        # or .local address) is local network access, which iOS asks about.
-        NSLocalNetworkUsageDescription: Walnut connects to the Walnut server you run on your local network.
         # Tasks-tab calendar view: device calendar events render read-only in
         # the day agenda next to your Walnut tasks. Read access only; nothing
         # is written to your calendars. (Deployment target is iOS 18, so only

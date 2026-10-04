@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -7,11 +7,14 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
 import { formatAbsoluteTime } from './addons-format';
 import { apiGet, apiDelete } from '@/api/client';
-import { fetchDevicesList } from './cloud/devices-list';
+import { devicesListChanged, fetchDevicesList } from './cloud/devices-list';
 import { log } from '@/utils/log';
 import { PairingQrBlock } from './cloud/PairingQrBlock';
 import { deviceNameForServer } from './device-name';
 import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
+import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
+import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 
 import '@/styles/settings-sections-addons.css';
 
@@ -58,14 +61,16 @@ const ROLE_NOTE: Record<'simulator' | 'self', string> = {
 };
 
 /**
- * Where a scanned QR points the phone. `cloud` works off Wi-Fi. Defined in
- * cloud/usePairDevice.ts — the Cloud Companion section pairs the same way.
+ * Where a scanned QR points the phone: this network, the tailnet or the cloud.
+ * Defined in cloud/usePairDevice.ts; the Cloud Companion section pairs the same way.
  */
 type TargetKind = PairTargetKind;
 
-/** Re-pair via cloud when the device has one — it keeps working off Wi-Fi. */
-function preferredKind(kinds: TargetKind[]): TargetKind {
-  return kinds.includes('cloud') ? 'cloud' : 'lan';
+/** GET /api/devices (its `tailscale` summary is read by the card through its own endpoint). */
+interface DevicesListResponse {
+  devices: DeviceEntry[];
+  cloudDevices?: DeviceEntry[];
+  targets?: PairingTarget[];
 }
 
 /**
@@ -74,15 +79,15 @@ function preferredKind(kinds: TargetKind[]): TargetKind {
  * exactly once (only its hash is stored server-side), so the QR block stays
  * visible until dismissed.
  *
- * Two pairing targets, because they are genuinely different credentials:
- * "This network" mints locally (same Wi-Fi only) and "Cloud" mints on the
- * cloud companion (works anywhere). Picking the wrong one is the classic
- * failure — a LAN QR scanned over cellular can never connect.
+ * The picker only chooses which address goes in the QR. A phone paired through
+ * any address learns the other addresses by itself, so pick the one the phone
+ * can reach right now: a Wi-Fi QR scanned over cellular never connects at all.
  */
 export function DevicesSection() {
   const [devices, setDevices] = useState<DeviceEntry[]>([]);
   const [cloudDevices, setCloudDevices] = useState<DeviceEntry[]>([]);
   const [targets, setTargets] = useState<PairingTarget[]>([]);
+  const replica = useIsCloudReplica();
   // Until the list answers, nothing is known: no "No phones" line and no "no address" notice
   // that then vanish and pull a deep-linked section below them upward (C74).
   const [listState, setListState] = useState<'loading' | 'ready' | 'failed'>('loading');
@@ -94,19 +99,26 @@ export function DevicesSection() {
   const [rowError, setRowError] = useState<{ name: string; message: string } | null>(null);
   const { track } = useSettingsSaved();
 
+  // Reads can land out of order (a pairing's read can beat the pane's first one):
+  // only the newest read writes the list.
+  const readSeq = useRef(0);
   const refresh = useCallback(async () => {
+    const seq = ++readSeq.current;
     try {
-      const res = await fetchDevicesList<{ devices: DeviceEntry[]; cloudDevices?: DeviceEntry[]; targets?: PairingTarget[] }>();
+      const res = await fetchDevicesList<DevicesListResponse>();
+      if (seq !== readSeq.current) return;
       setDevices(res.devices);
       setCloudDevices(res.cloudDevices ?? []);
       const list = res.targets ?? [];
       setTargets(list);
-      // Default to Cloud when it exists — a phone that leaves the house keeps
-      // working, which is what people mean by "connect my phone".
-      setTarget((prev) => (list.some((t) => t.kind === prev) ? prev : (list[list.length - 1]?.kind ?? 'lan')));
+      // Keep the current pick while it is still offered. The first pick is this
+      // network when there is one (the phone usually pairs next to this machine,
+      // then learns the other addresses), else Cloud, else the tailnet.
+      setTarget((prev) => (list.some((t) => t.kind === prev) ? prev : bestOfferedKind(list.map((t) => t.kind))));
       setListState('ready');
     } catch (err) {
       log.error('settings', 'devices list failed', { error: String(err) });
+      if (seq !== readSeq.current) return;
       setListState((prev) => (prev === 'ready' ? prev : 'failed'));
     }
   }, []);
@@ -158,6 +170,7 @@ export function DevicesSection() {
       await track((async () => {
         for (const kind of kinds) {
           await apiDelete(`/api/devices/${encodeURIComponent(name)}${kind === 'cloud' ? '?target=cloud' : ''}`);
+          devicesListChanged();
         }
       })());
       await refresh();
@@ -167,6 +180,26 @@ export function DevicesSection() {
   };
 
   const activeTarget = targets.find((t) => t.kind === target);
+  const showPicker = targets.length > 1;
+  // How to reach Walnut from anywhere without a cloud server: the guided card
+  // (cloud/RemoteAccessCard.tsx), on a primary only (a companion has nothing to install).
+  const showRemoteCard = !replica;
+  const chooseTailnet = () => {
+    setTarget('tailnet');
+    document.getElementById('devices-new-name')?.focus();
+  };
+  const targetHelp = activeTarget?.kind === 'cloud'
+    ? 'Works from anywhere, including cellular; the token is created on your cloud companion.'
+    : activeTarget?.kind === 'tailnet'
+      ? 'Works anywhere the phone is on the same tailnet as this machine, including cellular.'
+      : activeTarget
+        ? <>Works only while the phone is on the same <span className="settings-nowrap">Wi-Fi</span> as this Mac.</>
+        : undefined;
+  const nameHelp = targets.length === 1 && activeTarget?.kind === 'lan'
+    ? <>Pair a phone by scanning a QR code; this one works only on the same <span className="settings-nowrap">Wi-Fi</span> as this Mac.</>
+    : targets.length === 1 && activeTarget?.kind === 'tailnet'
+      ? 'Pair a phone by scanning a QR code; this one works anywhere the phone is on the same tailnet as this machine.'
+      : 'Pair a phone by scanning a QR code with the Walnut iOS app.';
   // ONE row per physical device. The same phone is usually paired to both this
   // Mac and the cloud, and listing each credential separately showed the same
   // name twice — indistinguishable rows that made a 2-device setup look like 9.
@@ -231,7 +264,7 @@ export function DevicesSection() {
                 disabled={busy}
                 aria-label={`Show a new QR code for ${d.name}; its current token stops working`}
                 data-testid="devices-show-qr"
-                onConfirm={() => repair(d.name, preferredKind(d.kinds))}
+                onConfirm={() => repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind)))}
               />
             )}
             {/* This Mac's own sync credential has no QR and must not be
@@ -272,15 +305,22 @@ export function DevicesSection() {
           )}
         </SettingsGroup>
 
+        {showRemoteCard && (
+          <RemoteAccessCard
+            devices={listState === 'ready' ? [...devices, ...cloudDevices] : null}
+            tailnetOffered={targets.some((t) => t.kind === 'tailnet')}
+            onChooseTailnet={chooseTailnet}
+            onTailnetChange={refresh}
+          />
+        )}
+
         <SettingsGroup heading="Pair a phone">
-          {targets.length > 1 && (
+          {/* Three long labels left the copy a word-wide column beside them: stack the row. */}
+          {showPicker && (
             <SettingsRow
               label="Pairing target"
-              help={activeTarget
-                ? activeTarget.kind === 'cloud'
-                  ? 'Works from anywhere, including cellular; the token is created on your cloud companion.'
-                  : <>Works only while the phone is on the same <span className="settings-nowrap">Wi-Fi</span> as this Mac.</>
-                : undefined}
+              className={targets.length > 2 ? 'settings-row-stacked' : undefined}
+              help={targetHelp}
               control={
                 <SegmentedControl
                   aria-label="Pairing target"
@@ -306,9 +346,7 @@ export function DevicesSection() {
             label="Device name"
             htmlFor="devices-new-name"
             wide
-            help={targets.length === 1 && activeTarget?.kind === 'lan'
-              ? <>Pair a phone by scanning a QR code; this one works only on the same <span className="settings-nowrap">Wi-Fi</span> as this Mac.</>
-              : 'Pair a phone by scanning a QR code with the Walnut iOS app.'}
+            help={nameHelp}
             error={nameError ?? (!created && error ? error : undefined)}
             control={
               <span className="settings-addons-inline devices-add-row">

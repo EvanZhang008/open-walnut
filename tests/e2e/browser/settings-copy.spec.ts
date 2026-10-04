@@ -248,7 +248,15 @@ test('C74: Phones & Cloud claims nothing before the devices list answers, so #cl
   const gate = new Promise<void>((r) => { release = r })
   await page.route((url) => url.pathname === '/api/devices', async (route) => {
     await gate
-    return route.continue()
+    // Pin what depends on the machine's Tailscale: a tailnet address adds a picker row and
+    // a missing Tailscale adds a hint line. Both appear only once the list answers, by
+    // design; a deep link holds its target through them (settings-panes.spec.ts C74).
+    const res = await route.fetch()
+    const body = (await res.json()) as { targets?: Array<{ kind: string }> }
+    return route.fulfill({
+      response: res,
+      json: { ...body, targets: (body.targets ?? []).filter((t) => t.kind !== 'tailnet'), tailscale: { installed: true, running: true } },
+    })
   })
   await recordWrites(page)
   await openSettings(page)

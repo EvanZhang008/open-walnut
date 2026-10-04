@@ -1,0 +1,69 @@
+/* Settings, Phones & Cloud: the "Reach Walnut from anywhere" card
+   (components/settings/sections/cloud/RemoteAccessCard.tsx). Rows of one
+   group, a status dot before each step title. Colors only through tokens. */
+
+.remote-access-step-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+/* muted = not yet, amber = your turn, green = done */
+.remote-access-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  opacity: 0.55;
+}
+.remote-access-dot[data-dot='action'] { background: var(--warning); opacity: 1; }
+.remote-access-dot[data-dot='done'] { background: var(--success); opacity: 1; }
+
+/* Help text lines up with the title, after the dot. */
+.remote-access-step .settings-row-copy > .settings-row-help,
+.remote-access-step .remote-access-note,
+.remote-access-step .remote-access-log,
+.remote-access-step .remote-access-stores {
+  margin-left: 16px;
+}
+
+.remote-access-step .remote-access-note { margin-top: 2px; }
+
+/* The last lines of a running Homebrew install. */
+.remote-access-log {
+  margin-top: 6px;
+  margin-bottom: 0;
+  padding: 6px 8px;
+  max-width: 60ch;
+  border-radius: 6px;
+  background: var(--bg-secondary, var(--bg-hover));
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.remote-access-stores {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 8px;
+}
+.remote-access-qr {
+  display: block;
+  width: 112px;
+  height: 112px;
+  image-rendering: pixelated;
+  border-radius: 4px;
+}
+.remote-access-stores .settings-addons-link { overflow-wrap: anywhere; text-align: left; }
+.remote-access-stores a.settings-addons-link { text-decoration: none; }
+.remote-access-stores a.settings-addons-link:hover { text-decoration: underline; }
+
+/* Step 3 while it can pick the tailnet address: the whole row is the target. */
+.settings-group .settings-row.remote-access-step--choice { cursor: pointer; }
+.settings-group .settings-row.remote-access-step--choice:hover { background: var(--bg-hover); }

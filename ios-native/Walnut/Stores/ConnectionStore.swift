@@ -13,6 +13,8 @@ final class ConnectionStore {
     /// burst of 401s a single screen's parallel requests would otherwise raise.
     private var unauthorizedProbe: Task<Bool, Never>?
     private var isActive = true
+    /// Which of the paired Walnut's routes (Wi-Fi / Tailscale / cloud) to use.
+    let routing: RouteCoordinator
 
     var isConfigured: Bool = AppConfig.isConfigured
     var serverURL: String = AppConfig.serverURL?.absoluteString ?? ""
@@ -22,7 +24,9 @@ final class ConnectionStore {
     var online = true
 
     init() {
+        routing = RouteCoordinator()
         LifecycleHub.shared.register(self)
+        routing.connection = self
         // A 401 does NOT immediately wipe the credential. It used to: "any 401
         // anywhere bounces the app back to setup" destroyed the Keychain token
         // on the FIRST one, and tokens are unrecoverable by design — so one
@@ -49,6 +53,7 @@ final class ConnectionStore {
         // not run in a background/prewarm process (P0-3). The 401 will be
         // re-raised by the first request after the app comes back.
         guard isConfigured, isActive, unauthorizedProbe == nil else { return }
+        let probedOrigin = AppConfig.serverURL?.absoluteString
         let probe = Task { [weak self] () -> Bool in
             guard let self else { return false }
             guard let url = AppConfig.serverURL?.absoluteString, let token = AppConfig.token, !token.isEmpty else {
@@ -66,9 +71,17 @@ final class ConnectionStore {
         }
         unauthorizedProbe = probe
         let revoked = await probe.value
+        // Refused on THIS route is not refused everywhere: another route to the
+        // same Walnut may still take the token. Decided while the probe is still
+        // registered, so the 401 burst keeps coalescing into this one check.
+        let rerouted = revoked && isActive
+            ? await routing.recoverFromRejectedToken(origin: probedOrigin)
+            : false
         unauthorizedProbe = nil
         guard isActive else { return }
-        if revoked {
+        if rerouted {
+            AppLog.info("auth", "device token refused on one route; switched to another", [:])
+        } else if revoked {
             AppLog.error("auth", "device token confirmed revoked — returning to setup", [:])
             disconnect()
         } else {
@@ -81,6 +94,7 @@ final class ConnectionStore {
         let started = Date()
         let probed = try await api.testStatus(serverURL: rawURL, token: token)
         AppConfig.save(serverURL: rawURL, token: token, deviceName: name)
+        routing.reset()
         status = probed
         self.serverURL = AppConfig.serverURL?.absoluteString ?? rawURL
         self.deviceName = name ?? ""
@@ -180,8 +194,12 @@ final class ConnectionStore {
             )
         }
 
+        // A status answer on the current route is when its route list is read.
+        if ok, !isSSE, endpoint == "/api/v1/status" { routing.statusSucceeded() }
+
         if oldState && !online {
             startRecoveryProbe()
+            routing.trigger(.offline)
         } else if !oldState && online {
             probeTask?.cancel()
             probeTask = nil
@@ -213,6 +231,7 @@ final class ConnectionStore {
         LifecycleHub.shared.teardownAll()
         let wasDemo = DemoMode.isActive
         AppConfig.clear()
+        routing.reset()
         DiskCache.clearAll()
         LocalDataReset.eraseAll(reason: wasDemo ? "leave-demo" : "disconnect")
         isConfigured = false
@@ -282,6 +301,8 @@ final class ConnectionStore {
                         suppressed: true
                     )
                 }
+                // Still down here: another route may have come up meanwhile.
+                self.routing.trigger(.offline)
                 delay = min(delay * 1.5, 30)
             }
         }
@@ -319,10 +340,12 @@ extension ConnectionStore: LifecycleSuspendable {
         isActive = false
         probeTask?.cancel()
         probeTask = nil
+        routing.suspend()
     }
 
     func resumeForForeground() {
         isActive = true
         if !online { startRecoveryProbe() }
+        routing.resume()
     }
 }
