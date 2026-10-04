@@ -586,6 +586,8 @@ let controlQueueFlushHandle: { stop: () => void } | null = null
 let sendQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: hands self-answered chat turns to the primary (core/cloud-chat-outbox.ts). */
 let cloudChatOutboxFlushHandle: { stop: () => void } | null = null
+/** Cloud box only: replays letter read/pin/archive changes (core/human-inbox/replica-state.ts). */
+let humanInboxQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
@@ -2719,6 +2721,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // ride their own non-git outbox to the primary, on the same drain triggers.
       const { startCloudChatOutboxFlush } = await import('../core/cloud-chat-outbox.js')
       cloudChatOutboxFlushHandle = startCloudChatOutboxFlush()
+      // Letter read/pin/archive changes taken while the primary was unreachable
+      // replay on the same triggers (core/human-inbox/replica-state.ts).
+      const { startHumanInboxQueueFlush } = await import('../core/human-inbox/replica-state.js')
+      humanInboxQueueFlushHandle = startHumanInboxQueueFlush()
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -5745,6 +5751,10 @@ export async function stopServer(): Promise<void> {
   if (cloudChatOutboxFlushHandle) {
     cloudChatOutboxFlushHandle.stop()
     cloudChatOutboxFlushHandle = null
+  }
+  if (humanInboxQueueFlushHandle) {
+    humanInboxQueueFlushHandle.stop()
+    humanInboxQueueFlushHandle = null
   }
   stopMobileEventsFeed()
   if (pinRetirementHandle) {

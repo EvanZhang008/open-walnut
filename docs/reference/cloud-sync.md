@@ -83,6 +83,17 @@ A push lands in the bare hub repo; its `post-receive` hook immediately
 fast-forwards the companion's working tree (`/var/lib/walnut/.open-walnut`),
 so the running cloud server sees new data within a second — no restart needed.
 
+**The Human Inbox while the Mac is away.** Letters live on the Mac (an answer
+has to reach the session that asked), so the companion asks the Mac first for
+every inbox request. The inbox directory also rides this sync, and when the Mac
+cannot be reached the companion answers the list and each letter from its own
+copy, and takes read, pin and archive for later: they are stored under
+`cache/human-inbox-queue/` (never synced) and replayed to the Mac when its bridge
+reconnects, each with the moment the human made it, so a newer change on the Mac
+(an agent's answer that made the letter unread again) wins over the replay.
+Answers and replies still need the Mac. The companion never writes into its
+copy of `human-inbox/`. Code: `src/core/human-inbox/replica-state.ts`.
+
 ## Daemon bridge (live session talk)
 
 Data sync (above) covers projections and notes. LIVE session interaction

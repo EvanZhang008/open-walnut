@@ -145,6 +145,9 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     ...(typeof r.bodyBytes === 'number' && r.bodyBytes >= 0 ? { bodyBytes: r.bodyBytes } : {}),
     pinned: r.pinned === true,
     archived: r.archived === true,
+    // Same reason as readAt: a rewrite must not erase when the flag moved.
+    ...(typeof r.pinnedAt === 'number' && r.pinnedAt > 0 ? { pinnedAt: r.pinnedAt } : {}),
+    ...(typeof r.archivedAt === 'number' && r.archivedAt > 0 ? { archivedAt: r.archivedAt } : {}),
     thread: normalizeThread(r.thread),
     ...(actions ? { actions } : {}),
     ...(answered && typeof answered.actionId === 'string'

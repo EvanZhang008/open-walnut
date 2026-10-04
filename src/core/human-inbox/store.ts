@@ -104,11 +104,18 @@ async function readStore(): Promise<LetterStoreFile> {
  * and flipped a read letter back to unread).
  */
 async function withStore<R>(fn: (store: LetterStoreFile) => R): Promise<R> {
+  return (await withStoreStamped(fn)).out;
+}
+
+/** withStore, also returning the content clock this write stamped. */
+async function withStoreStamped<R>(fn: (store: LetterStoreFile) => R): Promise<{ out: R; stamp: string }> {
   let out!: R;
+  let stamp = '';
   const apply = (raw: unknown): LetterStoreFile => {
     const store = normalizeStore(raw);
     out = fn(store);
-    store.lastUpdated = new Date().toISOString();
+    stamp = new Date().toISOString();
+    store.lastUpdated = stamp;
     return store;
   };
   try {
@@ -121,7 +128,7 @@ async function withStore<R>(fn: (store: LetterStoreFile) => R): Promise<R> {
     try { fs.renameSync(INDEX_FILE, `${INDEX_FILE}.corrupt`); } catch { /* already gone */ }
     await updateJsonFile<unknown>(INDEX_FILE, null, apply);
   }
-  return out;
+  return { out, stamp };
 }
 
 // ── Ids + body files ──
@@ -536,7 +543,7 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
 }
 
 /** Pinned first, then newest — what both the rail and the phone list want. */
-function sortLetters(letters: LetterRecord[]): LetterRecord[] {
+export function sortLetters(letters: LetterRecord[]): LetterRecord[] {
   return [...letters].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
@@ -656,6 +663,19 @@ function setReadFlag(letter: LetterRecord, read: boolean): void {
   letter.readAt = Date.now();
 }
 
+/** `pinned` / `archived` with their change stamps, the same rule as setReadFlag. */
+function setPinnedFlag(letter: LetterRecord, pinned: boolean): void {
+  if (letter.pinned === pinned) return;
+  letter.pinned = pinned;
+  letter.pinnedAt = Date.now();
+}
+
+function setArchivedFlag(letter: LetterRecord, archived: boolean): void {
+  if (letter.archived === archived) return;
+  letter.archived = archived;
+  letter.archivedAt = Date.now();
+}
+
 /**
  * Append an agent turn to the thread.
  *
@@ -696,7 +716,7 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
     }
     letter.thread.push(entry);
     setReadFlag(letter, false);
-    letter.archived = false;
+    setArchivedFlag(letter, false);
     return { ...letter };
   }));
   if (bodyFileToWrite && richSource !== null) await commitBodySource(bodyFileToWrite, richSource);
@@ -706,56 +726,117 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
   return record;
 }
 
-export async function setRead(id: string, read: boolean): Promise<LetterRecord> {
+/** The three flags that belong to the reader rather than to the work. */
+export type LetterStateField = 'read' | 'pinned' | 'archived';
+
+/** One state write, with what a cloud replica needs to know about it. */
+export interface LetterStateWrite {
+  letter: LetterRecord;
+  /** The index's content clock this write stamped (ISO, this box's clock). */
+  storeUpdatedAt: string;
+  /** Not applied: the letter changed after `since` (see setLetterState). */
+  superseded?: true;
+}
+
+/** The newest agent turn on the letter, epoch ms (0 = none). */
+function lastAgentTurnAt(letter: LetterRecord): number {
+  let at = 0;
+  for (const entry of letter.thread) if (entry.from === 'agent' && entry.at > at) at = entry.at;
+  return at;
+}
+
+/**
+ * Would applying a change the human made at `since` undo something newer?
+ *
+ * A cloud replica replays the read / pin / archive the human made while this box
+ * was out of reach, possibly hours later. Plain last-arrival-wins would then
+ * undo newer decisions: the human read a letter on the phone at 9:00, the agent
+ * answered it at 9:30 (which flips it unread and pulls it out of the archive),
+ * and the 10:00 replay of the 9:00 read would mark the answer read unseen. Each
+ * flag's stamp (`readAt`, `pinnedAt`, `archivedAt`) moves on every flip, so a
+ * newer one means somebody already decided after the human did. An agent turn
+ * after `since` is news a read or an archive could not have seen, even when it
+ * moved no flag (the letter was already unread and in the feed).
+ */
+function supersededSince(letter: LetterRecord, field: LetterStateField, value: boolean, since: number): boolean {
+  const changedAt = field === 'read' ? letter.readAt : field === 'pinned' ? letter.pinnedAt : letter.archivedAt;
+  if (changedAt !== undefined && changedAt > since) return true;
+  if (field === 'pinned') return false;
+  return value && lastAgentTurnAt(letter) > since;
+}
+
+/**
+ * Set one reader flag. `since` (epoch ms) marks a LATE write: when the letter
+ * changed after it in a way this write would undo, nothing is changed and the
+ * answer says `superseded`. A write that matches the current value is never
+ * superseded (it changes nothing either way).
+ */
+export async function setLetterState(
+  id: string,
+  field: LetterStateField,
+  value: boolean,
+  opts: { since?: number } = {},
+): Promise<LetterStateWrite> {
   requireValidId(id);
-  const record = await withWriteLock(() => withStore((store) => {
+  const want = value === true;
+  let superseded = false;
+  const { out: record, stamp } = await withWriteLock(() => withStoreStamped((store) => {
     const letter = find(store, id);
-    setReadFlag(letter, read === true);
+    const current = field === 'read' ? letter.read : field === 'pinned' ? letter.pinned : letter.archived;
+    if (current !== want && opts.since !== undefined && supersededSince(letter, field, want, opts.since)) {
+      superseded = true;
+    } else if (field === 'read') {
+      setReadFlag(letter, want);
+    } else if (field === 'pinned') {
+      setPinnedFlag(letter, want);
+    } else {
+      setArchivedFlag(letter, want);
+    }
     return { ...letter };
   }));
+  if (superseded) {
+    log.notif.info('human-inbox: late state write superseded by a newer change', {
+      letterId: id, field, value: want, since: opts.since,
+    });
+    return { letter: record, storeUpdatedAt: stamp, superseded: true };
+  }
   // Read state is canonical here; the envelope notification only mirrors it.
-  // Fire-and-forget on purpose: the mirror must never make the read itself wait
-  // on (or fail with) the notification file lock.
-  void mirrorLetterReadState(record.id, record.read);
-  return record;
+  // Fire-and-forget on purpose: the mirror must never make the write itself
+  // wait on (or fail with) the notification file lock. Why pin and archive
+  // mirror too, and why they mirror an archived letter as read: see setPinned
+  // and setArchived.
+  void mirrorLetterReadState(record.id, field === 'read' ? record.read : record.archived ? true : record.read);
+  return { letter: record, storeUpdatedAt: stamp };
 }
 
+export async function setRead(id: string, read: boolean): Promise<LetterRecord> {
+  return (await setLetterState(id, 'read', read)).letter;
+}
+
+/**
+ * Pinning changes what every surface must show (the glyph AND the sort order:
+ * pinned sorts first), and it was the ONE state toggle with no outbound signal —
+ * so a pin taken in one surface stayed invisible in the others until an
+ * unrelated letter event or a reload. Same mirror the siblings use: the envelope
+ * update broadcasts `notification:updated`, which is the lane every letter list
+ * already refreshes on. Read state is untouched (pinning is not reading), so the
+ * letter's own flag rides through unchanged — and for an ARCHIVED letter that
+ * means the same value setArchived mirrors, or pinning something on the shelf
+ * would re-badge the bell for a letter that has left the live feed.
+ */
 export async function setPinned(id: string, pinned: boolean): Promise<LetterRecord> {
-  requireValidId(id);
-  const record = await withWriteLock(() => withStore((store) => {
-    const letter = find(store, id);
-    letter.pinned = pinned === true;
-    return { ...letter };
-  }));
-  // Pinning changes what every surface must show (the glyph AND the sort order:
-  // pinned sorts first), and it was the ONE state toggle with no outbound signal —
-  // so a pin taken in one surface stayed invisible in the others until an
-  // unrelated letter event or a reload. Same mirror the siblings use: the envelope
-  // update broadcasts `notification:updated`, which is the lane every letter list
-  // already refreshes on. Read state is untouched (pinning is not reading), so the
-  // letter's own flag rides through unchanged — and for an ARCHIVED letter that
-  // means the same value setArchived mirrors, or pinning something on the shelf
-  // would re-badge the bell for a letter that has left the live feed.
-  // Fire-and-forget on purpose: the mirror must never make the pin wait on (or
-  // fail with) the notification file lock.
-  void mirrorLetterReadState(record.id, record.archived ? true : record.read);
-  return record;
+  return (await setLetterState(id, 'pinned', pinned)).letter;
 }
 
+/**
+ * The letter's own `read` flag is untouched (archiving is not reading), but the
+ * BELL counts the envelope notification, and letters are exempt from
+ * mark-all-read — so archiving an unread letter used to leave a badge nothing
+ * in the Inbox rail could clear. The envelope mirrors "not in the live feed" as
+ * read; un-archiving restores the letter's real read state.
+ */
 export async function setArchived(id: string, archived: boolean): Promise<LetterRecord> {
-  requireValidId(id);
-  const record = await withWriteLock(() => withStore((store) => {
-    const letter = find(store, id);
-    letter.archived = archived === true;
-    return { ...letter };
-  }));
-  // The letter's own `read` flag is untouched (archiving is not reading), but the
-  // BELL counts the envelope notification, and letters are exempt from
-  // mark-all-read — so archiving an unread letter used to leave a badge nothing
-  // in the Inbox rail could clear. The envelope mirrors "not in the live feed" as
-  // read; un-archiving restores the letter's real read state.
-  void mirrorLetterReadState(record.id, record.archived ? true : record.read);
-  return record;
+  return (await setLetterState(id, 'archived', archived)).letter;
 }
 
 /**
@@ -802,7 +883,7 @@ export async function answerLetter(
       delivery: { status: 'pending', at },
     });
     setReadFlag(letter, true);
-    letter.archived = false;
+    setArchivedFlag(letter, false);
     return { ...letter };
   }));
   void mirrorLetterReadState(record.id, true);
@@ -912,7 +993,7 @@ export async function humanReplyTurn(
       delivery: { status: 'pending', at },
     });
     setReadFlag(letter, true);
-    letter.archived = false;
+    setArchivedFlag(letter, false);
     return { record: { ...letter }, turn: letter.thread.length - 1, duplicate: false };
   }));
   if (!out.duplicate) void mirrorLetterReadState(out.record.id, true);

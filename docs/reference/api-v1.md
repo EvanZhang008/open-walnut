@@ -2468,6 +2468,17 @@ A lost answer (a timeout, a dropped connection) does not mean the reply was not 
 
 REPLICA: relayed to the primary over `server.human-inbox.human-reply` (`clientId` included) and `server.human-inbox.answer`. The primary waits up to 7s for the delivery on a relayed call, so its `pending` answer reaches the replica inside the replica's own deadline, and the replica answers `202` for it.
 
+### Human inbox on a replica while the primary is unreachable (additive, 2026-10)
+
+A replica asks the primary first for `GET /api/v1/human-inbox`, `GET /api/v1/human-inbox/:id` and `POST /api/v1/human-inbox/:id/{read,pin,archive}`, as before. When the primary cannot be reached (no bridge, a relay timeout, a primary too old for the action), it no longer answers `503 bridge_offline`:
+
+- **Reads** come from the replica's git-synced copy of the inbox, in the same shapes, plus `"servedFrom": "mirror"` (and, on the list, `"mirrorUpdatedAt"`, the copy's content clock). The copy is as new as the primary's last sync. A letter the copy does not hold, or a replica with no copy at all, still answers `503 bridge_offline`.
+- **read / pin / archive** are answered `200 { letter, "queued": true }` with the change applied, kept by the replica, and shown in every later read from the copy. The replica replays them to the primary when the primary's bridge reconnects (and every 60s), with the moment the human made the change. The primary skips a replay that would undo something newer: a change older than that flag's last change on the primary, or a read or archive older than an agent turn on the letter. A replica with changes still queued serves the list from the copy, so a list never shows a change as lost; one letter is still asked of the primary, with the queued changes on top.
+- **Letter records** carry `pinnedAt` and `archivedAt` (epoch ms, when the flag last changed; absent until it first moves), next to the existing `readAt`. They are what the primary compares a replay against.
+- Answers (`answer`, `human-reply`), agent replies and new letters still need the primary and answer `503 bridge_offline` while it is away.
+
+A client treats `queued` like any successful write and needs no change. Relay detail: the primary's `server.human-inbox.{read,pin,archive}` accepts `since` (epoch ms), and its answer also carries `storeUpdatedAt` (the index clock the write stamped) and `superseded: true` for a skipped replay. The replica keeps both for itself: it holds a change on top of its copy until the copy's clock reaches `storeUpdatedAt`, which covers a Mac that sleeps before its next sync.
+
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 
 One long-lived SSE stream that pushes slim updates so the app can keep its task list and session list current without polling. Works on BOTH boxes; auth is the standard Bearer.

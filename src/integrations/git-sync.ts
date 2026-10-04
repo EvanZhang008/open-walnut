@@ -897,9 +897,11 @@ const EXTRA_IGNORE_PATTERNS = [
  *
  * `human-inbox/` is primary-authoritative in the same way session-requests.json
  * is primary-only: every `/api/v1/human-inbox` route on a replica RELAYS to the
- * primary over `server.human-inbox.*` (see core/human-inbox/relay.ts), staging a
- * body there answers 501, and the replica never reads its local copy for
- * anything. So the replica holds a read-only mirror it received over git, and the
+ * primary over `server.human-inbox.*` (see core/human-inbox/relay.ts), and staging
+ * a body there answers 501. The replica READS its local copy only when the
+ * primary cannot be reached (core/human-inbox/replica-state.ts), and keeps the
+ * reader's changes made meanwhile in cache/, never in this directory. So the
+ * replica holds a read-only mirror it received over git, and the
  * only commit it could ever author against it is a REVERT of the primary's newer
  * write. That is not theoretical: 2026-08-30 a replica auto-save committed its
  * older index.json over the primary's, flipping a letter the human had read back

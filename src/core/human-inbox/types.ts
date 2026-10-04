@@ -125,6 +125,15 @@ export interface LetterRecord {
   pinned: boolean;
   archived: boolean;
   /**
+   * When `pinned` / `archived` last CHANGED, the same idea as `readAt`. Their
+   * consumer is the late replay a cloud replica sends for a change the human
+   * made while this box was out of reach: a flag that changed here after that
+   * moment is newer, and the replay must not undo it (setLetterState `since`).
+   * Absent until the flag first moves.
+   */
+  pinnedAt?: number;
+  archivedAt?: number;
+  /**
    * Size of the body document as the SENDER wrote it. Stamped at send time, so
    * it travels with the index — which is what lets a box holding only a COPY of
    * the body (a cloud replica, whose blob arrives over git-sync) tell a complete

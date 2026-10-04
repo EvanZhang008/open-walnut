@@ -9,7 +9,9 @@
  *
  * Shapes match the HTTP responses exactly (`{ letters, unreadCount }`,
  * `{ letter }`, `{ letter, delivery }`, `{ id }`), so the replica can pass the
- * reply straight through to the client.
+ * reply straight through to the client. The one addition: read / pin / archive
+ * also carry `storeUpdatedAt` (and `superseded` on a refused late replay), which
+ * the replica keeps for itself and strips before answering.
  */
 
 import {
@@ -17,10 +19,9 @@ import {
   getLetter,
   listLetters,
   readLetterBodyRange,
-  setArchived,
-  setPinned,
-  setRead,
+  setLetterState,
   LetterError,
+  type LetterStateWrite,
 } from './store.js';
 import { HUMAN_INBOX_CHUNK_BYTES } from './types.js';
 import {
@@ -53,6 +54,18 @@ function requireBool(p: Record<string, unknown>, field: string): boolean {
   const v = p[field];
   if (typeof v !== 'boolean') throw new LetterError(`${field} (boolean) is required`, 'invalid', 400);
   return v;
+}
+
+function sinceOf(p: Record<string, unknown>): { since?: number } {
+  return typeof p.since === 'number' && Number.isFinite(p.since) && p.since > 0 ? { since: p.since } : {};
+}
+
+function stateWrite(write: LetterStateWrite): Record<string, unknown> {
+  return {
+    letter: write.letter,
+    storeUpdatedAt: write.storeUpdatedAt,
+    ...(write.superseded ? { superseded: true } : {}),
+  };
 }
 
 export async function handleHumanInboxRelayAction(
@@ -103,12 +116,16 @@ export async function handleHumanInboxRelayAction(
       const { id, ...input } = p;
       return { letter: await agentReply(requireId({ id }), input as unknown as AgentReplyInput) };
     }
+    // The reader's flags answer with the index clock the write stamped: that is
+    // how the replica knows when its git-synced copy has caught up with it (see
+    // replica-state.ts). `since` marks a replay of a change the human made while
+    // this box was out of reach; a newer change on this box wins over it.
     case 'read':
-      return { letter: await setRead(requireId(p), requireBool(p, 'read')) };
+      return stateWrite(await setLetterState(requireId(p), 'read', requireBool(p, 'read'), sinceOf(p)));
     case 'pin':
-      return { letter: await setPinned(requireId(p), requireBool(p, 'pinned')) };
+      return stateWrite(await setLetterState(requireId(p), 'pinned', requireBool(p, 'pinned'), sinceOf(p)));
     case 'archive':
-      return { letter: await setArchived(requireId(p), requireBool(p, 'archived')) };
+      return stateWrite(await setLetterState(requireId(p), 'archived', requireBool(p, 'archived'), sinceOf(p)));
     case 'answer':
       // `'relay'`: this ran on the PRIMARY on behalf of a replica, so neither the console nor
       // the phone touched this box directly and claiming either would be a guess.

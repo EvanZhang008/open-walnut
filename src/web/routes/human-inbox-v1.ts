@@ -30,7 +30,12 @@
  *
  * Replica: letters live on the primary (delivery to the origin session needs
  * its daemons), so a cloud replica relays every route over the `server.human-
- * inbox.*` control actions, exactly like the notification routes do.
+ * inbox.*` control actions, exactly like the notification routes do. The
+ * reader's side (list, one letter, read / pin / archive) asks the primary first
+ * and, when it cannot be reached, answers from the replica's git-synced copy
+ * and queues the flag changes (human-inbox-replica.ts), so the inbox keeps
+ * working while the Mac sleeps. Sending, agent replies, answers and human
+ * replies still need the primary.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -277,7 +282,8 @@ humanInboxV1Router.get('/human-inbox', async (req: Request, res: Response, next:
   await guard(res, next, 'GET /human-inbox', async () => {
     const archived = req.query.archived === '1' || req.query.archived === 'true'
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox', SERVER_RELAY_SID, { archived }, 200)
+      const { replicaListLetters } = await import('./human-inbox-replica.js')
+      await replicaListLetters(res, archived)
       return
     }
     const { listLetters } = await import('../../core/human-inbox/store.js')
@@ -290,7 +296,8 @@ humanInboxV1Router.get('/human-inbox/:id', async (req: Request, res: Response, n
   await guard(res, next, 'GET /human-inbox/:id', async () => {
     const id = letterId(req)
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox.get', SERVER_RELAY_SID, { id }, 200)
+      const { replicaGetLetter } = await import('./human-inbox-replica.js')
+      await replicaGetLetter(res, id)
       return
     }
     const { getLetter } = await import('../../core/human-inbox/store.js')
@@ -355,7 +362,8 @@ humanInboxV1Router.post('/human-inbox/:id/read', async (req: Request, res: Respo
     if (read === null) return
     const id = letterId(req)
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox.read', SERVER_RELAY_SID, { id, read }, 200)
+      const { replicaSetLetterState } = await import('./human-inbox-replica.js')
+      await replicaSetLetterState(res, id, 'read', read)
       return
     }
     const { setRead } = await import('../../core/human-inbox/store.js')
@@ -370,7 +378,8 @@ humanInboxV1Router.post('/human-inbox/:id/pin', async (req: Request, res: Respon
     if (pinned === null) return
     const id = letterId(req)
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox.pin', SERVER_RELAY_SID, { id, pinned }, 200)
+      const { replicaSetLetterState } = await import('./human-inbox-replica.js')
+      await replicaSetLetterState(res, id, 'pinned', pinned)
       return
     }
     const { setPinned } = await import('../../core/human-inbox/store.js')
@@ -385,7 +394,8 @@ humanInboxV1Router.post('/human-inbox/:id/archive', async (req: Request, res: Re
     if (archived === null) return
     const id = letterId(req)
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox.archive', SERVER_RELAY_SID, { id, archived }, 200)
+      const { replicaSetLetterState } = await import('./human-inbox-replica.js')
+      await replicaSetLetterState(res, id, 'archived', archived)
       return
     }
     const { setArchived } = await import('../../core/human-inbox/store.js')

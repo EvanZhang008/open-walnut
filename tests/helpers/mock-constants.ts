@@ -123,6 +123,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     TASK_QUEUE_DIR: path.join(tmpBase, 'cache', 'task-queue'),
     CONTROL_QUEUE_DIR: path.join(tmpBase, 'cache', 'control-queue'),
     SEND_QUEUE_DIR: path.join(tmpBase, 'cache', 'send-queue'),
+    HUMAN_INBOX_QUEUE_DIR: path.join(tmpBase, 'cache', 'human-inbox-queue'),
     NOTES_DIR: path.join(tmpBase, 'notes'),
     GLOBAL_NOTES_FILE: path.join(tmpBase, 'notes', 'global-notes.md'),
     NOTES_AGENTS_FILE: path.join(tmpBase, 'notes', 'AGENTS.md'),

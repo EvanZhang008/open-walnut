@@ -154,6 +154,10 @@ export const CONTROL_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'control-queue'
  *  while the session host had no live bridge, drained on reconnect + a 60s
  *  sweep. See core/send-queue.ts. */
 export const SEND_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'send-queue');
+/** Letter read/pin/archive changes a cloud box took for the primary (NON-git,
+ *  cloud box only): queued while the primary was unreachable, and kept after
+ *  delivery until the git-synced inbox shows them. See core/human-inbox/replica-state.ts. */
+export const HUMAN_INBOX_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'human-inbox-queue');
 /** Last-known model catalog per host (from any session's list_models) — feeds pickers before/without a live CLI. */
 export const HOST_MODEL_CATALOG_FILE = path.join(WALNUT_HOME, 'cache', 'host-model-catalogs.json');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');
