@@ -330,30 +330,31 @@ final class BoardFolderTreeTests: XCTestCase {
 
     // MARK: - Duplicate labels, and other ties
 
-    /// Two sibling folders with the SAME label still order deterministically (id as the
-    /// tie-break) and keep their own rows. Identical-looking headings that swap places
+    /// Two sibling folders with the SAME label still order deterministically and keep
+    /// their own rows: each sits where its first row appears (the console's order), which
+    /// neither the label nor the id decides. Identical-looking headings that swap places
     /// between rebuilds is how a row appears to move on its own.
-    func testTwoSiblingsSharingALabelStayDistinctAndOrderedById() {
+    func testTwoSiblingsSharingALabelStayDistinctAndKeepTheirFirstRowsPlace() {
         let tasks = [task("m1"), task("m2"), task("m3")]
         let folders = [
             TaskFolder(groupId: "g_ship", label: "Ship", memberIds: ["m1"], project: "marina"),
             TaskFolder(
-                groupId: "g_two", label: "Notes", memberIds: ["m3"], project: "marina",
+                groupId: "g_two", label: "Notes", memberIds: ["m2"], project: "marina",
                 parentId: "g_ship"
             ),
             TaskFolder(
-                groupId: "g_one", label: "Notes", memberIds: ["m2"], project: "marina",
+                groupId: "g_one", label: "Notes", memberIds: ["m3"], project: "marina",
                 parentId: "g_ship"
             ),
         ]
         let built = bands(tasks, folders)
         XCTAssertEqual(
             built.map(\.bandId),
-            ["folder:g_ship", "folder:g_one", "folder:g_two"],
-            "same label, so the id decides — and it decides the same way every time"
+            ["folder:g_ship", "folder:g_two", "folder:g_one"],
+            "same label: m2 comes before m3, so g_two leads, on every rebuild"
         )
-        XCTAssertEqual(folderBand(built, "g_one")?.rows.map(\.id), ["m2"])
-        XCTAssertEqual(folderBand(built, "g_two")?.rows.map(\.id), ["m3"])
+        XCTAssertEqual(folderBand(built, "g_two")?.rows.map(\.id), ["m2"])
+        XCTAssertEqual(folderBand(built, "g_one")?.rows.map(\.id), ["m3"])
         XCTAssertEqual(folderBand(built, "g_one")?.nest?.depth, 2)
         XCTAssertEqual(folderBand(built, "g_two")?.nest?.depth, 2)
         assertEveryRowIsRendered(built, tasks, "duplicate sibling labels")

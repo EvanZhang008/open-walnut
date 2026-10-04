@@ -45,6 +45,9 @@ protocol WalnutTaskTransport {
     // The project→folder hierarchy (read-only on the phone; see TaskFolder)
     func taskFolders() async throws -> [TaskFolder]
 
+    // The hand-arranged project order (`GET /v1/ordering`; read-only on the phone)
+    func projectOrder() async throws -> [String]
+
     // Session metadata (rename / archive)
     func patchSession(id: String, title: String?, archived: Bool?, mode: String?) async throws -> SessionPatched
 }
@@ -58,6 +61,11 @@ extension WalnutTaskTransport {
     /// same answer the live path degrades to when the request fails. The board's
     /// fallback is therefore exercised by every existing store test for free.
     func taskFolders() async throws -> [TaskFolder] { [] }
+
+    /// Default: NO hand-arranged order, i.e. every project where its first row appears:
+    /// the order the console itself draws when `ordering.projects` is empty. Same
+    /// reasoning as `taskFolders`: it is the answer the live path degrades to.
+    func projectOrder() async throws -> [String] { [] }
 }
 
 /// One custom tier from `GET /v1/focus/tiers` → `{ "tiers": [ { id, label } ] }`.
@@ -167,6 +175,16 @@ extension WalnutAPI {
         struct Wrapper: Codable { let groups: [TaskFolder] }
         let wrapper: Wrapper = try await get("/tasks/groups")
         return wrapper.groups
+    }
+
+    /// GET /api/v1/ordering → `{ projects }`: the project order the console's pinned
+    /// tiers use under `By project` (`ordering.projects`). A replica serves the copy the
+    /// primary pushes; one that predates that answers from its own config (usually
+    /// empty), and the board then places projects where their first row appears.
+    func projectOrder() async throws -> [String] {
+        struct Wrapper: Codable { let projects: [String] }
+        let wrapper: Wrapper = try await get("/ordering")
+        return wrapper.projects
     }
 }
 

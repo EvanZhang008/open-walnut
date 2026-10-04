@@ -199,6 +199,17 @@ final class TasksStore {
             folderIndexCache = BoardFolderIndex.build(taskFolders)
         }
     }
+    /// The console's hand-arranged project order (`GET /v1/ordering`), which places the
+    /// project groups under `By project` (`PinnedTierOrder`). Empty = every project where
+    /// its first row appears, which is what an old server or a failed read leaves, and
+    /// exactly what the console draws with no order set.
+    var projectOrder: [String] = [] {
+        didSet { orderingGen &+= 1 }
+    }
+    /// The server has answered the folder listing / the project order at least once this
+    /// launch, so the disk cache must not overwrite them (see `initialize`).
+    @ObservationIgnored var taskFoldersAnswered = false
+    @ObservationIgnored var projectOrderAnswered = false
     /// Debounce handle for scheduleTierRefresh (extension file).
     @ObservationIgnored var tierRefreshTask: Task<Void, Never>?
     /// Transient failure line for fire-and-forget mutations — TasksView shows
@@ -459,10 +470,7 @@ final class TasksStore {
         // The folder hierarchy is cached for the same reason the lists are: the board
         // renders from cache before any request finishes, and adopting the tasks
         // without their folders would draw a FLAT board that re-nests a second later.
-        if let cachedFolders = await DiskCache.loadAsync([TaskFolder].self, key: "task-folders"),
-           isActive, taskFolders.isEmpty {
-            taskFolders = cachedFolders
-        }
+        await adoptCachedFoldersAndOrder()
         // The tier split, for the same reason and with a sharper failure without it:
         // the folders decide how bands NEST, the split decides that there are bands at
         // all. Offline without it, every pinned task fell into Satellite (measured: All
@@ -487,14 +495,61 @@ final class TasksStore {
         do {
             let folders = try await transport.taskFolders()
             guard isActive else { return }
+            taskFoldersAnswered = true
+            // Written on EVERY answer, like the tier split (`adoptSplit`): an answer equal
+            // to what is in memory (an empty listing on a fresh launch) must still replace
+            // a stale cached tree, or it outlives the server saying there is none.
+            DiskCache.save(folders, key: "task-folders")
             // Same-value guard: the poll re-fetches an unchanged tree every 30-120s, and
             // adopting it anyway would bump `boardInputsGen` and throw away the band memo
             // for nothing.
             guard folders != taskFolders else { return }
             taskFolders = folders
-            DiskCache.save(folders, key: "task-folders")
         } catch {
             AppLog.debug("tasks", "task folder load failed", [
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    /// DiskCache key for the project order.
+    static let projectOrderCacheKey = "project-order"
+
+    /// The cold start's folder tree and project order, from disk.
+    ///
+    /// Guarded on "the server has not answered", not on "empty": an EMPTY answer (an
+    /// older companion lists no folders and no order) is an answer, and the board request
+    /// can land while these cache reads are still running. Guarded on "empty" too, so a
+    /// value the store already holds is never replaced by an older one.
+    func adoptCachedFoldersAndOrder() async {
+        if let cachedFolders = await DiskCache.loadAsync([TaskFolder].self, key: "task-folders"),
+           isActive, taskFolders.isEmpty, !taskFoldersAnswered {
+            taskFolders = cachedFolders
+        }
+        // The project order, for the same reason as the folders: without it a cached
+        // board opens with its projects in first-appearance order and re-sorts when the
+        // answer lands.
+        if let cachedOrder = await DiskCache.loadAsync([String].self, key: Self.projectOrderCacheKey),
+           isActive, projectOrder.isEmpty, !projectOrderAnswered {
+            projectOrder = cachedOrder
+        }
+    }
+
+    /// Fetch the console's project order. Best-effort, exactly like `loadTaskFolders`:
+    /// an old server, a replica hiccup or an offline phone keeps the last known order.
+    func loadProjectOrder() async {
+        guard isActive else { return }
+        do {
+            let order = try await transport.projectOrder()
+            guard isActive else { return }
+            projectOrderAnswered = true
+            // Saved on every answer and adopted only on a change, for the same reasons as
+            // the folder tree's (`loadTaskFolders`).
+            DiskCache.save(order, key: Self.projectOrderCacheKey)
+            guard order != projectOrder else { return }
+            projectOrder = order
+        } catch {
+            AppLog.debug("tasks", "project order load failed", [
                 "error": error.localizedDescription,
             ])
         }
@@ -978,6 +1033,8 @@ final class TasksStore {
     @ObservationIgnored private var tiersGen: UInt64 = 0
     /// Bumped by `taskFolders`, which the board's project grouping nests by.
     @ObservationIgnored private var foldersGen: UInt64 = 0
+    /// Bumped by `projectOrder`, which places the board's project groups.
+    @ObservationIgnored private var orderingGen: UInt64 = 0
     /// Bumped by `sessionIdsByTask`: the board reads it per row, so a detail that
     /// lands while the board is on screen has to invalidate the band memo — otherwise
     /// the row keeps saying "no session yet" about a task we now know has one.
@@ -1014,7 +1071,7 @@ final class TasksStore {
     /// grouping emits, so a hierarchy that lands after the first board render has to
     /// invalidate the memo or the board would stay flat until something else changed.
     var boardInputsGen: UInt64 {
-        tasksGen &+ sessionsGen &+ tiersGen &+ foldersGen &+ detailsGen
+        tasksGen &+ sessionsGen &+ tiersGen &+ foldersGen &+ orderingGen &+ detailsGen
     }
     @ObservationIgnored private var taskSliceCache:
         (gen: UInt64, day: Date, byFilter: [TaskFilter: [WalnutTask]]) = (0, .distantPast, [:])
@@ -1361,6 +1418,9 @@ extension TasksStore {
         pinnedOrder = []
         customTiers = []
         taskFolders = []
+        projectOrder = []
+        taskFoldersAnswered = false
+        projectOrderAnswered = false
         lastCreatedTaskId = nil
         deleteNeedsForceIds = []
         errorMessage = nil

@@ -286,8 +286,19 @@ projectsV1Router.post('/projects/:name/summary/regenerate', async (req: Request,
 // ─── Ordering (project display order, config-backed) ─────────────────────────
 
 // GET /api/v1/ordering → { projects: [names in display order] }
+// REPLICA: the order lives in the primary's machine-local config.yaml, so the
+// replica serves the copy the primary pushes on its task projection
+// (`project_order`), and its own config only when the primary predates that.
 projectsV1Router.get('/ordering', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    if (CLOUD_MODE) {
+      const { readTaskProjection } = await import('../../core/task-projection.js')
+      const pushed = (await readTaskProjection().catch(() => null))?.project_order
+      if (Array.isArray(pushed)) {
+        res.json({ projects: pushed })
+        return
+      }
+    }
     const { getConfig } = await import('../../core/config-manager.js')
     const config = await getConfig()
     res.json({ projects: config.ordering?.projects ?? [] })

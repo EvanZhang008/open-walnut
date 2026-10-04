@@ -120,6 +120,7 @@ import { TodoFilterFooter, footerScope } from './TodoFilterFooter';
 import { TodoProjectsMiniBar } from './TodoProjectsMiniBar';
 import { TodoFilterEmpty, FilterOverrideReasons, isJustCreated } from './TodoFilterEmpty';
 import { staleDonePinIds } from './pin-search-fold';
+import { orderPinnedTier } from '@/utils/pinned-tier-order';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
 import { ancestorHeadings, buildFolderParents, folderAncestors, folderDepth, nestFolderUnits } from './folder-tree';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
@@ -772,121 +773,14 @@ function addFolderNesting(
   });
 }
 
-/**
- * Cluster a tier's tasks so same-group members are contiguous, anchored at the
- * group's first member in the given order. Flat (no parent/child nesting) version
- * of the main list's computeSortOrder clustering. Only groups with ≥2 members IN
- * THIS tier cluster — a lone pinned member of a group stays in place. Pure and
- * order-stable, so re-running on already-clustered input is a no-op. Returns ids.
- */
-function clusterTierByGroup(tasks: Task[], sinkFolders = false): string[] {
-  const byGroup = new Map<string, string[]>();
-  for (const t of tasks) {
-    if (t.group_id) {
-      let arr = byGroup.get(t.group_id);
-      if (!arr) { arr = []; byGroup.set(t.group_id, arr); }
-      arr.push(t.id);
-    }
-  }
-  const emitted = new Set<string>();
-  const out: string[] = [];
-  if (sinkFolders) {
-    // A1 ordering (project view): loose tasks first, folder clusters sink AFTER
-    // them. Two-pass emit keeps each side's relative order → still idempotent.
-    // NOT applied in custom view, where the user's hand order is authority.
-    for (const t of tasks) {
-      if (!t.group_id) out.push(t.id);
-    }
-    for (const t of tasks) {
-      if (!t.group_id || emitted.has(t.group_id)) continue;
-      emitted.add(t.group_id);
-      out.push(...(byGroup.get(t.group_id) ?? []));
-    }
-    return out;
-  }
-  for (const t of tasks) {
-    const members = t.group_id ? byGroup.get(t.group_id) : undefined;
-    if (t.group_id && members && members.length >= 1) {
-      if (emitted.has(t.group_id)) continue; // already flushed at the lead
-      emitted.add(t.group_id);
-      out.push(...members);
-    } else {
-      out.push(t.id);
-    }
-  }
-  return out;
-}
+// The pinned tiers' order (group + project clustering) lives in
+// '@/utils/pinned-tier-order', shared with the phone's Swift twin.
 
-/**
- * Cluster a tier's id order into project runs (first-seen anchor order), so the
- * pinned area can render a minimal folder label per project — same folder
- * structure as the main task list. Runs AFTER clusterTierByGroup and treats a
- * contiguous same-group run as ONE atomic block keyed by its lead task's
- * project (a group must never be split across folders). Pure + order-stable
- * (idempotent), and NEVER applied mid-drag — during a drag the user's live
- * order is authority (same contract as group clustering).
- */
 /** Case-insensitive project identity, the registry's rule ('' = Inbox). */
 function sameProjectKey(a: string | undefined, b: string | undefined): boolean {
   return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
 }
 
-function clusterTierByProject(ids: string[], tasks: Task[], projectOrder?: string[]): string[] {
-  const taskById = new Map(tasks.map((t) => [t.id, t]));
-  // 1. Blocks: same-group contiguous runs collapse into one block; everything
-  //    else is a single-id block. Unknown ids (group: sentinels shouldn't reach
-  //    here outside a drag, but be safe) inherit the previous block's key.
-  type Block = { key: string; ids: string[] };
-  const blocks: Block[] = [];
-  let i = 0;
-  while (i < ids.length) {
-    const t = taskById.get(ids[i]);
-    if (!t) {
-      const key = blocks.length > 0 ? blocks[blocks.length - 1].key : '';
-      blocks.push({ key, ids: [ids[i]] });
-      i++;
-      continue;
-    }
-    if (t.group_id) {
-      const run = [ids[i]];
-      let j = i + 1;
-      while (j < ids.length && taskById.get(ids[j])?.group_id === t.group_id) {
-        run.push(ids[j]);
-        j++;
-      }
-      blocks.push({ key: t.project || '', ids: run });
-      i = j;
-    } else {
-      blocks.push({ key: t.project || '', ids: [ids[i]] });
-      i++;
-    }
-  }
-  // 2. Stable-partition blocks by key, anchored at each key's first occurrence.
-  const byKey = new Map<string, string[]>();
-  const keyOrder: string[] = [];
-  for (const b of blocks) {
-    let arr = byKey.get(b.key);
-    if (!arr) { arr = []; byKey.set(b.key, arr); keyOrder.push(b.key); }
-    arr.push(...b.ids);
-  }
-  // 3. Optional global project order (ordering.projects, case-insensitive):
-  // listed projects rank by their position, unlisted keep first-occurrence
-  // order after them, Inbox ('') stays wherever occurrence put it relative to
-  // other unlisted keys. Stable sort → ties keep occurrence order.
-  if (projectOrder && projectOrder.length > 0) {
-    const rank = new Map(projectOrder.map((name, idx) => [name.toLowerCase(), idx]));
-    const occurrence = new Map(keyOrder.map((k, idx) => [k, idx]));
-    keyOrder.sort((a, b) => {
-      const ra = rank.get(a.toLowerCase());
-      const rb = rank.get(b.toLowerCase());
-      if (ra !== undefined && rb !== undefined) return ra - rb;
-      if (ra !== undefined) return -1;
-      if (rb !== undefined) return 1;
-      return occurrence.get(a)! - occurrence.get(b)!;
-    });
-  }
-  return keyOrder.flatMap((k) => byKey.get(k)!);
-}
 
 /**
  * Per-tier virtual-group render metadata: taskId → { groupId, label, isLead, isLast }.
@@ -4076,10 +3970,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const byId = new Map(tierTasks.map((t) => [t.id, t]));
     // Project view sinks folder clusters below the loose tasks (A1); custom view
     // keeps the lead-anchored cluster so the user's hand order stays authoritative.
-    const grouped = clusterTierByGroup(tierTasks, !isCustom);
-    const projected = isCustom
-      ? grouped
-      : clusterTierByProject(grouped, tierTasks, ordering?.projectOrder);
+    const projected = orderPinnedTier(tierTasks, isCustom ? 'custom' : 'project', ordering?.projectOrder);
     // A subfolder's rows move inside its parent folder's run (pre-order), so the
     // tree draws nested instead of as siblings.
     const nested = nestFolderUnits(projected, (id) => byId.get(id)?.group_id || undefined, folderParents);

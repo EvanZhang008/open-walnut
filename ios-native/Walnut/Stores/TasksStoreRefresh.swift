@@ -1,10 +1,11 @@
 import Foundation
 
-// MARK: - The board refresh bundle: ONE funnel for five requests
+// MARK: - The board refresh bundle: ONE funnel for six requests
 //
-// The board's whole input set is five GETs — `/v1/tasks`, `/v1/sessions`,
-// `/v1/tasks/groups` and the focus split (`/v1/focus/tasks` + `/v1/focus/tiers`) —
-// and five places legitimately want all five: cold start, returning to the
+// The board's whole input set is six GETs: `/v1/tasks`, `/v1/sessions`,
+// `/v1/tasks/groups`, `/v1/ordering` (the project order the console's `By project`
+// uses) and the focus split (`/v1/focus/tasks` + `/v1/focus/tiers`). Five
+// places legitimately want all of them: cold start, returning to the
 // foreground, the REST reconcile poll, pull-to-refresh, and the board coming on
 // screen.
 //
@@ -175,7 +176,8 @@ extension TasksStore {
             async let sessionsReq: Void = self.loadSessions()
             async let tiersReq: Void = self.loadFocusTiers()
             async let foldersReq: Void = self.loadTaskFolders()
-            _ = await (tasksReq, sessionsReq, tiersReq, foldersReq)
+            async let orderReq: Void = self.loadProjectOrder()
+            _ = await (tasksReq, sessionsReq, tiersReq, foldersReq, orderReq)
         }
         boardRefreshTask = task
         await task.value

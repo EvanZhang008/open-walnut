@@ -448,6 +448,7 @@ function placementSentence(p: Placement | undefined): string {
   const warning = p.warning ? ` ${p.warning}.` : ''
   return `Filed in ${project}${folder}${why}${tier}.${warning} `
 }
+
 /** One sentence when the server cut a long title (Walnut titles are a few words). */
 function titleCutSentence(p: Placement | undefined, task: Record<string, unknown> | undefined, hadDescription: boolean): string {
   if (!p?.title_shortened_from) return ''

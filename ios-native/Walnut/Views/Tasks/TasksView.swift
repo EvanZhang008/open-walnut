@@ -1536,6 +1536,9 @@ struct TasksView: View {
         // board re-nests when the tree lands even though the memo key only compares
         // `boardInputsGen` (which the folder generation is part of).
         let folders = tasks.boardFolderIndex
+        // The console's project order, which places the project groups. Observed read for
+        // the same reason (its generation is part of `boardInputsGen`).
+        let projectOrder = tasks.projectOrder
         // taskId → the task's own `session_ids`, for the tasks whose detail the phone
         // has read. Observed read, like every line above it: a detail landing while the
         // board is on screen has to re-derive the rows (its generation is part of
@@ -1586,7 +1589,9 @@ struct TasksView: View {
                 knownSessionIds: knownSessionIds,
                 // The tier the rail is narrowed to. Applied INSIDE, before the grouping
                 // branch, so both band builders inherit it (`BoardModel.assemble`).
-                scope: scope
+                scope: scope,
+                // Places the project groups exactly as the console does (`PinnedTierOrder`).
+                projectOrder: projectOrder
             )
         }
     }

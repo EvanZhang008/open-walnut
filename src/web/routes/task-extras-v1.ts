@@ -182,6 +182,14 @@ taskExtrasV1Router.get('/tasks/enriched', async (_req: Request, res: Response, n
 // when the primary predates that.
 taskExtrasV1Router.get('/tasks/groups', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    if (CLOUD_MODE) {
+      const { readTaskProjection } = await import('../../core/task-projection.js')
+      const pushed = (await readTaskProjection().catch(() => null))?.groups
+      if (Array.isArray(pushed)) {
+        res.json({ groups: pushed })
+        return
+      }
+    }
     const { listGroups } = await import('../../core/task-manager.js')
     res.json({ groups: await listGroups() })
   } catch (err) {

@@ -116,6 +116,32 @@ export interface TaskProjection {
    *  values and bucket its tier split like the primary. Absent on projections
    *  from an older primary. */
   custom_tiers?: Array<{ id: string; label: string }>
+  /**
+   * The two board-order inputs a replica cannot know on its own (additive, set by
+   * the primary's export only). The pinned board's order is pin_order + the
+   * hand-arranged project order + folder membership (web/src/utils/pinned-tier-order.ts,
+   * twinned on the phone), and only pin_order rides the rows:
+   *  - `project_order` is `ordering.projects`, which lives in the primary's
+   *    machine-local config.yaml and never syncs;
+   *  - `groups` is the folder listing: replica rows are built from this slim
+   *    projection, which carries no group_id, so the replica's own store has none.
+   * A replica serves both from GET /api/v1/ordering and GET /api/v1/tasks/groups.
+   * Absent on projections from an older primary (the replica then answers from
+   * its own store, as it always did).
+   */
+  project_order?: string[]
+  groups?: ProjectedFolder[]
+}
+
+/** One folder as a replica serves it (GET /api/v1/tasks/groups shape): the
+ *  primary's listing, `member_ids` narrowed to the rows this projection ships. */
+export interface ProjectedFolder {
+  group_id: string
+  label: string
+  hidden: boolean
+  member_ids: string[]
+  project: string
+  parent_id?: string
 }
 
 const SUMMARY_MAX = 500
@@ -269,13 +295,46 @@ export async function buildTaskProjection(): Promise<TaskProjection> {
  * git-synced file (atomic writes throughout).
  */
 export async function exportTaskProjection(): Promise<number> {
-  const projection = await buildTaskProjection()
+  const projection = await withBoardOrderInputs(await buildTaskProjection())
   await writeProjectionCache('tasks', projection)
   if (await legacyProjectionFilesEnabled()) {
     await writeJsonFile(PROJECTION_FILE, projection)
   }
   pushProjectionToCloud('projection-upsert', { which: 'tasks', data: projection })
   return projection.tasks.length
+}
+
+/**
+ * Attach `project_order` + `groups` (see TaskProjection). Export path only: the
+ * inline builders (GET /api/v1/tasks, the events snapshot) serve rows, and on a
+ * replica these inputs must come from the primary, never from its own store.
+ * Each input is best-effort: a failed read omits that field, which a replica
+ * reads as "older primary" and falls back to its local answer.
+ */
+async function withBoardOrderInputs(projection: TaskProjection): Promise<TaskProjection> {
+  const { listGroups } = await import('./task-manager.js')
+  const { getConfig } = await import('./config-manager.js')
+  const [groups, config] = await Promise.all([
+    listGroups().catch(() => null),
+    getConfig().catch(() => null),
+  ])
+  const shipped = new Set(projection.tasks.map((t) => t.id))
+  return {
+    ...projection,
+    ...(config ? { project_order: config.ordering?.projects ?? [] } : {}),
+    ...(groups
+      ? {
+        groups: groups.map((g) => ({
+          group_id: g.group_id,
+          label: g.label,
+          hidden: g.hidden,
+          member_ids: g.member_ids.filter((id) => shipped.has(id)),
+          project: g.project,
+          ...(g.parent_id ? { parent_id: g.parent_id } : {}),
+        })),
+      }
+      : {}),
+  }
 }
 
 /** Envelope gate shared by the cache and legacy sources — FAIL-CLOSED on a
@@ -336,11 +395,18 @@ function scheduleExport(): void {
 
 /**
  * Primary-box wiring: export at startup, then re-export (debounced) whenever
- * any task event fires. Returns a stop function for clean shutdown.
+ * any task event fires, or the project order changes (`project_order` rides the
+ * envelope). Returns a stop function for clean shutdown.
  */
 export function startTaskProjectionExport(): { stop: () => void } {
   scheduleExport() // initial export shortly after boot (debounce absorbs the startup storm)
-  bus.subscribe('task-projection', () => scheduleExport(), { global: true, interest: ['task:'] })
+  bus.subscribe('task-projection', (event) => {
+    if (event.name === 'config:changed') {
+      const key = (event.data as { key?: unknown } | null | undefined)?.key
+      if (key !== undefined && key !== 'ordering') return
+    }
+    scheduleExport()
+  }, { global: true, interest: ['task:', 'config:changed'] })
   return {
     stop: () => {
       bus.unsubscribe('task-projection')

@@ -1,0 +1,1389 @@
+{
+ "about": "Neutral fixture for the pinned-tier order (web/src/utils/pinned-tier-order.ts and its Swift twin). expected.json is produced by the web code: UPDATE_PINNED_TIER_ORDER=1 ./node_modules/.bin/vitest run tests/web/pinned-tier-order.test.ts",
+ "cases": [
+  {
+   "name": "empty tier",
+   "mode": "project",
+   "projectOrder": [],
+   "rows": []
+  },
+  {
+   "name": "projects by first appearance, Inbox where it first appears",
+   "mode": "project",
+   "projectOrder": [],
+   "rows": [
+    {
+     "id": "a1",
+     "project": "Orchard"
+    },
+    {
+     "id": "b1",
+     "project": ""
+    },
+    {
+     "id": "c1",
+     "project": "Juniper"
+    },
+    {
+     "id": "a2",
+     "project": "Orchard"
+    },
+    {
+     "id": "b2",
+     "project": ""
+    },
+    {
+     "id": "c2",
+     "project": "Juniper"
+    }
+   ]
+  },
+  {
+   "name": "listed projects take their listed place, Inbox listed as the empty name",
+   "mode": "project",
+   "projectOrder": [
+    "Juniper",
+    "",
+    "Empty Project"
+   ],
+   "rows": [
+    {
+     "id": "a1",
+     "project": "Orchard"
+    },
+    {
+     "id": "b1",
+     "project": ""
+    },
+    {
+     "id": "c1",
+     "project": "Juniper"
+    },
+    {
+     "id": "d1",
+     "project": "Tidepool"
+    },
+    {
+     "id": "a2",
+     "project": "Orchard"
+    },
+    {
+     "id": "c2",
+     "project": "Juniper"
+    }
+   ]
+  },
+  {
+   "name": "the project order folds case",
+   "mode": "project",
+   "projectOrder": [
+    "tidepool",
+    "ORCHARD"
+   ],
+   "rows": [
+    {
+     "id": "a1",
+     "project": "Orchard"
+    },
+    {
+     "id": "d1",
+     "project": "Tidepool"
+    },
+    {
+     "id": "c1",
+     "project": "Juniper"
+    }
+   ]
+  },
+  {
+   "name": "a name listed twice keeps its last place",
+   "mode": "project",
+   "projectOrder": [
+    "Orchard",
+    "Juniper",
+    "Orchard"
+   ],
+   "rows": [
+    {
+     "id": "a1",
+     "project": "Orchard"
+    },
+    {
+     "id": "c1",
+     "project": "Juniper"
+    },
+    {
+     "id": "d1",
+     "project": "Tidepool"
+    }
+   ]
+  },
+  {
+   "name": "two spellings that fold to one listed name keep their order",
+   "mode": "project",
+   "projectOrder": [
+    "orchard"
+   ],
+   "rows": [
+    {
+     "id": "x1",
+     "project": "orchard"
+    },
+    {
+     "id": "d1",
+     "project": "Tidepool"
+    },
+    {
+     "id": "a1",
+     "project": "Orchard"
+    },
+    {
+     "id": "x2",
+     "project": "orchard"
+    }
+   ]
+  },
+  {
+   "name": "loose rows first, folders sink below them at their first member",
+   "mode": "project",
+   "projectOrder": [],
+   "rows": [
+    {
+     "id": "f1",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    },
+    {
+     "id": "l1",
+     "project": "Orchard"
+    },
+    {
+     "id": "f2",
+     "project": "Orchard",
+     "group_id": "g_bark"
+    },
+    {
+     "id": "l2",
+     "project": "Orchard"
+    },
+    {
+     "id": "f3",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    }
+   ]
+  },
+  {
+   "name": "a project with only folder rows is placed after the loose ones",
+   "mode": "project",
+   "projectOrder": [],
+   "rows": [
+    {
+     "id": "f1",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    },
+    {
+     "id": "j1",
+     "project": "Juniper"
+    },
+    {
+     "id": "f2",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    },
+    {
+     "id": "t1",
+     "project": "Tidepool"
+    }
+   ]
+  },
+  {
+   "name": "custom order pulls a folder up to its first member",
+   "mode": "custom",
+   "projectOrder": [
+    "Juniper"
+   ],
+   "rows": [
+    {
+     "id": "l1",
+     "project": "Orchard"
+    },
+    {
+     "id": "f1",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    },
+    {
+     "id": "j1",
+     "project": "Juniper"
+    },
+    {
+     "id": "f2",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    },
+    {
+     "id": "l2",
+     "project": ""
+    }
+   ]
+  },
+  {
+   "name": "custom order ignores the project order",
+   "mode": "custom",
+   "projectOrder": [
+    "Tidepool"
+   ],
+   "rows": [
+    {
+     "id": "a1",
+     "project": "Orchard"
+    },
+    {
+     "id": "d1",
+     "project": "Tidepool"
+    }
+   ]
+  },
+  {
+   "name": "a folder whose rows span projects moves with its first member",
+   "mode": "project",
+   "projectOrder": [],
+   "rows": [
+    {
+     "id": "j1",
+     "project": "Juniper"
+    },
+    {
+     "id": "f1",
+     "project": "Orchard",
+     "group_id": "g_mixed"
+    },
+    {
+     "id": "f2",
+     "project": "Juniper",
+     "group_id": "g_mixed"
+    },
+    {
+     "id": "a1",
+     "project": "Orchard"
+    }
+   ]
+  },
+  {
+   "name": "an empty folder id is no folder",
+   "mode": "project",
+   "projectOrder": [],
+   "rows": [
+    {
+     "id": "e1",
+     "project": "Orchard",
+     "group_id": ""
+    },
+    {
+     "id": "f1",
+     "project": "Orchard",
+     "group_id": "g_seeds"
+    },
+    {
+     "id": "e2",
+     "project": "Orchard",
+     "group_id": ""
+    }
+   ]
+  },
+  {
+   "name": "Unicode names: exact identity, JS case fold (Greek final sigma)",
+   "mode": "project",
+   "projectOrder": [
+    "\u03bf\u03b4\u03bf\u03c2",
+    "\u679c\u56ed"
+   ],
+   "rows": [
+    {
+     "id": "n1",
+     "project": "Caf\u00e9 Nord"
+    },
+    {
+     "id": "d1",
+     "project": "Cafe\u0301 Nord"
+    },
+    {
+     "id": "g1",
+     "project": "\u039f\u0394\u039f\u03a3"
+    },
+    {
+     "id": "k1",
+     "project": "\u679c\u56ed"
+    },
+    {
+     "id": "n2",
+     "project": "Caf\u00e9 Nord"
+    },
+    {
+     "id": "i1",
+     "project": ""
+    }
+   ]
+  },
+  {
+   "name": "a single project",
+   "mode": "project",
+   "projectOrder": [
+    "Orchard"
+   ],
+   "rows": [
+    {
+     "id": "a1",
+     "project": "Juniper"
+    },
+    {
+     "id": "a2",
+     "project": "Juniper",
+     "group_id": "g_roots"
+    },
+    {
+     "id": "a3",
+     "project": "Juniper"
+    }
+   ]
+  }
+ ],
+ "board": {
+  "now": "2026-09-26T16:00:00.000Z",
+  "customTiers": [
+   {
+    "id": "ct_later",
+    "label": "Later"
+   }
+  ],
+  "projectOrder": [
+   "Lighthouse",
+   "",
+   "\u03bf\u03b4\u03bf\u03c2",
+   "orchard",
+   "Empty Project"
+  ],
+  "groups": [
+   {
+    "group_id": "g_or_seeds",
+    "label": "Seeds",
+    "hidden": false,
+    "member_ids": [
+     "t06"
+    ],
+    "project": "Orchard"
+   },
+   {
+    "group_id": "g_or_bark",
+    "label": "Bark",
+    "hidden": false,
+    "member_ids": [
+     "t03"
+    ],
+    "project": "Orchard"
+   },
+   {
+    "group_id": "g_lh_lamp",
+    "label": "Lamp room",
+    "hidden": false,
+    "member_ids": [
+     "t24",
+     "t42",
+     "t60"
+    ],
+    "project": "Lighthouse"
+   },
+   {
+    "group_id": "g_ju_roots",
+    "label": "Roots",
+    "hidden": false,
+    "member_ids": [
+     "t63",
+     "t95",
+     "t97"
+    ],
+    "project": "Juniper"
+   },
+   {
+    "group_id": "g_md_hay",
+    "label": "Hay",
+    "hidden": false,
+    "member_ids": [
+     "t48",
+     "t66"
+    ],
+    "project": "Meadow"
+   },
+   {
+    "group_id": "g_ck_1",
+    "label": "\u679d\u6761",
+    "hidden": false,
+    "member_ids": [
+     "t12",
+     "t30"
+    ],
+    "project": "\u679c\u56ed"
+   },
+   {
+    "group_id": "g_empty",
+    "label": "Nothing yet",
+    "hidden": false,
+    "member_ids": [],
+    "project": "Juniper"
+   }
+  ],
+  "tasks": [
+   {
+    "id": "t01",
+    "title": "Sketch 1",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Caf\u00e9 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 10,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t02",
+    "title": "Draft 2",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-03T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 20,
+    "start_date": "2026-09-20T09:00:00.000Z"
+   },
+   {
+    "id": "t03",
+    "title": "Review 3",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-04T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 30,
+    "focus_tier": "ct_later",
+    "group_id": "g_or_bark"
+   },
+   {
+    "id": "t04",
+    "title": "Plan 4",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-05T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 40,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t05",
+    "title": "Fix 5",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-06T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 50,
+    "start_date": "2026-10-15"
+   },
+   {
+    "id": "t06",
+    "title": "Ship 6",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-07T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 60,
+    "focus_tier": "focus",
+    "group_id": "g_or_seeds",
+    "start_date": "2026-11-01"
+   },
+   {
+    "id": "t07",
+    "title": "Check 7",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-08T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 70,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t08",
+    "title": "Call 8",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Caf\u00e9 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-09T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 80
+   },
+   {
+    "id": "t09",
+    "title": "Write 9",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-10T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 90,
+    "focus_tier": "ct_later",
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t10",
+    "title": "Prune 10",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-11T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 100,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t11",
+    "title": "Sketch 11 \u65e5\u672c\u8a9e \ud83c\udf33",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u039f\u0394\u039f\u03a3",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-12T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 110,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t12",
+    "title": "Draft 12",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-13T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 120,
+    "focus_tier": "ct_later",
+    "group_id": "g_ck_1"
+   },
+   {
+    "id": "t13",
+    "title": "Review 13",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Juniper",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-14T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 130,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t14",
+    "title": "Plan 14",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-15T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 140,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t15",
+    "title": "Fix 15",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-16T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 150,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t16",
+    "title": "Ship 16",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Meadow",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-17T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 160,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t17",
+    "title": "Check 17",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-18T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 170,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t18",
+    "title": "Call 18",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "\u039f\u0394\u039f\u03a3",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-19T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 180,
+    "focus_tier": "wait",
+    "start_date": "2026-10-15",
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t19",
+    "title": "Write 19",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-20T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 190,
+    "start_date": "2026-09-20T09:00:00.000Z"
+   },
+   {
+    "id": "t20",
+    "title": "Prune 20",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-21T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 190,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t21",
+    "title": "Sketch 21",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-22T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 210,
+    "focus_tier": "wait",
+    "parent_task_id": "t22"
+   },
+   {
+    "id": "t22",
+    "title": "Draft 22 \u65e5\u672c\u8a9e \ud83c\udf33",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-23T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 220
+   },
+   {
+    "id": "t23",
+    "title": "Review 23",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Meadow",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-24T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 230,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t24",
+    "title": "Plan 24",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-25T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 240,
+    "focus_tier": "wait",
+    "group_id": "g_lh_lamp"
+   },
+   {
+    "id": "t25",
+    "title": "Fix 25",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-01T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 250
+   },
+   {
+    "id": "t26",
+    "title": "Ship 26",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Caf\u00e9 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 260,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t27",
+    "title": "Check 27",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-03T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 270,
+    "focus_tier": "backlog",
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t28",
+    "title": "Call 28",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-04T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 280
+   },
+   {
+    "id": "t29",
+    "title": "Write 29",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-05T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 290,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t30",
+    "title": "Prune 30",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-06T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 300,
+    "focus_tier": "backlog",
+    "group_id": "g_ck_1"
+   },
+   {
+    "id": "t31",
+    "title": "Sketch 31",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Juniper",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-07T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 310,
+    "focus_tier": "focus",
+    "start_date": "2026-10-15"
+   },
+   {
+    "id": "t32",
+    "title": "Draft 32",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-08T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 320,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t33",
+    "title": "Review 33 \u65e5\u672c\u8a9e \ud83c\udf33",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Caf\u00e9 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-09T12:00:00.000Z",
+    "pinned": true,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t34",
+    "title": "Plan 34",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-10T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 340,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t35",
+    "title": "Fix 35",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-11T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 350,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t36",
+    "title": "Ship 36",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "\u039f\u0394\u039f\u03a3",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-12T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 360,
+    "focus_tier": "backlog",
+    "start_date": "2026-09-20T09:00:00.000Z",
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t37",
+    "title": "Check 37",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-13T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 370,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t38",
+    "title": "Call 38",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Juniper",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-14T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 380,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t39",
+    "title": "Write 39",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-15T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 390
+   },
+   {
+    "id": "t40",
+    "title": "Prune 40",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-16T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 400,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t41",
+    "title": "Sketch 41",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Meadow",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-17T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 410,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t42",
+    "title": "Draft 42",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-18T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 420,
+    "group_id": "g_lh_lamp"
+   },
+   {
+    "id": "t43",
+    "title": "Review 43",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u039f\u0394\u039f\u03a3",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-19T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 430,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t44",
+    "title": "Plan 44 \u65e5\u672c\u8a9e \ud83c\udf33",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-20T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 440,
+    "focus_tier": "wait",
+    "start_date": "2026-10-15"
+   },
+   {
+    "id": "t45",
+    "title": "Fix 45",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-21T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 450,
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t46",
+    "title": "Ship 46",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-22T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 460,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t47",
+    "title": "Check 47",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-23T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 470,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t48",
+    "title": "Call 48",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Meadow",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-24T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 480,
+    "group_id": "g_md_hay"
+   },
+   {
+    "id": "t49",
+    "title": "Write 49",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-25T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 490,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t50",
+    "title": "Prune 50",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-01T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 500,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t51",
+    "title": "Sketch 51",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Caf\u00e9 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 510,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t52",
+    "title": "Draft 52",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-03T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 520,
+    "focus_tier": "ct_later"
+   },
+   {
+    "id": "t53",
+    "title": "Review 53",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-04T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 530,
+    "focus_tier": "backlog",
+    "start_date": "2026-09-20T09:00:00.000Z"
+   },
+   {
+    "id": "t54",
+    "title": "Plan 54",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-05T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 540,
+    "focus_tier": "focus",
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t55",
+    "title": "Fix 55 \u65e5\u672c\u8a9e \ud83c\udf33",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-06T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 550,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t56",
+    "title": "Ship 56",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Juniper",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-07T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 560,
+    "focus_tier": "backlog"
+   },
+   {
+    "id": "t57",
+    "title": "Check 57",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-08T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 570,
+    "focus_tier": "focus",
+    "start_date": "2026-10-15"
+   },
+   {
+    "id": "t58",
+    "title": "Call 58",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Caf\u00e9 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-09T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 580,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t59",
+    "title": "Write 59",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Tidepool",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-10T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 590
+   },
+   {
+    "id": "t60",
+    "title": "Prune 60",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "Lighthouse",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-11T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 600,
+    "focus_tier": "focus",
+    "group_id": "g_lh_lamp"
+   },
+   {
+    "id": "t61",
+    "title": "Sketch 61",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u039f\u0394\u039f\u03a3",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-12T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 610,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t62",
+    "title": "Draft 62",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "\u679c\u56ed",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-13T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 620
+   },
+   {
+    "id": "t63",
+    "title": "Review 63",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "Juniper",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-14T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 630,
+    "focus_tier": "ct_later",
+    "group_id": "g_ju_roots",
+    "completed_at": "2026-09-25T08:00:00.000Z"
+   },
+   {
+    "id": "t64",
+    "title": "Plan 64",
+    "status": "in_progress",
+    "phase": "IN_PROGRESS",
+    "priority": "none",
+    "project": "",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-15T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 640,
+    "focus_tier": "wait"
+   },
+   {
+    "id": "t65",
+    "title": "Fix 65",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Cafe\u0301 Nord",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-16T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 650
+   },
+   {
+    "id": "t66",
+    "title": "Ship 66 \u65e5\u672c\u8a9e \ud83c\udf33",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Meadow",
+    "created_at": "2026-09-01T10:00:00.000Z",
+    "updated_at": "2026-09-17T12:00:00.000Z",
+    "pinned": true,
+    "pin_order": 660,
+    "focus_tier": "ct_later",
+    "group_id": "g_md_hay"
+   },
+   {
+    "id": "t99",
+    "title": "Fresh pin (just created)",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-26T16:00:00.000Z",
+    "updated_at": "2026-09-26T16:00:00.000Z",
+    "pinned": true,
+    "pin_order": 10000,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "u01",
+    "title": "Not pinned",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Orchard",
+    "created_at": "2026-09-26T16:00:00.000Z",
+    "updated_at": "2026-09-26T16:00:00.000Z"
+   },
+   {
+    "id": "t98",
+    "title": "Orphan tier",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Juniper",
+    "created_at": "2026-09-26T16:00:00.000Z",
+    "updated_at": "2026-09-26T16:00:00.000Z",
+    "pinned": true,
+    "pin_order": 5,
+    "focus_tier": "ct_gone"
+   },
+   {
+    "id": "t95",
+    "title": "Finished root survey",
+    "status": "done",
+    "phase": "COMPLETE",
+    "priority": "none",
+    "project": "Juniper",
+    "group_id": "g_ju_roots",
+    "created_at": "2026-09-26T16:00:00.000Z",
+    "updated_at": "2026-09-26T16:00:00.000Z",
+    "completed_at": "2026-09-25T08:00:00.000Z",
+    "pinned": true,
+    "pin_order": 15,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t96",
+    "title": "Loose between them",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Meadow",
+    "created_at": "2026-09-26T16:00:00.000Z",
+    "updated_at": "2026-09-26T16:00:00.000Z",
+    "pinned": true,
+    "pin_order": 16,
+    "focus_tier": "focus"
+   },
+   {
+    "id": "t97",
+    "title": "Open root follow-up",
+    "status": "todo",
+    "phase": "TODO",
+    "priority": "none",
+    "project": "Juniper",
+    "group_id": "g_ju_roots",
+    "created_at": "2026-09-26T16:00:00.000Z",
+    "updated_at": "2026-09-26T16:00:00.000Z",
+    "pinned": true,
+    "pin_order": 9000,
+    "focus_tier": "focus"
+   }
+  ]
+ }
+}

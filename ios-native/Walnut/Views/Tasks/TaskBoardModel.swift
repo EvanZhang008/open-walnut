@@ -936,6 +936,9 @@ enum BoardModel {
     ///     position is the memory of where the work happened.
     ///   - scope: the TIER the reader has narrowed to (a rail chip), or nil for the
     ///     whole board. Applied at CONSTRUCTION time — see `assemble`.
+    ///   - projectOrder: the hand-arranged project order (`GET /v1/ordering`), which
+    ///     places the project groups under `By project` exactly as the console does
+    ///     (`PinnedTierOrder`). Empty = every project in order of first appearance.
     ///   - now: injected so the date filter is testable without a clock.
     static func bands(
         tasks: [WalnutTask],
@@ -950,13 +953,15 @@ enum BoardModel {
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
         scope: String? = nil,
+        projectOrder: [String] = [],
         now: Date = Date()
     ) -> [BoardBand] {
         assemble(
             tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
             customTiers: customTiers, query: query, grouping: grouping,
             dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, folders: folders,
-            knownSessionIds: knownSessionIds, scope: scope, now: now
+            knownSessionIds: knownSessionIds, scope: scope, projectOrder: projectOrder,
+            now: now
         ).bands
     }
 
@@ -987,6 +992,7 @@ enum BoardModel {
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
         scope: String? = nil,
+        projectOrder: [String] = [],
         now: Date = Date()
     ) -> BoardAssembly {
         let sessionOf = latestSessionByTask(sessions)
@@ -1080,15 +1086,20 @@ enum BoardModel {
             order.append(taskId)
         }
 
+        // Every tier's rows in PIN ORDER, once, for both builders: the input the
+        // console's order is computed from (`PinnedTierOrder`).
+        let pinOrder = pinOrderByTier(
+            tiers: tiers, tierById: tierById, tierOrder: tierOrder, order: order
+        )
+
         // THE RAIL, first, and WHICH tiers it holds is the same question under every
         // grouping: the TIER bands over the WHOLE board. Built here rather than from the
         // rendered bands, which is what makes "the rail is the tier rail" true by
         // construction — feeding it the rendered bands is what turned it into a list of
         // projects and folders under `By project`.
         let railBands = tierBands(
-            rowById: rowById, tierById: tierById, order: order,
-            tiers: tiers, tierOrder: tierOrder, query: query,
-            dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
+            rowById: rowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
+            query: query, dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
         )
 
         // …and each chip's COUNT is what the board SHOWS for that tier, which is why it is
@@ -1140,19 +1151,17 @@ enum BoardModel {
 
         // The scope filter, at construction, over the ONE membership map.
         var scopedRowById = rowById
-        var scopedTierById = tierById
-        var scopedOrder = order
         if let honoured {
-            scopedOrder = order.filter { tierById[$0] == honoured }
-            let keep = Set(scopedOrder)
-            scopedRowById = rowById.filter { keep.contains($0.key) }
-            scopedTierById = tierById.filter { keep.contains($0.key) }
+            scopedRowById = rowById.filter { tierById[$0.key] == honoured }
         }
 
         let bands: [BoardBand]
         if grouping == .project {
             bands = projectBands(
-                rows: scopedOrder.compactMap { scopedRowById[$0] }, query: query,
+                // The scope's rows in PIN ORDER, tier by tier (Focus, then Satellite, …),
+                // which is the order the console's rule reads. One tier when scoped.
+                rows: tiers.flatMap { pinOrder[$0.id] ?? [] }.compactMap { scopedRowById[$0] },
+                query: query,
                 dateFilter: dateFilter, shownDoneTiers: shownDoneTiers,
                 folders: folders,
                 // What the ONE remaining heading is called when there is no project worth
@@ -1160,16 +1169,85 @@ enum BoardModel {
                 soleHeadingLabel: honoured.flatMap { id in
                     tiers.first(where: { $0.id == id })?.label
                 } ?? allChipLabel,
+                projectOrder: projectOrder,
                 now: now
             )
         } else {
             bands = tierBands(
-                rowById: scopedRowById, tierById: scopedTierById, order: scopedOrder,
-                tiers: tiers, tierOrder: tierOrder, query: query,
-                dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
+                rowById: scopedRowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
+                query: query, dateFilter: dateFilter, shownDoneTiers: shownDoneTiers, now: now
             )
         }
         return BoardAssembly(rail: rail, bands: bands, scope: honoured)
+    }
+
+    /// Every tier's ids in PIN ORDER: the split's own array (the server sorts it by
+    /// `pin_order`), minus ids another tier now owns, then the ids the split has not
+    /// caught up with yet (an optimistic pin) at the foot, where the server puts a new pin.
+    ///
+    /// `tierById` is the ONE answer to "which band owns this row", so a row can never be
+    /// drawn twice: a split bucket that still names a task some other tier now claims is
+    /// filtered out of that bucket, and the task appears in its own tier instead.
+    static func pinOrderByTier(
+        tiers: [(id: String, label: String)],
+        tierById: [String: String],
+        tierOrder: [String: [String]],
+        order: [String]
+    ) -> [String: [String]] {
+        var extrasByTier: [String: [String]] = [:]
+        for id in order {
+            guard let tier = tierById[id] else { continue }
+            extrasByTier[tier, default: []].append(id)
+        }
+        var out: [String: [String]] = [:]
+        out.reserveCapacity(tiers.count)
+        for tier in tiers {
+            let splitOrder = (tierOrder[tier.id] ?? []).filter { tierById[$0] == tier.id }
+            out[tier.id] = orderedIds(splitOrder: splitOrder, extras: extrasByTier[tier.id] ?? [])
+        }
+        return out
+    }
+
+    /// A tier's rows in the console's `Custom order`, completed rows included.
+    ///
+    /// # Open rows are the console's; a done row keeps its place
+    ///
+    /// The console draws no completed pin in a tier outside search, so the OPEN rows are
+    /// the part both surfaces show, and they run through `PinnedTierOrder` on their own:
+    /// their order must not depend on what else is pinned (a finished first member would
+    /// otherwise pull its folder up to its own place). A DONE row is drawn right after the
+    /// open row it follows when every row takes part, struck through in its pin place, so a
+    /// completion never moves a row and `show done (N)` never reorders an open one.
+    static func customOrder(
+        _ ids: [String], rowById: [String: BoardRow], folders: BoardFolderIndex
+    ) -> [String] {
+        var all: [PinnedTierOrder.Row] = []
+        var open: [PinnedTierOrder.Row] = []
+        var done = Set<String>()
+        all.reserveCapacity(ids.count)
+        open.reserveCapacity(ids.count)
+        for id in ids {
+            guard let row = rowById[id] else { continue }
+            let entry = PinnedTierOrder.Row(id: id, project: row.project, folder: folders.folderOf[id])
+            all.append(entry)
+            if row.isDone { done.insert(id) } else { open.append(entry) }
+        }
+        let openOrder = PinnedTierOrder.order(open, mode: .custom, projectOrder: [])
+        guard !done.isEmpty else { return openOrder }
+        var leading: [String] = []
+        var following: [String: [String]] = [:]
+        var lastOpen: String?
+        for id in PinnedTierOrder.order(all, mode: .custom, projectOrder: []) {
+            guard done.contains(id) else { lastOpen = id; continue }
+            if let lastOpen { following[lastOpen, default: []].append(id) } else { leading.append(id) }
+        }
+        var out = leading
+        out.reserveCapacity(all.count)
+        for id in openOrder {
+            out.append(id)
+            out.append(contentsOf: following[id] ?? [])
+        }
+        return out
     }
 
     /// Which band's done fold decides whether a row is DRAWN, under one grouping.
@@ -1184,40 +1262,30 @@ enum BoardModel {
         guard grouping == .project else { return tier }
         let folderId = folders.folderOf[row.id] ?? ""
         return folderId.isEmpty
-            ? projectBandPrefix + row.project
+            ? projectBandId(row.project)
             : folderBandPrefix + folderId
     }
 
-    /// The board grouped by pin tier — its native shape.
+    /// The board grouped by pin tier: its native shape, and the console's `Custom order`.
     ///
-    /// `tierById` is the ONE answer to "which band owns this row", so a row can
-    /// never be drawn twice: a split bucket that still names a task some other tier
-    /// now claims is filtered out of that bucket, and the task appears in its own
-    /// band's fallback order instead. Membership and rendering read the same map,
-    /// which is what the retired tail band's `claimed` set existed to reconcile.
+    /// Each band is its tier's rows in the console's custom order (`customOrder`): pin
+    /// order, a folder's rows pulled up to its first member. `pinOrder` comes from
+    /// `pinOrderByTier`, which is where "which band owns this row" is settled, so a row
+    /// can never be drawn twice. Rows `rowById` does not hold (another tier's, under a
+    /// scope) are skipped.
     static func tierBands(
         rowById: [String: BoardRow],
-        tierById: [String: String],
-        order: [String],
+        pinOrder: [String: [String]],
         tiers: [(id: String, label: String)],
-        tierOrder: [String: [String]],
+        folders: BoardFolderIndex = .empty,
         query: String,
         dateFilter: BoardDateFilter,
         shownDoneTiers: Set<String>,
         now: Date
     ) -> [BoardBand] {
-        var extrasByTier: [String: [String]] = [:]
-        for id in order {
-            guard let tier = tierById[id] else { continue }
-            extrasByTier[tier, default: []].append(id)
-        }
-
         var bands: [BoardBand] = []
         for tier in tiers {
-            // The split's own order for this band, minus ids this band no longer
-            // owns (moved tier, or gone from the projection entirely).
-            let splitOrder = (tierOrder[tier.id] ?? []).filter { tierById[$0] == tier.id }
-            let ids = orderedIds(splitOrder: splitOrder, extras: extrasByTier[tier.id] ?? [])
+            let ids = customOrder(pinOrder[tier.id] ?? [], rowById: rowById, folders: folders)
             // ONE pass that builds, search-filters and counts. Three chained
             // `filter`/`count` calls over the same array is three walks and two
             // throwaway arrays per band per body pass; a band is rebuilt on every
@@ -1254,6 +1322,24 @@ enum BoardModel {
     /// share the `hide done` set and the scroll-anchor space, and a project
     /// literally called "focus" would otherwise collide with the Focus tier.
     static let projectBandPrefix = "proj:"
+
+    /// A project band's id: `proj:<name>`, exactly as shipped, for every name already in
+    /// canonical (NFC) form, which is every ASCII name and nearly every other one.
+    ///
+    /// # Two spellings of one visible name are two projects
+    ///
+    /// The console keys a project by its exact code units, so `Café` typed precomposed and
+    /// `Café` with a combining accent are two projects there, and the board draws both
+    /// (`PinnedTierOrder.Exact`). Swift's `String ==` calls the two spellings equal, so two
+    /// bands with those ids would share ONE identity and `ForEach` would draw only one of
+    /// them: rows gone from the screen. A name whose code units differ from its NFC form
+    /// therefore carries them in its id, and the two bands stay two.
+    static func projectBandId(_ name: String) -> String {
+        let canonical = name.precomposedStringWithCanonicalMapping
+        guard !name.utf16.elementsEqual(canonical.utf16) else { return projectBandPrefix + name }
+        let units = name.utf16.map { String($0, radix: 16) }.joined(separator: ".")
+        return projectBandPrefix + name + "\u{1F}" + units
+    }
 
     /// Band id prefix for a FOLDER band. Same reasoning as `projectBandPrefix`, one
     /// level down: a folder's id shares the `hide done` set, the chip space and the
@@ -1300,6 +1386,21 @@ enum BoardModel {
     /// that the folder's indent refers to, and dropping it would leave an indented folder
     /// heading under a name the screen never said — the exact failure `leadsProject` and
     /// `leadFolders` exist to prevent.
+    /// # The ORDER is the console's, computed once
+    ///
+    /// `source` arrives in PIN ORDER (tier by tier under `All`), and the rows are laid out
+    /// in `PinnedTierOrder`'s project order: the Mac's pinned tier, run through the same
+    /// rule: listed projects (`projectOrder`) first in their listed places, every other
+    /// project (Inbox included) where its first row appears; inside a project its loose
+    /// rows first, then each folder where its first row appears; rows in pin order.
+    /// The OPEN rows alone decide where each group goes, because the console draws no
+    /// completed pin outside search: a finished row never pulls its project or folder
+    /// ahead of where the Mac draws it. A completed row keeps its pin place inside its
+    /// group, and a group only completed rows have follows every group with open work.
+    /// The date filter and the search narrow the result without moving anything.
+    ///
+    /// It used to be the phone's own order (Inbox first, projects A to Z, rows by recent
+    /// activity with live sessions first), so the same tier read differently on each device.
     static func projectBands(
         rows source: [BoardRow],
         query: String,
@@ -1307,43 +1408,92 @@ enum BoardModel {
         shownDoneTiers: Set<String>,
         folders: BoardFolderIndex = .empty,
         soleHeadingLabel: String = allChipLabel,
+        projectOrder: [String] = [],
         now: Date
     ) -> [BoardBand] {
-        // Decorate-sort-undecorate: a `BoardRow` payload makes every swap copy two
-        // whole structs (a `WalnutTask` plus an optional `WalnutSession`), so the
-        // buckets hold INDICES into one flat `rows` array — the per-project sort
-        // moves Ints and Dates, and each row is copied exactly once, when its band
-        // is built. Same shape `WalnutTask.openSorted` uses for the task list.
-        var rows: [BoardRow] = []
-        rows.reserveCapacity(source.count)
-        // project name → folder id ("" = the project's loose rows) → slots.
-        //
-        // TWO levels of dictionary and not a composite key, because the ORDER is
-        // computed per level: projects sort one way (Inbox, then A→Z), the folders
-        // inside a project another (loose first, then label A→Z), and a flat map keyed
-        // by a joined string would have to take the composite apart again to sort it.
-        var buckets: [String: [String: [(index: Int, live: Bool, done: Bool, at: Date)]]] = [:]
+        var rowById: [String: BoardRow] = [:]
+        rowById.reserveCapacity(source.count)
+        var ids: [String] = []
+        ids.reserveCapacity(source.count)
+        for row in source where rowById[row.id] == nil {
+            rowById[row.id] = row
+            ids.append(row.id)
+        }
+        // The LAYOUT, decided before any filter: the open rows in the console's order, then
+        // the rows of groups only completed work has (where they appear when every row
+        // takes part). Each group takes the place of its first row here.
+        var openRows: [PinnedTierOrder.Row] = []
+        var allRows: [PinnedTierOrder.Row] = []
+        openRows.reserveCapacity(ids.count)
+        allRows.reserveCapacity(ids.count)
+        for id in ids {
+            guard let row = rowById[id] else { continue }
+            let entry = PinnedTierOrder.Row(id: id, project: row.project, folder: folders.folderOf[id])
+            allRows.append(entry)
+            if !row.isDone { openRows.append(entry) }
+        }
+        var layout = PinnedTierOrder.order(openRows, mode: .project, projectOrder: projectOrder)
+        if allRows.count != openRows.count {
+            layout += PinnedTierOrder.order(allRows, mode: .project, projectOrder: projectOrder)
+                .filter { rowById[$0]?.isDone == true }
+        }
 
-        for row in source {
+        // A folder's rows travel as ONE block under the project of the folder's first row
+        // (the console keys a folder run by its lead), so a member filed under another
+        // project still draws inside its folder. Keyed EXACTLY (`PinnedTierOrder.Exact`),
+        // as the console keys its runs.
+        var folderProject: [String: String] = [:]
+        var projectPlace: [PinnedTierOrder.Exact: Int] = [:]
+        var folderPlace: [String: Int] = [:]
+        for (index, id) in layout.enumerated() {
+            guard let row = rowById[id] else { continue }
+            let folderId = folders.folderOf[id] ?? ""
+            if !folderId.isEmpty, folderProject[folderId] == nil {
+                folderProject[folderId] = row.project
+            }
+            let key = PinnedTierOrder.Exact(folderProject[folderId] ?? row.project)
+            if projectPlace[key] == nil { projectPlace[key] = index }
+            if !folderId.isEmpty, folderPlace[folderId] == nil { folderPlace[folderId] = index }
+        }
+
+        // project → folder id ("" = the project's loose rows) → rows in pin order, for the
+        // rows the filters admit. Groups are then laid out by their place above, so a filter
+        // hides rows and never moves a group.
+        var projectKeys: [PinnedTierOrder.Exact] = []
+        var buckets: [PinnedTierOrder.Exact: (folders: [String], rows: [String: [BoardRow]])] = [:]
+        for id in ids {
+            guard let row = rowById[id] else { continue }
             guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
-            let at = row.session?.lastActiveValue ?? row.task?.updatedAtValue ?? .distantPast
             // `row.id` is the OWNING TASK id whenever one is resolvable (see
             // `BoardRow.owningTaskId`), which is exactly the key the server's
             // `member_ids` are expressed in — so a session-only row whose task is
             // missing from the projection still lands in its folder.
             let folderId = folders.folderOf[row.id] ?? ""
-            buckets[row.project, default: [:]][folderId, default: []].append((
-                rows.count, row.session?.statusKind.isAlive == true, row.isDone, at
-            ))
-            rows.append(row)
+            let key = PinnedTierOrder.Exact(folderProject[folderId] ?? row.project)
+            if buckets[key] == nil {
+                projectKeys.append(key)
+                buckets[key] = ([], [:])
+            }
+            if buckets[key]?.rows[folderId] == nil {
+                buckets[key]?.folders.append(folderId)
+                buckets[key]?.rows[folderId] = []
+            }
+            buckets[key]?.rows[folderId]?.append(row)
         }
-
-        // Inbox ("") leads, then projects A→Z — the same order the project
-        // sections elsewhere in this app use, so switching grouping doesn't also
-        // reshuffle into an unfamiliar sequence.
-        let names = buckets.keys.sorted { a, b in
-            if a.isEmpty != b.isEmpty { return a.isEmpty }
-            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        // Every row is in `layout`, so every group has a place; the fallback only keeps a
+        // group that somehow has none on the board, after the rest.
+        projectKeys = projectKeys.enumerated().sorted {
+            let left = projectPlace[$0.element] ?? Int.max
+            let right = projectPlace[$1.element] ?? Int.max
+            return left != right ? left < right : $0.offset < $1.offset
+        }.map(\.element)
+        for key in projectKeys {
+            guard let folderIds = buckets[key]?.folders else { continue }
+            buckets[key]?.folders = folderIds.enumerated().sorted {
+                let left = folderPlace[$0.element] ?? Int.max
+                let right = folderPlace[$1.element] ?? Int.max
+                return left != right ? left < right : $0.offset < $1.offset
+            }.map(\.element)
         }
 
         // ONE project across every row AND no folder to indent under it: the project
@@ -1351,20 +1501,21 @@ enum BoardModel {
         // `folders.folderOf` is consulted through the buckets that actually got rows, so a
         // folder the server lists but this board has no rows for does not keep a heading
         // alive that nothing is nested under.
-        let hasFolderBand = buckets.values.contains { $0.keys.contains { !$0.isEmpty } }
-        let noProjectWorthNaming = names.count < 2 && !hasFolderBand
+        let hasFolderBand = buckets.values.contains { $0.folders.contains { !$0.isEmpty } }
+        let noProjectWorthNaming = projectKeys.count < 2 && !hasFolderBand
 
         var bands: [BoardBand] = []
-        for name in names {
-            let projectBandId = projectBandPrefix + name
+        for key in projectKeys {
+            let name = key.string
+            let projectBandId = Self.projectBandId(name)
             let projectLabel = name.isEmpty ? NewTaskSeed.inboxHeader : name
-            let inProject = buckets[name] ?? [:]
+            let inProject = buckets[key] ?? ([], [:])
             // The project's LOOSE rows first (id `proj:<name>`, the shipped band id and
             // the shipped accessibility ids), then its folders as a TREE in pre-order:
             // a folder, then its subfolders, so a nested folder's rows are rendered
             // INSIDE the parent they belong to instead of after it as a sibling.
             let folderIds = folderOrder(
-                withRows: inProject.keys.filter { !$0.isEmpty }, folders: folders
+                withRows: inProject.folders.filter { !$0.isEmpty }, folders: folders
             )
             for folderId in [""] + folderIds {
                 let isFolder = !folderId.isEmpty
@@ -1378,13 +1529,9 @@ enum BoardModel {
                 // Folded unless expanded, exactly as a tier band is: the default lives
                 // in ONE place per builder and both builders state the same rule.
                 let hidingDone = !shownDoneTiers.contains(bandId)
-                let sorted = (inProject[folderId] ?? []).sorted { a, b in
-                    if a.done != b.done { return !a.done }
-                    if a.live != b.live { return a.live }
-                    return a.at > b.at
-                }
-                let doneCount = sorted.count { $0.done }
-                let bandRows = (hidingDone ? sorted.filter { !$0.done } : sorted).map { rows[$0.index] }
+                let inBand = inProject.rows[folderId] ?? []
+                let doneCount = inBand.count { $0.isDone }
+                let bandRows = hidingDone ? inBand.filter { !$0.isDone } : inBand
                 // Same rule as everywhere else on this board: a band with nothing to
                 // show is not rendered. That covers the project with no loose rows (its
                 // heading then rides the first folder band, see `relead`) and the empty
@@ -1452,17 +1599,29 @@ enum BoardModel {
     ///    returned order is a folder whose rows are not on the board, which is the one
     ///    outcome this function must never have.
     ///
-    /// Siblings sort by label A→Z with the id as the tie-break, so two folders sharing a
-    /// name still order deterministically — an unstable order would make rows jump between
-    /// two identical-looking headings on every rebuild.
+    /// # Siblings keep the CONSOLE's order
+    ///
+    /// `ids` arrive in the order their first rows appear (`projectBands`), which is where the
+    /// console draws each folder: at its first member's place. A folder takes the place of
+    /// the first row anywhere in its SUBTREE, so a parent whose own rows come later still
+    /// leads the subfolder that appears first. With no nesting (the console's own pinned
+    /// tiers draw folders flat) this is exactly `ids`. The id breaks a tie, so the order is
+    /// deterministic even for an ancestor the caller did not list.
     static func folderOrder(
         withRows ids: [String], folders: BoardFolderIndex
     ) -> [String] {
         guard !ids.isEmpty else { return [] }
         // Every folder that takes part: the ones with rows, and their ancestors.
         var involved = Set(ids)
+        // A folder's place: the first appearance anywhere in its subtree.
+        var place: [String: Int] = [:]
+        for (index, id) in ids.enumerated() where place[id] == nil { place[id] = index }
         for id in ids {
-            for ancestor in folders.ancestors(of: id) { involved.insert(ancestor) }
+            let at = place[id] ?? Int.max
+            for ancestor in folders.ancestors(of: id) {
+                involved.insert(ancestor)
+                place[ancestor] = min(place[ancestor] ?? Int.max, at)
+            }
         }
         // parent → children, with "" standing for the top level of this project.
         var childrenOf: [String: [String]] = [:]
@@ -1471,14 +1630,11 @@ enum BoardModel {
             let key = (parent != nil && involved.contains(parent!)) ? parent! : ""
             childrenOf[key, default: []].append(id)
         }
-        let label = { (id: String) in folders.labelOf[id] ?? id }
         for (key, children) in childrenOf {
             childrenOf[key] = children.sorted { a, b in
-                let left = label(a)
-                let right = label(b)
-                if left != right {
-                    return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
-                }
+                let left = place[a] ?? Int.max
+                let right = place[b] ?? Int.max
+                if left != right { return left < right }
                 return a < b
             }
         }
@@ -1496,7 +1652,7 @@ enum BoardModel {
         // A folder the walk somehow missed still gets its band, at the top level. This is
         // the "an orphan's rows are never invisible" guarantee, stated as code rather than
         // as a comment about the code above.
-        for id in ids.sorted() where !visited.contains(id) {
+        for id in ids where !visited.contains(id) {
             visited.insert(id)
             order.append(id)
         }

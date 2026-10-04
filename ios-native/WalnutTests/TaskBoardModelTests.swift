@@ -663,7 +663,8 @@ final class TaskBoardModelTests: XCTestCase {
 
     // MARK: - Project grouping (the desktop's "By project")
 
-    /// Inbox ("") leads, then projects A→Z, and every PINNED task lands in EXACTLY
+    /// Projects where their first pinned row appears (the console's pinned-tier order,
+    /// `PinnedTierOrder`; Inbox is no exception), and every PINNED task lands in EXACTLY
     /// one band. "Exactly one" is the assertion that matters: a bug that
     /// double-counted would show the same task under two headings on one screen.
     ///
@@ -684,9 +685,9 @@ final class TaskBoardModelTests: XCTestCase {
             tierOf: ["m1": "focus"], tierOrder: ["focus": ["m1"]], customTiers: [],
             grouping: .project, now: Self.now
         )
-        XCTAssertEqual(bands.map(\.bandId), ["proj:", "proj:acme", "proj:marina"],
-            "Inbox leads, then A→Z, the order the rest of the app already uses")
-        XCTAssertEqual(bands.first?.label, NewTaskSeed.inboxHeader,
+        XCTAssertEqual(bands.map(\.bandId), ["proj:marina", "proj:acme", "proj:"],
+            "each project where its first row appears, in pin order, as the Mac draws it")
+        XCTAssertEqual(bands.first(where: { $0.bandId == "proj:" })?.label, NewTaskSeed.inboxHeader,
             "the empty project reads as Inbox, never as a blank heading")
 
         let ids = bands.flatMap(\.rows).map(\.id)
@@ -1022,29 +1023,31 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// The tree, stated as the ONE thing the board renders: a flat band array whose
-    /// ORDER is the hierarchy. Inbox first, then projects A→Z; inside a project its
-    /// loose rows first (under the project's own heading), then its folders A→Z.
+    /// ORDER is the hierarchy, in the console's order (`PinnedTierOrder`): each project
+    /// where its first row appears; inside a project its loose rows first (under the
+    /// project's own heading), then each folder where its first row appears. The rows
+    /// arrive in pin order i1, i2, m1, m2, m3, a1.
     func testByProjectNestsEachProjectsFoldersUnderThatProject() {
         let bands = folderBands()
         XCTAssertEqual(bands.map(\.bandId), [
             "proj:", "folder:g_taxes",           // Inbox: loose, then its folder
+            "proj:marina", "folder:g_beta", "folder:g_alpha",
             "folder:g_cats",                     // acme: no loose rows, so the folder leads
-            "proj:marina", "folder:g_alpha", "folder:g_beta",
-        ], "projects outside, folders inside, both in their own order")
+        ], "projects outside, folders inside, both where their first row appears")
 
         XCTAssertEqual(bands.map(\.label), [
-            "Inbox", "Taxes", "Cats", "marina", "Alpha", "Beta",
+            "Inbox", "Taxes", "marina", "Beta", "Alpha", "Cats",
         ], "a folder band is titled by the FOLDER, a project band by the project")
 
         // Every row is under the heading its folder puts it under.
         XCTAssertEqual(bands.map { $0.rows.map(\.id) }, [
-            ["i1"], ["i2"], ["a1"], ["m1"], ["m3"], ["m2"],
+            ["i1"], ["i2"], ["m1"], ["m2"], ["m3"], ["a1"],
         ])
 
         // The folder bands know which project they are drawn inside, and exactly one
         // band per project draws that project's heading.
         XCTAssertEqual(bands.compactMap { $0.nest?.projectLabel },
-                       ["Inbox", "acme", "marina", "marina"])
+                       ["Inbox", "marina", "marina", "acme"])
         XCTAssertEqual(
             bands.filter { $0.nest?.leadsProject == true }.map(\.bandId), ["folder:g_cats"],
             "only the project with no loose band needs its heading drawn by a folder"
@@ -1106,13 +1109,23 @@ final class TaskBoardModelTests: XCTestCase {
         )
     }
 
-    /// Folders belong to `By project` only. The tier grouping is byte-identical with and
-    /// without a hierarchy, so a folder can never reshape the board's native view.
-    func testTheTierGroupingIsUnchangedByTheFolderHierarchy() {
+    /// Folder HEADINGS belong to `By project` only. The tier grouping draws none, but it
+    /// orders a folder the way the console's `Custom order` does: its rows gather at its
+    /// first member's place (`PinnedTierOrder`). Without a hierarchy it is plain pin order.
+    func testTheTierGroupingGathersAFolderAtItsFirstMemberAndDrawsNoFolderHeading() {
+        // One-member folders move nothing, so the fixture's tier view is its pin order.
         XCTAssertEqual(
             folderBands(grouping: .tier),
             folderBands(folders: [], grouping: .tier)
         )
+        let pair = [TaskFolder(groupId: "g_pair", label: "Pair", memberIds: ["m1", "m3"], project: "marina")]
+        let gathered = folderBands(folders: pair, grouping: .tier)
+        XCTAssertEqual(gathered.flatMap { $0.rows.map(\.id) }, ["i1", "i2", "m1", "m3", "m2", "a1"])
+        XCTAssertEqual(
+            folderBands(folders: [], grouping: .tier).flatMap { $0.rows.map(\.id) },
+            ["i1", "i2", "m1", "m2", "m3", "a1"]
+        )
+        XCTAssertTrue(gathered.allSatisfy { $0.nest == nil }, "no folder band under Custom order")
     }
 
     /// The endpoint failing (or a server that predates it) must leave the board it drew
@@ -1120,7 +1133,7 @@ final class TaskBoardModelTests: XCTestCase {
     /// accessibility id and every stored `hide done` preference still means what it did.
     func testAnAbsentHierarchyLeavesExactlyTheFlatProjectBoard() {
         let flat = folderBands(folders: [])
-        XCTAssertEqual(flat.map(\.bandId), ["proj:", "proj:acme", "proj:marina"])
+        XCTAssertEqual(flat.map(\.bandId), ["proj:", "proj:marina", "proj:acme"])
         XCTAssertEqual(flat.compactMap { $0.nest }.count, 0, "no folder band, so no nesting")
         for band in flat {
             XCTAssertNotNil(band.createSeed, "\(band.bandId) lost its create ring")

@@ -189,10 +189,11 @@ final class BoardTierScopeTests: XCTestCase {
             "By project inside Focus drew rows from other tiers: \(rowIds(bands).subtracting(Self.focusIds).sorted())"
         )
 
-        // 2. The HEADINGS are the projects present in Focus, and only those. `zephyr`
-        //    and Inbox belong to Satellite and must not head a band here.
+        // 2. The HEADINGS are the projects present in Focus, and only those, where their
+        //    first row appears (f1 is marina's). `zephyr` and Inbox belong to Satellite
+        //    and must not head a band here.
         XCTAssertEqual(
-            bands.map(\.bandId), ["proj:acme", "proj:marina"],
+            bands.map(\.bandId), ["proj:marina", "proj:acme"],
             "the project bands are Focus's own — Inbox/zephyr came from Satellite"
         )
 
