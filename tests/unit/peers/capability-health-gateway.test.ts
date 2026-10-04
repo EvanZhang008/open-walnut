@@ -15,7 +15,7 @@ import { HEALTH_LOCAL_ONLY_MESSAGE } from '../../../src/lib/caller-origin.js'
 
 const CALLER = 'a1b2c3d4-1111-2222-3333-444455556666'
 const deps = (): CapabilityRouterDeps => ({ throttle: new PeerThrottle(), cloudMode: false })
-const HEALTH_OPS = ['health_status', 'health_sleep', 'health_daily', 'health_series', 'day_review']
+const HEALTH_OPS = ['health_status', 'health_sleep', 'health_daily', 'health_series', 'health_samples', 'day_review']
 const prevBase = process.env.OPEN_WALNUT_API_URL
 
 afterEach(() => {
@@ -32,7 +32,7 @@ describe('health ops over the agent gateway', () => {
 
   it('refuses every health op from a remote host, naming why', async () => {
     for (const name of HEALTH_OPS) {
-      const args = name === 'health_series' ? { metric: 'steps' } : {}
+      const args = name === 'health_series' ? { metric: 'steps' } : name === 'health_samples' ? { type: 'q.BodyMass' } : {}
       const r = await handleGatewayCapability('tools.call', CALLER, { name, args }, 'remote-dev', deps())
       expect(r.ok, name).toBe(false)
       if (r.ok) continue

@@ -5,11 +5,12 @@
  *   GET /api/health/sleep?last_nights=&from=&to=&detail=summary|stages
  *   GET /api/health/daily?last_days=&from=&to=&metrics=
  *   GET /api/health/series?metric=&from=&to=&bucket=5m|1h|1d
+ *   GET /api/health/samples?type=&from=&to=&limit=
  *
  * Primary only (501 on a replica, like /api/time): the store lives on the Mac.
  * This machine only (middleware/health-access.ts): any other caller gets 403,
  * even one holding a valid device token.
- * A Mac that never received an upload answers `connected: false` WITHOUT creating
+ * A Mac that never received a sync answers `connected: false` WITHOUT creating
  * a store, so an agent's curiosity never leaves a health database behind.
  * Logs record counts only, never a value.
  */
@@ -24,7 +25,7 @@ export const healthRouter = Router()
 
 healthRouter.use(requireThisMachine)
 
-const NOT_CONNECTED = 'Apple Health is not connected: the iPhone has not uploaded anything to this Mac yet'
+const NOT_CONNECTED = 'Apple Health is not connected yet. Turn it on in Walnut on the iPhone (Settings, Apple Health); the phone then keeps this Mac up to date by itself.'
 
 function q(req: Request, name: string): string | undefined {
   const v = req.query[name]
@@ -71,7 +72,7 @@ function route(name: string, empty: () => Record<string, unknown>, read: Reader)
 }
 
 function countItems(body: Record<string, unknown>): number {
-  for (const key of ['nights', 'days', 'points', 'types']) {
+  for (const key of ['nights', 'days', 'points', 'rows', 'types']) {
     const v = body[key]
     if (Array.isArray(v)) return v.length
   }
@@ -101,5 +102,12 @@ healthRouter.get('/series', route('series', () => ({ points: [] }), async (req) 
   const { healthSeries } = await import('../../core/health/index.js')
   return await healthSeries({
     metric: q(req, 'metric'), from: q(req, 'from'), to: q(req, 'to'), bucket: q(req, 'bucket'),
+  }) as unknown as Record<string, unknown>
+}))
+
+healthRouter.get('/samples', route('samples', () => ({ rows: [] }), async (req) => {
+  const { healthSamples } = await import('../../core/health/index.js')
+  return await healthSamples({
+    type: q(req, 'type'), from: q(req, 'from'), to: q(req, 'to'), limit: q(req, 'limit'),
   }) as unknown as Record<string, unknown>
 }))

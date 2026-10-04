@@ -215,8 +215,34 @@ describe('day_review', () => {
     const out = await runDayReview({ date: DATE, sections: 'sleep,activity' }, call as never, { now: NOW }) as any
     expect(out.unavailable).toEqual([
       { section: 'sleep', reason: 'no night was recorded for this wake date' },
-      { section: 'activity', reason: 'no Apple Health data was uploaded for this day' },
+      { section: 'activity', reason: 'nothing has synced from Apple Health for this day' },
     ])
+  })
+
+  it('a phone that stopped syncing reads as not connected, with the last sync, not as missing', async () => {
+    // The sleep and daily reads only say `connected: false` when no store exists:
+    // health_status is the one that knows nothing has synced for 3 days.
+    const stale = { connected: false, tz: 'America/New_York', lastUploadAt: '2026-09-17T12:00:00.000Z' }
+    const { call } = fakeCall({
+      ...PRESENT, '/api/health/status': stale,
+      '/api/health/sleep': { nights: [{ date: DATE, status: 'missing' }, { date: NEXT, status: 'missing' }] }, '/api/health/daily': { days: [] },
+    })
+    const out = await runDayReview({ date: DATE, sections: 'sleep,activity' }, call as never, { now: NOW }) as any
+    expect(out.unavailable).toEqual([
+      { section: 'sleep', reason: 'Apple Health is not connected: nothing has synced since 2026-09-17' },
+      { section: 'activity', reason: 'Apple Health is not connected: nothing has synced since 2026-09-17' },
+    ])
+    // A day that did sync before the phone stopped is still reported.
+    const before = fakeCall({ ...PRESENT, '/api/health/status': stale })
+    const kept = await runDayReview({ date: DATE, sections: 'activity' }, before.call as never, { now: NOW }) as any
+    expect(kept.unavailable).toEqual([])
+    expect(kept.sections.activity).toMatchObject({ activity: { steps: 8000 } })
+    // Activity alone (no zone needed) still asks health_status, once.
+    expect(before.seen.filter((r) => r.startsWith('GET /api/health/status'))).toHaveLength(1)
+    // A store whose phone never synced.
+    const never = fakeCall({ ...PRESENT, '/api/health/status': { connected: false, lastUploadAt: null }, '/api/health/daily': { days: [] } })
+    const none = await runDayReview({ date: DATE, sections: 'activity' }, never.call as never, { now: NOW }) as any
+    expect(none.unavailable).toEqual([{ section: 'activity', reason: 'Apple Health is not connected: the phone has never synced' }])
   })
 
   it('a source that never answers is listed as unavailable at its deadline; the rest still arrive', async () => {

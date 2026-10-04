@@ -6,12 +6,13 @@
  * Date arguments are LOCAL dates in the phone's last-known timezone.
  */
 
-import { HEALTH_METRICS, canonicalUnits, metricSpec, supportedTypes } from './catalog.js'
+import { HEALTH_METRICS, aggPinKey, canonicalUnits, metricSpec, supportedTypes, unitPinKey } from './catalog.js'
 import { getHealthDb, getMeta, getMetaJson } from './db.js'
 import { addDays, dateRange, isDateKey, localDate } from './day-key.js'
 import { HealthQueryError, MAX_RANGE_DAYS, healthTz } from './query-common.js'
 import { enabledCategories } from './ingest.js'
 import { readDays, readNights, savedSourceOrder } from './materialize.js'
+import { bucketSpan, sampleSpan, storedGenericNames, type Span } from './type-spans.js'
 import { rankSources, MANUAL_SOURCE, type SourceInfo } from './source-order.js'
 import type { PreferredUnits } from './sanitize.js'
 import { IN_BED_ONLY_CAVEAT, UNRECORDED_GAP_CAVEAT, type NightSummary } from './sleep-merge.js'
@@ -37,15 +38,13 @@ export function healthStatus(now = Date.now()) {
   const tz = healthTz()
   const lastUploadAt = Number(getMeta('lastUploadAt') ?? 0) || null
   const enabled = enabledCategories()
-  const sampleSpan = db.prepare('SELECT MIN(end_ms) AS lo, MAX(end_ms) AS hi FROM samples WHERE type = ?')
-  const bucketSpan = db.prepare('SELECT MIN(start_ms) AS lo, MAX(start_ms + interval_sec * 1000) AS hi FROM buckets WHERE metric = ?')
   let coverageLo = Infinity
   let coverageHi = -Infinity
   const types = Object.entries(HEALTH_METRICS).map(([name, spec]) => {
     const spans = [
-      spec.raw ? sampleSpan.get(name) as { lo: number | null; hi: number | null } : null,
-      spec.buckets ? bucketSpan.get(name) as { lo: number | null; hi: number | null } : null,
-    ].filter((s): s is { lo: number | null; hi: number | null } => !!s)
+      spec.raw ? sampleSpan(db, name) : null,
+      spec.buckets ? bucketSpan(db, name, now) : null,
+    ].filter((s): s is Span => !!s)
     const hi = Math.max(...spans.map((s) => s.hi ?? -Infinity))
     const lo = Math.min(...spans.map((s) => s.lo ?? Infinity))
     if (Number.isFinite(lo)) coverageLo = Math.min(coverageLo, lo)
@@ -55,12 +54,16 @@ export function healthStatus(now = Date.now()) {
     const state = age > UNKNOWN_AFTER_DAYS * DAY_MS ? 'unknown_or_denied' : age > spec.staleAfterDays * DAY_MS ? 'stale' : 'ok'
     return { type: name, category: spec.category, enabled: enabled.has(spec.category), lastSampleAt: iso(last), state }
   })
+  const generic = genericTypes(enabled.has('other'), now)
+  if (generic.lo !== null) coverageLo = Math.min(coverageLo, generic.lo)
+  if (generic.hi !== null) coverageHi = Math.max(coverageHi, generic.hi)
   const rows = db.prepare('SELECT bundle, name, first_sample_ms, first_seen_ms, last_seen_ms, apple FROM sources').all() as Array<{
     bundle: string; name: string; first_sample_ms: number; first_seen_ms: number; last_seen_ms: number; apple: number
   }>
   const infos = new Map<string, SourceInfo>(rows.map((r) => [r.bundle, {
     bundle: r.bundle, firstSeenMs: r.first_seen_ms, firstSampleMs: r.first_sample_ms, apple: r.apple === 1,
   }]))
+  // samples_manual (a partial index) answers this without reading the table.
   const hasManual = !!db.prepare('SELECT 1 FROM samples WHERE user_entered = 1 LIMIT 1').get()
   const keys = [...(hasManual ? [MANUAL_SOURCE] : []), ...rows.map((r) => r.bundle)]
   const ranks = rankSources(keys, infos, savedSourceOrder())
@@ -76,21 +79,57 @@ export function healthStatus(now = Date.now()) {
     connected: lastUploadAt !== null && now - lastUploadAt <= 3 * DAY_MS,
     paused: getMeta('paused') === '1',
     storeId: getMeta('storeId') as string,
+    /** The last sync (the name is a frozen contract). */
     lastUploadAt: iso(lastUploadAt),
     coverage: {
       from: Number.isFinite(coverageLo) ? localDate(coverageLo, tz) : null,
       to: Number.isFinite(coverageHi) ? localDate(coverageHi - 1, tz) : null,
     },
-    types,
+    types: [...types, ...generic.types],
     sources,
     sleepSourceOrder: savedSourceOrder(),
     categories: [...enabled].sort(),
-    units: canonicalUnits(),
+    units: { ...canonicalUnits(), ...generic.units },
     preferredUnits: preferredUnits(),
     tz,
     devices: Object.values(devices).map((d) => ({ model: d.model, os: d.os, lastSeenAt: iso(d.lastSeenAt) })),
     supported: supportedTypes(),
   }
+}
+
+/**
+ * Every stored generic type with its first and last instants (index seeks only,
+ * type-spans.ts) and its pinned unit. A generic type is listed only when it has
+ * rows, so it always reads `ok`: there is no freshness rule for a type the server
+ * does not interpret.
+ */
+function genericTypes(enabled: boolean, now: number) {
+  const db = getHealthDb()
+  const raw = new Set(storedGenericNames(db, 'samples'))
+  const buckets = new Set(storedGenericNames(db, 'buckets'))
+  const pins = db.prepare("SELECT key, value FROM meta WHERE key GLOB 'unit:*' OR key GLOB 'agg:*'").all() as Array<{ key: string; value: string }>
+  const pin = new Map(pins.map((p) => [p.key, p.value]))
+  const units: Record<string, string> = {}
+  let lo = Infinity
+  let hi = -Infinity
+  const types = [...new Set([...raw, ...buckets])].sort().map((type) => {
+    const spans = [raw.has(type) ? sampleSpan(db, type) : null, buckets.has(type) ? bucketSpan(db, type, now) : null]
+      .filter((s): s is Span => !!s)
+    const first = Math.min(...spans.map((s) => s.lo ?? Infinity))
+    const last = Math.max(...spans.map((s) => s.hi ?? -Infinity))
+    lo = Math.min(lo, first)
+    hi = Math.max(hi, last)
+    const unit = pin.get(unitPinKey(type)) ?? null
+    if (unit) units[type] = unit
+    const agg = pin.get(aggPinKey(type))
+    return {
+      type, category: 'other' as const, enabled, lastSampleAt: iso(Number.isFinite(last) ? last : null), state: 'ok' as const,
+      firstSampleAt: iso(Number.isFinite(first) ? first : null), unit,
+      kind: raw.has(type) && buckets.has(type) ? 'both' as const : raw.has(type) ? 'raw' as const : 'buckets' as const,
+      ...(agg ? { agg } : {}),
+    }
+  })
+  return { types, units, lo: Number.isFinite(lo) ? lo : null, hi: Number.isFinite(hi) ? hi : null }
 }
 
 // ── date windows ──

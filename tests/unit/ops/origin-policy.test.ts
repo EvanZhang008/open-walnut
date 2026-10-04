@@ -247,7 +247,7 @@ describe('the local-only route set is derived from the registry', () => {
       expect(op.bind || op.routes?.length, `${op.name} declares no route`).toBeTruthy()
     }
     const ops = new Set(localOnlyRoutes().map((r) => r.op))
-    for (const name of ['task_delete', 'health_status', 'health_sleep', 'health_daily', 'health_series', 'day_review']) {
+    for (const name of ['task_delete', 'health_status', 'health_sleep', 'health_daily', 'health_series', 'health_samples', 'day_review']) {
       expect(ops.has(name), name).toBe(true)
     }
     // task_merge left the set on 2026-10-02: a remote session merges its own

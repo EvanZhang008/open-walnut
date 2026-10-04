@@ -16,8 +16,17 @@ type Section = (typeof DAY_REVIEW_SECTIONS)[number]
 /** `timezone`: the phone's zone could not be read, so this machine's was used for every date bound. */
 interface Unavailable { section: Section | 'timezone'; reason: string }
 type SectionResult = { ok: true; value: unknown } | { ok: false; reason: string }
-/** When and where the review is read: `tz` is the phone's zone when a health store exists. */
-interface ReviewCtx { now: number; tz: string }
+/**
+ * What health_status says. `connected` is ITS answer (false once nothing has synced
+ * for 3 days): the sleep and daily reads only say `connected: false` when no store
+ * exists at all, so a phone that stopped syncing would otherwise read as "missing".
+ */
+interface HealthState { tz: string | null; connected: boolean | null; lastSyncAt: string | null }
+/**
+ * When and where the review is read: `tz` is the phone's zone when a health store
+ * exists. `health` settles by the zone lookup's deadline; null = unknown.
+ */
+interface ReviewCtx { now: number; tz: string; health: Promise<HealthState | null> }
 
 const MIN = 60_000
 /**
@@ -45,11 +54,12 @@ export function defaultReviewDate(now = new Date(), tz?: string): string {
 }
 
 /**
- * The phone's zone from the health store. `null` when there is no store or it has
- * no zone yet (this machine's zone is then the right answer, not a gap); a thrown
+ * The health store's status: the phone's zone (null when there is no store or it
+ * has no zone yet: this machine's zone is then the right answer, not a gap) and
+ * whether the phone is still syncing. `null` when the route is absent; a thrown
  * error when the lookup itself failed or timed out.
  */
-async function phoneTz(call: Call): Promise<string | null> {
+async function readHealthState(call: Call): Promise<HealthState | null> {
   let status: Record<string, unknown>
   try {
     status = rec(await call('GET', '/api/health/status'))
@@ -57,7 +67,21 @@ async function phoneTz(call: Call): Promise<string | null> {
     if (reasonOf(err) === 'not installed or turned off') return null
     throw err
   }
-  return isValidTz(status.tz) ? status.tz : null
+  return {
+    tz: isValidTz(status.tz) ? status.tz : null,
+    connected: typeof status.connected === 'boolean' ? status.connected : null,
+    lastSyncAt: typeof status.lastUploadAt === 'string' ? status.lastUploadAt : null,
+  }
+}
+
+/** The reason for a missing night or day when the phone is not syncing, or null when it is (or nobody knows). */
+async function notConnected(ctx: ReviewCtx): Promise<string | null> {
+  const health = await ctx.health
+  if (health?.connected !== false) return null
+  const last = health.lastSyncAt ? Date.parse(health.lastSyncAt) : Number.NaN
+  return Number.isFinite(last)
+    ? `Apple Health is not connected: nothing has synced since ${localDate(last, ctx.tz)}`
+    : 'Apple Health is not connected: the phone has never synced'
 }
 
 /** The date's local day in `tz`, as instants. */
@@ -182,6 +206,7 @@ async function sleepSection(call: Call, date: string, ctx: ReviewCtx): Promise<S
   const settled = (n: Record<string, unknown>): boolean => (n.status === 'ok' || n.status === 'in_bed_only')
     && typeof n.wake === 'string' && Date.parse(n.wake) <= ctx.now - NIGHT_SETTLED_MS
   const night = [...nights].reverse().find(settled)
+  // A night on record is reported whatever the sync state; only a gap needs the reason.
   if (night) {
     const { hypnogram: _h, otherSources: _o, ...rest } = night
     const notes = [
@@ -205,14 +230,16 @@ async function sleepSection(call: Call, date: string, ctx: ReviewCtx): Promise<S
     const naps = list(own.naps).length
     return { ok: false, reason: naps ? `no main night was recorded, only ${naps} nap${naps === 1 ? '' : 's'}` : 'no main night was recorded' }
   }
-  return { ok: false, reason: 'no night was recorded for this wake date' }
+  return { ok: false, reason: await notConnected(ctx) ?? 'no night was recorded for this wake date' }
 }
 
-async function activitySection(call: Call, date: string): Promise<SectionResult> {
+async function activitySection(call: Call, date: string, ctx: ReviewCtx): Promise<SectionResult> {
   const body = rec(await call('GET', `/api/health/daily?from=${date}&to=${date}&metrics=activity,vitals,workouts,mind`))
   if (body.connected === false) return { ok: false, reason: 'Apple Health is not connected' }
   const day = list(body.days)[0]
-  if (!day || day.status !== 'ok') return { ok: false, reason: 'no Apple Health data was uploaded for this day' }
+  if (!day || day.status !== 'ok') {
+    return { ok: false, reason: await notConnected(ctx) ?? 'nothing has synced from Apple Health for this day' }
+  }
   return { ok: true, value: { ...day, units: body.units } }
 }
 
@@ -234,6 +261,8 @@ function byDeadline<T>(work: Promise<T>, end: number, budgetMs: number): Promise
 
 /** Sections whose date bounds depend on the zone even when the date is given. */
 const ZONED: ReadonlySet<Section> = new Set(['tasks', 'time', 'sleep'])
+/** Sections that ask health_status whether the phone still syncs, to explain a gap. */
+const HEALTH_SECTIONS: ReadonlySet<Section> = new Set(['sleep', 'activity'])
 
 export async function runDayReview(
   args: Record<string, unknown>,
@@ -255,14 +284,20 @@ export async function runDayReview(
   // it: the Mac may sit in another zone. The lookup shares the review's one deadline.
   const givenDate = typeof args.date === 'string' ? args.date : null
   const needTz = givenDate === null || wanted.some((s) => ZONED.has(s))
+  const needStatus = needTz || wanted.some((s) => HEALTH_SECTIONS.has(s))
   // The lookup may spend at most half the budget, so the sections that wait for it
   // keep time to answer; everything still ends at the one `end`.
   const tzBudget = Math.floor(budget / 2)
+  const statusLookup: Promise<HealthState | null | { failed: unknown }> = !needStatus
+    ? Promise.resolve(null)
+    : byDeadline(readHealthState(call), Date.now() + tzBudget, tzBudget).catch((err: unknown) => ({ failed: err }))
+  const health = statusLookup.then((st) => (st && 'failed' in st ? null : st))
   const tzLookup: Promise<string> = !needTz
     ? Promise.resolve(systemTz())
-    : byDeadline(phoneTz(call), Date.now() + tzBudget, tzBudget).then((tz) => tz ?? systemTz(), (err: unknown) => {
+    : statusLookup.then((st) => {
+      if (!st || !('failed' in st)) return st?.tz ?? systemTz()
       const fallback = systemTz()
-      unavailable.push({ section: 'timezone', reason: `the phone's time zone could not be read (${reasonOf(err)}): this machine's zone (${fallback}) was used` })
+      unavailable.push({ section: 'timezone', reason: `the phone's time zone could not be read (${reasonOf(st.failed)}): this machine's zone (${fallback}) was used` })
       return fallback
     })
   const dateOf = async (): Promise<string> => givenDate ?? defaultReviewDate(new Date(now), await tzLookup)
@@ -271,7 +306,7 @@ export async function runDayReview(
   const run = async (s: Section): Promise<SectionResult> => {
     const zoned = givenDate === null || ZONED.has(s)
     const tz = zoned ? await tzLookup : systemTz()
-    return RUNNERS[s](call, await dateOf(), { now, tz })
+    return RUNNERS[s](call, await dateOf(), { now, tz, health })
   }
   const settled = await Promise.allSettled(wanted.map((s) => byDeadline(run(s), end, budget)))
   const tz = await tzLookup

@@ -1,14 +1,19 @@
 /**
- * Apple Health catalog: every type the phone may upload, its ONE canonical unit,
- * and the per-call caps. The phone converts to these units before it sends; the
- * server never converts a stored value (ops convert only for display, see units.ts).
+ * Apple Health catalog: every named type the phone may sync, its ONE canonical
+ * unit, and the per-call caps. The phone converts to these units before it sends;
+ * the server never converts a stored value (ops convert only for display, see units.ts).
  *
- * Two upload kinds:
+ * Two sync kinds:
  *   raw      individual HealthKit samples, keyed by their HealthKit UUID
  *   buckets  HealthKit statistics buckets (5m / 1h / 1d), keyed by (metric, start, interval)
  *
  * Buckets are Apple's own merged numbers (a statistics query already applies the
  * Health app's source priority), so the server stores them as they arrive.
+ *
+ * Beside the catalog, every other HealthKit type arrives under a GENERIC name
+ * (`q.<Suffix>`, `c.<Suffix>`, `x.<Name>`, see isGenericType). The server does not
+ * interpret those: it stores what the phone sends, pins the first unit it stores
+ * per type, and serves them to the agent as they are.
  */
 
 /** At most this many items (samples + deleted + buckets) per sync call. Pinned by the iOS client test. */
@@ -31,8 +36,14 @@ export const SLEEP_CODES = {
 export const ASLEEP_CODES: ReadonlySet<number> = new Set([1, 3, 4, 5])
 export const STAGE_CODES: ReadonlySet<number> = new Set([3, 4, 5])
 
-export const HEALTH_CATEGORIES = ['sleep', 'heart', 'activity', 'vitals', 'workouts', 'mind', 'audio'] as const
+/** `other` holds every generic type. */
+export const HEALTH_CATEGORIES = ['sleep', 'heart', 'activity', 'vitals', 'workouts', 'mind', 'audio', 'other'] as const
 export type HealthCategory = (typeof HEALTH_CATEGORIES)[number]
+/**
+ * The categories a saved list written before `other` existed knew about: a category
+ * missing from a saved list counts as switched off only if that list knew it.
+ */
+export const LEGACY_HEALTH_CATEGORIES: readonly HealthCategory[] = ['sleep', 'heart', 'activity', 'vitals', 'workouts', 'mind', 'audio']
 
 export interface MetricSpec {
   /** Canonical unit, HealthKit's own unit string where one exists. */
@@ -91,12 +102,104 @@ export function isHealthCategory(value: unknown): value is HealthCategory {
   return typeof value === 'string' && (HEALTH_CATEGORIES as readonly string[]).includes(value)
 }
 
-/** Every type and metric, by upload kind, for GET /health/status (a phone gates on it before sending). */
-export function supportedTypes(): { raw: string[]; buckets: string[] } {
+// ── generic types ──
+
+/** Most rows one health_samples read returns. */
+export const HEALTH_MAX_SAMPLE_ROWS = 500
+/** Longest type name a sync call may carry (catalog names are far shorter). */
+export const HEALTH_MAX_TYPE_LENGTH = 64
+/**
+ * `q.<Suffix>` = HKQuantityTypeIdentifier<Suffix>, `c.<Suffix>` = HKCategoryTypeIdentifier<Suffix>,
+ * `x.<Name>` = any other kind (Electrocardiogram, GAD7, PHQ9, the characteristics).
+ */
+export const GENERIC_TYPE_RE = /^[qcx]\.[A-Z][A-Za-z0-9]{1,62}$/
+export const GENERIC_PREFIXES = ['q', 'c', 'x'] as const
+/** Only quantity types have statistics buckets. */
+export const GENERIC_BUCKET_PREFIXES = ['q'] as const
+/** A batch-level unit string (HealthKit unit syntax, e.g. `kg`, `mg/dL`, `mL/(kg·min)`, `count/min`). */
+export const GENERIC_UNIT_RE = /^[A-Za-z0-9%/()*·._ ^-]{1,32}$/
+/** Bounds for any generic value and code (no per-type ranges: the server does not interpret them). */
+export const GENERIC_MAX_ABS_VALUE = 1e9
+export const GENERIC_MAX_CODE = 99_999_999
+
+/**
+ * Generic names the catalog already stores under its own name. A call for one
+ * answers `unsupported`, so nothing is stored twice; reads accept them as an alias.
+ */
+export const GENERIC_COVERED: Readonly<Record<string, string>> = {
+  'q.HeartRate': 'heart_rate',
+  'q.RestingHeartRate': 'resting_hr',
+  'q.WalkingHeartRateAverage': 'walking_hr',
+  'q.HeartRateVariabilitySDNN': 'hrv_sdnn',
+  'q.RespiratoryRate': 'respiratory_rate',
+  'q.OxygenSaturation': 'spo2',
+  'q.AppleSleepingWristTemperature': 'wrist_temp',
+  'q.VO2Max': 'vo2max',
+  'q.StepCount': 'steps',
+  'q.DistanceWalkingRunning': 'distance',
+  'q.ActiveEnergyBurned': 'active_energy',
+  'q.BasalEnergyBurned': 'basal_energy',
+  'q.AppleExerciseTime': 'exercise_min',
+  'q.AppleStandTime': 'stand_min',
+  'q.TimeInDaylight': 'daylight_min',
+  'q.EnvironmentalAudioExposure': 'audio_env',
+  'q.HeadphoneAudioExposure': 'audio_headphone',
+  'c.SleepAnalysis': 'sleep',
+  'c.MindfulSession': 'mindful',
+}
+
+/**
+ * Characteristics: one current value each, not a series. Their sample times are
+ * only when the phone read them, and a re-sent uuid replaces the stored row.
+ */
+export const GENERIC_CHARACTERISTICS: ReadonlySet<string> = new Set([
+  'x.BiologicalSex', 'x.BloodType', 'x.DateOfBirth', 'x.FitzpatrickSkinType', 'x.WheelchairUse', 'x.ActivityMoveMode',
+])
+
+/** A well-formed generic name (covered or not). */
+export function isGenericName(name: unknown): name is string {
+  return typeof name === 'string' && name.length <= HEALTH_MAX_TYPE_LENGTH && GENERIC_TYPE_RE.test(name)
+}
+
+/** A generic name the store accepts: well formed and not covered by the catalog. */
+export function isGenericType(name: unknown): name is string {
+  return isGenericName(name) && !Object.hasOwn(GENERIC_COVERED, name)
+}
+
+export function isQuantityType(name: string): boolean {
+  return name.startsWith('q.') && isGenericType(name)
+}
+
+export function isCharacteristic(name: string): boolean {
+  return GENERIC_CHARACTERISTICS.has(name)
+}
+
+/** Meta keys for the unit and agg pinned at a generic type's first stored sync. */
+export const unitPinKey = (type: string): string => `unit:${type}`
+export const aggPinKey = (type: string): string => `agg:${type}`
+
+/** SQL that matches generic type names in `column` as index ranges (catalog names hold no dot). */
+export function genericTypeSql(column: string): string {
+  return GENERIC_PREFIXES.map((p) => `(${column} >= '${p}.' AND ${column} < '${p}/')`).join(' OR ')
+}
+
+/** The category a stored type belongs to (`other` for every generic type). */
+export function typeCategory(name: string): HealthCategory | undefined {
+  return metricSpec(name)?.category ?? (isGenericType(name) ? 'other' : undefined)
+}
+
+/** Every type and metric, by sync kind, for GET /health/status (a phone gates on it before sending). */
+export function supportedTypes() {
   const entries = Object.entries(HEALTH_METRICS)
   return {
     raw: entries.filter(([, s]) => s.raw).map(([n]) => n),
     buckets: entries.filter(([, s]) => s.buckets).map(([n]) => n),
+    generic: {
+      prefixes: [...GENERIC_PREFIXES],
+      maxTypeLength: HEALTH_MAX_TYPE_LENGTH,
+      bucketPrefixes: [...GENERIC_BUCKET_PREFIXES],
+      covered: Object.keys(GENERIC_COVERED),
+    },
   }
 }
 
@@ -105,8 +208,13 @@ export function canonicalUnits(): Record<string, string> {
   return Object.fromEntries(Object.entries(HEALTH_METRICS).map(([n, s]) => [n, s.unit]))
 }
 
-/** Names that belong to a set of categories (for DELETE / settings). */
+/** Catalog names that belong to a set of categories (for DELETE / settings). Generic types are not listed: match them with genericTypeSql. */
 export function metricsInCategories(categories: readonly HealthCategory[]): string[] {
   const set = new Set(categories)
   return Object.entries(HEALTH_METRICS).filter(([, s]) => set.has(s.category)).map(([n]) => n)
 }
+
+/** Catalog raw types other than sleep: the rows a day summary folds. */
+export const DAY_RAW_TYPES: readonly string[] = Object.entries(HEALTH_METRICS).filter(([n, s]) => s.raw && n !== 'sleep').map(([n]) => n)
+/** Catalog bucket metrics: the buckets a day summary folds. */
+export const DAY_BUCKET_METRICS: readonly string[] = Object.entries(HEALTH_METRICS).filter(([, s]) => s.buckets).map(([n]) => n)

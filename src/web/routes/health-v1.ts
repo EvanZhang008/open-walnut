@@ -1,6 +1,6 @@
 /**
- * /api/v1 Apple Health (additive, frozen contract): the iPhone uploads what it
- * reads from HealthKit, and manages the store.
+ * /api/v1 Apple Health (additive, frozen contract): the iPhone reads HealthKit
+ * itself and keeps this Mac up to date, and manages the store.
  *
  *   POST   /api/v1/health/sync      one batch of samples / buckets / deletions
  *   GET    /api/v1/health/status    storeId, paused, coverage, per-type freshness

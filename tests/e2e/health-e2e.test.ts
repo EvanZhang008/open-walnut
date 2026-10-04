@@ -2,7 +2,9 @@
  * Apple Health end to end through a REAL server (startServer({ port: 0, dev: true })):
  * the phone's upload contract on /api/v1/health/*, then every health op through the
  * real registry (executeOp: zod args, HTTP binding, the internal /api/health reads),
- * day_review over the live endpoints, the replica's relay entry point
+ * day_review over the live endpoints, a paired phone's generic types (q. raw and
+ * buckets, a unit mismatch) read back through health_status, health_samples and
+ * health_series, the replica's relay entry point
  * (handleSessionControlRelay) answering on this primary, and the gate's bypass:
  * a REMOTE host's gateway `api` call for health reads, settings, the store delete
  * and a task delete, all refused, with the data proven still there, while a
@@ -26,6 +28,7 @@ import { PeerThrottle } from '../../src/core/peers/peer-throttle.js'
 import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { addDays, localDate, zonedTime } from '../../src/core/health/day-key.js'
 import { MARKER_HR, WATCH, uuid } from '../core/health/fixtures.js'
+import { createDevice } from '../../src/core/device-auth.js'
 
 const TZ = 'America/New_York'
 let server: HttpServer
@@ -128,6 +131,56 @@ describe('Apple Health through a real server', () => {
     expect(bad.ok).toBe(false)
   })
 
+  it('a paired phone syncs generic types, and the agent finds them in status and reads them', async () => {
+    const { token } = await createDevice('e2e-phone')
+    const phone = async (method: string, p: string, body?: unknown): Promise<{ status: number; body: any }> => {
+      const res = await fetch(url(p), {
+        method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      return { status: res.status, body: await res.json() }
+    }
+    const before = await phone('GET', '/api/v1/health/status')
+    expect(before.status).toBe(200)
+    expect(before.body.supported.generic).toMatchObject({ prefixes: ['q', 'c', 'x'], maxTypeLength: 64 })
+
+    const mass = (h: number, value: number) => ({ uuid: uuid('M'), start: iso(D1, h), end: iso(D1, h), value, source: WATCH, device: 'Scale' })
+    const raw = { device, tz: TZ, kind: 'raw', type: 'q.BodyMass', unit: 'kg', samples: [mass(8, 72.4), mass(20, 72)], deleted: [] }
+    expect((await phone('POST', '/api/v1/health/sync', raw)).body).toMatchObject({ accepted: 2, inserted: 2, paused: false })
+    const flights = {
+      device, tz: TZ, kind: 'buckets', metric: 'q.FlightsClimbed', unit: 'count', agg: 'sum',
+      buckets: Array.from({ length: 24 }, (_, i) => ({ start: new Date(zonedTime(D1, 0, 0, TZ) + i * 3_600_000).toISOString(), intervalSec: 3600, sum: 2 })),
+    }
+    expect((await phone('POST', '/api/v1/health/sync', flights)).body).toMatchObject({ accepted: 24 })
+    // Another unit for the same type: nothing stored, the phone keeps its anchor.
+    const pounds = await phone('POST', '/api/v1/health/sync', { ...raw, unit: 'lb', samples: [mass(21, 158)] })
+    expect(pounds.status).toBe(200)
+    expect(pounds.body).toMatchObject({ accepted: 0, unitMismatch: { type: 'q.BodyMass', field: 'unit', stored: 'kg', sent: 'lb' } })
+
+    const status = await phone('GET', '/api/v1/health/status')
+    expect(status.body.types).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'q.BodyMass', category: 'other', unit: 'kg', state: 'ok', kind: 'raw', lastSampleAt: iso(D1, 20) }),
+      expect.objectContaining({ type: 'q.FlightsClimbed', category: 'other', unit: 'count', state: 'ok', kind: 'buckets', agg: 'sum' }),
+    ]))
+
+    const local = { apiBase: apiBase(), origin: LOCAL_ORIGIN }
+    const st = await executeOp('health_status', {}, local)
+    expect(st.ok, JSON.stringify(st)).toBe(true)
+    expect((st as any).result.types.map((t: { type: string }) => t.type)).toEqual(expect.arrayContaining(['q.BodyMass', 'q.FlightsClimbed']))
+    const samples = await executeOp('health_samples', { type: 'q.BodyMass', limit: 10 }, local)
+    expect(samples.ok, JSON.stringify(samples)).toBe(true)
+    expect((samples as any).result).toMatchObject({ type: 'q.BodyMass', unit: 'kg', truncated: false })
+    expect((samples as any).result.rows.map((r: { value: number; device: string }) => [r.value, r.device])).toEqual([[72, 'Scale'], [72.4, 'Scale']])
+    const climbed = await executeOp('health_series', { metric: 'q.FlightsClimbed', from: D1, to: D1, bucket: '1d' }, local)
+    expect(climbed.ok, JSON.stringify(climbed)).toBe(true)
+    expect((climbed as any).result).toMatchObject({ unit: 'count', agg: 'sum', points: [{ t: D1, sum: 48 }] })
+    const weight = await executeOp('health_series', { metric: 'q.BodyMass', from: D1, to: D1, bucket: '1d' }, local)
+    expect((weight as any).result.points).toEqual([{ t: D1, avg: 72.2, min: 72, max: 72.4, sum: 144.4, count: 2 }])
+    // A malformed name is the route's 400, not a crash.
+    const bad = await executeOp('health_samples', { type: 'q.no such' }, local)
+    expect(bad.ok).toBe(false)
+  })
+
   it('day_review reads the live endpoints and lists what is missing', async () => {
     // Every section but calendar: its first read on a fresh home compiles and signs
     // the native EventKit helper, which a test must not do (the unit test covers it).
@@ -169,6 +222,7 @@ describe('Apple Health through a real server', () => {
     const attempts: Array<[string, string, Record<string, unknown>?]> = [
       ['GET', '/api/health/status'],
       ['GET', `/api/health/sleep?from=${D1}&to=${D1}`],
+      ['GET', '/api/health/samples?type=q.BodyMass'],
       ['GET', '/api/v1/health/status'],
       ['PUT', '/api/v1/health/settings', { paused: true }],
       ['DELETE', '/api/v1/health/data', {}],
@@ -183,8 +237,8 @@ describe('Apple Health through a real server', () => {
       expect(r.ok, `${method} ${path}: ${JSON.stringify(r)}`).toBe(false)
       expect(JSON.stringify(r), `${method} ${path}`).toMatch(/Health data is only available to sessions on this Mac|runs only for callers on this Mac|runs only from the console on this Mac/)
     }
-    for (const name of ['health_status', 'health_sleep', 'day_review']) {
-      const r = await gateway('remote-dev', name, {})
+    for (const [name, args] of [['health_status', {}], ['health_sleep', {}], ['health_samples', { type: 'q.BodyMass' }], ['day_review', {}]] as const) {
+      const r = await gateway('remote-dev', name, args)
       expect(r).toMatchObject({ ok: false, error: { message: `${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}` } })
     }
 

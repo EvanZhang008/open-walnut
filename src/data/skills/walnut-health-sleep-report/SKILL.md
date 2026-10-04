@@ -39,10 +39,14 @@ recording has a gap and give the gap (`min`) and the sleep after it
 (`otherSleepMin`). Never state that night's wake time, bedtime or hours asleep
 as fact, and leave it out of the short sleep flag.
 
-If it answers `connected: false`, or most nights read `status: missing`, run
-`walnut tools call health_status '{}'` and tell the user what it shows (last
-upload, which types have data). A type in `unknown_or_denied` means either the
-permission is off or there is no such data: say both, never pick one.
+If most nights read `status: missing` (or the answer says `connected: false`,
+which it does only when no health store exists at all), run
+`walnut tools call health_status '{}'` and tell the user what it shows. Its
+`connected: false` means nothing has synced for 3 days or more: give the last
+sync (`lastUploadAt`) and say the missing nights are missing because the phone
+has not synced. Also say which types have data. A type in `unknown_or_denied`
+means either the permission is off or there is no such data: say both, never
+pick one.
 
 Then read the prior day for context:
 

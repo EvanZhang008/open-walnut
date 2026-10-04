@@ -46,6 +46,8 @@ CREATE INDEX IF NOT EXISTS samples_type_night ON samples(type, night_date);
 CREATE INDEX IF NOT EXISTS samples_type_date ON samples(type, local_date);
 CREATE INDEX IF NOT EXISTS samples_date ON samples(local_date);
 CREATE INDEX IF NOT EXISTS samples_gen ON samples(gen) WHERE gen IS NOT NULL;
+-- health_status asks "is there any manual entry"; without this it read the whole table.
+CREATE INDEX IF NOT EXISTS samples_manual ON samples(user_entered) WHERE user_entered = 1;
 
 CREATE TABLE IF NOT EXISTS buckets (
   metric TEXT NOT NULL,

@@ -21,7 +21,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-health-pe
 import { ingestHealthSync } from '../../../src/core/health/ingest.js'
 import { closeHealthDb, destroyHealthDbFiles, getHealthDb, materializedRev } from '../../../src/core/health/db.js'
 import { computeDay, computeNight, drainMaterializeQueue, pendingRecomputes } from '../../../src/core/health/materialize.js'
-import { healthDaily, healthSeries, healthSleep } from '../../../src/core/health/queries.js'
+import { healthDaily, healthSeries, healthSleep, healthStatus } from '../../../src/core/health/queries.js'
 import { HEALTH_MAX_ITEMS_PER_SYNC } from '../../../src/core/health/catalog.js'
 import { updateHealthSettings } from '../../../src/core/health/settings.js'
 import { APP, WATCH, bucketBatch, hrBuckets, rawBatch, watchNight } from './fixtures.js'
@@ -200,5 +200,34 @@ describe('health at 90 days of 5-minute heart rate', () => {
     let judged = first
     if (!wallOk(first)) judged = await rebuild([WATCH.bundleId, APP.bundleId])
     expect(judged.busy.maxGapWallMs).toBeLessThan(judged.idle.maxGapWallMs + 100)
+  }, 120_000)
+})
+
+describe('health_status on a large store', () => {
+  it('reads by index seeks only: 300k samples, catalog and generic, cost a few ms of CPU', () => {
+    // health_status runs on every health question. Before it read by seeks, the
+    // "any manual entry" probe alone took about 60 ms of CPU at a million rows, a
+    // combined MIN/MAX walked every entry of its type, and a grouped COUNT over a
+    // million generic rows took about 75 ms of CPU.
+    destroyHealthDbFiles()
+    const db = getHealthDb()
+    const ins = db.prepare(`INSERT INTO samples (uuid, type, start_ms, end_ms, value, source_bundle, source_name, tz, local_date, night_date)
+      VALUES (?, ?, ?, ?, 60, 'org.example.scale', 'Scale', 'America/New_York', '2026-09-21', '2026-09-21')`)
+    const types = ['heart_rate', ...Array.from({ length: 25 }, (_, i) => `q.Type${String(i).padStart(2, '0')}`)]
+    let k = 0
+    db.transaction(() => {
+      for (const [i, type] of types.entries()) {
+        const n = i === 0 ? 150_000 : 6_000
+        for (let j = 0; j < n; j++) { const t = NOW - (n - j) * 60_000; ins.run(`perf-${k++}`, type, t, t) }
+      }
+      db.prepare("INSERT INTO meta (key, value) VALUES ('lastUploadAt', ?)").run(String(NOW))
+    })()
+    expect(k).toBe(300_000)
+    const first = measure(() => healthStatus(NOW))
+    expect(first.value.types.filter((t) => t.category === 'other')).toHaveLength(25)
+    const warm = Array.from({ length: 5 }, () => measure(() => healthStatus(NOW)).cpuMs)
+    console.log(`[health-perf] status rows=${k} cold=${first.cpuMs.toFixed(1)}cpu ms warm p50=${pct(warm, 0.5).toFixed(1)} max=${Math.max(...warm).toFixed(1)} cpu ms`)
+    // Seeks cost about 1 ms here; any row scan costs tens.
+    expect(pct(warm, 0.5)).toBeLessThan(10)
   }, 120_000)
 })

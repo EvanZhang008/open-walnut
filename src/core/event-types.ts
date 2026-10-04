@@ -1189,8 +1189,9 @@ export interface TimeOutsideEvent {
 }
 
 /**
- * A health sync committed new or changed data. `types` are the catalog names
- * (src/core/health/catalog.ts), `dates` the local days touched. No values ever.
+ * A health sync committed new or changed data. `types` are catalog or generic
+ * (`q.` / `c.` / `x.`) names (src/core/health/catalog.ts), `dates` the local days
+ * touched. No values ever.
  */
 export interface HealthIngestedEvent {
   types: string[];

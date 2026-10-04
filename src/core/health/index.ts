@@ -2,8 +2,8 @@
  * Apple Health on the primary box: the store, the sync ingest, derived nights and
  * days, the agent reads, and the once-a-morning sleep-ready signal.
  *
- * The iPhone reads HealthKit and uploads (POST /api/v1/health/sync); a cloud
- * replica only relays. Nothing here ever runs on a replica.
+ * The iPhone reads HealthKit and keeps this Mac up to date (POST /api/v1/health/sync);
+ * a cloud replica only relays. Nothing here ever runs on a replica.
  */
 
 import fs from 'node:fs'
@@ -16,6 +16,7 @@ import { disarmMissingCheck, startSleepReadyTimer } from './sleep-ready.js'
 export { HEALTH_MAX_ITEMS_PER_SYNC, HEALTH_MAX_SYNC_BYTES, HEALTH_METRICS, SLEEP_CODES } from './catalog.js'
 export { ingestHealthSync, type HealthSyncOutcome } from './ingest.js'
 export { healthDaily, healthSeries, healthSleep, healthStatus, HealthQueryError } from './queries.js'
+export { samplesQuery as healthSamples } from './samples.js'
 export { runHealthAction, isHealthAction, type HealthAction, type HealthActionResult } from './relay.js'
 export { sanitizeHealthSync } from './sanitize.js'
 

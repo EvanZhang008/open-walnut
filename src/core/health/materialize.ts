@@ -14,6 +14,7 @@
 
 import type { Database as DatabaseType } from 'better-sqlite3'
 import { log } from '../../logging/index.js'
+import { DAY_BUCKET_METRICS, DAY_RAW_TYPES } from './catalog.js'
 import { getHealthDb, getMetaJson, materializedRev } from './db.js'
 import { assembleNight, type NightSummary, type NightVitalsIn, type SleepSampleIn, type VitalPoint } from './sleep-merge.js'
 import { foldDay, type BucketIn, type DaySummary, type RawIn } from './day-summary.js'
@@ -169,12 +170,13 @@ export function computeNight(date: string): NightSummary | null {
 export function computeDay(date: string): DaySummary | null {
   const db = getHealthDb()
   dirtyDays.delete(date)
+  // Catalog rows only: a day summary never folds a generic type, so it never reads one.
   const buckets = db.prepare(
-    'SELECT metric, start_ms, interval_sec, sum, avg, min, max, count FROM buckets WHERE local_date = ?',
-  ).all(date) as Array<{ metric: string; start_ms: number; interval_sec: number; sum: number | null; avg: number | null; min: number | null; max: number | null; count: number | null }>
+    `SELECT metric, start_ms, interval_sec, sum, avg, min, max, count FROM buckets WHERE local_date = ? AND metric IN (${marks(DAY_BUCKET_METRICS)})`,
+  ).all(date, ...DAY_BUCKET_METRICS) as Array<{ metric: string; start_ms: number; interval_sec: number; sum: number | null; avg: number | null; min: number | null; max: number | null; count: number | null }>
   const raw = db.prepare(
-    "SELECT type, start_ms, end_ms, value, tz, source_name, meta FROM samples WHERE local_date = ? AND type != 'sleep'",
-  ).all(date) as Array<{ type: string; start_ms: number; end_ms: number; value: number | null; tz: string; source_name: string; meta: string | null }>
+    `SELECT type, start_ms, end_ms, value, tz, source_name, meta FROM samples WHERE local_date = ? AND type IN (${marks(DAY_RAW_TYPES)})`,
+  ).all(date, ...DAY_RAW_TYPES) as Array<{ type: string; start_ms: number; end_ms: number; value: number | null; tz: string; source_name: string; meta: string | null }>
   if (buckets.length === 0 && raw.length === 0) {
     storeDerived('days', 'day', date, null)
     return null
@@ -199,6 +201,10 @@ function storeDerived(table: 'nights' | 'days', kind: 'night' | 'day', date: str
       .run(date, materializedRev(), JSON.stringify(value))
     db.prepare('DELETE FROM dirty WHERE kind = ? AND date = ?').run(kind, date)
   })()
+}
+
+function marks(list: readonly string[]): string {
+  return list.map(() => '?').join(', ')
 }
 
 function safeJson(text: string): Record<string, unknown> | null {

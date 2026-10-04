@@ -13,6 +13,22 @@ Week over week: this week (the 7 days ending today) against the 7 days before.
 
 ## 1. Read
 
+First ask whether the phone is still syncing:
+
+```
+walnut tools call health_status '{}'
+```
+
+- `connected: true`: go on.
+- `connected: false` with `lastUploadAt` null (or no store at all): Apple Health
+  is not connected. Say so and stop.
+- `connected: false` with a `lastUploadAt`: nothing has synced since that date
+  (`lastUploadAt` is the last sync). Say so first, then compare only what arrived
+  before it, and count the days after it as missing because the phone has not
+  synced, not as days without sleep or activity.
+
+Then read the two weeks:
+
 ```
 walnut tools call health_sleep '{"last_nights":14}'
 walnut tools call health_daily '{"last_days":14,"metrics":"activity,vitals,workouts"}'
@@ -28,9 +44,6 @@ walnut tools call time_summary '{"days":14}'
 Use only these named reads. If one is refused, say what was refused and stop:
 health data is only available to sessions on this Mac, and no other call is a
 way around that.
-
-If `health_sleep` answers `connected: false`, say Apple Health is not connected
-and stop.
 
 ## 2. Compare
 

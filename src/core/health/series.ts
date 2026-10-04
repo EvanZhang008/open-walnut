@@ -6,29 +6,45 @@
  * Bucket rows are ONE tiling per metric: the widest stored interval that is not
  * coarser than the requested bucket (else the finest there is). Mixing a 1h and a
  * 1d bucket of the same steps would count them twice.
+ *
+ * A generic quantity type (`q.<Suffix>`) is a metric too: its buckets fold by the
+ * agg pinned at its first bucket sync, its raw samples answer avg/min/max plus a
+ * sum (meaningful only for cumulative types such as dietary intake). A generic
+ * name the catalog covers (`q.HeartRate`) reads the catalog metric.
  */
 
-import { metricSpec } from './catalog.js'
-import { getHealthDb } from './db.js'
-import { addDays, isDateKey, localDate, zonedMidnight } from './day-key.js'
-import { HealthQueryError, MAX_RANGE_DAYS, MAX_SERIES_POINTS, healthTz } from './query-common.js'
+import { GENERIC_COVERED, aggPinKey, isGenericType, isQuantityType, metricSpec, unitPinKey } from './catalog.js'
+import { getHealthDb, getMeta } from './db.js'
+import { localDate } from './day-key.js'
+import { HealthQueryError, MAX_RANGE_DAYS, MAX_SERIES_POINTS, healthTz, toInstant } from './query-common.js'
 
 const BUCKETS = { '5m': 300, '1h': 3600, '1d': 86_400 } as const
 type BucketName = keyof typeof BUCKETS
 
-function toInstant(value: string, tz: string, endOfDay: boolean): number {
-  if (isDateKey(value)) return zonedMidnight(endOfDay ? addDays(value, 1) : value, tz)
-  const ms = Date.parse(value)
-  if (!Number.isFinite(ms) || !/^\d{4}-\d{2}-\d{2}T/.test(value)) throw new HealthQueryError('from/to must be YYYY-MM-DD dates or ISO-8601 instants')
-  return ms
-}
-
 interface Row { k: number | string; t: number; s: number | null; wa: number | null; w: number | null; lo: number | null; hi: number | null; n: number | null }
 
-export async function seriesQuery(args: { metric?: string; from?: string; to?: string; bucket?: string }, now = Date.now()) {
-  const metric = args.metric ?? ''
+/** How one metric reads: its unit, whether it has buckets and raw rows, and how bucket points fold. */
+interface SeriesSpec { unit: string | null; raw: boolean; buckets: boolean; fold: 'sum' | 'avg'; generic: boolean }
+
+function seriesSpec(metric: string): SeriesSpec {
   const spec = metricSpec(metric)
-  if (!spec || metric === 'sleep') throw new HealthQueryError(`metric must be a catalog name other than sleep (use health_sleep for nights)`)
+  if (spec && metric !== 'sleep') {
+    return { unit: spec.unit, raw: spec.raw, buckets: spec.buckets, fold: spec.agg === 'sum' ? 'sum' : 'avg', generic: false }
+  }
+  if (isQuantityType(metric)) {
+    const agg = getMeta(aggPinKey(metric))
+    return { unit: getMeta(unitPinKey(metric)) ?? null, raw: true, buckets: true, fold: agg === 'sum' ? 'sum' : 'avg', generic: true }
+  }
+  if (isGenericType(metric)) {
+    throw new HealthQueryError(`${metric} is not a quantity type, so it has no series: read its rows with health_samples`)
+  }
+  throw new HealthQueryError('metric must be a catalog name other than sleep (use health_sleep for nights) or a q.<Suffix> type from health_status')
+}
+
+export async function seriesQuery(args: { metric?: string; from?: string; to?: string; bucket?: string }, now = Date.now()) {
+  const requested = args.metric ?? ''
+  const metric = Object.hasOwn(GENERIC_COVERED, requested) ? GENERIC_COVERED[requested] : requested
+  const spec = seriesSpec(metric)
   const tz = healthTz()
   const today = localDate(now, tz)
   const fromMs = toInstant(args.from ?? today, tz, false)
@@ -59,31 +75,40 @@ export async function seriesQuery(args: { metric?: string; from?: string; to?: s
         GROUP BY k ORDER BY t DESC LIMIT ?`).all(metric, sourceIntervalSec, fromMs, toMs, MAX_SERIES_POINTS + 1) as Row[]
     }
   }
+  let fromRaw = false
   if (rows.length === 0 && spec.raw) {
     const group = key ?? `(end_ms / ${size * 1000})`
     rows = db.prepare(`SELECT ${group} AS k, MIN(end_ms) AS t, SUM(value) AS s, SUM(value) AS wa, COUNT(value) AS w,
         MIN(value) AS lo, MAX(value) AS hi, COUNT(*) AS n
       FROM samples WHERE type = ? AND end_ms >= ? AND end_ms < ? AND value IS NOT NULL
       GROUP BY k ORDER BY t DESC LIMIT ?`).all(metric, fromMs, toMs, MAX_SERIES_POINTS + 1) as Row[]
-    sourceIntervalSec = rows.length ? 0 : sourceIntervalSec
+    fromRaw = rows.length > 0
+    sourceIntervalSec = fromRaw ? 0 : sourceIntervalSec
   }
 
   const truncated = rows.length > MAX_SERIES_POINTS
   const kept = rows.slice(0, MAX_SERIES_POINTS).reverse()
   const round = (v: number | null): number | null => (v === null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10)
-  const points = kept.map((r) => ({
-    t: key ? String(r.k) : new Date(r.t).toISOString(),
-    ...(spec.agg === 'sum'
-      ? { sum: round(r.s) }
-      : { avg: round(r.w && r.w > 0 && r.wa !== null ? r.wa / r.w : null), min: round(r.lo), max: round(r.hi) }),
-    count: r.n ?? 0,
-  }))
+  // Catalog metrics keep their one fold; raw generic samples carry no fold, so they get all four.
+  const fields = spec.generic && fromRaw ? 'all' : spec.fold
+  const points = kept.map((r) => {
+    const avg = round(r.w && r.w > 0 && r.wa !== null ? r.wa / r.w : null)
+    return {
+      t: key ? String(r.k) : new Date(r.t).toISOString(),
+      ...(fields === 'sum' ? { sum: round(r.s) }
+        : fields === 'avg' ? { avg, min: round(r.lo), max: round(r.hi) }
+          : { avg, min: round(r.lo), max: round(r.hi), sum: round(r.s) }),
+      count: r.n ?? 0,
+    }
+  })
   return {
     metric,
+    ...(metric !== requested ? { requested } : {}),
     unit: spec.unit,
     bucket,
     /** 0 = folded from raw samples; otherwise the stored bucket width the points were built from. */
     sourceIntervalSec,
+    ...(spec.generic && !fromRaw && sourceIntervalSec !== null ? { agg: spec.fold } : {}),
     tz,
     from: new Date(fromMs).toISOString(),
     to: new Date(toMs).toISOString(),

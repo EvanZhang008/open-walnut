@@ -9,11 +9,11 @@
  */
 
 import { log } from '../../logging/index.js'
-import { HEALTH_CATEGORIES, isHealthCategory, metricsInCategories, type HealthCategory } from './catalog.js'
+import { HEALTH_CATEGORIES, genericTypeSql, isHealthCategory, metricsInCategories, type HealthCategory } from './catalog.js'
 import {
   bumpMaterializedRev, destroyHealthDbFiles, getHealthDb, getMeta, getMetaJson, newStoreId, setMeta, setMetaJson,
 } from './db.js'
-import { enabledCategories } from './ingest.js'
+import { enabledCategories, saveEnabledCategories } from './ingest.js'
 import { resetMaterializeQueue, savedSourceOrder } from './materialize.js'
 import { cleanPreferredUnits, type PreferredUnits } from './sanitize.js'
 import { disarmMissingCheck } from './sleep-ready.js'
@@ -75,7 +75,7 @@ export function updateHealthSettings(body: unknown): HealthSettingsView {
         bumpMaterializedRev()
       }
     }
-    if (categories !== undefined) setMetaJson('categories', categories)
+    if (categories !== undefined) saveEnabledCategories(categories)
     if (units) setMetaJson('preferredUnits', units)
   })()
   log.web.info('health settings updated', {
@@ -97,6 +97,7 @@ export function deleteHealthData(body: unknown): HealthDeleteResult {
     const keep = {
       sleepSourceOrder: savedSourceOrder(),
       categories: getMetaJson<unknown>('categories'),
+      categoriesKnown: getMetaJson<unknown>('categoriesKnown'),
       preferredUnits: getMetaJson<unknown>('preferredUnits'),
     }
     const removed = countRows()
@@ -105,31 +106,45 @@ export function deleteHealthData(body: unknown): HealthDeleteResult {
     getHealthDb() // fresh file, fresh storeId
     if (keep.sleepSourceOrder) setMetaJson('sleepSourceOrder', keep.sleepSourceOrder)
     if (keep.categories !== undefined) setMetaJson('categories', keep.categories)
+    if (keep.categoriesKnown !== undefined) setMetaJson('categoriesKnown', keep.categoriesKnown)
     if (keep.preferredUnits !== undefined) setMetaJson('preferredUnits', keep.preferredUnits)
     setMeta('paused', '1')
     log.web.info('health data deleted', { scope: 'all', removed })
     return { deleted: 'all', storeId: getMeta('storeId') as string, paused: true, removed }
   }
   const names = metricsInCategories(scoped)
+  // `other` is every generic type: matched by name shape, not listed in the catalog.
+  const generic = scoped.includes('other')
   const db = getHealthDb()
   let removed = 0
   db.transaction(() => {
     const marks = names.map(() => '?').join(', ')
-    removed += db.prepare(`DELETE FROM samples WHERE type IN (${marks})`).run(...names).changes
-    removed += db.prepare(`DELETE FROM buckets WHERE metric IN (${marks})`).run(...names).changes
+    const sampleWhere = [...(names.length ? [`type IN (${marks})`] : []), ...(generic ? [genericTypeSql('type')] : [])].join(' OR ')
+    const bucketWhere = [...(names.length ? [`metric IN (${marks})`] : []), ...(generic ? [genericTypeSql('metric')] : [])].join(' OR ')
+    if (sampleWhere) removed += db.prepare(`DELETE FROM samples WHERE ${sampleWhere}`).run(...names).changes
+    if (bucketWhere) removed += db.prepare(`DELETE FROM buckets WHERE ${bucketWhere}`).run(...names).changes
     db.prepare('DELETE FROM nights').run()
     db.prepare('DELETE FROM days').run()
     const enabled = [...enabledCategories()].filter((c) => !scoped.includes(c))
-    setMetaJson('categories', enabled)
+    saveEnabledCategories(enabled)
     setMeta('storeId', newStoreId())
     setMeta('paused', '1')
     for (const n of names) db.prepare('DELETE FROM meta WHERE key IN (?, ?)').run(`resync:raw:${n}`, `resync:buckets:${n}`)
+    // Their unit and agg pins and open resyncs go with them: a fresh sync may pin anew.
+    if (generic) db.prepare(`DELETE FROM meta WHERE ${genericMetaKeys()}`).run()
     bumpMaterializedRev()
   })()
   // Push the deleted pages out of the WAL too.
   try { db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* next checkpoint does it */ }
   log.web.info('health data deleted', { scope: 'categories', categories: scoped.length, removed })
   return { deleted: scoped, storeId: getMeta('storeId') as string, paused: true, removed }
+}
+
+/** Meta keys that belong to generic types: `unit:q.X`, `agg:q.X`, `resync:raw:c.X`, `resync:buckets:q.X`. */
+function genericMetaKeys(): string {
+  return ['unit:', 'agg:', 'resync:raw:', 'resync:buckets:']
+    .flatMap((head) => ['q', 'c', 'x'].map((p) => `key GLOB '${head}${p}.*'`))
+    .join(' OR ')
 }
 
 function countRows(): number {

@@ -10,10 +10,15 @@
  * `rejected`, because retrying an item that can never be accepted helps nobody.
  * The only refusal is 413 for a call over the caps, which tells the phone to
  * split the batch (it keeps the data).
+ *
+ * Generic types (`q.` / `c.` / `x.`, catalog.ts) carry a batch-level `unit`
+ * (required for `q.`) and, for buckets, `agg`. A generic call whose unit or agg
+ * is missing or malformed stores nothing and says which field (`refused`).
  */
 
 import {
-  BUCKET_INTERVALS, HEALTH_MAX_ITEMS_PER_SYNC, HEALTH_MAX_SYNC_BYTES, SPAN_VALUE_TYPES, metricSpec,
+  BUCKET_INTERVALS, GENERIC_MAX_ABS_VALUE, GENERIC_MAX_CODE, GENERIC_UNIT_RE, HEALTH_MAX_ITEMS_PER_SYNC,
+  HEALTH_MAX_SYNC_BYTES, HEALTH_MAX_TYPE_LENGTH, SPAN_VALUE_TYPES, isCharacteristic, isGenericType, isQuantityType, metricSpec,
 } from './catalog.js'
 import { isValidTz } from './day-key.js'
 
@@ -71,10 +76,17 @@ export interface CleanBatch {
   buckets: CleanBucket[]
   resync?: CleanResync
   preferredUnits?: PreferredUnits
+  /** Generic types only: the unit every value in this call is in. */
+  unit?: string
+  /** Generic bucket calls only: how a bucket folds. */
+  agg?: 'sum' | 'avg'
 }
 
+/** A generic call missing a field it needs: nothing in it is stored. */
+export interface SyncRefusal { field: 'unit' | 'agg'; message: string }
+
 export type SanitizeOutcome =
-  | { ok: true; batch: CleanBatch; rejected: number; unsupported?: true }
+  | { ok: true; batch: CleanBatch; rejected: number; unsupported?: true; refused?: SyncRefusal }
   | { ok: false; status: 413; code: 'too_large'; message: string; maxItems: number; maxBytes: number }
 
 const UUID_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
@@ -168,6 +180,67 @@ function cleanSample(raw: unknown, type: string, batchTz: string, now: number): 
   return out
 }
 
+function genericValue(value: unknown): number | undefined {
+  const v = num(value)
+  return v !== undefined && Math.abs(v) <= GENERIC_MAX_ABS_VALUE ? v : undefined
+}
+
+/**
+ * A generic raw sample: `value` and/or `code`, no per-type range. A zero-length
+ * span is fine (most quantity samples are one instant). A characteristic's times
+ * only say when the phone read it, so any pair inside the plausible window is kept.
+ */
+function cleanGenericSample(raw: unknown, type: string, batchTz: string, now: number): CleanSample | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const s = raw as Record<string, unknown>
+  const uuid = typeof s.uuid === 'string' && UUID_RE.test(s.uuid) ? s.uuid : undefined
+  let start = parseInstant(s.start, now)
+  let end = parseInstant(s.end, now)
+  if (!uuid || start === undefined || end === undefined) return null
+  if (isCharacteristic(type)) {
+    if (end < start) [start, end] = [end, start]
+  } else if (end < start || end - start > MAX_SPAN_MS) return null
+  const tz = isValidTz(s.tz) ? s.tz : batchTz
+  if (!tz) return null
+  const hasValue = s.value !== undefined && s.value !== null
+  const hasCode = s.code !== undefined && s.code !== null
+  const value = hasValue ? genericValue(s.value) : undefined
+  const code = hasCode && typeof s.code === 'number' && Number.isInteger(s.code) && s.code >= 0 && s.code <= GENERIC_MAX_CODE
+    ? s.code : undefined
+  // A field that is present but broken drops the item: storing half of it would misread.
+  if ((hasValue && value === undefined) || (hasCode && code === undefined) || (value === undefined && code === undefined)) return null
+  const src = (s.source && typeof s.source === 'object' ? s.source : {}) as Record<string, unknown>
+  const source: HealthSource = { bundleId: str(src.bundleId, 200) ?? 'unknown', name: str(src.name, 100) ?? '' }
+  const out: CleanSample = { uuid, start, end, source, tz }
+  if (value !== undefined) out.value = value
+  if (code !== undefined) out.code = code
+  const device = str(s.device, 100)
+  if (device) out.device = device
+  const meta = cleanMeta(s.meta)
+  if (meta) out.meta = meta
+  return out
+}
+
+/** A generic statistics bucket: the field its `agg` names must be there; every value within ±1e9. */
+function cleanGenericBucket(raw: unknown, agg: 'sum' | 'avg', now: number): CleanBucket | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const b = raw as Record<string, unknown>
+  const start = parseInstant(b.start, now)
+  const intervalSec = num(b.intervalSec)
+  if (start === undefined || intervalSec === undefined || !BUCKET_INTERVALS.has(intervalSec)) return null
+  const out: CleanBucket = { start, intervalSec }
+  for (const key of ['sum', 'avg', 'min', 'max'] as const) {
+    if (b[key] === undefined || b[key] === null) continue
+    const v = genericValue(b[key])
+    if (v === undefined) return null
+    out[key] = v
+  }
+  const count = num(b.count)
+  if (count !== undefined && Number.isInteger(count) && count >= 0 && count <= 1_000_000) out.count = count
+  if (out[agg] === undefined) return null
+  return out
+}
+
 function cleanBucket(raw: unknown, type: string, now: number): CleanBucket | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const b = raw as Record<string, unknown>
@@ -220,6 +293,38 @@ function arr(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
+/**
+ * The type name as sent, or '' (unsupported). Never cut to length: a cut name could
+ * be a different, valid name.
+ */
+function typeName(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  return trimmed.length <= HEALTH_MAX_TYPE_LENGTH ? trimmed : ''
+}
+
+/**
+ * Batch-level `unit` (required for `q.`, optional for `c.` / `x.`) and, on a
+ * bucket call, `agg`. Writes the clean values into `base`; returns why the call
+ * cannot be stored, if it cannot.
+ */
+function genericFields(b: Record<string, unknown>, type: string, kind: 'raw' | 'buckets', base: CleanBatch): SyncRefusal | undefined {
+  const rawUnit = typeof b.unit === 'string' ? b.unit.trim() : b.unit
+  if (rawUnit !== undefined && rawUnit !== null && rawUnit !== '') {
+    if (typeof rawUnit !== 'string' || !GENERIC_UNIT_RE.test(rawUnit)) {
+      return { field: 'unit', message: 'unit must be 1 to 32 characters of HealthKit unit syntax (letters, digits, % / ( ) * · . _ space ^ -)' }
+    }
+    base.unit = rawUnit
+  } else if (type.startsWith('q.')) {
+    return { field: 'unit', message: `${type} is a quantity type: every call for it must name its unit` }
+  }
+  if (kind === 'buckets') {
+    if (b.agg !== 'sum' && b.agg !== 'avg') return { field: 'agg', message: 'a bucket call for a generic type must set agg to sum or avg' }
+    base.agg = b.agg
+  }
+  return undefined
+}
+
 /** Serialized size of a request body, for the 192 KB cap. */
 export function serializedBytes(body: unknown): number {
   try {
@@ -245,9 +350,10 @@ export function sanitizeHealthSync(body: unknown, now = Date.now()): SanitizeOut
   }
   const kind: 'raw' | 'buckets' = b.kind === 'buckets' || (b.kind !== 'raw' && bucketsIn.length > 0 && samplesIn.length === 0)
     ? 'buckets' : 'raw'
-  const type = str(kind === 'buckets' ? (b.metric ?? b.type) : (b.type ?? b.metric), 40) ?? ''
+  const type = typeName(kind === 'buckets' ? (b.metric ?? b.type) : (b.type ?? b.metric))
   const tz = isValidTz(b.tz) ? b.tz : ''
   const spec = metricSpec(type)
+  const generic = isGenericType(type)
   const storeId = typeof b.storeId === 'string' && ID_RE.test(b.storeId) ? b.storeId : undefined
   const dev = (b.device && typeof b.device === 'object' ? b.device : {}) as Record<string, unknown>
   const installId = typeof dev.installId === 'string' && ID_RE.test(dev.installId) ? dev.installId : undefined
@@ -266,17 +372,27 @@ export function sanitizeHealthSync(body: unknown, now = Date.now()): SanitizeOut
   const units = cleanUnits(b.preferredUnits)
   if (units) base.preferredUnits = units
 
-  const supported = kind === 'raw' ? spec?.raw === true : spec?.buckets === true
+  const supported = generic
+    ? kind === 'raw' || isQuantityType(type)
+    : kind === 'raw' ? spec?.raw === true : spec?.buckets === true
   if (!supported) {
     // Nothing of an unknown type can be stored. The phone gates on status.supported,
     // and must not advance its anchor for a call answered `unsupported`.
     delete base.resync
     return { ok: true, batch: base, rejected: rejected + samplesIn.length + bucketsIn.length, unsupported: true }
   }
+  if (generic) {
+    const refused = genericFields(b, type, kind, base)
+    if (refused) {
+      // Nothing stored and no resync: an `end` here would sweep every row of the type.
+      delete base.resync
+      return { ok: true, batch: base, rejected: rejected + samplesIn.length + bucketsIn.length, refused }
+    }
+  }
   if (kind === 'raw') {
     const seen = new Set<string>()
     for (const item of samplesIn) {
-      const clean = cleanSample(item, type, tz, now)
+      const clean = generic ? cleanGenericSample(item, type, tz, now) : cleanSample(item, type, tz, now)
       if (!clean || seen.has(clean.uuid)) { rejected++; continue }
       seen.add(clean.uuid)
       base.samples.push(clean)
@@ -287,7 +403,7 @@ export function sanitizeHealthSync(body: unknown, now = Date.now()): SanitizeOut
     else {
       const seen = new Set<string>()
       for (const item of bucketsIn) {
-        const clean = cleanBucket(item, type, now)
+        const clean = generic ? cleanGenericBucket(item, base.agg!, now) : cleanBucket(item, type, now)
         const key = clean ? `${clean.start}:${clean.intervalSec}` : ''
         if (!clean || seen.has(key)) { rejected++; continue }
         seen.add(key)
