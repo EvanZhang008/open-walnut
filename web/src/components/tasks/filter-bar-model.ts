@@ -23,7 +23,9 @@ import {
 import {
   BLOCKED_OPTIONS,
   DATE_FILTER_OPTIONS,
+  DEFAULT_VALUE,
   MISSING_VALUE_TITLE,
+  OPEN_GROUP_VALUE,
   OPEN_PHASES,
   STATUS_FILTER_ORDER,
   STATUS_LAST_VALUE_TITLE,
@@ -31,9 +33,11 @@ import {
   dimLabel,
   hasAllOpen,
   hasName,
+  isDefaultStatus,
   isDimDefault,
   isValueMissing,
   listChipLabel,
+  openGroupState,
   orderStatus,
   priorityLabel,
   resetDim,
@@ -339,6 +343,8 @@ function toggleIn(list: readonly string[], value: string, dim: FilterDim): strin
  * goes empty.
  */
 export function pickValue(state: FilterState, dim: FilterDim, value: string, mode: FilterPickMode): FilterState {
+  if (value === DEFAULT_VALUE) return isDimDefault(state, dim) ? state : resetDim(state, dim);
+  if (dim === 'status' && value === OPEN_GROUP_VALUE) return pickOpenGroup(state, mode);
   const current = selectedValues(state, dim);
   if (SINGLE_DIMS.includes(dim)) {
     if (dim === 'date') return withValues(state, dim, [value]);
@@ -352,4 +358,24 @@ export function pickValue(state: FilterState, dim: FilterDim, value: string, mod
   else next = current.length === 1 && has ? [] : [value];
   if (dim === 'status' && next.length === 0) return state;
   return withValues(state, dim, next);
+}
+
+/**
+ * The Open parent row. `only` = just the open block (the default). A click adds
+ * the whole block when any of it is off, and takes it out when all of it is on,
+ * unless nothing else is picked: Status never goes empty.
+ */
+export function pickOpenGroup(state: FilterState, mode: FilterPickMode): FilterState {
+  const s = orderStatus(state.status);
+  if (mode === 'only') return isDefaultStatus(s) ? state : { ...state, status: [...OPEN_PHASES] };
+  if (openGroupState(s) === 'all') {
+    const rest = s.filter((p) => !OPEN_PHASES.includes(p));
+    return rest.length ? { ...state, status: rest } : state;
+  }
+  return { ...state, status: orderStatus([...s, ...OPEN_PHASES]) };
+}
+
+/** The Open row cannot be turned off: the open block is all that is picked. */
+export function isOpenGroupLocked(set: readonly TaskPhase[]): boolean {
+  return isDefaultStatus(set);
 }

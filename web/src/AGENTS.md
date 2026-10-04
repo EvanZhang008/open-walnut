@@ -116,10 +116,23 @@ show inline after the open ones, other completed hits that show the query fold i
   now, Any date, Overdue, Starting within 7 days, the old `No dates` is gone; `Clear` in the title
   while something is set), then the display rows
   (`DisplaySections.tsx`): Sort and Group, then View (one row, the current view's name at the right),
-  Show tab bar, Session columns, and last the rows only some views have (Collapse all, Tier layout,
-  Recent order). A property row opens page two (`FilterValuesPage.tsx`), that property's values as a
+  Show tab bar, Session columns, and last Collapse all in the views with project groups. Sort and
+  Group are the same two rows in EVERY view and act on the lists the view draws (`list-order.ts`):
+  each tier keeps its own sort (`walnut-todo-tier-sorts`, Manual = pin order) and its Group is the old
+  tier view mode (By project / Flat), Recent sorts by Priority, Created or Updated and groups by
+  project or not, the Projects list keeps `sortBy`/`groupBy` (All and Projects act on it; a tier in
+  All is sorted and grouped from its heading menu, the same Organize / Sort by groups the Projects
+  heading has, and the Pinned heading menu sets every tier at once, which is the only way in All
+  when the pins draw with no tier heading); Pinned reads every tier it draws (no segment pressed
+  when they differ, with a note) and a pick writes them all. A sorted tier draws no
+  separator lines, and a drop that reorders inside it switches it to Manual (its drawn order becomes
+  the pin order), while any other sorted tier keeps its pin order through the write (`keepPinOrder`).
+  A property row opens page two (`FilterValuesPage.tsx`), that property's values as a
   checklist (`FilterValueList.tsx`, shared with the chip menus: a plain click TOGGLES a multi-select
-  row, a single-select pick closes the menu); the View row opens the view list (`DisplayViewsPage`,
+  row, a single-select pick closes the menu). Every list names its default with a muted `Default`:
+  Status starts with an Open row (To Do, In Progress, Need Action indented under it, a dash while
+  part of it is on), Date tags Available now, the rest start with an `Any …` row that clears the
+  property (left out of chip menus, which have Remove filter); the View row opens the view list (`DisplayViewsPage`,
   the bar's tabs above a hairline, the rest below, a pick closes the menu). Typing searches every
   filter value AND every view on page one (hits ranked by `RecentEntry.uses`, `filter-home-model.ts`
   `rankByUse`) and filters the rows on page two. Never bring the wall back: a first page is a

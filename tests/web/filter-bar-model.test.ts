@@ -11,7 +11,8 @@ import { INBOX_TAB } from '../../web/src/components/tasks/task-tabs';
 import { DEFAULT_TASK_QUERY_FILTER_STATE as Q0 } from '../../web/src/components/tasks/view-filter-model';
 import { DEFAULT_FILTER_STATE, type FilterLists, type FilterState, type LegacyFilterFields } from '../../web/src/components/tasks/filter-bar-types';
 import {
-  DATE_FILTER_OPTIONS, OPEN_PHASES, STATUS_FILTER_ORDER, buildFilterChips, chipSummary, dimValues,
+  DATE_FILTER_OPTIONS, DEFAULT_VALUE, OPEN_GROUP_VALUE, OPEN_PHASES, STATUS_FILTER_ORDER, buildFilterChips, chipSummary, dimValues,
+  anyRowLabel, defaultValueOf, isOpenGroupLocked, openGroupState,
   foldQueryStatus, isDefaultStatus, isDimVisible, migrateLegacy, moreSetCount, pickValue, readFilterState,
   readStatusSet, statusChipLabel, timeChipText, writeFilterState, writeProjectSet, writeStatusSet,
 } from '../../web/src/components/tasks/filter-bar-model';
@@ -264,6 +265,41 @@ describe('pickValue (6.2, G13)', () => {
     const t = pickValue(S0, 'time', '24h', 'replace');
     expect(t.time.preset).toBe('24h');
     expect(pickValue(t, 'time', '24h', 'replace').time.preset).toBeNull();
+  });
+});
+
+describe('the Open row and the default rows', () => {
+  const st2 = (...p: TaskPhase[]) => ({ ...S0, status: p });
+  it('Open adds the whole block when any of it is off, takes it out when all is on, never empties Status', () => {
+    expect(pickValue(st2('TODO', 'COMPLETE'), 'status', OPEN_GROUP_VALUE, 'toggle').status).toEqual([...OPEN_PHASES, 'COMPLETE']);
+    expect(pickValue(st2('COMPLETE'), 'status', OPEN_GROUP_VALUE, 'toggle').status).toEqual([...OPEN_PHASES, 'COMPLETE']);
+    expect(pickValue(st2(...OPEN_PHASES, 'WAITING'), 'status', OPEN_GROUP_VALUE, 'toggle').status).toEqual(['WAITING']);
+    const only = st2(...OPEN_PHASES);
+    expect(pickValue(only, 'status', OPEN_GROUP_VALUE, 'toggle')).toBe(only);
+    expect(pickValue(st2('NEED_ACTION', 'COMPLETE'), 'status', OPEN_GROUP_VALUE, 'only').status).toEqual([...OPEN_PHASES]);
+  });
+  it('openGroupState and the lock follow the set', () => {
+    expect(openGroupState([...OPEN_PHASES])).toBe('all');
+    expect(openGroupState(['IN_PROGRESS', 'WAITING'])).toBe('some');
+    expect(openGroupState(['COMPLETE'])).toBe('none');
+    expect(isOpenGroupLocked([...OPEN_PHASES])).toBe(true);
+    expect(isOpenGroupLocked([...OPEN_PHASES, 'COMPLETE'])).toBe(false);
+  });
+  it('the default row resets its property and names the default', () => {
+    const set: FilterState = { ...S0, projects: ['Home'], blocked: true, time: { ...S0.time, basis: 'created', preset: '24h' }, date: 'overdue' };
+    expect(pickValue(set, 'project', DEFAULT_VALUE, 'toggle').projects).toEqual([]);
+    expect(pickValue(set, 'blocked', DEFAULT_VALUE, 'replace').blocked).toBeUndefined();
+    const t = pickValue(set, 'time', DEFAULT_VALUE, 'replace').time;
+    expect(t.preset).toBeNull();
+    expect(t.basis).toBe('created');
+    expect(pickValue(S0, 'project', DEFAULT_VALUE, 'toggle')).toBe(S0);
+    expect(defaultValueOf('status')).toBe(OPEN_GROUP_VALUE);
+    expect(defaultValueOf('date')).toBe('now');
+    expect(defaultValueOf('tags')).toBe(DEFAULT_VALUE);
+    expect(anyRowLabel('status')).toBeNull();
+    expect(anyRowLabel('date')).toBeNull();
+    expect(anyRowLabel('project')).toBe('Any project');
+    expect(anyRowLabel('time')).toBe('Any time');
   });
 });
 

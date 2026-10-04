@@ -2,8 +2,8 @@
  * The Display menu's setting rows (spec 3.3, 6.5): segmented pickers with a
  * roving tabindex (Left/Right move AND pick, Home/End jump), the Sort row with
  * its inline "replace every project's own order" confirm (gap G12), the tab bar
- * switch, and the plain choice rows (Group, Session columns, Tier layout,
- * Recent order). Presentational; DisplayMenu.tsx wires them to its props.
+ * switch, and the plain choice rows (Group, Session columns). Presentational;
+ * DisplaySections.tsx wires them to its props.
  */
 import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { SortBy } from './ViewDropdown';
@@ -12,7 +12,7 @@ export interface SegChoice<K extends string> {
   key: K;
   label: string;
   title?: string;
-  /** Extra `data-view-option` on the segment (Tier layout, Recent order keep per-value keys). */
+  /** Extra `data-view-option` on the segment. */
   option?: string;
 }
 
@@ -117,13 +117,15 @@ export function replaceOrdersQuestion(sort: SortBy, n: number): string {
 }
 
 /**
- * Sort for the whole board. `setSortForAll` drops every project's own order, so
+ * Sort for the lists the view draws. A pick drops every project's own order, so
  * while any project has one (projectSortCount > 0) no segment reads as pressed,
  * a muted line says how many, and a pick asks first: only Replace writes. With
- * none, re-picking the pressed segment writes nothing.
+ * none, re-picking the pressed segment writes nothing. `sortBy` null = the
+ * lists differ: nothing pressed, and any pick writes.
  */
-export function SortRow({ sortBy, projectSortCount, onSortForAll }: {
-  sortBy: SortBy;
+export function SortRow({ sortBy, choices = SORT_CHOICES, projectSortCount, onSortForAll }: {
+  sortBy: SortBy | null;
+  choices?: readonly SegChoice<SortBy>[];
   projectSortCount: number;
   onSortForAll(v: SortBy): void;
 }) {
@@ -144,7 +146,7 @@ export function SortRow({ sortBy, projectSortCount, onSortForAll }: {
   return (
     <div className="dm-sort" ref={rowRef}>
       <DisplayRow option="sort" label="Sort">
-        <Segmented label="Sort" choices={SORT_CHOICES} value={mixed ? null : sortBy} onPick={pick} />
+        <Segmented label="Sort" choices={choices} value={mixed ? null : sortBy} onPick={pick} />
       </DisplayRow>
       {mixed && !pending && <div className="dm-note">{ownOrderNote(projectSortCount)}</div>}
       {mixed && pending && (

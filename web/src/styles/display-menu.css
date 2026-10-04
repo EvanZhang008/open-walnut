@@ -48,8 +48,7 @@
 .dm-row-label { flex-shrink: 0; }
 .dm-seg { flex: none; width: auto; }
 .dm-seg-btn { flex: none; min-width: 24px; padding: 0 8px; font-variant-numeric: tabular-nums; }
-/* The view-specific slot: room for its tallest form (one row: Collapse all, Tier
-   layout or Recent order), so a view switch never moves a row or resizes the box. */
+/* The Collapse all slot. */
 .dm-context { --dm-row-h: 32px; min-height: var(--dm-row-h); }
 .dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tp-muted); font-size: 12px; }
 

@@ -181,23 +181,25 @@ test('a view picked on the View page switches the list and the tab bar, closes t
   await expect(tab(page, 'Focus')).toHaveAttribute('aria-selected', 'true')
   await openDisplayMenu(page)
   await expect(viewSummary(page)).toHaveText('Focus')
-  // C15: a tier view adds Tier layout, last; both keys pick and the menu stays open.
-  for (const key of ['tier-custom', 'tier-project']) {
-    await option(page, key).click()
-    await expect(option(page, key)).toHaveAttribute('aria-pressed', 'true')
+  // A tier view has the same Sort and Group as every view, live (the old Tier layout row is
+  // its Group); both pick and the menu stays open. No row says it only works elsewhere.
+  for (const [row, key] of [['group', 'none'], ['group', 'project'], ['sort', 'priority'], ['sort', 'manual']] as const) {
+    await option(page, row).locator(`[data-choice="${key}"]`).click()
+    await expect(option(page, row).locator(`[data-choice="${key}"]`)).toHaveAttribute('aria-pressed', 'true')
   }
   await expect(displayMenu(page)).toBeVisible()
-  await expect(option(page, 'recent-updated')).toHaveCount(0)
+  await expect(option(page, 'sort').locator('[data-choice]')).toHaveCount(4)
+  expect(await displayMenu(page).innerText()).not.toMatch(/Tier layout|Recent order|Only in/)
   await closeDisplayMenu(page)
 
-  // Recent swaps the last row for Recent order.
+  // Recent: the same two rows; its Sort has no Manual (a feed has no hand order).
   await pickView(page, 'recent')
   await openDisplayMenu(page)
   await expect(viewSummary(page)).toHaveText('Recent')
-  await expect(option(page, 'tier-project')).toHaveCount(0)
-  for (const key of ['recent-created', 'recent-updated']) {
-    await option(page, key).click()
-    await expect(option(page, key)).toHaveAttribute('aria-pressed', 'true')
+  await expect(option(page, 'sort').locator('[data-choice="manual"]')).toHaveCount(0)
+  for (const [row, key] of [['sort', 'date'], ['sort', 'updated'], ['group', 'project'], ['group', 'none']] as const) {
+    await option(page, row).locator(`[data-choice="${key}"]`).click()
+    await expect(option(page, row).locator(`[data-choice="${key}"]`)).toHaveAttribute('aria-pressed', 'true')
   }
   await closeDisplayMenu(page)
 
@@ -244,23 +246,28 @@ test('page one keeps its height and every row in place in every view; the View p
   await boot(page, baseURL!)
   await openDisplayMenu(page)
   const height = async () => (await box(displayMenu(page))).height
-  // Rows every view has (Session columns, Sort, Group: C29b) and the top of the slot the view
-  // rows (Collapse all, Tier layout, Recent order) share sit at the same place in every view.
-  const ys = async () => { const top = (await box(displayMenu(page))).y; return Promise.all([option(page, 'session-panels'), option(page, 'sort'), option(page, 'group'), displayMenu(page).locator('.dm-context')]
+  // Rows every view has (Sort, Group, View, Session columns: C29b) sit at the same place in
+  // every view; only the last row, Collapse all, comes and goes (views with project groups).
+  const ys = async () => { const top = (await box(displayMenu(page))).y; return Promise.all([option(page, 'sort'), option(page, 'group'), option(page, 'view'), option(page, 'session-panels')]
     .map(async (l) => Math.round((await box(l)).y - top))) }
   await expect(option(page, 'sort')).toBeVisible()
   const h0 = await height()
   const y0 = await ys()
-  const steady = async () => {
-    expect(Math.abs((await height()) - h0)).toBeLessThan(0.5)
+  // The height without the Collapse row, the same in every view that has none.
+  let hBare: number | null = null
+  const steady = async (withCollapse: boolean) => {
+    const h = await height()
+    if (withCollapse) expect(Math.abs(h - h0)).toBeLessThan(0.5)
+    else { expect(h).toBeLessThan(h0); hBare ??= h; expect(Math.abs(h - hBare)).toBeLessThan(0.5) }
     for (const [i, y] of (await ys()).entries()) expect(Math.abs(y - y0[i])).toBeLessThanOrEqual(1)
   }
   await closeDisplayMenu(page)
-  for (const [key, row] of [['focus', 'tier-project'], ['recent', 'recent-updated'], ['all', 'collapse']] as const) {
+  for (const [key, withCollapse] of [['focus', false], ['recent', false], ['all', true]] as const) {
     await pickView(page, key)
     await openDisplayMenu(page)
-    await expect(option(page, row)).toBeVisible()
-    await steady()
+    await expect(option(page, 'group')).toBeVisible()
+    await expect(option(page, 'collapse')).toHaveCount(withCollapse ? 1 : 0)
+    await steady(withCollapse)
     await closeDisplayMenu(page)
   }
 
@@ -286,7 +293,7 @@ test('page one keeps its height and every row in place in every view; the View p
   await expect(displayMenu(page)).toHaveCount(0)
   await openDisplayMenu(page)
   await expect(viewSummary(page)).toHaveText('Lane 30')
-  await steady()
+  await steady(false)
   await closeDisplayMenu(page)
 })
 

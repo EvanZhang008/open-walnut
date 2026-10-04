@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { Fragment, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -109,6 +109,10 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { type SortBy, type GroupBy } from './ViewDropdown';
+import {
+  RECENT_SORT_VALUES, SORT_VALUES, commonValue, groupByProject, groupOfTierMode, keepPinOrder, orderLists,
+  parseTierSorts, recentOrderOfSort, sortOfRecentOrder, tierModeOfGroup, type RecentOrder, type TierViewMode,
+} from './list-order';
 import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
 import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
@@ -600,7 +604,6 @@ function persistSection(section: TodoSection) {
  * only changes which one drives the render; neither is rewritten. Keyed by tier
  * id ('focus' | ... | ct_*); 'walnut-todo-' prefix rides ui-prefs-sync.
  */
-type TierViewMode = 'project' | 'custom';
 const LS_TIER_VIEW_KEY = 'walnut-todo-tier-view-modes';
 
 function readTierViewModes(): Record<string, TierViewMode> {
@@ -622,19 +625,38 @@ function persistTierViewModes(modes: Record<string, TierViewMode>) {
   try { localStorage.setItem(LS_TIER_VIEW_KEY, JSON.stringify(modes)); } catch { /* ignore */ }
 }
 
+// Per-tier task sort (the Display menu's Sort in a tier view), keyed like the view
+// modes; absent = Manual, the tier's pin order. 'walnut-todo-' prefix rides ui-prefs-sync.
+const LS_TIER_SORT_KEY = 'walnut-todo-tier-sorts';
+
+function readTierSorts(): Record<string, SortBy> {
+  try { return parseTierSorts(localStorage.getItem(LS_TIER_SORT_KEY)); } catch { return {}; }
+}
+
+function persistTierSorts(sorts: Record<string, SortBy>) {
+  try { localStorage.setItem(LS_TIER_SORT_KEY, JSON.stringify(sorts)); } catch { /* ignore */ }
+}
+
+// Recent's Group (Flat by default, the feed as it always was).
+const LS_RECENT_GROUP_KEY = 'walnut-todo-recent-group';
+
+function readRecentGroup(): GroupBy {
+  try { return localStorage.getItem(LS_RECENT_GROUP_KEY) === 'project' ? 'project' : 'none'; } catch { return 'none'; }
+}
+
 // Recent tab sort mode — see RecentSortMode in recent-activity-time.ts (the row's
 // time and the feed's sort share it). 'walnut-todo-' prefix rides ui-prefs-sync.
 const LS_RECENT_SORT_KEY = 'walnut-todo-recent-sort';
 
-function readRecentSortMode(): RecentSortMode {
+function readRecentSortMode(): RecentOrder {
   try {
     const v = localStorage.getItem(LS_RECENT_SORT_KEY);
-    if (v === 'updated' || v === 'created') return v;
+    if (v === 'updated' || v === 'created' || v === 'priority') return v;
   } catch { /* ignore */ }
   return 'updated';
 }
 
-function persistRecentSortMode(mode: RecentSortMode) {
+function persistRecentSortMode(mode: RecentOrder) {
   try { localStorage.setItem(LS_RECENT_SORT_KEY, mode); } catch { /* ignore */ }
 }
 
@@ -1711,6 +1733,15 @@ function persistGroupBy(v: GroupBy) {
   try { localStorage.setItem(LS_GROUP_KEY, v); } catch { /* ignore */ }
 }
 
+function priorityRank(t: Task): number {
+  return PRIORITY_RANK[effectivePriority(t.priority)] ?? 3;
+}
+
+/** The order each non-Manual sort draws a list in: the Projects list and the tiers alike. */
+const TASK_COMPARATORS: Record<Exclude<SortBy, 'manual'>, (a: Task, b: Task) => number> = {
+  priority: comparePriority, date: compareDate, updated: compareUpdated,
+};
+
 /** Sort tasks by priority (Immediate → Important → Backlog → None), then by created_at descending within same priority */
 function comparePriority(a: Task, b: Task): number {
   const pa = PRIORITY_RANK[effectivePriority(a.priority)] ?? 3;
@@ -2323,7 +2354,7 @@ const NO_SEPARATORS: TierSeparator[] = [];
 // IS the collapse control, and every tier verb lives in its ··· / right-click menu.
 // No grip, no icon, no count, and no per-tier resize handle: the All view is one
 // scroller now, so a per-tier maxHeight would carve a second scrollbar out of it.
-function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode }: {
+function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort }: {
   /** `id` + `label` of the tier — the four built-ins pass a synthetic def. */
   def: CustomTierDef;
   /** In a stacked view (All or Pinned): the tier draws its heading and takes header drops. */
@@ -2353,6 +2384,9 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
   /** Per-tier view mode, offered as two menu rows (the solo tab keeps its bar). */
   viewMode?: TierViewMode;
   onChangeViewMode?: (tier: string, mode: TierViewMode) => void;
+  /** The tier's own sort, offered as pick-one rows like the Projects heading's. */
+  sortBy?: SortBy;
+  onChangeSort?: (tier: string, sort: SortBy) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${def.id}-header-drop-zone`, disabled: !isAll });
   const actions: ContextMenuItem[] = [
@@ -2369,10 +2403,15 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
     { divider: true },
     { key: 'collapse', label: folded ? `Expand ${def.label}` : `Collapse ${def.label}`, onSelect: () => onToggle(def.id) },
     { divider: true },
-    // Same two modes the solo tab's toggle offers, as explicit rows: a menu has
-    // room to name both, so neither is hidden behind the other's label.
-    { key: 'mode-project', label: 'By project', when: !!onChangeViewMode, disabled: viewMode === 'project', onSelect: () => onChangeViewMode?.(def.id, 'project') },
-    { key: 'mode-custom', label: 'Custom order', when: !!onChangeViewMode, disabled: viewMode === 'custom', onSelect: () => onChangeViewMode?.(def.id, 'custom') },
+    // The tier's Group and Sort, the same pick-one groups the Projects heading has (and
+    // what the Display menu sets in this tier's own view).
+    { key: 'organize', label: 'Organize', section: true, when: !!onChangeViewMode },
+    { key: 'mode-project', label: 'By project', when: !!onChangeViewMode, checked: viewMode === 'project', onSelect: () => onChangeViewMode?.(def.id, 'project') },
+    { key: 'mode-custom', label: 'In one list', when: !!onChangeViewMode, checked: viewMode === 'custom', onSelect: () => onChangeViewMode?.(def.id, 'custom') },
+    { key: 'sort', label: 'Sort by', section: true, when: !!onChangeSort },
+    ...PROJECT_SORT_OPTIONS.map(([value, label]) => ({
+      key: `sort-${value}`, label, when: !!onChangeSort, checked: sortBy === value, onSelect: () => onChangeSort?.(def.id, value),
+    })),
   ];
   return (
     <div className="todo-pinned-subgroup">
@@ -2991,11 +3030,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, []);
-  // Recent tab sort mode (updated-activity vs creation time) — see RecentSortMode.
-  const [recentSortMode, setRecentSortMode] = useState<RecentSortMode>(readRecentSortMode);
-  const handleRecentSortChange = useCallback((mode: RecentSortMode) => {
-    setRecentSortMode(mode);
+  // Per-tier task sort: Manual (pin order) unless the Display menu picked another.
+  const [tierSorts, setTierSorts] = useState<Record<string, SortBy>>(readTierSorts);
+  const tierSort = useCallback((tier: string): SortBy => tierSorts[tier] ?? 'manual', [tierSorts]);
+  const setTierSort = useCallback((tier: string, v: SortBy) => {
+    setTierSorts((prev) => {
+      if ((prev[tier] ?? 'manual') === v) return prev;
+      const next = { ...prev };
+      if (v === 'manual') delete next[tier]; else next[tier] = v;
+      persistTierSorts(next);
+      return next;
+    });
+  }, []);
+  // Read by the drag-end handler, whose deps leave the sort out.
+  const tierSortRef = useRef(tierSort);
+  tierSortRef.current = tierSort;
+  // Recent's order: the time the feed ranks by (the row's time too, see
+  // RecentSortMode), or Priority, which keeps the feed and orders it by priority.
+  const [recentOrder, setRecentOrder] = useState<RecentOrder>(readRecentSortMode);
+  const recentSortMode: RecentSortMode = recentOrder === 'created' ? 'created' : 'updated';
+  const handleRecentSortChange = useCallback((mode: RecentOrder) => {
+    setRecentOrder(mode);
     persistRecentSortMode(mode);
+  }, []);
+  const [recentGroup, setRecentGroup] = useState<GroupBy>(readRecentGroup);
+  const handleRecentGroupChange = useCallback((g: GroupBy) => {
+    setRecentGroup(g);
+    try { localStorage.setItem(LS_RECENT_GROUP_KEY, g); } catch { /* ignore */ }
   }, []);
   // Ephemeral view override while a search query is active. Search defaults to the
   // stacked All view (every region shows its matches at once); picking a tab during
@@ -3841,7 +3902,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Completed tasks join the feed DURING SEARCH (2026-08-26, user request —
     // a matching done task must be findable in Recent too); the everyday feed
     // keeps the "Show completed" gate (+ the completion-animation grace).
-    return tasks
+    const feed = tasks
       .filter(t => {
         const isDone = t.status === 'done' || t.phase === 'COMPLETE';
         if (isDone) return isSearchMode || showCompleted || keepWhileCompleting(t);
@@ -3849,7 +3910,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       })
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
-  }, [tasks, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, recentSortMode, isSearchMode]);
+    // Priority reorders the same 50 (newest first among equals); By project then
+    // gathers each project's rows under its label.
+    const ranked = recentOrder === 'priority'
+      ? feed.map((t, i) => ({ t, i })).sort((a, b) => priorityRank(a.t) - priorityRank(b.t) || a.i - b.i).map((x) => x.t)
+      : feed;
+    return recentGroup === 'project' ? groupByProject(ranked) : ranked;
+  }, [tasks, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, recentSortMode, recentOrder, recentGroup, isSearchMode]);
   const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
@@ -3967,10 +4034,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const folderParents = useMemo(() => buildFolderParents(folderMeta), [folderMeta]);
   const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
     const isCustom = tierViewMode(tier) === 'custom';
+    const sort = tierSort(tier);
     const byId = new Map(tierTasks.map((t) => [t.id, t]));
+    // A sorted tier reads its cards in the sort's order instead of pin order; the
+    // folder and project passes below then work on that order (both are stable).
+    const ordered = sort === 'manual' ? tierTasks : [...tierTasks].sort(TASK_COMPARATORS[sort]);
     // Project view sinks folder clusters below the loose tasks (A1); custom view
     // keeps the lead-anchored cluster so the user's hand order stays authoritative.
-    const projected = orderPinnedTier(tierTasks, isCustom ? 'custom' : 'project', ordering?.projectOrder);
+    const projected = orderPinnedTier(ordered, isCustom ? 'custom' : 'project', ordering?.projectOrder);
     // A subfolder's rows move inside its parent folder's run (pre-order), so the
     // tree draws nested instead of as siblings.
     const nested = nestFolderUnits(projected, (id) => byId.get(id)?.group_id || undefined, folderParents);
@@ -3989,12 +4060,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // in `items`, the strategy displaces a line with the cards around it, so a card
     // can never visually cross it mid-drag (2026-08-25) and a slot can open above a
     // top-anchored line.
+    // Lines divide a hand order: a sorted tier draws none (they stay saved for Manual).
+    if (sort !== 'manual') return withChips;
     return withSeparatorSentinels({
       ids: withChips, separators, tier,
       groupOf: (id) => byId.get(id)?.group_id ?? null,
       isTaskId: (id) => byId.has(id),
     });
-  }, [tierViewMode, ordering?.projectOrder, separators, folderParents]);
+  }, [tierViewMode, tierSort, ordering?.projectOrder, separators, folderParents]);
   const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterForTier('focus', focusTasksLocal), [dragTierIds, focusTasksLocal, clusterForTier]);
   const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterForTier('satellite', satelliteTasksLocal), [dragTierIds, satelliteTasksLocal, clusterForTier]);
   const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterForTier('wait', waitTasksLocal), [dragTierIds, waitTasksLocal, clusterForTier]);
@@ -4041,7 +4114,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // divider lines anchored to it. Custom mode only: project-mode lines anchor
   // FOLDERS, which stay put when one card moves.
   const sepReanchor = useCallback((tier: string, beforeIds: string[], movedIds: string[]) => {
-    if (tierViewMode(tier) !== 'custom') return;
+    if (tierViewMode(tier) !== 'custom' || tierSortRef.current(tier) !== 'manual') return;
     const next = reanchorSeparatorsAfterMove({
       separators, tier, beforeIds, movedIds,
       groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
@@ -4056,7 +4129,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const syncCustomSepAnchors = useCallback((tiers: Array<{ tier: string; arr: string[] }>, movedIds: string[] = []) => {
     let next = separators;
     for (const { tier, arr } of tiers) {
-      if (tierViewMode(tier) !== 'custom') continue;
+      if (tierViewMode(tier) !== 'custom' || tierSortRef.current(tier) !== 'manual') continue;
       next = syncSeparatorAnchorsFromArr({
         separators: next, tier, finalArr: arr,
         isTaskId: (id) => pinnedTaskMap.has(id),
@@ -4570,6 +4643,34 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Global pinned order = tiers concatenated in render order.
     const globalOrder = (arrOf: (t: FocusTier) => string[]): string[] =>
       [...snap.tiers.keys()].flatMap((t) => arrOf(t));
+    // Sorted tiers (list-order.ts): snap.tiers holds what each tier DREW, its sort's
+    // order. A drop that moves something inside one sorted tier switches it to Manual,
+    // and the order it drew becomes its pin order, so nothing on screen jumps. Every
+    // other sorted tier keeps its own pin order through the write: a drop writes every
+    // tier, and a sort's order must not replace a hand order nobody touched.
+    const pinIndex = new Map(pinnedTaskIds_arr.map((id, i) => [id, i]));
+    const persisted = (order: string[], manualTier?: FocusTier): string[] => {
+      const keep: Set<string>[] = [];
+      for (const tier of snap.tiers.keys()) {
+        if (tier === manualTier || tierSortRef.current(tier) === 'manual') continue;
+        keep.push(new Set(taskIdsOnly(finalArr(tier))));
+      }
+      return keep.length ? keepPinOrder(order, keep, pinIndex) : order;
+    };
+    /** `tier`'s cards in `order` differ from what it drew: the drop moved something there. */
+    const movedWithin = (tier: FocusTier, order: string[]): boolean => {
+      const before = taskIdsOnly(snap.tiers.get(tier) ?? []);
+      const members = new Set(before);
+      const after = order.filter((id) => members.has(id));
+      return after.length === before.length && after.some((id, i) => id !== before[i]);
+    };
+    /** A reorder inside `tier`: a sorted tier switches to Manual. Returns the tier the write bakes. */
+    const reorderIn = (tier: FocusTier, order: string[]): FocusTier | undefined => {
+      if (tierSortRef.current(tier) === 'manual' || !movedWithin(tier, order)) return undefined;
+      setTierSort(tier, 'manual');
+      showSortToast(`${tierDisplayLabel(tier, customTiers)} switched to Manual order`);
+      return tier;
+    };
     // A card filed into a folder drawn in `tier` lives there from now on: pinned first
     // when it came from Recent, retiered when it came from another tier. The card
     // teleports into the cluster, so a line anchored to it is freed first (it would
@@ -4885,7 +4986,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const newOrder = ordered.flatMap((id) => id === activeId ? orderedMembers : (memberSet.has(id) ? [] : [id]));
       // Lines anchored to a member move with the BAND, not the block.
       reanchorSeps(snapTierOf(orderedMembers[0]), orderedMembers);
-      onReorderPinned?.(taskIdsOnly(newOrder));
+      const folderOrder = taskIdsOnly(newOrder);
+      onReorderPinned?.(persisted(folderOrder, sameTier ? reorderIn(overTier, folderOrder) : undefined));
       return;
     }
 
@@ -4967,7 +5069,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const currentTier = finalTierOf(activeId);
       if (isFromRecent) {
         if (currentTier) {
-          const order = buildOrderFromRefs();
+          const order = persisted(buildOrderFromRefs());
           onPinTask?.(activeId);
           setTimeout(() => onSetTier?.(activeId, currentTier, order), 100);
           maybeMoveProject(currentTier, finalArr(currentTier), /* evidence */ 'none');
@@ -4982,7 +5084,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               { tier: origTier, arr: finalArr(origTier) },
               { tier: currentTier, arr: finalArr(currentTier) },
             ], [activeId]);
-            return onSetTier?.(activeId, currentTier, buildOrderFromRefs());
+            return onSetTier?.(activeId, currentTier, persisted(buildOrderFromRefs()));
           });
         } else if (fileTo) {
           commit(() => {});
@@ -5030,7 +5132,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!targetTier) return;
       // Pin first, then set tier. setFocusTier requires task.pinned===true in the
       // store, so we delay to let the pin write complete before changing tier.
-      const order = buildOrderFromRefs();
+      const order = persisted(buildOrderFromRefs());
       onPinTask?.(activeId);
       setTimeout(() => onSetTier?.(activeId, targetTier, order), 100);
       maybeMoveProject(targetTier, finalArr(targetTier), /* evidence */ 'none');
@@ -5067,9 +5169,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           { tier: origTier, arr: finalArr(origTier).filter((id) => id !== activeId) },
           { tier: targetTier, arr },
         ], [activeId]);
+        const order = buildOrderFromRefs(targetTier);
         return origTier !== targetTier
-          ? onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier))
-          : onReorderPinned?.(buildOrderFromRefs(targetTier));
+          ? onSetTier?.(activeId, targetTier, persisted(order))
+          : onReorderPinned?.(persisted(order, reorderIn(targetTier, order)));
       });
       maybeMoveProject(targetTier, arr);
       return;
@@ -5100,9 +5203,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Anchors from the final frame: a card that pushed a line aside really is on
       // the other side of it now (the strategy's preview was the truth).
       syncCustomSepAnchors([{ tier: origTier, arr: reorderedTier }]);
-      return onReorderPinned?.(taskIdsOnly(newOrder));
+      const order = taskIdsOnly(newOrder);
+      return onReorderPinned?.(persisted(order, reorderIn(origTier, order)));
     });
-  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
+  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors, setTierSort, showSortToast, customTiers]);
 
   /** Every live project group key: real project names + '' when Inbox exists. */
   const liveGroupKeys = useMemo(() => {
@@ -5431,6 +5535,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => visibleRecentTasks.map(recentStaticId),
     [recentStaticId, visibleRecentTasks],
   );
+  const recentProjectCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of visibleRecentTasks) map.set(t.project || '', (map.get(t.project || '') ?? 0) + 1);
+    return map;
+  }, [visibleRecentTasks]);
   // Projects with a visible card per tier, AT REST (frozen for a pinned drag): which
   // project labels a tier draws. Frozen so a label never comes or goes under a live
   // drag, the way the old plain-DOM labels read their set from tierIdsAtRest.
@@ -5579,8 +5688,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Manual mode: keep store order as-is. Priority/date/updated: re-sort siblings.
     // Each project sorts by its own order; projects are drawn in the project order
     // (grouped below), so how their runs interleave here does not matter.
-    const cmpMap: Record<Exclude<SortBy, 'manual'>, (a: Task, b: Task) => number> = { priority: comparePriority, date: compareDate, updated: compareUpdated };
-    const sortRun = (run: Task[], mode: SortBy) => { if (mode !== 'manual') run.sort(cmpMap[mode] ?? compareDate); };
+    const sortRun = (run: Task[], mode: SortBy) => { if (mode !== 'manual') run.sort(TASK_COMPARATORS[mode] ?? compareDate); };
     if (groupBy === 'project') {
       const runs = new Map<string, Task[]>();
       for (const task of topLevel) {
@@ -7143,7 +7251,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // One folder means no boundary between folders. Say which mode does divide
       // inside a folder instead of failing silently.
       if (runs.length < 2) {
-        onOperationError?.('Only one folder in this tier: "By project" puts a line BETWEEN folders. Switch to Custom order to divide inside one.');
+        onOperationError?.('Only one folder in this tier: "By project" puts a line BETWEEN folders. Set its Group to Flat to divide inside one.');
         return;
       }
       // The line goes on the side of the clicked folder that HAS a neighbour:
@@ -7216,13 +7324,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // chip alone (it IS the whole cluster mid-drag). The chip's key is stable across
   // both states (`group:<gid>:<tier>`) so React keeps the same drag node through the
   // idle→collapsed handoff — dnd-kit's active node must not remount mid-drag.
-  const movePinnedRow = useCallback((taskId: string, neighborId: string) => {
-    const next = [...pinnedTaskIds ?? []];
+  const movePinnedRow = useCallback((taskId: string, neighborId: string, tier: FocusTier) => {
+    let next = [...pinnedTaskIds ?? []];
+    if (tierSort(tier) !== 'manual') {
+      // A sorted tier draws no hand order to swap in: the order it shows becomes its
+      // pin order, the move is made there, and the tier switches to Manual.
+      const shown = taskIdsOnly(tierIdsAtRest.get(tier) ?? []);
+      const members = new Set(shown);
+      let k = 0;
+      next = next.map((id) => (members.has(id) ? shown[k++] ?? id : id));
+      setTierSort(tier, 'manual');
+      showSortToast(`${tierDisplayLabel(tier, customTiers)} switched to Manual order`);
+    }
     const from = next.indexOf(taskId), to = next.indexOf(neighborId);
     if (from < 0 || to < 0) return;
     [next[from], next[to]] = [next[to], next[from]];
     onReorderPinned?.(next);
-  }, [pinnedTaskIds, onReorderPinned]);
+  }, [pinnedTaskIds, onReorderPinned, tierSort, setTierSort, tierIdsAtRest, showSortToast, customTiers]);
   const renderTierItems = useCallback((ids: string[], tier: FocusTier, groupMeta: Map<string, GroupRenderInfo>) => {
     const out: ReactNode[] = [];
     // Project labels — a slim row above each project run (ids are pre-clustered by
@@ -7287,7 +7405,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // native-drag placement, with the live drag preview substituted for the
     // stored entry so what the user sees mid-drag is literally what gets saved.
     const sepMode: SeparatorMode = tierViewMode(tier) === 'custom' ? 'custom' : 'project';
-    const sepList = sepPreview ? upsertSeparator(separators, sepPreview) : separators;
+    const sorted = tierSort(tier) !== 'manual';
+    const sepList = sorted ? NO_SEPARATORS : sepPreview ? upsertSeparator(separators, sepPreview) : separators;
     const sepPlacement = sepMode === 'project' ? placeSeparators({
       ids,
       projectOf: (id) => { const t = pinnedTaskMap.get(id); return t ? (t.project || '') : null; },
@@ -7383,7 +7502,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             }}
             onToggleCollapse={(p) => toggleRun(tier, p)}
             onAddTask={(p) => addTaskToRun(tier, p)}
-            onAddSeparator={(p) => addSeparator(tier, p)}
+            onAddSeparator={sorted ? undefined : (p) => addSeparator(tier, p)}
             onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
             // Named projects only: a launch seeds the project's default folder and
             // Inbox has no registry row to carry one.
@@ -7508,8 +7627,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           projectCollapsed={runHidden(showFolders && prevProject !== null ? prevProject : proj)}
           selectMode={selectMode}
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
-          onMoveUp={i > 0 && pinnedTaskMap.get(ids[i - 1])?.project === task.project && pinnedTaskMap.get(ids[i - 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i - 1]) : undefined}
-          onMoveDown={i < ids.length - 1 && pinnedTaskMap.get(ids[i + 1])?.project === task.project && pinnedTaskMap.get(ids[i + 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i + 1]) : undefined}
+          onMoveUp={i > 0 && pinnedTaskMap.get(ids[i - 1])?.project === task.project && pinnedTaskMap.get(ids[i - 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i - 1], tier) : undefined}
+          onMoveDown={i < ids.length - 1 && pinnedTaskMap.get(ids[i + 1])?.project === task.project && pinnedTaskMap.get(ids[i + 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i + 1], tier) : undefined}
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} landingDepth={task.id === activeDragPinnedId ? dragLandingDepth : undefined}
           filterOverrideReason={task.id === filterOverrideId || task.id === fadingOverrideId ? filterOverrideNode : undefined} />
       );
@@ -7524,7 +7643,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [filterOverrideId, fadingOverrideId, filterOverrideNode, movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId]);
+  }, [filterOverrideId, fadingOverrideId, filterOverrideNode, movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId, tierSort]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -7633,49 +7752,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     (project: string) => homeFilters.apply({ ...homeFilters.state, projects: [project] }, 'board'),
     [homeFilters],
   );
-  // D8: Sort and Group only reorder the Projects list, which only All and
-  // Projects draw (search ranks by relevance), so the rows show only there.
-  const listOrderApplies = (effectiveSection === 'all' || effectiveSection === 'tasks') && !isSearchMode;
-  // One toolbar button: the menu's open state and anchor are the filter controller's.
-  const displayProps: DisplayMenuProps = {
-    open: homeFilters.menuOpen,
-    onOpenChange: homeFilters.setMenuOpen,
-    buttonRef: homeFilters.buttonRef,
-    section: effectiveSection,
-    onSectionChange: (id: string) => handleSectionChange(id as TodoSection),
-    customTiers: customTiers ?? [],
-    quickViews,
-    onQuickViewsChange: (next: boolean) => {
-      setQuickViews(next);
-      if (next) return;
-      // C56: hiding the bar from Display reads like hiding it from its own menu:
-      // the menu closes, focus lands on Display (where the bar comes back), a toast says so.
-      homeFilters.setMenuOpen(false);
-      requestAnimationFrame(() => homeFilters.buttonRef.current?.focus({ preventScroll: true }));
-      notify({ kind: 'sort', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden' });
-    },
-    viewTitleHint: viewItemLabel,
-    sortBy,
-    projectSortCount: Object.keys(projectSorts).length,
-    onSortForAll: setSortForAll,
-    showSort: listOrderApplies,
-    groupBy,
-    onGroupByChange: (v: GroupBy) => { setGroupBy(v); persistGroupBy(v); },
-    showGroup: listOrderApplies,
-    allCollapsed,
-    onCollapseExpandAll: handleCollapseExpandAll,
-    // F05: only in the views whose list has project groups for the action to fold
-    // (All and Projects, with at least one project). Under Flat it still sets the
-    // folds the By project list opens with.
-    showCollapse: listOrderApplies && liveGroupKeys.size > 0,
-    orderNote: listOrderApplies ? null : isSearchMode ? 'Search ranks by match' : 'Only in All and Projects',
-    tierLayout: isTierSection(effectiveSection) && !isSearchMode
-      ? { mode: tierViewMode(effectiveSection), onChange: (m: 'project' | 'custom') => setTierViewMode(effectiveSection, m) }
-      : null,
-    recentOrder: effectiveSection === 'recent' && !isSearchMode
-      ? { mode: recentSortMode, onChange: handleRecentSortChange }
-      : null,
-  };
   /**
    * One tier's render model, for the section loop below. A pure LOOKUP over the
    * memos that already exist (three per built-in, one bundle per custom) — no
@@ -7731,6 +7807,77 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const model = tierSectionModel(tier);
     return !!model && !tierHiddenWhenEmpty(tier, model);
   });
+
+  // Sort and Group act on the view's own list (list-order.ts): All and Projects the
+  // Projects list, Pinned every tier, a tier view its tier, Recent its feed. A search
+  // ranks by match instead.
+  const listOrderApplies = (effectiveSection === 'all' || effectiveSection === 'tasks') && !isSearchMode;
+  const displayOrder = ((): DisplayMenuProps['order'] => {
+    // Pinned reads the tiers it draws; a pick writes every tier it holds.
+    const drawnTiers = tiersWithTasks.length > 0 ? tiersWithTasks : allTierKeys;
+    const reads = orderLists(effectiveSection, drawnTiers);
+    const writes = orderLists(effectiveSection, allTierKeys);
+    const sorts: SortBy[] = [
+      ...reads.tiers.map(tierSort),
+      ...(reads.projects ? [sortBy] : []),
+      ...(reads.recent ? [sortOfRecentOrder(recentOrder)] : []),
+    ];
+    const groups: GroupBy[] = [
+      ...reads.tiers.map((t) => groupOfTierMode(tierViewMode(t))),
+      ...(reads.projects ? [groupBy] : []),
+      ...(reads.recent ? [recentGroup] : []),
+    ];
+    return {
+      sort: commonValue(sorts),
+      sortChoices: reads.recent ? RECENT_SORT_VALUES : SORT_VALUES,
+      onSort: (v: SortBy) => {
+        for (const t of writes.tiers) setTierSort(t, v);
+        if (writes.projects) setSortForAll(v);
+        if (writes.recent && v !== 'manual') handleRecentSortChange(recentOrderOfSort(v));
+      },
+      projectSortCount: reads.projects ? Object.keys(projectSorts).length : 0,
+      group: commonValue(groups),
+      onGroup: (v: GroupBy) => {
+        for (const t of writes.tiers) setTierViewMode(t, tierModeOfGroup(v));
+        if (writes.projects) { setGroupBy(v); persistGroupBy(v); }
+        if (writes.recent) handleRecentGroupChange(v);
+      },
+      note: isSearchMode ? 'Search ranks by match' : null,
+    };
+  })();
+  // The Pinned heading sets every tier's Group and Sort at once, as Pinned's Display rows
+  // do. A new board draws its pins with no tier heading, so this is All's way to order them.
+  const pinnedReads = tiersWithTasks.length > 0 ? tiersWithTasks : allTierKeys;
+  const pinnedGroup = commonValue(pinnedReads.map((t) => groupOfTierMode(tierViewMode(t))));
+  const pinnedSort = commonValue(pinnedReads.map(tierSort));
+  const pinnedHeadless = tiersWithTasks.length > 0 && tiersWithTasks.every((t) => headlessTiers.has(t));
+  // One toolbar button: the menu's open state and anchor are the filter controller's.
+  const displayProps: DisplayMenuProps = {
+    open: homeFilters.menuOpen,
+    onOpenChange: homeFilters.setMenuOpen,
+    buttonRef: homeFilters.buttonRef,
+    section: effectiveSection,
+    onSectionChange: (id: string) => handleSectionChange(id as TodoSection),
+    customTiers: customTiers ?? [],
+    quickViews,
+    onQuickViewsChange: (next: boolean) => {
+      setQuickViews(next);
+      if (next) return;
+      // C56: hiding the bar from Display reads like hiding it from its own menu:
+      // the menu closes, focus lands on Display (where the bar comes back), a toast says so.
+      homeFilters.setMenuOpen(false);
+      requestAnimationFrame(() => homeFilters.buttonRef.current?.focus({ preventScroll: true }));
+      notify({ kind: 'sort', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden' });
+    },
+    viewTitleHint: viewItemLabel,
+    order: displayOrder,
+    allCollapsed,
+    onCollapseExpandAll: handleCollapseExpandAll,
+    // F05: only in the views whose list has project groups for the action to fold
+    // (All and Projects, with at least one project). Under Flat it still sets the
+    // folds the By project list opens with.
+    showCollapse: listOrderApplies && liveGroupKeys.size > 0,
+  };
 
   const tierSectionActive = isTierSection(effectiveSection) && !isSearchMode;
 
@@ -7789,7 +7936,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             label={tierDisplayLabel(effectiveSection, customTiers)}
             onAddSession={onOpenLauncherForTier}
             onAddTask={addTaskToTier}
-            onAddSeparator={addSeparator}
+            onAddSeparator={tierSort(effectiveSection) === 'manual' ? addSeparator : undefined}
           />
         </div>
       )}
@@ -7842,8 +7989,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               {isStacked && (
               <NavigationHeading id="pinned" label="Pinned" className="todo-pinned-header" collapsed={isFolded('pinned')} onClick={() => toggleSection('pinned')}
                 actions={[
-                  { key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') },
+                  { key: 'organize', label: 'Organize', section: true, when: anyTierDrawn },
+                  ...([['project', 'By project'], ['none', 'In one list']] as const).map(([value, label]) => ({
+                    key: `group-${value}`, label, checked: pinnedGroup === value, when: anyTierDrawn,
+                    onSelect: () => { for (const t of allTierKeys) setTierViewMode(t, tierModeOfGroup(value)); },
+                  })),
+                  { key: 'sort', label: pinnedHeadless ? 'Sort by' : 'Sort every tier by', section: true, when: anyTierDrawn },
+                  ...PROJECT_SORT_OPTIONS.map(([value, label]) => ({
+                    key: `sort-${value}`, label, checked: pinnedSort === value, when: anyTierDrawn,
+                    onSelect: () => { for (const t of allTierKeys) setTierSort(t, value); },
+                  })),
+                  { key: 'folds', divider: true, when: anyTierDrawn },
                   ...(anyTierDrawn && !tiersWithTasks.every((t) => headlessTiers.has(t)) ? [{ key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) }] : []),
+                  { key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') },
                 ]} />
               )}
               {/* F34: no "nothing pinned" verdict before the pins have loaded. */}
@@ -7876,12 +8034,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           onAdd={(title) => onCreate({ title, priority: 'none', pinnedTier: tier, capture: true })}
                           onAddSession={onOpenLauncherForTier}
                           onAddTask={addTaskToTier}
-                          onAddSeparator={addSeparator}
+                          onAddSeparator={tierSort(tier) === 'manual' ? addSeparator : undefined}
                           dropProps={sepDropProps(tier)}
                           addOpenSignal={tierAddOpenSignal(tier)}
                           onAddSignalConsumed={consumeTierAddSignal}
                           viewMode={tierViewMode(tier)}
                           onChangeViewMode={setTierViewMode}
+                          sortBy={tierSort(tier)}
+                          onChangeSort={setTierSort}
                         >
                           {renderTierItems(model.visibleIds, tier, model.groupMeta)}
                         </TierNavigationGroup>
@@ -7963,9 +8123,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       ? { maxHeight: recentResize.height, flex: 'none' }
                       : { minHeight: RECENT_VISIBLE_MAX * 30 }}
                   >
-                    {visibleRecentTasks.map((task) => (
+                    {visibleRecentTasks.map((task, i) => (
+                      <Fragment key={task.id}>
+                      {/* Group by project: a quiet label over each project's rows (read only:
+                          the feed has no order of its own to drag). */}
+                      {recentGroup === 'project' && (i === 0 || (visibleRecentTasks[i - 1].project || '') !== (task.project || '')) && (
+                        <div className="tier-project-label recent-project-label" data-project={task.project || ''}>
+                          <span className="tier-project-label-name">{task.project || 'Inbox'}</span>
+                          <span className="tier-project-label-count" aria-hidden="true">{recentProjectCounts.get(task.project || '') ?? 0}</span>
+                        </div>
+                      )}
                       <SortableRecentCard
-                        key={task.id}
                         task={task}
                         isFocused={focusedTaskId === task.id}
                         isVanishing={graceExiting && ((keepWhileCompleting(task) && !showCompleted) || (keepWhileParking(task) && waitingWillHide))}
@@ -7991,6 +8159,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onDelete={onDelete}
                         timeMode={recentSortMode}
                       />
+                      </Fragment>
                     ))}
                   </div>
                   {isAll && (

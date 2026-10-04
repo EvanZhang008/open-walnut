@@ -178,19 +178,24 @@ export interface DisplayMenuProps {
   quickViews: boolean;
   onQuickViewsChange(v: boolean): void;
   viewTitleHint: string | null;
-  sortBy: SortBy;
-  projectSortCount: number;
-  onSortForAll(v: SortBy): void;
-  showSort: boolean;
-  groupBy: GroupBy;
-  onGroupByChange(v: GroupBy): void;
-  showGroup: boolean;
+  /** Sort and Group of the lists this view draws (list-order.ts). */
+  order: DisplayOrder;
   allCollapsed: boolean;
   onCollapseExpandAll(): void;
   /** The view draws project groups that Collapse all acts on (F05). */
   showCollapse: boolean;
-  /** Why Sort and Group do nothing in this view (shown in their rows), when they don't apply. */
-  orderNote: string | null;
-  tierLayout: { mode: 'project' | 'custom'; onChange(m: 'project' | 'custom'): void } | null;
-  recentOrder: { mode: 'updated' | 'created'; onChange(m: 'updated' | 'created'): void } | null;
+}
+
+/** The Display menu's Sort and Group rows, the same two in every view. */
+export interface DisplayOrder {
+  /** null = the lists this view draws differ: no segment reads as pressed. */
+  sort: SortBy | null;
+  sortChoices: readonly SortBy[];
+  onSort(v: SortBy): void;
+  /** Projects with their own order that a pick replaces (the row asks first). */
+  projectSortCount: number;
+  group: GroupBy | null;
+  onGroup(v: GroupBy): void;
+  /** Why the rows do nothing here (a search ranks by match), or null. */
+  note: string | null;
 }

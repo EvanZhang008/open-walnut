@@ -54,6 +54,18 @@ export function hasAllOpen(set: readonly TaskPhase[]): boolean {
   return OPEN_PHASES.every((p) => set.includes(p));
 }
 
+/** The Status page's parent row: To Do, In Progress and Need Action as one pick. */
+export const OPEN_GROUP_VALUE = 'OPEN';
+export const OPEN_GROUP_TITLE = 'Open: To Do, In Progress and Need Action';
+/** A value row that puts its property back at the default (`Any project`, `Any time`). */
+export const DEFAULT_VALUE = '__default__';
+
+/** How much of the open block the set holds: the parent row's check (all, a dash, none). */
+export function openGroupState(set: readonly TaskPhase[]): 'all' | 'some' | 'none' {
+  const n = OPEN_PHASES.filter((p) => set.includes(p)).length;
+  return n === OPEN_PHASES.length ? 'all' : n > 0 ? 'some' : 'none';
+}
+
 export function sameName(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
@@ -74,6 +86,29 @@ const DIM_LABELS: Record<FilterDim, string> = {
 
 export function dimLabel(dim: FilterDim): string {
   return DIM_LABELS[dim];
+}
+
+/** The row a property's default is drawn as, when no value row is the default itself. */
+const ANY_LABELS: Partial<Record<FilterDim, string>> = {
+  project: 'Any project',
+  source: 'Any source',
+  priority: 'Any priority',
+  blocked: 'Any',
+  tags: 'Any tag',
+  sprint: 'Any sprint',
+  time: 'Any time',
+};
+
+/** `Any project`: the default row's label, or null when a value row is the default (Status, Date). */
+export function anyRowLabel(dim: FilterDim): string | null {
+  return ANY_LABELS[dim] ?? null;
+}
+
+/** The value row the page tags `Default`: Open on Status, Available now on Date, else the Any row. */
+export function defaultValueOf(dim: FilterDim): string {
+  if (dim === 'status') return OPEN_GROUP_VALUE;
+  if (dim === 'date') return DEFAULT_FILTER_STATE.date;
+  return DEFAULT_VALUE;
 }
 
 export function statusChipLabel(set: readonly TaskPhase[]): string {

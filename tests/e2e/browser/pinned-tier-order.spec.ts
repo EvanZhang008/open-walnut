@@ -16,7 +16,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { chooseViewOption, openHome } from './home-navigation-helpers'
+import { arrange, chooseViewOption, openHome } from './home-navigation-helpers'
 import { orderPinnedTier } from '../../../web/src/utils/pinned-tier-order'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -132,7 +132,7 @@ async function computed(tier: string, mode: 'project' | 'custom'): Promise<strin
   return orderPinnedTier(rows, mode, projects)
 }
 
-test('a pinned tier draws the order orderPinnedTier computes, By project and Custom order', async ({ page, baseURL }) => {
+test('a pinned tier draws the order orderPinnedTier computes, By project and Flat', async ({ page, baseURL }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const alder = `OrdAlder${stamp}`
   const birch = `OrdBirch${stamp}`
@@ -162,7 +162,7 @@ test('a pinned tier draws the order orderPinnedTier computes, By project and Cus
 
   // By project: Birch (listed) first, then the rest where their first row appears
   // (Cedar, Inbox, Alder); inside Alder its loose row, then the folder block.
-  await chooseViewOption(page, 'tier-project')
+  await arrange(page, 'By project')
   const byProject = [b1, c1, i1, i2, a2, a1, a3]
   await expectDrawnAsComputed(page, tier.id, 'project', birch, byProject)
   await expect.poll(async () => {
@@ -172,8 +172,8 @@ test('a pinned tier draws the order orderPinnedTier computes, By project and Cus
   }, { timeout: 30_000 }).toEqual([birch, cedar, '', alder])
   await page.screenshot({ path: `${SHOTS}/web-tier-by-project.png` })
 
-  // Custom order: pin order, the folder's rows gathered at its first member.
-  await chooseViewOption(page, 'tier-custom')
+  // Flat: pin order, the folder's rows gathered at its first member.
+  await arrange(page, 'Flat')
   const custom = [c1, i1, a1, a3, b1, a2, i2]
   await expectDrawnAsComputed(page, tier.id, 'custom', birch, custom)
   await page.screenshot({ path: `${SHOTS}/web-tier-custom.png` })
@@ -199,7 +199,7 @@ test('a pinned tier draws the order orderPinnedTier computes, By project and Cus
   litter.tasks.push(created.id)
   await expect.poll(() => drawn(page, tier.id), { timeout: 15_000 }).toEqual([...custom, created.id])
 
-  await chooseViewOption(page, 'tier-project')
+  await arrange(page, 'By project')
   const withNew = await expectDrawnAsComputed(page, tier.id, 'project', birch)
   const byId = new Map(all.map((t) => [t.id, t]))
   const home = created.project ?? ''

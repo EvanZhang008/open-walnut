@@ -11,11 +11,13 @@
  * filters` row; then the display rows: Sort / Group (`.dm-section.dm-order`),
  * `[data-view-group="Show"]` with the View row `[data-view-option="view"]`
  * (the current view in `.fb-prop-summary`), `[data-view-option="quick-views"]`
- * (Show tab bar) and the Session columns row; last the view-specific rows
- * (`collapse`, tier layout, recent order). Page two for a property:
+ * (Show tab bar) and the Session columns row; last `collapse` in the views with
+ * project groups. Page two for a property:
  * `.fb-page[data-filter-dim]` with a `Back to all filters` button and value rows
  * `.fb-opt-body[data-filter-value="<visible text>"]` (Date values also carry
- * `data-date-value`, `aria-pressed` = selected); for View:
+ * `data-date-value`, `aria-pressed` = selected; the default rows are the `Any`
+ * row `[data-default-row]` and Status's `[data-status-group="open"]`, see
+ * VALUE_ROW); for View:
  * `.fb-page[data-filter-dim="view"]` with `.dm-view[data-view-option]` rows.
  * The filter row `.fb-row` has chips `[data-chip-dim]` with remove buttons
  * `.fb-chip-x`, the count `[data-testid="filter-count"]` and Clear in its tail.
@@ -109,6 +111,9 @@ function valueSelector(dim: FilterDimKey, value: string): string {
   return `[data-filter-value="${cssString(value)}"]`
 }
 
+/** A page's value rows: not the `Any` row that clears the property, not Status's Open row. */
+export const VALUE_ROW = '.fb-opt-body:not([data-default-row]):not([data-status-group])'
+
 /** The value row for `value` on `dim`'s page (page two must be open). */
 export function filterValue(page: Page, dim: FilterDimKey, value: string): Locator {
   return filterPage(page, dim).locator(`.fb-opt-body${valueSelector(dim, value)}`)
@@ -140,7 +145,7 @@ export async function addFilter(
 ): Promise<void> {
   const pane = await openFilterPage(page, dim)
   if (!opts.add && dim !== 'date' && dim !== 'blocked' && dim !== 'time') {
-    const on = pane.locator('.fb-opt-body[aria-pressed="true"]')
+    const on = pane.locator(`${VALUE_ROW}[aria-pressed="true"]`)
     const target = valueSelector(dim, value)
     for (const row of await on.all()) {
       const isTarget = (await row.evaluate((el, sel) => el.matches(sel), target))
@@ -153,7 +158,7 @@ export async function addFilter(
   await turnOn(page, dim, value)
   if (!opts.add && dim === 'status') {
     // The value is on: now drop the ones that were locked while it was the only one.
-    for (const row of await pane.locator('.fb-opt-body[aria-pressed="true"]').all()) {
+    for (const row of await pane.locator(`${VALUE_ROW}[aria-pressed="true"]`).all()) {
       if (await row.evaluate((el, sel) => el.matches(sel), valueSelector(dim, value))) continue
       await row.click()
       await expect(row).toHaveAttribute('aria-pressed', 'false')

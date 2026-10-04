@@ -87,6 +87,7 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
         counts={counts}
         query={query}
         autoFocus={!searchable}
+        anyRow={false}
         onPick={(value, mode) => w.write((s) => pickValue(s, dim, value, mode), 'chip-menu')}
       />
       {dim === 'time' && c.state.time.preset === 'custom' && <CustomTime c={c} w={w} origin="chip-menu" />}

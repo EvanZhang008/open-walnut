@@ -206,6 +206,44 @@ describe('FilterValuesPage: the second page', () => {
       .toEqual(['now', '', 'overdue', 'this-week'])
   })
 
+  it('Status: an Open row over To Do, In Progress and Need Action; a dash while part of it is on', () => {
+    const doc = page(controller(), 'status')
+    const open = opt(doc, 'Open')!
+    expect(open.getAttribute('data-status-group')).toBe('open')
+    expect(open.getAttribute('aria-pressed')).toBe('true')
+    // The open block is all that is picked: the Open row cannot be turned off.
+    expect(open.getAttribute('aria-disabled')).toBe('true')
+    expect(doc.querySelector('[aria-label="Only Open"]')).toBeNull()
+    const children = Array.from(doc.querySelectorAll('.fb-opt.is-child .fb-opt-label')).map((el) => el.textContent)
+    expect(children).toEqual(['To Do', 'In Progress', 'Need Action'])
+    const some = page(controller({ state: withState({ status: ['TODO', 'COMPLETE'] as TaskPhase[] }) }), 'status')
+    expect(opt(some, 'Open')?.getAttribute('aria-pressed')).toBe('mixed')
+    expect(opt(some, 'Open')?.querySelector('.fb-check-dash')).not.toBeNull()
+    expect(opt(some, 'Open')?.hasAttribute('aria-disabled')).toBe(false)
+    expect(some.querySelector('[aria-label="Only Open"]')).not.toBeNull()
+    const none = page(controller({ state: withState({ status: ['COMPLETE'] as TaskPhase[] }) }), 'status')
+    expect(opt(none, 'Open')?.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('every page tags its default: Open, Available now, and an Any row for the rest', () => {
+    const tag = (doc: Document) => Array.from(doc.querySelectorAll('.fb-opt-default')).map((el) => el.closest('.fb-opt-body')?.getAttribute('data-filter-value'))
+    const c = controller({ lists: lists({ sources: TWO_SOURCES, tags: ['label:urgent'], sprints: ['S1'], showPriority: true }) })
+    expect(tag(page(c, 'status'))).toEqual(['Open'])
+    expect(tag(page(c, 'date'))).toEqual(['Available now'])
+    const any: Record<string, string> = {
+      project: 'Any project', source: 'Any source', priority: 'Any priority', blocked: 'Any', tags: 'Any tag', sprint: 'Any sprint', time: 'Any time',
+    }
+    for (const [dim, label] of Object.entries(any)) {
+      const doc = page(c, dim as FilterDim)
+      expect(tag(doc), dim).toEqual([label])
+      expect(doc.querySelector('.fb-opt-body')?.getAttribute('data-filter-value'), dim).toBe(label)
+      expect(pressed(doc, label), dim).toBe('true')
+      expect(doc.querySelector('.fb-opt-default')?.textContent).toBe('Default')
+    }
+    // Set, the Any row is no longer pressed.
+    expect(pressed(page(controller({ state: withState({ projects: ['Garden'] }) }), 'project'), 'Any project')).toBe('false')
+  })
+
   it('head: Back to all filters, the property name, Reset only while the property is set', () => {
     const doc = page(controller(), 'project')
     const head = doc.querySelector('.fb-page[data-filter-dim="project"] .fb-page-head')!
@@ -220,13 +258,13 @@ describe('FilterValuesPage: the second page', () => {
   it('C28: 30 projects are 30 rows in board order, no "N more"; with Inbox, Inbox first with its title', () => {
     const names = Array.from({ length: 30 }, (_, i) => `Project ${String(i + 1).padStart(2, '0')}`)
     const doc = page(controller({ lists: lists({ projects: names }) }), 'project')
-    expect(labels(doc)).toEqual(names)
+    expect(labels(doc)).toEqual(['Any project', ...names])
     expect(doc.body.textContent).not.toMatch(/\d+ more/)
     const inbox = page(controller({ lists: lists({ projects: ['', ...names] }) }), 'project')
-    const first = inbox.querySelector('.fb-opt-body')!
+    const first = inbox.querySelector('.fb-opt-body:not([data-default-row])')!
     expect(first.getAttribute('data-filter-value')).toBe('Inbox')
     expect(first.getAttribute('title')).toBe('Tasks with no project')
-    expect(inbox.querySelectorAll('.fb-opt-body').length).toBe(31)
+    expect(inbox.querySelectorAll('.fb-opt-body:not([data-default-row])').length).toBe(31)
   })
 
   it('G13: checklist rows draw a square, a count slot and an Only button out of the Tab order; no add square', () => {
@@ -251,7 +289,7 @@ describe('FilterValuesPage: the second page', () => {
     expect(doc.querySelector('[data-date-value="now"] .fb-check svg')).not.toBeNull()
     expect(opt(doc, 'Available now')?.getAttribute('title')).toBe('Hide tasks that start later. Tasks with no start date stay.')
     const blocked = page(controller(), 'blocked')
-    expect(labels(blocked)).toEqual(['Blocked', 'Not blocked'])
+    expect(labels(blocked)).toEqual(['Any', 'Blocked', 'Not blocked'])
     expect(blocked.querySelectorAll('.fb-check-box, .fb-only').length).toBe(0)
   })
 
@@ -277,7 +315,7 @@ describe('FilterValuesPage: the second page', () => {
       expect(el?.textContent).toBe(o.label)
       expect(el?.querySelector('.fb-val-icon, .fb-item-icon')).toBeNull()
     }
-    expect(labels(doc)).toEqual(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
+    expect(labels(doc)).toEqual(['Open', 'To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
   })
 
   it('the search text filters the rows by label, case-insensitive; a miss says so', () => {
@@ -295,7 +333,7 @@ describe('FilterValuesPage: the second page', () => {
     const doc = page(controller(), 'time')
     const basis = Array.from(doc.querySelectorAll('.fb-page-sub [data-time-basis]'))
     expect(basis.map((b) => b.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
-    expect(labels(doc)).toEqual(['1h', '6h', '24h', '7d', '30d', 'Custom'])
+    expect(labels(doc)).toEqual(['Any time', '1h', '6h', '24h', '7d', '30d', 'Custom'])
     expect(doc.querySelector('.fb-custom-time')).toBeNull()
     const custom = page(controller({ state: withState({ time: { basis: 'updated', preset: 'custom', customValue: 3, customUnit: 'days' } }) }), 'time')
     expect(custom.querySelector('.fb-custom-time input[aria-label="Custom window length"]')).not.toBeNull()
@@ -411,10 +449,11 @@ describe('DisplayButton: the one toolbar button', () => {
     return {
       open: false, onOpenChange: vi.fn(), buttonRef: { current: null }, section: 'all', onSectionChange: vi.fn(),
       customTiers: [], quickViews: false, onQuickViewsChange: vi.fn(), viewTitleHint: null,
-      sortBy: 'manual', projectSortCount: 0, onSortForAll: vi.fn(), showSort: true,
-      groupBy: 'project', onGroupByChange: vi.fn(), showGroup: true,
-      allCollapsed: false, onCollapseExpandAll: vi.fn(), showCollapse: false, orderNote: null,
-      tierLayout: null, recentOrder: null, ...over,
+      order: {
+        sort: 'manual', sortChoices: ['manual', 'priority', 'date', 'updated'], onSort: vi.fn(), projectSortCount: 0,
+        group: 'project', onGroup: vi.fn(), note: null,
+      },
+      allCollapsed: false, onCollapseExpandAll: vi.fn(), showCollapse: false, ...over,
     }
   }
   const button = (c: FilterBarController, over: Partial<DisplayMenuProps> = {}) =>

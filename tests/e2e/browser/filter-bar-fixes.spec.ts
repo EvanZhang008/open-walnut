@@ -73,8 +73,8 @@ test('F05: Collapse all projects only where the view draws project groups', asyn
   await expect(displayMenu(page)).toHaveCount(0)
   await openDisplayMenu(page)
   await expect(collapse).toHaveCount(0)
-  // Sort keeps its place and says why it is quiet here (C29b, F41).
-  await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Only in All and Projects')
+  // Sort keeps its place and works here too: the tiers have their own order (C29b).
+  await expect(displayMenu(page).locator('[data-view-option="sort"] [data-choice]')).toHaveCount(4)
   expect(Math.abs((await sortY()) - y0)).toBeLessThanOrEqual(1)
   await chooseDisplayOption(page, 'recent')
   await openDisplayMenu(page)

@@ -206,7 +206,13 @@
   transition: background-color 80ms ease-out, border-color 80ms ease-out;
 }
 .fb-check-box svg { width: 10px; height: 10px; stroke-width: 2.2; }
-.fb-opt.is-selected .fb-check-box { background: var(--accent); border-color: var(--accent); }
+.fb-opt.is-selected .fb-check-box,
+.fb-opt.is-mixed .fb-check-box { background: var(--accent); border-color: var(--accent); }
+.fb-check-dash { width: 8px; height: 2px; border-radius: 1px; background: currentColor; }
+/* Status: To Do, In Progress and Need Action sit under the Open row. */
+.fb-opt.is-child .fb-opt-body { padding-left: 30px; }
+/* The row a property starts at: a muted word at the right, hidden under `Only` like the count. */
+.fb-opt-default { flex: none; color: var(--tp-muted); font-size: 11px; }
 .fb-opt-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .fb-opt.is-missing .fb-opt-label { font-style: italic; color: var(--tp-muted); }
 .fb-opt-body .tp-count { color: var(--tp-muted); font-size: 12px; }
@@ -236,10 +242,13 @@
 .fb-opt:focus-within .fb-only { visibility: visible; }
 /* Room for `Only` over the count while it shows. */
 .fb-opt:hover .fb-opt-body .tp-count,
-.fb-opt:focus-within .fb-opt-body .tp-count { visibility: hidden; }
+.fb-opt:focus-within .fb-opt-body .tp-count,
+.fb-opt:has(.fb-only):hover .fb-opt-default,
+.fb-opt:has(.fb-only):focus-within .fb-opt-default { visibility: hidden; }
 @media (hover: none) {
   .fb-only { visibility: visible; }
-  .fb-opt-body .tp-count { visibility: hidden; }
+  .fb-opt-body .tp-count,
+  .fb-opt:has(.fb-only) .fb-opt-default { visibility: hidden; }
 }
 .fb-empty { padding: 10px 8px; color: var(--tp-muted); font-size: 12px; }
 

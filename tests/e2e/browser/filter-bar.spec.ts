@@ -198,10 +198,10 @@ test.describe('Mia: removing and clearing', () => {
     await expect(complete).toHaveAttribute('aria-pressed', 'true')
     await expect(filterChip(page, 'status')).toContainText('Complete')
     expect(await page.locator('.fb-menu input[type="checkbox"], .fb-menu select').count()).toBe(0)
-    // C50: the status words, in order, each with a title that names no tier.
-    await expect(filterPage(page, 'status').locator('.fb-opt-label')).toHaveText(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
+    // C50: the status words, in order (the Open row over its three), each with a title that names no tier.
+    await expect(filterPage(page, 'status').locator('.fb-opt-label')).toHaveText(['Open', 'To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
     const titles = await filterPage(page, 'status').locator('.fb-opt-body').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''))
-    expect(titles).toHaveLength(5)
+    expect(titles).toHaveLength(6)
     for (const t of titles) { expect(t).not.toBe(''); expect(t).not.toMatch(/tier|focus|satellite|backlog|parked/i) }
     // C13: page one names no tier either, in its words or its titles, and reads the set status.
     await openFilterMenu(page)

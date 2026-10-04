@@ -7,7 +7,22 @@
  */
 import { useLayoutEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { ICON_CHECK } from '../common/Icons';
-import { STATUS_LAST_VALUE_TITLE, sameName, selectedValues } from './filter-bar-model';
+import type { TaskPhase } from '@open-walnut/core';
+import {
+  DEFAULT_VALUE,
+  OPEN_GROUP_TITLE,
+  OPEN_GROUP_VALUE,
+  OPEN_PHASES,
+  STATUS_LAST_VALUE_TITLE,
+  anyRowLabel,
+  defaultValueOf,
+  dimLabel,
+  isDimDefault,
+  isOpenGroupLocked,
+  openGroupState,
+  sameName,
+  selectedValues,
+} from './filter-bar-model';
 import type { FilterBarController, FilterDim, FilterOrigin, FilterPickMode, FilterState, FilterValueOption } from './filter-bar-types';
 
 /** Writes that chain on the newest state, even before the controller's props catch up. */
@@ -101,10 +116,70 @@ export interface FilterValueListProps {
   autoFocus?: boolean;
   /** Called when the arrow keys run off the top of the list (the caller's search box takes focus). */
   onExitTop?(): void;
+  /** Draw the `Any` row (a chip menu has `Remove filter` for it instead). */
+  anyRow?: boolean;
 }
 
-/** The value rows. Selection is read live from `state`. */
-export function FilterValueList({ dim, options, state, counts, query = '', onPick, autoFocus, onExitTop }: FilterValueListProps) {
+/** The muted word on the row a property starts at. */
+export const DEFAULT_TAG = 'Default';
+
+interface RowProps {
+  value: string;
+  label: string;
+  title: string;
+  /** `mixed` = part of the Open block is on (a dash in the box). */
+  sel: boolean | 'mixed';
+  locked: boolean;
+  multi: boolean;
+  /** One of the Open block's own statuses, drawn under the Open row. */
+  child?: boolean;
+  isDefault: boolean;
+  missing?: boolean;
+  count?: number;
+  attrs: Record<string, string>;
+  /** `Only` beside the row (checklist rows that can be picked alone). */
+  only: boolean;
+  onPick(value: string, mode: FilterPickMode): void;
+  pickMode: FilterPickMode;
+}
+
+function ValueRow({ value, label, title, sel, locked, multi, child, isDefault, missing, count, attrs, only, onPick, pickMode }: RowProps) {
+  const on = sel === true;
+  return (
+    <div className={`fb-opt${on ? ' is-selected' : ''}${sel === 'mixed' ? ' is-mixed' : ''}${missing ? ' is-missing' : ''}${child ? ' is-child' : ''}`}>
+      <button
+        type="button"
+        className="fb-opt-body"
+        {...attrs}
+        aria-pressed={sel}
+        aria-disabled={locked || undefined}
+        title={locked ? STATUS_LAST_VALUE_TITLE : title}
+        onClick={() => { if (!locked) onPick(value, pickMode); }}
+      >
+        {/* Checklist rows draw a square; single-select rows a plain tick in the same slot. */}
+        <span className={`fb-check${multi ? ' fb-check-box' : ''}`} aria-hidden="true">
+          {on ? ICON_CHECK : sel === 'mixed' ? <span className="fb-check-dash" /> : null}
+        </span>
+        <span className="fb-opt-label">{label}</span>
+        {isDefault && <span className="fb-opt-default">{DEFAULT_TAG}</span>}
+        {count !== undefined && <span className={`tp-count${count === 0 ? ' is-zero' : ''}`}>{count}</span>}
+      </button>
+      {only && (
+        <button type="button" className="fb-only" tabIndex={-1} aria-label={`Only ${label}`} onClick={() => onPick(value, 'only')}>
+          Only
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The value rows. Selection is read live from `state`. Every list names its
+ * default: Status opens with the Open row (To Do, In Progress and Need Action
+ * under it), Date tags Available now, and the rest start with an `Any` row that
+ * clears the property.
+ */
+export function FilterValueList({ dim, options, state, counts, query = '', onPick, autoFocus, onExitTop, anyRow = true }: FilterValueListProps) {
   const multi = MULTI_DIMS.includes(dim);
   const listRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -114,7 +189,11 @@ export function FilterValueList({ dim, options, state, counts, query = '', onPic
     first?.focus({ preventScroll: true });
   }, [autoFocus]);
   const shown = useMemo(() => filterOptions(options, query), [options, query]);
-  const statusSel = dim === 'status' ? selectedValues(state, 'status') : [];
+  const q = query.trim().toLowerCase();
+  const matches = (label: string) => !q || label.toLowerCase().includes(q);
+  const statusSel = (dim === 'status' ? selectedValues(state, 'status') : []) as TaskPhase[];
+  const defaultValue = defaultValueOf(dim);
+  const anyLabel = anyRowLabel(dim);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'ArrowUp' && onExitTop) {
       const rows = Array.from(listRef.current?.querySelectorAll<HTMLElement>('.fb-opt-body') ?? []);
@@ -122,34 +201,48 @@ export function FilterValueList({ dim, options, state, counts, query = '', onPic
     }
     arrowFocus(e, '.fb-opt-body');
   };
+  const lead: RowProps[] = [];
+  if (anyRow && anyLabel && matches(anyLabel)) {
+    lead.push({
+      value: DEFAULT_VALUE, label: anyLabel, title: `${dimLabel(dim)}: every task, the default`,
+      sel: isDimDefault(state, dim), locked: false, multi, isDefault: true,
+      attrs: { 'data-filter-value': anyLabel, 'data-default-row': '' }, only: false, onPick, pickMode: clickMode(dim),
+    });
+  }
+  if (dim === 'status' && matches('Open')) {
+    const group = openGroupState(statusSel);
+    const locked = isOpenGroupLocked(statusSel);
+    lead.push({
+      value: OPEN_GROUP_VALUE, label: 'Open', title: OPEN_GROUP_TITLE,
+      sel: group === 'all' ? true : group === 'some' ? 'mixed' : false, locked, multi, isDefault: true,
+      attrs: { 'data-filter-value': 'Open', 'data-status-group': 'open' }, only: !locked, onPick, pickMode: 'toggle',
+    });
+  }
   return (
     <div ref={listRef} className="fb-list-rows" role="group" aria-label={`${dim} values`} onKeyDown={onKeyDown}>
-      {shown.length === 0 && <div className="fb-empty">{query.trim() ? `No match for "${query.trim()}"` : 'Nothing to pick'}</div>}
+      {shown.length === 0 && lead.length === 0 && <div className="fb-empty">{query.trim() ? `No match for "${query.trim()}"` : 'Nothing to pick'}</div>}
+      {lead.map((r) => <ValueRow key={r.value} {...r} />)}
       {shown.map((opt) => {
         const sel = isValueSelected(state, dim, opt.value);
         const locked = dim === 'status' && sel && statusSel.length === 1;
         return (
-          <div key={opt.value || '(inbox)'} className={`fb-opt${sel ? ' is-selected' : ''}${opt.missing ? ' is-missing' : ''}`}>
-            <button
-              type="button"
-              className="fb-opt-body"
-              {...valueAttrs(dim, opt)}
-              aria-pressed={sel}
-              aria-disabled={locked || undefined}
-              title={locked ? STATUS_LAST_VALUE_TITLE : opt.title}
-              onClick={() => { if (!locked) onPick(opt.value, clickMode(dim)); }}
-            >
-              {/* Checklist rows draw a square; single-select rows a plain tick in the same slot. */}
-              <span className={`fb-check${multi ? ' fb-check-box' : ''}`} aria-hidden="true">{sel ? ICON_CHECK : null}</span>
-              <span className="fb-opt-label">{opt.label}</span>
-              {counts && <span className={`tp-count${(counts[opt.value] ?? 0) === 0 ? ' is-zero' : ''}`}>{counts[opt.value] ?? 0}</span>}
-            </button>
-            {multi && !locked && (
-              <button type="button" className="fb-only" tabIndex={-1} aria-label={`Only ${opt.label}`} onClick={() => onPick(opt.value, 'only')}>
-                Only
-              </button>
-            )}
-          </div>
+          <ValueRow
+            key={opt.value || '(inbox)'}
+            value={opt.value}
+            label={opt.label}
+            title={opt.title}
+            sel={sel}
+            locked={locked}
+            multi={multi}
+            child={dim === 'status' && OPEN_PHASES.includes(opt.value as TaskPhase)}
+            isDefault={opt.value === defaultValue}
+            missing={opt.missing}
+            count={counts ? counts[opt.value] ?? 0 : undefined}
+            attrs={valueAttrs(dim, opt)}
+            only={multi && !locked}
+            onPick={onPick}
+            pickMode={clickMode(dim)}
+          />
         );
       })}
     </div>

@@ -56,7 +56,8 @@ export interface TierProjectLabelRowProps {
   onToggleCollapse: (project: string) => void;
   /** Open this project's inline "add task" row in this tier. */
   onAddTask: (project: string) => void;
-  onAddSeparator: (project: string) => void;
+  /** Absent while the tier is sorted: lines divide a hand order. */
+  onAddSeparator?: (project: string) => void;
   onAddFolder?: (project: string) => void;
   /** Named projects only (a launch seeds the project's default folder). */
   onAddSession?: (project: string) => void;

@@ -271,7 +271,10 @@ describe('pinned tier order (web ⇄ iOS parity fixture)', () => {
   it('the home panel orders its tiers with this function and no private copy', () => {
     const source = fs.readFileSync(TODO_PANEL, 'utf8');
     expect(source).toContain("from '@/utils/pinned-tier-order'");
-    expect(source).toMatch(/orderPinnedTier\(tierTasks, isCustom \? 'custom' : 'project', ordering\?\.projectOrder\)/);
+    // A tier sorted from the Display menu hands its cards over in the sort's order;
+    // Manual (the default, and the phone's only order) hands over the pin order as is.
+    expect(source).toMatch(/const ordered = sort === 'manual' \? tierTasks : \[\.\.\.tierTasks\]\.sort\(/);
+    expect(source).toMatch(/orderPinnedTier\(ordered, isCustom \? 'custom' : 'project', ordering\?\.projectOrder\)/);
     expect(source).not.toMatch(/function clusterTierBy(Group|Project)\(/);
   });
 });

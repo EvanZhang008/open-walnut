@@ -11,7 +11,7 @@
 import { expect, test, type Locator } from '@playwright/test'
 import {
   addFilter, closeFilterMenu, filterButton, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterSearch,
-  filterValue, openFilterMenu, openFilterPage, removeFilterChip, setStatus, viewRow, viewsPage,
+  filterValue, openFilterMenu, openFilterPage, removeFilterChip, setStatus, VALUE_ROW, viewRow, viewsPage,
 } from './filter-bar-helpers'
 import { MIA, MIA_PINS, openHome, row, stubBoard } from './filter-bar-fixtures'
 
@@ -49,12 +49,17 @@ test('keys: ArrowDown/Up walk every row, ArrowRight and Enter open a page, Backs
   await expect(head.locator('.fb-page-title')).toHaveText('Project')
   await expect(head.locator('.fb-page-reset')).toHaveCount(0)
   await expect(search).toHaveAttribute('placeholder', 'Search projects')
-  // Two projects: nothing to search, so the first row takes focus; the arrows walk the rows.
+  // Two projects: nothing to search, so the selected row, the default Any project, takes
+  // focus; the arrows walk the rows.
+  await expect(filterValue(page, 'project', 'Any project')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
   await expect(filterValue(page, 'project', 'Garden')).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(filterValue(page, 'project', 'Home')).toBeFocused()
   await page.keyboard.press('ArrowUp')
   await expect(filterValue(page, 'project', 'Garden')).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(filterValue(page, 'project', 'Any project')).toBeFocused()
   await page.keyboard.press('ArrowUp')
   await expect(search).toBeFocused()
   // Backspace in the empty search box goes back; focus returns to the row that opened the page.
@@ -110,7 +115,7 @@ test('keys: ArrowDown/Up walk every row, ArrowRight and Enter open a page, Backs
   await page.keyboard.press('Escape')
   await expect(search).toHaveValue('')
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'status')
-  await expect(filterPage(page, 'status').locator('.fb-opt-body')).toHaveCount(5)
+  await expect(filterPage(page, 'status').locator(VALUE_ROW)).toHaveCount(5)
   await page.keyboard.press('Escape')
   await expect(filterMenu(page)).toHaveCount(0)
   await expect(filterButton(page)).toBeFocused()

@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
-import { addFilter, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
+import { addFilter, chooseDisplayOption, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
@@ -78,17 +78,18 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   const bottomOf = (selector: string) => page.locator(selector).first().evaluate(el => Math.round(el.getBoundingClientRect().bottom));
   expect(await bottomOf('.sidebar-header')).toBe(await bottomOf('#home-task-navigation .todo-panel-toolbar'));
   await expect(homeToolbar(page).locator('.new-launcher-label')).toBeVisible();
-  // One quiet toolbar, no accent colour: New task wears the search field's outline, and the
-  // Display icon is the same grey glyph as the hide button.
+  // One quiet toolbar, no accent colour: New task is a bare word like Display, no frame
+  // (2026-10-03: "keep the button, drop the box around it"), and the Display icon is the
+  // same grey glyph as the hide button.
   const look = (selector: string) => homeToolbar(page).locator(selector).first().evaluate(el => {
     const s = getComputedStyle(el);
-    return { background: s.backgroundColor, border: `${s.borderTopWidth} ${s.borderTopColor}`, color: s.color };
+    return { background: s.backgroundColor, border: s.borderTopColor, color: s.color };
   });
-  const [searchLook, createLook, displayLook, hideLook] = await Promise.all(
-    ['.todo-search-bar', '.new-launcher-btn', '.dm-display-btn', '.todo-panel-hide'].map(look));
-  expect(createLook.background).toBe(searchLook.background);
-  expect(createLook.border).toBe(searchLook.border);
-  expect(createLook.color).toBe('rgb(29, 29, 31)');
+  const [createLook, displayLook, hideLook] = await Promise.all(
+    ['.new-launcher-btn', '.dm-display-btn', '.todo-panel-hide'].map(look));
+  expect(createLook.background).toBe('rgba(0, 0, 0, 0)');
+  expect(createLook.border).toBe('rgba(0, 0, 0, 0)');
+  expect(createLook.color).toBe(displayLook.color);
   // Display carries a word, so it reads in the secondary grey (the hide button is a bare
   // icon in the muted one); it shares the hide button's background and never wears the
   // accent at rest.
@@ -213,7 +214,8 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await chooseViewOption(page, 'wait');
   await expect(page.getByTestId('tier-view-bar')).toContainText('Parked');
   await expect(heading(page, 'focus')).toHaveCount(0);
-  await chooseViewOption(page, 'tier-custom');
+  await chooseDisplayOption(page, 'group', 'none');
+  await closeViewMenu(page);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-tier-view-modes') ?? '{}').wait)).toBe('custom');
   await chooseViewOption(page, 'quick-views');
   await expect(page.locator('.todo-section-tabs')).toBeVisible();

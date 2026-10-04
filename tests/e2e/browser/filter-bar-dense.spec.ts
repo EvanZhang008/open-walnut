@@ -8,7 +8,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator } from '@playwright/test'
 import {
   addFilter, closeFilterMenu, expandMoreFilters, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterSearch,
-  filterValue, openFilterMenu, openFilterPage, openViewsPage, setStatus,
+  filterValue, openFilterMenu, openFilterPage, openViewsPage, setStatus, VALUE_ROW,
 } from './filter-bar-helpers'
 import { SHOTS, box, clipAround, focusedLabel, openHome, ownerSeeds, row, settled, stubBoard } from './filter-bar-fixtures'
 
@@ -61,8 +61,10 @@ test.describe('Owner: dense board', () => {
     // More than six values: the search box takes focus and names the property.
     await expect(filterSearch(page)).toBeFocused()
     await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search projects')
-    const rows = filterPage(page, 'project').locator('.fb-opt-body')
+    const rows = filterPage(page, 'project').locator(VALUE_ROW)
     await expect(rows).toHaveCount(30)
+    // The page starts with its default, Any project.
+    await expect(filterPage(page, 'project').locator('.fb-opt-body').first()).toHaveAttribute('data-filter-value', 'Any project')
     // Board order: no saved order on a fresh browser, so projects sort by name.
     await expect(rows.first()).toHaveAttribute('data-filter-value', 'iOS App')
     await expect(rows.last()).toHaveAttribute('data-filter-value', 'Walnut')
@@ -87,10 +89,11 @@ test.describe('Owner: dense board', () => {
     await expect(filterSearch(page)).toHaveValue('')
     await expect(filterMenu(page)).toHaveAttribute('data-page', 'project')
     await expect(rows).toHaveCount(30)
-    // Source: two values, so no search focus; the first row takes it; names, not ids, with counts.
+    // Source: two values, so no search focus; the selected row (its default, Any source) takes
+    // it; names, not ids, with counts.
     await openFilterPage(page, 'source')
-    await expect(filterPage(page, 'source').locator('.fb-opt-label')).toHaveText(['Local', 'Microsoft To Do'])
-    await expect(filterValue(page, 'source', 'Local')).toBeFocused()
+    await expect(filterPage(page, 'source').locator('.fb-opt-label')).toHaveText(['Any source', 'Local', 'Microsoft To Do'])
+    await expect(filterValue(page, 'source', 'Any source')).toBeFocused()
     await expect(filterPage(page, 'source').locator('.fb-opt-body .tp-count')).toHaveCount(2)
   })
 
@@ -228,7 +231,7 @@ test.describe('Owner: tags and counts', () => {
     await openFilterPage(page, 'tags')
     await expect(filterSearch(page)).toBeFocused()
     await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search tags')
-    const rows = filterPage(page, 'tags').locator('.fb-opt-body')
+    const rows = filterPage(page, 'tags').locator(VALUE_ROW)
     await expect(rows).toHaveCount(80)
     await expect(filterMenu(page).getByRole('button', { name: /^\d+ more$/ })).toHaveCount(0)
     await filterSearch(page).fill('t03')
@@ -377,7 +380,7 @@ test('C28: one task with no project adds Inbox as the first value of the Project
   await openHome(page)
   await expect(row(page, 'fb-own-1')).toBeAttached({ timeout: 30_000 })
   await openFilterPage(page, 'project')
-  const rows = filterPage(page, 'project').locator('.fb-opt-body')
+  const rows = filterPage(page, 'project').locator(VALUE_ROW)
   await expect(rows).toHaveCount(31, { timeout: 15_000 })
   await expect(rows.first()).toHaveAttribute('data-filter-value', 'Inbox')
   await expect(rows.first()).toHaveAttribute('title', 'Tasks with no project')
