@@ -80,6 +80,12 @@ targets:
         # the one code that ever asks to write; Release builds never ask.
         NSHealthShareUsageDescription: Walnut reads the Apple Health data you allow and keeps your own Mac up to date, so your AI can answer questions about your sleep, activity, heart and other health data.
         NSHealthUpdateUsageDescription: Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data.
+        # Places (Settings, Places): off until the user turns it on. iOS visit
+        # monitoring needs Always, asked right after While Using (the order iOS
+        # requires). No `location` background mode: iOS relaunches the app to
+        # deliver a visit by itself.
+        NSLocationWhenInUseUsageDescription: Walnut uses your location only for Places, after you turn it on. It records the places you visit and keeps them on your own Mac.
+        NSLocationAlwaysAndWhenInUseUsageDescription: With Places on, Walnut records the places you visit, even while it is closed, and keeps them only on your own Mac, so your AI can answer where you were. iOS records visits only with Always.
         # The Health sync's app refresh task (HealthBackground.swift). Needs the
         # `fetch` background mode below.
         BGTaskSchedulerPermittedIdentifiers:

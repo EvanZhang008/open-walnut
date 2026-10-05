@@ -93,6 +93,9 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         // Apple Health: HealthKit background delivery and the app refresh task
         // wake the app in the background, so this is NOT behind LaunchGate.
         HealthBackground.shared.start()
+        // Places: iOS relaunches Walnut in the background to deliver a visit, and
+        // only a location manager made during launch receives it. Not behind LaunchGate.
+        PlacesRecorder.shared.start()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)

@@ -138,6 +138,10 @@ enum LocalDataReset {
         // anchor (the Mac's copy is only removed by "Delete Health Data on Mac").
         HealthSync.eraseLocalState()
 
+        // 7. Places: stop recording and forget the visits kept here (the Mac's
+        // copy is only removed by "Delete Places on Mac").
+        PlacesRecorder.shared.eraseLocalState()
+
         AppLog.info("reset", "local data erased", [
             "reason": reason,
             "removed": String(removed.count),

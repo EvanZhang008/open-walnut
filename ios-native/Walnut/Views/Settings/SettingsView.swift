@@ -37,6 +37,7 @@ struct SettingsView: View {
                 automationSection
                 notificationsSection
                 AppleHealthSettingsSection()
+                PlacesSettingsSection()
                 voiceSection
                 diagnosticsSection
                 actionsSection

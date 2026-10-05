@@ -254,6 +254,10 @@ enum LiveStreamEvents {
             if HealthAccessDecision.isHealthRead(name: payload.name, detail: payload.inputPreview ?? payload.detail) {
                 Task { @MainActor in HealthAccessPrompt.shared.healthReadStarted() }
             }
+            // The same for Places: an agent asking where the user went.
+            if PlacesAccessDecision.isPlacesRead(name: payload.name, detail: payload.inputPreview ?? payload.detail) {
+                Task { @MainActor in PlacesAccessPrompt.shared.placesReadStarted() }
+            }
             return Handled(impliesStreaming: true, toolName: payload.name,
                            needsFlush: false)
         case "tool-result":
