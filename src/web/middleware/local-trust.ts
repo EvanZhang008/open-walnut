@@ -120,3 +120,16 @@ export function classifyLocalRequest(req: RequestLike): LocalTrust {
 export function isCrossSiteRefusal(t: LocalTrust): boolean {
   return !t.trusted && (t.reason === 'foreign-host' || t.reason === 'foreign-origin')
 }
+
+/**
+ * The client a cloud WS upgrade counts against for the auth rate limit: the
+ * first X-Forwarded-For hop when the socket is this machine's own reverse
+ * proxy (mirrors Express `trust proxy: 'loopback'`), else the socket. A rate
+ * limit key, never a grant: a client off this machine cannot pick its own key.
+ */
+export function rateLimitClientIp(req: RequestLike): string {
+  const peer = req.socket?.remoteAddress ?? 'unknown'
+  const fwd = req.headers['x-forwarded-for']
+  const first = typeof fwd === 'string' ? fwd.split(',')[0]?.trim() : undefined
+  return isLoopbackAddress(peer) && first ? first : peer
+}

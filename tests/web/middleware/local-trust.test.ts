@@ -4,7 +4,7 @@
  * from elsewhere reaches a loopback socket or pretends to be local.
  */
 import { describe, it, expect } from 'vitest'
-import { classifyLocalRequest, isCrossSiteRefusal, isLoopbackName, isOwnOrigin } from '../../../src/web/middleware/local-trust.js'
+import { classifyLocalRequest, isCrossSiteRefusal, isLoopbackName, isOwnOrigin, rateLimitClientIp } from '../../../src/web/middleware/local-trust.js'
 
 /** A request that arrived on the server's port 3456. */
 function req(remoteAddress: string, headers: Record<string, string> = {}) {
@@ -61,7 +61,7 @@ describe('classifyLocalRequest', () => {
   })
 
   it('refuses a loopback socket that a local proxy or tunnel forwarded', () => {
-    const proxied = [
+    const proxied: Array<Record<string, string>> = [
       { 'x-forwarded-for': '203.0.113.9' }, { forwarded: 'for=203.0.113.9' }, { 'x-real-ip': '10.0.0.7' },
       { 'x-forwarded-host': 'walnut.example' }, { 'x-forwarded-proto': 'https' }, { via: '1.1 proxy' },
     ]
@@ -107,5 +107,22 @@ describe('name helpers', () => {
     expect(isOwnOrigin('http://127.0.0.1:9999')).toBe(true) // no port known: the name alone
     expect(isOwnOrigin('null', 3456)).toBe(false)
     expect(isOwnOrigin('', 3456)).toBe(false)
+  })
+})
+
+// The cloud WS upgrade's rate-limit key (ws/handler.ts verifyCloudUpgrade), moved here
+// unchanged so the raw socket is read in this middleware only.
+describe('rateLimitClientIp', () => {
+  it('the first X-Forwarded-For hop when this machine\'s own reverse proxy forwarded the request', () => {
+    expect(rateLimitClientIp(req('127.0.0.1', { 'x-forwarded-for': '203.0.113.9, 10.0.0.1' }))).toBe('203.0.113.9')
+    expect(rateLimitClientIp(req('::1', { 'x-forwarded-for': ' 198.51.100.4 ' }))).toBe('198.51.100.4')
+    expect(rateLimitClientIp(req('::ffff:127.0.0.1', { 'x-forwarded-for': '198.51.100.5' }))).toBe('198.51.100.5')
+  })
+
+  it('the socket otherwise: a client off this machine cannot pick its own key', () => {
+    expect(rateLimitClientIp(req('192.168.1.44', { 'x-forwarded-for': '203.0.113.9' }))).toBe('192.168.1.44')
+    expect(rateLimitClientIp(req('127.0.0.1'))).toBe('127.0.0.1')
+    expect(rateLimitClientIp(req('127.0.0.1', { 'x-forwarded-for': '' }))).toBe('127.0.0.1')
+    expect(rateLimitClientIp({ headers: { 'x-forwarded-for': '203.0.113.9' } })).toBe('unknown')
   })
 })

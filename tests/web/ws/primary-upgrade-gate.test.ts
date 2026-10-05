@@ -204,6 +204,26 @@ describe('/ws upgrade from this machine', () => {
     }
   })
 
+  // The op executor and a plugin's http.fetch reach this server over loopback for a
+  // caller off this Mac and say so in x-walnut-origin (src/lib/caller-origin.ts). /ws
+  // carries terminal:open, so such a caller shows a token, like the one it acts for.
+  it('a loopback upgrade made for a caller off this Mac needs a token (x-walnut-origin)', async () => {
+    for (const origin of ['host:devbox', 'remote-http', '__local__, host:devbox']) {
+      expect(await upgrade('127.0.0.1', { headers: { 'x-walnut-origin': origin } }), origin).toBe(401)
+      expect(await upgrade('127.0.0.1', { headers: { 'x-walnut-origin': origin, Origin: `http://127.0.0.1:${port}` } }), origin).toBe(401)
+      expect(await upgrade('127.0.0.1', { path: `/ws?token=${encodeURIComponent(deviceToken)}`, headers: { 'x-walnut-origin': origin } }), origin).toBe(101)
+    }
+    // A daemon's machine token is still not a way in.
+    expect(await upgrade('127.0.0.1', { path: `/ws?token=${encodeURIComponent(machineToken)}`, headers: { 'x-walnut-origin': 'host:devbox' } })).toBe(401)
+  })
+
+  it('a local client, the console page and a self-call for a caller on this Mac still connect without a token', async () => {
+    expect(await upgrade('127.0.0.1')).toBe(101)
+    expect(await upgrade('127.0.0.1', { headers: { Origin: `http://127.0.0.1:${port}` } })).toBe(101)
+    expect(await upgrade('127.0.0.1', { headers: { Origin: `http://localhost:${port}` } })).toBe(101)
+    expect(await upgrade('127.0.0.1', { headers: { 'x-walnut-origin': '__local__' } })).toBe(101)
+  })
+
   it('a local proxy or tunnel (X-Forwarded-For) needs a token', async () => {
     expect(await upgrade('127.0.0.1', { headers: { 'X-Forwarded-For': '203.0.113.9' } })).toBe(401)
     expect(await upgrade('127.0.0.1', { path: `/ws?token=${deviceToken}`, headers: { 'X-Forwarded-For': '203.0.113.9' } })).toBe(101)

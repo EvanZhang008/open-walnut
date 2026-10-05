@@ -11,7 +11,10 @@
  * Auth is the global /api middleware: the loopback console, or a device token.
  * The two POSTs go further: only the console on this machine may run an
  * installer or open an app here, never a paired phone's token (a phone that
- * wants Tailscale is told to set it up on the Mac). Every handler is bounded:
+ * wants Tailscale is told to set it up on the Mac), nor a loopback self-call
+ * this server makes for a caller off this Mac (a remote host session's `api`
+ * op, a plugin running for a phone), which says so in x-walnut-origin and is
+ * refused like that caller (request-origin.ts). Every handler is bounded:
  * the CLI probe has a 3s deadline, the install runs in the background and is
  * only read here.
  */
@@ -21,14 +24,16 @@ import { CLOUD_MODE } from '../../constants.js'
 import { tailscaleDetail } from '../../core/tailnet.js'
 import { openTailscaleApp, startTailscaleInstall, tailscaleInstallState } from '../../core/tailscale-install.js'
 import { log } from '../../logging/index.js'
-import { classifyLocalRequest } from '../middleware/local-trust.js'
+import { requestOrigin } from '../middleware/request-origin.js'
+import { isLocalOrigin } from '../../lib/caller-origin.js'
 
 export const devicesTailscaleRouter = Router()
 
 const OWN_ROUTES = new Set(['GET /', 'POST /install', 'POST /open'])
 
+/** A request this machine trusts (local-trust.ts) that also acts for a caller on this Mac. */
 function requireLocalConsole(req: Request, res: Response, next: NextFunction): void {
-  if (classifyLocalRequest(req).trusted) {
+  if (isLocalOrigin(requestOrigin(req))) {
     next()
     return
   }

@@ -7,9 +7,10 @@
  *   ...&redact=0                                   → keep usernames and hostnames
  *
  * Redacted by default: the text is made to be pasted into a public issue.
- * `redact=0` is honoured only for a caller on this machine's loopback, and
- * never on a cloud replica: raw paths and hostnames are for the user's own
- * terminal, not for a paired phone or a LAN browser. Secrets are masked in
+ * `redact=0` is honoured only for a caller on this Mac (request-origin.ts),
+ * and never on a cloud replica: raw paths and hostnames are for the user's own
+ * terminal, not for a paired phone, a LAN browser, a tunnel, or a loopback
+ * self-call made for a remote host session. Secrets are masked in
  * every form (collectDiagnostics). Same auth posture as /api/bug-report: the
  * standard /api auth, NOT in CLOUD_EXEMPT_PATHS. Never 500s: the caller is
  * debugging. Concurrent requests share one collection (it runs a login shell
@@ -22,6 +23,8 @@ import { collectDiagnostics, type CollectOptions, type DiagnosticsReport } from 
 import { hostsSection, redactDiagnostics, renderDiagnosticsText } from '../../core/diagnostics/render.js'
 import { getWebAssetsReport } from './config.js'
 import { log } from '../../logging/index.js'
+import { requestOrigin } from '../middleware/request-origin.js'
+import { isLocalOrigin } from '../../lib/caller-origin.js'
 
 /**
  * The facts only the server knows: the terminal's dtach answer and the served
@@ -46,15 +49,15 @@ export function serverDiagnosticsOptions(cloudMode: boolean = CLOUD_MODE): Colle
   }
 }
 
-export function isLoopbackAddress(address: string | undefined): boolean {
-  if (!address) return false
-  const a = address.startsWith('::ffff:') ? address.slice(7) : address
-  return a === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(a)
-}
-
-/** Raw output only for this machine's own loopback on a primary; the socket, never a forwarded header. */
+/**
+ * Raw output only on a primary, for a request this machine trusts (local-trust.ts:
+ * a loopback socket, no proxy header, its own Host and Origin) that also acts for
+ * a caller on this Mac (request-origin.ts). The socket alone is not enough: a
+ * tunnel arrives on loopback, and so does a self-call this server makes for a
+ * remote host session or a paired client, which says so in x-walnut-origin.
+ */
 export function rawAllowed(req: Request, cloudMode: boolean = CLOUD_MODE): boolean {
-  return !cloudMode && isLoopbackAddress(req.socket.remoteAddress)
+  return !cloudMode && isLocalOrigin(requestOrigin(req))
 }
 
 function flag(value: unknown, fallback: boolean): boolean {

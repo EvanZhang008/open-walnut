@@ -239,14 +239,11 @@ function registerSetInterest(): void {
  */
 async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine' } | null> {
   // Rate-limit key: behind the local reverse proxy every socket peer is
-  // loopback — use X-Forwarded-For (first hop) so one abusive client can't
-  // exhaust the shared budget for everyone. Only trusted when the actual
-  // peer IS loopback (mirrors Express `trust proxy: 'loopback'`).
-  const peer = request.socket.remoteAddress ?? 'unknown'
-  const isLoopbackPeer = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
-  const fwd = request.headers['x-forwarded-for']
-  const fwdIp = typeof fwd === 'string' ? fwd.split(',')[0]?.trim() : undefined
-  const ip = (isLoopbackPeer && fwdIp) ? fwdIp : peer
+  // loopback, so the first X-Forwarded-For hop is used (one abusive client
+  // can't exhaust the shared budget for everyone); only when the actual peer
+  // IS loopback (local-trust.ts rateLimitClientIp).
+  const { rateLimitClientIp } = await import('../middleware/local-trust.js')
+  const ip = rateLimitClientIp(request)
   const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')
   if (isAuthRateLimited(ip)) {
     log.ws.warn('cloud ws upgrade: rate limited', { ip })
@@ -280,18 +277,22 @@ function ignoreSocketError(): void { /* see the upgrade handler */ }
  * session:start, so it gets the HTTP middleware's rule (local-trust.ts): this
  * machine's own pages connect freely; a WebSocket is never stopped by CORS, so
  * a page on another site is refused by its Origin; every other caller sends a
- * device token (`?token=`, as the SPA does, or an Authorization header).
+ * device token (`?token=`, as the SPA does, or an Authorization header). So
+ * does a loopback upgrade that says, in x-walnut-origin, it acts for a caller
+ * off this Mac (request-origin.ts): the header only ever lowers trust.
  */
 async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise<'ok' | 401 | 403 | 429> {
+  const { requestOrigin } = await import('../middleware/request-origin.js')
+  const { isLocalOrigin } = await import('../../lib/caller-origin.js')
+  if (isLocalOrigin(requestOrigin(request))) return 'ok'
   const { classifyLocalRequest, isCrossSiteRefusal } = await import('../middleware/local-trust.js')
   const trust = classifyLocalRequest(request)
-  if (trust.trusted) return 'ok'
   const header = request.headers.authorization
   const token = url.searchParams.get('token')
     ?? (header?.startsWith('Bearer ') ? header.slice(7) : null)
   const ip = request.socket.remoteAddress ?? 'unknown'
   if (!token) {
-    log.ws.warn('ws upgrade refused: no credential', { ip, reason: trust.reason, origin: request.headers.origin, host: request.headers.host })
+    log.ws.warn('ws upgrade refused: no credential', { ip, reason: trust.trusted ? 'on-behalf-of' : trust.reason, origin: request.headers.origin, host: request.headers.host })
     return isCrossSiteRefusal(trust) ? 403 : 401
   }
   const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')

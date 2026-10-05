@@ -4,7 +4,8 @@
  * Contract under test:
  *   - JSON by default, redacted by default (paths and hostnames masked);
  *   - ?format=text is the paste-ready block, ?section=hosts the hosts block;
- *   - ?redact=0 keeps the raw values only for a loopback reader on a primary;
+ *   - ?redact=0 keeps the raw values only for a caller on this Mac, on a primary
+ *     (request-origin.ts: never a tunnel, never a self-call made for a caller off this Mac);
  *   - concurrent requests share ONE collection (it runs processes);
  *   - a collection failure still answers 200 with the reason.
  */
@@ -15,8 +16,10 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-diagnosti
 
 import express from 'express'
 import request from 'supertest'
+import { once } from 'node:events'
+import type { AddressInfo } from 'node:net'
 import {
-  createDiagnosticsRouter, isLoopbackAddress, rawAllowed, serverDiagnosticsOptions,
+  createDiagnosticsRouter, rawAllowed, serverDiagnosticsOptions,
 } from '../../../src/web/routes/diagnostics.js'
 import type { CollectOptions, DiagnosticsProbes } from '../../../src/core/diagnostics/doctor.js'
 
@@ -75,6 +78,43 @@ describe('GET /api/diagnostics', () => {
     expect(res.headers['x-diagnostics-redacted']).toBeUndefined()
     expect(res.body.local.claude.path).toBe('/Users/alice/.local/bin/claude')
     expect(res.body.hosts[0].hostname).toBe('devbox.example.com')
+  })
+
+  // The op executor's `api` passthrough reaches this route over loopback for a session on
+  // another exec host or a paired client, and says so in x-walnut-origin (src/lib/caller-origin.ts).
+  it('redacts redact=0 for a loopback self-call made for a caller off this Mac, and for a tunnel', async () => {
+    for (const [name, value] of [['x-walnut-origin', 'host:devbox'], ['x-walnut-origin', 'remote-http'], ['x-forwarded-for', '203.0.113.9']]) {
+      const res = await request(app(fixed)).get('/api/diagnostics?redact=0').set(name, value)
+      expect(res.status, value).toBe(200)
+      expect(res.headers['x-diagnostics-redacted'], value).toBe('forced')
+      expect(res.body.local.claude.path, value).toBe('/Users/\u2026/.local/bin/claude')
+      expect(JSON.stringify(res.body), value).not.toContain('alice')
+      expect(JSON.stringify(res.body), value).not.toContain('devbox.example.com')
+      const text = await request(app(fixed)).get('/api/diagnostics?format=text&redact=0').set(name, value)
+      expect(text.text, value).not.toContain('alice')
+    }
+  })
+
+  it('keeps redact=0 raw for the console page and for a self-call made for a caller on this Mac', async () => {
+    const server = app(fixed).listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const port = (server.address() as AddressInfo).port
+      for (const headers of [{ Origin: `http://127.0.0.1:${port}` }, { Origin: `http://localhost:${port}` }, { 'x-walnut-origin': '__local__' }]) {
+        const res = await request(server).get('/api/diagnostics?redact=0').set(headers)
+        expect(res.headers['x-diagnostics-redacted'], JSON.stringify(headers)).toBeUndefined()
+        expect(res.body.local.claude.path).toBe('/Users/alice/.local/bin/claude')
+        expect(res.body.hosts[0].hostname).toBe('devbox.example.com')
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
+  it('redacts redact=0 for a page from another site on the same loopback socket', async () => {
+    const res = await request(app(fixed)).get('/api/diagnostics?redact=0').set('Origin', 'http://localhost:5173')
+    expect(res.headers['x-diagnostics-redacted']).toBe('forced')
+    expect(JSON.stringify(res.body)).not.toContain('alice')
   })
 
   it('returns the paste-ready text block, and the hosts block alone', async () => {
@@ -138,17 +178,29 @@ describe('GET /api/diagnostics', () => {
 })
 
 describe('who may read raw output', () => {
-  it('treats only loopback socket addresses as this machine', () => {
-    for (const a of ['127.0.0.1', '127.1.2.3', '::1', '::ffff:127.0.0.1']) expect(isLoopbackAddress(a)).toBe(true)
-    for (const a of [undefined, '', '192.168.1.20', '::ffff:10.0.0.5', 'fe80::1', '127.0.0.1.example.com']) expect(isLoopbackAddress(a)).toBe(false)
+  const req = (remoteAddress: string, headers: Record<string, string> = {}) =>
+    ({ socket: { remoteAddress, localPort: 3456 }, headers }) as unknown as Parameters<typeof rawAllowed>[0]
+
+  it('this Mac: a local client, the console page, a self-call made for a caller on this Mac', () => {
+    expect(rawAllowed(req('127.0.0.1'), false)).toBe(true)
+    expect(rawAllowed(req('::1', { host: '[::1]:3456' }), false)).toBe(true)
+    expect(rawAllowed(req('::ffff:127.0.0.1', { host: 'localhost:3456', origin: 'http://localhost:3456' }), false)).toBe(true)
+    expect(rawAllowed(req('127.0.0.1', { host: '127.0.0.1:3456', 'x-walnut-origin': '__local__' }), false)).toBe(true)
   })
 
-  it('never allows raw output on a replica, and reads the socket, not a forwarded header', () => {
-    const req = (remoteAddress: string, headers: Record<string, string> = {}) =>
-      ({ socket: { remoteAddress }, headers }) as unknown as Parameters<typeof rawAllowed>[0]
-    expect(rawAllowed(req('127.0.0.1'), false)).toBe(true)
+  it('never on a replica, off this machine, through a tunnel, or for a page from another site', () => {
     expect(rawAllowed(req('127.0.0.1'), true)).toBe(false)
     expect(rawAllowed(req('10.0.0.5', { 'x-forwarded-for': '127.0.0.1' }), false)).toBe(false)
+    expect(rawAllowed(req('192.168.1.20'), false)).toBe(false)
+    // A tunnel or a local reverse proxy arrives on loopback; the socket alone used to pass it.
+    expect(rawAllowed(req('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }), false)).toBe(false)
+    expect(rawAllowed(req('127.0.0.1', { host: '127.0.0.1:3456', origin: 'https://evil.example' }), false)).toBe(false)
+  })
+
+  it('never for a loopback self-call made for a caller off this Mac (x-walnut-origin)', () => {
+    for (const origin of ['host:devbox', 'remote-http', '__local__, host:devbox', '']) {
+      expect(rawAllowed(req('127.0.0.1', { host: '127.0.0.1:3456', 'x-walnut-origin': origin }), false), origin).toBe(false)
+    }
   })
 })
 

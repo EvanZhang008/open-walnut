@@ -266,6 +266,48 @@ describe('a paired phone may read, never install or open', () => {
   })
 })
 
+// The op executor's `api` passthrough and a plugin's http.fetch reach this server over
+// loopback, with no credential, and name the caller they act for in x-walnut-origin
+// (src/lib/caller-origin.ts). The socket alone used to let them install and open.
+describe('a loopback self-call made for a caller off this Mac may not install or open', () => {
+  const refused = { status: 403, body: { error: 'Only the Walnut console on this machine can install or open Tailscale.' } }
+
+  it.each([
+    ['a session on another exec host', { 'x-walnut-origin': 'host:devbox', 'x-walnut-caller-host': 'devbox' }],
+    ['a paired client', { 'x-walnut-origin': 'remote-http' }],
+    ['the origin header sent twice', { 'x-walnut-origin': '__local__, host:devbox' }],
+  ])('%s: 403 on both POSTs, nothing spawned or opened', async (_label, headers) => {
+    expect(await post('/api/devices/tailscale/install', headers)).toEqual(refused)
+    expect(await post('/api/devices/tailscale/open', headers)).toEqual(refused)
+    // The same with the console's own Origin on the request: the header still wins.
+    expect(await post('/api/devices/tailscale/open', { ...headers, Origin: `http://127.0.0.1:${port}` })).toEqual(refused)
+    expect(children).toHaveLength(0)
+    expect(opened).toBe(0)
+  })
+
+  it('the console page, a local client and a self-call for a caller on this Mac still install and open', async () => {
+    const callers: Array<Record<string, string>> = [
+      { Origin: `http://127.0.0.1:${port}` }, // the console page
+      { Origin: `http://localhost:${port}` },
+      {}, // a local client (the CLI, curl): no Origin, no token
+      { 'x-walnut-origin': '__local__' }, // the op executor, for a session on this Mac
+    ]
+    for (const headers of callers) {
+      expect(await post('/api/devices/tailscale/open', headers), JSON.stringify(headers)).toEqual({ status: 200, body: { opened: true } })
+    }
+    expect(opened).toBe(callers.length)
+    // Past the guard on /install too: without Homebrew the route itself answers 400.
+    brew = null
+    installSeams()
+    for (const headers of callers) {
+      expect(await post('/api/devices/tailscale/install', headers), JSON.stringify(headers)).toEqual({
+        status: 400, body: { error: 'Homebrew is not installed on this Mac; get Tailscale from the App Store instead.' },
+      })
+    }
+    expect(children).toHaveLength(0)
+  })
+})
+
 describe('POST /api/devices/tailscale/open', () => {
   it('opens the app on macOS', async () => {
     expect(await post('/api/devices/tailscale/open')).toEqual({ status: 200, body: { opened: true } })
