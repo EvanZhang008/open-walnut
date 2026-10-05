@@ -103,7 +103,7 @@ test('a paused trigger stays on its task through a reload, stops checking, and R
     // Pause: the ONLY trigger on the task stays, muted, with Resume.
     await trow.getByRole('button', { name: 'Pause' }).click()
     await expect(trow).toHaveAttribute('data-state', 'paused')
-    await expect(pill).toHaveText('TRIGGER · PAUSED')
+    await expect(pill).toHaveText('TRIGGER')
     await expect(pill).toHaveAttribute('data-paused', 'true')
     await expect(trow.getByTestId('trigger-jobs-state')).toHaveText('Paused')
     await expect(trow.getByTestId('trigger-jobs-off')).toContainText(/^Paused (just now|\dm ago): not checking\. On Resume, anything that appeared meanwhile arrives once, as one fire\.$/)
@@ -140,7 +140,8 @@ test('a paused trigger stays on its task through a reload, stops checking, and R
     await page.waitForLoadState('networkidle')
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 })
     const pill2 = taskRow(page, task.title).getByTestId('task-trigger-pill')
-    await expect(pill2).toHaveText('TRIGGER · PAUSED', { timeout: 15_000 })
+    await expect(pill2).toHaveText('TRIGGER', { timeout: 15_000 })
+    await expect(pill2).toHaveAttribute('data-paused', 'true')
     expect(await pill2.getAttribute('title')).toContain(`${name} (paused`)
     await pill2.click()
     const trow2 = page.getByTestId('trigger-jobs-flyout').locator(`.trigger-jobs-row[data-routine-id="${created.id}"]`)
@@ -237,7 +238,8 @@ test('a trigger stopped after failing checks reads Stopped on its task and on th
 
     await openHome(page)
     const pill = taskRow(page, task.title).getByTestId('task-trigger-pill')
-    await expect(pill).toHaveText('TRIGGER ×2 · OFF', { timeout: 15_000 })
+    await expect(pill).toHaveText('TRIGGER', { timeout: 15_000 })
+    await expect(pill).toHaveAttribute('data-paused', 'true')
     await pill.click()
     const flyout = page.getByTestId('trigger-jobs-flyout')
     const srow = flyout.locator(`.trigger-jobs-row[data-routine-id="${failing.id}"]`)

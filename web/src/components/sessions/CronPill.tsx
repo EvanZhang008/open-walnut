@@ -1,4 +1,6 @@
+import { useRef } from 'react';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
+import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { cronPillTitle } from '@/utils/cron-job-text';
 import '@/styles/session-supervision.css';
 
@@ -10,6 +12,10 @@ export interface CronPillProps {
 
 export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
   const cron = useActiveSessionCron(sessionId);
+  const spanRef = useRef<HTMLSpanElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useRowPillFold(spanRef, !!cron && !onClick);
+  useRowPillFold(buttonRef, !!cron && !!onClick);
   if (!cron) return null;
 
   const title = cronPillTitle(cron.jobs);
@@ -17,7 +23,8 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
   if (!onClick) {
     return (
       <span
-        className="session-cron-pill"
+        ref={spanRef}
+        className="session-cron-pill task-row-pill"
         title={title}
         aria-label="Cron job armed"
         data-cron-presence="active"
@@ -31,8 +38,9 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
 
   return (
     <button
+      ref={buttonRef}
       type="button"
-      className="session-cron-pill"
+      className="session-cron-pill task-row-pill"
       title={title}
       aria-label={expanded ? 'Cron job armed. Hide job details' : 'Cron job armed. Show job details'}
       aria-expanded={!!expanded}

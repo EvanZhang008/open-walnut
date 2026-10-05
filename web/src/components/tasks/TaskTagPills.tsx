@@ -10,7 +10,9 @@
  * together); the rest fold into "+N", whose tooltip names them. The detail pane
  * passes a larger max.
  */
+import { useRef } from 'react';
 import { TagChip } from './TagChip';
+import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
 import { effectiveTags } from '../../../../src/core/tag-model';
@@ -35,10 +37,12 @@ export function pillText(tag: string, compiled: CompiledTagDisplay): string {
 export function TaskTagPills({ tags, task, max = 2, className }: { tags?: readonly string[]; task?: TaggedTask; max?: number; className?: string }) {
   const { compiled } = useTagDisplay();
   const shown = shownTags(task ? effectiveTags(task) : tags, compiled);
+  const groupRef = useRef<HTMLSpanElement>(null);
+  useRowPillFold(groupRef, shown.length > 0);
   if (shown.length === 0) return null;
   const rest = shown.slice(max);
   return (
-    <span className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
+    <span ref={groupRef} className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
       {shown.slice(0, max).map((tag) => {
         const text = pillText(tag, compiled);
         return <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} whole={text.length <= WHOLE_TAG_MAX} href={compiled.linkFor(tag)} />;

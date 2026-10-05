@@ -5,6 +5,7 @@ import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import { log } from '@/utils/log';
@@ -95,6 +96,8 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
     return () => document.removeEventListener('keydown', onKey, true);
   }, [open, close]);
 
+  useRowPillFold(triggerRef, subtasks.length > 0);
+
   if (subtasks.length === 0) return null;
 
   // The row's unlink icon: the worker leaves this team and keeps running where
@@ -117,7 +120,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
       <button
         ref={triggerRef}
         type="button"
-        className={`task-team-pill todo-item-leader-pill${className ? ` ${className}` : ''}`}
+        className={`task-team-pill task-row-pill todo-item-leader-pill${className ? ` ${className}` : ''}`}
         title={leaderPillTitle(subtasks, done)}
         aria-label={open ? 'Leads subtasks. Hide them' : 'Leads subtasks. List them'}
         aria-haspopup="dialog"

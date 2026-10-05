@@ -73,6 +73,7 @@ import { arrangeSearchResults, taskMatchesLiterally } from './search-relevance';
 import { taskMatchesDateTag } from './date-tag-search';
 import '@/styles/todo-search.css';
 import '@/styles/todo-empty-board.css';
+import '@/styles/row-pill-fit.css';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import {
@@ -105,6 +106,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { dragBus } from '@/utils/drag-bus';
+import { observeRowFit } from '@/utils/row-fit';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
@@ -7746,7 +7748,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A stable ref callback: an inline one is detached (set to null) on every commit,
   // which left FilterBar's scroll keeper reading a null list scroller.
   const listScrollRef = homeFilters.listScrollRef;
-  const setListScrollEl = useCallback((el: HTMLDivElement | null) => { listScrollRef.current = el; }, [listScrollRef]);
+  const stopRowFit = useRef<(() => void) | null>(null);
+  const setListScrollEl = useCallback((el: HTMLDivElement | null) => {
+    listScrollRef.current = el;
+    stopRowFit.current?.();
+    stopRowFit.current = el ? observeRowFit(el) : null;
+  }, [listScrollRef]);
   // 6.8: the project heading's "Filter to this project" replaces the Project set.
   const filterToProject = useCallback(
     (project: string) => homeFilters.apply({ ...homeFilters.state, projects: [project] }, 'board'),

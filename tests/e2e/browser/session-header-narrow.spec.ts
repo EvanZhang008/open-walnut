@@ -336,7 +336,7 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   expect(errors).toEqual([])
 })
 
-test('a second trigger while narrow keeps the single letter; the count returns with the width', async ({ page }) => {
+test('a second trigger while narrow keeps the single letter; the word returns with the width', async ({ page }) => {
   test.setTimeout(180_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -353,11 +353,12 @@ test('a second trigger while narrow keeps the single letter; the count returns w
   expect(narrow.titleRow.fit).toBe('letters')
   expect(narrow.titleRow.hiddenPills.split(' ')).not.toContain('trigger')
   const second = await api<{ job: { id: string } }>('POST', '/api/v1/routines/trigger', {
-    name: 'Narrow header second watch', description: 'A second trigger, so the pill counts.',
+    name: 'Narrow header second watch', description: 'A second trigger, so the hover text lists two.',
     run: `echo '{"fire": false}'`, every: '5m', prompt: 'Nothing to do.', session: taskId,
   })
   litterRoutines.push(second.job.id)
-  await expect(trigger).toHaveText('TRIGGER ×2', { timeout: 20_000 })
+  await expect(trigger).toHaveText('TRIGGER', { timeout: 20_000 })
+  await expect(trigger).toHaveAttribute('data-trigger-count', '2')
   const still = await settleAt(page, panel, 260)
   expectInsidePanel(still, '260px with two triggers')
   expect(still.letters.trigger).toBe('after:T')
@@ -365,6 +366,6 @@ test('a second trigger while narrow keeps the single letter; the count returns w
 
   const wide = await settleAt(page, panel, null)
   expect(wide.titleRow.fit).toBe('full')
-  expect(wide.letters.trigger).toBe('text:TRIGGER ×2')
+  expect(wide.letters.trigger).toBe('text:TRIGGER')
   expect(errors).toEqual([])
 })

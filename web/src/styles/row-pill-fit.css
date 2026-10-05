@@ -1,0 +1,25 @@
+/* A crowded task row folds its pills to one letter (W, T, L, C), so the title keeps
+   the room. Two attributes decide it, both plain:
+     - `data-row-fit="tight"` on the list's scroller: the column is narrow
+       (utils/row-fit.ts);
+     - `data-pill-crowd` on the row or card: it has two or more of the pills
+       (TRIGGER, WORKER, LEADER, CRON), or a tag group beside one. A lone pill keeps
+       its word, there is room for it. The pills report this as they come and go
+       (hooks/useRowPillFold.ts).
+
+   The word stays in the DOM, so readers and tests still see "Worker" and the count
+   in "Leader · 13"; the letter is drawn from `data-short`, like the session header
+   (session-header-fit.css), and the hover text keeps the rest.
+
+   Not a `:has()` on the row: WebKit (the Mac app) did not restyle a pill reliably
+   when a pill arrived late or left (the triggers load after the row), in two
+   different shapes depending on where the new pill sat (2026-10-05). An attribute
+   set from script invalidates like any other. */
+
+.home-navigation-scroll[data-row-fit="tight"] :is(.todo-item-title-row, .todo-focus-card, .todo-pinned-card)[data-pill-crowd] > .task-row-pill[data-short] > .task-pill-long {
+  display: none;
+}
+
+.home-navigation-scroll[data-row-fit="tight"] :is(.todo-item-title-row, .todo-focus-card, .todo-pinned-card)[data-pill-crowd] > .task-row-pill[data-short]::after {
+  content: attr(data-short);
+}

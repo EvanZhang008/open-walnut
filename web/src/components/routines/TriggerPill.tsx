@@ -6,10 +6,12 @@
  * never a generic page. Rendered on the task rows, the Focus cards and the
  * session header from the one shared routines store.
  *
- * A paused trigger stays: the pill turns muted and reads TRIGGER · PAUSED (or
- * "· 1 PAUSED" beside armed ones), and its flyout row offers Resume. Switching
- * one off used to make it vanish, which read as a delete. A trigger the server
- * stopped after its check kept failing stays the same way, marked STOPPED.
+ * The pill always reads TRIGGER: no count, no PAUSED (a row full of pills is
+ * noisy, and the flyout and the hover text carry both). The look says the state:
+ * a solid pill means something on the task still polls, a dashed muted one means
+ * every trigger is switched off, and its flyout row offers Resume. Switching one
+ * off used to make the pill vanish, which read as a delete. A trigger the server
+ * stopped after its check kept failing stays the same way, dashed and red.
  *
  * A task waiting on a trigger says so with its own status (Waiting); this pill
  * stays the trigger's handle and nothing more.
@@ -24,6 +26,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Routine, RoutineAuditEntry } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
   auditClock, auditHistory, describeAuditEntry, describeCheck, describeFireTally, describeLastCheck,
@@ -47,17 +50,9 @@ function offWord(off: readonly PillTrigger[]): string {
   return states.has('stopped') ? 'STOPPED' : states.has('paused') ? 'PAUSED' : 'OFF';
 }
 
-/**
- * The pill's text. Switched-off triggers say so: `TRIGGER · PAUSED` when none
- * polls, `TRIGGER ×3 · 1 PAUSED` when some do.
- */
+/** The pill's text: the word alone. Count and off state live in the look, the hover text and the flyout. */
 export function triggerPillLabel(triggers: readonly PillTrigger[]): string {
-  if (!triggers.length) return '';
-  const off = triggers.filter((r) => !r.enabled);
-  let label = `TRIGGER${triggers.length > 1 ? ` ×${triggers.length}` : ''}`;
-  if (off.length === triggers.length) label += ` · ${offWord(off)}`;
-  else if (off.length) label += ` · ${off.length} ${offWord(off)}`;
-  return label;
+  return triggers.length ? 'TRIGGER' : '';
 }
 
 /** The hover text: one line per trigger, so the pill alone tells what is polling. */
@@ -278,6 +273,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  useRowPillFold(triggerRef, !!taskId && triggers.length > 0);
   const navigate = useNavigate();
   const placement = useMenuPlacement(open, triggerRef, menuRef, {
     align: 'start',
@@ -335,7 +331,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
       <button
         ref={triggerRef}
         type="button"
-        className={`task-trigger-pill${allOff ? ' is-paused' : ''}`}
+        className={`task-trigger-pill task-row-pill${allOff ? ' is-paused' : ''}`}
         title={triggerPillTitle(triggers)}
         aria-label={`${what}. ${open ? 'Hide' : 'Show'} trigger details`}
         aria-haspopup="dialog"
@@ -344,8 +340,8 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
         data-trigger-count={triggers.length}
         data-paused={allOff ? 'true' : undefined}
         data-off={allOff ? offWord(triggers).toLowerCase() : undefined}
-        // A narrow session header shows this letter instead of the words (CSS, the
-        // text stays for readers and tests); the count rides in the hover text.
+        // A narrow session header or a crowded task row shows this letter instead of
+        // the word (CSS, the text stays for readers and tests).
         data-short="T"
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the

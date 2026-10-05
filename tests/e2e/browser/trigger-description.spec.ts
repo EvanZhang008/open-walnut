@@ -106,7 +106,8 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
     await showEverything(page)
     const row = taskRow(page, task.title)
     const pill = row.getByTestId('task-trigger-pill')
-    await expect(pill).toHaveText('TRIGGER ×2', { timeout: 15_000 })
+    await expect(pill).toHaveText('TRIGGER', { timeout: 15_000 })
+    await expect(pill).toHaveAttribute('data-trigger-count', '2')
     // Hover text: the description right after the name; the legacy line as before.
     const title = (await pill.getAttribute('title')) ?? ''
     expect(title).toContain(`PW described ${stamp}: ${LONG} · Every 5 min, $ echo`)

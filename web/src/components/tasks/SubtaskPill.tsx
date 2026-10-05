@@ -1,6 +1,7 @@
-import type { KeyboardEvent, MouseEvent } from 'react';
+import { useRef, type KeyboardEvent, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import '@/styles/subtask-pill.css';
@@ -29,6 +30,8 @@ export function SubtaskPill({ task, className }: { task: { parent_task_id?: stri
   const navigate = useNavigate();
   const store = useTasksContextSafe();
   const parentId = task.parent_task_id;
+  const pillRef = useRef<HTMLSpanElement>(null);
+  useRowPillFold(pillRef, !!parentId);
   if (!parentId) return null;
   // parent_task_id may be a short prefix (legacy data): the store's rule everywhere.
   const parent = store?.tasks.find((t) => t.id.startsWith(parentId)) ?? null;
@@ -41,9 +44,10 @@ export function SubtaskPill({ task, className }: { task: { parent_task_id?: stri
   };
   return (
     <span
+      ref={pillRef}
       role="button"
       tabIndex={0}
-      className={`task-team-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
+      className={`task-team-pill task-row-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
       title={subtaskPillTitle(parent?.title)}
       aria-label="Worker"
       data-testid="subtask-pill"

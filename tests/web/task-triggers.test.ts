@@ -100,18 +100,13 @@ const paused = (id: string) => ({ id, enabled: false, state: { pausedAtMs: NOW -
 const stopped = (id: string) => ({ id, enabled: false, state: { consecutiveErrors: MAX_CONSECUTIVE_CHECK_ERRORS } });
 
 describe('triggerPillLabel', () => {
-  it('reads TRIGGER, with a count past one', () => {
+  it('is the word TRIGGER alone: no count, no PAUSED or STOPPED (the look and the hover text carry them)', () => {
     expect(triggerPillLabel([on('a')])).toBe('TRIGGER');
-    expect(triggerPillLabel([on('a'), on('b'), on('c')])).toBe('TRIGGER ×3');
-  });
-
-  it('says PAUSED or STOPPED instead of going away, and counts the off ones beside armed ones', () => {
-    expect(triggerPillLabel([paused('a')])).toBe('TRIGGER · PAUSED');
-    expect(triggerPillLabel([paused('a'), paused('b')])).toBe('TRIGGER ×2 · PAUSED');
-    expect(triggerPillLabel([stopped('a')])).toBe('TRIGGER · STOPPED');
-    expect(triggerPillLabel([paused('a'), stopped('b')])).toBe('TRIGGER ×2 · OFF');
-    expect(triggerPillLabel([on('a'), paused('b'), on('c')])).toBe('TRIGGER ×3 · 1 PAUSED');
-    expect(triggerPillLabel([on('a'), stopped('b')])).toBe('TRIGGER ×2 · 1 STOPPED');
+    expect(triggerPillLabel([on('a'), on('b'), on('c')])).toBe('TRIGGER');
+    expect(triggerPillLabel([paused('a')])).toBe('TRIGGER');
+    expect(triggerPillLabel([paused('a'), paused('b')])).toBe('TRIGGER');
+    expect(triggerPillLabel([stopped('a')])).toBe('TRIGGER');
+    expect(triggerPillLabel([on('a'), paused('b'), stopped('c')])).toBe('TRIGGER');
   });
 
   it('is empty with no trigger (the pill does not render then)', () => {
