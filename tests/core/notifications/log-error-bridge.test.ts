@@ -570,6 +570,48 @@ describe('humanized copy on the way into the feed', () => {
     expect(feed.every(n => n.title === "Couldn't start a session")).toBe(true);
     expect(new Set(feed.map(n => n.dedupKey)).size).toBe(2);
   });
+
+  it("a PLUGIN condition folds across tasks: one cause, one card, the task as the latest deep link", async () => {
+    // 2026-10-05: with a sync plugin's sign-in expired, every task the user
+    // touched minted its own "couldn't save a task change" card, because the
+    // fingerprint carried taskId. The condition is the plugin's; the task is context.
+    const fpA = dedupFingerprintForTest({
+      subsystem: 'acme/sync', message: 'failed to push task', meta: { taskId: 'mt-a', error: 'auth expired' },
+    });
+    const fpB = dedupFingerprintForTest({
+      subsystem: 'acme/sync', message: 'failed to push task', meta: { taskId: 'mt-b', error: 'auth expired' },
+    });
+    expect(fpA).toBe(fpB);
+    // A different error text is still its own card.
+    expect(dedupFingerprintForTest({
+      subsystem: 'acme/sync', message: 'failed to push task', meta: { taskId: 'mt-a', error: 'title too long' },
+    })).not.toBe(fpA);
+    // A session-family error keeps the task in its identity: a start failure is
+    // about THAT task (keyed task:<id>), so two tasks are two cards.
+    expect(dedupFingerprintForTest({
+      subsystem: 'session', message: 'transport start failed', meta: { taskId: 'mt-a', error: 'ENOENT' },
+    })).not.toBe(dedupFingerprintForTest({
+      subsystem: 'session', message: 'transport start failed', meta: { taskId: 'mt-b', error: 'ENOENT' },
+    }));
+
+    const logger = createSubsystemLogger('acme/sync');
+    logger.error('failed to push task', { taskId: 'mt-a', error: 'auth expired' });
+    await feedAfterCount(1);
+    // Past the 60s storm absorber (clock, not timers), the second task folds in.
+    const realNow = Date.now;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+    try {
+      logger.error('failed to push task', { taskId: 'mt-b', error: 'auth expired' });
+      await new Promise(r => setTimeout(r, 200));
+    } finally {
+      nowSpy.mockRestore();
+    }
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].count).toBe(2);
+    expect(feed[0].recoveryKey).toBe('plugin:acme');
+    expect(feed[0].taskId).toBe('mt-b');
+  });
 });
 
 /**

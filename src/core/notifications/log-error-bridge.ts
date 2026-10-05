@@ -238,8 +238,15 @@ export function dedupFingerprintForTest(payload: ErrorNotifyPayload): string {
 }
 
 function dedupFingerprint(payload: ErrorNotifyPayload): string {
+  // A plugin's condition is the PLUGIN's (its account, its API), and the task a
+  // failed push named is context, not identity: with the sign-in expired, every
+  // task the user touched minted its own "couldn't save a task change" card
+  // (2026-10-05). The task still rides on the record as its deep link, and
+  // follows the latest occurrence; a different error text is still its own card.
+  const pluginCondition = recoveryKeyOf(payload)?.startsWith('plugin:') === true;
   const stableMeta: Record<string, unknown> = {};
   for (const key of DEDUP_META_KEYS) {
+    if (pluginCondition && key === 'taskId') continue;
     const value = payload.meta?.[key];
     if (value !== undefined) stableMeta[key] = value;
   }
