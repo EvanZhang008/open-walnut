@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, shipsNativeBinary, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
+import { LAUNCHER, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
@@ -27,10 +27,6 @@ const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'release-archi
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 const touch = (p: string, body = '') => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, body) }
 const SHA = (c: string) => c.repeat(64)
-
-type Step = { name?: string; uses?: string; run?: string; if?: string; env?: Record<string, string>; with?: Record<string, unknown> }
-type Job = { needs?: string | string[]; if?: string; 'runs-on': string; permissions?: Record<string, string>; strategy?: { matrix?: { include?: Array<{ target: string; os: string }> } }; steps: Step[] }
-const load = (f: string) => parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows', f), 'utf8')) as { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> }
 
 describe('build.mjs', () => {
   it('builds for macOS and Linux on arm64 and x64, under the names Node releases use', () => {
@@ -52,13 +48,6 @@ describe('build.mjs', () => {
     expect(RUNTIME_MARKER).toBe(UPDATER_MARKER)
   })
 
-  it('its npm never fetches a GPU provider, in the build or in any update after it', () => {
-    // onnxruntime-node reads npm_config_onnxruntime_node_install; Walnut's embedder is CPU only.
-    expect(NPMRC).toMatch(/^onnxruntime-node-install=skip$/m)
-    const embedder = fs.readFileSync(path.join(ROOT, 'src/lib/hybrid-search/embed-worker.ts'), 'utf8')
-    expect(embedder.match(/device: '([a-z]+)'/g)?.every((d) => d === "device: 'cpu'")).toBe(true)
-  })
-
   it('refuses a package whose updater does not know the archive', () => {
     const old = path.join(tmp, 'old-pkg')
     touch(path.join(old, 'dist/cli.js'), 'console.log("0.6.2")')
@@ -71,54 +60,20 @@ describe('build.mjs', () => {
     expect(updaterKnowsArchive(knows)).toBe(true)
   })
 
-  it('--check says whether the package npm would serve can have an archive, without building one', () => {
-    const check = (marker: boolean) => {
-      const pkg = path.join(tmp, `check-${marker}`)
-      touch(path.join(pkg, 'package.json'), JSON.stringify({ name: 'open-walnut', version: marker ? '0.7.0' : '0.6.2' }))
-      touch(path.join(pkg, 'dist/cli.js'), marker ? `const m = "${RUNTIME_MARKER}"` : '')
-      const tgz = execFileSync('npm', ['pack', '--silent', '--pack-destination', tmp], { cwd: pkg, encoding: 'utf8' }).trim().split('\n').pop()!
-      return execFileSync(process.execPath, [path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), '--check', '--spec', path.join(tmp, tgz)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    }
-    expect(check(true)).toBe('supported=true\n')
-    expect(check(false)).toBe('supported=false\n')
-  })
-
   it('drops the native binaries a dependency carries for other platforms, and keeps this one\'s', () => {
     const m = path.join(tmp, 'modules')
     for (const p of ['darwin/arm64', 'darwin/x64', 'linux/arm64', 'linux/x64', 'win32/x64']) touch(path.join(m, 'onnxruntime-node/bin/napi-v6', p, 'onnxruntime_binding.node'))
-    // The CUDA and TensorRT providers onnxruntime-node fetches on Linux x64 by default.
-    for (const lib of GPU_PROVIDER_LIBS) touch(path.join(m, 'onnxruntime-node/bin/napi-v6/linux/x64', lib))
     for (const p of ['arm64-darwin', 'x64-darwin', 'x64-linux', 'arm64-linux', 'x64-win32']) touch(path.join(m, '@anthropic-ai/claude-agent-sdk/vendor/ripgrep', p, 'rg'))
     for (const p of ['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-x64-musl', 'win32-x64']) touch(path.join(m, '@homebridge/node-pty-prebuilt-multiarch/prebuilds', p, 'pty.node'))
     touch(path.join(m, '@anthropic-ai/claude-agent-sdk/vendor/ripgrep/COPYING'))
     const removed = pruneForeignBinaries(m, { platform: 'linux', arch: 'x64' })
     expect(fs.readdirSync(path.join(m, 'onnxruntime-node/bin/napi-v6'))).toEqual(['linux'])
     expect(fs.readdirSync(path.join(m, 'onnxruntime-node/bin/napi-v6/linux'))).toEqual(['x64'])
-    expect(fs.readdirSync(path.join(m, 'onnxruntime-node/bin/napi-v6/linux/x64'))).toEqual(['onnxruntime_binding.node'])
     expect(fs.readdirSync(path.join(m, '@anthropic-ai/claude-agent-sdk/vendor/ripgrep')).sort()).toEqual(['COPYING', 'x64-linux'])
     expect(fs.readdirSync(path.join(m, '@homebridge/node-pty-prebuilt-multiarch/prebuilds')).sort()).toEqual(['linux-x64', 'linux-x64-musl'])
     expect(removed).toContain(path.join('onnxruntime-node/bin/napi-v6', 'win32'))
     // A second pass finds nothing left to drop.
     expect(pruneForeignBinaries(m, { platform: 'linux', arch: 'x64' })).toEqual([])
-  })
-
-  it('requires a native module to load only where its package ships that target\'s binary, judged before pruning', () => {
-    // onnxruntime-node 1.24 ships no darwin/x64 (2026-10-06: 0.6.4's Intel Mac archive failed on it).
-    const m = path.join(tmp, 'modules-ships')
-    for (const p of ['darwin/arm64', 'linux/arm64', 'linux/x64', 'win32/x64']) touch(path.join(m, 'onnxruntime-node/bin/napi-v6', p, 'onnxruntime_binding.node'))
-    expect(shipsNativeBinary(m, 'onnxruntime-node', { platform: 'darwin', arch: 'x64' })).toBe(false)
-    for (const t of [{ platform: 'darwin', arch: 'arm64' }, { platform: 'linux', arch: 'x64' }, { platform: 'linux', arch: 'arm64' }]) {
-      expect(shipsNativeBinary(m, 'onnxruntime-node', t), `${t.platform}-${t.arch}`).toBe(true)
-    }
-    // Pruning removes the other targets' copies; the answer was taken before it.
-    pruneForeignBinaries(m, { platform: 'linux', arch: 'x64' })
-    expect(shipsNativeBinary(m, 'onnxruntime-node', { platform: 'darwin', arch: 'arm64' })).toBe(false)
-    expect(shipsNativeBinary(path.join(tmp, 'no-such-modules'), 'onnxruntime-node', { platform: 'linux', arch: 'x64' })).toBe(false)
-    // better-sqlite3 builds or fetches its own: it must always load.
-    expect(shipsNativeBinary(m, 'better-sqlite3', { platform: 'darwin', arch: 'x64' })).toBe(true)
-    const build = fs.readFileSync(path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), 'utf8')
-    const main = build.slice(build.indexOf('async function main'))
-    expect(main.indexOf('shipsNativeBinary(modules')).toBeLessThan(main.indexOf('pruneForeignBinaries(modules'))
   })
 
   it('the launcher runs the archive\'s own Node on its own package, through any chain of links', () => {
@@ -165,12 +120,9 @@ describe('formula.mjs', () => {
     expect(rb).not.toMatch(/depends_on/)
   })
 
-  it('refuses what is not a version, and a version with no archives', () => {
-    expect(() => formula({ version: 'v0.7.0"; system "x', sums })).toThrow(/not a version/)
+  it('refuses a prerelease and a release with no archives', () => {
+    expect(() => formula({ version: '0.7.0-nightly.1', sums })).toThrow(/not a stable version/)
     expect(() => formula({ version: '0.8.0', sums })).toThrow(/lists no archive/)
-    // CI's rehearsal writes one for its prerelease build.
-    const pre = `${SHA('4')}  open-walnut-0.7.1-rehearsal.1-linux-x64.tar.gz`
-    expect(formula({ version: '0.7.1-rehearsal.1', sums: pre })).toContain('version "0.7.1-rehearsal.1"')
   })
 
   it('is Ruby that parses', () => {
@@ -215,6 +167,9 @@ describe('runtime.mjs helpers', () => {
 })
 
 describe('the archive workflows', () => {
+  type Step = { name?: string; uses?: string; run?: string; if?: string; env?: Record<string, string>; with?: Record<string, unknown> }
+  type Job = { needs?: string | string[]; if?: string; 'runs-on': string; permissions?: Record<string, string>; strategy?: { matrix?: { include?: Array<{ target: string; os: string }> } }; steps: Step[] }
+  const load = (f: string) => parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows', f), 'utf8')) as { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> }
   const archives = load('release-archives.yml')
   const release = load('release.yml')
 
@@ -230,8 +185,8 @@ describe('the archive workflows', () => {
 
   it('attaches what built, the checksums only after the archives, and stays red when a platform is missing', () => {
     const publish = archives.jobs.publish
-    expect(publish.needs).toEqual(['support', 'build'])
-    expect(publish.if).toBe("${{ !cancelled() && needs.support.outputs.supported == 'true' }}")
+    expect(publish.needs).toBe('build')
+    expect(publish.if).toBe('${{ !cancelled() }}')
     expect(publish.permissions).toEqual({ contents: 'write' })
     const upload = publish.steps.find((s) => s.run?.includes('gh release upload'))!.run!
     expect(upload.indexOf('*.tar.gz --clobber')).toBeLessThan(upload.indexOf('SHA256SUMS install.sh --clobber'))
@@ -239,15 +194,6 @@ describe('the archive workflows', () => {
     const brew = archives.jobs.homebrew
     expect(brew.needs).toBe('publish')
     expect(brew.steps.map((s) => s.run ?? '').join('\n')).toMatch(/brew install walnut-release\/test\/open-walnut[\s\S]*brew test[\s\S]*gh release upload "v\$VERSION" "\$RUNNER_TEMP\/open-walnut.rb"/)
-  })
-
-  it('a version whose updater predates the archive gets none, and the run stays green', () => {
-    const support = archives.jobs.support
-    expect(support.steps.map((s) => s.run ?? '').join('\n')).toContain('scripts/runtime-bundle/build.mjs --check --spec "open-walnut@$VERSION"')
-    expect(archives.jobs.build.needs).toBe('support')
-    expect(archives.jobs.build.if).toBe("needs.support.outputs.supported == 'true'")
-    // The wait for npm happens once, before anything builds.
-    expect(archives.jobs.build.steps.some((s) => s.name === 'A stable version npm serves')).toBe(false)
   })
 
   it('both stable paths start it, with the one permission that needs', () => {
@@ -269,105 +215,5 @@ describe('the archive workflows', () => {
     const step = ci.jobs.rehearsal.steps.find((s) => s.run?.includes('release-rehearsal/run.mjs'))!
     expect(step.run).toContain('--runtime')
     expect(step.env!.WALNUT_REHEARSAL_BREW).toContain('/home/linuxbrew/.linuxbrew/bin/brew')
-  })
-
-  it('every push builds and runs the archive of every target a release ships, on the machine it ships from', () => {
-    // 2026-10-06: the rehearsal covered darwin-arm64 and linux-x64 only, so 0.6.4's
-    // darwin-x64 archive failed for the first time at release.
-    const ci = load('ci.yml')
-    const shipped = archives.jobs.build.strategy!.matrix!.include!
-    const osOf = Object.fromEntries(shipped.map((x) => [x.target, x.os]))
-    const rehearsalOs = ((ci.jobs.rehearsal.strategy!.matrix as { os: string[] }).os)
-    const targets = ci.jobs['archive-targets'].strategy!.matrix!.include!
-    const covered = [...shipped.filter((x) => rehearsalOs.includes(x.os)).map((x) => x.target), ...targets.map((x) => x.target)]
-    expect(covered.sort()).toEqual(shipped.map((x) => x.target).sort())
-    for (const { target, os } of targets) expect(os, target).toBe(osOf[target])
-    const runs = ci.jobs['archive-targets'].steps.map((s) => s.run ?? '').join('\n')
-    expect(runs).toMatch(/release-rehearsal\/pack\.mjs[\s\S]*runtime-bundle\/build\.mjs --spec[\s\S]*release-rehearsal\/run\.mjs --archive/)
-    // It gates: CI OK needs it and fails without it.
-    const gate = ci.jobs['ci-ok']
-    expect(gate.needs).toContain('archive-targets')
-    expect(gate.steps.map((s) => s.run ?? '').join('\n')).toContain('needs.archive-targets.result')
-  })
-})
-
-describe('the Mac app', () => {
-  const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
-  const archives = load('release-archives.yml')
-  const swift = read('desktop/BundledRuntime.swift')
-  const installSh = read('scripts/install.sh')
-
-  it('looks for the runtime where install.sh puts it, in the layout build.mjs builds', () => {
-    // install.sh's defaults, and the folder it swaps each new copy into.
-    expect(installSh).toContain('install_dir="${OPEN_WALNUT_INSTALL_DIR:-$HOME/.local/share/open-walnut}"')
-    expect(installSh).toContain('bin_dir="${OPEN_WALNUT_BIN_DIR:-$HOME/.local/bin}"')
-    expect(installSh).toContain('mv "$staging/${stem}" "$install_dir/app"')
-    expect(swift).toContain('home + "/.local/share/open-walnut"')
-    expect(swift).toContain('home + "/.local/bin"')
-    expect(swift).toContain('installDir + "/app"')
-    // build.mjs: runtime/ is the npm prefix, the package inside it, the launcher beside it.
-    expect(LAUNCHER).toContain('"$root/runtime/bin/node" "$root/runtime/lib/node_modules/open-walnut/bin/open-walnut.js"')
-    expect(swift).toContain('appDir + "/runtime/bin"')
-    expect(swift).toContain('appDir + "/runtime/lib/node_modules/open-walnut"')
-  })
-
-  it('both builds compile it and carry the same install.sh every release attaches', () => {
-    for (const script of ['desktop/build.sh', 'desktop/build-release.sh']) {
-      const body = read(script)
-      for (const cmd of body.split('swiftc ').slice(1)) expect(cmd.slice(0, cmd.indexOf('-framework Carbon')), script).toContain('BundledRuntime.swift')
-      expect(body, script).toContain('cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"')
-    }
-    expect(read('scripts/test-desktop.sh')).toContain('tests/desktop/bundled-runtime-tests.swift')
-  })
-
-  it('the release build signs for notarization, and claims what its usage strings promise', () => {
-    const build = read('desktop/build-release.sh')
-    expect(build).toContain('codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS"')
-    expect(build).toMatch(/xcrun notarytool submit "\$file"/)
-    expect(build).toContain('xcrun stapler staple "$APP_BUNDLE"')
-    expect(build).toContain('xcrun stapler staple "$DMG_OUT"')
-    // Never an Apple Development certificate for other people's Macs.
-    expect(build).not.toMatch(/grep -o '"\\\(Developer ID Application\\\|Apple Development/)
-    const entitlements = read('desktop/Walnut.entitlements')
-    // Under the hardened runtime a usage string alone gets no prompt: each needs its entitlement.
-    const plist = build.slice(build.indexOf('<plist'), build.indexOf('</plist>'))
-    if (plist.includes('NSMicrophoneUsageDescription')) expect(entitlements).toContain('com.apple.security.device.audio-input')
-    if (plist.includes('NSCalendarsUsageDescription')) expect(entitlements).toContain('com.apple.security.personal-information.calendars')
-    // Granted, not merely named: each key is followed by <true/> inside the plist's one dict.
-    expect(entitlements).toMatch(/^<\?xml [^>]*\?>\s*<!DOCTYPE plist [^>]*>\s*(?:<!--[\s\S]*?-->\s*)*<plist version="1\.0">\s*<dict>[\s\S]*<\/dict>\s*<\/plist>\s*$/)
-    for (const key of ['com.apple.security.device.audio-input', 'com.apple.security.personal-information.calendars']) {
-      expect(entitlements).toMatch(new RegExp(`<key>${key.replace(/\./g, '\\.')}</key>\\s*<true/>`))
-    }
-  })
-
-  it('is built after the archives it installs, signed only inside the release environment, and attached only when notarized and launched', () => {
-    const app = load('mac-app.yml')
-    const job = app.jobs.app as Job & { environment?: string }
-    expect(job.environment).toBe('release')
-    const mac = archives.jobs['mac-app'] as unknown as { needs: string; uses: string; secrets: string }
-    expect(mac.needs).toBe('publish')
-    expect(mac.uses).toBe('./.github/workflows/mac-app.yml')
-    expect(mac.secrets).toBe('inherit')
-    const names = job.steps.map((s) => s.name ?? s.uses ?? '')
-    const at = (pattern: RegExp) => names.findIndex((n) => pattern.test(n))
-    // Smoke-launched and assessed by Gatekeeper before the upload, the keychain gone after it.
-    expect(at(/^Gatekeeper opens it/)).toBeLessThan(at(/^Attach Walnut\.dmg/))
-    expect(at(/^First launch installs/)).toBeLessThan(at(/^Attach Walnut\.dmg/))
-    expect(job.steps[job.steps.length - 1].if).toBe('always()')
-    expect(job.steps[job.steps.length - 1].run).toContain('security delete-keychain')
-    expect(job.steps.find((s) => s.name?.startsWith('Attach Walnut.dmg'))!.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
-    // The secrets reach one step, as environment variables.
-    const withSecrets = job.steps.filter((s) => JSON.stringify(s).includes('secrets.'))
-    expect(withSecrets.map((s) => s.name)).toEqual(['Signing identity and notary key, from the release environment'])
-    expect(withSecrets[0].run).not.toContain('secrets.')
-    // The release's own app: built from its tag.
-    expect(job.steps[0].with).toEqual({ ref: 'v${{ inputs.version }}' })
-  })
-
-  it('CI launches the app on every push, on the archive the rehearsal builds', () => {
-    const ci = load('ci.yml')
-    const steps = ci.jobs.rehearsal.steps
-    expect(steps.find((s) => s.name === 'Build the Mac app')!.run).toBe('bash scripts/test-desktop.sh && bash desktop/build.sh')
-    expect(steps.find((s) => s.run?.includes('release-rehearsal/run.mjs'))!.env!.WALNUT_REHEARSAL_APP).toContain('desktop/Walnut.app')
   })
 })

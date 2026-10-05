@@ -14,13 +14,6 @@ name: Release archives
 # (a few minutes), install.sh takes the newest release that has them.
 #
 # By hand: rebuild any released version's archives (the upload replaces them).
-# Job `mac-app` then builds the Mac app on them (mac-app.yml).
-#
-# A version whose updater predates the archive (0.6.2 and older, or a stable
-# promoted from a nightly built before it) gets none: its updater would update
-# an archive with whatever npm is on PATH, into that npm's prefix. Job `support`
-# says so and the run stays green; install.sh then takes an older release that
-# has archives, or tells the user to use npm.
 
 on:
   workflow_dispatch:
@@ -38,45 +31,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  support:
-    name: open-walnut ${{ inputs.version }} can have archives
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    outputs:
-      supported: ${{ steps.check.outputs.supported }}
-    env:
-      VERSION: ${{ inputs.version }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-      - name: A stable version npm serves
-        run: |
-          case "$VERSION" in
-            *[!0-9.]* | '' ) echo "::error::$VERSION is not a stable version (x.y.z)"; exit 1 ;;
-          esac
-          # npm validates a new version for a few minutes before it serves it.
-          for _ in $(seq 1 60); do
-            if curl -fsS -o /dev/null --max-time 30 -H 'cache-control: no-cache' "https://registry.npmjs.org/open-walnut/$VERSION"; then
-              echo "npm serves open-walnut@$VERSION"; exit 0
-            fi
-            sleep 30
-          done
-          echo "::error::npm did not serve open-walnut@$VERSION within 30 minutes"; exit 1
-      - name: Its updater knows the archive
-        id: check
-        run: |
-          node scripts/runtime-bundle/build.mjs --check --spec "open-walnut@$VERSION" | tee -a "$GITHUB_OUTPUT"
-          if grep -q '^supported=false' "$GITHUB_OUTPUT"; then
-            echo "::notice::open-walnut@$VERSION predates the self-contained archive; no archives for it"
-            echo "open-walnut@$VERSION predates the self-contained archive: no archives, formula or app for it." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   build:
     name: open-walnut ${{ inputs.version }} (${{ matrix.target }})
-    needs: support
-    if: needs.support.outputs.supported == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -95,6 +51,19 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: A stable version npm serves
+        run: |
+          case "$VERSION" in
+            *[!0-9.]* | '' ) echo "::error::$VERSION is not a stable version (x.y.z)"; exit 1 ;;
+          esac
+          # npm validates a new version for a few minutes before it serves it.
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null --max-time 30 -H 'cache-control: no-cache' "https://registry.npmjs.org/open-walnut/$VERSION"; then
+              echo "npm serves open-walnut@$VERSION"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::npm did not serve open-walnut@$VERSION within 30 minutes"; exit 1
       - name: Build the archive
         run: node scripts/runtime-bundle/build.mjs --spec "open-walnut@$VERSION" --out "$RUNNER_TEMP/out"
       - name: It is this platform's
@@ -122,8 +91,8 @@ jobs:
   # "Re-run failed jobs" builds the missing one and uploads the set again.
   publish:
     name: Attach to v${{ inputs.version }}
-    needs: [support, build]
-    if: ${{ !cancelled() && needs.support.outputs.supported == 'true' }}
+    needs: build
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -192,15 +161,3 @@ jobs:
           brew test walnut-release/test/open-walnut
       - name: Attach it to the release
         run: gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber
-
-  # Walnut.app, signed and notarized, whose first launch installs these archives
-  # (mac-app.yml; its signing secrets live in the `release` environment).
-  mac-app:
-    name: Mac app for v${{ inputs.version }}
-    needs: publish
-    uses: ./.github/workflows/mac-app.yml
-    with:
-      version: ${{ inputs.version }}
-    secrets: inherit
-    permissions:
-      contents: write

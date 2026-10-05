@@ -128,7 +128,6 @@ own npm prefix, HOME, data dir and daemon dir, with a mock `claude`
 | archive | `scripts/runtime-bundle/build.mjs` builds the self-contained archive of "older" for this machine; `scripts/install.sh` finds it on a local server laid out like GitHub Releases, checks it and installs it |
 | archive-serve | that install serves, finds `claude` and answers a session with no Node on PATH, and its updater says `walnut update` |
 | archive-brew | the Homebrew formula written for it installs from a scratch tap and passes `brew test` (Homebrew comes with both runner images) |
-| archive-app | (macOS) `Walnut.app`, built from this commit by `desktop/build.sh`, installs that archive on its first launch with the `install.sh` inside it, serves the console with no Node on PATH, takes its server with it when it dies, and starts again without downloading (`scripts/desktop-smoke.mjs`) |
 | archive-update | that install, started, updates itself to "current" through its own Node's npm |
 
 The two update scenarios use `registry.mjs`, a local registry that serves the chosen
@@ -137,13 +136,6 @@ tarballs under chosen dist-tags and passes every other package through to npm, w
 `pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
 outside CI), then `node scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
 
-The rehearsal runs on `macos-26` and `ubuntu-24.04`, so it builds the darwin-arm64 and
-linux-x64 archives. CI job `archive-targets` builds the other two a release ships
-(darwin-x64 on `macos-26-intel`, linux-arm64 on `ubuntu-24.04-arm`) from the same packed
-commit and runs each the way `release-archives.yml` does (`run.mjs --archive`: install.sh,
-serve and a session with no Node on PATH). CI OK needs it, so no target is first built at
-release time: 0.6.4's darwin-x64 archive was (2026-10-06), and failed.
-
 ## Self-contained archives, install.sh and Homebrew
 
 Every stable release also ships one archive per platform (`open-walnut-X.Y.Z-<darwin|linux>-<arm64|x64>.tar.gz`):
@@ -151,9 +143,7 @@ the newest Node 22 from nodejs.org, checked against its SHASUMS256.txt, used as 
 with `open-walnut@X.Y.Z` installed into it by that Node's own npm, the other platforms' native
 binaries dropped, and two launchers (`bin/walnut`, `bin/open-walnut`) that run that Node on that
 package. `scripts/runtime-bundle/build.mjs` builds it for the machine it runs on and refuses a
-version whose updater does not know the layout. Each native module must load in the archive,
-except one whose package ships no binary for that platform: onnxruntime-node 1.24 has none for
-darwin-x64, so that archive goes without semantic search and Walnut answers with keyword search.
+version whose updater does not know the layout.
 
 - **Built by** `.github/workflows/release-archives.yml`, which job `promote` (or `stable`)
   starts once the GitHub Release is open: one runner per platform builds from the version npm
@@ -162,10 +152,7 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   `homebrew` writes the formula from that `SHA256SUMS` (`scripts/homebrew/formula.mjs`),
   installs it from GitHub with brew, runs `brew test` and attaches `open-walnut.rb`. A platform
   that failed is left out and the run is red; "Re-run failed jobs" finishes the set. By hand:
-  dispatch it with any released version to rebuild its archives. Job `support` runs first
-  (`build.mjs --check`): a version whose updater predates the archive gets no archives and the
-  run stays green. That is every release up to 0.6.2, and a stable promoted from a nightly built
-  before the archive existed.
+  dispatch it with any released version to rebuild its archives.
 - **`install.sh`** (`curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`)
   reads the version from the newest release's `SHA256SUMS`; in the minutes before a release's
   archives are up it takes the newest release that has one for this platform (GitHub's API).
@@ -175,18 +162,6 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   (its own workflow, hourly). The formula keeps the archive packed through `install` and unpacks
   it in `post_install_steps`: Homebrew rewrites the install name of every Mach-O file in a keg it
   builds, and one prebuilt native module has no header room for that, so `brew install` failed.
-- **The Mac app**: job `mac-app` (`.github/workflows/mac-app.yml`) builds `Walnut.app` from the
-  release's tag, signs it with the Developer ID Application identity (hardened runtime,
-  `desktop/Walnut.entitlements`), notarizes and staples the app and then its DMG, has Gatekeeper
-  assess the DMG with a browser's quarantine mark on it, launches the mounted app on a fresh
-  `HOME` (it installs the release's own archive and serves the console), and only then attaches
-  `Walnut.dmg`. The identity (`MACOS_CERT_P12_BASE64`, `MACOS_CERT_P12_PASSWORD`) and the
-  notary key (`APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, an App Store
-  Connect API key with the Developer role) are secrets of the `release` environment, which only
-  `main` may deploy to; the identity goes into a keychain made for the job and deleted after it.
-  Without them the app is built ad-hoc and kept as a workflow artifact, never attached. The app
-  is a small shell that is never modified: its first launch runs the bundled `install.sh`, and
-  the runtime it installed updates itself like any archive install.
 - **Updates**: the archive carries `runtime/open-walnut-runtime.json`. The updater
   (`src/core/self-update/install-kind.ts`) sees it and installs a newer release with the
   archive's own Node and npm into the archive's own prefix (`walnut update`, and on start), never
@@ -229,21 +204,14 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 
 Job `nightly` of the same workflow checks whenever CI finishes on `main` and on every
 scheduled run (above), and runs by hand (`workflow_dispatch`, with a `force` input
-for a republish). A check publishes only when the `nightly` dist-tag is at least 4.5 hours
+for a republish). A check publishes only when the `nightly` dist-tag is at least 5.5 hours
 old (`scripts/nightly-version.mjs due`), so nightlies come about every six hours while
-`main` moves. The gap is short of six hours because GitHub runs this repo's schedule only
-every 3 to 6.5 hours, whatever the cron says: at 5.5 hours, a check that found the nightly
-5.4 hours old handed the commit to one five hours later (2026-10-05). It asks for the newest commit
-on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`): it walks the last 40
-commits of `origin/main` in git, newest first, and asks GitHub about each one by its sha,
-passing over a commit with no CI run (docs only, a release commit), a red, running or
-cancelled one. It never reads the branch's run list: on 2026-10-05 that list answered from
-a stale index for six hours (118 runs where there were 190, the newest a week old), and every
-nightly took a week-old commit for the newest green one and published nothing. It does
-nothing when no commit qualifies, when that commit is already the last nightly's, or when it
-is not a descendant of it (a nightly must never move installs backwards). That last case,
-and a commit older than the nightly pipeline itself, leave a warning on the run: either
-means the lookup went wrong. The last nightly's commit is the `gitHead` npm
+`main` moves, whatever GitHub does with the schedule. It asks for the newest commit
+on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
+when there is none among the last 30 runs, when that commit is already the last nightly's,
+or when it is not a descendant of it (GitHub's runs list can show a finished run as still
+running for a minute or two, so the newest green may be an older commit, and a nightly
+must never move installs backwards). The last nightly's commit is the `gitHead` npm
 records for the version under the `nightly` dist-tag (`scripts/nightly-version.mjs last`).
 A `nightly` git tag used to say it, until 2026-10-03, when GitHub refused to move it: the
 newest green commit trailed a `main` whose newest commit changed a workflow (see the token

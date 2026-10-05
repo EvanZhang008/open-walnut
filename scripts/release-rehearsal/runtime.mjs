@@ -17,10 +17,6 @@
  *                   never a person's Homebrew) the formula scripts/homebrew/formula.mjs
  *                   writes for it installs from a scratch tap, `brew test` passes,
  *                   and Homebrew's `walnut` names the version.
- *   archive-app     (WALNUT_REHEARSAL_APP names a built Walnut.app; macOS) the app's
- *                   first launch installs the archive with the install.sh inside it,
- *                   serves the console with no Node on PATH, takes its server down
- *                   with it, and starts again without downloading.
  */
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -28,7 +24,6 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { smokeDesktopApp } from '../desktop-smoke.mjs'
 import { formula } from '../homebrew/formula.mjs'
 import { readPackedManifest, startRegistry } from './registry.mjs'
 import { IsolatedWalnut, runLogged } from './walnut.mjs'
@@ -217,16 +212,6 @@ export async function rehearseRuntime({ work, archive = null, fromTgz = null, to
       await w.shutdown()
       return 'served and answered a session with no node on PATH'
     })
-    // The Mac app's first launch: it installs this archive with the install.sh
-    // inside it and serves the console (scripts/desktop-smoke.mjs).
-    const app = process.env.WALNUT_REHEARSAL_APP
-    if (app) {
-      ran++
-      await scenario('archive-app', async () => {
-        const steps = await smokeDesktopApp({ app, work: path.join(work, 'desktop-app'), version: installed.version, releaseUrl: server.url })
-        return steps.map((s) => `${s.name} (${Math.round(s.secs)}s)`).join('; ')
-      })
-    }
     const brew = process.env.WALNUT_REHEARSAL_BREW
     if (brew) {
       ran++

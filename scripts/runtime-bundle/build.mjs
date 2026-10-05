@@ -7,10 +7,7 @@
  *
  *   node scripts/runtime-bundle/build.mjs --spec open-walnut@0.6.2 --out <dir>
  *   node scripts/runtime-bundle/build.mjs --spec <open-walnut-0.6.2.tgz> --out <dir>
- *   node scripts/runtime-bundle/build.mjs --check --spec open-walnut@0.6.3   ->  supported=true|false
  *
- * --check answers, without building, whether a version can have an archive at
- * all: one whose updater predates it cannot (release-archives.yml skips it).
  * Builds for THIS machine's platform and architecture only: the native modules
  * (better-sqlite3, node-pty, sharp) are fetched for the Node that runs them.
  *
@@ -63,21 +60,6 @@ export function shaFromSums(sums, file) {
   throw new Error(`${file} is not listed in SHASUMS256.txt`)
 }
 
-/**
- * The archive's npm global config (runtime/etc/npmrc, which its npm reads for
- * every install it runs: this build and each update after it). Walnut's
- * embedder runs on the CPU, so onnxruntime-node's install script must not fetch
- * its CUDA provider (about 240 MB on Linux x64, where it is the default).
- */
-export const NPMRC = `onnxruntime-node-install=skip
-update-notifier=false
-fund=false
-audit=false
-`
-
-/** GPU execution providers onnxruntime-node may carry; Walnut never loads one. */
-export const GPU_PROVIDER_LIBS = ['libonnxruntime_providers_cuda.so', 'libonnxruntime_providers_tensorrt.so']
-
 /** The launcher every entry point is: this archive's Node, this archive's package. */
 export const LAUNCHER = `#!/bin/sh
 # Open Walnut, self-contained: it runs on the Node beside it and updates itself
@@ -117,34 +99,12 @@ export function pruneForeignBinaries(modules, { platform, arch }) {
   for (const napi of fs.existsSync(onnx) ? fs.readdirSync(onnx) : []) {
     keepOnly(path.join(onnx, napi), (os) => os === platform)
     keepOnly(path.join(onnx, napi, platform), (a) => a === arch)
-    for (const lib of GPU_PROVIDER_LIBS) {
-      const file = path.join(onnx, napi, platform, arch, lib)
-      if (fs.existsSync(file)) { fs.rmSync(file); removed.push(path.relative(modules, file)) }
-    }
   }
   keepOnly(path.join(modules, '@anthropic-ai', 'claude-agent-sdk', 'vendor', 'ripgrep'), (name) => name === `${arch}-${platform}`)
   for (const pkg of [['@homebridge', 'node-pty-prebuilt-multiarch'], ['screencapturekit-audio-capture']]) {
     keepOnly(path.join(modules, ...pkg, 'prebuilds'), (name) => name.startsWith(`${platform}-${arch}`))
   }
   return removed
-}
-
-/**
- * The native modules whose package ships a binary for this target, judged on
- * the install as npm left it (before pruneForeignBinaries). Only those must load
- * on the archive's Node. onnxruntime-node ships no macOS x64 binary since 1.24
- * (1.23.2 was the last with one): an Intel Mac's archive goes out without it,
- * and search there runs on keywords alone, as on an npm install on that Mac
- * (the embedder degrades to keyword results, src/lib/hybrid-search/embedder.ts).
- * 2026-10-06: 0.6.4's darwin-x64 archive failed to build on exactly this.
- */
-export function shipsNativeBinary(modules, mod, { platform, arch }) {
-  if (mod === 'onnxruntime-node') {
-    const bin = path.join(modules, 'onnxruntime-node', 'bin')
-    if (!fs.existsSync(bin)) return false
-    return fs.readdirSync(bin).some((napi) => fs.existsSync(path.join(bin, napi, platform, arch)))
-  }
-  return true
 }
 
 /**
@@ -183,44 +143,22 @@ async function fetchOk(url, as) {
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex')
 
-/**
- * `supported=true|false` for $GITHUB_OUTPUT: the package npm serves for `spec`,
- * unpacked from `npm pack`, has an updater that knows the archive.
- */
-function checkSupport(spec) {
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-runtime-check-'))
-  try {
-    const name = execFileSync('npm', ['pack', spec, '--pack-destination', work, '--silent'], { encoding: 'utf8', cwd: work, timeout: 300_000 }).trim().split('\n').pop()
-    execFileSync('tar', ['-xzf', path.join(work, name), '-C', work])
-    const pkgRoot = path.join(work, 'package')
-    const { version } = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'))
-    const supported = updaterKnowsArchive(pkgRoot)
-    process.stderr.write(supported ? `open-walnut@${version} can have an archive\n` : `open-walnut@${version} predates the self-contained archive: its updater would not update one\n`)
-    process.stdout.write(`supported=${supported}\n`)
-  } finally {
-    fs.rmSync(work, { recursive: true, force: true })
-  }
-}
-
 function parseArgs(argv) {
-  const out = { spec: null, out: null, node: process.env.WALNUT_RUNTIME_NODE_VERSION ?? null, keep: false, check: false }
+  const out = { spec: null, out: null, node: process.env.WALNUT_RUNTIME_NODE_VERSION ?? null, keep: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--spec') out.spec = argv[++i]
     else if (a === '--out') out.out = path.resolve(argv[++i])
     else if (a === '--node') out.node = argv[++i]
     else if (a === '--keep') out.keep = true
-    else if (a === '--check') out.check = true
     else throw new Error(`unknown argument ${a}`)
   }
-  if (out.check && out.spec) return out
   if (!out.spec || !out.out) throw new Error('usage: build.mjs --spec <open-walnut@x.y.z | tarball> --out <dir> [--node <x.y.z>]')
   return out
 }
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
-  if (opts.check) return checkSupport(opts.spec)
   const target = targetOf()
   const spec = fs.existsSync(opts.spec) ? path.resolve(opts.spec) : opts.spec
   const nodeVersion = opts.node ?? newestOfMajor(await fetchOk(`${NODE_DIST}/index.json`, 'json'))
@@ -240,8 +178,6 @@ async function main() {
     fs.writeFileSync(path.join(work, nodeFile), tarball)
     execFileSync('tar', ['-xzf', path.join(work, nodeFile), '-C', runtime, '--strip-components=1'])
     for (const extra of ['include', 'share', 'CHANGELOG.md', 'README.md']) fs.rmSync(path.join(runtime, extra), { recursive: true, force: true })
-    fs.mkdirSync(path.join(runtime, 'etc'))
-    fs.writeFileSync(path.join(runtime, 'etc', 'npmrc'), NPMRC)
 
     // The package, installed by that Node's npm the way the updater installs it.
     const node = path.join(runtime, 'bin', 'node')
@@ -255,8 +191,6 @@ async function main() {
       npm_config_update_notifier: 'false',
       npm_config_fund: 'false',
       npm_config_audit: 'false',
-      // Read from runtime/etc/npmrc as well; said here so a caller's npm config cannot undo it.
-      ONNXRUNTIME_NODE_INSTALL: 'skip',
     }
     const args = [npmCli, 'install', '-g', '--prefix', runtime, spec]
     args.push(`--allow-scripts=${allow.join(',')}`)
@@ -264,21 +198,16 @@ async function main() {
     const pkgRoot = path.join(runtime, 'lib', 'node_modules', 'open-walnut')
     const version = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version
     if (!updaterKnowsArchive(pkgRoot)) throw new Error(`open-walnut@${version} predates the self-contained archive: its updater would not update one`)
-    const modules = path.join(pkgRoot, 'node_modules')
-    // The native modules that must load on this runtime's Node: every one whose
-    // package ships this target's binary, decided before pruning, so a prune that
-    // removed this target's own copy fails here instead of passing unnoticed.
+    const pruned = pruneForeignBinaries(path.join(pkgRoot, 'node_modules'), target)
+    process.stdout.write(`dropped ${pruned.length} other-platform binary folders\n`)
+    // The native modules that stayed load on this runtime's Node.
     const loads = {
       'better-sqlite3': "new (require('better-sqlite3'))(':memory:').close()",
       'onnxruntime-node': "require('onnxruntime-node')",
     }
-    const installed = Object.keys(loads).filter((mod) => fs.existsSync(path.join(modules, mod)))
-    const withoutBinary = installed.filter((mod) => !shipsNativeBinary(modules, mod, target))
-    for (const mod of withoutBinary) process.stdout.write(`${mod} ships no ${target.name} binary: the archive goes without it\n`)
-    const pruned = pruneForeignBinaries(modules, target)
-    process.stdout.write(`dropped ${pruned.length} other-platform binary folders\n`)
-    for (const mod of installed.filter((m) => !withoutBinary.includes(m))) {
-      execFileSync(node, ['-e', loads[mod]], { cwd: pkgRoot, env, stdio: 'inherit', timeout: 120_000 })
+    for (const [mod, probe] of Object.entries(loads)) {
+      if (!fs.existsSync(path.join(pkgRoot, 'node_modules', mod))) continue
+      execFileSync(node, ['-e', probe], { cwd: pkgRoot, env, stdio: 'inherit', timeout: 120_000 })
     }
     fs.writeFileSync(path.join(runtime, RUNTIME_MARKER), `${JSON.stringify({ node: nodeVersion, target: target.name, built: version }, null, 2)}\n`)
 
@@ -293,7 +222,7 @@ async function main() {
     const archive = path.join(opts.out, `${stem}.tar.gz`)
     // No AppleDouble files from macOS tar.
     execFileSync('tar', ['-czf', archive, '-C', work, stem], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
-    const result = { archive, sha256: sha256(fs.readFileSync(archive)), version, node: nodeVersion, target: target.name, bytes: fs.statSync(archive).size, withoutBinary }
+    const result = { archive, sha256: sha256(fs.readFileSync(archive)), version, node: nodeVersion, target: target.name, bytes: fs.statSync(archive).size }
     process.stdout.write(`${JSON.stringify(result)}\n`)
   } finally {
     if (!opts.keep) fs.rmSync(work, { recursive: true, force: true })

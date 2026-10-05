@@ -165,7 +165,5 @@ describe('install.sh', () => {
     const r = await install(freshHome())
     expect(r.code).not.toBe(0)
     expect(r.out).toContain('install with npm instead: npm install -g open-walnut')
-    // Nothing is left behind by a first install that could not happen.
-    expect(fs.existsSync(path.join(r.home, '.local/share/open-walnut'))).toBe(false)
   })
 })

@@ -43,8 +43,7 @@ export function archivesIn(sums, version) {
 }
 
 export function formula({ version, sums, baseUrl = `${REPO_URL}/releases/download` }) {
-  // Releases are stable versions; CI's rehearsal writes one for a prerelease build.
-  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) throw new Error(`${version} is not a version`)
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`${version} is not a stable version`)
   const shas = archivesIn(sums, version)
   if (Object.keys(shas).length === 0) throw new Error(`SHA256SUMS lists no archive of ${version}`)
   const blocks = []
