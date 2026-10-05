@@ -15,11 +15,18 @@
  *      the user acts on the page; the hidden page never marks a thread read.
  *   C. An empty team (the leader alone, "Ask for a board" as a small link), long
  *      and Unicode titles, and a narrow pane (the "now" line moves to the tooltip).
- *   D. A board with projects reads BY SECTION: the page's order, each section's
- *      status pill and red "needs you" count, a done section folded, a project
- *      with no task as a plain head, the members no section names at the end
- *      (done ones apart); a task moved into a section and a worker handed back
- *      move live; the projects deleted, the state groups come back.
+ *   D. A board with projects is a project board: the status strip (counts, a
+ *      click filters, again shows all), one card per project in the page's order
+ *      (status pill, waiting tag, count line, task chips, the leader's overview,
+ *      latest and next, the choices inside the project, its Questions thread),
+ *      a General card for the page's loose threads, the other tasks last; "Show:"
+ *      hides a part on every card and is remembered; the user changes a status,
+ *      answers a choice, reads a thread and asks questions from a card, every
+ *      write landing on the server; a failed send keeps the words and a retry
+ *      sends them; the leader's text and tasks move live; projects deleted, the
+ *      state groups come back.
+ *   E. 21 projects over a 42-member team with long and Unicode card text: every
+ *      card inside the pane, wide and narrow, light and dark.
  *
  * The chromium and webkit projects share ONE fixture board, so every task is
  * named `${engine}-overview-…` with a stamp, in a project of its own.
@@ -539,13 +546,21 @@ test('C. an empty team, long and Unicode titles, a narrow pane', async ({ page }
   expect(pageErrors).toEqual([])
 })
 
-const sectionOf = (pane: Locator, id: string) => pane.getByTestId(`board-overview-section-${id}`)
-const sectionIds = (pane: Locator) => pane.locator('.bo-section').evaluateAll((els) => els.map((el) => el.getAttribute('data-section')))
-const idsInSection = (pane: Locator, id: string) => sectionOf(pane, id).getByTestId('board-overview-row')
-  .evaluateAll((els) => els.map((el) => el.getAttribute('data-task-id')))
 
-test('D. a board with projects reads by section, in the page\'s order, live', async ({ page }) => {
-  test.setTimeout(360_000)
+const cardOf = (pane: Locator, id: string) => pane.locator(`[data-testid="board-card"][data-card-id="${id}"]`)
+const cardIds = (pane: Locator) => pane.getByTestId('board-card').evaluateAll((els) => els.map((el) => el.getAttribute('data-card-id')))
+const chipIds = (card: Locator) => card.getByTestId('board-card-chip').evaluateAll((els) => els.map((el) => el.getAttribute('data-task-id')))
+const tileOf = (pane: Locator, f: string) => pane.getByTestId(`board-strip-${f}`)
+const tileCount = async (pane: Locator, f: string) => (await tileOf(pane, f).locator('.bpb-n').textContent())?.trim() ?? ''
+
+interface BoardRead {
+  projects: Record<string, { status?: string; status_by?: string }>
+  choices: Record<string, { option?: string; text?: string }>
+  threads: Record<string, Array<{ author: string; text: string }>>
+}
+
+test('D. a board with projects is a project board: strip, cards, the user\'s writes, live', async ({ page }) => {
+  test.setTimeout(420_000)
   const engine = test.info().project.name
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const project = `${engine}-overview-D ${stamp}`
@@ -553,9 +568,9 @@ test('D. a board with projects reads by section, in the page\'s order, live', as
   page.on('pageerror', (e) => pageErrors.push(e.message))
   const t = (name: string) => `${engine}-overview ${name} ${stamp}`
 
-  // The leader has no session (a project write by the user would start its turn); the user
-  // reads the team's board from a worker's panel, and that worker writes the projects as the
-  // leader would (board_project_set: a session's write, nothing delivered).
+  // The leader has no session (a user's write would start its turn); the user reads the
+  // team's board from a worker's panel, and that worker writes the projects as the leader
+  // would (board_project_set: a session's write, nothing delivered).
   const lead = await createTask(t('lead D'), { project })
   const viewer = await createTask(t('viewer'), { project, parent_task_id: lead })
   const viewerSid = await startSession(viewer, 'snapshot-clean-turn:Viewer D ready')
@@ -570,19 +585,30 @@ test('D. a board with projects reads by section, in the page\'s order, live', as
   const loose = await sub('loose')
   const looseDone = await sub('loose finished')
   await patch(looseDone, { phase: 'COMPLETE' })
-  // The page shows B before A; C is recorded but not on the page.
+  // The page shows B before A, a choice and a thread inside A, a loose thread at the end; C is recorded only.
   await api('PUT', `/api/v1/tasks/${lead}/board`, {
     html: `<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px sans-serif;padding:12px">
 <h1 style="font-size:17px">${engine} page D ${stamp}</h1>
 <section data-project="area-b"><h2>B <walnut-project id="area-b"></walnut-project></h2></section>
-<section data-project="area-a"><h2>A <walnut-project id="area-a"></walnut-project></h2></section>
+<section data-project="area-a"><h2>A <walnut-project id="area-a"></walnut-project></h2>
+<walnut-choice id="pick-a" title="Ship the fix?" options="now:Ship now,wait:Wait for the review" recommended="wait">The review is half done.</walnut-choice>
+<walnut-thread id="area-a" title="A talk"></walnut-thread>
+</section>
+<walnut-thread id="overall" title="Overall"></walnut-thread>
 </body></html>`,
   })
   const asLeader = { 'x-walnut-caller-sid': viewerSid }
   const setProject = (id: string, body: Record<string, unknown>) => api('PUT', `/api/v1/tasks/${lead}/board/projects/${id}`, body, asLeader)
-  await setProject('area-a', { title: 'A bus race', status: 'decide', tasks: [aNeed, aDone] })
-  await setProject('area-b', { title: 'B leader handover', status: 'done', tasks: [bOpen] })
+  const readBoard = () => api<BoardRead>('GET', `/api/v1/tasks/${lead}/board`)
+  await setProject('area-a', {
+    title: 'A bus race', status: 'decide', tasks: [aNeed, aDone],
+    summary: 'Two deploys rolled the cell; the **watcher** deleted its own bus.',
+    latest: 'Fix in review, one more check `kube-401` to go.', next: 'Ship Monday after the review.',
+    waiting: '3 CRs to deploy', meta: '12 tickets',
+  })
+  await setProject('area-b', { title: 'B leader handover', status: 'done', tasks: [bOpen], summary: 'Handed over.' })
   await setProject('area-c', { title: 'C image CVE', status: 'wait' })
+  await api('POST', `/api/v1/tasks/${lead}/board/threads/area-a`, { text: 'Found the cause: the watcher.' }, asLeader)
   await expect.poll(() => historyText(viewerSid), { timeout: 60_000 }).toContain('Viewer D ready')
   await expect.poll(async () => (await sessionOf(viewerSid)).process_status ?? '', { timeout: 60_000 }).not.toBe('running')
 
@@ -593,93 +619,185 @@ test('D. a board with projects reads by section, in the page\'s order, live', as
   await expect(leadRow).toBeVisible({ timeout: 90_000 })
   const chevron = leadRow.locator('.collapse-chevron')
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
-  const { pane } = await openBoardTab(page, viewer, viewerSid)
+  const { panel, pane } = await openBoardTab(page, viewer, viewerSid)
   const overview = pane.getByTestId('board-overview')
   await expect(overview).toBeVisible({ timeout: 15_000 })
   await expect(pane.getByTestId('board-overview-leader')).toHaveAttribute('data-task-id', lead)
+  await expect(pane.getByTestId('board-project-board')).toBeVisible({ timeout: 15_000 })
 
-  // ── By section, in the page's order, the recorded-only project after, the rest last ──
-  await expect(sectionOf(pane, 'area-a')).toBeVisible({ timeout: 15_000 })
-  await expect.poll(() => sectionIds(pane), { timeout: 15_000 }).toEqual(['area-b', 'area-a', 'area-c', '_rest', '_rest-done'])
-  await expect(pane.locator('.bo-group[data-group]')).toHaveCount(0) // no state groups beside the sections
-  const a = sectionOf(pane, 'area-a')
-  await expect(a.getByTestId('board-overview-section-title')).toHaveText('A bus race')
-  await expect(a.getByTestId('board-overview-count')).toHaveText('3')
-  await expect(a.getByTestId('board-overview-section-attention')).toHaveText('1')
-  await expect(a.getByTestId('board-overview-section-status')).toHaveText('Needs you')
-  await expect(a.getByTestId('board-overview-section-status')).toHaveAttribute('data-tone', 'red')
-  await expect(a.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'true')
-  expect(await idsInSection(pane, 'area-a')).toEqual([aNeed, aSub, aDone]) // the open rows first (the subtask under its parent), done after
-  await expect(rowOf(pane, aSub)).toHaveAttribute('data-indent', '1')
-  await expect(rowOf(pane, aNeed)).toHaveAttribute('data-group', 'needs')
-  await expect(rowOf(pane, aDone)).toHaveAttribute('data-group', 'done')
-  // A done section starts folded, its status green; a click unfolds it.
-  const b = sectionOf(pane, 'area-b')
-  await expect(b.getByTestId('board-overview-section-status')).toHaveText('Done')
-  await expect(b.getByTestId('board-overview-section-status')).toHaveAttribute('data-tone', 'green')
-  await expect(b.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
-  await expect(b.getByTestId('board-overview-count')).toHaveText('1')
-  await expect(b.getByTestId('board-overview-row')).toHaveCount(0)
-  await expect(b.getByTestId('board-overview-section-attention')).toHaveCount(0)
-  await b.locator('.bo-group-head').click()
-  await expect(rowOf(pane, bOpen)).toBeVisible()
-  await expect(rowOf(pane, bOpen)).toHaveAttribute('data-group', 'open')
-  // A project naming no task: a plain head (no button), its status still shown.
-  const c = sectionOf(pane, 'area-c')
-  await expect(c.locator('.bo-group-head-empty')).toHaveCount(1)
-  await expect(c.locator('button.bo-group-head')).toHaveCount(0)
-  await expect(c.getByTestId('board-overview-count')).toHaveText('no task')
-  await expect(c.getByTestId('board-overview-section-status')).toHaveText('Waiting on others')
-  await expect(c.getByTestId('board-overview-section-status')).toHaveAttribute('data-tone', 'amber')
-  // The rest: the members no section names, the done ones apart and folded.
-  const rest = sectionOf(pane, '_rest')
-  await expect(rest.getByTestId('board-overview-section-title')).toHaveText('Not in a section')
-  await expect(rest.getByTestId('board-overview-section-status')).toHaveCount(0)
-  expect((await idsInSection(pane, '_rest')).sort()).toEqual([loose, viewer].sort())
-  const restDone = sectionOf(pane, '_rest-done')
-  await expect(restDone.getByTestId('board-overview-section-title')).toHaveText('Done, not in a section')
-  await expect(restDone.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
-  await expect(restDone.getByTestId('board-overview-count')).toHaveText('1')
-  await restDone.locator('.bo-group-head').click()
-  expect(await idsInSection(pane, '_rest-done')).toEqual([looseDone])
+  // ── The strip and the cards, in the page's order ──
+  await expect.poll(() => cardIds(pane), { timeout: 15_000 }).toEqual(['_general', 'area-b', 'area-a', 'area-c', '_rest', '_rest-done'])
+  await expect(pane.locator('.bo-group[data-group]')).toHaveCount(0) // no state groups beside the cards
+  expect([await tileCount(pane, 'decide'), await tileCount(pane, 'wip'), await tileCount(pane, 'wait'), await tileCount(pane, 'done'), await tileCount(pane, 'all')])
+    .toEqual(['1', '0', '1', '1', '3'])
+  await expect(tileOf(pane, 'none')).toHaveCount(0)
+  await expect(tileOf(pane, 'all')).toHaveAttribute('aria-pressed', 'true')
+
+  const a = cardOf(pane, 'area-a')
+  await expect(a.getByTestId('board-card-title')).toHaveText('A bus race')
+  await expect(a.getByTestId('board-card-status')).toContainText('Needs you')
+  await expect(a.getByTestId('board-card-status')).toHaveAttribute('data-tone', 'red')
+  await expect(a.getByTestId('board-card-waiting')).toHaveText('3 CRs to deploy')
+  await expect(a.getByTestId('board-card-meta')).toHaveText('12 tickets')
+  await expect(a.getByTestId('board-card-attention')).toHaveText('1 needs you')
+  expect(await chipIds(a)).toEqual([aNeed, aSub, aDone]) // open first (the subtask after its parent), done after
+  await expect(a.locator(`[data-testid="board-card-chip"][data-task-id="${aNeed}"]`)).toHaveAttribute('data-group', 'needs')
+  await expect(a.locator('.bpc-summary strong')).toHaveText('watcher') // light markdown
+  await expect(a.getByTestId('board-card-latest')).toContainText('Fix in review')
+  await expect(a.getByTestId('board-card-latest').locator('code')).toHaveText('kube-401')
+  await expect(a.getByTestId('board-card-next')).toContainText('Ship Monday after the review.')
+  const choice = a.getByTestId('board-card-choice')
+  await expect(choice).toHaveAttribute('data-answered', 'false')
+  await expect(choice).toContainText('Ship the fix?')
+  await expect(choice).toContainText('The review is half done.')
+  await expect(choice.getByTestId('board-card-option')).toHaveText([/Ship now/, /Wait for the review.*Recommended/])
+  const aThread = a.getByTestId('board-card-thread')
+  await expect(aThread).toHaveCount(1)
+  await expect(aThread.getByTestId('board-card-thread-unread')).toHaveText('1 new')
+  await expect(aThread.locator('.bpc-thread-peek')).toContainText('Found the cause: the watcher.')
+  // A done card starts folded; a click opens it.
+  const b = cardOf(pane, 'area-b')
+  await expect(b.getByTestId('board-card-fold')).toHaveAttribute('aria-expanded', 'false')
+  await expect(b.getByTestId('board-card-chip')).toHaveCount(0)
+  await b.getByTestId('board-card-fold').click()
+  expect(await chipIds(b)).toEqual([bOpen])
+  // A project with no task and no text: its own Questions thread, a quiet "not written yet".
+  const c = cardOf(pane, 'area-c')
+  await expect(c.getByTestId('board-card-status')).toContainText('Waiting on others')
+  await expect(c.getByTestId('board-card-chip')).toHaveCount(0)
+  await expect(c.locator('.bpc-none')).toBeVisible()
+  await expect(c.getByTestId('board-card-thread')).toHaveAttribute('data-thread-id', 'area-c')
+  // The loose thread is General's; the other tasks close the board (the done ones folded).
+  await expect(cardOf(pane, '_general').getByTestId('board-card-thread')).toHaveAttribute('data-thread-id', 'overall')
+  expect((await chipIds(cardOf(pane, '_rest'))).sort()).toEqual([loose, viewer].sort())
+  await expect(cardOf(pane, '_rest-done').getByTestId('board-card-fold')).toHaveAttribute('aria-expanded', 'false')
   await expect(pane.getByTestId('board-overview-rollup')).toContainText('5 open · 2 done')
-  // Every section head's right edge stays inside the pane (long titles cut, the pill at the end).
-  const paneBox = (await overview.boundingBox())!
-  for (const head of await pane.locator('.bo-section .bo-group-head').all()) {
-    const box = (await head.boundingBox())!
-    expect(box.x + box.width).toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
-    expect(box.height).toBeLessThanOrEqual(36)
-  }
-  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D1-sections.png` })
+  await overview.evaluate((el) => { el.scrollTop = 0 })
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D1-cards.png` })
 
-  // ── Live: a task moved into a section; a worker handed back inside its section ──
+  // ── A chip opens its task beside the board ──
+  await a.locator(`[data-testid="board-card-chip"][data-task-id="${aNeed}"]`).click()
+  const peek = panel.getByTestId('board-task-peek')
+  await expect(peek).toHaveAttribute('data-task-id', aNeed)
+  await backToChat(panel)
+  await expect(peek).toBeHidden()
+
+  // ── The strip filters; the same tile again shows all ──
+  await tileOf(pane, 'decide').click()
+  await expect(tileOf(pane, 'decide')).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => cardIds(pane)).toEqual(['area-a'])
+  await tileOf(pane, 'done').click()
+  await expect.poll(() => cardIds(pane)).toEqual(['area-b'])
+  await tileOf(pane, 'done').click()
+  await expect.poll(() => cardIds(pane)).toEqual(['_general', 'area-b', 'area-a', 'area-c', '_rest', '_rest-done'])
+  await expect(tileOf(pane, 'all')).toHaveAttribute('aria-pressed', 'true')
+
+  // ── "Show:" hides a part on every card, and the pick outlives the view ──
+  await pane.getByTestId('board-part-latest').click()
+  await expect(pane.getByTestId('board-part-latest')).toHaveAttribute('aria-pressed', 'false')
+  await expect(pane.getByTestId('board-card-latest')).toHaveCount(0)
+  await expect(a.getByTestId('board-card-next')).toBeVisible()
+  await pane.getByTestId('board-view-custom').click()
+  await expect(pane.locator('iframe.task-board-frame')).toBeVisible()
+  await pane.getByTestId('board-view-overview').click()
+  await expect(pane.getByTestId('board-part-latest')).toHaveAttribute('aria-pressed', 'false')
+  await expect(pane.getByTestId('board-card-latest')).toHaveCount(0)
+  await pane.getByTestId('board-part-latest').click()
+  await expect(cardOf(pane, 'area-a').getByTestId('board-card-latest')).toBeVisible()
+
+  // ── The user changes a status from the card: theirs, on the server, the strip recounted ──
+  await c.getByTestId('board-card-status').click()
+  await expect(c.getByTestId('board-card-picker')).toBeVisible()
+  await c.getByTestId('board-card-pick-wip').click()
+  await expect(c.getByTestId('board-card-status')).toContainText('In progress · yours', { timeout: 15_000 })
+  await expect(c).toHaveAttribute('data-tone', 'blue')
+  await expect.poll(async () => (await readBoard()).projects['area-c']).toMatchObject({ status: 'wip', status_by: 'human' })
+  await expect.poll(() => tileCount(pane, 'wait')).toBe('0')
+  expect(await tileCount(pane, 'wip')).toBe('1')
+
+  // ── The user answers the choice: stored, folded to one line, the project counts as answered ──
+  await choice.getByTestId('board-card-option').filter({ hasText: 'Ship now' }).click()
+  await expect.poll(async () => (await readBoard()).choices['pick-a']?.option, { timeout: 15_000 }).toBe('now')
+  await expect(choice).toHaveAttribute('data-answered', 'true')
+  // The leader has no session: the answer waits on the board, and the card says so.
+  await expect(choice.locator('.bpc-ok')).toHaveText('Saved. The leader sees it on the board.')
+  await expect(a.locator('.bpc-tag-answered')).toBeVisible()
+  await expect.poll(() => tileCount(pane, 'decide')).toBe('0')
+
+  // ── Reading the thread clears its "new"; a reply goes to the server (Shift+Enter is a new line) ──
+  await aThread.getByTestId('board-card-thread-toggle').click()
+  await expect(aThread.getByTestId('board-card-thread-unread')).toHaveCount(0)
+  await expect(aThread.getByTestId('board-card-message')).toHaveCount(1)
+  const reply = aThread.getByTestId('board-card-composer').locator('textarea')
+  await reply.click()
+  await page.keyboard.type('Why wait')
+  await page.keyboard.press('Shift+Enter')
+  await page.keyboard.type('for the review?')
+  await page.keyboard.press('Enter')
+  await expect(aThread.getByTestId('board-card-message')).toHaveCount(2, { timeout: 15_000 })
+  await expect(reply).toHaveValue('')
+  await expect.poll(async () => (await readBoard()).threads['area-a']?.map((m) => [m.author, m.text]))
+    .toEqual([[`task:${viewer}`, 'Found the cause: the watcher.'], ['user', 'Why wait\nfor the review?']])
+
+  await a.screenshot({ path: `${SHOT_DIR}/${engine}-D1b-card-answered.png` })
+
+  // ── Asking on a card whose page shows no thread; the first send fails and keeps the words ──
+  let failOnce = true
+  await page.route(`**/api/v1/tasks/${lead}/board/threads/area-c`, async (route) => {
+    if (failOnce && route.request().method() === 'POST') {
+      failOnce = false
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 'boom', message: 'Disk full' } }) })
+      return
+    }
+    await route.continue()
+  })
+  await c.getByTestId('board-card-ask').click()
+  const ask = c.getByTestId('board-card-composer').locator('textarea')
+  await expect(ask).toBeFocused()
+  await page.keyboard.type('Is the image rebuilt yet?')
+  await page.keyboard.press('Enter')
+  await expect(c.getByTestId('board-card-composer-error')).toContainText('Disk full', { timeout: 15_000 })
+  await expect(ask).toHaveValue('Is the image rebuilt yet?')
+  await c.screenshot({ path: `${SHOT_DIR}/${engine}-D1c-send-failed.png` })
+  await c.getByTestId('board-card-send').click()
+  await expect(c.getByTestId('board-card-message')).toHaveCount(1, { timeout: 15_000 })
+  await expect(c.getByTestId('board-card-composer-error')).toHaveCount(0)
+  await expect.poll(async () => (await readBoard()).threads['area-c']?.map((m) => m.text)).toEqual(['Is the image rebuilt yet?'])
+  await page.unroute(`**/api/v1/tasks/${lead}/board/threads/area-c`)
+
+  // ── Live: the leader's text and tasks move on the card ──
+  await setProject('area-a', { latest: 'Deployed to staging.' })
+  await expect(a.getByTestId('board-card-latest')).toContainText('Deployed to staging.', { timeout: 15_000 })
   await setProject('area-c', { tasks: [loose] })
-  // The row was on screen already (in the rest): wait for it INSIDE its new section.
-  await expect(sectionOf(pane, 'area-c').locator(`[data-task-id="${loose}"]`)).toBeVisible({ timeout: 15_000 })
-  expect(await idsInSection(pane, 'area-c')).toEqual([loose])
-  await expect(c.locator('button.bo-group-head')).toHaveCount(1)
-  await expect(c.getByTestId('board-overview-count')).toHaveText('1')
-  expect(await idsInSection(pane, '_rest')).toEqual([viewer])
+  await expect.poll(() => chipIds(c), { timeout: 15_000 }).toEqual([loose])
+  expect(await chipIds(cardOf(pane, '_rest'))).toEqual([viewer])
   await patch(bOpen, { phase: 'NEED_ACTION' })
-  await expect(rowOf(pane, bOpen)).toHaveAttribute('data-group', 'needs', { timeout: 15_000 })
-  await expect(b.getByTestId('board-overview-section-attention')).toHaveText('1', { timeout: 15_000 })
-  expect(await idsInSection(pane, 'area-b')).toEqual([bOpen]) // it stays in its section
+  await expect(b.getByTestId('board-card-attention')).toHaveText('1 needs you', { timeout: 15_000 })
+
+  // Every card stays inside the pane.
+  const paneBox = (await overview.boundingBox())!
+  for (const card of await pane.getByTestId('board-card').all()) {
+    const box = (await card.boundingBox())!
+    expect(box.x + box.width).toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
+  }
+  await overview.evaluate((el) => { el.scrollTop = 0 })
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D2-cards-after.png` })
 
   // ── Dark theme, same pane ──
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
   await page.waitForTimeout(200)
-  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D2-sections-dark.png` })
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D3-cards-dark.png` })
   await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
 
   // ── The projects gone: the state groups are back ──
-  for (const id of ['area-a', 'area-b', 'area-c']) await setProject(id, { delete: true })
-  await expect(pane.locator('.bo-section')).toHaveCount(0, { timeout: 15_000 })
+  for (const id of ['area-a', 'area-b', 'area-c']) await setProject(id, { delete: true, override_user: true })
+  await expect(pane.getByTestId('board-project-board')).toHaveCount(0, { timeout: 15_000 })
   expect(await groupIds(pane)).toEqual(['needs', 'open', 'done'])
   expect(await idsIn(pane, 'needs')).toEqual(expect.arrayContaining([aNeed, bOpen])) // the viewer may be handed back too
   expect(pageErrors).toEqual([])
 })
 
-test('E. a 21-section board over a 42-member team: every head one line, wide and narrow', async ({ page }) => {
+test('E. 21 projects over a 42-member team with long card text: every card inside the pane, wide and narrow', async ({ page }) => {
   test.setTimeout(420_000)
   const engine = test.info().project.name
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -691,36 +809,36 @@ test('E. a 21-section board over a 42-member team: every head one line, wide and
   const lead = await createTask(t('lead E'), { project })
   const viewer = await createTask(t('viewer'), { project, parent_task_id: lead })
   const viewerSid = await startSession(viewer, 'snapshot-clean-turn:Viewer E ready')
-  // 21 areas, A..U: 13 hold one task each (3 of them done), 8 hold none; the rest of the
-  // team is 2 more open tasks and 26 done ones (the usual shape: merged tickets). Titles
-  // are long, some in Japanese with an emoji (as escapes), as a real board's are.
+  // 21 areas, A..U: 13 hold two tasks each (some done, some handed back), 8 hold none; the
+  // rest of the team is 15 done tickets. Titles and text are long, some in Japanese with an
+  // emoji (as escapes), as a real board's are.
   const letters = 'ABCDEFGHIJKLMNOPQRSTU'.split('')
   const statuses = ['wait', 'decide', 'done', 'wait', 'wait', 'wip', 'wip', 'done', 'wait', 'wait', 'wait', 'decide', 'done', 'done', 'wait', 'decide', 'done', 'decide', 'wip', 'decide', 'decide']
   const longTail = ' after the regional rollout, with the on-call confirming the purge window and the deploy train held until the cache is warm'
-  const members: Record<string, string> = {}
+  const jp = '\u30ea\u30fc\u30c0\u30fc\u5207\u308a\u66ff\u3048\u3067\u30a4\u30d9\u30f3\u30c8\u6d88\u5931 \u{1F6A8}'
   const sectionTasks: Record<string, string[]> = {}
   for (const [i, letter] of letters.entries()) {
     if (i >= 13) continue
-    const title = i % 4 === 2
-      ? `${letter} \u30ea\u30fc\u30c0\u30fc\u5207\u308a\u66ff\u3048\u3067\u30a4\u30d9\u30f3\u30c8\u6d88\u5931 \u{1F6A8} ${stamp}`
-      : `${t(`area ${letter} probe`)}${i % 3 === 0 ? longTail : ''}`
-    const id = await createTask(title, { project, parent_task_id: lead })
-    members[letter] = id
-    sectionTasks[`sec-${letter.toLowerCase()}`] = [id]
-    if (statuses[i] === 'done') await patch(id, { phase: 'COMPLETE' })
-    else if (statuses[i] === 'decide') await patch(id, { phase: 'NEED_ACTION' })
+    const ids: string[] = []
+    for (const k of [1, 2]) {
+      const title = i % 4 === 2 ? `${letter}${k} ${jp} ${stamp}` : `${t(`area ${letter}${k} probe`)}${i % 3 === 0 ? longTail : ''}`
+      const id = await createTask(title, { project, parent_task_id: lead })
+      ids.push(id)
+      if (statuses[i] === 'done') await patch(id, { phase: 'COMPLETE' })
+      else if (statuses[i] === 'decide' && k === 1) await patch(id, { phase: 'NEED_ACTION' })
+    }
+    sectionTasks[`sec-${letter.toLowerCase()}`] = ids
   }
-  const restOpen = [await createTask(t('ops report review'), { project, parent_task_id: lead }), await createTask(t('dashboard sweep'), { project, parent_task_id: lead })]
-  for (let i = 1; i <= 26; i++) {
+  for (let i = 1; i <= 15; i++) {
     const id = await createTask(t(`merged ticket ${i}`), { project, parent_task_id: lead })
     await patch(id, { phase: 'COMPLETE' })
   }
-  // The page shows 20 of the areas, not alphabetically (U is recorded only).
+  // The page shows 20 of the areas, not alphabetically (U is recorded only), each with its thread.
   const pageOrder = ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'i', 'j', 'l', 'n', 'q', 'r', 's', 't', 'k', 'o', 'g', 'm', 'p']
   await api('PUT', `/api/v1/tasks/${lead}/board`, {
     html: `<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px sans-serif;padding:12px">
 <h1 style="font-size:17px">${engine} page E ${stamp}</h1>
-${pageOrder.map((l) => `<section data-project="sec-${l}"><h2>${l.toUpperCase()} <walnut-project id="sec-${l}"></walnut-project></h2></section>`).join('\n')}
+${pageOrder.map((l) => `<section data-project="sec-${l}"><h2>${l.toUpperCase()}</h2><walnut-thread id="sec-${l}"></walnut-thread></section>`).join('\n')}
 </body></html>`,
   })
   const asLeader = { 'x-walnut-caller-sid': viewerSid }
@@ -729,7 +847,14 @@ ${pageOrder.map((l) => `<section data-project="sec-${l}"><h2>${l.toUpperCase()} 
     const title = i % 5 === 1
       ? `${letter} \u30ce\u30fc\u30c9\u30e1\u30e2\u30ea\u56de\u53ce\u30da\u30fc\u30b8 (D${100 + i}, 09-10 \u5fa9\u65e7\u6e08\u307f)`
       : `${letter} ${['Bus race', 'Memory reclaim page', 'Grey failure', 'Alert family', 'Dropped events'][i % 5]}${i % 3 === 0 ? longTail : ''}`
-    await api('PUT', `/api/v1/tasks/${lead}/board/projects/${id}`, { title, status: statuses[i], ...(sectionTasks[id] ? { tasks: sectionTasks[id] } : {}) }, asLeader)
+    await api('PUT', `/api/v1/tasks/${lead}/board/projects/${id}`, {
+      title, status: statuses[i], ...(sectionTasks[id] ? { tasks: sectionTasks[id] } : {}),
+      summary: `${i % 2 ? jp : 'Two deploys rolled every cell'}${longTail}.${longTail}`,
+      latest: `Checked https://example.com/tickets/${1000 + i} again;${longTail}`,
+      next: i % 3 ? `Deploy ${letter} on Monday` : '',
+      waiting: i % 4 === 0 ? `Waiting on ${i + 1} CRs to deploy across the regions` : '',
+      meta: `${i + 2} tickets (${i} Sev2 + 2 Sev2.5)`,
+    }, asLeader)
   }
   await expect.poll(() => historyText(viewerSid), { timeout: 60_000 }).toContain('Viewer E ready')
   await expect.poll(async () => (await sessionOf(viewerSid)).process_status ?? '', { timeout: 60_000 }).not.toBe('running')
@@ -744,45 +869,40 @@ ${pageOrder.map((l) => `<section data-project="sec-${l}"><h2>${l.toUpperCase()} 
   const { panel, pane } = await openBoardTab(page, viewer, viewerSid)
   const overview = pane.getByTestId('board-overview')
   await expect(overview).toBeVisible({ timeout: 15_000 })
-  await expect(sectionOf(pane, 'sec-u')).toBeVisible({ timeout: 20_000 })
+  await expect(cardOf(pane, 'sec-u')).toBeVisible({ timeout: 20_000 })
 
-  // ── 21 sections in the page's order, U after them, then the rest ──
-  await expect.poll(() => sectionIds(pane), { timeout: 15_000 }).toEqual([...pageOrder.map((l) => `sec-${l}`), 'sec-u', '_rest', '_rest-done'])
-  await expect(pane.getByTestId('board-overview-rollup')).toContainText('13 open · 29 done')
-  await expect(sectionOf(pane, '_rest-done').getByTestId('board-overview-count')).toHaveText('26')
-  await expect(sectionOf(pane, '_rest-done').locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
-  expect((await idsInSection(pane, '_rest')).sort()).toEqual([...restOpen, viewer].sort())
-  // Every area with a NEED_ACTION task carries the red count; done areas start folded.
+  // ── 21 cards in the page's order, U after them, then the other tasks ──
+  await expect.poll(() => cardIds(pane), { timeout: 15_000 }).toEqual([...pageOrder.map((l) => `sec-${l}`), 'sec-u', '_rest', '_rest-done'])
+  expect([await tileCount(pane, 'decide'), await tileCount(pane, 'wip'), await tileCount(pane, 'wait'), await tileCount(pane, 'done'), await tileCount(pane, 'all')])
+    .toEqual(['6', '3', '7', '5', '21'])
+  await expect(pane.getByTestId('board-overview-rollup')).toContainText('21 open · 21 done')
   for (const [i, letter] of letters.entries()) {
-    const s = sectionOf(pane, `sec-${letter.toLowerCase()}`)
-    await expect(s.getByTestId('board-overview-section-status')).toHaveText(
+    const card = cardOf(pane, `sec-${letter.toLowerCase()}`)
+    await expect(card.getByTestId('board-card-status')).toContainText(
       { wait: 'Waiting on others', decide: 'Needs you', wip: 'In progress', done: 'Done' }[statuses[i]]!)
-    if (i < 13 && statuses[i] === 'decide') await expect(s.getByTestId('board-overview-section-attention')).toHaveText('1')
-    else await expect(s.getByTestId('board-overview-section-attention')).toHaveCount(0)
-    if (statuses[i] === 'done' && i < 13) await expect(s.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
-    if (i >= 13) await expect(s.getByTestId('board-overview-count')).toHaveText('no task')
+    await expect(card.getByTestId('board-card-fold')).toHaveAttribute('aria-expanded', statuses[i] === 'done' ? 'false' : 'true')
+    if (i < 13 && statuses[i] === 'decide') await expect(card.getByTestId('board-card-attention')).toHaveText('1 needs you')
+    else await expect(card.getByTestId('board-card-attention')).toHaveCount(0)
   }
-  const fits = async (maxHeight: number) => {
+  const fits = async () => {
     const paneBox = (await overview.boundingBox())!
-    for (const head of await pane.locator('.bo-section .bo-group-head').all()) {
-      await head.scrollIntoViewIfNeeded()
-      const box = (await head.boundingBox())!
-      expect(box.height, 'one line per head').toBeLessThanOrEqual(maxHeight)
-      expect(box.x + box.width, 'inside the pane').toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
+    for (const card of await pane.getByTestId('board-card').all()) {
+      await card.scrollIntoViewIfNeeded()
+      const box = (await card.boundingBox())!
       expect(box.x, 'inside the pane').toBeGreaterThanOrEqual(paneBox.x - 1)
+      expect(box.x + box.width, 'inside the pane').toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
+      // Nothing inside a card is wider than the card.
+      const overflow = await card.evaluate((el) => el.scrollWidth - el.clientWidth)
+      expect(overflow, 'no horizontal overflow').toBeLessThanOrEqual(1)
     }
-    // The long title is cut, not wrapped; the pill stays whole.
-    const cut = await sectionOf(pane, 'sec-a').getByTestId('board-overview-section-title').evaluate((el) => ({
-      clipped: el.scrollWidth > el.clientWidth, overflow: getComputedStyle(el).textOverflow,
-    }))
-    expect(cut.overflow).toBe('ellipsis')
-    return cut.clipped
+    const strip = (await pane.getByTestId('board-strip').boundingBox())!
+    expect(strip.x + strip.width).toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
   }
-  await fits(36)
+  await fits()
   await overview.evaluate((el) => { el.scrollTop = 0 })
   await pane.screenshot({ path: `${SHOT_DIR}/${engine}-E1-dense-wide.png` })
 
-  // ── A narrow pane (about 400px): the heads still fit, the long titles cut ──
+  // ── A narrow pane (about 400px): still inside, long titles cut ──
   const wide = (await overview.boundingBox())!.width
   const handle = panel.locator(':scope > .session-panel-split > .session-panel-chat-resize')
   const grab = await handle.evaluate((el) => {
@@ -800,8 +920,15 @@ ${pageOrder.map((l) => `<section data-project="sec-${l}"><h2>${l.toUpperCase()} 
   await page.mouse.move(grab!.x - (wide - 400), grab!.y, { steps: 12 })
   await page.mouse.up()
   await expect.poll(async () => (await overview.boundingBox())!.width).toBeLessThanOrEqual(420)
-  expect(await fits(36)).toBe(true)
+  await fits()
+  const cut = await cardOf(pane, 'sec-a').getByTestId('board-card-title').evaluate((el) => ({
+    clipped: el.scrollWidth > el.clientWidth, overflow: getComputedStyle(el).textOverflow,
+  }))
+  expect(cut).toEqual({ clipped: true, overflow: 'ellipsis' })
   await overview.evaluate((el) => { el.scrollTop = 0 })
   await pane.screenshot({ path: `${SHOT_DIR}/${engine}-E2-dense-narrow.png` })
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
+  await page.waitForTimeout(200)
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-E3-dense-narrow-dark.png` })
   expect(pageErrors).toEqual([])
 })

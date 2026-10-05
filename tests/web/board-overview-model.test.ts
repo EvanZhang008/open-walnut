@@ -398,8 +398,8 @@ describe('sections: the board\'s projects', () => {
       ['project', 'sec-a', 'A bus race', 'decide', ['a-need-0001', 'a-open-0001', 'a-done-0001'], 1, 1],
       ['project', 'sec-b', 'B leader handover', 'wip', ['b-run-0001'], 0, 0],
       ['project', 'sec-c', 'C image CVE', 'wait', [], 0, 0],
-      ['rest', REST_SECTION_ID, 'Not in a section', null, ['loose-0001'], 0, 0],
-      ['rest-done', REST_DONE_SECTION_ID, 'Done, not in a section', null, ['loose-done-0001', 'loose-done-0002'], 0, 2],
+      ['rest', REST_SECTION_ID, 'Other tasks', null, ['loose-0001'], 0, 0],
+      ['rest-done', REST_DONE_SECTION_ID, 'Other tasks, done', null, ['loose-done-0001', 'loose-done-0002'], 0, 2],
     ]);
   });
 

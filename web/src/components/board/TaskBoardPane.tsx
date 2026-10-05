@@ -47,6 +47,7 @@ import {
 import { BoardReplyDock, type BoardDockAnchor, type BoardReplyTarget } from './BoardReplyDock';
 import { boardView, keepBoardView } from './board-view-memory';
 import { BoardOverview } from './BoardOverview';
+import type { BoardCardActions } from './BoardProjectCard';
 import { BoardViewToggle } from './BoardViewToggle';
 import { ASK_FOR_BOARD_TEXT, useAskForBoard } from './useAskForBoard';
 import { useBoardItemSaves } from './useBoardItemSaves';
@@ -160,7 +161,10 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const toFrame = useCallback((msg: FrameMsg) => {
     frameRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
-  const { saveMark, saveProject, saveCheck, saveChoice, saveChoiceText, saveReminder, keepNoteDraft, noteDrafts } = useBoardItemSaves(
+  const {
+    saveMark, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
+    keepNoteDraft, noteDrafts,
+  } = useBoardItemSaves(
     ownerId, ownerRef, toFrame, { mergeMark, mergeProject, mergeCheck, mergeChoice, mergeReminder },
   );
   const frameData = () => ({
@@ -236,6 +240,23 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
       : { thread, title, aboutTitle: about || undefined };
     setReply((cur) => ({ target, nonce: (cur?.nonce ?? 0) + 1 }));
   }, [refs, storeById]);
+
+  // The Overview cards' writes: the same routes as the page's, answered as promises.
+  const markThreadSeen = useCallback((thread: string, ts: string) => {
+    setSeen((cur) => {
+      const next = advanceSeen(cur, thread, ts);
+      if (!next) return cur;
+      writeSeen(ownerRef.current, next);
+      return next;
+    });
+  }, []);
+  const cardActions = useMemo<BoardCardActions>(() => ({
+    setStatus: setProjectStatus,
+    pickChoice,
+    answerChoiceText: answerChoiceWords,
+    postMessage: sendFromDock,
+    markSeen: markThreadSeen,
+  }), [setProjectStatus, pickChoice, answerChoiceWords, sendFromDock, markThreadSeen]);
 
   const deleteThreadMessage = useCallback((reqId: string, thread: string, messageId: string) => {
     const boardTask = ownerRef.current;
@@ -429,6 +450,8 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
           <BoardOverview
             key={ownerId}
             overview={team.overview}
+            cards={team.cards}
+            cardActions={cardActions}
             ownerTitle={ownerTitle}
             hasPage={hasPage}
             loading={team.loading}

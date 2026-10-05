@@ -23,6 +23,7 @@ import {
   type BoardFile,
 } from '../../../src/core/boards/board-store.js'
 import { checkContentHash, checkHashes, choiceSpecs, parsePairs } from '../../../src/core/boards/board-html.js'
+import { threadHeading } from '../../../src/core/boards/board-delivery.js'
 import {
   BOARD_MAX_CHECKS,
   BOARD_MAX_PROJECTS,
@@ -198,6 +199,37 @@ describe('projects', () => {
     expect((await getBoard(T))!.version).toBe(1)
   })
 
+  it('card text: trimmed, kept by later writes, "" clears; latest_at moves only when latest does; text alone keeps a project', async () => {
+    const first = await setBoardProject(T, 'cause-a', {
+      title: 'Bus race', summary: '  A teardown deletes its own bus. ', latest: 'Fix in review.', next: 'Deploy Monday.', waiting: '3 CRs', meta: '6 tickets',
+    }, { by: 'task:lead' })
+    expect(first).toMatchObject({ summary: 'A teardown deletes its own bus.', latest: 'Fix in review.', next: 'Deploy Monday.', waiting: '3 CRs', meta: '6 tickets' })
+    expect(first!.latest_at).toBe(first!.updated_at)
+    await new Promise((r) => setTimeout(r, 5))
+    // Another field, or the same latest again: the stamp stays.
+    const same = await setBoardProject(T, 'cause-a', { status: 'wait', latest: 'Fix in review.' }, { by: 'task:lead' })
+    expect(same).toMatchObject({ status: 'wait', summary: 'A teardown deletes its own bus.', latest_at: first!.latest_at })
+    await new Promise((r) => setTimeout(r, 5))
+    const moved = await setBoardProject(T, 'cause-a', { latest: 'Deployed to gamma.' }, { by: 'task:lead' })
+    expect(moved!.latest_at).not.toBe(first!.latest_at)
+    expect(moved!.latest_at).toBe(moved!.updated_at)
+    const cleared = await setBoardProject(T, 'cause-a', { latest: '', next: null, waiting: '' }, { by: 'task:lead' })
+    expect(cleared).not.toHaveProperty('latest')
+    expect(cleared).not.toHaveProperty('latest_at')
+    expect(cleared).not.toHaveProperty('next')
+    expect(cleared).not.toHaveProperty('waiting')
+    expect(cleared).toMatchObject({ summary: 'A teardown deletes its own bus.', meta: '6 tickets' })
+    // Text alone is a project; with the text gone too it is removed.
+    expect(await setBoardProject(T, 'cause-a', { title: '', status: '' }, { by: 'task:lead' })).toMatchObject({ summary: 'A teardown deletes its own bus.' })
+    expect(await setBoardProject(T, 'cause-a', { summary: '', meta: '' }, { by: 'task:lead' })).toBeNull()
+    // Too long, or not a string: refused, nothing written.
+    const before = await rawFile()
+    expect(await boardError(() => setBoardProject(T, 'p', { waiting: 'x'.repeat(121) }, { by: 'human' }))).toMatchObject({ code: 'bad_request', statusCode: 400 })
+    expect(await boardError(() => setBoardProject(T, 'p', { summary: 7 as unknown as string }, { by: 'human' }))).toMatchObject({ code: 'bad_request' })
+    expect(await setBoardProject(T, 'p', { summary: 'x'.repeat(2000) }, { by: 'human' })).toMatchObject({ summary: 'x'.repeat(2000) })
+    expect(before).not.toBe(await rawFile())
+  })
+
   it('bad status, long title, too many tasks, bad id, a 201st project; nothing written', async () => {
     expect(await boardError(() => setBoardProject(T, 'p', { status: 'blocked' }, { by: 'human' }))).toMatchObject({ code: 'bad_status', statusCode: 400 })
     expect(await boardError(() => setBoardProject(T, 'p', { title: 'x'.repeat(201) }, { by: 'human' }))).toMatchObject({ code: 'bad_request' })
@@ -256,6 +288,18 @@ describe('projects', () => {
     expect(cleared).not.toHaveProperty('status_by')
     expect(cleared).not.toHaveProperty('status_at')
     expect(await setBoardProject(T, 'cause-a', { status: 'wip' }, lead)).toMatchObject({ status_by: 'task:lead' })
+  })
+})
+
+describe('threadHeading', () => {
+  it('names a thread the page shows by its title, and a project\'s own thread by the project', async () => {
+    const html = '<walnut-thread id="t1" title="Cache talk"></walnut-thread>'
+    const projects = { 'cause-a': { title: 'Bus race' }, 'cause-c': {} }
+    expect(await threadHeading(html, 't1', projects)).toBe('Board thread "Cache talk"')
+    expect(await threadHeading(html, 'cause-a', projects)).toBe('Board project "Bus race" (thread cause-a)')
+    expect(await threadHeading(html, 'cause-c', projects)).toBe('Board project "cause-c" (thread cause-c)')
+    expect(await threadHeading(html, 'cause-b', projects)).toBe('Board thread "cause-b"')
+    expect(await threadHeading(html, 'cause-a')).toBe('Board thread "cause-a"')
   })
 })
 

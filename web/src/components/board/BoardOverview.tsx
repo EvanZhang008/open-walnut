@@ -7,32 +7,40 @@
  * whose body says "No workers yet."). Below: the team, each row one line: phase
  * circle, title, the grey "now" line (what it does, waits on, or why it needs
  * you), its live badge and how long ago it last changed. A board whose leader
- * defined projects reads BY SECTION: one head per project in the page's order
- * (its title, its task count, a red count of what needs you, its status pill),
- * done sections folded, the members no section names at the end. Without
- * projects the team is in attention order, Needs you, Running, Open, Done
- * (collapsed to its count). The rules live in board-overview-model.ts.
+ * defined projects is a project board instead (BoardProjectBoard.tsx): a status
+ * strip that filters, and one card per project with its tasks, the leader's
+ * text, its choices and its questions. Without projects the team is in
+ * attention order, Needs you, Running, Open, Done (collapsed to its count). The
+ * rules live in board-overview-model.ts and board-cards-model.ts.
  *
  * A row opens its task the way a chip on the page does (the session panel's
  * peek). Up / Down walk the rows and group heads; Enter or Space opens one.
  * The pane narrower than about 420px moves the "now" line into the row's
  * tooltip (a container query in board-overview.css), so the title keeps its room.
  */
-import { memo, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { memo, useCallback, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { log } from '@/utils/log';
 import { timeAgo } from '@/utils/time';
 import {
-  PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, compactAgo, donePercent, rollupText, rowTooltip,
-  type OverviewGroup, type OverviewRow, type OverviewSection, type PlacedRow, type TeamOverview,
+  compactAgo, donePercent, rollupText, rowTooltip,
+  type OverviewGroup, type OverviewRow, type PlacedRow, type TeamOverview,
 } from './board-overview-model';
+import type { ProjectCard } from './board-cards-model';
+import type { CardContext } from './BoardCardThread';
+import { BoardProjectBoard } from './BoardProjectBoard';
+import type { BoardCardActions } from './BoardProjectCard';
 import { useAskForBoard } from './useAskForBoard';
 import '@/styles/subtask-pill.css';
 import '@/styles/board-overview.css';
 
 export interface BoardOverviewProps {
   overview: TeamOverview;
+  /** The board's projects as cards; null when it defines none (the state groups show instead). */
+  cards?: ProjectCard[] | null;
+  /** The user's writes from a card (status, choices, questions, read marks). */
+  cardActions?: BoardCardActions;
   /** The owner's title from the board payload: the header still names an owner the store has no row for. */
   ownerTitle: string;
   hasPage: boolean;
@@ -53,7 +61,7 @@ function onListKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
   const all = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(ROW_SELECTOR));
   if (all.length === 0) return;
   const at = all.indexOf(document.activeElement as HTMLElement);
-  if (at < 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) return; // focus is elsewhere (a link): leave the keys alone
+  if (at < 0) return; // focus is elsewhere (a link, a card's composer): leave the keys alone
   const next = e.key === 'Home' ? 0
     : e.key === 'End' ? all.length - 1
       : Math.max(0, Math.min(all.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)));
@@ -62,7 +70,7 @@ function onListKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
 }
 
 export function BoardOverview({
-  overview, ownerTitle, hasPage, loading, completedHidden, onLoadArchive, onOpenTask, onSendToSession,
+  overview, cards, cardActions, ownerTitle, hasPage, loading, completedHidden, onLoadArchive, onOpenTask, onSendToSession,
 }: BoardOverviewProps) {
   // Finished work is history, the count is enough until asked: the Done group and a
   // done section start folded. Keyed `g:<group>` / `s:<section>`; unset = the default.
@@ -76,8 +84,22 @@ export function BoardOverview({
     onOpenTask(taskId);
   }, [onOpenTask, overview.ownerId]);
 
+  // A message's author by title: the leader and the team, as the store has them.
+  const titles = useMemo(() => {
+    const m = new Map<string, string>();
+    if (overview.leader) m.set(overview.ownerId, overview.leader.task.title);
+    for (const g of overview.groups) for (const r of g.rows) m.set(r.id, r.task.title);
+    return m;
+  }, [overview]);
+  const ctx = useMemo<CardContext>(() => ({
+    ownerId: overview.ownerId,
+    titleOf: (id) => titles.get(id) ?? '',
+    onOpenTask: (id) => open(id, 'card-text'),
+  }), [overview.ownerId, titles, open]);
+
   const { leader } = overview;
   const empty = overview.members === 0;
+  const board = cards && cards.length > 0 ? cards : null;
   const pct = donePercent(overview);
   return (
     <div className="board-overview" data-testid="board-overview" data-owner-id={overview.ownerId} onKeyDown={onListKeyDown}>
@@ -106,30 +128,20 @@ export function BoardOverview({
         )}
       </div>
 
-      {loading && empty ? (
+      {board ? (
+        // The projects are the board even before a worker exists: their text, choices and questions.
+        <>
+          <BoardProjectBoard ownerId={overview.ownerId} cards={board} ctx={ctx} actions={cardActions} />
+          {/* Finished work older than the store's window is on no card, so the note closes the board. */}
+          {completedHidden > 0 && <ArchiveLine onLoad={onLoadArchive} />}
+        </>
+      ) : loading && empty ? (
         <div className="bo-empty" data-testid="board-overview-loading">Loading the team…</div>
       ) : empty ? (
         <div className="bo-empty" data-testid="board-overview-empty">
           <div className="bo-empty-title">No workers yet.</div>
           <div className="bo-empty-text">Subtasks the leader files show up here, with their live status.</div>
         </div>
-      ) : overview.sections ? (
-        <>
-          {overview.sections.map((s) => {
-            const byDefault = s.status === 'done' || s.kind === 'rest-done';
-            return (
-              <OverviewSectionBlock
-                key={`s:${s.id}`}
-                section={s}
-                folded={isFolded(`s:${s.id}`, byDefault)}
-                onToggle={() => toggle(`s:${s.id}`, byDefault)}
-                onOpen={open}
-              />
-            );
-          })}
-          {/* Finished work older than the store's window is missing from every section, so the note closes the list. */}
-          {completedHidden > 0 && <ArchiveLine onLoad={onLoadArchive} />}
-        </>
       ) : (
         overview.groups.map((g) => {
           const byDefault = g.id === 'done';
@@ -176,62 +188,6 @@ function OverviewGroupSection({ group, folded, onToggle, onOpen, archive }: {
       </button>
       {!folded && <RowList rows={group.rows} onOpen={onOpen} />}
       {!folded && archive && <ArchiveLine onLoad={archive} />}
-    </section>
-  );
-}
-
-/**
- * One board project as a section (or the trailing rest): its title as written,
- * its task count, a red count of the rows that need the user, its status pill.
- * A project naming no task is a plain head (nothing to unfold), its status still
- * part of the picture.
- */
-function OverviewSectionBlock({ section, folded, onToggle, onOpen }: {
-  section: OverviewSection;
-  folded: boolean;
-  onToggle: () => void;
-  onOpen: (taskId: string, from: string) => void;
-}) {
-  const n = section.rows.length;
-  const status = section.status;
-  const head = (
-    <>
-      <span className={`bo-chevron${folded ? '' : ' is-open'}`} aria-hidden="true" />
-      <span className="bo-group-label" data-testid="board-overview-section-title">{section.title}</span>
-      <span className="bo-group-count" data-testid="board-overview-count">{n === 0 ? 'no task' : n}</span>
-      {section.attention > 0 && (
-        <span className="bo-section-attention" data-testid="board-overview-section-attention" title={`${section.attention} ${section.attention === 1 ? 'needs' : 'need'} you`}>
-          {section.attention}
-        </span>
-      )}
-      {status && (
-        <span className="bo-badge bo-section-status" data-tone={PROJECT_STATUS_TONES[status]} data-testid="board-overview-section-status">
-          {PROJECT_STATUS_LABELS[status]}
-        </span>
-      )}
-    </>
-  );
-  return (
-    <section
-      className="bo-group bo-section"
-      data-kind={section.kind}
-      data-section={section.id}
-      data-status={status ?? undefined}
-      data-testid={`board-overview-section-${section.id}`}
-    >
-      {n === 0 ? (
-        <div className="bo-group-head bo-group-head-empty" title={section.title}>{head}</div>
-      ) : (
-        <button
-          type="button"
-          className="bo-group-head"
-          data-bo-nav=""
-          aria-expanded={!folded}
-          title={`${folded ? 'Show' : 'Hide'} ${section.title}`}
-          onClick={onToggle}
-        >{head}</button>
-      )}
-      {!folded && n > 0 && <RowList rows={section.rows} onOpen={onOpen} />}
     </section>
   );
 }

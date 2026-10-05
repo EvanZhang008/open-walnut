@@ -49,6 +49,16 @@ export interface BoardProject {
   /** Who last changed the status ('human' = the user's pick on the page), and when. */
   status_by?: string;
   status_at?: string;
+  /** The Overview card's text, written by the leader (`board_project_set`); light markdown. */
+  summary?: string;
+  latest?: string;
+  /** When `latest` last changed (the server stamps it). */
+  latest_at?: string;
+  next?: string;
+  /** A short "waiting on" tag ("3 CRs to deploy"). */
+  waiting?: string;
+  /** A short count line ("6 tickets"). */
+  meta?: string;
 }
 
 /** A point on the page as GET reports it: `hash` is the CURRENT one, `read` = the user read this version. */

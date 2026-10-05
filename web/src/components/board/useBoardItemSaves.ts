@@ -2,7 +2,8 @@
  * The Board pane's writes for the user's items: a note (`<walnut-mark>`), a
  * project status picked on the page, a read tick, a choice, a reminder. Each
  * answers the frame's request (`wn-board:ack` with its reqId) and merges the
- * route's answer into the payload. Every write goes to the board's OWNER
+ * route's answer into the payload. The Overview's cards make the same status
+ * and choice writes through promise twins (`setProjectStatus`, `pickChoice`). Every write goes to the board's OWNER
  * (`ownerRef`), and an answer that lands after the pane moved to another board
  * is dropped.
  *
@@ -23,6 +24,14 @@ import { boardErrorMessage, boardPath, type TaskBoardData } from './useTaskBoard
 export const CHECK_CHANGED_TEXT = 'This point changed since you opened it. Read it again.';
 
 type Delivery = { state: string; reason?: string; sessionId?: string };
+
+/** A card's choice write: saved (and whether the leader's session got it now), or why not. */
+export type ChoiceSave = { ok: true; delivered: boolean } | { ok: false; error: string };
+
+/** The frame's rule: queued or deferred reached the session; stored alone waits on the board. */
+function deliveredNow(d: Delivery | undefined): boolean {
+  return d?.state === 'queued' || d?.state === 'deferred';
+}
 type ToFrame = (msg: Record<string, unknown> & { t: string }) => void;
 
 export function useBoardItemSaves(
@@ -71,21 +80,40 @@ export function useBoardItemSaves(
   }, [ownerRef, toFrame, mergeMark, fail]);
 
   /** The user's status for a project: stored as theirs, and delivered to the board's session. */
+  const putProject = useCallback(async (projectId: string, status: string, from: string) => {
+    const boardTask = ownerRef.current;
+    log.info('board', 'project status saving', { taskId: boardTask, projectId, status, from });
+    const res = await apiPut<{ project: BoardProject | null; delivery?: Delivery }>(
+      `${boardPath(boardTask)}/projects/${encodeURIComponent(projectId)}`, { status },
+    );
+    log.info('board', 'project status saved', {
+      taskId: boardTask, projectId, status: res.project?.status ?? '', from,
+      delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
+    });
+    const current = ownerRef.current === boardTask;
+    if (current) mergeProject(projectId, res.project ?? null);
+    return { res, current };
+  }, [ownerRef, mergeProject]);
+
+  /** The page's status pick: the frame hears how it went. */
   const saveProject = useCallback((reqId: string, projectId: string, status: string) => {
     const boardTask = ownerRef.current;
-    log.info('board', 'project status saving', { taskId: boardTask, projectId, reqId, status });
-    apiPut<{ project: BoardProject | null; delivery?: Delivery }>(
-      `${boardPath(boardTask)}/projects/${encodeURIComponent(projectId)}`, { status },
-    ).then((res) => {
-      log.info('board', 'project status saved', {
-        taskId: boardTask, projectId, reqId, status: res.project?.status ?? '',
-        delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
-      });
-      if (ownerRef.current !== boardTask) return;
-      toFrame({ t: 'wn-board:ack', reqId, ok: true, project: res.project ?? null, delivery: res.delivery ?? null });
-      mergeProject(projectId, res.project ?? null);
+    putProject(projectId, status, 'page').then(({ res, current }) => {
+      if (current) toFrame({ t: 'wn-board:ack', reqId, ok: true, project: res.project ?? null, delivery: res.delivery ?? null });
     }).catch((err: unknown) => fail(boardTask, reqId, 'project status save', { projectId }, err));
-  }, [ownerRef, toFrame, mergeProject, fail]);
+  }, [ownerRef, putProject, toFrame, fail]);
+
+  /** The Overview card's status pick: null when saved, else the reason. */
+  const setProjectStatus = useCallback(async (projectId: string, status: string): Promise<string | null> => {
+    try {
+      await putProject(projectId, status, 'overview');
+      return null;
+    } catch (err) {
+      const message = boardErrorMessage(err);
+      log.error('board', 'project status save failed', { taskId: ownerRef.current, projectId, from: 'overview', error: message });
+      return message;
+    }
+  }, [ownerRef, putProject]);
 
   /** The user's read tick; a point that changed under the click answers 409 with its new hash. */
   const saveCheck = useCallback((reqId: string, checkId: string, read: boolean, hash: string) => {
@@ -111,49 +139,85 @@ export function useBoardItemSaves(
   }, [ownerRef, toFrame, mergeCheck, fail]);
 
   /** The user's answer to a choice: stored, and delivered to the board's session like a thread message. */
+  const putChoice = useCallback(async (choiceId: string, option: string, from: string) => {
+    const boardTask = ownerRef.current;
+    log.info('board', 'choice saving', { taskId: boardTask, choiceId, option, from });
+    const res = await apiPut<{ choice: BoardChoice | null; delivery?: Delivery }>(
+      `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { option },
+    );
+    log.info('board', 'choice saved', {
+      taskId: boardTask, choiceId, option: res.choice?.option ?? '', from,
+      delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
+    });
+    const current = ownerRef.current === boardTask;
+    if (current) mergeChoice(choiceId, res.choice ?? null);
+    return { res, current };
+  }, [ownerRef, mergeChoice]);
+
+  /** The page's pick: the frame hears how it went. */
   const saveChoice = useCallback((reqId: string, choiceId: string, option: string) => {
     const boardTask = ownerRef.current;
-    log.info('board', 'choice saving', { taskId: boardTask, choiceId, reqId, option });
-    apiPut<{ choice: BoardChoice | null; delivery?: Delivery }>(
-      `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { option },
-    ).then((res) => {
-      log.info('board', 'choice saved', {
-        taskId: boardTask, choiceId, reqId, option: res.choice?.option ?? '',
-        delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
-      });
-      if (ownerRef.current !== boardTask) return;
-      toFrame({ t: 'wn-board:ack', reqId, ok: true, choice: res.choice ?? null, delivery: res.delivery ?? null });
-      mergeChoice(choiceId, res.choice ?? null);
+    putChoice(choiceId, option, 'page').then(({ res, current }) => {
+      if (current) toFrame({ t: 'wn-board:ack', reqId, ok: true, choice: res.choice ?? null, delivery: res.delivery ?? null });
     }).catch((err: unknown) => fail(boardTask, reqId, 'choice save', { choiceId }, err));
-  }, [ownerRef, toFrame, mergeChoice, fail]);
+  }, [ownerRef, putChoice, toFrame, fail]);
+
+  /** An Overview card's pick: saved, and whether the leader was told now. */
+  const pickChoice = useCallback(async (choiceId: string, option: string): Promise<ChoiceSave> => {
+    try {
+      const { res } = await putChoice(choiceId, option, 'overview');
+      return { ok: true, delivered: deliveredNow(res.delivery) };
+    } catch (err) {
+      const message = boardErrorMessage(err);
+      log.error('board', 'choice save failed', { taskId: ownerRef.current, choiceId, from: 'overview', error: message });
+      return { ok: false, error: message };
+    }
+  }, [ownerRef, putChoice]);
+
+  /** The user's own words on a choice: saved beside the pick, delivered with it in one message. */
+  const putChoiceWords = useCallback(async (choiceId: string, text: string, from: string) => {
+    const boardTask = ownerRef.current;
+    log.info('board', 'choice words saving', { taskId: boardTask, choiceId, chars: text.length, from });
+    const res = await apiPut<{ choice: BoardChoice | null; delivery?: Delivery }>(
+      `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { text },
+    );
+    log.info('board', 'choice words saved', {
+      taskId: boardTask, choiceId, option: res.choice?.option ?? '', chars: res.choice?.text?.length ?? 0, from,
+      delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
+    });
+    if (ownerRef.current === boardTask) {
+      mergeChoice(choiceId, res.choice ?? null);
+      toFrame({ t: 'wn-board:choice-words', id: choiceId, delivery: res.delivery ?? null });
+    }
+    return res;
+  }, [ownerRef, toFrame, mergeChoice]);
 
   /**
-   * The user's own words on a choice (the docked composer's Send): saved beside the
-   * pick, delivered with it in one message. Resolves to null when saved, else the
+   * The docked composer's Send on a choice. Resolves to null when saved, else the
    * reason (the composer keeps the text). The frame hears how far it went.
    */
   const saveChoiceText = useCallback(async (choiceId: string, text: string): Promise<string | null> => {
-    const boardTask = ownerRef.current;
-    log.info('board', 'choice words saving', { taskId: boardTask, choiceId, chars: text.length });
     try {
-      const res = await apiPut<{ choice: BoardChoice | null; delivery?: Delivery }>(
-        `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { text },
-      );
-      log.info('board', 'choice words saved', {
-        taskId: boardTask, choiceId, option: res.choice?.option ?? '', chars: res.choice?.text?.length ?? 0,
-        delivery: res.delivery?.state ?? '', deliveryReason: res.delivery?.reason ?? '', deliverySessionId: res.delivery?.sessionId ?? '',
-      });
-      if (ownerRef.current === boardTask) {
-        mergeChoice(choiceId, res.choice ?? null);
-        toFrame({ t: 'wn-board:choice-words', id: choiceId, delivery: res.delivery ?? null });
-      }
+      await putChoiceWords(choiceId, text, 'page');
       return null;
     } catch (err) {
       const message = boardErrorMessage(err);
-      log.error('board', 'choice words save failed', { taskId: boardTask, choiceId, error: message });
+      log.error('board', 'choice words save failed', { taskId: ownerRef.current, choiceId, error: message });
       return message;
     }
-  }, [ownerRef, toFrame, mergeChoice]);
+  }, [ownerRef, putChoiceWords]);
+
+  /** An Overview card's words on a choice: saved, and whether the leader was told now. */
+  const answerChoiceWords = useCallback(async (choiceId: string, text: string): Promise<ChoiceSave> => {
+    try {
+      const res = await putChoiceWords(choiceId, text, 'overview');
+      return { ok: true, delivered: deliveredNow(res.delivery) };
+    } catch (err) {
+      const message = boardErrorMessage(err);
+      log.error('board', 'choice words save failed', { taskId: ownerRef.current, choiceId, from: 'overview', error: message });
+      return { ok: false, error: message };
+    }
+  }, [ownerRef, putChoiceWords]);
 
   /** A reminder on a choice or a thread (`at` null clears it). */
   const saveReminder = useCallback((reqId: string, target: string, at: string | null) => {
@@ -168,5 +232,8 @@ export function useBoardItemSaves(
       }).catch((err: unknown) => fail(boardTask, reqId, 'reminder save', { target }, err));
   }, [ownerRef, toFrame, mergeReminder, fail]);
 
-  return { saveMark, saveProject, saveCheck, saveChoice, saveChoiceText, saveReminder, keepNoteDraft, noteDrafts };
+  return {
+    saveMark, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
+    keepNoteDraft, noteDrafts,
+  };
 }

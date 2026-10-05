@@ -20,6 +20,7 @@ import type { BoardPayload, BoardSeen } from './board-model';
 import {
   NO_BOARD_ELEMENTS, buildTeamOverview, teamChildren, type BoardElement, type BoardElements, type LiveStatus, type TeamOverview,
 } from './board-overview-model';
+import { buildProjectCards, type ProjectCard } from './board-cards-model';
 import { readBoardView, shownBoardView, writeBoardView, type BoardView } from './board-view-pref';
 
 const MINUTE_MS = 60_000;
@@ -38,12 +39,26 @@ function useMinute(): number {
   return minute;
 }
 
-function elementsOf(doc: Document, selector: string): BoardElement[] {
-  return Array.from(doc.querySelectorAll(selector)).map((el) => ({
-    id: el.getAttribute('id') ?? '',
-    title: (el.getAttribute('title') ?? '').trim(),
-    task: (el.getAttribute('task') ?? '').trim(),
-  })).filter((el) => el.id);
+/** A choice's context on a card is a few lines, not the author's whole block. */
+const CONTEXT_MAX = 600;
+
+function elementsOf(doc: Document, selector: string, choice = false): BoardElement[] {
+  return Array.from(doc.querySelectorAll(selector)).map((el) => {
+    const out: BoardElement = {
+      id: el.getAttribute('id') ?? '',
+      title: (el.getAttribute('title') ?? '').trim(),
+      task: (el.getAttribute('task') ?? '').trim(),
+      project: (el.closest('[data-project]')?.getAttribute('data-project') ?? '').trim(),
+    };
+    if (choice) {
+      // The parsed document is inert, so a choice's text is the author's own context alone.
+      const context = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+      out.options = el.getAttribute('options') ?? '';
+      out.recommended = (el.getAttribute('recommended') ?? '').trim();
+      out.context = context.length > CONTEXT_MAX ? `${context.slice(0, CONTEXT_MAX - 1)}…` : context;
+    }
+    return out;
+  }).filter((el) => el.id);
 }
 
 /** The board projects the page shows, in document order (a section's `data-project`, a pill's id), each once. */
@@ -67,7 +82,7 @@ export function parseBoardElements(html: string | null | undefined): BoardElemen
   if (!html || typeof DOMParser === 'undefined') return NO_BOARD_ELEMENTS;
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    return { choices: elementsOf(doc, 'walnut-choice[id]'), threads: elementsOf(doc, 'walnut-thread[id]'), projects: projectsOf(doc) };
+    return { choices: elementsOf(doc, 'walnut-choice[id]', true), threads: elementsOf(doc, 'walnut-thread[id]'), projects: projectsOf(doc) };
   } catch (err) {
     log.warn('board', 'board html not parsed for the overview', { error: err instanceof Error ? err.message : String(err) });
     return NO_BOARD_ELEMENTS;
@@ -76,6 +91,8 @@ export function parseBoardElements(html: string | null | undefined): BoardElemen
 
 export interface TeamOverviewState {
   overview: TeamOverview | null;
+  /** The board's projects as cards (board-cards-model.ts); null when the board defines none. */
+  cards: ProjectCard[] | null;
   /** The task store has not answered yet. */
   loading: boolean;
   /** Finished tasks older than the store's recent window are not loaded (see useTasks). */
@@ -119,10 +136,24 @@ export function useTeamOverview(
     // `epoch` and `minute` are the triggers: the session store and the clock moved.
   }, [tasks, ownerId, elements, payload, seen, epoch, minute]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const cards = useMemo(() => {
+    if (!overview?.sections) return null;
+    return buildProjectCards({
+      sections: overview.sections,
+      projects: payload?.projects ?? null,
+      elements,
+      board: payload ? { choices: payload.choices, threads: payload.threads, reminders: payload.reminders } : null,
+      seen,
+      now: Date.now(),
+    });
+    // `minute` moves a reminder from pending to due.
+  }, [overview, payload, elements, seen, minute]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const ensureAll = store?.ensureAllTasks;
   const loadArchive = useCallback(() => { ensureAll?.(); }, [ensureAll]);
   return {
     overview,
+    cards,
     loading: !!store?.loading,
     completedHidden: store?.completedHidden ?? 0,
     loadArchive,

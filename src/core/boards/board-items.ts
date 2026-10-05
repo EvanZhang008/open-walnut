@@ -46,6 +46,9 @@ export const BOARD_MAX_CHOICES = 200;
 export const BOARD_MAX_REMINDERS = 200;
 export const BOARD_PROJECT_MAX_TASKS = 200;
 export const BOARD_PROJECT_TITLE_MAX = 200;
+/** The card text of a project, in characters: the long fields, then the short tags. */
+export const BOARD_PROJECT_TEXT_FIELDS = { summary: 2000, latest: 2000, next: 1000, waiting: 120, meta: 80 } as const;
+export type BoardProjectTextField = keyof typeof BOARD_PROJECT_TEXT_FIELDS;
 export const BOARD_REMINDER_MAX_DAYS = 90;
 export const BOARD_MAX_SECTION_SEEN = 500;
 const SEEN_HASH_MAX_CHARS = 128;
@@ -76,8 +79,16 @@ export interface ProjectInput {
   status?: string | null;
   /** A FULL replacement of full task ids (the route resolves prefixes); null or [] clears. */
   tasks?: string[] | null;
+  /** The card's text (BOARD_PROJECT_TEXT_FIELDS): absent keeps, "" or null clears. */
+  summary?: string | null;
+  latest?: string | null;
+  next?: string | null;
+  waiting?: string | null;
+  meta?: string | null;
   delete?: boolean;
 }
+
+const TEXT_FIELDS = Object.keys(BOARD_PROJECT_TEXT_FIELDS) as BoardProjectTextField[];
 
 /** The words the page shows for each status (the frame's DEFAULT_LABELS). */
 export const BOARD_PROJECT_STATUS_LABELS: Record<BoardProjectStatus, string> = {
@@ -97,8 +108,8 @@ export interface ProjectWrite {
 }
 
 /**
- * Partial update of one project. A project left with no title, status and
- * tasks (or `delete: true`) is removed and the result is null.
+ * Partial update of one project. A project left with no title, status, tasks
+ * and card text (or `delete: true`) is removed and the result is null.
  */
 export async function setBoardProject(
   taskId: string,
@@ -130,6 +141,18 @@ export async function writeBoardProject(
   if (typeof status === 'string' && status !== '' && !isStatus(status)) {
     throw new BoardError('bad_status', 400, { status });
   }
+  const text: Partial<Record<BoardProjectTextField, string | null>> = {};
+  for (const field of TEXT_FIELDS) {
+    const v = input[field];
+    if (v === undefined) continue;
+    if (v !== null && typeof v !== 'string') throw new BoardError('bad_request', 400, { field }, `\`${field}\` must be a string`);
+    const trimmed = typeof v === 'string' ? v.trim() : '';
+    const max = BOARD_PROJECT_TEXT_FIELDS[field];
+    if (trimmed.length > max) {
+      throw new BoardError('bad_request', 400, { field, max }, `A project's \`${field}\` is at most ${max} characters`);
+    }
+    text[field] = trimmed;
+  }
   let tasks: string[] | null | undefined = input.tasks;
   if (Array.isArray(tasks)) {
     if (tasks.some((t) => typeof t !== 'string' || !t)) {
@@ -148,7 +171,17 @@ export async function writeBoardProject(
     if (title !== undefined) { if (title) project.title = title; else delete project.title; }
     if (status !== undefined) { if (status) project.status = status as BoardProjectStatus; else delete project.status; }
     if (tasks !== undefined) { if (tasks?.length) project.tasks = tasks; else delete project.tasks; }
-    const removed = !!input.delete || (!project.title && !project.status && !project.tasks?.length);
+    for (const field of TEXT_FIELDS) {
+      const v = text[field];
+      if (v === undefined) continue;
+      if (v) project[field] = v; else delete project[field];
+    }
+    if (text.latest !== undefined) {
+      if (!project.latest) delete project.latest_at;
+      else if (project.latest !== prev?.latest) project.latest_at = at;
+    }
+    const removed = !!input.delete
+      || (!project.title && !project.status && !project.tasks?.length && !TEXT_FIELDS.some((f) => project[f]));
     const statusChanged = (removed ? undefined : project.status) !== prev?.status;
     if (statusChanged && prev?.status && prev.status_by === 'human' && opts.by !== 'human' && !opts.overrideUser) {
       throw new BoardError('status_set_by_user', 409, { project: id, status: prev.status, status_at: prev.status_at },

@@ -302,9 +302,11 @@ defineOp({
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
+const PROJECT_TEXT_ARGS = ['summary', 'latest', 'next', 'waiting', 'meta'] as const;
+
 defineOp({
   name: 'board_project_set',
-  title: 'Set a board project\'s status and tasks',
+  title: 'Set a board project\'s status, tasks and card text',
   description:
     'Create or update one project of your team\'s Board (or of the task you name). A board project is one ' +
     'area of this board, one cause or one ticket; it is NOT a Walnut project (a task\'s project field). Its ' +
@@ -312,8 +314,10 @@ defineOp({
     'data-project="<id>" and every <walnut-project id> on the page recolors on its own, and the strip ' +
     'recounts. The user can pick a status on the page too (you are told when they do); a status the user ' +
     'picked stays theirs: changing or removing it is refused unless you pass override_user: true. ' +
-    'Absent fields keep their value; status "" clears it; tasks is a full replacement; a project ' +
-    'left with no title, status and tasks, or delete: true, is removed.',
+    'The Board tab\'s Overview shows each project as a card: its title, status, tasks, and the card ' +
+    'text you set here (summary, latest, next, waiting, meta); set them on every update so the card ' +
+    'reads current. Absent fields keep their value; "" clears one; tasks is a full replacement; a ' +
+    'project left with no title, status, tasks and text, or delete: true, is removed.',
   input: {
     task: TASK_ARG,
     id: z.string().min(1).max(128).describe('The project id (the data-project / <walnut-project id> value)'),
@@ -323,7 +327,12 @@ defineOp({
     tasks: z.array(z.string().min(1)).max(200).optional().describe(
       'The task ids working on this area (full ids or unique prefixes); replaces the whole list. The Board ' +
       'tab\'s Overview groups the team by these (a named task\'s own subtasks follow it): a team member no ' +
-      'project names falls to "Not in a section" at the end'),
+      'project names falls to "Other tasks" at the end'),
+    summary: z.string().max(2000).optional().describe('What this area is, in one to three sentences (the card\'s overview); "" clears'),
+    latest: z.string().max(2000).optional().describe('The latest update, newest facts first; Walnut stamps when it changed; "" clears'),
+    next: z.string().max(1000).optional().describe('The next step, and who takes it; "" clears'),
+    waiting: z.string().max(120).optional().describe('What it waits on, a few words ("3 CRs to deploy"); "" clears'),
+    meta: z.string().max(80).optional().describe('A short note for the end of the title row ("6 tickets"); "" clears'),
     delete: z.boolean().optional().describe('Remove the project'),
     override_user: z.boolean().optional().describe(
       'true: replace (or remove) a status the user picked on the page; without it that status stays'),
@@ -335,6 +344,7 @@ defineOp({
       ...(args.title !== undefined ? { title: args.title } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),
       ...(args.tasks !== undefined ? { tasks: args.tasks } : {}),
+      ...Object.fromEntries(PROJECT_TEXT_ARGS.filter((k) => args[k] !== undefined).map((k) => [k, args[k]])),
       ...(args.delete === true ? { delete: true } : {}),
       ...(args.override_user === true ? { override_user: true } : {}),
     }) as { project?: { status?: string; tasks?: string[] } | null };
@@ -345,7 +355,7 @@ defineOp({
         ? `Project "${id}" of ${boardOfPossessive(target)}: ${project.status || 'no status'}, ${plural(project.tasks?.length ?? 0, 'task')}.`
         : `Project "${id}" removed from ${boardOfPossessive(target)}.`,
       project
-        ? 'The page recolors on its own; keep that section\'s text (latest update, next step) current with board_edit.'
+        ? 'The page and the Overview card recolor on their own; keep summary, latest and next current here, and the page\'s section with board_edit.'
         : 'Remove its section from the html with board_edit if it is still there.',
     );
   },

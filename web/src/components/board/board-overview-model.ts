@@ -24,7 +24,7 @@
  * instead (`sections`, null otherwise): the sections in the page's order (the
  * ones the page does not show after, as recorded), each with its status and its
  * tasks (and their subtasks) in the attention order above, open rows before done
- * ones; then the team members no section names ("Not in a section", the done
+ * ones; then the team members no section names ("Other tasks", the done
  * ones apart). A row's state group is still on it, so a blocked worker stays red
  * inside its section.
  */
@@ -114,6 +114,13 @@ export interface BoardElement {
   title: string;
   /** The `task` attribute as written (may be a prefix of an id), '' when absent. */
   task: string;
+  /** The board project of the nearest `[data-project]` around it, '' when none. */
+  project?: string;
+  /** A choice's `options` ("key:label,key:label") and `recommended` key, as written. */
+  options?: string;
+  recommended?: string;
+  /** A choice's own text (the context the author put inside it), whitespace folded. */
+  context?: string;
 }
 
 export interface BoardElements {
@@ -560,8 +567,8 @@ export function buildSections(
   });
   const restOpen = rest.filter((r) => r.group !== 'done');
   const restDone = rest.filter((r) => r.group === 'done');
-  if (restOpen.length) out.push(section('rest', REST_SECTION_ID, 'Not in a section', null, restOpen));
-  if (restDone.length) out.push(section('rest-done', REST_DONE_SECTION_ID, 'Done, not in a section', null, restDone));
+  if (restOpen.length) out.push(section('rest', REST_SECTION_ID, 'Other tasks', null, restOpen));
+  if (restDone.length) out.push(section('rest-done', REST_DONE_SECTION_ID, 'Other tasks, done', null, restDone));
   return out;
 }
 

@@ -552,6 +552,41 @@ describe('round two', () => {
       expect((await call('PUT', `${boardPath(crew.solo)}/projects/p`, { body: { title: 'x' } })).json.error.code).toBe('no_board')
       expect((await getBoard(crew.boss))!.projects['cause-a'].tasks).toEqual([crew.w1a])
     })
+
+    it('card text: the leader writes it, GET returns it trimmed and stamped; a question on a project\'s own thread names the project', async () => {
+      const url = `${boardPath(crew.boss)}/projects/cause-z`
+      const set = await call('PUT', url, {
+        sid: crew.sid.boss,
+        body: { title: 'Image CVE', summary: '  A base image CVE.  ', latest: 'Rebuilt.', next: 'Roll out', waiting: '2 CRs', meta: '3 tickets' },
+      })
+      expect(set.status).toBe(200)
+      expect(set.json.project).toMatchObject({
+        summary: 'A base image CVE.', latest: 'Rebuilt.', latest_at: expect.any(String), next: 'Roll out', waiting: '2 CRs', meta: '3 tickets',
+      })
+      expect(set.json.delivery).toBeUndefined() // a session's own write is its own news
+      expect((await call('GET', boardPath(crew.boss))).json.projects['cause-z']).toMatchObject({ summary: 'A base image CVE.', meta: '3 tickets' })
+      // "" clears one field, the rest stay; bad types and long text are refused, nothing written.
+      const cleared = await call('PUT', url, { sid: crew.sid.boss, body: { next: '' } })
+      expect(cleared.json.project.next).toBeUndefined()
+      expect(cleared.json.project.latest).toBe('Rebuilt.')
+      expect((await call('PUT', url, { sid: crew.sid.boss, body: { summary: 7 } })).status).toBe(400)
+      const long = await call('PUT', url, { sid: crew.sid.boss, body: { meta: 'x'.repeat(81) } })
+      expect(long.status).toBe(400)
+      expect(long.json.error.code).toBe('bad_request')
+      expect((await getBoard(crew.boss))!.projects['cause-z'].meta).toBe('3 tickets')
+
+      // The Overview's "Ask a question" posts under the project id, a thread the html does not show.
+      performSessionSendMock.mockClear()
+      const asked = await call('POST', `${boardPath(crew.boss)}/threads/cause-z`, { body: { text: 'Is it rolled out?' } })
+      expect(asked.status).toBe(201)
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+      expect((performSessionSendMock.mock.calls[0][0] as { text: string }).text)
+        .toContain('Board project "Image CVE" (thread cause-z): the user wrote on your Board:')
+
+      // Leave the shared board as the later tests expect it.
+      await call('DELETE', `${boardPath(crew.boss)}/threads/cause-z/messages/${asked.json.message.id}`)
+      expect((await call('PUT', url, { body: { delete: true } })).json).toEqual({ project: null })
+    })
   })
 
   describe('checks (read ticks)', () => {

@@ -9,7 +9,8 @@
  *   POST   /tasks/:id/board/threads/:thread  { text }                → 201 { message, delivery }
  *   DELETE /tasks/:id/board/threads/:thread/messages/:message       → { message } (the removed one)
  *   PUT    /tasks/:id/board/marks/:mark      { note?, state? (legacy) } → { mark | null }
- *   PUT    /tasks/:id/board/projects/:project { title?, status?, tasks?, delete?, override_user? }
+ *   PUT    /tasks/:id/board/projects/:project { title?, status?, tasks?, summary?, latest?, next?, waiting?, meta?,
+ *                                                delete?, override_user? }
  *                                                → { project | null, delivery? (a human's new status) }
  *   PUT    /tasks/:id/board/checks/:check    { read, hash? }         → { check | null, hash } (humans only)
  *   PUT    /tasks/:id/board/choices/:choice  { option?, text? }      → { choice | null, delivery } (humans only)
@@ -55,6 +56,7 @@ import {
 } from '../../core/boards/board-store.js'
 import {
   BOARD_PROJECT_MAX_TASKS,
+  BOARD_PROJECT_TEXT_FIELDS,
   boardCheckStates,
   writeBoardProject,
   setBoardCheck,
@@ -343,6 +345,11 @@ boardV1Router.put('/tasks/:id/board/projects/:project', route(async (req, res) =
   for (const field of ['delete', 'override_user'] as const) {
     if (b[field] !== undefined && typeof b[field] !== 'boolean') throw new RouteError(400, 'bad_request', `\`${field}\` must be a boolean`)
   }
+  const text: Record<string, string | null> = {}
+  for (const field of Object.keys(BOARD_PROJECT_TEXT_FIELDS)) {
+    const v = optionalString(b, field)
+    if (v !== undefined) text[field] = v
+  }
   const tasks = await resolveProjectTasks(b.tasks)
   const projectId = param(req.params.project)
   const by = writer(caller)
@@ -350,6 +357,7 @@ boardV1Router.put('/tasks/:id/board/projects/:project', route(async (req, res) =
     ...(title !== undefined ? { title } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(tasks !== undefined ? { tasks } : {}),
+    ...text,
     ...(b.delete === true ? { delete: true } : {}),
   }, { by, overrideUser: b.override_user === true })
   // The user's pick reaches the board's session like a choice answer; a session's own write is its own news.
@@ -433,6 +441,6 @@ boardV1Router.delete('/tasks/:id/board', route(async (req, res) => {
 /** Never fails the post: the message is already stored, so a send failure is reported, not thrown. */
 async function deliverToLeader(task: Task, thread: string, message: BoardMessage): Promise<BoardDelivery> {
   const board = await getBoard(task.id)
-  const text = buildBoardThreadPrompt(await threadHeading(board?.html ?? '', thread), thread, message.text)
+  const text = buildBoardThreadPrompt(await threadHeading(board?.html ?? '', thread, board?.projects), thread, message.text)
   return deliverBoardText(task.id, text, { thread, messageId: message.id })
 }

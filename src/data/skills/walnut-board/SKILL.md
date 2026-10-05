@@ -35,7 +35,7 @@ notes and read ticks are readable by you, task chips and section status show liv
 | `board_edit {task?, edits: [{old, new}]}` | Replace exact strings. Each `old` must occur ONCE in the current html, or nothing is written and the error names the edit. This is the normal way to update. |
 | `board_post {task?, thread, text}` | Your answer or note in a section's thread. One message per post. The outcome names the new message id. |
 | `board_post_delete {task?, thread, id}` | Delete one of your own posts (a wrong or outdated answer). The user can delete any post from the Board tab. |
-| `board_project_set {task?, id, title?, status?, tasks?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title and tasks. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. `tasks` also shapes the Board tab's Overview: it lists the team by project, in the page's order (a named task's own subtasks follow it), and a team member no project names falls to "Not in a section" at the end, so name every task of an area. |
+| `board_project_set {task?, id, title?, status?, tasks?, summary?, latest?, next?, waiting?, meta?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title, tasks and card text. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. The Board tab's Overview shows every project as a card in the page's order: its status, `tasks` as live chips (a named task's own subtasks follow it; a team member no project names falls to "Other tasks" at the end, so name every task of an area), and your text: `summary` (what this area is, a few sentences), `latest` (the newest update; Walnut stamps its time), `next` (the next step and who takes it), `waiting` (a short tag, "3 CRs to deploy") and `meta` (a short count, "6 tickets"). Light markdown; `""` clears one. Set `latest` and `next` on every update, so the card is never staler than the page. The card also shows the choices and threads inside the project's `data-project` section, and the user asks questions there: they arrive like a thread message on the thread with the project's id. |
 | `board_remind {task?, target, at, note?}` | A reminder on a choice or a thread (`at` is an ISO time, `""` clears). |
 
 **A team shares one board**: the nearest ancestor that has a board, else the root
@@ -107,7 +107,7 @@ Walnut project (the `project` field of a task); the two never mix.
 
 1. `board_get` to see whether your team has a board.
 2. Take the template below, fill the header, one overview row and one section per area you lead, with the real `<walnut-task>` ids from `task_list` or your `open_items`.
-3. `board_set {"html": …}`, then `board_project_set` for each project's status and tasks. Tell the user in one line that the Board tab is up and that they can ask under any section.
+3. `board_set {"html": …}`, then `board_project_set` for each project's status, tasks and card text (`summary`, `latest`, `next`). Tell the user in one line that the Board tab is up and that they can ask under any section.
 4. From then on, `board_edit`, `board_project_set` and `board_post`.
 
 ## 7. Template

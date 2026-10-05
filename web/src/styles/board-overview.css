@@ -232,8 +232,7 @@
 
 .board-overview .bo-group[data-group="needs"] .bo-group-label { color: var(--bo-red); }
 
-.board-overview .bo-group[data-group="needs"] .bo-group-count,
-.board-overview .bo-section-attention {
+.board-overview .bo-group[data-group="needs"] .bo-group-count {
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
@@ -247,43 +246,6 @@
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-
-/* A board project's head: the title as the leader wrote it (no caps: it is a
-   name, often long, often not Latin), cut with an ellipsis; the status pill
-   sits at the right end, where a row's badge does. */
-.board-overview .bo-section .bo-group-head {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 12px;
-  color: var(--fg-secondary);
-}
-
-.board-overview .bo-section .bo-group-head:hover { color: var(--fg); }
-
-.board-overview .bo-section .bo-group-label {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.board-overview .bo-section .bo-group-count { flex: 0 0 auto; }
-
-.board-overview .bo-section .bo-section-status {
-  flex: 0 0 auto;
-  margin-left: auto;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-/* A project naming no task: a head with nothing to unfold, so not a button; the chevron keeps the title aligned. */
-.board-overview .bo-group-head.bo-group-head-empty { cursor: default; }
-.board-overview .bo-group-head.bo-group-head-empty:hover { color: var(--fg-secondary); }
-.board-overview .bo-group-head-empty .bo-chevron { visibility: hidden; }
-.board-overview .bo-group-head-empty .bo-group-label { color: var(--fg-muted); }
 
 .board-overview .bo-list {
   margin: 0;

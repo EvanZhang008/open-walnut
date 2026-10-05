@@ -79,6 +79,17 @@ export interface BoardProject {
   status?: BoardProjectStatus;
   /** Full task ids, in the order given. */
   tasks?: string[];
+  /** What this area is, in a sentence or three (the Overview card's first paragraph). */
+  summary?: string;
+  /** The latest update; `latest_at` is when it last changed (stamped by Walnut). */
+  latest?: string;
+  latest_at?: string;
+  /** The next step. */
+  next?: string;
+  /** What it waits on (a short tag beside the title). */
+  waiting?: string;
+  /** A short note at the end of the title row ("6 tickets"). */
+  meta?: string;
   updated_at: string;
   updated_by: BoardWriter;
   /** Who last changed the status (the user picks one on the page too), and when. */

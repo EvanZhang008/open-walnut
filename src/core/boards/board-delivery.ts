@@ -36,9 +36,21 @@ async function aboutTask(taskRef: string | undefined): Promise<string> {
   return about ? `, about task "${about.title}" (${about.id})` : `, about task ${taskRef}`;
 }
 
-/** The line naming the thread, and the task it is about when its tag names one. */
-export async function threadHeading(html: string, thread: string): Promise<string> {
+/**
+ * The line naming the thread, and the task it is about when its tag names one.
+ * A thread the page does not show is a project's own (the Overview's "Ask a
+ * question" posts under the project id): it is named by that project.
+ */
+export async function threadHeading(
+  html: string,
+  thread: string,
+  projects?: Record<string, Pick<BoardProject, 'title'>>,
+): Promise<string> {
   const meta = threadMeta(html, thread);
+  if (!meta && projects && Object.hasOwn(projects, thread)) {
+    const title = projects[thread]?.title;
+    return `Board project "${title || thread}" (thread ${thread})`;
+  }
   return `Board thread "${meta?.title || thread}"${await aboutTask(meta?.task)}`;
 }
 

@@ -203,7 +203,7 @@ describe('board ops', () => {
     const got = await r.speak({ id: 'cause a', status: 'wip', tasks: ['w1', 'w2', 'w3'] })
     expect(r.seen[2]).toEqual({ method: 'PUT', path: '/tasks/lead01/board/projects/cause%20a', body: { status: 'wip', tasks: ['w1', 'w2', 'w3'] } })
     expect(got.outcome).toBe('Project "cause a" of lead01\'s board: wip, 3 tasks.')
-    expect(got.next).toMatch(/recolors on its own/)
+    expect(got.next).toMatch(/recolor on their own; keep summary, latest and next current here/)
     const d = run('board_project_set', (m, p) => (p === '/me' ? ME : p.endsWith('/owner') ? OWN : { project: null }))
     const gone = await d.speak({ id: 'cause-a', delete: true })
     expect(d.seen[2].body).toEqual({ delete: true })
@@ -217,6 +217,16 @@ describe('board ops', () => {
     await k.speak({ id: 'cause-a', status: 'done', override_user: false })
     expect(k.seen[2].body).toEqual({ status: 'done' })
     expect(getOp('board_project_set')!.description).toMatch(/stays theirs: changing or removing it is refused unless you pass override_user: true/)
+  })
+
+  it('board_project_set carries the card text it is given, "" included, and nothing it is not', async () => {
+    const r = run('board_project_set', server())
+    await r.speak({ id: 'cause-a', summary: 'A bus race.', latest: 'Fix in review.', next: '', waiting: '3 CRs', meta: '6 tickets' })
+    expect(r.seen[2].body).toEqual({ summary: 'A bus race.', latest: 'Fix in review.', next: '', waiting: '3 CRs', meta: '6 tickets' })
+    const only = run('board_project_set', server())
+    await only.speak({ id: 'cause-a', latest: 'Deployed.' })
+    expect(only.seen[2].body).toEqual({ latest: 'Deployed.' })
+    expect(getOp('board_project_set')!.description).toMatch(/Overview shows each project as a card/)
   })
 
   it('board_remind sets with an ISO time and clears with ""', async () => {
