@@ -123,11 +123,14 @@ extension DemoServer {
         return nil
     }
 
+    /// The lane engine, as the real server (lanes are its only chat engine): the
+    /// chat has a session, so its composer carries the same mode and model pills
+    /// a real one does. The demo keeps one lane session for the chat.
     private func chatEngine() -> ChatEngineInfo {
         withState { state in
             ChatEngineInfo(
-                engine: "in-process", model: state.chatModel, effort: state.chatEffort,
-                switchable: true, models: DemoFixtures.models
+                engine: "lane", sessionId: Self.laneSessionID, host: "",
+                model: state.chatModel, effort: state.chatEffort, switchable: true
             )
         }
     }

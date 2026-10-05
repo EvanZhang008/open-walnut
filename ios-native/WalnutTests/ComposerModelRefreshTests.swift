@@ -619,6 +619,52 @@ final class ComposerModelRefreshTests: XCTestCase {
         XCTAssertEqual(model.writeTarget, .session(id: "sess-lane-1"))
     }
 
+    /// The mode pill follows the chat's lane session, and keeps it through every
+    /// moment nothing is writable: a re-ask the Mac does not answer, and a new chat
+    /// getting its id on its first send. It used to vanish for exactly those
+    /// moments (user, 2026-10-04: "sometimes Bypass, sometimes not"). Another
+    /// conversation drops it until that conversation's own session answers.
+    func testTheModeSessionSurvivesAnUnreachableSpellAndTheFirstSend() async {
+        transport.engine = { _ in .success(Self.laneEngine) }
+        let model = makeModel()
+        await open(model, .chat(agentID: "general", conversationID: nil))
+        XCTAssertEqual(model.modeSessionID, "sess-lane-1")
+
+        // The first send gives the chat its id: nothing is writable until the
+        // re-ask answers, but the mode pill keeps its session.
+        let held = transport.holdNext(.engine)
+        model.attach(.chat(agentID: "general", conversationID: "conv-new"))
+        await held.reached()
+        XCTAssertNil(model.switchableSessionID)
+        XCTAssertEqual(model.modeSessionID, "sess-lane-1", "the mode pill lost its session on the first send")
+        held.release()
+        await model.settleForTesting()
+        XCTAssertEqual(model.modeSessionID, "sess-lane-1")
+
+        // The Mac goes away: the model pill turns Retry, the mode keeps its session.
+        transport.engine = { _ in .failure(Self.unreachable503) }
+        await fireWake(model)
+        XCTAssertTrue(model.unreachable)
+        XCTAssertNil(model.switchableSessionID)
+        XCTAssertEqual(model.modeSessionID, "sess-lane-1", "the mode pill lost its session while the Mac was away")
+
+        // Another conversation: its own session or none, never this one's.
+        transport.engine = { _ in .success(ChatEngineInfo(engine: "lane", sessionId: "sess-lane-2", cwd: "/x", host: "")) }
+        let other = transport.holdNext(.engine)
+        model.attach(.chat(agentID: "general", conversationID: "conv-2"))
+        await other.reached()
+        XCTAssertNil(model.modeSessionID, "another conversation showed this one's mode")
+        other.release()
+        await model.settleForTesting()
+        XCTAssertEqual(model.modeSessionID, "sess-lane-2")
+
+        // An old server answering in-process: no session, no mode pill.
+        transport.engine = { _ in .success(Self.degradedEngine) }
+        await open(model, .chat(agentID: "general", conversationID: "conv-3"))
+        XCTAssertNil(model.modeSessionID)
+        XCTAssertTrue(model.answersInProcess)
+    }
+
     // MARK: - Scenario 5: a pick wins over a refresh in flight
 
     func testAPickWinsOverARefreshThatStartedBeforeIt() async {

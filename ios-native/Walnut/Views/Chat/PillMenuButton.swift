@@ -30,9 +30,6 @@ struct PillMenu: Equatable {
     struct Section: Equatable {
         var title: String
         var items: [Item]
-        /// Lay the rows out as tiles, three to a row (the effort levels), so the
-        /// levels take two rows above a model list of any length.
-        var compact = false
     }
 
     var sections: [Section]
@@ -195,16 +192,13 @@ final class PillMenuUIButton: UIButton {
         shown = menu
     }
 
-    /// How many tiles UIKit fits in one medium-size row.
-    static let compactRowLength = 3
-
     static func build(
         _ menu: PillMenu,
         onSelect: @escaping (PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void
     ) -> UIMenu {
         let token = menu.token
         let sections: [UIMenuElement] = menu.sections.map { section in
-            let actions: [UIMenuElement] = section.items.map { item in
+            UIMenu(title: section.title, options: .displayInline, children: section.items.map { item in
                 let action = UIAction(
                     title: item.title,
                     image: item.systemImage.flatMap { UIImage(systemName: $0) },
@@ -213,20 +207,7 @@ final class PillMenuUIButton: UIButton {
                 ) { _ in onSelect(item.choice, token) }
                 action.accessibilityIdentifier = item.accessibilityID
                 return action
-            }
-            guard section.compact else {
-                return UIMenu(title: section.title, options: .displayInline, children: actions)
-            }
-            // UIKit lays a medium-size group out as one row of at most three
-            // tiles and spills the rest into ordinary rows, so the rows are cut
-            // into groups of three, each its own row of tiles.
-            let rows = stride(from: 0, to: actions.count, by: compactRowLength).map { start in
-                let row = UIMenu(title: start == 0 ? section.title : "", options: .displayInline,
-                                 children: Array(actions[start..<min(start + compactRowLength, actions.count)]))
-                row.preferredElementSize = .medium
-                return row as UIMenuElement
-            }
-            return UIMenu(title: "", options: .displayInline, children: rows)
+            })
         }
         return UIMenu(title: menu.title, children: sections)
     }
@@ -460,8 +441,9 @@ final class PillMenuUIButton: UIButton {
     }
 }
 
-private extension UIView {
-    /// The text view holding the focus (and so the keyboard) in this subtree.
+extension UIView {
+    /// The text view holding the focus (and so the keyboard) in this subtree
+    /// (a pill's menu or sheet puts it away, and gives it back on close).
     var textFocus: UIView? {
         if isFirstResponder, self is UITextInput { return self }
         for subview in subviews {

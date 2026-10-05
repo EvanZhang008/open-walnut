@@ -47,8 +47,6 @@ struct NewSessionChatView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    /// The mode pill's height, for the stacked model pill's menu to clear.
-    @State private var modePillHeight: CGFloat = 0
     @Environment(TasksStore.self) private var tasks: TasksStore?
     @Environment(ConnectionStore.self) private var connection: ConnectionStore?
 
@@ -302,11 +300,12 @@ struct NewSessionChatView: View {
 
     /// The draft's permission-mode and model pills, handed to the composer for its
     /// bottom row in the live row's order (mode, then model). The same `PillChip`
-    /// a live session's pills are, so the row reads like one: with the keyboard up
-    /// the first tap puts the keyboard away and the next opens the menu above the
-    /// pill (a SwiftUI `Menu` in this row lost taps over the keyboard, see
-    /// `ComposerBar.plusButton`). Side by side, stacked at the accessibility
-    /// sizes, like the live pills (`ComposerBar.pillLayout`).
+    /// a live session's pills are, so the row reads like one: the mode pill's
+    /// menu opens above it (with the keyboard up the first tap puts the keyboard
+    /// away; a SwiftUI `Menu` in this row lost taps over the keyboard, see
+    /// `ComposerBar.plusButton`), and the model pill opens the "Select model"
+    /// sheet. Side by side, stacked at the accessibility sizes, like the live
+    /// pills (`ComposerBar.pillLayout`).
     private var launchPills: some View {
         let stacked = dynamicTypeSize.isAccessibilitySize
         // A pick while the create call runs would be a choice the launch already
@@ -326,7 +325,6 @@ struct NewSessionChatView: View {
                 onSelect: { choice, _ in pick(choice) },
                 onPresentedChange: { _, _ in }
             )
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { modePillHeight = $0 }
             PillChip(
                 text: modelLabel,
                 glyph: .chevron,
@@ -335,12 +333,12 @@ struct NewSessionChatView: View {
                 rawID: false,
                 menu: Self.modelMenu(selected: model),
                 menuID: "launchModel",
-                // Stacked, its menu opens above the mode pill too, not over it.
-                menuClearance: stacked ? modePillHeight + ComposerBar.pillSpacing : 0,
                 accessibilityID: "newSessionChat.modelPill",
                 accessibilityLabel: "Model: \(model == nil ? "Default" : modelLabel)",
                 onSelect: { choice, _ in pick(choice) },
-                onPresentedChange: { _, _ in }
+                onPresentedChange: { _, _ in },
+                // The same "Select model" sheet as a live composer's model pill.
+                sheetTitle: ComposerModelPill.sheetTitle
             )
             .layoutPriority(1)
         }

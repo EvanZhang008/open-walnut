@@ -65,11 +65,10 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(controls.pillAccessibilityValue, "Effort: High")
     }
 
-    /// The pill's menu is the levels, then the models, as INLINE sections (never
-    /// a submenu, whose chevron column squeezed the model names), each headed by
-    /// its current value and each with exactly its own row checked. The levels
-    /// lead as compact tiles: always in view, however long the model list.
-    func testTheOnePillsMenuHoldsTheLevelsThenTheModels() {
+    /// The pill's menu is the models, then the levels, as two sections (the
+    /// sheet shows the second as its Effort row), each headed by its current
+    /// value and each with exactly its own row checked.
+    func testTheOnePillsMenuHoldsTheModelsThenTheLevels() {
         let controls = ComposerControlsModel(
             models: [
                 model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high", "max"]),
@@ -78,39 +77,12 @@ final class ComposerControlsTests: XCTestCase {
             currentModelID: "global.anthropic.claude-opus-5[1m]",
             currentEffort: "max"
         )
-        let sections = controls.combinedMenu().sections
-        XCTAssertEqual(sections.map(\.title), ["Effort: Max", "Model: Opus 5 1M"])
-        XCTAssertEqual(sections.map(\.compact), [true, false])
-        XCTAssertEqual(sections[0].items.map(\.choice), [.effort("low"), .effort("high"), .effort("max")])
-        XCTAssertEqual(sections[0].items.filter(\.checked).map(\.title), ["Max"])
-        XCTAssertEqual(sections[1].items.filter(\.checked).count, 1)
-        XCTAssertEqual(controls.combinedMenu().token, controls.menuToken)
-
-        // At the accessibility sizes a tile is a whole row: the models lead, the
-        // levels follow as an ordinary section.
-        let large = controls.combinedMenu(compactLevels: false).sections
-        XCTAssertEqual(large.map(\.title), ["Model: Opus 5 1M", "Effort: Max"])
-        XCTAssertEqual(large.map(\.compact), [false, false])
-    }
-
-    /// A compact section becomes rows of at most three medium tiles (UIKit spills
-    /// a fourth tile into a plain row), the first row carrying the heading; a
-    /// plain section stays one inline group.
-    func testACompactSectionIsRowsOfThreeTilesUnderItsHeading() {
-        let levels = ["Low", "Medium", "High", "Extra High", "Max"]
-        let menu = PillMenu(sections: [
-            .init(title: "Effort: High", items: levels.map { .init(title: $0, choice: .effort($0)) }, compact: true),
-            .init(title: "Model: Opus 5", items: [.init(title: "Opus 5", choice: .model("opus"))]),
-        ], token: .init(generation: 0, version: 0))
-        let built = PillMenuUIButton.build(menu) { _, _ in }
-        let tiles = built.children[0] as? UIMenu
-        let rows = tiles?.children.compactMap { $0 as? UIMenu } ?? []
-        XCTAssertEqual(rows.map { $0.children.map(\.title) }, [["Low", "Medium", "High"], ["Extra High", "Max"]])
-        XCTAssertEqual(rows.map(\.preferredElementSize), [.medium, .medium])
-        XCTAssertEqual(rows.map(\.title), ["Effort: High", ""])
-        let plain = built.children[1] as? UIMenu
-        XCTAssertEqual(plain?.title, "Model: Opus 5")
-        XCTAssertEqual(plain?.children.map(\.title), ["Opus 5"])
+        let sections = controls.combinedMenu.sections
+        XCTAssertEqual(sections.map(\.title), ["Model: Opus 5 1M", "Effort: Max"])
+        XCTAssertEqual(sections[1].items.map(\.choice), [.effort("low"), .effort("high"), .effort("max")])
+        XCTAssertEqual(sections[0].items.filter(\.checked).count, 1)
+        XCTAssertEqual(sections[1].items.filter(\.checked).map(\.title), ["Max"])
+        XCTAssertEqual(controls.combinedMenu.token, controls.menuToken)
     }
 
     /// A model with no effort axis: the model alone, and a menu of models only.
@@ -122,7 +94,7 @@ final class ComposerControlsTests: XCTestCase {
         )
         XCTAssertEqual(controls.combinedPillLabel, controls.pillLabel)
         XCTAssertNil(controls.pillAccessibilityValue)
-        XCTAssertEqual(controls.combinedMenu().sections.count, 1)
+        XCTAssertEqual(controls.combinedMenu.sections.count, 1)
     }
 
     /// An effort axis with no reported level: "Effort" is a placeholder, not a
@@ -136,7 +108,7 @@ final class ComposerControlsTests: XCTestCase {
         )
         XCTAssertEqual(controls.combinedPillLabel, "Opus 5")
         XCTAssertNil(controls.pillAccessibilityValue)
-        let levels = controls.combinedMenu().sections.first?.items ?? []
+        let levels = controls.combinedMenu.sections.last?.items ?? []
         XCTAssertEqual(levels.map(\.title), ["Low", "High"])
         XCTAssertTrue(levels.allSatisfy { !$0.checked })
     }
@@ -151,7 +123,7 @@ final class ComposerControlsTests: XCTestCase {
         )
         XCTAssertEqual(controls.combinedPillLabel, "Opus 5 · High")
         XCTAssertEqual(controls.pillAccessibilityValue, "Effort: High, last known")
-        XCTAssertEqual(controls.combinedMenu().sections.flatMap(\.items).map(\.choice), [.retry])
+        XCTAssertEqual(controls.combinedMenu.sections.flatMap(\.items).map(\.choice), [.retry])
     }
 
     /// The mode pill follows the session a pick is written to; the in-process
@@ -166,6 +138,9 @@ final class ComposerControlsTests: XCTestCase {
             writeTarget: .chat(agentID: "general", conversationID: "c1")
         )
         XCTAssertNil(inProcess.switchableSessionID)
+        XCTAssertNil(inProcess.modeSessionID)
+        XCTAssertTrue(inProcess.answersInProcess, "an in-process chat has no session, so no mode pill")
+        XCTAssertFalse(session.answersInProcess)
     }
 
     /// Both menus are headed by the current value, which at the accessibility

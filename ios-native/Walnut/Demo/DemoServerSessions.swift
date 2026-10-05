@@ -12,6 +12,7 @@ extension DemoServer {
         if match2(r, "GET", s, "sessions", "list-dirs") { return listDirs(r) }
         guard s.count >= 2 else { return nil }
         let id = s[1]
+        if id == Self.laneSessionID { return routeLaneSession(r, action: s.count > 2 ? s[2] : "") }
         guard withState({ $0.sessionIndex(id) }) != nil else {
             return .error(404, "not_found", "Session not found.")
         }
@@ -134,9 +135,57 @@ extension DemoServer {
         }
     }
 
+    // MARK: - The chat's lane session
+
+    /// The chat's lane session. Not a listed session (the real server keeps its
+    /// lanes out of the session lists too): it answers only what the chat
+    /// composer asks of it, the model catalog, model and effort switches, and the
+    /// permission mode.
+    static let laneSessionID = "demo-lane"
+
+    /// The draft picks a picker alias ("sonnet"); a real launch runs it as a
+    /// catalog model, so the session reports that row. Kept as the alias, the
+    /// model sheet showed an unlisted, greyed "sonnet" row above "Sonnet 5.5".
+    static func launchModel(_ picked: String?) -> String {
+        switch picked ?? "" {
+        case "", "default", "opus": return DemoFixtures.mainModel
+        case "sonnet": return "claude-sonnet-5-5"
+        case "haiku": return DemoFixtures.fastModel
+        case let id: return id
+        }
+    }
+
+    private func routeLaneSession(_ r: DemoRequest, action: String) -> DemoReply? {
+        switch (r.method, action) {
+        case ("GET", "model-options"):
+            let options = withState { state in
+                SessionModelOptions(models: DemoFixtures.models, current: state.chatModel, currentEffort: state.chatEffort)
+            }
+            return .encoded(options)
+        case ("POST", "model"):
+            let model = r.string("model") ?? DemoFixtures.mainModel
+            withState { state in state.chatModel = model }
+            return .encoded(SessionModelChange(model: model, cliModel: model, appliedLive: true, applied: nil, effectiveModel: model))
+        case ("POST", "effort"):
+            let effort = r.string("effort") ?? DemoFixtures.defaultEffort
+            withState { state in state.chatEffort = effort }
+            return .encoded(SessionEffortChange(effort: effort, appliedLive: true, effectiveEffort: effort, overridden: false))
+        case ("GET", "controls"), ("POST", "controls"):
+            if r.method == "POST", r.string("id") == "mode", let value = r.string("value") {
+                withState { state in state.chatMode = value }
+            }
+            return .encoded(Self.modeControls(current: withState { $0.chatMode }))
+        default:
+            return .error(404, "not_found", "Session not found.")
+        }
+    }
+
     private func controls(_ id: String) -> SessionControlsPayload {
-        let mode = withState { $0.sessions[$0.sessionIndex(id)!].mode }
-        return SessionControlsPayload(engine: "claude", controls: [
+        Self.modeControls(current: withState { $0.sessions[$0.sessionIndex(id)!].mode })
+    }
+
+    private static func modeControls(current mode: String) -> SessionControlsPayload {
+        SessionControlsPayload(engine: "claude", controls: [
             // The real server's shape (`claudeModeControls`): every mode, by the
             // labels of the one mode registry.
             SessionControlsPayload.Control(
@@ -200,7 +249,7 @@ extension DemoServer {
             let id = state.nextID("s")
             state.sessions.append(DemoSession(
                 id: id, title: title, taskId: taskID, host: host, processStatus: "idle",
-                model: r.string("model") ?? DemoFixtures.mainModel, mode: r.string("mode") ?? "bypass",
+                model: Self.launchModel(r.string("model")), mode: r.string("mode") ?? "bypass",
                 startedAt: now, lastActiveAt: now, cwd: cwd, description: nil, transcript: []
             ))
             if let t = state.taskIndex(taskID!) { state.tasks[t].sessionIds.append(id) }

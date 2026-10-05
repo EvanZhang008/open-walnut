@@ -189,8 +189,6 @@ struct ComposerBar: View {
     @State private var controls = ComposerControlsModel()
     /// The live session's permission mode, for the mode pill.
     @State private var mode = ComposerModeModel()
-    /// The mode pill's height, for a stacked model pill's menu to clear.
-    @State private var modePillHeight: CGFloat = 0
     /// Photo picker presentation is now explicit: the `+` is a MENU (photos +
     /// camera + host provenance), so the picker is presented rather than being the
     /// button.
@@ -716,13 +714,22 @@ struct ComposerBar: View {
     static let pillSpacing: CGFloat = 6
 
     /// The session whose permission mode the mode pill shows: a session composer's
-    /// own, or the chat's lane session once the model pill has resolved it. nil on
-    /// the new-session draft (its own pill rides the create call) and on the
-    /// in-process chat engine (no session, no mode).
+    /// own, or the chat's lane session (the last one resolved, so a re-ask or the
+    /// Mac going away never drops it). nil until the chat has one.
     private var modeSessionID: String? {
         if case .session(let id) = modelSource { return id }
         guard modelSource != nil else { return nil }
-        return controls.switchableSessionID
+        return controls.modeSessionID
+    }
+
+    /// Every live composer has a mode pill, the chat's included (it holds its
+    /// seat while the lane session resolves). Not the new-session draft (its own
+    /// pill rides the create call), and not a chat answered in-process by an old
+    /// server, which has no session and so no mode.
+    private var showsModePill: Bool {
+        guard let modelSource else { return false }
+        if case .session = modelSource { return true }
+        return !controls.answersInProcess
     }
 
     // MARK: - The `+` menu's model
@@ -942,27 +949,14 @@ struct ComposerBar: View {
             // rather than shoving send off the edge. At the accessibility sizes the
             // names wrap instead. Mode, then model (with its effort): the web
             // composer's order, on every composer.
-            if modeSessionID != nil || showsModelPill {
-                let stacked = dynamicTypeSize.isAccessibilitySize
-                Self.pillLayout(stacked: stacked) {
-                    if modeSessionID != nil {
-                        ComposerModePill(mode: mode)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { modePillHeight = $0 }
+            if showsModePill || showsModelPill {
+                Self.pillLayout(stacked: dynamicTypeSize.isAccessibilitySize) {
+                    if showsModePill {
+                        ComposerModePill(mode: mode, away: controls.unreachable)
                     }
                     if showsModelPill {
-                        // Stacked, the mode pill sits above this one, and the model
-                        // menu opening over it would put a row where that pill is.
-                        // It opens above both. UIKit keeps a scrolling menu at one
-                        // height (517pt measured on a 6.3" phone), so at AX5, where
-                        // less room than that is left above the mode pill, it slides
-                        // down over the mode pill's top (20pt measured); the model
-                        // pill itself stays clear.
-                        ComposerModelPill(
-                            controls: controls,
-                            menuClearance: stacked && modeSessionID != nil && mode.label != nil
-                                ? modePillHeight + Self.pillSpacing : 0
-                        )
-                        .layoutPriority(1)
+                        ComposerModelPill(controls: controls)
+                            .layoutPriority(1)
                     }
                 }
             }

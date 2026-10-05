@@ -121,8 +121,11 @@ struct DemoState {
     var sideQuestions: [String: [SideQuestion]] = [:]
     /// Reasoning effort per session (the model lives on the session).
     var sessionEfforts: [String: String] = [:]
+    /// The chat's lane session (`DemoServer.laneSessionID`): its model, effort
+    /// and permission mode.
     var chatModel = DemoFixtures.mainModel
     var chatEffort = DemoFixtures.defaultEffort
+    var chatMode = "bypass"
     /// Channels with a scripted turn in flight, and the text streamed so far.
     var liveTurns: [String: String] = [:]
     /// The turn id of each chat turn in flight, by channel key.

@@ -32,6 +32,9 @@ final class ComposerModeModel {
     private(set) var writing: String?
     /// Why the last pick did not take, shown above the next menu's rows.
     private(set) var failureNote: String?
+    /// The session's controls could not be read and nothing is known yet: the
+    /// pill says "Mode" with a warning, and its menu is this reason and Retry.
+    private(set) var loadFailure: String?
 
     /// Bumps on every attach and every load, so only the newest answer lands.
     @ObservationIgnored private var loadToken = 0
@@ -48,18 +51,34 @@ final class ComposerModeModel {
 
     // MARK: - What the pill shows
 
-    /// The current mode's name ("Bypass"), or nil = no pill.
+    /// The current mode's name ("Bypass"), or nil = not known yet.
     var label: String? {
         guard let control else { return nil }
         let value = writing ?? control.currentValue
         return Self.optionLabel(value, in: control)
     }
 
+    /// The pill's seat holder while the mode is not known: the pill stays in
+    /// the row (it never comes and goes), quiet until the answer lands.
+    static let placeholderLabel = "Mode"
+
     var pillState: ComposerControlsModel.PillState {
-        writing == nil ? .ready : .writing
+        if writing != nil { return .writing }
+        // Still being read (no answer and no failure yet): nothing to pick from.
+        if control == nil, loadFailure == nil { return .waiting }
+        return .ready
     }
 
     var menu: PillMenu {
+        if control == nil, let loadFailure {
+            return PillMenu(
+                sections: [.init(title: loadFailure, items: [.init(
+                    title: "Retry", choice: .retry, systemImage: "arrow.clockwise",
+                    accessibilityID: "composer.modePill.retry"
+                )])],
+                token: ComposerControlsModel.MenuToken(generation: 0, version: 0)
+            )
+        }
         let options = control?.options ?? []
         let current = writing ?? control?.currentValue
         let items = options.map { option in
@@ -104,6 +123,7 @@ final class ComposerModeModel {
         control = nil
         writing = nil
         failureNote = nil
+        loadFailure = nil
         pickTask?.cancel()
         refresh()
     }
@@ -120,11 +140,15 @@ final class ComposerModeModel {
                 let payload = try await api.sessionControls(id: id)
                 guard token == self.loadToken, id == self.sessionID else { return }
                 self.control = Self.modeControl(in: payload)
+                self.loadFailure = nil
             } catch {
-                // An old server (404) or a session not attached yet (409): keep
-                // what we had; nothing to show is the honest answer if we had
-                // nothing.
-                guard token == self.loadToken, id == self.sessionID else { return }
+                // Cancelled by a newer load or an attach, which owns the pill now.
+                guard !Task.isCancelled, token == self.loadToken, id == self.sessionID else { return }
+                // A re-read that failed keeps the mode it had (the pill goes on
+                // naming it); with nothing known the pill says why, with a Retry.
+                if self.control == nil {
+                    self.loadFailure = "Couldn't read the mode: \(SessionControlsSheet.friendlyControlError(error))"
+                }
                 AppLog.info("session", "composer mode: controls unavailable", [
                     "sessionId": id, "error": error.localizedDescription,
                 ])
@@ -133,8 +157,11 @@ final class ComposerModeModel {
     }
 
     func menuSelect(_ choice: PillMenu.Choice) {
-        guard case .mode(let value) = choice else { return }
-        select(value)
+        switch choice {
+        case .mode(let value): select(value)
+        case .retry: refresh()
+        case .model, .effort, .none: return
+        }
     }
 
     func select(_ value: String) {

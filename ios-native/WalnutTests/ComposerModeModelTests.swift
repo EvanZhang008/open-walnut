@@ -13,12 +13,14 @@ final class ComposerModeModelTests: XCTestCase {
     private final class FakeTransport: ComposerModeTransport {
         var modes: [String: String] = [:]
         var failApply: Error?
+        var failRead: Error?
         var applied: [(String, String, String)] = []
         var gate: (() async -> Void)?
         var applyGate: (() async -> Void)?
 
         func sessionControls(id: String) async throws -> SessionControlsPayload {
             await gate?()
+            if let failRead { throw failRead }
             return Self.payload(modes[id] ?? "bypass")
         }
 
@@ -145,6 +147,36 @@ final class ComposerModeModelTests: XCTestCase {
         XCTAssertEqual(mode.label, "Bypass")
         XCTAssertEqual(mode.pillState, .ready)
         XCTAssertEqual(mode.menu.title, "", "the abandoned pick's refusal reached the menu")
+    }
+
+    /// The pill holds its seat: "Mode", quiet and taking no taps, until the first
+    /// answer. A read that fails with nothing known says why, with a Retry that
+    /// heals it; a re-read that fails later keeps the mode it had.
+    func testThePillHoldsItsSeatAndAFailedReadOffersRetry() async {
+        let api = FakeTransport()
+        api.failRead = APIError.server(
+            status: 502, code: "bridge_offline", message: "The Mac is away", serverHash: nil, serverContent: nil
+        )
+        let mode = ComposerModeModel(transport: api)
+        mode.attach("s1")
+        XCTAssertNil(mode.label)
+        XCTAssertEqual(mode.pillState, .waiting, "nothing to pick from before the first answer")
+        await settle(mode)
+        XCTAssertNotNil(mode.loadFailure)
+        XCTAssertEqual(mode.pillState, .ready, "the failed pill must take a tap: its menu is the Retry")
+        XCTAssertEqual(mode.menu.sections.flatMap(\.items).map(\.choice), [.retry])
+
+        api.failRead = nil
+        mode.menuSelect(.retry)
+        await settle(mode)
+        XCTAssertEqual(mode.label, "Bypass")
+        XCTAssertNil(mode.loadFailure)
+
+        api.failRead = APIError.network(underlying: URLError(.timedOut))
+        mode.refresh()
+        await settle(mode)
+        XCTAssertEqual(mode.label, "Bypass", "a failed re-read dropped the mode the pill knew")
+        XCTAssertNil(mode.loadFailure)
     }
 
     /// The same pick again, and a pick with no session, write nothing.

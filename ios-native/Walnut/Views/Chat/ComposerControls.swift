@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// The composer's model control: ONE pill naming the model and its effort
-/// ("Opus 5 · High"), whose menu holds the effort levels and then the models. It
-/// sits in the input row, next to the message it configures, after the mode pill
-/// (`ComposerModePill`), in the web composer's order.
+/// ("Opus 5 · High"). It sits in the input row, next to the message it
+/// configures, after the mode pill (`ComposerModePill`), in the web composer's
+/// order.
 ///
 /// Why the model lives HERE and not in a settings sheet: this mirrors the web
 /// console's decision, quoted from `DraftLaunchBar.tsx` ("the model belongs with
@@ -13,35 +13,31 @@ import SwiftUI
 /// model pill in the controls row, with the effort inside the same pill; the
 /// phone matches (user, 2026-10-04: one pill, not a model pill and an effort pill).
 ///
-/// Effort is an INLINE section of the same menu, never a submenu: rows of tiles
-/// at the top, so the menu opens with them in view however long the model list
-/// (after the models at the accessibility sizes, where a tile is a whole row).
-/// A submenu row reserves a trailing chevron column in EVERY row: the model names
-/// got about 139pt and "Default (Opus 5.5 1M)" wrapped onto two lines at the
-/// default text size, which is why effort once had a pill of its own. The section
-/// offers only the levels the CURRENT model declares, and is absent for a model
-/// without an effort axis.
+/// A tap opens "Select model" (`PillMenuSheet`), the Claude app's picker: the
+/// models as one vertical list, and an "Effort" row that opens the levels as
+/// another (user, 2026-10-04: a drawer, every list vertical). It offers only the
+/// levels the CURRENT model declares, and no Effort row for a model without an
+/// effort axis. The sheet opens on one tap with the keyboard up too.
 ///
 /// What is deliberately NOT in this row (a 44pt row is not a settings screen):
 ///  - Path/host are not in a live session's composer at all: they are facts of a
 ///    running CLI, and belong to session CREATION (see NewSessionChatView).
 ///  - Side questions, the session note and fork are in the `+` menu.
 ///
-/// The pills are UIKit button menus (`PillMenuButton`), so UIKit places the menu
-/// (it can never overflow the screen however many models the catalog carries).
-/// The web AGENTS.md rule "menus never overflow the viewport" holds by
-/// construction here. With the keyboard up, a tap on a pill puts the keyboard
-/// away and the next tap opens the menu: there is no room above a pill that sits
-/// on the keyboard, and a menu laid over the pill picked rows on a double tap.
+/// The mode pill is a UIKit button menu (`PillMenuButton`), so UIKit places it
+/// (it can never overflow the screen). With the keyboard up, a tap on it puts
+/// the keyboard away and the next tap opens the menu: there is no room above a
+/// pill that sits on the keyboard.
 ///
 /// Text size: at the accessibility sizes the name wraps instead of truncating
 /// (gate r2 D2: "GPT-6 Astra" read "GP…" at AX5, and a name the user cannot read
 /// is not a control).
 struct ComposerModelPill: View {
     @State var controls: ComposerControlsModel
-    /// How far above itself the menu must also clear (a stacked pill above).
-    var menuClearance: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// The model picker's title, the Claude app's.
+    static let sheetTitle = "Select model"
 
     var body: some View {
         // Nothing known yet (still loading, or an engine with no switchable
@@ -57,14 +53,14 @@ struct ComposerModelPill: View {
                 state: controls.combinedPillState,
                 wraps: dynamicTypeSize.isAccessibilitySize,
                 rawID: controls.pillLabelIsRawID,
-                menu: controls.combinedMenu(compactLevels: !dynamicTypeSize.isAccessibilitySize),
+                menu: controls.combinedMenu,
                 menuID: "model",
-                menuClearance: menuClearance,
                 accessibilityID: "composer.modelPill",
                 accessibilityLabel: controls.pillAccessibilityLabel,
                 accessibilityValue: controls.pillAccessibilityValue,
                 onSelect: { choice, token in controls.menuSelect(choice, token: token) },
-                onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) }
+                onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) },
+                sheetTitle: Self.sheetTitle
             )
         }
     }
@@ -73,28 +69,36 @@ struct ComposerModelPill: View {
 /// The permission-mode pill of a live composer (a coding session, or the main
 /// chat's lane session): the session's own mode control, read and written
 /// through `/sessions/:id/controls`, the same channel the web's mode pill and the
-/// Session Controls sheet use. Absent until the session's controls answer, and
-/// for a session that has no mode control.
+/// Session Controls sheet use.
+///
+/// Always in the row once the composer has a session to set a mode on, so it
+/// never comes and goes: "Mode", quiet, until the first answer; the last known
+/// mode, read-only, while the Mac is away; "Mode" with a warning and a Retry
+/// when the mode could not be read at all.
 struct ComposerModePill: View {
     let mode: ComposerModeModel
+    /// The Mac (or the box) can't be reached right now: the model pill says so,
+    /// and this pill keeps the last known mode without offering a pick.
+    var away = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        if let label = mode.label {
-            PillChip(
-                text: label,
-                glyph: .chevron,
-                state: mode.pillState,
-                wraps: dynamicTypeSize.isAccessibilitySize,
-                rawID: false,
-                menu: mode.menu,
-                menuID: "mode",
-                accessibilityID: "composer.modePill",
-                accessibilityLabel: "Permission mode: \(label)",
-                onSelect: { choice, _ in mode.menuSelect(choice) },
-                onPresentedChange: { _, _ in }
-            )
-        }
+        let label = mode.label ?? ComposerModeModel.placeholderLabel
+        let failed = mode.label == nil && mode.loadFailure != nil
+        PillChip(
+            text: label,
+            glyph: away ? .none : (failed ? .warning : .chevron),
+            state: away ? .lastKnown : mode.pillState,
+            wraps: dynamicTypeSize.isAccessibilitySize,
+            rawID: false,
+            menu: mode.menu,
+            menuID: "mode",
+            accessibilityID: "composer.modePill",
+            accessibilityLabel: mode.label.map { "Permission mode: \($0)" } ?? "Permission mode",
+            accessibilityValue: away && mode.label != nil ? "last known" : nil,
+            onSelect: { choice, _ in mode.menuSelect(choice) },
+            onPresentedChange: { _, _ in }
+        )
     }
 }
 
@@ -123,7 +127,12 @@ struct PillChip: View {
     let onSelect: (PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void
     /// The menu opened or closed (`menuID`, open).
     let onPresentedChange: (String, Bool) -> Void
+    /// Set = the pill opens its menu as a sheet with this title (the model
+    /// pill's "Select model", see `PillMenuSheet`) instead of a UIKit menu.
+    var sheetTitle: String? = nil
     @State private var pressed = false
+    @State private var sheetShown = false
+    @State private var sheetFocus = PillSheetFocus()
     /// The glyph grows with the text: a fixed 8pt chevron sat cramped and tiny
     /// against an XXXL label.
     @ScaledMetric(relativeTo: .caption) private var glyphSize: CGFloat = 8
@@ -165,21 +174,58 @@ struct PillChip: View {
         // identifier, the label and the menu.
         .accessibilityHidden(true)
         .overlay {
-            PillMenuButton(
-                menu: menu,
-                accessibilityID: accessibilityID,
-                accessibilityLabel: accessibilityLabel,
-                accessibilityValue: accessibilityValue,
-                menuID: menuID,
-                menuClearance: menuClearance,
-                onSelect: onSelect,
-                onPresentedChange: onPresentedChange,
-                onHighlightChange: { pressed = $0 }
-            )
-            // SwiftUI writes this onto the UIButton's `isEnabled` after every
-            // update, so it is the ONLY way to disable it (see PillMenuButton).
-            .disabled(!state.takesTaps)
+            if let sheetTitle {
+                PillSheetButton(
+                    accessibilityID: accessibilityID,
+                    accessibilityLabel: accessibilityLabel,
+                    accessibilityValue: accessibilityValue,
+                    focus: sheetFocus,
+                    onTap: { openSheet() },
+                    onHighlightChange: { pressed = $0 }
+                )
+                .disabled(!state.takesTaps)
+                .sheet(isPresented: $sheetShown, onDismiss: sheetClosed) {
+                    PillMenuSheet(title: sheetTitle, menu: menu, onSelect: onSelect)
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                }
+            } else {
+                PillMenuButton(
+                    menu: menu,
+                    accessibilityID: accessibilityID,
+                    accessibilityLabel: accessibilityLabel,
+                    accessibilityValue: accessibilityValue,
+                    menuID: menuID,
+                    menuClearance: menuClearance,
+                    onSelect: onSelect,
+                    onPresentedChange: onPresentedChange,
+                    onHighlightChange: { pressed = $0 }
+                )
+                // SwiftUI writes this onto the UIButton's `isEnabled` after every
+                // update, so it is the ONLY way to disable it (see PillMenuButton).
+                .disabled(!state.takesTaps)
+            }
         }
+        // A pill torn down with its sheet up (the composer switched source) never
+        // gets the dismiss call, and the model would hold every answer forever.
+        .onDisappear {
+            if sheetShown { onPresentedChange(menuID, false) }
+        }
+    }
+
+    /// The sheet counts as open from the tap: while it is up the model holds
+    /// every answer, so its rows never change under the finger.
+    private func openSheet() {
+        guard !sheetShown else { return }
+        AppLog.info("chat", "composer pill: sheet opened", ["menu": menuID])
+        onPresentedChange(menuID, true)
+        sheetShown = true
+    }
+
+    private func sheetClosed() {
+        AppLog.info("chat", "composer pill: sheet closed", ["menu": menuID])
+        onPresentedChange(menuID, false)
+        sheetFocus.giveBack()
     }
 }
 

@@ -297,13 +297,30 @@ final class ComposerControlsModel {
         return modelPillState
     }
 
-    /// The session a mode pill reads and writes: the session itself, or the
-    /// chat's lane session once it is resolved. nil = nothing to set a mode on
-    /// (the in-process chat engine, or not resolved yet).
+    /// The session a pick is written to right now: the session itself, or the
+    /// chat's lane session once it is resolved. nil = nothing writable (the
+    /// in-process chat engine, a lookup in flight, the Mac away).
     var switchableSessionID: String? {
         if case .session(let id) = writeTarget { return id }
         return nil
     }
+
+    /// The session the mode pill follows: the writable one, else the last one
+    /// this source resolved. A re-ask, the Mac going away, or a new chat getting
+    /// its id after the first send leaves nothing writable for a moment, and the
+    /// mode pill used to vanish for exactly that moment (user, 2026-10-04: "why
+    /// does the chat sometimes have Bypass and sometimes not").
+    var modeSessionID: String? { switchableSessionID ?? lastSessionID }
+
+    /// The chat is answered in-process (an old server): there is no session, so
+    /// there is no permission mode to show.
+    var answersInProcess: Bool {
+        if case .chat = writeTarget { return true }
+        return false
+    }
+
+    /// The last session this source resolved (see `modeSessionID`).
+    private(set) var lastSessionID: String?
 
     /// Both pills take a tap only when a pick has somewhere true to go.
     var pillEnabled: Bool { !applying && !resolving }
@@ -421,25 +438,13 @@ final class ComposerControlsModel {
         )], token: menuToken, title: statusNote ?? "")
     }
 
-    /// The one pill's menu: the effort levels as rows of tiles, then the models.
-    /// The levels lead so the menu opens with them in view however long the
-    /// model list is. At the accessibility sizes UIKit draws every tile as a
-    /// full-height row, so there (`compactLevels` false) the levels follow the
-    /// models as an ordinary section, and the menu opens on the models with their
-    /// heading in view (measured at AX5: levels first left only Low, Medium and
-    /// High on screen). INLINE sections, never a submenu: a submenu row reserves
-    /// a trailing chevron column in every row and squeezed the model names onto
-    /// two lines (why effort once moved to a pill of its own). The retry and
-    /// read-only states have no effort to offer and stay the model menu.
-    func combinedMenu(compactLevels: Bool = true) -> PillMenu {
+    /// The one pill's menu: the models, then the effort levels, as two sections
+    /// (the sheet shows the second as its Effort row). The retry and read-only
+    /// states have no effort to offer and stay the model menu.
+    var combinedMenu: PillMenu {
         let model = modelMenu
         guard !unreachable, !readOnly, !effortLevelsForCurrentModel.isEmpty else { return model }
-        var levels = effortMenu.sections
-        guard compactLevels else {
-            return PillMenu(sections: model.sections + levels, token: menuToken, title: model.title)
-        }
-        for index in levels.indices { levels[index].compact = true }
-        return PillMenu(sections: levels + model.sections, token: menuToken, title: model.title)
+        return PillMenu(sections: model.sections + effortMenu.sections, token: menuToken, title: model.title)
     }
 
     /// A menu's heading names the current value ("Effort: Extra High"): at the
@@ -647,6 +652,9 @@ final class ComposerControlsModel {
         let previous = source
         let hadPill = pillLabel != nil
         source = next
+        // Another conversation has another lane session; the same one getting its
+        // id keeps the session it already had.
+        if !Self.isSameConversationGettingItsID(previous, next) { lastSessionID = nil }
         generation += 1
         // A pick still being written belongs to the previous source. Its answer is
         // dropped by the generation check, and it must not hold this source's pill.
@@ -823,6 +831,11 @@ final class ComposerControlsModel {
             plan.currentModelID = row.id
         }
         if plan != displayedPlan { displayVersion &+= 1 }
+        switch plan.writeTarget {
+        case .session(let id): lastSessionID = id
+        case .chat: lastSessionID = nil
+        case .none, .mintLaneSession: break
+        }
         models = plan.models
         currentModelID = plan.currentModelID
         currentEffort = plan.currentEffort
