@@ -46,11 +46,16 @@ export function newerBase(a, b) {
 }
 
 /**
- * Hours between scheduled nightlies. The schedule fires every 30 minutes and this
- * gap decides, so a run GitHub drops costs half an hour, not six (T3 Code does the
- * same); 5.5 keeps the cadence at about six hours instead of drifting later.
+ * Hours between scheduled nightlies. A check publishes once the last nightly is
+ * this old, so the cadence is this gap plus the wait for the next check. The cron
+ * asks every ten minutes, but GitHub runs this repo's schedule every 3 to 6.5 hours
+ * (median 3.5, measured 2026-10-03 to 05), so a check that lands just short of the
+ * gap hands the commit to one hours later: 2026-10-05, the 06:19 check found the
+ * nightly 5.4h old against a 5.5h gap and the next one came after 11:19. At 4.5
+ * the near misses publish and the cadence stays about six hours. The release watch
+ * dispatches a nightly when no check comes at all.
  */
-export const NIGHTLY_GAP_HOURS = 5.5
+export const NIGHTLY_GAP_HOURS = 4.5
 
 /** Whether a scheduled nightly is due: the `nightly` dist-tag is at least `gapHours` old. */
 export function nightlyDue(packument, now, gapHours = NIGHTLY_GAP_HOURS) {

@@ -204,9 +204,11 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 
 Job `nightly` of the same workflow checks whenever CI finishes on `main` and on every
 scheduled run (above), and runs by hand (`workflow_dispatch`, with a `force` input
-for a republish). A check publishes only when the `nightly` dist-tag is at least 5.5 hours
+for a republish). A check publishes only when the `nightly` dist-tag is at least 4.5 hours
 old (`scripts/nightly-version.mjs due`), so nightlies come about every six hours while
-`main` moves, whatever GitHub does with the schedule. It asks for the newest commit
+`main` moves. The gap is short of six hours because GitHub runs this repo's schedule only
+every 3 to 6.5 hours, whatever the cron says: at 5.5 hours, a check that found the nightly
+5.4 hours old handed the commit to one five hours later (2026-10-05). It asks for the newest commit
 on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
 when there is none among the last 30 runs, when that commit is already the last nightly's,
 or when it is not a descendant of it (GitHub's runs list can show a finished run as still

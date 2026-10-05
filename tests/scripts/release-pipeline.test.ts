@@ -159,15 +159,30 @@ describe('nightlyDue', () => {
     : { 'dist-tags': {}, time: {} }
 
   it('is due once the nightly dist-tag is the gap old, and not before', () => {
-    expect(NIGHTLY_GAP_HOURS).toBe(5.5)
-    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T11:47:00Z')).due).toBe(false)
-    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T12:17:00Z')).due).toBe(true)
-    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T11:47:00Z')).reason).toContain('5.5h')
+    expect(NIGHTLY_GAP_HOURS).toBe(4.5)
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T10:47:00Z')).due).toBe(false)
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T10:50:00Z')).due).toBe(true)
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T10:47:00Z')).reason).toContain('4.5h')
   })
 
-  it('a half-hourly check after a dropped run still publishes within half an hour', () => {
-    // Published 06:20; the 12:17 check is dropped; 12:47 publishes.
-    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T12:47:00Z')).due).toBe(true)
+  it('on the schedule GitHub really ran, a check just short of six hours publishes', () => {
+    // Every scheduled Release run from 2026-10-03 17:54 (the ten-minute cron) to
+    // 2026-10-05 11:21 (a dispatch by hand), and the first nightly they found.
+    const checks = ['2026-10-03T17:54:33Z', '2026-10-03T20:53:40Z', '2026-10-03T23:36:46Z', '2026-10-04T02:52:42Z',
+      '2026-10-04T09:22:48Z', '2026-10-04T14:55:27Z', '2026-10-04T18:35:49Z', '2026-10-04T21:56:58Z',
+      '2026-10-05T00:45:41Z', '2026-10-05T06:19:33Z', '2026-10-05T11:21:11Z']
+    // npm records the version about ten minutes after its check starts (00:45:41 -> 00:55:36).
+    const npmAt = (check: string) => new Date(Date.parse(check) + 10 * 60_000).toISOString()
+    let last = npmAt(checks[0])
+    const published = [checks[0]]
+    for (const c of checks.slice(1)) {
+      if (nightlyDue(pack(last), at(c)).due) { published.push(c); last = npmAt(c) }
+    }
+    // The 06:19 check found 5.4h: at the old 5.5h it waited for the next check, five hours on.
+    expect(published).toContain('2026-10-05T06:19:33Z')
+    const hours = published.slice(1).map((p, i) => (Date.parse(p) - Date.parse(published[i])) / 3_600_000)
+    expect(Math.max(...hours)).toBeLessThan(10)
+    expect(Math.min(...hours)).toBeGreaterThanOrEqual(NIGHTLY_GAP_HOURS)
   })
 
   it('is due when npm has no nightly at all', () => {
