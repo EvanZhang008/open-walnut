@@ -295,7 +295,11 @@ describe('the Mac app', () => {
     const plist = build.slice(build.indexOf('<plist'), build.indexOf('</plist>'))
     if (plist.includes('NSMicrophoneUsageDescription')) expect(entitlements).toContain('com.apple.security.device.audio-input')
     if (plist.includes('NSCalendarsUsageDescription')) expect(entitlements).toContain('com.apple.security.personal-information.calendars')
-    expect(execFileSync('plutil', ['-lint', path.join(ROOT, 'desktop/Walnut.entitlements')], { encoding: 'utf8' })).toContain('OK')
+    // Granted, not merely named: each key is followed by <true/> inside the plist's one dict.
+    expect(entitlements).toMatch(/^<\?xml [^>]*\?>\s*<!DOCTYPE plist [^>]*>\s*(?:<!--[\s\S]*?-->\s*)*<plist version="1\.0">\s*<dict>[\s\S]*<\/dict>\s*<\/plist>\s*$/)
+    for (const key of ['com.apple.security.device.audio-input', 'com.apple.security.personal-information.calendars']) {
+      expect(entitlements).toMatch(new RegExp(`<key>${key.replace(/\./g, '\\.')}</key>\\s*<true/>`))
+    }
   })
 
   it('is built after the archives it installs, signed only inside the release environment, and attached only when notarized and launched', () => {

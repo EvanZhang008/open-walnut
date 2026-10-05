@@ -138,6 +138,36 @@ export function scanForMacOnlyAssumptions(
   return violations
 }
 
+/**
+ * Tests run on Linux in CI, so a test that spawns a macOS-only tool must say so:
+ * a platform check, `isMac`, or `skipIf`/`runIf` within the 15 lines before it.
+ * 2026-10-05: a quick-tier test ran `plutil -lint` unguarded, passed on the Mac,
+ * and failed on every Linux runner with `spawnSync plutil ENOENT`.
+ */
+const MAC_ONLY_TOOL_SPAWN = /(execFileSync|spawnSync|execSync|execFile|spawn)\(\s*[`"'](plutil|codesign|xcrun|security|hdiutil|spctl|swiftc|launchctl|osascript|sw_vers|ditto|iconutil|lipo|defaults|sips|xattr)[`"' ]/
+const TEST_GUARD_MARKERS = ['process.platform', 'os.platform', 'isMac', 'skipIf', 'runIf', 'darwin', 'Darwin']
+
+export function scanTestForMacOnlySpawns(file: string, content: string): Violation[] {
+  const lines = content.split('\n')
+  const out: Violation[] = []
+  lines.forEach((line, i) => {
+    const m = MAC_ONLY_TOOL_SPAWN.exec(line)
+    if (!m || isComment(line)) return
+    const window = lines.slice(Math.max(0, i - 15), i + 1).join('\n')
+    if (TEST_GUARD_MARKERS.some((g) => window.includes(g))) return
+    out.push({ file, line: i + 1, needle: m[2], text: line.trim() })
+  })
+  return out
+}
+
+function testFiles(dir: string): string[] {
+  return fs.readdirSync(path.join(REPO, dir), { withFileTypes: true }).flatMap((e) => {
+    const rel = path.join(dir, e.name)
+    if (e.isDirectory()) return testFiles(rel)
+    return /\.(test|spec)\.ts$/.test(e.name) ? [rel] : []
+  })
+}
+
 describe('cross-platform ratchet', () => {
   it('finds no unguarded macOS-only assumption in the Linux-executed files', () => {
     const violations = CROSS_PLATFORM_FILES.flatMap((file) =>
@@ -217,5 +247,20 @@ describe('cross-platform ratchet', () => {
     const allowed = [{ file: 'scripts/fake.sh', needle: '/opt/homebrew', reason: 'x'.repeat(21) }]
     expect(scanForMacOnlyAssumptions('scripts/fake.sh', 'PATH=$PATH:/opt/homebrew/bin', allowed)).toEqual([])
     expect(scanForMacOnlyAssumptions('scripts/fake.sh', 'PATH=$PATH:/opt/homebrew/bin', [])).toHaveLength(1)
+  })
+
+  it('no test spawns a macOS-only tool without a platform guard (CI runs them on Linux)', () => {
+    const violations = testFiles('tests').flatMap((file) =>
+      scanTestForMacOnlySpawns(file, fs.readFileSync(path.join(REPO, file), 'utf-8')),
+    )
+    const report = violations.map((v) => `${v.file}:${v.line}  ${v.needle}  →  ${v.text}`).join('\n')
+    expect(violations, `macOS-only tool spawned unguarded:\n${report}\n\nGuard it (process.platform, describe.skipIf) or check the content in JS.`).toEqual([])
+  })
+
+  it('the test-spawn scan catches an unguarded call and accepts a guarded one', () => {
+    const call = ['execFile', "Sync('plu", "til', ['-lint', f])"].join('')
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `it('x', () => {\n  ${call}\n})`)).toHaveLength(1)
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `if (process.platform === 'darwin') {\n  ${call}\n}`)).toEqual([])
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `describe.skipIf(!isMac)('x', () => {\n  ${call}\n})`)).toEqual([])
   })
 })

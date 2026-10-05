@@ -96,11 +96,17 @@ describe('runner images', () => {
     // ubuntu-latest moves to 26.04 from 2026-10-19 on GitHub's schedule; a moving
     // label turns CI red without a commit. The archives also need each image's
     // other architecture (both standard runners for a public repository).
-    for (const file of ['ci.yml', 'release.yml', 'release-archives.yml', 'flake-hunt.yml']) {
+    const files = ['ci.yml', 'release.yml', 'release-archives.yml', 'flake-hunt.yml', 'mac-app.yml']
+    for (const file of files) {
       const doc = parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows', file), 'utf8')) as {
-        jobs: Record<string, { 'runs-on': string; strategy?: { matrix?: { os?: string[]; include?: Array<{ os: string }> } } }>
+        jobs: Record<string, { 'runs-on': string; uses?: string; strategy?: { matrix?: { os?: string[]; include?: Array<{ os: string }> } } }>
       }
       for (const [name, job] of Object.entries(doc.jobs)) {
+        // A job that calls another workflow runs on that workflow's jobs, which this loop checks too.
+        if (job.uses) {
+          expect(files.map((f) => `./.github/workflows/${f}`), `${file} ${name}`).toContain(job.uses)
+          continue
+        }
         const matrix = job.strategy?.matrix
         const labels = job['runs-on'] === '${{ matrix.os }}' ? (matrix!.os ?? matrix!.include!.map((x) => x.os)) : [job['runs-on']]
         expect(labels.length, `${file} ${name}`).toBeGreaterThan(0)
