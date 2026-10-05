@@ -67,6 +67,18 @@ describe('build.mjs', () => {
     expect(updaterKnowsArchive(knows)).toBe(true)
   })
 
+  it('--check says whether the package npm would serve can have an archive, without building one', () => {
+    const check = (marker: boolean) => {
+      const pkg = path.join(tmp, `check-${marker}`)
+      touch(path.join(pkg, 'package.json'), JSON.stringify({ name: 'open-walnut', version: marker ? '0.7.0' : '0.6.2' }))
+      touch(path.join(pkg, 'dist/cli.js'), marker ? `const m = "${RUNTIME_MARKER}"` : '')
+      const tgz = execFileSync('npm', ['pack', '--silent', '--pack-destination', tmp], { cwd: pkg, encoding: 'utf8' }).trim().split('\n').pop()!
+      return execFileSync(process.execPath, [path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), '--check', '--spec', path.join(tmp, tgz)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    }
+    expect(check(true)).toBe('supported=true\n')
+    expect(check(false)).toBe('supported=false\n')
+  })
+
   it('drops the native binaries a dependency carries for other platforms, and keeps this one\'s', () => {
     const m = path.join(tmp, 'modules')
     for (const p of ['darwin/arm64', 'darwin/x64', 'linux/arm64', 'linux/x64', 'win32/x64']) touch(path.join(m, 'onnxruntime-node/bin/napi-v6', p, 'onnxruntime_binding.node'))
@@ -198,8 +210,8 @@ describe('the archive workflows', () => {
 
   it('attaches what built, the checksums only after the archives, and stays red when a platform is missing', () => {
     const publish = archives.jobs.publish
-    expect(publish.needs).toBe('build')
-    expect(publish.if).toBe('${{ !cancelled() }}')
+    expect(publish.needs).toEqual(['support', 'build'])
+    expect(publish.if).toBe("${{ !cancelled() && needs.support.outputs.supported == 'true' }}")
     expect(publish.permissions).toEqual({ contents: 'write' })
     const upload = publish.steps.find((s) => s.run?.includes('gh release upload'))!.run!
     expect(upload.indexOf('*.tar.gz --clobber')).toBeLessThan(upload.indexOf('SHA256SUMS install.sh --clobber'))
@@ -207,6 +219,15 @@ describe('the archive workflows', () => {
     const brew = archives.jobs.homebrew
     expect(brew.needs).toBe('publish')
     expect(brew.steps.map((s) => s.run ?? '').join('\n')).toMatch(/brew install walnut-release\/test\/open-walnut[\s\S]*brew test[\s\S]*gh release upload "v\$VERSION" "\$RUNNER_TEMP\/open-walnut.rb"/)
+  })
+
+  it('a version whose updater predates the archive gets none, and the run stays green', () => {
+    const support = archives.jobs.support
+    expect(support.steps.map((s) => s.run ?? '').join('\n')).toContain('scripts/runtime-bundle/build.mjs --check --spec "open-walnut@$VERSION"')
+    expect(archives.jobs.build.needs).toBe('support')
+    expect(archives.jobs.build.if).toBe("needs.support.outputs.supported == 'true'")
+    // The wait for npm happens once, before anything builds.
+    expect(archives.jobs.build.steps.some((s) => s.name === 'A stable version npm serves')).toBe(false)
   })
 
   it('both stable paths start it, with the one permission that needs', () => {

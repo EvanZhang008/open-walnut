@@ -152,7 +152,10 @@ version whose updater does not know the layout.
   `homebrew` writes the formula from that `SHA256SUMS` (`scripts/homebrew/formula.mjs`),
   installs it from GitHub with brew, runs `brew test` and attaches `open-walnut.rb`. A platform
   that failed is left out and the run is red; "Re-run failed jobs" finishes the set. By hand:
-  dispatch it with any released version to rebuild its archives.
+  dispatch it with any released version to rebuild its archives. Job `support` runs first
+  (`build.mjs --check`): a version whose updater predates the archive gets no archives and the
+  run stays green. That is every release up to 0.6.2, and a stable promoted from a nightly built
+  before the archive existed.
 - **`install.sh`** (`curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`)
   reads the version from the newest release's `SHA256SUMS`; in the minutes before a release's
   archives are up it takes the newest release that has one for this platform (GitHub's API).
