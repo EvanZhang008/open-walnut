@@ -904,15 +904,13 @@ describe('computeSessionChanges — incremental parse cache', () => {
     const p = jsonlAbs(sid, repo);
     const fixed = new Date(Date.now() + 5_000);
     await fsp.utimes(p, fixed, fixed);
-    const mtimeBefore = (await fsp.stat(p)).mtimeMs;
     expect((await computeSessionChanges(sid, repo)).fileCount).toBe(0);
 
     const f = path.join(repo, 'same-ms.ts');
     await putFile(f, 'v2\n');
     await fsp.appendFile(p, '\n' + JSON.stringify(assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f, old_string: 'v1', new_string: 'v2' } }])));
     await fsp.utimes(p, fixed, fixed);
-    // The filesystem's own value, not the Date (Linux stores 1791205725089.999).
-    expect((await fsp.stat(p)).mtimeMs).toBe(mtimeBefore);
+    expect((await fsp.stat(p)).mtimeMs).toBe(fixed.getTime());
     expect((await computeSessionChanges(sid, repo)).fileCount).toBe(1);
   });
 
