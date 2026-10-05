@@ -109,9 +109,13 @@ async function callerSessionHost(callerSid?: string): Promise<string> {
   return rec?.host ?? '';
 }
 
-/** Resolve the task a fire should be delivered to. */
+/**
+ * Resolve the task a fire should be delivered to. `own` = it is the calling
+ * session's own task, the one a trigger parks by default.
+ */
 async function resolveTarget(session: string, callerSid?: string): Promise<{
   target: string;
+  own: boolean;
   host?: string;
   cwd?: string;
 }> {
@@ -121,7 +125,12 @@ async function resolveTarget(session: string, callerSid?: string): Promise<{
     if (!task) {
       throw new SessionControlError(`no task ${session}: pass the id of a task that exists, or session: "this"`, 400);
     }
-    return { target: task.id, ...(task.cwd ? { cwd: task.cwd } : {}) };
+    let own = false;
+    if (callerSid) {
+      const { getSessionByClaudeId } = await import('../session-tracker.js');
+      own = (await getSessionByClaudeId(callerSid).catch(() => null))?.taskId === task.id;
+    }
+    return { target: task.id, own, ...(task.cwd ? { cwd: task.cwd } : {}) };
   }
   if (!callerSid) {
     throw new SessionControlError('no calling session; pass session: <taskId>', 400);
@@ -133,9 +142,63 @@ async function resolveTarget(session: string, callerSid?: string): Promise<{
   }
   return {
     target: rec.taskId,
+    own: true,
     ...(rec.host ? { host: rec.host } : {}),
     ...(rec.cwd ? { cwd: rec.cwd } : {}),
   };
+}
+
+/** What a trigger_create did to the task it delivers into. */
+export interface TriggerWaitResult {
+  parked: boolean;
+  task_id: string;
+  /** Why it was not parked: the caller passed wait:false, the trigger is for another task, or the task is complete. */
+  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written';
+  /** The clock the store now holds (null = no clock), when parked. */
+  wait_until?: string | null;
+  /** The task was already WAITING (its clock is kept unless wait_until was passed). */
+  already_waiting?: boolean;
+  /** The receipt in the user's inbox (a session caller only). */
+  letter_id?: string;
+  letter_error?: string;
+  error?: string;
+}
+
+/**
+ * Park the task a new trigger delivers into: WAITING, with the caller's clock
+ * or the store's default, plus the receipt letter when a session asked. Never
+ * throws: the trigger is already armed, so a park that fails is reported in the
+ * result rather than undoing the create.
+ */
+async function parkForTrigger(taskId: string, opts: {
+  waitUntil: string | undefined;
+  report: string | undefined;
+  callerSid: string | undefined;
+}): Promise<TriggerWaitResult> {
+  try {
+    const { getTask, updateTask } = await import('../task-manager.js');
+    const before = await getTask(taskId);
+    if (before.phase === 'COMPLETE') return { parked: false, task_id: taskId, reason: 'complete' };
+    const { task } = await updateTask(taskId, {
+      phase: 'WAITING',
+      ...(opts.waitUntil !== undefined ? { wait_until: opts.waitUntil } : {}),
+    }, { source: 'api', asyncPush: true, ...(opts.callerSid ? { actorSid: opts.callerSid } : {}) });
+    if (task.phase !== 'WAITING') return { parked: false, task_id: taskId, reason: 'not_written' };
+    const { isSessionCaller, sendWaitReceipt } = await import('../task-wait-receipt.js');
+    const receipt = await isSessionCaller(opts.callerSid)
+      ? await sendWaitReceipt({ taskId, callerSid: opts.callerSid, ...(opts.report ? { report: opts.report } : {}) })
+      : {};
+    return {
+      parked: true, task_id: taskId, wait_until: task.wait_until ?? null,
+      ...(before.phase === 'WAITING' ? { already_waiting: true } : {}),
+      ...(receipt.letterId ? { letter_id: receipt.letterId } : {}),
+      ...(receipt.error ? { letter_error: receipt.error } : {}),
+    };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    log.web.warn('trigger park failed', { taskId, error });
+    return { parked: false, task_id: taskId, reason: 'not_written', error };
+  }
 }
 
 /**
@@ -174,6 +237,8 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   host: string;
   /** Always null: the daemon owns the clock and reports the real next check. */
   nextCheckAt: null;
+  /** What happened to the task it delivers into (parked by default for the caller's own task). */
+  wait: TriggerWaitResult;
 }> {
   const b = record(body) ?? {};
   const run = str(b.run);
@@ -201,6 +266,19 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   if (everyMs < MIN_EVERY_MS) {
     throw new SessionControlError(`every must be at least ${MIN_EVERY_MS / 1000}s`, 400);
   }
+  // The park is checked before anything is armed: a bad clock arms nothing.
+  if (b.wait !== undefined && typeof b.wait !== 'boolean') {
+    throw new SessionControlError('wait must be true or false', 400);
+  }
+  const { parseWaitUntil, parseWaitReport } = await import('../task-wait-receipt.js');
+  let waitUntil: string | undefined;
+  let waitReport: string | undefined;
+  try {
+    waitUntil = parseWaitUntil(b.wait_until);
+    waitReport = parseWaitReport(b.wait_report);
+  } catch (err) {
+    throw new SessionControlError(err instanceof Error ? err.message : String(err), 400);
+  }
 
   const session = str(b.session) || 'this';
   const resolved = await resolveTarget(session, callerSid);
@@ -223,9 +301,19 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
     executor: { type: 'session', config: { target: resolved.target, prompt } },
   }, origin);
 
+  // A session's trigger parks its own task by default: the work is waiting on
+  // the thing the trigger watches, so the task leaves the user's list until it
+  // fires (2026-10-04). wait:false keeps it there while work remains; a trigger
+  // aimed at another task leaves that task alone unless wait:true says so.
+  const park = b.wait === true || (b.wait === undefined && resolved.own);
+  const wait: TriggerWaitResult = park
+    ? await parkForTrigger(resolved.target, { waitUntil, report: waitReport, callerSid })
+    : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
+
   log.web.info('trigger created', {
     host, target: resolved.target, everyMs,
     jobId: (created.job as { id?: string } | undefined)?.id,
+    parked: wait.parked, ...(wait.reason ? { notParked: wait.reason } : {}),
   });
-  return { job: created.job, host, nextCheckAt: null };
+  return { job: created.job, host, nextCheckAt: null, wait };
 }

@@ -858,13 +858,22 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     (a trigger fire, a human, a peer) moves it to `IN_PROGRESS`, and that turn
     ends as `NEED_ACTION` as usual; a session turn that merely ends, a session
     error and a sync pull do not move it (a sync pull may only complete it).
-    `wait_until` (ISO datetime, or `""` / `null` for no clock) rides with
+    `wait_until` (ISO datetime, a duration from now like `"6h"` / `"3d"`
+    (additive, 2026-10), or `""` / `null` for no clock) rides with
     `phase: "WAITING"` or onto a task already waiting (`400` otherwise): at that
     time the server wakes the task's session with a note, or hands the task back
     as `NEED_ACTION` + `unread` when it has no session. A move into `WAITING`
     that names no `wait_until` gets one 3 days out (`DEFAULT_WAIT_DAYS`), so a
     wait is never open-ended unless asked for. Any move out of `WAITING` clears
     `wait_until`.
+  - Wait receipts (additive, 2026-10): when a SESSION (`x-walnut-caller-sid`)
+    moves a task into `WAITING`, the server sends one letter to the human inbox
+    saying it is parked: what triggers watch it, when it comes back by itself,
+    how to take it back. `wait_report` (markdown, at most 4000 characters, only
+    with `phase: "WAITING"`, `400` otherwise) is the session's opening for that
+    letter; with it, a task already waiting gets a fresh receipt too. The
+    response then carries `wait_receipt: { letter_id }` or `{ error }` (the park
+    stands either way). A human's PATCH sends no receipt.
   - Calendar window (additive, 2026-08): `end_date` joins `start_date` as the
     end of the task's working block, so a client can move or resize a task on a
     calendar with one PATCH. Both accept an ISO-8601 value, and `""` **or**
@@ -2006,6 +2015,24 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   (unlike the tolerant legacy web route — a phone delete fails loudly).
 - `POST /api/v1/routines/:id/toggle` → `{ "job" }` with `enabled` flipped.
 - `POST /api/v1/routines/:id/run` → `{ "result" }` — forced immediate run.
+- `POST /api/v1/routines/trigger` (the `trigger_create` op) body `{ run, every,
+  prompt, description, session?, host?, cwd?, name?, timeoutSeconds?,
+  maxFiresPerDay?, wait?, wait_until?, wait_report? }` → `201 { job, host,
+  nextCheckAt: null, wait }`. `session` defaults to `"this"` (the calling
+  session's task, from `x-walnut-caller-sid`).
+  - Parking (additive, 2026-10): a trigger on the CALLER'S OWN task parks that
+    task as `WAITING` by default; `wait: false` arms it without parking (work
+    remains), `wait: true` parks a task named by id as well. `wait_until` is an
+    ISO datetime or a duration from now (`"6h"`, `"3d"`), `""` for no clock;
+    absent = the store's 3-day default. `wait_report` (markdown, at most 4000
+    characters) opens the receipt letter a session caller's park sends to the
+    human inbox. A bad `wait`, `wait_until` (unparseable or not in the future)
+    or `wait_report` is `400` and arms nothing.
+  - `wait` = `{ parked, task_id, reason?, wait_until?, already_waiting?,
+    letter_id?, letter_error?, error? }`. `reason` when not parked: `wait_false`,
+    `other_task`, `complete` (a completed task is never parked), `not_written`
+    (the park failed; the trigger stays armed and `error` says why). A task that
+    was already waiting keeps its clock unless `wait_until` was passed.
 - Engine still booting → `503 { error: { code: "internal", message:
   "Routines engine is not running" } }`.
 

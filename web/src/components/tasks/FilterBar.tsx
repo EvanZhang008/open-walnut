@@ -160,6 +160,9 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   // in-flow height changes (the scroll box sits below it). The box is taken at
   // render time: a parent's inline ref callback is detached (null) while this
   // layout effect runs and re-attached after it.
+  // A list at its top stays at its top: there the first row IS the top, and
+  // scrolling it by the row's height slid it under the stuck headings (2026-10-04:
+  // "N Waiting hidden" revealed a pinned card that the Pinned heading covered).
   const scrollerRef = useRef<HTMLElement | null>(null);
   scrollerRef.current = listScroller(c.listScrollRef.current) ?? scrollerRef.current;
   useLayoutEffect(() => {
@@ -167,7 +170,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     const delta = h - inFlowHeight.current;
     inFlowHeight.current = h;
     const el = scrollerRef.current;
-    if (el?.isConnected && Math.abs(delta) >= 1) el.scrollTop += delta;
+    if (el?.isConnected && Math.abs(delta) >= 1 && el.scrollTop > 0) el.scrollTop += delta;
   });
 
   // Only a pointer removal from the row itself holds the row (the pointer is on

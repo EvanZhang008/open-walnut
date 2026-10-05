@@ -461,6 +461,14 @@ export async function applySessionPhase(
       || ((trigger === 'session:turn-start' || trigger === 'session:result') && opts.turnGen !== undefined))) {
     phaseRunner = (await import('../providers/claude-code-session.js')).sessionRunner
   }
+  // A WAITING set during the turn that is running now belongs to that turn: its
+  // own turn-start, replayed or reconciled later (the snapshot pull runs every
+  // 30s with no turn generation), must not pull it back. 2026-10-04: a session
+  // armed its trigger, the task parked, and six seconds later the snapshot pull
+  // moved it to In Progress, so the turn's end handed it back as Need Action.
+  const heldRunner = newPhase && opts?.sessionId && trigger === 'session:turn-start' && HELD_PHASES.has(task.phase)
+    ? phaseRunner ?? (await import('../providers/claude-code-session.js')).sessionRunner
+    : undefined
 
   if (!newPhase) {
     log.session.debug('applySessionPhase: skip (no transition needed)', {
@@ -515,6 +523,14 @@ export async function applySessionPhase(
           if (opts?.shouldApply && !opts.shouldApply(current)) {
             skipReason = 'superseded-snapshot'
             return false
+          }
+          if (heldRunner && HELD_PHASES.has(current.phase)) {
+            const turnStartedAt = heldRunner.findSessionByClaudeId(opts!.sessionId!)?.turnStartedAt
+            const heldAt = Date.parse(current.phase_changed_at ?? '')
+            if (turnStartedAt !== undefined && Number.isFinite(heldAt) && heldAt >= turnStartedAt) {
+              skipReason = 'held-this-turn'
+              return false
+            }
           }
           const live = opts?.sessionId ? phaseRunner?.findSessionByClaudeId(opts.sessionId) : undefined
           if (live) {

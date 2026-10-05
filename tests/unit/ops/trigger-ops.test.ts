@@ -49,6 +49,59 @@ describe('trigger_create output', () => {
     const out = getOp('trigger_create')!.mapResult!({ body: {}, args: {} }) as Record<string, unknown>
     expect('id' in out).toBe(false)
   })
+
+  // The outcome says what the call did to the task, so the model never tells the
+  // user "it is waiting" when it is not, or the reverse (2026-10-04).
+  const job = { id: 'rt_1', name: 'PR review', schedule: { kind: 'every', everyMs: 300_000 } }
+  const mapWith = (wait: Record<string, unknown>) =>
+    getOp('trigger_create')!.mapResult!({ body: { job, host: '__local__', nextCheckAt: null, wait }, args: {} }) as
+      { outcome: string; next: string; wait: unknown }
+
+  it('says the task is parked, until when, and that the receipt went out', () => {
+    const out = mapWith({ parked: true, task_id: 't1', wait_until: '2026-10-07T12:00:00.000Z', letter_id: 'lt-1' })
+    expect(out.outcome).toContain('The task is now Waiting, off the user\'s list, until it fires or 2026-10-07T12:00:00.000Z')
+    expect(out.outcome).toContain('the receipt is in the user\'s inbox')
+    expect(out.next).toMatch(/^End your turn now; the fire starts a new one here\./)
+    expect(out.next).toContain('park again (task_update phase=WAITING with wait_report)')
+    expect(out.wait).toMatchObject({ parked: true, letter_id: 'lt-1' })
+  })
+
+  it('asks the model to tell the user itself when the receipt letter failed', () => {
+    const out = mapWith({ parked: true, task_id: 't1', wait_until: null, letter_error: 'inbox offline' })
+    expect(out.outcome).toContain('until it fires; the receipt letter failed (inbox offline), so tell the user in your reply.')
+  })
+
+  it('says why the task was left alone', () => {
+    expect(mapWith({ parked: false, task_id: 't1', reason: 'wait_false' }).outcome)
+      .toContain('left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left')
+    expect(mapWith({ parked: false, task_id: 't2', reason: 'other_task' }).outcome)
+      .toContain('not your task; pass wait:true to park it')
+    expect(mapWith({ parked: false, task_id: 't3', reason: 'complete' }).outcome)
+      .toContain('is complete, so it was not parked')
+    expect(mapWith({ parked: false, task_id: 't4', reason: 'not_written', error: 'locked' }).outcome)
+      .toContain('The task could not be parked (locked).')
+    // Not parked: the old one-line report to the user, never "end your turn".
+    expect(mapWith({ parked: false, task_id: 't1', reason: 'wait_false' }).next)
+      .toMatch(/^Tell the user in one line what is watched and how often\./)
+  })
+})
+
+describe('trigger_create wait inputs', () => {
+  const schema = () => z.object(getOp('trigger_create')!.input).strict()
+  const base = { ...args, description: 'Checks PR 123 for review comments.' }
+
+  it('accepts wait, wait_until and wait_report, and types them', () => {
+    expect(schema().safeParse({ ...base, wait: false }).success).toBe(true)
+    expect(schema().safeParse({ ...base, wait: true, wait_until: '6h', wait_report: 'PR 123 is pushed.' }).success).toBe(true)
+    expect(schema().safeParse({ ...base, wait: 'no' }).success).toBe(false)
+  })
+
+  it('tells the model it parks by default, to use it unasked, and how to opt out', () => {
+    const op = getOp('trigger_create')!
+    expect(op.description).toContain('It PARKS your own task by default')
+    expect(op.description).toContain('Pass wait:false while you or the user still have work on this task')
+    expect(op.description).toContain('do not ask the user to watch it')
+  })
 })
 
 describe('trigger_list output', () => {

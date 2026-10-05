@@ -7,8 +7,10 @@ description: >-
   "watch for", "keep an eye on", "as soon as X happens", "poll until", or wants
   to be pinged on new mail / PR comments / build results / a file appearing.
   Also when the user says "snooze until", "wait until", "park this until",
-  "come back to this when": create the trigger, then set the task to Waiting;
-  the fire brings it back.
+  "come back to this when". Use it on your own, without being asked, whenever
+  the rest of the work waits on something outside the session (a review, a
+  merge, a deploy, a build, a reply): creating the trigger parks the task as
+  Waiting with a receipt in the user's inbox, and the fire brings it back.
 ---
 
 # Trigger
@@ -109,10 +111,13 @@ or a file only that host has), and never paste one inline as `curl -H
    Keep going until `parsed` is non-null. `wouldFire: false` with `parsed` set is a
    working check with nothing to report: that is a pass, not a failure.
 3. **Tell the user in ONE line** what will be watched and how often, before arming it.
-4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"..."}'`.
+4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"...","wait_report":"..."}'`.
    `description` is required (see below).
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
+   This also **parks this task as Waiting** and sends the user a receipt (see
+   "Waiting is the default" below). Pass `"wait":false` while you still have work
+   to do here.
 5. **Report the id and the cadence.** Then stop; do not poll the trigger yourself.
 
 Default cadence when the user gave none: **every 5 minutes**. Never poll faster
@@ -145,47 +150,69 @@ trigger. One or two plain sentences, 600 characters at most, covering three thin
 
 Write it in the language you use with the user.
 
-## Snooze until something happens (the task waits on the trigger)
+## Waiting is the default
 
-When the user says "snooze this task until X" or "wait until X" about the task
-this session works on, the task should go quiet until X happens, then come back
-to them. The task menu's "Start / Snooze until › Something happens…" starts that
-message for them as `/walnut-trigger Snooze this task until: X`. Do the steps
-above (script, test, one line to the user, `trigger_create`), then, as the LAST
-call of your turn, put the task in **Waiting**:
+A trigger exists because something is not done yet, so `trigger_create` on this
+session's own task **parks the task as Waiting** in the same call:
+
+- The task leaves the user's default task list (it keeps its board section; the
+  user reveals it with "Show waiting") and the end of your turn does not hand it
+  back.
+- The user gets ONE letter in their inbox saying it is parked: your
+  `wait_report` first, then what the trigger watches, when the task comes back
+  by itself, and how to take it back. Every park a session makes sends one, so
+  never park silently and never skip the report.
+- The next message into this session (the fire, the user, a peer task) moves it
+  to In Progress on its own; that turn ends as Need Action like any other.
+
+**Use it on your own.** When the rest of the work waits on something outside
+this session (a review, a merge, a deploy, a build, a CI run, a reply from a
+person), do not ask the user to watch it or to "make a trigger": write the
+check, arm it, and end the turn. That is what keeps their list short. Ask one
+short question only when you genuinely cannot tell what to watch (which PR,
+which channel).
+
+**But not while work remains.** If you or the user still have work on this
+task (more changes to make, the user is mid-conversation with you about it),
+pass `"wait":false`: the trigger is armed and the task stays where it is. Park
+it later, once only the wait is left, as the LAST call of that turn:
 
 ```
-walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING"}'
+walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING","wait_report":"..."}'
 ```
 
-- Waiting is a status. The task keeps its board section but leaves the default
-  task list (the user reveals waiting tasks with "Show waiting"), shows an
-  hourglass instead of a red dot, and the end of your turn does not hand it
-  back. The next message into this session (the trigger's fire, the user, a
-  peer task) moves it to In Progress on its own, and that turn ends as Need
-  Action like any other. So: `trigger_create`, one line to the user, `task_update`
-  WAITING, end the turn. Nothing else to wire.
-- Every wait has a clock. Without `wait_until` the task comes back by itself
-  3 days from now, whether or not X happened: Walnut wakes this session with a
-  note and the task returns the normal way. Set `wait_until` (an ISO datetime)
-  when the user named a time ("by Friday either way", "give it a week"), shorter
-  or longer than the default:
-  `walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING","wait_until":"2026-10-03T17:00:00-07:00"}'`
-  Pass `"wait_until":""` only when the user explicitly wants no time limit.
-- Make the check fire ONCE per event: give each event an item id (the CR's
+**`wait_report`** is the opening of the receipt, in the language you use with
+the user: two to five lines saying what was finished, what it waits on now, and
+what you will do when it fires. Example: "PR 123 is pushed and CI is green.
+Waiting for the review. When a reviewer comments I make the change and reply;
+when it is approved I merge it." The facts under it (watched trigger, clock,
+how to take it back) are added by Walnut, so do not repeat them.
+
+**`wait_until`** is the clock. Without it the task comes back by itself 3 days
+from now, whether or not anything happened: Walnut wakes this session with a
+note and the task returns the normal way. Pass an ISO datetime or a duration
+from now (`"6h"`, `"2d"`) when the user named a time ("by Friday either way",
+"give it a week") or the thing has a natural deadline. Pass `"wait_until":""`
+only when the user explicitly wants no time limit.
+
+- A trigger on ANOTHER task does not park it unless you pass `"wait":true`.
+  A completed task is never parked.
+- Make the check fire ONCE per event: give each event an item id (the PR's
   state + revision, the message id), so an unchanged state is quiet.
-- Write the `prompt` for the moment it fires: "Check what changed on CR 1234 and
-  tell the user what it means and the next step."
-- When it fires and the event does not need the user yet (an acknowledgement, an
-  intermediate stage), say so briefly and set the task to Waiting again as the
-  last call; the trigger keeps polling and keeps what it has seen.
+- Write the `prompt` for the moment it fires: "Check what changed on PR 123 and
+  do the next step: make requested changes, merge when approved, tell the user
+  only what needs them."
+- When it fires and the event does not need the user (an acknowledgement, an
+  intermediate stage, a change you can make yourself), handle it, then park
+  again as the last call with `task_update` WAITING and a fresh `wait_report`
+  saying what happened. The trigger keeps polling and keeps what it has seen.
+- When the work it watched is done, `trigger_delete` it, so it stops firing.
 - When the user writes to this session meanwhile, the task is In Progress again;
-  answer them. If the plan still holds, set it back to Waiting as your last call.
-  If the plan changed ("don't wait", "wait for X instead"), `trigger_delete` the
-  old trigger and arm the new one if there is one.
-- Ask one short question when the condition is ambiguous (which CR, which
-  channel, a time that already passed) instead of guessing; you usually know
-  from the conversation.
+  answer them. If the plan still holds, park it again as your last call. If the
+  plan changed ("don't wait", "wait for X instead"), `trigger_delete` the old
+  trigger and arm the new one if there is one.
+- The task menu's "Start / Snooze until › Something happens…" starts this for
+  the user as `/walnut-trigger Snooze this task until: X`.
 
 ## Managing them
 

@@ -751,6 +751,8 @@ export class ClaudeCodeSession {
    *  Never reset — a reset would make a live gen look older than an in-flight result's
    *  gen, and the stale-result gate in core/phase.ts fails OPEN on that comparison. */
   private _turnGen = 0
+  /** When the last turn-start edge happened (see turnStartedAt). */
+  private _turnEdgeAt: number | undefined
   /** Did any MAIN-lane assistant text reach the UI stream during this turn?
    *
    *  Set as a side effect of emitting SESSION_TEXT_DELTA (both the `assistant`
@@ -1311,6 +1313,7 @@ export class ClaudeCodeSession {
   ): void {
     const sid = this.claudeSessionId ?? sidHint
     this._turnGen++
+    this._turnEdgeAt = Date.now()
     // A turn walnut did not deliver itself (a message injected straight into
     // the daemon's FIFO, a queued mid-turn message the CLI picks up after the
     // previous result) starts its speed meter here; a turn writeMessage already
@@ -1893,6 +1896,13 @@ export class ClaudeCodeSession {
     return this._turnGen
   }
 
+  /** Epoch ms of the last turn-start edge (undefined before the first). Read by
+   *  core/phase.ts: a WAITING set after this moment was set DURING the current
+   *  turn, and a reconcile of that same turn must not pull it back. */
+  get turnStartedAt(): number | undefined {
+    return this._turnEdgeAt
+  }
+
   /** Allow the health-monitor reconcile loop to sync the in-memory status after
    *  an authoritative DB converge — without this, the in-memory map would
    *  desync from the record and the next writeMessage would base its mid-turn
@@ -2358,6 +2368,8 @@ export class ClaudeCodeSession {
     // TTFT anchor for the spawn path (init-only spawns get re-anchored by the
     // first real writeMessage; a stale anchor is overwritten there).
     this._turnStartTs = initOnly ? undefined : Date.now()
+    // A spawn that carries a message starts a turn (see turnStartedAt).
+    if (!initOnly) this._turnEdgeAt = this._turnStartTs
     this._firstThinkingTs = undefined
     this._firstTextTs = undefined
     this._firstToolTs = undefined
@@ -3311,7 +3323,7 @@ export class ClaudeCodeSession {
       const before = {
         _processStatus: this._processStatus, _activity: this._activity,
         resultEmitted: this.resultEmitted, _turnResultEmitted: this._turnResultEmitted,
-        _expectedTeardown: this._expectedTeardown, _turnGen: this._turnGen,
+        _expectedTeardown: this._expectedTeardown, _turnGen: this._turnGen, _turnEdgeAt: this._turnEdgeAt,
         _deferredOutcome: this._deferredOutcome, _turnStartOffset: this._turnStartOffset,
         _interruptRequested: this._interruptRequested,
         _askUserIntercepted: this._askUserIntercepted, _sawApiTimeoutThisTurn: this._sawApiTimeoutThisTurn,
@@ -3356,6 +3368,7 @@ export class ClaudeCodeSession {
       // it visibly streams. Mid-turn injections deliberately skip this block —
       // they join the SAME turn and must not bump.
       this._turnGen++
+      this._turnEdgeAt = Date.now()
       // #870 hand-off: the user moving on outranks a still-pending hold. A stale
       // withheld outcome must not settle the NEW turn (a withheld turn that reached
       // this reset already completed via idle/followup/reconcile, or its process

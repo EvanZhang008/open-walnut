@@ -252,6 +252,21 @@ describe('buildSessionContext (identity note)', () => {
     // first create; the user saw five tasks where one was asked for.
     // 1700 → 1720 (2026-10-01) for the third word, "worker": the board calls a
     // subtask that, and a session hears it from the user.
-    expect(systemPrompt.length).toBeLessThan(1720)
+    // 1720 → 2150 (2026-10-04) for waiting as the session's job: arm a trigger
+    // yourself instead of asking the user to watch something async; it parks the
+    // task with a receipt. A session had finished its part and then asked the user
+    // to "make a trigger" for the review, which it could have done in one call.
+    expect(systemPrompt.length).toBeLessThan(2150)
+  })
+
+  it('makes waiting the session\'s job: arm a trigger itself, park only when only the wait is left', async () => {
+    // 2026-10-04: a session reported a review was pending and asked the user to
+    // watch it; the user had to say "make a trigger" and then "don't ask me".
+    for (const id of ['', await seedTask('marina')]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).toMatch(/never ask the user to watch it: arm a trigger yourself \(walnut-trigger skill\)/i)
+      expect(systemPrompt).toMatch(/parks this task as Waiting, off the user's list, with a receipt in their inbox/i)
+      expect(systemPrompt).toMatch(/while work remains here, arm it with wait:false/i)
+    }
   })
 })

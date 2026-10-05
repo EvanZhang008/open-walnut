@@ -80,10 +80,12 @@ defineOp({
     + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card. '
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
-    + 'To snooze the task until something happens ("snooze this until CR 1234 is approved"): create the '
-    + 'trigger, then as the LAST call of the turn set the task to Waiting with task_update '
-    + '{"phase":"WAITING"} (add wait_until, an ISO time, when the user also wants it back by a time). The '
-    + 'fire starts a new turn here, which brings the task back on its own.',
+    + 'It PARKS your own task by default: the task goes to Waiting (off the user\'s list), the user gets a '
+    + 'receipt letter in their inbox, and the fire (or the clock, 3 days unless wait_until says otherwise) '
+    + 'brings it back. Write wait_report for that letter. Pass wait:false while you or the user still have '
+    + 'work on this task, and park it later with task_update phase=WAITING once only the wait is left. '
+    + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
+    + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it.',
   input: {
     run: z.string().min(1).describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh")'),
     every: z.union([z.number().int().positive(), z.string().min(1)])
@@ -100,22 +102,45 @@ defineOp({
       + 'A session on another host may arm checks only on its own host'),
     timeoutSeconds: z.number().int().positive().optional().describe('Kill the check after this long (default 30, max 300)'),
     maxFiresPerDay: z.number().int().min(0).optional().describe('Fire budget: up to this many fires in a burst, refilling at this many per 24h (default 24, so once an hour once spent; a held fire comes later, never lost). For a busy source checked often (chat, mail) set it to the checks per day, e.g. 288 for every 5m. 0 = unlimited'),
+    wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default true for your own task, '
+      + 'false for another task. Pass false while you or the user still have work on this task'),
+    wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
+      + 'from now ("6h", "2d"). Default 3 days; "" = no clock (only the fire or a message brings it back)'),
+    wait_report: z.string().optional().describe('The receipt the user reads in their inbox, in their language, markdown, a few lines: '
+      + 'what is done, what you are waiting on, what you will do when it fires, anything they may want to do meanwhile. '
+      + 'Walnut adds what is watched, the clock and how to take it back'),
   },
   bind: { method: 'POST', path: '/routines/trigger' },
   mapResult: ({ body }) => {
     const b = (body ?? {}) as {
       job?: { id?: string; name?: string; schedule?: { everyMs?: number } }; host?: string
+      wait?: { parked?: boolean; reason?: string; wait_until?: string | null; letter_id?: string; letter_error?: string; error?: string }
     }
     const id = b.job?.id ?? ''
     const every = everyLabel(b.job?.schedule?.everyMs)
+    const armed = `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every} and `
+      + 'delivers the prompt when it fires. It keeps polling while Walnut restarts.'
+    const off = `Turn it off with walnut tools call trigger_delete '{"id":"${id}"}' once it has done its job.`
+    const w = b.wait
+    // What the call did to the task is said in the outcome, so the model never
+    // tells the user "it is waiting" when it is not, or the reverse.
+    const parked = w?.parked
+      ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}`
+        + `${w.letter_id ? '; the receipt is in the user\'s inbox' : w.letter_error ? `; the receipt letter failed (${w.letter_error}), so tell the user in your reply` : ''}.`
+      : w?.reason === 'wait_false' ? ' The task was left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left.'
+      : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
+      : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'
+      : w ? ` The task could not be parked${w.error ? ` (${w.error})` : ''}.`
+      : ''
+    const next = w?.parked
+      ? `End your turn now; the fire starts a new one here. When a fire does not need the user, handle it and park again (task_update phase=WAITING with wait_report) as your last call. ${off}`
+      : `Tell the user in one line what is watched and how often. ${off}`
     // The id at the top level too: trigger_pause/resume/delete take it, and a
     // caller reading `.id` should not have to know the job sits under `.job`.
     return withOutcome(
       { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b },
-      `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every} and `
-      + 'delivers the prompt when it fires. It keeps polling while Walnut restarts.',
-      `Tell the user in one line what is watched and how often. Turn it off with `
-      + `walnut tools call trigger_delete '{"id":"${id}"}'; see its last check with trigger_list.`,
+      `${armed}${parked}`,
+      `${next} See its last check with trigger_list.`,
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
