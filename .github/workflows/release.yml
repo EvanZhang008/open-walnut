@@ -11,8 +11,10 @@ name: Release
 #            `release: X.Y.Z` commit on main rolls CHANGELOG and package.json
 #            (scripts/stable-promote.mjs). By hand, a `vX.Y.Z` tag cut with
 #            `npm run release -- patch|minor|major` publishes through job `stable`.
-#   nightly  about every six hours (checked when CI finishes on main and every 30
-#            minutes; and by hand): the newest commit on main that CI passed,
+#            Either way the release then gets its self-contained archives, the
+#            Homebrew formula and install.sh (release-archives.yml).
+#   nightly  about every six hours (checked when CI finishes on main and on the
+#            schedule; and by hand): the newest commit on main that CI passed,
 #            when it is not the last nightly. Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`. Nothing is
 #            committed: the version lives in the registry, not in package.json,
@@ -43,7 +45,7 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
-  # The checks only ask, and a gap decides: a nightly when the last one is 5.5h old
+  # The checks only ask, and a gap decides: a nightly when the last one is 4.5h old
   # (scripts/nightly-version.mjs due), a stable when the last one is 23h old
   # (scripts/stable-promote.mjs plan). They ask whenever CI finishes on main,
   # which is when there is something new to ship, and on a schedule for a quiet
@@ -100,8 +102,13 @@ jobs:
     concurrency:
       group: release-tag-${{ github.ref_name }}
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # actions: write starts release-archives.yml (the one event this token may start).
+    permissions:
+      contents: write
+      id-token: write
+      actions: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -140,6 +147,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           node scripts/release-notes.mjs "$version" > release-notes.md
           gh release create "${GITHUB_REF_NAME}" --title "Open Walnut ${version}" --notes-file release-notes.md
+      - name: Build its self-contained archives (release-archives.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-archives.yml --ref main -f version="${GITHUB_REF_NAME#v}"
 
   nightly:
     name: Publish nightly from main
@@ -147,7 +158,7 @@ jobs:
     concurrency:
       group: release-nightly
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -237,7 +248,7 @@ jobs:
   promote-plan:
     name: Pick the nightly to promote
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       publish: ${{ steps.plan.outputs.publish }}
@@ -275,7 +286,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-26]
     steps:
       # main, for the script and the allow list (the candidate may predate the script).
       - uses: actions/checkout@v5
@@ -327,8 +338,13 @@ jobs:
     concurrency:
       group: release-promote
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # actions: write starts release-archives.yml (the one event this token may start).
+    permissions:
+      contents: write
+      id-token: write
+      actions: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -430,3 +446,16 @@ jobs:
           done
           echo "::error::open-walnut@$VERSION is published, but main's CHANGELOG and package.json were not rolled"
           exit 1
+      # Last, so a failure here never holds up main's roll. A re-run starts it only
+      # while the release has no SHA256SUMS (release-archives.yml uploads it last).
+      - name: Build its self-contained archives (release-archives.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.promote-plan.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS; then
+            echo "v$VERSION already has its archives"
+          else
+            gh workflow run release-archives.yml --ref main -f version="$VERSION"
+            echo "started release-archives.yml for $VERSION"
+          fi
