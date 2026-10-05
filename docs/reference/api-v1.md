@@ -70,6 +70,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `target_archived` \| `self_send` | 409 / 400 | `POST /messages` target is archived, or resolved to the calling session itself |
 | `throttled` \| `queue_full` | 429 | Peer send rate budget (`retryAfterMs`) or the target's queue cap; do not retry in a loop |
 | `unknown_request` \| `not_request_target` \| `origin_session_gone` | 404 / 403 / 410 | `in_reply_to` names no request, names one addressed to another session, or the asking session is gone |
+| `parent_complete` | 409 | `POST /messages` (a send or an `in_reply_to`) from a subtask's session to its parent task, which is COMPLETE: a completed parent takes no messages from its subtasks (`parentTaskId`). Reopening the parent lifts it |
 | `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap, or a `POST /health/sync` call exceeds 500 items or 192 KB: split it) |
 | `bad_audio` | 422 | `POST /stt/transcribe`: this recording is undecodable (an m4a cut off before it was finalized), so re-uploading the same bytes cannot help. Additive: an older server answers `503 stt_unavailable` for the same case, and a client that treats 4xx as a verdict about the audio simply retires the recording sooner |
 | `stt_unavailable` | 503 | `POST /stt/transcribe`: the service cannot answer right now (no engine configured, engine down, the companion could not reach the primary box and has no key of its own). The recording is worth keeping and retrying |
@@ -1051,10 +1052,12 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   this one also auto-unpins the task from the Focus bar (and compacts the
   remaining `pin_order`s) and AWAITS the external-sync push, so a
   plugin-backed task that failed to reach its remote store answers an error
-  instead of a silent `200`. `409 conflict` + `active_children` when the task
-  still has non-COMPLETE children: since 2026-10-01 a list of up to 8
-  `{ id, title, phase }` rows (it was a count; `active_count` keeps the number),
-  and the message names each one, so a session can act on them by id. Added
+  instead of a silent `200`. Open subtasks never block it (since 2026-10-04;
+  before that it answered `409 conflict` + `active_children`): they are not
+  touched and keep running, and the body adds `open_subtasks`, up to 20
+  `{ id, title, phase }` rows (`more_open_subtasks` counts the rest), only when
+  there are any. A COMPLETE parent hears nothing more from them, and a
+  subtask's own `POST /messages` to it answers `409 parent_complete`. Added
   for the CLI's `open-walnut done`, which has always had these semantics.
 - `POST /api/v1/tasks/:id/start` (additive, 2026-08) body
   `{ "message"?, "cwd"?, "host"?, "model"?, "mode"?, "engine"?,
@@ -1591,7 +1594,9 @@ ledger. Both end up in the same persistent message queue.
 - `GET /api/v1/requests/:id` → `200 { "request": { "id", "fromSessionId",
   "toSessionId"?, "toTaskId"?, "preview", "status", "createdAt", "deadlineAt",
   "settledAt"?, "outcome"? } }`. `status` is `pending` | `replied` |
-  `notified` | `expired`; `outcome` on a settled row is `completed` | `error` |
+  `notified` | `expired` | `withdrawn` (since 2026-10-04: the asker's task
+  completed, nobody was told, and reopening that task makes it `pending`
+  again); `outcome` on a settled row is `completed` | `error` |
   `awaiting_human` | `timeout`. Malformed id is `400 bad_request`, unknown id
   `404 not_found`. This is a status read for `walnut wait rq-…`, not something
   a client should poll: replies and the fallback notification are pushed into

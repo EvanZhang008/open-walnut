@@ -211,6 +211,35 @@ describe('the sweep', () => {
     expect((await getBoard(T))!.reminders.when).not.toHaveProperty('fired_at')
   })
 
+  it('a reminder a session set waits while the board task is COMPLETE; the user\'s own still goes (2026-10-04)', async () => {
+    // A worker's reminder used to reach its closed leader as a human send and reopen it.
+    const tm = await import('../../../src/core/task-manager.js')
+    const { closeDb } = await import('../../../src/core/task-db.js')
+    closeDb()
+    tm._resetForTesting()
+    const { task: lead } = await tm.addTask({ title: 'Leader' })
+    await setBoardHtml(lead.id, PAGE, { by: `task:${lead.id}` })
+    const now = Date.now()
+    await setBoardReminder(lead.id, 'cause-a', { at: new Date(now + MIN).toISOString() }, { by: 'task:worker-1' })
+    await setBoardReminder(lead.id, 'when', { at: new Date(now + MIN).toISOString() }, { by: 'human' })
+    await tm.completeTask(lead.id)
+    await loadBoardReminders()
+
+    await sweepBoardReminders(now + 2 * MIN)
+    expect(sends().map((x) => x.to)).toEqual([lead.id])
+    expect(sends()[0].text).toContain('(choice when)')
+    expect((await getBoard(lead.id))!.reminders['cause-a']).toMatchObject({ attempts: 1 })
+    expect((await getBoard(lead.id))!.reminders['cause-a']).not.toHaveProperty('delivered_at')
+
+    // Reopened before the retries run out: the held one goes on its next slot.
+    expect((await tm.toggleComplete(lead.id)).task.phase).toBe('TODO')
+    await sweepBoardReminders(now + 2 * MIN + BOARD_REMINDER_RETRY_MS)
+    expect(sends()).toHaveLength(2)
+    expect(sends()[1].text).toContain('(thread cause-a)')
+    expect((await getBoard(lead.id))!.reminders['cause-a']).toMatchObject({ delivered_at: expect.any(String) })
+    closeDb()
+  })
+
   it('a deleted board drops its deadlines', async () => {
     startBoardReminders()
     await setBoardReminder(T, 'when', { at: new Date(Date.now() + HOUR).toISOString() }, { by: 'human' })

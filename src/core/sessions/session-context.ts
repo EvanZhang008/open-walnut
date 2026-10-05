@@ -85,7 +85,13 @@ export async function buildSessionContext(
       if (task.parent_task_id) {
         // Who asked (see 2b above). A missing parent just drops the line.
         const parent = await getTask(task.parent_task_id).catch(() => null)
-        if (parent) {
+        if (parent?.phase === 'COMPLETE') {
+          // A closed leader takes no messages from its subtasks (session-send-core.ts).
+          // Said as "while", because this prompt outlives a reopen.
+          taskLine += `Your task is a subtask of "${parent.title}" (id ${parent.id}), which was complete `
+            + 'when this session started: while it stays complete it hears nothing from you and a message '
+            + 'to it is refused, so keep your results in your own task, where the user reads them.\n\n'
+        } else if (parent) {
           taskLine += `Your task is a subtask of "${parent.title}" (id ${parent.id}). A message `
             + 'ending in "Reply when done" comes from that task\'s session, and the reply it '
             + 'names is how your result gets back to it. Walnut tells that task on its own '

@@ -18,7 +18,7 @@ import express from 'express';
 import request from 'supertest';
 import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { addTask, completeTask } from '../../../src/core/task-manager.js';
+import { addTask, completeTask, getTask, updateTask } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -116,55 +116,46 @@ describe('POST /api/tasks — project is stored verbatim', () => {
   });
 });
 
-describe('active children guard — routes', () => {
-  it('POST toggle-complete returns 409 when parent has active children', async () => {
-    const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Child', parent_task_id: parent.id });
-    const app = createApp();
-
-    const res = await request(app).post(`/api/tasks/${parent.id}/toggle-complete`);
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/child task/);
-    // The open subtasks themselves (a session acts on them by id), plus the count.
-    expect(res.body.active_count).toBe(1);
-    expect(res.body.active_children).toEqual([expect.objectContaining({ title: 'Child', phase: 'TODO' })]);
-  });
-
-  it('POST complete returns 409 when parent has active children', async () => {
-    const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Child', parent_task_id: parent.id });
-    const app = createApp();
-
-    const res = await request(app).post(`/api/tasks/${parent.id}/complete`);
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/child task/);
-  });
-
-  it('PATCH phase=COMPLETE returns 409 when parent has active children', async () => {
-    const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Child', parent_task_id: parent.id });
-    const app = createApp();
-
-    const res = await request(app)
-      .patch(`/api/tasks/${parent.id}`)
-      .send({ phase: 'COMPLETE' });
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/child task/);
-  });
-
-  it('allows completing parent after all children complete', async () => {
+describe('completing a parent with open subtasks — routes', () => {
+  // The legacy routes the web board calls (2026-10-04: the user could not close
+  // a leader whose worker was still open; every one of these answered 409).
+  it('POST toggle-complete completes a parent with an open child', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
-    await completeTask(child.id);
     const app = createApp();
 
     const res = await request(app).post(`/api/tasks/${parent.id}/toggle-complete`);
 
     expect(res.status).toBe(200);
     expect(res.body.task.phase).toBe('COMPLETE');
+    expect((await getTask(child.id)).phase).toBe('TODO');
+  });
+
+  it('POST complete completes a parent with an open child', async () => {
+    const { task: parent } = await addTask({ title: 'Parent' });
+    await addTask({ title: 'Child', parent_task_id: parent.id });
+    const app = createApp();
+
+    const res = await request(app).post(`/api/tasks/${parent.id}/complete`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.task.phase).toBe('COMPLETE');
+  });
+
+  it('PATCH phase=COMPLETE completes a parent with an open child, and PATCH TODO reopens it', async () => {
+    const { task: parent } = await addTask({ title: 'Parent' });
+    const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
+    await updateTask(child.id, { phase: 'NEED_ACTION' });
+    const app = createApp();
+
+    const res = await request(app).patch(`/api/tasks/${parent.id}`).send({ phase: 'COMPLETE' });
+    expect(res.status).toBe(200);
+    expect(res.body.task.phase).toBe('COMPLETE');
+    expect((await getTask(child.id))).toMatchObject({ phase: 'NEED_ACTION', parent_task_id: parent.id });
+
+    const back = await request(app).patch(`/api/tasks/${parent.id}`).send({ phase: 'TODO' });
+    expect(back.status).toBe(200);
+    expect(back.body.task.phase).toBe('TODO');
   });
 
   it('toggle-complete allows reopening a completed parent', async () => {

@@ -981,7 +981,7 @@ describe('task_complete says what completion does', () => {
   // effects (completeTaskSessions stops the task's own live session; its leader
   // hears unless the leader is the caller): the old one claimed execution was
   // unchanged, which it never was.
-  const OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one, hears about it unless the leader is you.'
+  const OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one and is still open, hears about it unless the leader is you.'
   const NEXT = 'No further action is required.'
 
   const cases: Array<{ label: string; task: Record<string, unknown>; state: string }> = [
@@ -1010,6 +1010,20 @@ describe('task_complete says what completion does', () => {
       expect(r.ref).toBe(`<task-ref id="${TASK.id}" label="${TASK.title}"/>`)
     })
   }
+
+  it('names the subtasks that stay open when a parent completes over them (2026-10-04)', () => {
+    const open = [
+      { id: 'w1', title: 'Daily digest', phase: 'NEED_ACTION' },
+      { id: 'w2', title: 'Retry the import', phase: 'TODO' },
+    ]
+    const r = mapped('task_complete', { task: { id: TASK.id, title: TASK.title, phase: 'COMPLETE' }, open_subtasks: open }, { id: TASK.id })
+    expect(r.outcome).toBe(`${OUTCOME} Its open subtasks (2) were not touched and keep running: `
+      + '"Daily digest" (w1, NEED_ACTION); "Retry the import" (w2, TODO). This task hears nothing more from them until it is reopened.')
+    expect(r.open_subtasks).toEqual(open)
+    const more = mapped('task_complete', { task: { id: TASK.id, title: TASK.title }, open_subtasks: open, more_open_subtasks: 5 }, { id: TASK.id })
+    expect(more.outcome).toContain('Its open subtasks (7) were not touched')
+    expect(more.outcome).toContain('(w2, TODO); \u2026. This task hears nothing more')
+  })
 })
 
 describe('bulk writes: one call, one row per task, failures do not stop the rest', () => {

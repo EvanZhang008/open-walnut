@@ -2903,7 +2903,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         sendError(res, 400, 'bad_request', msg)
         return
       }
-      if (err instanceof tm.ProjectSourceConflictError || err instanceof tm.ActiveChildrenError) {
+      if (err instanceof tm.ProjectSourceConflictError) {
         sendError(res, 409, 'conflict', msg)
         return
       }

@@ -699,7 +699,7 @@ defineOp({
 })
 
 /** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped. */
-const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one, hears about it unless the leader is you.'
+const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one and is still open, hears about it unless the leader is you.'
 
 defineOp({
   name: 'task_complete',
@@ -715,10 +715,22 @@ defineOp({
   // Same reasoning as the CLI's `done`.
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => {
-    const task = (body as { task?: unknown } | undefined)?.task
+    const b = body as { task?: unknown; open_subtasks?: Array<{ id: string; title: string; phase: string }>; more_open_subtasks?: number } | undefined
+    const task = b?.task
+    const open = Array.isArray(b?.open_subtasks) ? b.open_subtasks : []
+    const total = open.length + (typeof b?.more_open_subtasks === 'number' ? b.more_open_subtasks : 0)
+    // Open subtasks do not block a completion; say which ones keep running alone.
+    const openLine = total > 0
+      ? ` Its open subtasks (${total}) were not touched and keep running: `
+        + `${open.slice(0, 5).map((t) => `"${t.title}" (${t.id}, ${t.phase})`).join('; ')}${total > 5 ? '; …' : ''}. `
+        + 'This task hears nothing more from them until it is reopened.'
+      : ''
     return withOutcome(
-      withRef(task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : task, { completed: true }),
-      COMPLETED_OUTCOME,
+      withRef(task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : task, {
+        completed: true,
+        ...(open.length > 0 ? { open_subtasks: open } : {}),
+      }),
+      COMPLETED_OUTCOME + openLine,
       'No further action is required.',
     )
   },
@@ -815,9 +827,8 @@ defineOp({
   name: 'task_complete_bulk',
   title: 'Complete many Walnut tasks in one call',
   description:
-    'Mark up to 50 tasks done in ONE call, each with task_complete semantics (a task with running ' +
-    'subtasks is refused and listed as failed; the others still complete). From a remote session this ' +
-    'costs ONE write of the gateway budget instead of one per task.',
+    'Mark up to 50 tasks done in ONE call, each with task_complete semantics (one failing id does not ' +
+    'stop the others). From a remote session this costs ONE write of the gateway budget instead of one per task.',
   input: {
     ids: z.array(z.string().min(1)).min(1).max(MAX_BULK_WRITE)
       .describe(`1 to ${MAX_BULK_WRITE} task ids (exact, or a unique id prefix)`),
@@ -826,7 +837,7 @@ defineOp({
   handler: async (args, call) => {
     const ids = [...new Set((args.ids as string[]).map((s) => s.trim()).filter(Boolean))]
     const rows = await bulkRows(ids, (id) => call('POST', `/tasks/${encodeURIComponent(id)}/complete`))
-    return bulkResult(rows, 'marked complete. Their own live sessions are stopped; a leader hears about each unless the leader is you',
+    return bulkResult(rows, 'marked complete. Their own live sessions are stopped; an open leader hears about each unless the leader is you',
       'No further action is required.')
   },
   timeoutMs: 120_000,

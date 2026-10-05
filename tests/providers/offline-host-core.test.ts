@@ -240,6 +240,32 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.delivered).toHaveLength(2)
   })
 
+  it('a subtask cannot message or answer its COMPLETE parent, and a COMPLETE asker hears no notice, as on the server', async () => {
+    const h = harness()
+    h.host.configure(slice())
+    const sent = await call(h, A, 'task_send', { to: B, text: 'Build it and tell me' })
+    const requestId = sent.ok ? String(sent.result.requestId) : ''
+    // The parent completes itself while the server is away (queued).
+    expect((await call(h, A, 'task_complete', { id: 'mtaskaaa-0001' })).ok).toBe(true)
+
+    const send = await call(h, B, 'task_send', { to: 'mtaskaaa-0001', text: 'done' })
+    expect(!send.ok && send.error.code).toBe('parent_complete')
+    const bySid = await call(h, B, 'task_send', { to: A, text: 'done' })
+    expect(!bySid.ok && bySid.error.code).toBe('parent_complete')
+    const reply = await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Done: page built.' })
+    expect(!reply.ok && reply.error.code).toBe('parent_complete')
+    expect(h.delivered).toHaveLength(1)
+
+    // The child's turn ends without a reply: nothing goes into the closed parent.
+    await h.host.onResult(B, JSON.stringify({ type: 'result', subtype: 'success', result: 'finished' }))
+    expect(h.delivered).toHaveLength(1)
+    const row = h.host.drain(HOME).records.filter((r): r is Extract<OfflineRecord, { kind: 'row' }> => r.kind === 'row').at(-1)!.row
+    expect(row).toMatchObject({ id: requestId, status: 'withdrawn' })
+    // Someone who is not its subtask still reaches it.
+    h.live.add(C)
+    expect((await call(h, C, 'task_send', { to: A, text: 'from a peer', expect_reply: false })).ok).toBe(true)
+  })
+
   it('refuses a reply from a session the request was not sent to', async () => {
     const h = harness()
     h.host.configure(slice())
@@ -375,14 +401,13 @@ describe('offline host: queued writes and the handover', () => {
     ])
   })
 
-  it('refuses to complete a task whose children in the copy are still open, as the server would', async () => {
+  it('queues completing a parent whose children in the copy are still open, as the server allows', async () => {
     const h = harness()
     h.host.configure(slice())
     const r = await call(h, A, 'task_complete', { id: 'mtaskaaa-0001' })
-    expect(!r.ok && r.error.message).toMatch(/1 child task\(s\) are still active \(Child: build the page\)/)
-    await call(h, B, 'task_complete', { id: 'mtaskbbb-0002' })
-    const now = await call(h, A, 'task_complete', { id: 'mtaskaaa-0001' })
-    expect(now.ok).toBe(true)
+    expect(r.ok && r.result.queued).toBe(true)
+    const child = await call(h, A, 'task_get', { id: 'mtaskbbb-0002' })
+    expect(child.ok && (child.result.task as { phase?: string }).phase).not.toBe('COMPLETE')
   })
 
   it('refuses queued writes for tasks outside the copy and oversized arguments', async () => {

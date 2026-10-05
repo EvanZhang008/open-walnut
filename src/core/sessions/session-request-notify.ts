@@ -28,6 +28,7 @@ import {
   clipNoticeMessage,
   overdueRequests,
   settleNotified,
+  withdrawRequest,
   type NoticeLastMessage,
   type SessionRequest,
   type SessionRequestOutcome,
@@ -164,6 +165,19 @@ export async function readLastTurn(
   }
 }
 
+/** Whether the asking session's task is COMPLETE. Unknown counts as not. */
+async function askerTaskIsComplete(fromSessionId: string): Promise<boolean> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const taskId = (await getSessionByClaudeId(fromSessionId))?.taskId;
+    if (!taskId) return false;
+    const { listTasksByIds } = await import('../task-manager.js');
+    return (await listTasksByIds([taskId])).find((t) => t.id === taskId)?.phase === 'COMPLETE';
+  } catch {
+    return false;
+  }
+}
+
 export async function notifyRequesterFallback(
   request: SessionRequest,
   outcome: SessionRequestOutcome,
@@ -174,6 +188,17 @@ export async function notifyRequesterFallback(
   // the asker hears "no reply" after it already got one.
   const { waitForOfflineHandovers } = await import('../offline-handover.js');
   await waitForOfflineHandovers();
+  // A Walnut notice never goes into a COMPLETE task's session: nothing there
+  // waits for it, and delivering would run a turn on finished work. Withdrawn,
+  // not notified (nobody was told), so reopening the task restores it.
+  if (await askerTaskIsComplete(request.fromSessionId)) {
+    if (await withdrawRequest(request.id)) {
+      log.session.info('request fallback: asker task is complete, request withdrawn, nobody told', {
+        requestId: request.id, fromSessionId: request.fromSessionId, outcome,
+      });
+    }
+    return false;
+  }
   const settled = await settleNotified(request.id, outcome);
   if (!settled) return false; // replied / already notified — someone else spoke
 

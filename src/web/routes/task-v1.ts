@@ -223,12 +223,14 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
         task: result.task,
         fields: ['status', 'phase', 'completed_at'],
       }, ['web-ui'], { source: 'api-v1' })
-      res.json(result)
+      // Open subtasks never block a completion; the caller is told which ones
+      // keep running without it (additive, present only when there are any).
+      const { listOpenSubtasks } = await import('../../core/sessions/open-items.js')
+      const open = await listOpenSubtasks(result.task.id).catch(() => ({ subtasks: [], more: 0 }))
+      res.json(open.subtasks.length > 0
+        ? { ...result, open_subtasks: open.subtasks, ...(open.more > 0 ? { more_open_subtasks: open.more } : {}) }
+        : result)
     } catch (err) {
-      if (err instanceof tm.ActiveChildrenError) {
-        sendError(res, 409, 'conflict', err.message, { active_children: err.activeChildren, active_count: err.activeCount })
-        return
-      }
       if (sendTaskManagerError(res, err)) return
       throw err
     }

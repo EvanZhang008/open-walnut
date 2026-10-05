@@ -247,6 +247,34 @@ describe('notifyRequesterFallback — the settle wins exactly once', () => {
   });
 });
 
+describe('notifyRequesterFallback — a COMPLETE asker hears no notice', () => {
+  it('withdraws the row (nobody was told) and delivers nothing into a completed task\'s session', async () => {
+    const rq = await arm();
+    // The mock answers whatever ids it is asked; the asker's task is matched by id.
+    listTasksByIds.mockResolvedValue([
+      { id: 'task-77', title: 'Run the migration', phase: 'NEED_ACTION' },
+      { id: 'task-asker', title: 'Asker', phase: 'COMPLETE' },
+    ]);
+
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(false);
+
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect((await getSessionRequest(rq.id))?.status).toBe('withdrawn');
+    // Exactly once: a second edge finds it settled and stays silent.
+    expect(await notifyRequesterFallback(rq, 'timeout')).toBe(false);
+    expect((await getSessionRequest(rq.id))?.status).toBe('withdrawn');
+  });
+
+  it('a TARGET that completed does not silence the asker', async () => {
+    const rq = await arm();
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'COMPLETE' }]);
+
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('notifyRequesterFallback — a failure after the settle', () => {
   it('does NOT un-settle the row when delivery throws, and reports false', async () => {
     const rq = await arm();

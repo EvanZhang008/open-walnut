@@ -3498,23 +3498,15 @@ function heldPhaseBlocks(current: TaskPhase, next: TaskPhase, source: string): b
 }
 
 /**
- * Guard: block completing a parent task that still has active (non-COMPLETE) children.
- * Call inside withWriteLock where the store is already loaded.
- */
-function guardActiveChildren(store: TaskStore, task: Task): void {
-  const activeChildren = store.tasks.filter(
-    (t) => t.parent_task_id === task.id && t.phase !== 'COMPLETE',
-  );
-  if (activeChildren.length > 0) {
-    throw new ActiveChildrenError(task.title, activeChildren);
-  }
-}
-
-/**
  * Complete a task by partial ID match. Returns the completed task.
  * Throws if no match or ambiguous match.
- */
-/**
+ *
+ * Open subtasks never block it (2026-10-04, user call: a leader whose worker
+ * is a recurring daily job could not be closed at all). The subtasks keep
+ * running and keep their parent link; a COMPLETE parent simply hears nothing
+ * more from them (sessions/subtask-notices.ts, session-send-core.ts), and
+ * reopening it brings that back.
+ *
  * `opts.actorSid`: the session whose API call completes the task, carried on
  * the phase event so the notices it causes can skip their own author
  * (session-request-watch: a leader completing its worker already knows).
@@ -3538,7 +3530,6 @@ export async function completeTask(idPrefix: string, opts?: { actorSid?: string 
 
     const t = matches[0];
     const oldPhase = t.phase;
-    guardActiveChildren(store, t);
     applyPhase(t, 'COMPLETE');
     // No auto-unpin on completion (removed 2026-08-26, user request): a pin is
     // a manual placement, so the done card stays in its tier until the user
@@ -3586,7 +3577,6 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
     if (t.phase === 'COMPLETE') {
       applyPhase(t, 'TODO');
     } else {
-      guardActiveChildren(store, t);
       applyPhase(t, 'COMPLETE');
       // No auto-unpin on completion — see completeTask.
     }
@@ -3615,14 +3605,14 @@ export interface BatchTaskOutcome {
   id: string;
   title?: string;
   ok: boolean;
-  /** Present when ok=false — human-readable reason (active children, active sessions, …). */
+  /** Present when ok=false — human-readable reason (unknown or ambiguous id, …). */
   error?: string;
 }
 
 export interface BatchPhaseResult {
   /** Tasks whose phase actually changed and was persisted locally. */
   changed: Task[];
-  /** Tasks NOT applied — guard rejection (active children), unknown/ambiguous id. */
+  /** Tasks NOT applied — unknown/ambiguous id. */
   failed: BatchTaskOutcome[];
   /**
    * Tasks applied locally whose EXTERNAL sync push failed. Deliberately separate
@@ -3640,10 +3630,10 @@ export interface BatchPhaseResult {
  * write lock + rewrite the whole store per task, so completing 10 tasks meant 10
  * full-store rewrites and 10 separate WS events (the UI then flickered row by row).
  *
- * Per-task guards are still enforced INDIVIDUALLY — a task with active children
- * can't be completed — but a guard failure only skips THAT task and is reported in
+ * An id that matches no task (or several) only skips THAT id and is reported in
  * `failed`; the rest still apply. Partial success is the right semantics here: the
- * user picked 10 rows and one being un-completable must not void the other 9.
+ * user picked 10 rows and one bad id must not void the other 9. Open subtasks do
+ * not block a parent (see completeTask).
  *
  * Completing does NOT unpin (2026-08-26, user request): pinned done cards stay
  * in their tier until the user unpins them.
@@ -3676,25 +3666,6 @@ export async function setPhaseBulk(
       }
       const t = matches[0];
       if (t.phase === phase) continue; // already there — not a failure, just a no-op
-      if (phase === 'COMPLETE') {
-        // Guard per task, not per batch: one blocked parent must not void the rest.
-        // Children already inside THIS batch count as being completed, so selecting
-        // a parent together with its children succeeds (the natural user intent).
-        const activeChildren = store.tasks.filter(
-          (c) => c.parent_task_id === t.id
-            && c.phase !== 'COMPLETE'
-            && !applied.some((a) => a.id === c.id),
-        );
-        if (activeChildren.length > 0) {
-          skipped.push({
-            id: t.id,
-            title: t.title,
-            ok: false,
-            error: new ActiveChildrenError(t.title, activeChildren).message,
-          });
-          continue;
-        }
-      }
       priorPhases.set(t.id, t.phase);
       applyPhase(t, phase);
       // No auto-unpin on completion — see completeTask.
@@ -4122,7 +4093,6 @@ export async function updateTask(
         taskId: task.id, currentPhase: task.phase, requestedPhase: updates.phase, source,
       });
     } else {
-      if (updates.phase === 'COMPLETE') guardActiveChildren(store, task);
       applyPhase(task, updates.phase);
     }
     }
@@ -4139,7 +4109,6 @@ export async function updateTask(
         taskId: task.id, currentPhase: task.phase, requestedPhase: derivedPhase, source,
       });
     } else {
-      if (derivedPhase === 'COMPLETE') guardActiveChildren(store, task);
       applyPhase(task, derivedPhase);
     }
   }
@@ -4825,31 +4794,6 @@ export class ActiveSessionError extends Error {
     );
     this.name = 'ActiveSessionError';
     this.activeSessionIds = activeSessionIds;
-  }
-}
-
-/**
- * Error thrown when attempting to complete a parent task that has active (non-COMPLETE) children.
- */
-export class ActiveChildrenError extends Error {
-  public readonly childTitles: string[];
-  public readonly activeCount: number;
-  /** The open subtasks (at most 8), so a session reading the error can act on each by id. */
-  public readonly activeChildren: { id: string; title: string; phase: TaskPhase }[];
-  constructor(taskTitle: string, activeChildren: { id: string; title: string; phase: TaskPhase }[]) {
-    const count = activeChildren.length;
-    const shown = activeChildren.slice(0, 8).map((t) => ({ id: t.id, title: t.title, phase: t.phase }));
-    const listed = shown.map((t) => `"${t.title}" (${t.id}, ${t.phase})`).join('; ');
-    const more = count > shown.length ? `; and ${count - shown.length} more` : '';
-    super(
-      `Cannot complete task "${taskTitle}": ${count} child task(s) are still active: ${listed}${more}. `
-      + 'Finish them first (task_get reads one, task_send continues it, task_complete closes one you have checked), '
-      + 'or leave this task open while they run.',
-    );
-    this.name = 'ActiveChildrenError';
-    this.childTitles = shown.map((t) => t.title);
-    this.activeCount = count;
-    this.activeChildren = shown;
   }
 }
 

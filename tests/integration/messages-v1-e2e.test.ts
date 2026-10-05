@@ -20,7 +20,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-messages-v1-
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask } from '../../src/core/task-manager.js'
-import { createSessionRequest } from '../../src/core/session-requests.js'
+import { createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 
 let server: HttpServer
 let port = 0
@@ -94,4 +95,61 @@ describe('GET /api/v1/requests/:id', () => {
     expect(body.request.id).toBe(req.id)
     expect(body.request.status).toBe('pending')
   })
+})
+
+describe('a completed parent hears nothing from its subtasks (2026-10-04)', () => {
+  // The real route table, task store, hook dispatcher and request ledger: the
+  // parent completes over an open subtask, its ask to that subtask is
+  // withdrawn by the phase hook, the subtask's send and reply are refused, and
+  // a reopen undoes all of it.
+  const PARENT_SID = 'eeeeeeee-1111-4111-8111-111111111111'
+  const CHILD_SID = 'ffffffff-2222-4222-8222-222222222222'
+
+  async function waitFor(check: () => Promise<boolean>, ms = 10_000): Promise<void> {
+    const end = Date.now() + ms
+    while (!(await check())) {
+      if (Date.now() > end) throw new Error('condition not met in time')
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+
+  it('completes over the open subtask, then refuses the subtask until the parent is reopened', async () => {
+    const { task: parent } = await addTask({ title: 'e2e leader' })
+    const { task: child } = await addTask({ title: 'e2e worker', parent_task_id: parent.id })
+    await createSessionRecord(PARENT_SID, parent.id, '', '/work', { title: 'e2e leader' })
+    await createSessionRecord(CHILD_SID, child.id, '', '/work', { title: 'e2e worker' })
+    const ask = await createSessionRequest({ fromSessionId: PARENT_SID, toSessionId: CHILD_SID, toTaskId: child.id, text: 'build it, reply when done' })
+
+    const done = await post(`/api/v1/tasks/${parent.id}/complete`, {})
+    expect(done.status).toBe(200)
+    expect(done.json.task.phase).toBe('COMPLETE')
+    expect(done.json.open_subtasks).toEqual([{ id: child.id, title: 'e2e worker', phase: 'TODO' }])
+    // The phase hook withdraws the parent's ask to its subtask.
+    await waitFor(async () => (await getSessionRequest(ask.id))?.status === 'withdrawn')
+
+    // No live session for the closed parent (so nothing here can reach a CLI):
+    // the refusal still says why instead of "use task_start".
+    await updateSessionRecord(PARENT_SID, { archived: true })
+    const caller = { 'x-walnut-caller-sid': CHILD_SID }
+    const send = await post('/api/v1/messages', { to: parent.id, text: 'today is done' }, caller)
+    expect(send.status).toBe(409)
+    expect(send.json.error.code).toBe('parent_complete')
+    expect(send.json.parentTaskId).toBe(parent.id)
+    const reply = await post('/api/v1/messages', { in_reply_to: ask.id, text: 'built' }, caller)
+    expect(reply.status).toBe(409)
+    expect(reply.json.error.code).toBe('parent_complete')
+    const still = await (await fetch(api(`/api/v1/tasks/${parent.id}`))).json()
+    expect(still.task.phase).toBe('COMPLETE')
+    expect((await (await fetch(api(`/api/v1/tasks/${child.id}`))).json()).task.phase).toBe('TODO')
+
+    // Reopened: the ask is pending again and the subtask is no longer refused.
+    const reopen = await fetch(api(`/api/v1/tasks/${parent.id}`), {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ phase: 'IN_PROGRESS' }),
+    })
+    expect(reopen.status).toBe(200)
+    await waitFor(async () => (await getSessionRequest(ask.id))?.status === 'pending')
+    const again = await post('/api/v1/messages', { to: parent.id, text: 'today is done' }, caller)
+    expect(again.status).toBe(409)
+    expect(again.json.error.code).toBe('task_has_no_session')
+  }, 60_000)
 })

@@ -123,8 +123,8 @@ describe('runOfflineHandover', () => {
     const serverRow = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: child, text: 'server asked this' })
     const now = Date.now()
     const leafBefore = await task(grandchild)
-    const blocked = await newTask('Parent with open work')
-    await newTask('Still open', { parent_task_id: blocked })
+    // A queued write the server refuses at replay: a task made its own parent.
+    const blocked = await newTask('Refused at replay')
     const blockedBefore = await task(blocked)
     const done = await newTask('Already finished')
     await api('POST', `/api/v1/tasks/${done}/complete`)
@@ -143,7 +143,7 @@ describe('runOfflineHandover', () => {
       { seq: 4, at: now + 1, kind: 'op', op: 'task_complete', args: { id: grandchild }, callerSid: B, base: String(leafBefore.updated_at) },
       { seq: 5, at: staleAt, kind: 'op', op: 'task_update', args: { id: parent, description: 'stale offline edit' }, callerSid: A, base: new Date(staleAt - 1000).toISOString() },
       { seq: 6, at: now, kind: 'delivery', fromSessionId: A, toSessionId: B, toTaskId: done, messageId: 'qm-offline-1' },
-      { seq: 7, at: Date.now(), kind: 'op', op: 'task_complete', args: { id: blocked }, callerSid: B, base: String(blockedBefore.updated_at) },
+      { seq: 7, at: Date.now(), kind: 'op', op: 'task_update', args: { id: blocked, parent_task_id: blocked }, callerSid: B, base: String(blockedBefore.updated_at) },
     ]
     const calls: Array<{ cmd: string; params: Record<string, unknown> }> = []
     let drained = false
@@ -169,12 +169,12 @@ describe('runOfflineHandover', () => {
     expect(await task(grandchild)).toMatchObject({ title: 'Grandchild: tests written', phase: 'COMPLETE' })
     expect((await task(parent)).description).toBe('edited on the phone meanwhile')
     expect((await task(done)).phase).toBe('IN_PROGRESS')
-    expect((await task(blocked)).phase).not.toBe('COMPLETE')
+    expect((await task(blocked)).parent_task_id).toBeFalsy()
     // Each session that was told "saved" hears which of its changes did not land.
     const bySid = new Map(delivered.map((d) => [d.sid, d.text]))
     expect(bySid.get(A)).toContain(`task_update ${parent}: the task changed after this change was queued`)
-    expect(bySid.get(B)).toContain(`task_complete ${blocked}: `)
-    expect(bySid.get(B)).toContain('child task(s) are still active')
+    expect(bySid.get(B)).toContain(`task_update ${blocked}: `)
+    expect(bySid.get(B)).toContain('Walnut API error (self_parent)')
     expect(bySid.get(B)).toMatch(/^<walnut-message kind="notification" from="Walnut"/)
   })
 

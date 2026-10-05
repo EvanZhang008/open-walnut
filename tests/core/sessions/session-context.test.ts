@@ -190,6 +190,20 @@ describe('buildSessionContext (identity note)', () => {
     expect((await buildSessionContext(parent.id)).systemPrompt).not.toContain('subtask of')
   })
 
+  it('tells a subtask whose parent is COMPLETE that the parent no longer hears from it', async () => {
+    // 2026-10-04: a parent may complete with its subtasks open; the subtask
+    // must not keep reporting to it (its sends are refused).
+    const { task: parent } = await addTask({ title: 'Budget alert', project: 'acme' })
+    const { task: child } = await addTask({ title: 'Daily digest', project: 'acme', parent_task_id: parent.id })
+    const { completeTask } = await import('../../../src/core/task-manager.js')
+    await completeTask(parent.id)
+    const { systemPrompt } = await buildSessionContext(child.id)
+    expect(systemPrompt).toContain(`Your task is a subtask of "Budget alert" (id ${parent.id}), which was complete when this session started:`)
+    expect(systemPrompt).toContain('while it stays complete it hears nothing from you and a message to it is refused')
+    expect(systemPrompt).not.toMatch(/Reply when done/)
+    expect(systemPrompt).not.toMatch(/Walnut tells that task on its own/)
+  })
+
   it('tells a leader its workers are followed on the Board, and names the skill', async () => {
     // The leader's chat is the noisiest surface Walnut has (2026-10-01: a user
     // could not follow 40 workers through it). The line appears only while a

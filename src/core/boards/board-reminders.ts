@@ -24,6 +24,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { own } from './board-html.js';
 import type { BoardFile, BoardReminder } from './board-store.js';
+import type { BoardDelivery } from './board-delivery.js';
 
 export const BOARD_REMINDERS_SUBSCRIBER = 'board-reminders';
 export const BOARD_REMINDER_RETRY_MS = 5 * 60_000;
@@ -138,9 +139,16 @@ async function fire(taskId: string, target: string, nowMs: number): Promise<bool
     }
 
     const { buildReminderPrompt, deliverBoardText } = await import('./board-delivery.js');
-    const delivery = await deliverBoardText(taskId, await buildReminderPrompt(board.html, target, current), {
-      reminder: target, attempt: (current.attempts ?? 0) + 1,
-    });
+    // A reminder a session set never reopens a COMPLETE board task (a worker's
+    // would reach its closed leader as a human send); it waits like any other
+    // undelivered one, so a reopen in time still gets it. The user's own goes.
+    const { getTask } = await import('../task-manager.js');
+    const closed = current.set_by !== 'human' && (await getTask(taskId).catch(() => null))?.phase === 'COMPLETE';
+    const delivery: BoardDelivery = closed
+      ? { state: 'stored', reason: 'task_complete' }
+      : await deliverBoardText(taskId, await buildReminderPrompt(board.html, target, current), {
+        reminder: target, attempt: (current.attempts ?? 0) + 1,
+      });
     if (delivery.state !== 'stored') {
       await patchBoardReminder(taskId, target, current.set_at, { delivered_at: new Date(nowMs).toISOString() });
       log.task.info('board reminder delivered', { taskId, target, sessionId: delivery.sessionId });

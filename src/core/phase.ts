@@ -489,13 +489,6 @@ export async function applySessionPhase(
       // full-store rewrite — phase transitions are on the hot send path and
       // must not hold the global task write-lock for O(taskCount) time.
       // emitEvent/push keep UI + external-sync parity with updateTask.
-      //
-      // SAFETY: updateTaskRaw skips updateTask's guardActiveChildren (which
-      // blocks COMPLETE while children are active). That's fine ONLY because
-      // every newPhase computed above is non-terminal (IN_PROGRESS /
-      // NEED_ACTION) — applySessionPhase never targets COMPLETE. If you ever
-      // add a COMPLETE transition here, route it through updateTask or you'll
-      // bypass the active-children guard.
       let skipReason: string | undefined
       const updated = await updateTaskRaw(taskId, {
         phase: newPhase,

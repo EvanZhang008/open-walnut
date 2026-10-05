@@ -32,6 +32,7 @@ import {
   deletePendingRequest,
   getSessionRequest,
   settleReplied,
+  withdrawRequest,
   type SessionRequest,
 } from '../session-requests.js';
 
@@ -46,7 +47,8 @@ export class SendError extends Error {
     public code:
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
-      | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone',
+      | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
+      | 'parent_complete',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -283,6 +285,28 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, onTimeout]).finally(() => { if (timer) clearTimeout(timer); });
 }
 
+/**
+ * A subtask never messages its COMPLETE parent (2026-10-04, user call: "once I
+ * close it, the subtask must not keep messaging it"). A parent may now complete
+ * while its subtasks run, and a peer message reopens a completed task, so
+ * without this a worker's report or reply would pull a closed leader back to
+ * IN_PROGRESS. Refused with a pointer instead; anyone else's message to a
+ * completed task still reopens it, and reopening the parent lifts this.
+ */
+async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: string | undefined): Promise<void> {
+  if (caller.kind !== 'session' || !caller.record.taskId || !targetTaskId) return;
+  const { getTask } = await import('../task-manager.js');
+  const own = await getTask(caller.record.taskId).catch(() => undefined);
+  // A stored parent id may be a legacy short prefix of the parent's id.
+  if (!own?.parent_task_id || !targetTaskId.startsWith(own.parent_task_id)) return;
+  const target = await getTask(targetTaskId).catch(() => undefined);
+  if (!target || !target.id.startsWith(own.parent_task_id) || target.phase !== 'COMPLETE') return;
+  throw new SendError('parent_complete',
+    `"${target.title}" (${target.id}) is your task's parent and it is complete: it no longer takes messages `
+    + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear '
+    + 'from you again, the user reopens it.', 409, { parentTaskId: target.id });
+}
+
 /** The one send entry point (route + gateway both land here). */
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
   const text = (input.text ?? '').trim();
@@ -292,7 +316,16 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   if (input.inReplyTo) return performReply(input, caller, text);
 
   if (!input.to) throw new SendError('bad_request', '`to` is required (or pass in_reply_to)');
-  const target = await resolveSendTarget(input.to);
+  let target: Awaited<ReturnType<typeof resolveSendTarget>>;
+  try {
+    target = await resolveSendTarget(input.to);
+  } catch (err) {
+    // A completed parent usually has no live session: say why, never "use task_start".
+    if (err instanceof SendError && err.code === 'task_has_no_session') {
+      await refuseSendToCompleteParent(caller, typeof err.detail?.taskId === 'string' ? err.detail.taskId : undefined);
+    }
+    throw err;
+  }
   const targetSid = target.session.claudeSessionId;
 
   if (target.session.archived) {
@@ -301,6 +334,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   if (caller.kind === 'session' && caller.record.claudeSessionId === targetSid) {
     throw new SendError('self_send', 'target resolves to the calling session itself');
   }
+  await refuseSendToCompleteParent(caller, target.taskId ?? target.session.taskId);
 
   // Envelope + throttle apply exactly when the SPEAKER is not the human:
   // another session (named peer-note) or an unidentified process (anonymous).
@@ -448,6 +482,16 @@ async function performReply(
   if (!isTarget) {
     throw new SendError('not_request_target',
       `request ${id} was not addressed to this session`, 403);
+  }
+  // Asked by the parent, which has completed since: refused before anything
+  // else (its session is usually stopped by then), and the ask is withdrawn.
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const asker = await getSessionByClaudeId(request.fromSessionId).catch(() => undefined);
+    await refuseSendToCompleteParent(caller, asker?.taskId);
+  } catch (err) {
+    if (request.status === 'pending') await withdrawRequest(id).catch(() => null);
+    throw err;
   }
 
   // Resolve the asker BEFORE settling: a gone asker means there is nowhere to

@@ -1846,11 +1846,21 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
   // edges (on the task's phase at dispatch), which the handler reads fresh itself.
   filter: {
     predicate: (ctx) => !('domain' in ctx && ctx.domain === 'task')
-      || ['NEED_ACTION', 'WAITING', 'COMPLETE'].includes((ctx as TaskHookContext).newPhase ?? ''),
+      || ['NEED_ACTION', 'WAITING', 'COMPLETE'].includes((ctx as TaskHookContext).newPhase ?? '')
+      // A reopen restores what the completion withdrew.
+      || (ctx as TaskHookContext).oldPhase === 'COMPLETE',
   },
   handler: async (payload) => {
     const isPhaseEdge = 'domain' in payload && (payload as unknown as TaskHookContext).domain === 'task';
     const ctx = payload as unknown as TaskHookContext;
+    // The PARENT side of a completion: a task that completes hears nothing
+    // more from its own subtasks (they keep running), and a reopen undoes that.
+    if (isPhaseEdge && ctx.taskId && ctx.oldPhase !== ctx.newPhase) {
+      const quiet = await import('../sessions/subtask-notices.js');
+      if (ctx.newPhase === 'COMPLETE') await quiet.quietCompletedParent(ctx.taskId);
+      else if (ctx.oldPhase === 'COMPLETE') await quiet.restoreWithdrawnAsks(ctx.taskId);
+      if (!['NEED_ACTION', 'WAITING', 'COMPLETE'].includes(ctx.newPhase ?? '')) return;
+    }
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const { pendingRequestsForTarget } = await import('../session-requests.js');
     let sessionId = ctx.sessionId ?? ctx.task?.session_id ?? undefined;

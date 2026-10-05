@@ -29,8 +29,13 @@
  * Bounded by construction:
  *  - direct parent only; a grandparent hears through its own child;
  *  - a COMPLETE parent, or one that never had a session, gets nothing (the
- *    board shows it); the send source `walnut-notify` never
- *    reopens a finished task (phase.ts REOPENING_SEND_SOURCES);
+ *    board shows it), also when it completed inside the coalesce window; the
+ *    send source `walnut-notify` never reopens a finished task (phase.ts
+ *    REOPENING_SEND_SOURCES). A parent may complete with subtasks still open
+ *    (2026-10-04): its asks to them are withdrawn and the notices about them
+ *    still queued for it are dropped (quietCompletedParent), and their own
+ *    sends to it are refused (session-send-core.ts), so a closed leader stays
+ *    closed until someone reopens it (restoreWithdrawnAsks);
  *  - the child hears nothing back, so there is no loop;
  *  - edges for one parent within COALESCE_MS go out as ONE message of several
  *    envelopes (the web card renders each), and while the parent is busy a
@@ -43,6 +48,7 @@ import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
 import type { SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
+import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
 
 const kit = createEnvelopeKit();
 
@@ -118,6 +124,112 @@ export async function parentCanHear(parentTaskId: string): Promise<boolean> {
   }
 }
 
+/** `task` names `parentId` as its parent; a stored parent id may be a legacy short prefix. */
+export function isSubtaskOf(task: Pick<Task, 'parent_task_id'> | null | undefined, parentId: string): boolean {
+  const p = task?.parent_task_id;
+  return !!p && parentId.startsWith(p);
+}
+
+/** Which of `ids` are tasks that are direct subtasks of `parentId`. */
+async function subtasksAmong(parentId: string, ids: Iterable<string>): Promise<Set<string>> {
+  const { getTask } = await import('../task-manager.js');
+  const out = new Set<string>();
+  for (const id of new Set(ids)) {
+    const t = await getTask(id).catch(() => null);
+    if (t && isSubtaskOf(t, parentId)) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * The task ids a queued message is a Walnut notice about, when the message is
+ * nothing but Walnut notification envelopes (a subtask notice batch, a request
+ * fallback); [] for anything else.
+ */
+export function noticeSubjects(text: string): string[] {
+  const about: string[] = [];
+  let rest = text.trim();
+  while (rest) {
+    const env = parseWalnutMessage(rest);
+    if (!env || !rest.startsWith(env.raw) || env.kind !== 'notification' || env.attrs.from !== 'Walnut') return [];
+    const task = env.attrs['about-task'];
+    if (!task) return [];
+    about.push(task);
+    rest = rest.slice(env.raw.length).trim();
+  }
+  return about;
+}
+
+/**
+ * A task just completed: it hears nothing more from its own direct subtasks
+ * until it is reopened. The replies it still waited for from them are
+ * withdrawn (a subtask stops seeing them as owed, the sweeper never fires for
+ * them, restoreWithdrawnAsks brings them back), and Walnut notices about them
+ * still waiting in its sessions' queues are dropped: a boot or reconnect drain
+ * would otherwise run a turn in the closed task. Asks to anyone else and every
+ * other queued message stay. Never throws.
+ */
+export async function quietCompletedParent(parentTaskId: string): Promise<{ withdrawn: number; dropped: number }> {
+  const none = { withdrawn: 0, dropped: 0 };
+  try {
+    const { getSessionsForTask } = await import('../session-tracker.js');
+    const sids = (await getSessionsForTask(parentTaskId).catch(() => [])).map((s) => s.claudeSessionId);
+    if (sids.length === 0) return none;
+    const requests = await import('../session-requests.js');
+    const queue = await import('../session-message-queue.js');
+    const asks = (await Promise.all(sids.map((sid) => requests.pendingRequestsFromSession(sid)))).flat();
+    const queued = (await Promise.all(sids.map(async (sid) => (await queue.getQueue(sid))
+      .filter((m) => m.status === 'pending')
+      .map((m) => ({ sid, id: m.id, about: noticeSubjects(m.message) })))))
+      .flat().filter((q) => q.about.length > 0);
+    if (asks.length === 0 && queued.length === 0) return none;
+    const children = await subtasksAmong(parentTaskId, [
+      ...asks.flatMap((r) => (r.toTaskId ? [r.toTaskId] : [])), ...queued.flatMap((q) => q.about),
+    ]);
+    let withdrawn = 0;
+    let dropped = 0;
+    for (const r of asks) {
+      if (r.toTaskId && children.has(r.toTaskId) && await requests.withdrawRequest(r.id)) withdrawn++;
+    }
+    for (const q of queued) {
+      if (q.about.every((id) => children.has(id)) && await queue.deleteMessage(q.sid, q.id)) dropped++;
+    }
+    if (withdrawn + dropped > 0) log.session.info('parent completed: its subtasks no longer reach it', { parentTaskId, withdrawn, dropped });
+    return { withdrawn, dropped };
+  } catch (err) {
+    log.session.warn('quieting a completed parent failed', {
+      parentTaskId, error: err instanceof Error ? err.message : String(err),
+    });
+    return none;
+  }
+}
+
+/**
+ * A completed task was reopened: every ask its sessions had withdrawn while it
+ * was complete (to its subtasks at completion, to anyone by the fallback) is
+ * pending again, so a reply or a fallback notice can reach it. Never throws.
+ */
+export async function restoreWithdrawnAsks(taskId: string): Promise<number> {
+  try {
+    const { getSessionsForTask } = await import('../session-tracker.js');
+    const requests = await import('../session-requests.js');
+    const sids = (await getSessionsForTask(taskId).catch(() => [])).map((s) => s.claudeSessionId);
+    let restored = 0;
+    for (const sid of sids) {
+      for (const r of await requests.requestsFromSession(sid, 'withdrawn')) {
+        if (await requests.restoreRequest(r.id)) restored++;
+      }
+    }
+    if (restored > 0) log.session.info('task reopened: its withdrawn asks are pending again', { taskId, restored });
+    return restored;
+  } catch (err) {
+    log.session.warn('restoring withdrawn asks failed', {
+      taskId, error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
 /** Only the newest notice per child and kind survives a batch. */
 export function coalesce(batch: SubtaskNotice[]): SubtaskNotice[] {
   const latest = new Map<string, SubtaskNotice>();
@@ -176,6 +288,16 @@ async function flush(parentSid: string): Promise<void> {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const target = await getSessionByClaudeId(parentSid);
     if (!target || target.archived) return;
+    // Completed inside the coalesce window: a COMPLETE parent hears nothing.
+    const { getTask } = await import('../task-manager.js');
+    const parent = await getTask(notices[0].parentTaskId).catch(() => null);
+    if (parent?.phase === 'COMPLETE') {
+      log.session.info('subtask notice not sent: the parent completed meanwhile', {
+        parentSid, parentTaskId: notices[0].parentTaskId,
+        children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),
+      });
+      return;
+    }
     // Not mid-turn: wake it only for an edge it can act on (see the header).
     if (target.process_status !== 'running') {
       const dropped = notices.filter((n) => !WAKES_AN_IDLE_PARENT.has(n.kind));

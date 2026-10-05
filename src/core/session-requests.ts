@@ -57,7 +57,9 @@ export type SessionRequestStatus =
   /** No reply, but Walnut notified the asker (turn end / target death). */
   | 'notified'
   /** No reply by the deadline; the asker was told to go look. */
-  | 'expired';
+  | 'expired'
+  /** Nobody waits on it: the asker's task completed (withdrawRequest). Reopening restores it. */
+  | 'withdrawn';
 
 /** Why a 'notified' settle fired — rides into the notification wording. */
 export type SessionRequestOutcome = 'completed' | 'error' | 'awaiting_human' | 'timeout';
@@ -198,6 +200,30 @@ export async function settleNotified(
 }
 
 /**
+ * Withdraw a request nobody waits on any more (its asker's task completed):
+ * nobody is told, the target stops seeing it as owed (open_items), and the
+ * sweeper never fires a notice for it. `restoreRequest` undoes it.
+ */
+export async function withdrawRequest(id: string): Promise<SessionRequest | null> {
+  return settle(id, 'withdrawn');
+}
+
+/** Put a withdrawn request back to pending (its asker's task was reopened). Null when it is not withdrawn. */
+export async function restoreRequest(id: string): Promise<SessionRequest | null> {
+  let restored: SessionRequest | null = null;
+  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || requests[idx].status !== 'withdrawn') return undefined;
+    const { settledAt: _settledAt, outcome: _outcome, ...rest } = requests[idx];
+    restored = { ...rest, status: 'pending' };
+    requests[idx] = restored;
+    return { requests };
+  });
+  return restored;
+}
+
+/**
  * Pending requests aimed at this task and/or session (the turn-end hook's query).
  *
  * Known boundary: the taskId leg is what lets a request survive a target session
@@ -231,11 +257,16 @@ export async function pendingRequestsForTarget(
  * Newest-first, so a truncated list keeps the freshest asks.
  */
 export async function pendingRequestsFromSession(sessionId: string): Promise<SessionRequest[]> {
+  return requestsFromSession(sessionId, 'pending');
+}
+
+/** This session's requests in one status, newest first. */
+export async function requestsFromSession(sessionId: string, status: SessionRequestStatus): Promise<SessionRequest[]> {
   const sid = (sessionId ?? '').trim();
   if (!sid) return [];
   const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
   return (store.requests ?? [])
-    .filter((r) => r.status === 'pending' && r.fromSessionId === sid)
+    .filter((r) => r.status === status && r.fromSessionId === sid)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 

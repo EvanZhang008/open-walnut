@@ -352,86 +352,70 @@ describe('Phase lifecycle E2E', () => {
   });
 });
 
-describe('Active children guard E2E', () => {
-  it('blocks completing parent with active child via toggle-complete', async () => {
+describe('Completing a parent with open subtasks E2E', () => {
+  // 2026-10-04: open subtasks used to block completion (409 active_children);
+  // the user could not close a leader whose worker was a recurring job.
+  it('completes a parent with an open child via toggle-complete', async () => {
     const parent = await createTask('E2E parent');
-    await createTask('E2E child', { parent_task_id: parent.id });
+    const child = await createTask('E2E child', { parent_task_id: parent.id });
 
     const res = await fetch(apiUrl(`/api/tasks/${parent.id}/toggle-complete`), { method: 'POST' });
-    expect(res.status).toBe(409);
-    const body = await res.json() as { error: string; active_children: Array<{ id: string }>; active_count: number };
-    expect(body.error).toContain('child task');
-    // The open subtasks by id (since 2026-10-01; the count moved to active_count).
-    expect(body.active_count).toBe(1);
-    expect(body.active_children).toHaveLength(1);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { task: TaskResponse }).task.phase).toBe('COMPLETE');
+    expect((await getTask(child.id)).phase).toBe('TODO');
   });
 
-  it('blocks completing parent with active child via POST /complete', async () => {
+  it('completes a parent with an open child via POST /complete', async () => {
     const parent = await createTask('E2E parent 2');
     await createTask('E2E child 2', { parent_task_id: parent.id });
 
     const res = await fetch(apiUrl(`/api/tasks/${parent.id}/complete`), { method: 'POST' });
-    expect(res.status).toBe(409);
-    const body = await res.json() as { error: string };
-    expect(body.error).toContain('child task');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { task: TaskResponse }).task.phase).toBe('COMPLETE');
   });
 
-  it('blocks completing parent with active child via PATCH phase=COMPLETE', async () => {
+  it('completes a parent with an open child via PATCH phase=COMPLETE (the board checkbox)', async () => {
     const parent = await createTask('E2E parent 3');
-    await createTask('E2E child 3', { parent_task_id: parent.id });
+    const child = await createTask('E2E child 3', { parent_task_id: parent.id });
 
     const res = await fetch(apiUrl(`/api/tasks/${parent.id}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phase: 'COMPLETE' }),
     });
-    expect(res.status).toBe(409);
-    const body = await res.json() as { error: string };
-    expect(body.error).toContain('child task');
+    expect(res.status).toBe(200);
+    expect((await getTask(parent.id)).phase).toBe('COMPLETE');
+    expect((await getTask(child.id))).toMatchObject({ phase: 'TODO', parent_task_id: parent.id });
   });
 
-  it('allows completing parent after all children are complete', async () => {
-    const parent = await createTask('E2E parent ok');
-    const child = await createTask('E2E child ok', { parent_task_id: parent.id });
+  it('v1 complete lists the subtasks that stay open, and only open ones', async () => {
+    const parent = await createTask('E2E v1 parent');
+    const open = await createTask('E2E v1 open child', { parent_task_id: parent.id });
+    const closed = await createTask('E2E v1 closed child', { parent_task_id: parent.id });
+    await fetch(apiUrl(`/api/tasks/${closed.id}/complete`), { method: 'POST' });
 
-    // Complete child first
-    const childRes = await fetch(apiUrl(`/api/tasks/${child.id}/complete`), { method: 'POST' });
-    expect(childRes.status).toBe(200);
+    const res = await fetch(apiUrl(`/api/v1/tasks/${parent.id}/complete`), { method: 'POST' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { task: TaskResponse; open_subtasks?: Array<{ id: string; title: string; phase: string }> };
+    expect(body.task.phase).toBe('COMPLETE');
+    expect(body.open_subtasks).toEqual([{ id: open.id, title: 'E2E v1 open child', phase: 'TODO' }]);
 
-    // Now parent should complete successfully
-    const parentRes = await fetch(apiUrl(`/api/tasks/${parent.id}/complete`), { method: 'POST' });
-    expect(parentRes.status).toBe(200);
-    const completed = ((await parentRes.json()) as { task: TaskResponse }).task;
-    expect(completed.phase).toBe('COMPLETE');
+    const lone = await createTask('E2E v1 no children');
+    const plain = await (await fetch(apiUrl(`/api/v1/tasks/${lone.id}/complete`), { method: 'POST' })).json() as Record<string, unknown>;
+    expect(plain).not.toHaveProperty('open_subtasks');
   });
 
-  it('allows reopening completed parent (toggle COMPLETE → TODO)', async () => {
+  it('allows reopening a parent completed over an open child, and completing it again', async () => {
     const parent = await createTask('E2E reopen parent');
     const child = await createTask('E2E reopen child', { parent_task_id: parent.id });
-
-    // Complete both
-    await fetch(apiUrl(`/api/tasks/${child.id}/complete`), { method: 'POST' });
     await fetch(apiUrl(`/api/tasks/${parent.id}/complete`), { method: 'POST' });
 
-    // Reopen parent — should work since we're going FROM COMPLETE
     const res = await fetch(apiUrl(`/api/tasks/${parent.id}/toggle-complete`), { method: 'POST' });
     expect(res.status).toBe(200);
-    const reopened = ((await res.json()) as { task: TaskResponse }).task;
-    expect(reopened.phase).toBe('TODO');
-  });
-
-  it('persists guard — parent stays unchanged after blocked completion', async () => {
-    const parent = await createTask('E2E persist guard');
-    await createTask('E2E persist child', { parent_task_id: parent.id });
-
-    // Try to complete — should fail
-    const res = await fetch(apiUrl(`/api/tasks/${parent.id}/complete`), { method: 'POST' });
-    expect(res.status).toBe(409);
-
-    // Verify parent is still TODO
-    const fetched = await getTask(parent.id);
-    expect(fetched.phase).toBe('TODO');
-    expect(fetched.status).toBe('todo');
+    expect(((await res.json()) as { task: TaskResponse }).task.phase).toBe('TODO');
+    const again = await fetch(apiUrl(`/api/tasks/${parent.id}/toggle-complete`), { method: 'POST' });
+    expect(((await again.json()) as { task: TaskResponse }).task.phase).toBe('COMPLETE');
+    expect((await getTask(child.id)).phase).toBe('TODO');
   });
 });
 

@@ -8,7 +8,7 @@ import { removeTempTree } from '../helpers/temp-home.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { addTask, toggleComplete, completeTask, updateTask, linkSessionSlot, ActiveChildrenError, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, toggleComplete, completeTask, updateTask, linkSessionSlot, getTask, getChildTasks, setPhaseBulk, _resetForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
@@ -144,48 +144,70 @@ describe('project field is stored verbatim', () => {
   });
 });
 
-// ── Active children guard ──
+// ── Open subtasks never block a completion ──
 
-describe('active children guard', () => {
-  it('completeTask blocks when child is active', async () => {
+describe('completing a parent with open subtasks', () => {
+  it('completeTask completes the parent and leaves the open child untouched', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Child', parent_task_id: parent.id });
+    const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
+    await updateTask(child.id, { phase: 'IN_PROGRESS' });
 
-    await expect(completeTask(parent.id)).rejects.toThrow(ActiveChildrenError);
-    await expect(completeTask(parent.id)).rejects.toThrow(/1 child task/);
+    const { task: completed } = await completeTask(parent.id);
+    expect(completed.phase).toBe('COMPLETE');
+    const after = await getTask(child.id);
+    expect(after.phase).toBe('IN_PROGRESS');
+    expect(after.parent_task_id).toBe(parent.id);
   });
 
-  it('toggleComplete blocks when child is active', async () => {
+  it('toggleComplete completes a parent with two open children, and toggles it back', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     await addTask({ title: 'Child A', parent_task_id: parent.id });
     await addTask({ title: 'Child B', parent_task_id: parent.id });
 
-    await expect(toggleComplete(parent.id)).rejects.toThrow(ActiveChildrenError);
-    await expect(toggleComplete(parent.id)).rejects.toThrow(/2 child task/);
+    expect((await toggleComplete(parent.id)).task.phase).toBe('COMPLETE');
+    expect((await toggleComplete(parent.id)).task.phase).toBe('TODO');
+    expect((await toggleComplete(parent.id)).task.phase).toBe('COMPLETE');
+    const children = (await getChildTasks(parent.id)).map((t) => t.phase);
+    expect(children).toEqual(['TODO', 'TODO']);
   });
 
-  it('updateTask with phase=COMPLETE blocks when child is active', async () => {
-    const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Child', parent_task_id: parent.id });
-
-    await expect(updateTask(parent.id, { phase: 'COMPLETE' })).rejects.toThrow(ActiveChildrenError);
-  });
-
-  it('updateTask with status=done blocks when child is active', async () => {
-    const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Child', parent_task_id: parent.id });
-
-    await expect(updateTask(parent.id, { status: 'done' })).rejects.toThrow(ActiveChildrenError);
-  });
-
-  it('allows completing parent after all children are complete', async () => {
+  it('updateTask with phase=COMPLETE completes a parent whose child waits on the user', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
+    await updateTask(child.id, { phase: 'NEED_ACTION' });
 
-    await completeTask(child.id);
+    const { task: updated } = await updateTask(parent.id, { phase: 'COMPLETE' });
+    expect(updated.phase).toBe('COMPLETE');
+    expect((await getTask(child.id)).phase).toBe('NEED_ACTION');
+  });
+
+  it('updateTask with status=done completes a parent with an open child', async () => {
+    const { task: parent } = await addTask({ title: 'Parent' });
+    await addTask({ title: 'Child', parent_task_id: parent.id });
+
+    const { task: updated } = await updateTask(parent.id, { status: 'done' });
+    expect(updated.phase).toBe('COMPLETE');
+  });
+
+  it('setPhaseBulk completes a parent whose children are not in the batch', async () => {
+    const { task: parent } = await addTask({ title: 'Parent' });
+    const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
+    const { task: other } = await addTask({ title: 'Other' });
+
+    const result = await setPhaseBulk([parent.id, other.id], 'COMPLETE');
+    expect(result.failed).toEqual([]);
+    expect(result.changed.map((t) => t.id).sort()).toEqual([parent.id, other.id].sort());
+    expect((await getTask(child.id)).phase).toBe('TODO');
+  });
+
+  it('a parent with a Unicode title and many open children completes', async () => {
+    // Test data: a CJK title (escaped) like the real recurring-digest worker.
+    const { task: parent } = await addTask({ title: '\u6bcf\u65e5\u6458\u8981 leader' });
+    for (let i = 0; i < 12; i++) await addTask({ title: `Worker ${i}`, parent_task_id: parent.id });
 
     const { task: completed } = await completeTask(parent.id);
     expect(completed.phase).toBe('COMPLETE');
+    expect((await getChildTasks(parent.id)).filter((t) => t.phase !== 'COMPLETE')).toHaveLength(12);
   });
 
   it('allows completing a task with no children', async () => {
@@ -195,36 +217,10 @@ describe('active children guard', () => {
     expect(completed.phase).toBe('COMPLETE');
   });
 
-  it('toggleComplete allows reopening a completed parent', async () => {
-    // Setup: parent with completed child, both completed
-    const { task: parent } = await addTask({ title: 'Parent' });
-    const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
-    await completeTask(child.id);
-    await completeTask(parent.id);
-
-    // Reopen should work (toggle from COMPLETE → TODO, no guard needed)
-    const { task: reopened } = await toggleComplete(parent.id);
-    expect(reopened.phase).toBe('TODO');
-  });
-
-  it('error message includes child task titles', async () => {
-    const { task: parent } = await addTask({ title: 'Parent' });
-    await addTask({ title: 'Fix login bug', parent_task_id: parent.id });
-
-    try {
-      await completeTask(parent.id);
-      expect.fail('should have thrown');
-    } catch (err) {
-      expect(err).toBeInstanceOf(ActiveChildrenError);
-      expect((err as Error).message).toContain('Fix login bug');
-    }
-  });
-
-  it('non-COMPLETE phases on parent are allowed even with active children', async () => {
+  it('non-COMPLETE phases on a parent with open children still work', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     await addTask({ title: 'Child', parent_task_id: parent.id });
 
-    // Setting to IN_PROGRESS should work fine
     const { task: updated } = await updateTask(parent.id, { phase: 'IN_PROGRESS' });
     expect(updated.phase).toBe('IN_PROGRESS');
   });

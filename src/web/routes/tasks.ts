@@ -19,7 +19,6 @@ import {
   deleteTasksByIds,
   mergeTaskInto,
   ActiveSessionError,
-  ActiveChildrenError,
   InvalidProjectNameError,
   InvalidFocusTierError,
   ProjectSourceConflictError,
@@ -986,8 +985,8 @@ tasksRouter.patch('/reorder', async (req: Request, res: Response, next: NextFunc
 // (same reason the `/groups…` paths sit above `/:id`).
 //
 // Both endpoints are PARTIAL-SUCCESS by design: they always return 200 with
-// { changed|deleted, failed[] }. A single un-completable task (active children) or
-// busy task (active session) must not void the other 9 the user picked. The client
+// { changed|deleted, failed[] }. A single bad id or busy task (active session)
+// must not void the other 9 the user picked. The client
 // applies `changed`/`deleted` and surfaces `failed` as a warning.
 
 /** Validate a batch body's task_ids array. Returns the ids, or null after replying 400. */
@@ -1389,10 +1388,6 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: err.message, project: err.project })
       return
     }
-    if (err instanceof ActiveChildrenError) {
-      res.status(409).json({ error: err.message, active_children: err.activeChildren, active_count: err.activeCount })
-      return
-    }
     if (err instanceof CircularDependencyError) {
       res.status(409).json({ error: err.message, task_id: err.taskId, dep_id: err.depId })
       return
@@ -1410,10 +1405,6 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
     bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
-    if (err instanceof ActiveChildrenError) {
-      res.status(409).json({ error: err.message, active_children: err.activeChildren, active_count: err.activeCount })
-      return
-    }
     next(err)
   }
 })
@@ -1488,10 +1479,6 @@ tasksRouter.post('/:id/toggle-complete', async (req: Request, res: Response, nex
     const result = await toggleComplete(id)
     res.json(result)
   } catch (err) {
-    if (err instanceof ActiveChildrenError) {
-      res.status(409).json({ error: err.message, active_children: err.activeChildren, active_count: err.activeCount })
-      return
-    }
     next(err)
   }
 })

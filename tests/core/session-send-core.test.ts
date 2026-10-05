@@ -83,7 +83,7 @@ function rec(claudeSessionId: string, overrides: Partial<SessionRecord> = {}): S
 /** The in-memory session registry every mocked tracker call reads. */
 let sessions: SessionRecord[] = [];
 /** Tasks the stand-in getTask can resolve (same contract as the real one). */
-let tasks: Array<{ id: string; title: string; session_id?: string }> = [];
+let tasks: Array<{ id: string; title: string; session_id?: string; parent_task_id?: string; phase?: string }> = [];
 
 /** Grabs the (sid, busText, opts) of the Nth sendMessageToSession call. */
 function dispatched(n = 0): { sid: string; busText: string; opts: Record<string, unknown> } {
@@ -757,6 +757,89 @@ describe('performSessionSend — in_reply_to routes to the requester’s CURRENT
       'origin_session_gone', 410,
     );
     expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('performSessionSend — a subtask never messages its COMPLETE parent', () => {
+  // 2026-10-04: a parent may complete while its subtasks run; a peer message
+  // reopens a completed task, so a worker's send would pull a closed leader back.
+  const PARENT = 'sess-parent-1';
+  const CHILD = 'sess-child-1';
+
+  beforeEach(() => {
+    sessions = [
+      rec(PARENT, { title: 'Leader', taskId: 'task-parent' }),
+      rec(CHILD, { title: 'Daily digest', taskId: 'task-child' }),
+      rec('sess-peer-1', { title: 'Peer', taskId: 'task-peer' }),
+    ];
+    tasks = [
+      { id: 'task-parent', title: 'Leader', phase: 'COMPLETE' },
+      { id: 'task-child', title: 'Daily digest', phase: 'IN_PROGRESS', parent_task_id: 'task-parent' },
+      { id: 'task-peer', title: 'Peer', phase: 'IN_PROGRESS' },
+    ];
+  });
+
+  it('refuses the subtask send with parent_complete, delivers nothing and registers no request', async () => {
+    const err = await expectSendError(
+      performSessionSend({ to: PARENT, text: 'today\'s digest is out', callerSid: CHILD }),
+      'parent_complete', 409,
+    );
+    expect(err.message).toContain('"Leader" (task-parent)');
+    expect(err.message).toContain('is complete');
+    expect(err.detail).toEqual({ parentTaskId: 'task-parent' });
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect(fs.existsSync(REQUESTS_FILE) ? JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf8')).requests : []).toEqual([]);
+  });
+
+  it('delivers once the parent is reopened, and to an open parent', async () => {
+    tasks[0].phase = 'IN_PROGRESS';
+    const result = await performSessionSend({ to: PARENT, text: 'done', callerSid: CHILD, expectReply: false });
+    expect(result.delivery).toBe('queued');
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves everyone else alone: a non-subtask peer and the human still reach a completed task', async () => {
+    await performSessionSend({ to: PARENT, text: 'from a peer', callerSid: 'sess-peer-1', expectReply: false });
+    await performSessionSend({ to: PARENT, text: 'from the human' });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('says parent_complete, never "use task_start", when the completed parent has no live session', async () => {
+    sessions = sessions.map((x) => x.claudeSessionId === PARENT ? rec(PARENT, { title: 'Leader', taskId: 'task-parent', archived: true }) : x);
+    const err = await expectSendError(performSessionSend({ to: 'task-parent', text: 'done', callerSid: CHILD }), 'parent_complete', 409);
+    expect(err.message).not.toContain('task_start');
+    // Anyone else still learns the task is not started.
+    await expectSendError(performSessionSend({ to: 'task-parent', text: 'hi', callerSid: 'sess-peer-1' }), 'task_has_no_session', 409);
+  });
+
+  it('a legacy short-prefix parent link still counts as the parent', async () => {
+    tasks[1].parent_task_id = 'task-par';
+    await expectSendError(performSessionSend({ to: PARENT, text: 'done', callerSid: CHILD }), 'parent_complete', 409);
+  });
+
+  it('a subtask may still message its siblings while the parent is complete', async () => {
+    tasks[2].parent_task_id = 'task-parent';
+    await performSessionSend({ to: 'sess-peer-1', text: 'sibling note', callerSid: CHILD, expectReply: false });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses the subtask reply to a request its COMPLETE parent made, and withdraws the request', async () => {
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    const rq = await createSessionRequest({ fromSessionId: PARENT, toSessionId: CHILD, toTaskId: 'task-child', text: 'reply when done' });
+
+    await expectSendError(
+      performSessionSend({ text: 'here is the result', inReplyTo: rq.id, callerSid: CHILD }),
+      'parent_complete', 409,
+    );
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(await getSessionRequest(rq.id)).toMatchObject({ status: 'withdrawn' });
+
+    // Reopened: the same reply goes through (late, the row is settled).
+    tasks[0].phase = 'IN_PROGRESS';
+    const ok = await performSessionSend({ text: 'here is the result', inReplyTo: rq.id, callerSid: CHILD });
+    expect(ok.repliedTo).toBe(rq.id);
+    expect(dispatched().sid).toBe(PARENT);
   });
 });
 

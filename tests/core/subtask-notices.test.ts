@@ -19,8 +19,10 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-subtask-notices'));
 
 const getTask = vi.fn();
+const getChildTasks = vi.fn();
 vi.mock('../../src/core/task-manager.js', () => ({
   getTask: (...args: unknown[]) => getTask(...args),
+  getChildTasks: (...args: unknown[]) => getChildTasks(...args),
 }));
 
 const getSessionByClaudeId = vi.fn();
@@ -35,11 +37,13 @@ const sendMessageToSession = vi.fn();
 const enqueueMessage = vi.fn();
 const editMessage = vi.fn();
 const getQueue = vi.fn();
+const deleteMessage = vi.fn();
 vi.mock('../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: (...args: unknown[]) => sendMessageToSession(...args),
   enqueueMessage: (...args: unknown[]) => enqueueMessage(...args),
   editMessage: (...args: unknown[]) => editMessage(...args),
   getQueue: (...args: unknown[]) => getQueue(...args),
+  deleteMessage: (...args: unknown[]) => deleteMessage(...args),
 }));
 
 import {
@@ -50,9 +54,15 @@ import {
   flushSubtaskNotices,
   noticeQueueId,
   queueSubtaskNotice,
+  isSubtaskOf,
+  noticeSubjects,
+  quietCompletedParent,
   resolveParentDestination,
+  restoreWithdrawnAsks,
   type SubtaskNotice,
 } from '../../src/core/sessions/subtask-notices.js';
+import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js';
+import fs from 'node:fs';
 import { lastTurnOf, turnStarterOf } from '../../src/core/sessions/session-request-notify.js';
 import { buildWalnutMessage, parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import { parseSessionEnvelopes } from '../../web/src/components/sessions/session-envelope.js';
@@ -90,12 +100,15 @@ beforeEach(() => {
   sessions = [rec(PARENT_SID, { title: 'Ship the dashboard', process_status: 'running' })];
   parent = { id: 'parent-1', title: 'Ship the dashboard', phase: 'IN_PROGRESS' };
   getTask.mockReset();
+  getChildTasks.mockReset();
   getSessionByClaudeId.mockReset();
   getSessionsForTask.mockReset();
   sendMessageToSession.mockReset();
   enqueueMessage.mockReset();
   editMessage.mockReset();
   getQueue.mockReset();
+  deleteMessage.mockReset();
+  deleteMessage.mockResolvedValue(true);
   getTask.mockImplementation(async (id: string) => (id === parent.id ? parent : null));
   getSessionByClaudeId.mockImplementation(async (sid: string) => sessions.find((s) => s.claudeSessionId === sid) ?? null);
   getSessionsForTask.mockImplementation(async (taskId: string) => sessions.filter((s) => s.taskId === taskId));
@@ -299,6 +312,22 @@ describe('delivery to the parent', () => {
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
+  it('a parent that completes inside the coalesce window hears nothing', async () => {
+    // 2026-10-04: a parent may complete with subtasks open; a notice queued a
+    // moment before must not land in the closed task's session.
+    await queueSubtaskNotice(notice({ kind: 'completed' }));
+    parent = { ...parent, phase: 'COMPLETE' };
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect(editMessage).not.toHaveBeenCalled();
+    // Reopened, it hears its subtasks again.
+    parent = { ...parent, phase: 'IN_PROGRESS' };
+    await queueSubtaskNotice(notice({ kind: 'completed' }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
   it('the parent\'s live session wins over a stopped newer one; an archived row is never an address', async () => {
     sessions = [
       rec('old-live', { process_status: 'running', lastActiveAt: '2026-01-01T00:00:00.000Z' }),
@@ -352,5 +381,91 @@ describe('delivery to the parent', () => {
       notice({ child: { id: 'a', title: '' }, kind: 'blocked', lastWords: undefined }),
     ]);
     expect(out.map((n) => `${n.child.id}/${n.kind}/${n.lastWords?.text ?? ''}`)).toEqual(['a/stopped/2', 'b/completed/', 'a/blocked/']);
+  });
+});
+
+describe('a parent that completes hears nothing more from its subtasks (2026-10-04)', () => {
+  const tasks: Record<string, Partial<Task>> = {
+    'child-a': { id: 'child-a', title: 'Build the page', parent_task_id: 'parent-1' },
+    // A legacy short-prefix parent id still names parent-1.
+    'child-b': { id: 'child-b', title: 'Write the tests', parent_task_id: 'parent' },
+    'peer-task': { id: 'peer-task', title: 'Someone else', phase: 'IN_PROGRESS' },
+  };
+  const noticeAbout = (id: string, kind: SubtaskNotice['kind'] = 'stopped') =>
+    buildSubtaskNoticeText(notice({ child: { id, title: tasks[id]?.title ?? id }, kind }));
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    // Each case starts with an empty request ledger.
+    fs.rmSync(REQUESTS_FILE, { force: true });
+    getTask.mockImplementation(async (id: string) => (id === parent.id ? parent : tasks[id] ?? null));
+    sessions = [rec(PARENT_SID), rec('parent-sid-0002', { process_status: 'stopped' })];
+  });
+
+  it('withdraws the asks to its own subtasks from every parent session, and leaves the rest pending', async () => {
+    const toA = await createSessionRequest({ fromSessionId: PARENT_SID, toSessionId: 'child-sid-a', toTaskId: 'child-a', text: 'build it, reply when done' });
+    const toB = await createSessionRequest({ fromSessionId: 'parent-sid-0002', toTaskId: 'child-b', text: 'and this' });
+    const toPeer = await createSessionRequest({ fromSessionId: PARENT_SID, toTaskId: 'peer-task', text: 'a question for a peer' });
+    const fromElsewhere = await createSessionRequest({ fromSessionId: 'someone-else', toTaskId: 'child-a', text: 'not the parent' });
+    getQueue.mockResolvedValue([]);
+
+    expect(await quietCompletedParent('parent-1')).toEqual({ withdrawn: 2, dropped: 0 });
+
+    expect(await getSessionRequest(toA.id)).toMatchObject({ status: 'withdrawn' });
+    expect((await getSessionRequest(toA.id))?.outcome).toBeUndefined();
+    expect(await getSessionRequest(toB.id)).toMatchObject({ status: 'withdrawn' });
+    expect(await getSessionRequest(toPeer.id)).toMatchObject({ status: 'pending' });
+    expect(await getSessionRequest(fromElsewhere.id)).toMatchObject({ status: 'pending' });
+    // A second completion edge finds nothing left to withdraw.
+    expect(await quietCompletedParent('parent-1')).toEqual({ withdrawn: 0, dropped: 0 });
+
+    // Reopened: what was withdrawn is pending again, and only that.
+    expect(await restoreWithdrawnAsks('parent-1')).toBe(2);
+    expect(await getSessionRequest(toA.id)).toMatchObject({ status: 'pending' });
+    expect(await getSessionRequest(toA.id)).not.toHaveProperty('settledAt');
+    expect(await getSessionRequest(toB.id)).toMatchObject({ status: 'pending' });
+    expect(await restoreWithdrawnAsks('parent-1')).toBe(0);
+  });
+
+  it('drops the Walnut notices about its subtasks still queued for it, and nothing else', async () => {
+    getQueue.mockImplementation(async (sid: string) => sid !== PARENT_SID ? [] : [
+      { id: 'sn-child-a-stopped', status: 'pending', message: noticeAbout('child-a') },
+      { id: 'qm-batch', status: 'pending', message: `${noticeAbout('child-a', 'completed')}\n\n${noticeAbout('child-b', 'error')}` },
+      { id: 'qm-human', status: 'pending', message: 'hello, are you there?' },
+      { id: 'qm-flight', status: 'processing', message: noticeAbout('child-b') },
+      { id: 'qm-peer', status: 'pending', message: noticeAbout('peer-task') },
+      { id: 'qm-mixed', status: 'pending', message: `${noticeAbout('child-a')}\n\nand a human line` },
+    ]);
+
+    expect(await quietCompletedParent('parent-1')).toEqual({ withdrawn: 0, dropped: 2 });
+    expect(deleteMessage.mock.calls).toEqual([[PARENT_SID, 'sn-child-a-stopped'], [PARENT_SID, 'qm-batch']]);
+  });
+
+  it('reads a queued message as notices only when it is nothing but Walnut notification envelopes', () => {
+    expect(noticeSubjects(noticeAbout('child-a'))).toEqual(['child-a']);
+    expect(noticeSubjects(`  ${noticeAbout('child-a')}\n\n${noticeAbout('child-b')}\n`)).toEqual(['child-a', 'child-b']);
+    expect(noticeSubjects('plain text')).toEqual([]);
+    expect(noticeSubjects(`${noticeAbout('child-a')}\ntrailing words`)).toEqual([]);
+    expect(noticeSubjects(`before\n${noticeAbout('child-a')}`)).toEqual([]);
+    const peer = buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Build the page', 'about-task': 'child-a' }, body: 'hi' });
+    expect(noticeSubjects(peer)).toEqual([]);
+  });
+
+  it('a parent link may be a legacy short prefix', () => {
+    expect(isSubtaskOf({ parent_task_id: 'parent-1' }, 'parent-1')).toBe(true);
+    expect(isSubtaskOf({ parent_task_id: 'parent' }, 'parent-1')).toBe(true);
+    expect(isSubtaskOf({ parent_task_id: 'other' }, 'parent-1')).toBe(false);
+    expect(isSubtaskOf({ parent_task_id: '' }, 'parent-1')).toBe(false);
+    expect(isSubtaskOf(null, 'parent-1')).toBe(false);
+  });
+
+  it('never throws: a task with no sessions or a failing store quiets nothing', async () => {
+    sessions = [];
+    expect(await quietCompletedParent('parent-1')).toEqual({ withdrawn: 0, dropped: 0 });
+    sessions = [rec(PARENT_SID)];
+    getQueue.mockRejectedValue(new Error('queue busy'));
+    expect(await quietCompletedParent('parent-1')).toEqual({ withdrawn: 0, dropped: 0 });
+    getSessionsForTask.mockRejectedValue(new Error('tracker busy'));
+    expect(await restoreWithdrawnAsks('parent-1')).toBe(0);
   });
 });

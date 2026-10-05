@@ -63,7 +63,7 @@ export interface HostSlice {
   requests: OfflineSliceRequest[]
 }
 
-export type OfflineRequestStatus = 'pending' | 'replied' | 'notified' | 'expired'
+export type OfflineRequestStatus = 'pending' | 'replied' | 'notified' | 'expired' | 'withdrawn'
 
 /** A request row (same fields as the server's SessionRequest) plus daemon bookkeeping. */
 export interface OfflineRequestRow {
@@ -428,6 +428,23 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     })
   }
 
+  /**
+   * The server's rule (session-send-core.ts), said here too: a subtask never
+   * messages its COMPLETE parent, as this copy (with queued completions) sees it.
+   */
+  function parentCompleteRefusal(home: string, callerSid: string, targetTaskId: string | undefined): GatewayResult | undefined {
+    const ownId = callerIdentity(home, callerSid).taskId
+    if (!ownId || !targetTaskId) return undefined
+    const tasks = tasksWithOverlay(home)
+    const parentRef = tasks.find((t) => t.id === ownId)?.parent_task_id
+    if (!parentRef || !targetTaskId.startsWith(parentRef)) return undefined
+    const parent = tasks.find((t) => t.id === targetTaskId)
+    if (parent?.phase !== 'COMPLETE') return undefined
+    return fail('parent_complete', `"${parent.title}" (${parent.id}) is your task's parent and it is complete: it no longer takes messages `
+      + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear from you again, the user reopens it.',
+    { detail: { parentTaskId: parent.id } })
+  }
+
   async function opReply(home: string, callerSid: string, args: Record<string, unknown>, text: string): Promise<GatewayResult> {
     const id = String(args.in_reply_to)
     const { own, copy } = findRequest(home, id)
@@ -436,6 +453,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     const me = callerIdentity(home, callerSid)
     const isTarget = row.toSessionId === callerSid || (!!row.toTaskId && row.toTaskId === me.taskId)
     if (!isTarget) return fail('bad_request', `request ${id} was not addressed to this session`)
+    const closed = parentCompleteRefusal(home, callerSid, sessionOf(home, row.fromSessionId)?.taskId)
+    if (closed) return closed
     if (!deps.isLive(row.fromSessionId)) {
       return needsServer(`The asking session (${row.fromSessionId.slice(0, 8)}) is not running on this host; routing the answer`)
     }
@@ -495,8 +514,13 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       return opReply(home, callerSid, args, text)
     }
     if (typeof args.to !== 'string' || !args.to.trim()) return fail('bad_request', '`to` is required (or pass in_reply_to)')
+    // Before the session lookup: a completed parent usually has nothing running.
+    const closed = parentCompleteRefusal(home, callerSid, resolveTask(home, args.to).task?.id)
+    if (closed) return closed
     const target = resolveSendTarget(home, args.to)
     if (target.error) return target.error
+    const closedTarget = parentCompleteRefusal(home, callerSid, target.taskId)
+    if (closedTarget) return closedTarget
     const targetSid = target.sid!
     if (targetSid === callerSid) return fail('self_send', 'target resolves to the calling session itself')
     const denied = admitWrite(callerSid) ?? roomFor(home)
@@ -562,14 +586,6 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     let size = 0
     try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
     if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to queue offline (${size} bytes, limit ${MAX_ARGS_BYTES})`)
-    if (name === 'task_complete') {
-      // The server's own rule (task-manager guardActiveChildren), said now
-      // instead of failing at replay: the children this copy knows of.
-      const active = tasksWithOverlay(home).filter((t) => t.parent_task_id === task.id && t.phase !== 'COMPLETE')
-      if (active.length > 0) {
-        return fail('bad_request', `Cannot complete task "${task.title}": ${active.length} child task(s) are still active (${active.slice(0, 5).map((t) => t.title).join(', ')}). Complete or delete them first.`)
-      }
-    }
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
     const base = slices.get(home)?.tasks.find((t) => t.id === task.id)?.updated_at
@@ -613,6 +629,16 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   // ── turn ends and deadlines: the fallback notice for rows this host owns ──
 
   async function notify(home: string, row: OfflineRequestRow, outcome: EnvelopeOutcome, lastText?: string): Promise<void> {
+    // As on the server: no Walnut notice into a COMPLETE asker's session. Withdrawn
+    // (nobody was told), so the server restores it if that task is reopened.
+    const askerTask = sessionOf(home, row.fromSessionId)?.taskId
+    if (askerTask && tasksWithOverlay(home).find((t) => t.id === askerTask)?.phase === 'COMPLETE') {
+      row.status = 'withdrawn'
+      row.settledAt = new Date(deps.now()).toISOString()
+      append(home, { kind: 'row', row: { ...row } })
+      deps.log('info', 'offline host: asker task is complete, request withdrawn', { home, requestId: row.id })
+      return
+    }
     row.status = outcome === 'timeout' ? 'expired' : 'notified'
     row.outcome = outcome
     row.settledAt = new Date(deps.now()).toISOString()
