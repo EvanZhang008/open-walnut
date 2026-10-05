@@ -770,6 +770,32 @@ function markUnsettled(messages: readonly SessionHistoryMessage[]): SessionHisto
   return messages.map(m => (isUnsettledRow(m) ? { ...m, unsettled: true } : m))
 }
 
+/**
+ * A whale's history reaching back to the delta's anchor (history-anchor-reach.ts),
+ * or null: not within the reader's ceiling, the host is still connecting, or the
+ * read failed. Every null keeps the old answer, a full rebuild.
+ */
+async function reachDeltaAnchor(
+  sessionId: string,
+  record: SessionRecord,
+  anchorMsgId: string,
+): Promise<SessionHistoryMessage[] | null> {
+  const started = Date.now()
+  try {
+    const { readHistoryReachingAnchor } = await import('../../core/history-anchor-reach.js')
+    const reached = await boundHostRead(record.host, () => readHistoryReachingAnchor(sessionId, record.cwd, record.host, anchorMsgId))
+    log.web.info('history delta reached past the tail window for its anchor', {
+      sessionId, anchorMsgId, found: !!reached, bytes: reached?.bytes, messages: reached?.messages.length, ms: Date.now() - started,
+    })
+    return reached?.messages ?? null
+  } catch (err) {
+    log.web.warn('history delta anchor reach failed; rebuilding', {
+      sessionId, anchorMsgId, error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
 function unavailableHistoryReason(record: SessionRecord): string {
   const caps = engineCaps(record.engine)
   if (caps.historySource === 'acp-journal') {
@@ -1589,15 +1615,36 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           anchorMsgId,
           anchorTail: Number.isFinite(anchorTail) ? anchorTail : 0,
         }
-        const resolved = resolveDeltaStart(messages, anchorReq, { windowed: historyWindowed })
+        let deltaSource = messages
+        let resolved = resolveDeltaStart(messages, anchorReq, { windowed: historyWindowed })
+        // A whale's tail slid past the anchor (one turn of screenshots appends more
+        // than the window holds). Declining here handed the client a window sharing
+        // no row with its own, which it could only swap in: every AI reply vanished
+        // until a reload (2026-10-05). Reach back for the anchor instead.
+        if (resolved.kind === 'rebuild' && resolved.reason === 'anchor-missing' && historyWindowed
+            && anchorMsgId && record && !forkedFromSessionId) {
+          const reached = await reachDeltaAnchor(sessionId, record, anchorMsgId)
+          if (reached) {
+            const again = resolveDeltaStart(reached, anchorReq, { windowed: true })
+            if (again.kind === 'delta') {
+              deltaSource = reached
+              resolved = again
+            }
+          }
+        }
         if (resolved.kind === 'delta') {
-          const slice = messages.slice(resolved.start)
+          let slice = deltaSource.slice(resolved.start)
           // The client re-asks for rows it holds an UNSETTLED copy of (an Agent row
           // still awaiting its late `bgTaskFinished`, a tool row awaiting its result).
           // Serving those again by identity is what un-freezes a prefix the client
           // synced mid-flight (inc-1785965937858). Ambiguous/unanswerable → rebuild,
           // which also stops the client from re-asking forever.
-          const { revised, ambiguous } = collectRequestedRevisions(messages, reviseIds)
+          let { revised, ambiguous } = collectRequestedRevisions(deltaSource, reviseIds)
+          // A reached run was read raw; give its rows the same image rewrite.
+          if (deltaSource !== messages && record?.host && !ambiguous) {
+            slice = await rewriteHistoryRemoteImages(slice, record.host, sessionId, record.cwd)
+            if (revised.length > 0) revised = await rewriteHistoryRemoteImages(revised, record.host, sessionId, record.cwd)
+          }
           if (!ambiguous) {
             res.json({
               messages: markUnsettled(slice),

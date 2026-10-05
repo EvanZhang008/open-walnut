@@ -2006,6 +2006,62 @@ function seedIncrementalState(
 }
 
 /**
+ * The JSONL path a window read uses, or undefined when it cannot be found.
+ * Hashed-cwd session (encoded cwd >200 chars) with no cached path: the
+ * resolved-path cache is only seeded by a SUCCESSFUL full read, and a file over
+ * the byte ceiling can never complete one, so for a hashed-cwd whale the cache
+ * stays empty forever and the window read used to die right here, serving an
+ * empty history for a healthy live session (inc-1786390337224: 70 MB JSONL,
+ * "No conversation" on every load). One fs.find resolves it; cached so the next
+ * read takes the stat fast-path.
+ */
+export async function resolveHistoryWindowPath(
+  sessionId: string,
+  cwd: string | undefined,
+  daemonHost: string,
+  reader: { findSessionPath(sessionId: string): Promise<string | null> },
+): Promise<string | undefined> {
+  const known = cwd && isSafeForProjectEncoding(cwd)
+    ? remoteJsonlPath(sessionId, cwd)
+    : getResolvedRemotePath(sessionId, daemonHost);
+  if (known) return known;
+  const found = (await reader.findSessionPath(sessionId)) ?? undefined;
+  if (found) setResolvedRemotePath(sessionId, daemonHost, found);
+  return found;
+}
+
+/** True when the session has recorded in-place rewinds, which no window can filter. */
+export async function hasInPlaceRewinds(sessionId: string): Promise<boolean> {
+  return (await getInPlaceRewinds(sessionId)) !== undefined;
+}
+
+/**
+ * Parse a run of whole JSONL lines cut from the end of a session's file (a
+ * window), the way every window read does: Walnut's injected user lines merged
+ * in, echo claims bound, and the result marked windowed.
+ */
+export async function parseHistoryWindowText(
+  sessionId: string,
+  windowText: string,
+  parseOpts?: ParseSessionMessagesOptions,
+): Promise<SessionHistoryMessage[]> {
+  const merged = await mergeSyntheticUserEvents(sessionId, windowText);
+  const parsed = parseSessionMessages(merged, parseOpts);
+  // Echo-claim binding — same as the full-read path (:1572). Its absence here
+  // silently killed the STRONGEST absorption evidence on exactly the sessions
+  // that need it most: a whale transcript always degrades to this window, so
+  // `walnutMessageId` was null on every message (verified live: 0 of 1752), and
+  // the frontend's id-exact dedup pass was dead code for the entire session
+  // (inc-1785993576822).
+  try {
+    const { bindEchoClaims } = await import('./echo-claims.js');
+    bindEchoClaims(sessionId, parsed);
+  } catch { /* best-effort — text dedup remains the fallback */ }
+  markWindowedRead(parsed);
+  return parsed;
+}
+
+/**
  * Tail-bounded history read for consumers that only need RECENT messages
  * (search content indexing keeps ≤50 KB; the phone transcript sweep keeps the
  * last 100 messages). For files ≤ maxTailBytes this is a plain
@@ -2042,24 +2098,11 @@ async function readSessionHistoryTailWindow(
   parseOpts?: ParseSessionMessagesOptions,
 ): Promise<SessionHistoryMessage[] | null> {
   const daemonHost = host ?? '__local__';
-  let statPath = cwd && isSafeForProjectEncoding(cwd)
-    ? remoteJsonlPath(sessionId, cwd)
-    : getResolvedRemotePath(sessionId, daemonHost);
   try {
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
-    if (!statPath) {
-      // Hashed-cwd session (encoded cwd >200 chars) with no cached path. The
-      // resolved-path cache is only seeded by a SUCCESSFUL full read — and a
-      // file over the byte ceiling can never complete one, so for a hashed-cwd
-      // whale the cache stays empty forever and the degradation path used to
-      // die right here, serving an empty history for a healthy live session
-      // (inc-1786390337224: 70 MB JSONL, "No conversation" on every load).
-      // One fs.find resolves it; cache so the next read takes the stat fast-path.
-      statPath = (await reader.findSessionPath(sessionId)) ?? undefined;
-      if (!statPath) return null;
-      setResolvedRemotePath(sessionId, daemonHost, statPath);
-    }
+    const statPath = await resolveHistoryWindowPath(sessionId, cwd, daemonHost, reader);
+    if (!statPath) return null;
     const st = await reader.stat(statPath);
     if (!st) return null;
     // Clamp the window to the reader's own ceiling. Without this, a ceiling set
@@ -2076,20 +2119,7 @@ async function readSessionHistoryTailWindow(
       const nl = res.content.indexOf('\n');
       windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
     }
-    const merged = await mergeSyntheticUserEvents(sessionId, windowText);
-    const parsed = parseSessionMessages(merged, parseOpts);
-    // Echo-claim binding — same as the full-read path (:1572). Its absence here
-    // silently killed the STRONGEST absorption evidence on exactly the sessions
-    // that need it most: a whale transcript always degrades to this window, so
-    // `walnutMessageId` was null on every message (verified live: 0 of 1752), and
-    // the frontend's id-exact dedup pass was dead code for the entire session
-    // (inc-1785993576822).
-    try {
-      const { bindEchoClaims } = await import('./echo-claims.js');
-      bindEchoClaims(sessionId, parsed);
-    } catch { /* best-effort — text dedup remains the fallback */ }
-    markWindowedRead(parsed);
-    return parsed;
+    return await parseHistoryWindowText(sessionId, windowText, parseOpts);
   } catch (err) {
     log.session.debug('tail window read failed', {
       sessionId, host: daemonHost,
