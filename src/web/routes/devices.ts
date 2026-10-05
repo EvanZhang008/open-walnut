@@ -12,18 +12,23 @@
  * Changing an EXISTING device (re-pair, remove) is for that device itself, the
  * Mac that owns this companion's machine credentials, or this machine itself
  * (core/device-actor.ts). The caller is the token it presented, never a name.
+ *
+ * The cloud half (`target: 'cloud'`, `?target=cloud`, `cloudDevices`) is this
+ * Mac acting on its companion with its own token there, so it is for this Mac
+ * itself only (cloudRelayDecision); everyone else hears 403 first.
  */
 
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createDevice, revokeDevice, rotateDevice, listDevices, listDeviceRecords, type DeviceInfo } from '../../core/device-auth.js'
-import { DeviceChangeRefused, LOCAL_ACTOR, type DeviceActor } from '../../core/device-actor.js'
+import { DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecision, type DeviceActor, type DeviceChange } from '../../core/device-actor.js'
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
 import { tailscaleSummary } from '../../core/tailnet.js'
 import { revokeAdoptionTwin } from './device-twins.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { classifyLocalRequest } from '../middleware/local-trust.js'
+import { requestOrigin } from '../middleware/request-origin.js'
+import { isLocalOrigin } from '../../lib/caller-origin.js'
 import { revokePushTokensForDevice } from './push.js'
 import {
   MACHINE_PROOF_HEADER, MachineCredentialRefused, adoptMachineCredential, mintMachineCredential, revokeMachineCredential,
@@ -32,15 +37,28 @@ import {
 export const devicesRouter = Router()
 
 /**
- * Who is asking. This machine itself (the primary's console over loopback;
- * never on a companion, whose public traffic reaches it through a local
- * proxy), else the bearer token the auth middleware accepted.
+ * Who is asking. This machine itself only for a request this machine trusts
+ * that also acts for a caller on this Mac (the console, a local client, a
+ * session on this Mac): the op executor's loopback self-calls carry the
+ * ORIGINAL caller's class in x-walnut-origin (src/lib/caller-origin.ts), and one
+ * made for a session on another exec host or for a paired client is that
+ * caller, never this Mac (request-origin.ts: the header only lowers trust).
+ * Never this Mac on a companion, whose public traffic reaches it through a
+ * local proxy. Else the credential the auth middleware accepted: a paired
+ * device by its token, a config.yaml API key by its name. A self-call for a
+ * caller off this Mac that carries no credential is its origin alone.
  */
 export function actorOf(req: Request): DeviceActor {
-  if (!CLOUD_MODE && classifyLocalRequest(req).trusted) return LOCAL_ACTOR
+  const origin = requestOrigin(req)
+  if (!CLOUD_MODE && isLocalOrigin(origin)) return LOCAL_ACTOR
+  const named = req as Request & { apiKeyName?: string; deviceName?: string }
   const header = req.headers.authorization
-  if (header?.startsWith('Bearer ')) return { token: header.slice(7) }
-  return { apiKey: (req as Request & { apiKeyName?: string }).apiKeyName ?? '' }
+  if (header?.startsWith('Bearer ')) {
+    // The auth middleware names every credential it accepts and marks the
+    // paired devices among them: a named one that is no device is an API key.
+    return named.apiKeyName && !named.deviceName ? { apiKey: named.apiKeyName } : { token: header.slice(7) }
+  }
+  return { onBehalfOf: origin }
 }
 
 /** Name of the caller for logs (the auth middleware's; absent for an API key). */
@@ -54,6 +72,19 @@ export function sendRefusal(res: Response, err: unknown): boolean {
     res.status(err.status).json({ error: err.message, code: err.code })
     return true
   }
+  return false
+}
+
+/**
+ * Before any relay to the cloud companion, which speaks with this Mac's own
+ * token there: the caller must be this Mac itself (device-actor.ts
+ * cloudRelayDecision). Otherwise answers the refusal and returns false.
+ */
+async function cloudRelayAllowed(req: Request, res: Response, change: DeviceChange): Promise<boolean> {
+  const decision = cloudRelayDecision(await listDeviceRecords(), actorOf(req), change)
+  if (decision.ok) return true
+  log.web.warn('devices: cloud relay refused', { caller: callerDevice(req), change, code: decision.refusal.code })
+  sendRefusal(res, decision.refusal)
   return false
 }
 
@@ -193,8 +224,10 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
       : await getPairingTargets(origin, requestPort(req))
     // Cloud-paired devices live in the cloud's auth.json — fetch them so the
     // console can list and revoke them (best-effort: a down cloud must not
-    // break the local list).
-    const cloudDevices = CLOUD_MODE ? [] : await listCloudDevices()
+    // break the local list). That half is this Mac's view on its companion
+    // (its own token there): for this Mac itself only, like every other relay.
+    const relayed = !CLOUD_MODE && cloudRelayDecision([], actorOf(req), 'list').ok
+    const cloudDevices = relayed ? await listCloudDevices() : []
     // Only real, QR-pairable devices reach the console. Daemon bridge
     // credentials (kind:'machine' / the legacy `bridge-*` names) are plumbing —
     // listing them next to a "Show QR" button invited pairing a phone against a
@@ -211,7 +244,7 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     res.json({
       devices: devices.map((d) => ({ ...d, role: classify(d.name) })),
       cloudDevices: cloudDevices.map((d) => ({ ...d, role: classify(d.name) })),
-      targets: targets.map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
+      targets: targets.filter((t) => CLOUD_MODE || relayed || t.kind !== 'cloud').map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
       // So the console can say "install Tailscale" when no tailnet target exists.
       // Absent = say nothing: on a companion, and while the first probe is still out.
       ...(tailscale ? { tailscale } : {}),
@@ -250,6 +283,7 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     const replace = req.body?.replace === true
 
     if (wantsCloud) {
+      if (!await cloudRelayAllowed(req, res, replace ? 'rotate' : 'create')) return
       const created = await mintOnCloud(name, replace)
       if ('error' in created) {
         res.status(created.status).json({ error: created.error })
@@ -325,6 +359,7 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
   try {
     const name = String(req.params.name ?? '')
     if (req.query.target === 'cloud' && !CLOUD_MODE) {
+      if (!await cloudRelayAllowed(req, res, 'revoke')) return
       const cloud = getCloudPairingEndpoint()
       if (!cloud) {
         res.status(400).json({ error: 'Cloud sync is not configured.' })

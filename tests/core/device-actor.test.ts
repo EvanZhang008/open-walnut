@@ -22,10 +22,10 @@ import {
   type DeviceRecord,
 } from '../../src/core/device-auth.js'
 import {
-  DeviceChangeRefused, LOCAL_ACTOR, deviceChangeDecision, deviceChangeRefusal, isPhoneRecord, newDeviceId, platformFromInfo, recordForToken,
-  type DeviceActor,
+  CLOUD_RELAY_REFUSAL, DeviceChangeRefused, LOCAL_ACTOR, SELF_CALL_CANNOT_PAIR, cloudRelayDecision, deviceChangeDecision, deviceChangeRefusal,
+  isPhoneRecord, newDeviceId, platformFromInfo, recordForToken, type DeviceActor,
 } from '../../src/core/device-actor.js'
-import { mintMachineCredential } from '../../src/core/machine-credentials.js'
+import { machineCredentialDecision, mintMachineCredential } from '../../src/core/machine-credentials.js'
 import { runDeviceRevoke } from '../../src/commands/device.js'
 
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
@@ -112,6 +112,87 @@ describe('deviceChangeDecision (pure)', () => {
     expect(isPhoneRecord({})).toBe(false)
     expect(recordForToken(devices, 'my-phone-token')).toBe(phone)
     expect(recordForToken(devices, 'nope')).toBeUndefined()
+  })
+})
+
+describe('cloudRelayDecision (pure): the Mac acting on its companion with its own token', () => {
+  const phone = rec('my-phone', { platform: 'ios' })
+  const studio = rec('studio-mac', { platform: 'other' })
+  const tablet = rec('spare-tablet')
+  const devices = [phone, studio, tablet]
+
+  it('this machine itself may list, pair, re-pair and remove there', () => {
+    for (const change of ['list', 'create', 'rotate', 'revoke'] as const) {
+      expect(cloudRelayDecision(devices, LOCAL_ACTOR, change)).toEqual({ ok: true, by: 'local' })
+    }
+  })
+
+  it('no paired device, unknown token, API key or self-call made for a caller off this Mac may, whatever it would be allowed on this Mac', () => {
+    const callers: DeviceActor[] = [
+      as('my-phone'), as('studio-mac'), as('spare-tablet'), { token: 'not-a-token' }, { apiKey: 'console-key' }, { apiKey: '' },
+      { onBehalfOf: 'host:devbox' }, { onBehalfOf: 'remote-http' }, { onBehalfOf: 'unknown' },
+    ]
+    for (const actor of callers) {
+      for (const change of ['list', 'create', 'rotate', 'revoke'] as const) {
+        const d = cloudRelayDecision(devices, actor, change)
+        expect(d.ok).toBe(false)
+        if (d.ok) continue
+        expect(d.refusal).toBeInstanceOf(DeviceChangeRefused)
+        expect(d.refusal.status).toBe(403)
+        const phonePairing = change === 'create' && 'token' in actor && actor.token === 'my-phone-token'
+        expect(d.refusal.code).toBe(phonePairing ? 'phone_cannot_pair' : 'device_change_refused')
+        if (!phonePairing) expect(d.refusal.message).toBe(CLOUD_RELAY_REFUSAL)
+      }
+    }
+  })
+
+  it('a device asking about itself is still refused: the relay would speak as the Mac, not as it', () => {
+    expect(cloudRelayDecision(devices, as('studio-mac'), 'rotate').ok).toBe(false)
+    expect(cloudRelayDecision(devices, as('my-phone'), 'revoke').ok).toBe(false)
+  })
+
+  it('the refusals are plain sentences that name the one place it works (pinned, not compared to themselves)', () => {
+    expect(CLOUD_RELAY_REFUSAL).toBe('Only this Mac itself can pair or remove devices on the cloud companion, in Settings › Phones & Cloud on this Mac.')
+    expect(SELF_CALL_CANNOT_PAIR).toBe('Only this Mac itself can pair new devices, in Settings › Phones & Cloud on this Mac.')
+  })
+})
+
+describe('a loopback self-call made for a caller off this Mac (the op executor, x-walnut-origin)', () => {
+  // A session on another exec host, a paired client, and a header sent twice.
+  const remote: DeviceActor[] = [{ onBehalfOf: 'host:devbox' }, { onBehalfOf: 'remote-http' }, { onBehalfOf: 'unknown' }]
+  const owner = rec('mac-primary', { platform: 'other' })
+  const phone = rec('my-phone', { platform: 'ios' })
+  const cred = rec('bridge-local', { kind: 'machine', ownerId: owner.id })
+  const devices = [owner, phone, cred]
+
+  it('pairs nothing on this Mac: whoever it acts for showed no credential', () => {
+    for (const actor of remote) {
+      for (const cloudMode of [false, true]) {
+        const d = deviceChangeDecision(devices, actor, 'create', 'laundered', cloudMode)
+        expect(d).toMatchObject({ ok: false, refusal: { status: 403, code: 'device_change_refused' } })
+        if (!d.ok) expect(d.refusal.message).toBe('Only this Mac itself can pair new devices, in Settings › Phones & Cloud on this Mac.')
+      }
+    }
+  })
+
+  it('removes and re-pairs nothing either, not even a device of that name', () => {
+    for (const actor of remote) {
+      for (const change of ['rotate', 'revoke'] as const) {
+        for (const name of ['mac-primary', 'my-phone']) {
+          const d = deviceChangeDecision(devices, actor, change, name, false)
+          expect(d).toMatchObject({ ok: false, refusal: { status: 403, code: 'device_change_refused' } })
+          if (!d.ok) expect(d.refusal.message).toBe(`Only ${name} itself or this Mac can remove or re-pair ${name}.`)
+        }
+      }
+    }
+  })
+
+  it('mints no machine credential: it is no paired Mac', () => {
+    for (const actor of remote) {
+      for (const action of ['mint', 'adopt'] as const) {
+        expect(machineCredentialDecision(devices, { by: actor, name: 'bridge-devbox', action })).toMatchObject({ ok: false, status: 403, code: 'machine_needs_device' })
+      }
+    }
   })
 })
 
