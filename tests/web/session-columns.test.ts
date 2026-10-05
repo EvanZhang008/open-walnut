@@ -8,6 +8,7 @@ import {
   fitRestoredColumns,
   removeSessionColumn,
   replaceSessionColumn,
+  restoreSessionColumn,
   splitByLock,
   type SessionSlot,
 } from '../../web/src/pages/sessionColumns';
@@ -568,5 +569,66 @@ describe('sessionColumns: removeSessionColumn / replaceSessionColumn', () => {
     expect(replaceSessionColumn([slot('full'), slot('prefix', true)], 'prefix', 'full')[0].locked).toBe(true);
     expect(replaceSessionColumn([slot('full', true), slot('prefix')], 'prefix', 'full')[0].locked).toBe(true);
     expect(replaceSessionColumn([slot('full'), slot('prefix')], 'prefix', 'full')[0].locked).toBe(false);
+  });
+});
+
+describe('sessionColumns: restoreSessionColumn (Undo of a completed task\'s column)', () => {
+  const restore = (cols: SessionSlot[], s: SessionSlot, index: number, triage = false, max = 3) =>
+    restoreSessionColumn(cols, s, index, triage, max);
+
+  it('puts the column back at the index it had (middle of a strip of three)', () => {
+    // [a b c] -> b closed -> [a c] -> Undo
+    expect(restore([slot('a'), slot('c')], slot('b'), 1).map(s => s.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('puts the column back at either end', () => {
+    expect(restore([slot('b'), slot('c')], slot('a'), 0).map(s => s.id)).toEqual(['a', 'b', 'c']);
+    expect(restore([slot('a'), slot('b')], slot('c'), 2).map(s => s.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is a no-op (same reference) when the column is already open', () => {
+    const cols = [slot('a'), slot('b')];
+    expect(restore(cols, slot('b'), 0)).toBe(cols);
+  });
+
+  it('clamps an index past the end to the end of the unlocked region, before the pins', () => {
+    const cols = [slot('a'), slot('p', true)];
+    expect(restore(cols, slot('b'), 9, false, 3).map(s => s.id)).toEqual(['a', 'b', 'p']);
+  });
+
+  it('never goes in front of the drafts that are pinned to the far left', () => {
+    const cols = [slot('draft:1'), slot('a')];
+    expect(restore(cols, slot('b'), 0, false, 3).map(s => s.id)).toEqual(['draft:1', 'b', 'a']);
+  });
+
+  it('comes back unlocked (a locked column never rolls up, so there is no pin to restore)', () => {
+    expect(restore([slot('a')], slot('b', true), 1).find(s => s.id === 'b')?.locked).toBe(false);
+  });
+
+  it('with no room left it is a normal open: the budget evicts the rightmost unlocked column', () => {
+    // the strip refilled to 3 while the Undo was on screen
+    const cols = [slot('x'), slot('y'), slot('z')];
+    const out = restore(cols, slot('b'), 1, false, 3).map(s => s.id);
+    expect(out).toContain('b');
+    expect(out).toHaveLength(3);
+    expect(out[0]).toBe('b'); // addSessionColumn opens leftmost
+    expect(out).not.toContain('z');
+  });
+
+  it('respects the triage panel\'s slot in the budget', () => {
+    // max 3 with triage open leaves 2 for sessions: already 2 open -> full
+    const out = restore([slot('a'), slot('c')], slot('b'), 1, true, 3).map(s => s.id);
+    expect(out).toHaveLength(2);
+    expect(out).toContain('b');
+  });
+
+  it('uses the lock grant like an open does: every panel pinned still leaves one free slot, left of the pins', () => {
+    const cols = [slot('p1', true), slot('p2', true), slot('p3', true)];
+    expect(restore(cols, slot('b'), 0, false, 3).map(s => s.id)).toEqual(['b', 'p1', 'p2', 'p3']);
+  });
+
+  it('is unchanged (same reference) at the hard ceiling of pinned panels', () => {
+    const cols = Array.from({ length: MAX_PANELS }, (_, i) => slot(`p${i}`, true));
+    expect(restore(cols, slot('b'), 0, false, MAX_PANELS)).toBe(cols);
   });
 });

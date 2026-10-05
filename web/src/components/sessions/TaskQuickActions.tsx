@@ -83,9 +83,16 @@ interface TaskQuickActionsProps {
    * native menu, and only the innermost matching ancestor owns the gesture.
    */
   contextMenuScope?: string;
+  /**
+   * The person just completed this task from this control (the ring, or the status menu's
+   * Complete). Fired once the shared store has applied it (which rolls itself back on a
+   * refusal), or, with no store row, once the server accepted the write; `from` is the phase
+   * it left. A session column uses it to roll itself up.
+   */
+  onCompleted?: (info: { taskId: string; from: TaskPhase }) => void;
 }
 
-export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, leadingSection, onOpenTaskDetail, contextMenuScope }: TaskQuickActionsProps) {
+export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   // Writes go through the shared task store when it carries this row: the
@@ -220,9 +227,18 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     });
     const id = task.id;
     const shared = storeFor(id);
-    if (shared) { shared.setPhase(id, phase); return; }
+    if (shared) {
+      shared.setPhase(id, phase);
+      if (completing) onCompleted?.({ taskId: id, from: task.phase });
+      return;
+    }
+    // Nothing rolls back the store here, so the host hears about the completion only once the
+    // server has taken it: a refused write must never cost the person their column.
+    const from = task.phase;
     const attempt = (retries: number) => {
-      updateTask(id, { phase }).catch((err) => {
+      updateTask(id, { phase }).then(() => {
+        if (completing) onCompleted?.({ taskId: id, from });
+      }, (err) => {
         if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
           fetchTask(id).then(setTask).catch(() => {});
           return;
@@ -235,7 +251,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       });
     };
     attempt(5);
-  }, [task, storeFor]);
+  }, [task, storeFor, onCompleted]);
 
   // The status control's "Until" row. Same split as the other writes: this
   // menu's own copy at once, then the shared store when it carries the row.

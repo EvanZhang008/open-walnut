@@ -80,6 +80,7 @@ import {
   replaceSessionColumn,
   toggleLockSlot,
 } from './sessionColumns';
+import { useColumnCompleteRollUp } from './useColumnCompleteRollUp';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -352,7 +353,7 @@ interface MainPageProps {
 
 export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
-  const { notify } = useNotifications();
+  const { notify, dismissToast } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, setFolderParent, moveFolderToProject } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
@@ -1614,6 +1615,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     };
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
+
+  // Completing a task from its column's header rolls the column up and closes it, with an Undo.
+  const columnRollUp = useColumnCompleteRollUp({
+    sessionColumns,
+    setSessionColumns,
+    tasks,
+    setPhase,
+    closeColumn: handleCloseSession,
+    openSession: openSessionOrToast,
+    notify,
+    dismissToast,
+    triageOpenRef,
+    maxPanelsRef,
+  });
+  // The × on a column: whatever roll-up was in flight gives way to the person's own close.
+  const handleClosePanel = useCallback((sessionId: string) => {
+    columnRollUp.release(sessionId);
+    handleCloseSession(sessionId);
+  }, [columnRollUp.release, handleCloseSession]);
 
   useEffect(() => {
     const pending = pendingSessionFocusRef.current;
@@ -3173,6 +3193,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps(colIdx - 1)} />}
             <div
               className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === mobileActiveIdx ? ' is-mobile-active' : ''}`}
+              data-column-id={sid}
               style={colStyle}
             >
               {isDraft ? (
@@ -3241,7 +3262,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   sessionId={sid}
                   locked={slot.locked}
                   onToggleLock={handleToggleLockSession}
-                  onClose={handleCloseSession}
+                  onTaskCompleted={columnRollUp.onTaskCompleted}
+                  onClose={handleClosePanel}
                   onTaskClick={handleFocusTaskById}
                   onLocateTask={handleLocateTaskById}
                   onOpenTaskDetail={handleOpenTaskDetailById}

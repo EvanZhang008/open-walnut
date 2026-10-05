@@ -234,6 +234,28 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      // Column roll-up fixtures (column-complete-roll-up.spec.ts): three real columns, each with a
+      // long transcript, whose tasks the spec completes and undoes. Their own tasks, because the
+      // spec changes their phase and every other spec shares this dataset.
+      ...(['a', 'b', 'c'] as const).map((key) => ({
+        id: `pw-task-rollup-${key}`,
+        title: `Roll-up fixture ${key.toUpperCase()}`,
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [`pw-rollup-${key}-session`],
+        active_session_ids: [],
+        session_id: `pw-rollup-${key}-session`,
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      })),
       {
         // Service preview fixture (session-service-preview.spec.ts): its session
         // printed the addresses of REAL http servers this fixture starts, so a
@@ -2687,6 +2709,33 @@ await fs.mkdir(searchAskFixtureRoot, { recursive: true })
     ].join('\n'),
   )
 }
+// Column roll-up fixtures: 45 question/answer turns each, so the columns are the real density
+// (a scrolled chat under the header), not an empty panel.
+{
+  const encodedCwd = vscodeFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+  await fs.mkdir(jsonlDir, { recursive: true })
+  for (const key of ['a', 'b', 'c'] as const) {
+    const sessionId = `pw-rollup-${key}-session`
+    await fs.writeFile(
+      path.join(jsonlDir, `${sessionId}.jsonl`),
+      Array.from({ length: 45 }, (_, i) => [
+        JSON.stringify({
+          type: 'user',
+          sessionId,
+          timestamp: new Date(sessionFixtureNow - 90_000 + i * 1_000).toISOString(),
+          message: { role: 'user', content: `roll-up ${key} question ${i + 1}` },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId,
+          timestamp: new Date(sessionFixtureNow - 89_500 + i * 1_000).toISOString(),
+          message: { role: 'assistant', content: [{ type: 'text', text: `roll-up ${key} answer ${i + 1}: the chat keeps enough rows to scroll under the header.` }] },
+        }),
+      ]).flat().concat('').join('\n'),
+    )
+  }
+}
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,
@@ -2719,6 +2768,19 @@ await fs.writeFile(
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
       },
+      ...(['a', 'b', 'c'] as const).map((key) => ({
+        claudeSessionId: `pw-rollup-${key}-session`,
+        taskId: `pw-task-rollup-${key}`,
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 10_000).toISOString(),
+        messageCount: 90,
+        cwd: vscodeFixtureRoot,
+        title: `Roll-up fixture session ${key.toUpperCase()}`,
+      })),
       {
         claudeSessionId: 'pw-tags-session',
         taskId: 'pw-task-tags',
