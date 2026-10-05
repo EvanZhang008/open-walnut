@@ -52,7 +52,7 @@ function resolveOpenWalnutHome(): string {
   // Test guard: never let tests touch ~/.open-walnut/
   if (isTestEnv) {
     // If OPEN_WALNUT_HOME is explicitly set to a non-production path, trust it
-    if (envHome && envHome !== productionHome && !envHome.startsWith(productionHome + path.sep)) {
+    if (envHome && !isUnderProductionHome(envHome)) {
       assertNotProductionPath(envHome)
       return envHome
     }
@@ -91,15 +91,30 @@ export function assertNotProductionPath(inputPath: string): void {
   if (!isTestEnv) return
 
   const resolved = path.resolve(inputPath)
-  const prodHome = path.join(os.homedir(), '.open-walnut')
 
-  if (resolved === prodHome || resolved.startsWith(prodHome + path.sep)) {
+  if (isUnderProductionHome(resolved)) {
     throw new Error(
       `SAFETY: Test process attempted to use production path: ${resolved}\n` +
       `  This would destroy real user data in ~/.open-walnut/.\n` +
       `  Set OPEN_WALNUT_HOME to a temp directory or let constants.ts auto-assign one.`,
     )
   }
+}
+
+/**
+ * True for ~/.open-walnut (or a path inside it) under $HOME AND under the
+ * account's own home from the passwd entry: the test harness runs every worker
+ * under a fake HOME (tests/setup/exec-guard.ts), which must not hide the real
+ * data dir from this check.
+ */
+function isUnderProductionHome(p: string): boolean {
+  const homes = [os.homedir()]
+  try { homes.push(os.userInfo().homedir) } catch { /* no passwd entry: $HOME is all there is */ }
+  const resolved = path.resolve(p)
+  return homes.some((h) => {
+    const prodHome = path.join(h, '.open-walnut')
+    return resolved === prodHome || resolved.startsWith(prodHome + path.sep)
+  })
 }
 
 /**

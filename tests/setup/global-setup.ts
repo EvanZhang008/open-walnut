@@ -31,6 +31,10 @@ import { sweepStaleTmpDirs } from './stale-tmp';
 // Shared with runtime-dir-isolation.ts (workers): one name, one sweep rule.
 import { PROD_RUNTIME_DIR, RUNTIME_DIR_PREFIX, isCallerChosenRuntime } from './runtime-dir-choice';
 import { stripGitRedirectEnv } from './git-env-isolation';
+import { EXEC_GUARD_HOME_PREFIX, formatHit, unattributedHitsSince, unreadHitsOfRun, type ExecGuardHit } from './exec-guard-core';
+
+/** When this run started, for the exec guard's unattributed-hit check at teardown. */
+const RUN_STARTED_MS = Date.now();
 
 /**
  * Fail fast when the running Node can't load better-sqlite3.
@@ -158,6 +162,8 @@ const MOCK_HOME_NAME = /^[a-z][a-z0-9-]*-\d{13}-[a-z0-9]{6,}$/;
 function sweepRuntimeDirs(): void {
   const removed = sweepStaleTmpDirs([
     { prefix: RUNTIME_DIR_PREFIX, pidFrom: 'name' },
+    // The exec guard's fake HOME, one per worker (tests/setup/exec-guard.ts).
+    { prefix: EXEC_GUARD_HOME_PREFIX, pidFrom: 'name' },
     // Mock homes from tests/helpers/mock-constants.ts (`<prefix>-<13-digit ms>-<base36>`).
     // The worker's tmp-reaper removes them, but a spawned daemon or CLI can write
     // into one AFTER that (notifications.json, logs/), re-creating it from a
@@ -184,6 +190,28 @@ export function teardown(): void {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   }
+  // Before the sweep: it removes the dead workers' homes, and their logs with them.
+  const unread = unreadHitsOfRun(process.pid);
   sweepRuntimeDirs();
   releaseTestSlot();
+  failOnUnattributedExecHits(unread);
+}
+
+/**
+ * A guarded tool no test was failed for still fails the run: one a worker's
+ * checks never read (a background dial that outlived its test; `started by`
+ * names that test), or one from a process that had lost the test env. Something
+ * reached for the real claude or ssh, and the shim was all that stopped it
+ * (tests/setup/exec-guard.ts).
+ */
+function failOnUnattributedExecHits(unread: ExecGuardHit[]): void {
+  const lost = unattributedHitsSince(RUN_STARTED_MS);
+  if (unread.length === 0 && lost.length === 0) return;
+  const parts: string[] = [];
+  if (unread.length > 0) parts.push(`${unread.length} after the check of the test that started them:\n${unread.map(formatHit).join('\n')}`);
+  if (lost.length > 0) parts.push(`${lost.length} from a process that had lost the test env:\n${lost.map(formatHit).join('\n')}`);
+  throw new Error(
+    `[exec-guard] ${unread.length + lost.length} call(s) to a real claude/ssh/scp/sftp were refused that no test `
+    + 'was failed for:\n' + parts.join('\n'),
+  );
 }

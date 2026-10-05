@@ -340,6 +340,8 @@ export class DaemonConnection {
   private _connected = false
   private _connecting = false
   private _destroyed = false
+  /** Dialled straight to a daemon's URL (connectDirect): no ssh path to fall back on. */
+  private _dialledDirect = false
   private _disconnectedSince: number | null = null
   private _phase: DaemonConnectPhase = 'idle'
   private _phaseSince = Date.now()
@@ -3429,6 +3431,7 @@ export class DaemonConnection {
    */
   async connectDirect(wsUrl: string): Promise<void> {
     if (this._connected) return
+    this._dialledDirect = true
     await this.connectWebSocket(wsUrl)
     const ok = await this.verifyCapabilities()
     if (!ok) {
@@ -4114,6 +4117,15 @@ export class DaemonConnection {
       })
       this.recoverDisconnectedSessions().catch(() => {})
       return
+    }
+
+    // A remote host dialled straight to a daemon URL (a test's MockDaemon: no
+    // other caller does) has no tunnel to rebuild. The ssh path below would dial
+    // its sshTarget for real (2026-10-03: `ssh -fN localhost` and `ssh localhost
+    // sh -s` from tests whose mock daemon had stopped), and the URL may be another
+    // test's daemon by now. The attempt fails and the loop keeps its schedule.
+    if (this._dialledDirect && this.hostKey !== '__local__') {
+      throw new Error(`Connection to ${this.hostKey} was made straight to its daemon's URL; there is no ssh path to redial it`)
     }
 
     // Local daemon path: no SSH tunnel / ControlMaster — just re-ensure the

@@ -39,6 +39,8 @@
  *
  * Not covered: child processes. A CLI or server a test spawns resolves its own
  * target, so give it an explicit OPEN_WALNUT_API_URL (the spawning tests do).
+ * A child that reaches for the real claude or ssh is the exec guard's
+ * (tests/setup/exec-guard.ts).
  */
 import net from 'node:net'
 import os from 'node:os'

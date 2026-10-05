@@ -249,8 +249,14 @@ async function maySweepDtachDir(host: string | undefined, owner: string | null, 
  * Orphan reaper: sweep `walnut-*.dsock` dtach sockets on the local host (and
  * known remote hosts) and kill any whose backing session no longer exists in
  * the registry. Safety net for the "conditional keep" strategy. Best-effort.
+ *
+ * `remoteHosts`: also ssh the remote hosts. Off under vitest by default, for the
+ * host warmup's reason (hostWarmupGateReason): every test that boots a server
+ * would otherwise ssh each host in its config, and the developer's real ones
+ * when HOME is real.
  */
-export async function reapOrphanDtach(): Promise<void> {
+export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Promise<void> {
+  const remoteHosts = opts.remoteHosts ?? !process.env.VITEST
   let liveIds: Set<string>
   let sessions: Awaited<ReturnType<typeof listSessions>>
   try {
@@ -274,18 +280,20 @@ export async function reapOrphanDtach(): Promise<void> {
   // live-session hosts would leak their sockets forever. Sweep local + EVERY
   // configured host, unioned with hosts of live sessions.
   const hosts = new Set<string | undefined>([undefined])
-  for (const s of sessions) if (s.host) hosts.add(s.host)
-  try {
-    const config = await getConfig()
-    for (const h of Object.keys(config.hosts ?? {})) hosts.add(h)
-    // A host that cannot open a terminal (the cloud box: no SSH) has no dtach
-    // sockets to sweep, and listing them would only fail on every start.
-    const { hostOffersTerminal } = await import('../../core/hosts/host-status.js')
-    for (const [h, def] of Object.entries(config.hosts ?? {})) {
-      if (def && !hostOffersTerminal(def)) hosts.delete(h)
+  if (remoteHosts) {
+    for (const s of sessions) if (s.host) hosts.add(s.host)
+    try {
+      const config = await getConfig()
+      for (const h of Object.keys(config.hosts ?? {})) hosts.add(h)
+      // A host that cannot open a terminal (the cloud box: no SSH) has no dtach
+      // sockets to sweep, and listing them would only fail on every start.
+      const { hostOffersTerminal } = await import('../../core/hosts/host-status.js')
+      for (const [h, def] of Object.entries(config.hosts ?? {})) {
+        if (def && !hostOffersTerminal(def)) hosts.delete(h)
+      }
+    } catch (err) {
+      log.web.warn('reapOrphanDtach: failed to load config hosts', { error: String(err) })
     }
-  } catch (err) {
-    log.web.warn('reapOrphanDtach: failed to load config hosts', { error: String(err) })
   }
 
   for (const host of hosts) {

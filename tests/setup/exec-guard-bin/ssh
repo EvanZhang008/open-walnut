@@ -1,0 +1,19 @@
+#!/bin/sh
+# Open Walnut test exec guard (tests/setup/exec-guard.ts). This dir leads PATH in
+# every mock-tier vitest worker, so a test that reaches the real claude, ssh, scp
+# or sftp lands here instead. It never runs the real tool: it records who asked
+# (the worker's guard log fails that test in afterEach) and exits like a missing
+# claude (127) or a failed ssh (255).
+tool=${0##*/}
+tag=${WALNUT_TEST_EXEC_GUARD_TAG:-a process that lost the test env}
+log=${WALNUT_TEST_EXEC_GUARD_LOG:-${TMPDIR:-/tmp}/open-walnut-exec-guard-unattributed.log}
+args=$(printf '%s' "$*" | tr '\t\n\r' '   ' | cut -c1-400)
+line=$(printf '%s\t%s\t%s\t%s\t%s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$tool" "$tag" "$args")
+{ printf '%s\n' "$line" 2>/dev/null >> "$log"; } 2>/dev/null \
+  || { printf '%s\n' "$line" 2>/dev/null >> /tmp/open-walnut-exec-guard-unattributed.log; } 2>/dev/null
+echo "open-walnut test guard: refused to run the real $tool (from $tag): $tool $args" >&2
+echo "open-walnut test guard: tests use the repo mocks; see tests/setup/exec-guard.ts" >&2
+case "$tool" in
+  claude) exit 127 ;;
+  *) exit 255 ;;
+esac

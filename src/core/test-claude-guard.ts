@@ -7,7 +7,11 @@
  * worker whose server started a session on its own local daemon ran the user's
  * real CLI on the Mac (a real model turn, with the user's credentials and
  * tools), and failed with "claude not found" in CI. A PATH shim in the test
- * process cannot help: the daemon never uses that PATH first.
+ * process alone cannot help: a daemon puts its login shell's PATH first. The
+ * harness's exec guard (tests/setup/exec-guard.ts) now also makes a daemon a
+ * test started keep the test's PATH, with refusing claude/ssh scripts, first
+ * (WALNUT_TEST_EXEC_GUARD, host-runtime-core.ts); this file decides which
+ * `claude` a session is told to run.
  *
  * Under vitest, a daemon the test did not hand over (no test daemon URL: the
  * server's own local daemon, or a configured host) is told to run the harness's

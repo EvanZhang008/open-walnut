@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { publishLocally, serveReleases } from '../../scripts/release-rehearsal/runtime.mjs'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SCRIPT = path.join(ROOT, 'scripts/install.sh')
@@ -42,7 +43,8 @@ function install(home: string, env: Record<string, string> = {}): Promise<Run> {
   return new Promise((resolve) => {
     execFile('/bin/sh', [SCRIPT], {
       env: {
-        PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home,
+        // A system PATH with no Node, behind the test guard (which holds no Node either).
+        PATH: guardedPath([], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home,
         OPEN_WALNUT_RELEASE_BASE_URL: server.url,
         OPEN_WALNUT_RELEASES_API: `${server.url}/api.json`,
         ...env,

@@ -85,12 +85,18 @@ describe('no terminal on the cloud box', () => {
   it('the orphan sweep skips Cloud: no ssh to it and no warning on every start', async () => {
     const warn = vi.spyOn(log.web, 'warn')
     try {
-      await reapOrphanDtach()
+      // remoteHosts: on outside vitest; here every ssh is the mocked shell.
+      await reapOrphanDtach({ remoteHosts: true })
       const listFailed = warn.mock.calls.filter(([msg]) => msg === 'reapOrphanDtach: list failed')
       expect(listFailed.filter(([, data]) => (data as { host?: string })?.host === '__cloudbox__')).toEqual([])
       expect(touchedCloud()).toEqual([])
       // The SSH host is still swept.
       expect(shellCalls.some((c) => c.some((a) => a.includes('devbox.example.test')))).toBe(true)
     } finally { warn.mockRestore() }
+  })
+
+  it('under vitest the default sweep stays on this machine (a test server never ssh-es its hosts)', async () => {
+    await reapOrphanDtach()
+    expect(shellCalls.some((c) => c.some((a) => a.includes('devbox.example.test')))).toBe(false)
   })
 })

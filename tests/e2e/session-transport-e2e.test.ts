@@ -373,12 +373,14 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
+  // The mock ssh stays first on PATH until every connection is down: closing the
+  // test-remote link runs `ssh -O exit`, and that must reach the mock, not a real ssh.
+  await stopServer()
+  await daemon?.stop()
   if (originalPath !== undefined) {
     process.env.PATH = originalPath
   }
-  sessionRunner.setTestDaemonUrl(undefined)
-  await stopServer()
-  await daemon?.stop()
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value

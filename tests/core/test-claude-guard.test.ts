@@ -97,7 +97,9 @@ describe('server-side CLI resolution', () => {
     fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     expect(resolveClaudeCliExecutable({ ...process.env, PATH: dir })).toBe(path.join(dir, 'claude'))
     expect(isTestScratchPath(dir)).toBe(true)
-    expect(isTestScratchPath(os.homedir())).toBe(false)
+    // A real home, not os.homedir(): the worker's HOME is a fake one in the temp dir.
+    expect(isTestScratchPath('/Users/someone')).toBe(false)
+    expect(isTestScratchPath('/home/someone')).toBe(false)
     expect(isTestScratchPath('/usr/local/bin')).toBe(false)
   })
 

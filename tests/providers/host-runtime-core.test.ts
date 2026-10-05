@@ -166,6 +166,30 @@ describe('computeDaemonPath: login-shell capture', () => {
     expect(out.path).toBe([...defaultDaemonExtraPaths(HOME), '/inherited'].join(':'))
   })
 
+  it('a daemon a test started (WALNUT_TEST_EXEC_GUARD) runs what the test controls, then the guard, then the machine', () => {
+    // tests/setup/exec-guard.ts: else the login shell's /usr/bin/ssh or a real
+    // claude on the login PATH would win over the harness's refusing scripts.
+    const guard = '/repo/tests/setup/exec-guard-bin'
+    const login = () => '__WALNUT_LOGIN_PATH__=/login/real/bin:/usr/local/bin:/usr/bin:/bin\n'
+    const guarded = withSyncExec({ HOME, SHELL: '/bin/zsh', PATH: `/test/fakes:${guard}:/usr/bin`, WALNUT_TEST_EXEC_GUARD: guard }, login)
+    const parts = guarded.rt.computeDaemonPath().path.split(':')
+    const at = (d: string) => parts.indexOf(d)
+    // The test's own fakes and its (fake) HOME's bins, where twin tests keep a mock claude.
+    expect(at('/test/fakes')).toBe(0)
+    expect(at(`${HOME}/.local/bin`)).toBeGreaterThan(at('/test/fakes'))
+    expect(at(guard)).toBeGreaterThan(at(`${HOME}/.local/bin`))
+    // Everything of the machine's comes after the refusal.
+    for (const d of ['/usr/bin', '/login/real/bin', '/usr/local/bin']) expect(at(d), d).toBeGreaterThan(at(guard))
+    // A test that pinned a PATH without the guard (a host with no claude) gets
+    // exactly that and its HOME's bins: no login PATH, no system dirs.
+    const pinned = withSyncExec({ HOME, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin', WALNUT_TEST_EXEC_GUARD: guard }, login)
+    const homeBins = defaultDaemonExtraPaths(HOME).filter((d) => d.startsWith(`${HOME}/`))
+    expect(pinned.rt.computeDaemonPath().path).toBe(['/usr/bin', '/bin', ...homeBins].join(':'))
+    // Outside the harness nothing changes: the login PATH leads.
+    const plain = withSyncExec({ HOME, SHELL: '/bin/zsh', PATH: '/test/fakes' }, login)
+    expect(plain.rt.computeDaemonPath().path.split(':')[0]).toBe('/login/real/bin')
+  })
+
   it('does not feed an sh script to a shell that is not sh-compatible (fish)', () => {
     expect(createHostRuntime({ env: {} }).loginShellScript('/usr/bin/fish')).toBeNull()
     expect(createHostRuntime({ env: {} }).parseLoginShellPath('x\n__WALNUT_LOGIN_PATH__=relative-only\n')).toBeNull()
@@ -249,6 +273,17 @@ describe('preflight', () => {
     })
     expect(calls).toHaveLength(1)
     expect(calls[0].timeout).toBeLessThanOrEqual(5000)
+  })
+
+  it('under the test exec guard, its refusing claude reads as not installed and is never run for a version', async () => {
+    const guard = '/repo/tests/setup/exec-guard-bin'
+    const files = { [`${guard}/claude`]: { content: '#!/bin/sh\nexit 127\n', exec: true }, '/usr/bin/gcc': { content: ELF, exec: true } }
+    const { deps, calls } = fakeHost(files, () => ({ code: 0, stdout: '2.1.280 (Claude Code)\n' }),
+      { HOME, PATH: `${guard}:/usr/bin`, WALNUT_TEST_EXEC_GUARD: guard })
+    expect((await createHostRuntime(deps).preflight()).claude).toEqual({ found: false, error: MISSING })
+    expect(calls.filter((c) => c.args[0] === '--version')).toEqual([])
+    // A session start is not a readiness check: it still runs the guard, which fails that test.
+    expect(await createHostRuntime(deps).ensureClaude('claude', deps.env.PATH!)).toMatchObject({ ok: true, path: `${guard}/claude` })
   })
 
   it('runs `claude --version` with the discovered node dir first on PATH, and reports a crash', async () => {

@@ -89,15 +89,25 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try { await stopServer() } catch { /* already down */ }
-  process.env.PATH = savedPath
   for (const s of held) s.destroy()
   await new Promise<void>((r) => silent.close(() => r()))
-  // The stand-in ssh processes end by themselves; wait for every one (never signal them).
-  const pids = fs.existsSync(pidFile()) ? fs.readFileSync(pidFile(), 'utf-8').split('\n').map(Number).filter((n) => n > 1) : []
-  const end = Date.now() + 30_000
+  // The stand-in ssh processes end by themselves; wait for every one (never signal
+  // them), the ones a dial still in flight starts after the stop included: the
+  // ControlMaster's ends at 14s and its fallback `ssh ... sh -s` follows at once.
+  // Only then may `ssh` stop meaning the stand-in, or that fallback would run the
+  // next ssh on PATH (the real one, before tests/setup/exec-guard.ts).
+  const pids = () => fs.existsSync(pidFile()) ? fs.readFileSync(pidFile(), 'utf-8').split('\n').map(Number).filter((n) => n > 1) : []
   const alive = (p: number) => { try { process.kill(p, 0); return true } catch { return false } }
-  while (Date.now() < end && pids.some(alive)) await new Promise((r) => setTimeout(r, 250))
-  expect(pids.filter(alive)).toEqual([])
+  const end = Date.now() + 60_000
+  let quietSince = 0
+  while (Date.now() < end) {
+    if (pids().some(alive)) quietSince = 0
+    else if (!quietSince) quietSince = Date.now()
+    else if (Date.now() - quietSince >= 2_000) break
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  process.env.PATH = savedPath
+  expect(pids().filter(alive)).toEqual([])
 }, 90_000)
 
 describe.each([

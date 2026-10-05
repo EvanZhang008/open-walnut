@@ -35,17 +35,24 @@ const { connectHostNow } = await import('../../../src/core/hosts/host-connect-ac
 const { clearReconnectCause } = await import('../../../src/providers/daemon-reconnect-cause.js')
 
 type Internals = { _disconnectedSince: number | null; scheduleReconnect: (d: number) => void }
-const HOSTS = ['__cloudbox__', 'devbox'] as const
+// The targets getConfig names: a pooled connection with another target is a
+// different machine, so connectHostNow would replace it with a new one and dial.
+const TARGETS = {
+  __cloudbox__: { hostname: 'companion.example.com' },
+  devbox: { hostname: 'devbox.example.com', user: 'alice' },
+} as const
+const HOSTS = Object.keys(TARGETS) as Array<keyof typeof TARGETS>
+const reconnects: Record<string, ReturnType<typeof vi.fn>> = {}
 
 beforeEach(async () => {
   vi.useFakeTimers()
   allow.calls = []
   for (const host of HOSTS) {
-    const conn = new dc.DaemonConnection(host, { hostname: `${host}.example.com` })
+    const conn = new dc.DaemonConnection(host, TARGETS[host])
     dc.setPooledConnectionForTest(host, conn)
     ;(conn as unknown as Internals)._disconnectedSince = Date.now()
     conn.setPhaseForTest('reconnecting')
-    vi.spyOn(conn as never, 'reconnect' as never).mockImplementation((async () => { throw new Error('Cloud companion tunnel failed: HTTP 401') }) as never)
+    reconnects[host] = vi.spyOn(conn as never, 'reconnect' as never).mockImplementation((async () => { throw new Error('Cloud companion tunnel failed: HTTP 401') }) as never) as never
     vi.spyOn(conn, 'connect').mockImplementation(async () => { throw new Error('connect() must not run: it would dial for real') })
     ;(conn as unknown as Internals).scheduleReconnect(60_000)
   }
@@ -67,11 +74,14 @@ describe('Retry on the Cloud row', () => {
     const r = await connectHostNow('__cloudbox__')
     expect(r.httpStatus).toBe(200)
     expect(allow.calls).toEqual(['__local__'])
+    // The loop's (stubbed) attempt ran: nothing was replaced, nothing dialled.
+    expect(reconnects.__cloudbox__).toHaveBeenCalledTimes(1)
   })
 
   it('an SSH host\'s Retry leaves the Cloud credential window alone', async () => {
     const r = await connectHostNow('devbox')
     expect(r.httpStatus).toBe(200)
     expect(allow.calls).toEqual([])
+    expect(reconnects.devbox).toHaveBeenCalledTimes(1)
   })
 })

@@ -240,7 +240,43 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     var login = captureLoginShellPathSync()
     var source: 'login-shell' | 'rc' | 'none' = 'login-shell'
     if (!login) { login = rcSourcedPathSync(h); source = login ? 'rc' : 'none' }
+    var guarded = testGuardedPath(h)
+    if (guarded && guarded.pinned) return { path: buildDaemonPath(guarded.path, [], ''), source: source }
+    if (guarded) return { path: buildDaemonPath(guarded.path, defaultExtraPaths(h), login || ''), source: source }
     return { path: buildDaemonPath(login || '', defaultExtraPaths(h), deps.env.PATH || ''), source: source }
+  }
+
+  /**
+   * A daemon a test started (WALNUT_TEST_EXEC_GUARD, set only by the test
+   * harness's tests/setup/exec-guard.ts) runs what the test controls first: the
+   * PATH entries it put ahead of the guard, then the bins under its HOME (always
+   * a fake one there, where twin tests keep their mock claude), then the
+   * harness's refusing claude/ssh dir, and only then the machine (the rest of
+   * the inherited PATH, the login shell's, the system dirs). So neither
+   * /usr/bin/ssh nor a real claude on the login PATH can run. A test that pinned
+   * a PATH without the guard (`PATH: '/usr/bin:/bin'`, a host with no claude)
+   * gets exactly that plus its HOME's bins (`pinned`): nothing of the machine's,
+   * where a real claude could sit. Null outside the harness, which changes
+   * nothing there.
+   */
+  function testGuardedPath(homeDir: string): { path: string; pinned: boolean } | null {
+    var guard = deps.env.WALNUT_TEST_EXEC_GUARD
+    if (!guard) return null
+    var inherited = (deps.env.PATH || '').split(':').filter(function (d) { return !!d })
+    var at = inherited.indexOf(guard)
+    var homeBins = defaultExtraPaths(homeDir).filter(function (d) { return d.indexOf(homeDir + '/') === 0 })
+    if (at < 0) return { path: inherited.concat(homeBins).join(':'), pinned: true }
+    return { path: inherited.slice(0, at).concat(homeBins, [guard], inherited.slice(at + 1)).join(':'), pinned: false }
+  }
+
+  /**
+   * The harness's refusing claude is no install. A readiness check that found it
+   * answers "not installed", as on CI, instead of running it for a version; a
+   * session start still runs it, and the guard fails that test.
+   */
+  function isTestGuardStub(p: string | undefined): boolean {
+    var guard = deps.env.WALNUT_TEST_EXEC_GUARD
+    return !!guard && !!p && p.slice(0, p.lastIndexOf('/')) === guard
   }
 
   function run(file: string, args: string[], timeoutMs: number, prefixDir?: string | null): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
@@ -393,6 +429,7 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     var sp = await shellSetupPath(setup, 5000)
     var pathStr = sp.path
     var probe = await probeClaude('claude', pathStr, deadline - 5000)
+    if (probe.found && isTestGuardStub(probe.path)) probe = { found: false }
     // The spawn preamble plus shell_setup: the environment a session really starts in.
     var viaShell = deps.spawnPreamble ? deps.spawnPreamble() + (setup ? '; { ' + setup + '; } >/dev/null 2>&1 || true' : '') : ''
     var shellRuns = false
@@ -406,6 +443,7 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
         // A bare name is a shell function or alias: the shell may run it, but there is nothing to inspect.
         if (!seen.cmdPath || seen.cmdPath.charAt(0) !== '/') return { claude: { found: false, unknown: 'claude is a shell function or alias' }, pathStr: pathStr }
         probe = await probeClaude(seen.cmdPath, pathStr, deadline - 5000)
+        if (probe.found && isTestGuardStub(probe.path)) probe = { found: false }
         shellRuns = probe.found
       }
       if (probe.found && probe.needsNode && !probe.nodeFound && seen.hasNode) { probe.nodeFound = true; shellRuns = true }

@@ -124,10 +124,10 @@ describe('isThrowawayDataDir', () => {
   });
 
   it('leaves a real data dir alone', () => {
+    // Not os.homedir(): tests run under a fake HOME in the temp dir (tests/setup/exec-guard.ts).
     for (const dir of [
       '/Users/someone/.open-walnut',
       '/home/someone/.open-walnut',
-      path.join(os.homedir(), '.open-walnut'),
     ]) {
       expect(isThrowawayDataDir(dir), dir).toBe(false);
     }
@@ -142,11 +142,13 @@ describe('isThrowawayDataDir', () => {
     // Why the rule is fixed system roots and NOT os.tmpdir(): TMPDIR=$HOME would make
     // every real data dir "temporary" and silently switch off calendar, Screen Time
     // and the rest on the user's own server.
+    // A home outside the temp roots: the real HOME is faked to one inside them.
+    const home = '/Users/someone';
     const previous = process.env.TMPDIR;
-    process.env.TMPDIR = os.homedir();
+    process.env.TMPDIR = home;
     try {
-      expect(os.tmpdir()).toBe(os.homedir());
-      expect(isThrowawayDataDir(path.join(os.homedir(), '.open-walnut'))).toBe(false);
+      expect(os.tmpdir()).toBe(home);
+      expect(isThrowawayDataDir(path.join(home, '.open-walnut'))).toBe(false);
     } finally {
       if (previous === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previous;

@@ -90,7 +90,9 @@ describe('wiring: every config that runs real servers loads it', () => {
     for (const rel of runsServers) {
       const src = fs.readFileSync(path.join(repoRoot, rel), 'utf-8')
       const files = src.match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''
-      expect(files.trim().startsWith("'tests/setup/runtime-dir-isolation.ts'"), `${rel} must load tests/setup/runtime-dir-isolation.ts first`).toBe(true)
+      // Only the exec guard (fake HOME, refusing claude/ssh; it starts nothing) may come before it.
+      const rest = files.trim().replace(/^'tests\/setup\/exec-guard\.ts',\s*/, '')
+      expect(rest.startsWith("'tests/setup/runtime-dir-isolation.ts'"), `${rel} must load tests/setup/runtime-dir-isolation.ts first (after the exec guard)`).toBe(true)
     }
   })
 })

@@ -8,18 +8,18 @@
  * EVERY holder of the pipe, so killing ssh settled nothing while the proxy hung.
  *
  * MACHINE SAFETY: real child processes, but only `/bin/sh`, `sleep` and `cat`
- * (and one `ssh -F /dev/null` whose ProxyCommand is `sleep`, so it never opens a
- * connection). Each stray grandchild is a short `sleep` that exits by itself.
+ * (and a fake `ssh` script in the shape of one whose ProxyCommand never answers;
+ * no test runs the real ssh, tests/setup/exec-guard.ts). Each stray grandchild is
+ * a short `sleep` that exits by itself.
  */
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { runRemoteSh, runSshBounded, SSH_PIPE_GRACE_MS, RemoteCommandError } from '../../src/providers/remote-sh.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const sh = (script: string, timeoutMs: number, input?: string) => runSshBounded(['-c', script], { bin: '/bin/sh', timeoutMs, input })
-
-const hasSsh = (() => {
-  try { execFileSync('ssh', ['-V'], { stdio: 'ignore', timeout: 5_000 }); return true } catch { return false }
-})()
 
 describe('runSshBounded', () => {
   it('a plain command settles on close with its output and code', async () => {
@@ -72,13 +72,21 @@ describe('runSshBounded', () => {
   })
 })
 
-describe.skipIf(!hasSsh)('runRemoteSh with a real ssh whose ProxyCommand never answers', () => {
+describe('runRemoteSh with an ssh whose ProxyCommand never answers', () => {
   it('rejects as timed out by its deadline, not when the proxy exits', async () => {
+    // ssh hands its stderr to the proxy, which outlives it, and neither ends.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fake-ssh-'))
+    fs.writeFileSync(path.join(dir, 'ssh'), '#!/bin/sh\nsleep 6 </dev/null >/dev/null &\nexec sleep 6\n', { mode: 0o755 })
+    const saved = process.env.PATH
+    process.env.PATH = guardedPath([dir])
     const t0 = Date.now()
     const err = await runRemoteSh([
       '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
       '-o', 'ProxyCommand=sleep 6', 'nobody@walnut-test.invalid',
-    ], 'echo hi', 1_500).catch((e: unknown) => e)
+    ], 'echo hi', 1_500).catch((e: unknown) => e).finally(() => {
+      process.env.PATH = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    })
     const took = Date.now() - t0
     expect(err).toBeInstanceOf(RemoteCommandError)
     expect((err as Error).message).toContain('timed out after 1500ms')

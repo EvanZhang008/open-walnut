@@ -35,7 +35,10 @@ export default defineConfig({
     // git-env-isolation: GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE override the
     // `cwd` every git test passes, so an inherited one aims the whole suite at
     // whatever repo the launcher was holding (2026-09-20: a stray commit on main).
+    // exec-guard FIRST of all: a fake HOME and refusing claude/ssh/scp/sftp on
+    // PATH before anything else reads HOME or spawns (tests/setup/exec-guard.ts).
     setupFiles: [
+      'tests/setup/exec-guard.ts',
       'tests/setup/runtime-dir-isolation.ts',
       'tests/setup/git-env-isolation.ts',
       'tests/setup/tmp-reaper.ts',
