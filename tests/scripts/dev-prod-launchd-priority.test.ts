@@ -106,7 +106,8 @@ describe('dev-prod.sh launchd priority', () => {
         'set -euo pipefail',
         fn('xml_escape'), fn('launchd_job_argv'), fn('write_launchd_plist'),
         'LAUNCH_LABEL=com.example.test-job',
-        `REPO_ROOT='/repo with space/a&b'`,
+        // The job's cwd is the serve root (the checkout, or WALNUT_DEVPROD_SERVE_ROOT for a deploy of a clean clone).
+        `SERVE_ROOT='/repo with space/a&b'`,
         `PATH='/bin:/usr/bin:/odd/"quoted"/<dir>&x'`,
         'NODE_BIN=/usr/local/bin/node',
         'PORT=3456',
@@ -122,6 +123,7 @@ describe('dev-prod.sh launchd priority', () => {
         .split('\n').filter(Boolean).map((l) => unescapeXml(/^<string>([\s\S]*)<\/string>$/.exec(l)![1]))
       expect(args).toEqual(expected)
       expect(args).toContain(`PATH=/bin:/usr/bin:/odd/"quoted"/<dir>&x`)
+      expect(args).toContain('/repo with space/a&b')
       expect(args.slice(-4)).toEqual(['/stage/dist/cli.js', 'web', '--port', '3456'])
       expect(xml).toContain('<key>StandardOutPath</key><string>/tmp/log &amp; more.log</string>')
       // The clamp request rides in the plist only: the argv is shared with the
