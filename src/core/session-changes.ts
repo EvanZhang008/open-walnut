@@ -260,6 +260,14 @@ interface IncrementalState {
   effectiveCwd?: string;
 }
 
+/** The cached result is current only when the JSONL's mtime AND size are
+ *  unchanged. mtime alone misses an append that lands inside the clock's
+ *  resolution (a filesystem with coarse mtimes, two writes in one millisecond),
+ *  and an append always grows the file. */
+function isCurrent(entry: CacheEntry, st: { mtimeMs: number; size?: number }): boolean {
+  return st.mtimeMs === entry.mtimeMs && (entry.size === undefined || st.size === entry.size);
+}
+
 function lineCheckOf(line: string): { len: number; head: string; tail: string } {
   return { len: line.length, head: line.slice(0, 64), tail: line.slice(-64) };
 }
@@ -270,6 +278,8 @@ function lineMatches(line: string, check: { len: number; head: string; tail: str
 
 interface CacheEntry {
   mtimeMs: number;
+  /** The JSONL's size at compute time (absent for daemon-backed entries). */
+  size?: number;
   result: SessionChangesResult;
   inc?: IncrementalState;
   /** Per-subagent-file parsed ops, keyed by filename, size-validated. Finished
@@ -592,7 +602,7 @@ export async function computeSessionChangesSwr(
       if (jsonlPath) {
         const { DaemonFileReader } = await import('./daemon-file-reader.js');
         const st = await new DaemonFileReader(host ?? '__local__').stat(jsonlPath);
-        if (st && st.mtimeMs === entry.mtimeMs) return entry.result;
+        if (st && isCurrent(entry, st)) return entry.result;
       }
     } catch { /* stat failed — treat as stale */ }
     kickRefresh();
@@ -832,7 +842,7 @@ async function computeSessionChangesInner(
       if (statResult) {
         mtimeMs = statResult.mtimeMs;
         statSize = statResult.size;
-        if (cached && cached.mtimeMs === mtimeMs) return cached.result;
+        if (cached && isCurrent(cached, statResult)) return cached.result;
       } else if (resolvedPath && jsonlPath === resolvedPath) {
         // The cached find result went stale (file moved/deleted) — drop it.
         resolvedPath = undefined;
@@ -1016,7 +1026,7 @@ async function computeSessionChangesInner(
 
   if (fileMap.size === 0) {
     const empty: SessionChangesResult = { sessionId, groups: [], fileCount: 0, anyPartial: false };
-    if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result: empty, inc, subCache, subDir, gitRootByDir, resolvedPath });
+    if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, ...(statSize !== undefined ? { size: statSize } : {}), result: empty, inc, subCache, subDir, gitRootByDir, resolvedPath });
     return empty;
   }
 
@@ -1208,7 +1218,8 @@ async function computeSessionChangesInner(
 
   if (mtimeMs !== undefined) {
     cacheSet(key, {
-      mtimeMs, result, inc, subCache, subDir, droppedPaths, gitRootByDir, resolvedPath,
+      mtimeMs, ...(statSize !== undefined ? { size: statSize } : {}),
+      result, inc, subCache, subDir, droppedPaths, gitRootByDir, resolvedPath,
       ...(failedPaths.size ? { failedPaths } : {}),
     });
   }
