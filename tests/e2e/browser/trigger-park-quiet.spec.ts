@@ -1,8 +1,8 @@
 /**
- * A session's trigger parks its task, and the user reads why in the inbox
- * (2026-10-04: a session asked the user to watch a review it could have watched
- * itself; the user asked that every trigger park the task by default, and that
- * every park write a report to the inbox saying "I put this in wait").
+ * A session's trigger parks its task quietly (2026-10-04: a session asked the
+ * user to watch a review it could have watched itself, so every trigger parks the
+ * task by default; 2026-10-05: the inbox letter each park then sent filled the
+ * user's inbox, so a park sends none).
  *
  * The agent side is done the way an agent does it: a REAL quick-start session on
  * the fixture server (mock CLI) calls `POST /api/v1/routines/trigger` with the
@@ -10,10 +10,8 @@
  *
  *  1. The task leaves the default task list on its own (no reload), and the
  *     footer says a Waiting task is hidden; one click shows it with the hourglass.
- *  2. The receipt is an unread Info letter in the Inbox, subject "Waiting: <title>",
- *     whose reader shows the session's report first and then the stamped facts
- *     (what is watched, when it comes back, how to take it back), with the task
- *     as a pill.
+ *  2. The Inbox has no letter about it: no "Waiting: <title>" envelope, and the
+ *     inbox's count of letters for this task stays at zero.
  *
  * Serial + nonce-scoped: the fixture server and its letter store are shared.
  */
@@ -24,7 +22,7 @@ import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
-const SHOTS = '/tmp/trigger-park/shots'
+const SHOTS = '/tmp/trigger-park-quiet/shots'
 const NONCE = Date.now().toString(36)
 
 test.setTimeout(180_000)
@@ -69,12 +67,12 @@ async function shot(target: Page | Locator, name: string, browserName: string): 
   await target.screenshot({ path: `${SHOTS}/${browserName}-${name}.png` })
 }
 
-test('a session\'s trigger parks its task off the list, and the receipt reads in the inbox', async ({ page, request, browserName }) => {
+test('a session\'s trigger parks its task off the list, and no letter reaches the inbox', async ({ page, request, browserName }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   const { sid, taskId } = await startSession(request, `Get PR 123 merged ${NONCE} ${browserName}`)
   // A unique title, so the inbox subject below is this run's.
-  const title = `Park receipt ${NONCE} ${browserName}`
+  const title = `Quiet park ${NONCE} ${browserName}`
   expect((await request.patch(`/api/tasks/${taskId}`, { data: { title } })).ok()).toBeTruthy()
 
   await page.goto('/')
@@ -83,21 +81,19 @@ test('a session\'s trigger parks its task off the list, and the receipt reads in
   await expect(anyRow.first()).toBeVisible({ timeout: 15_000 })
 
   // ── The agent arms its trigger (the default parks the task) ──
-  const report = `PR 123 is pushed and CI is green (${NONCE}).\n\nWaiting for the review. When a reviewer comments I make the change; when it is approved I merge it.`
   const created = await request.post('/api/v1/routines/trigger', {
     headers: { 'x-walnut-caller-sid': sid },
     data: {
       run: 'bash ~/.open-walnut/triggers/pr-123/check.sh', every: '5m',
       prompt: 'Read the review on PR 123 and do the next step.',
       description: 'Checks PR 123 for a review every 5 minutes; the session makes the requested change or merges it.',
-      wait_report: report,
     },
   })
   expect(created.status(), await created.text()).toBe(201)
   const out = await created.json() as { job: { id: string }; wait: { parked: boolean; letter_id?: string } }
   litterRoutines.push(out.job.id)
   expect(out.wait.parked).toBe(true)
-  expect(out.wait.letter_id).toBeTruthy()
+  expect(out.wait.letter_id).toBeUndefined()
 
   // 1. It leaves the list live, and the footer says so.
   await expect(anyRow).toHaveCount(0, { timeout: 15_000 })
@@ -124,36 +120,26 @@ test('a session\'s trigger parks its task off the list, and the receipt reads in
   await waitingChip.click()
   await expect(anyRow).toHaveCount(0)
 
-  // 2. The receipt, in the inbox.
+  // 2. The inbox has nothing about it. A letter the session sends on purpose
+  // (sent after the park, so it lands after any park letter would have) is the
+  // positive control: the inbox list is live and showing this run's letters.
+  const control = `Asked-for note ${NONCE} ${browserName}`
+  const sent = await request.post('/api/v1/human-inbox', {
+    headers: { 'x-walnut-caller-sid': sid },
+    data: { subject: control, type: 'info', markdown: 'You asked to hear when the review lands.', task_refs: [taskId] },
+  })
+  expect(sent.status(), await sent.text()).toBeLessThan(300)
   await page.getByRole('button', { name: 'Notifications' }).click()
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
   const inboxRail = panel.locator('.nfc-rail-btn', { hasText: 'Inbox' })
   await inboxRail.click()
   await expect(inboxRail).toHaveAttribute('aria-current', 'true')
-  const envelope = panel.locator('.hib-row').filter({ hasText: `Waiting: ${title}` })
-  await expect(envelope).toBeVisible({ timeout: 15_000 })
-  await expect(envelope).toHaveClass(/hib-unread/)
-  await expect(envelope.locator('.hib-type')).toHaveText('Info')
-  await expect(envelope.locator('.hib-preview')).toContainText(`PR 123 is pushed and CI is green (${NONCE}).`)
-  await shot(envelope, 'inbox-envelope', browserName)
-
-  await envelope.click()
-  const reader = page.locator('.hib-reader')
-  await expect(reader).toBeVisible({ timeout: 15_000 })
-  await expect(reader.locator('.hib-reader-subject')).toHaveText(`Waiting: ${title}`)
-  const body = reader.locator('.hib-md-body')
-  await expect(body).toContainText(`PR 123 is pushed and CI is green (${NONCE}).`)
-  await expect(body).toContainText('This task is parked: it is off your task list until something happens. Nothing is needed from you.')
-  await expect(body).toContainText('Watching:')
-  await expect(body).toContainText('Checks PR 123 for a review every 5 minutes; the session makes the requested change or merges it. (every 5 min)')
-  await expect(body).toContainText(/Back by: .+ at the latest, even if nothing happens\./)
-  await expect(body).toContainText('To take it back now: send a message in its session.')
-  // The report leads, the facts follow.
-  const text = (await body.textContent()) ?? ''
-  expect(text.indexOf('PR 123 is pushed')).toBeLessThan(text.indexOf('This task is parked'))
-  await expect(reader.locator('.hib-taskrefs')).toBeVisible()
-  await shot(reader, 'inbox-reader', browserName)
+  await expect(panel.locator('.hib-row').filter({ hasText: control })).toBeVisible({ timeout: 15_000 })
+  await expect(panel.locator('.hib-row').filter({ hasText: `Waiting: ${title}` })).toHaveCount(0)
+  await shot(panel, 'inbox-no-park-letter', browserName)
+  const letters = await (await request.get('/api/v1/human-inbox')).json() as { letters: Array<{ subject: string; taskRefs?: string[] }> }
+  expect(letters.letters.filter((l) => (l.taskRefs ?? []).includes(taskId)).map((l) => l.subject)).toEqual([control])
 
   expect(pageErrors).toEqual([])
 })

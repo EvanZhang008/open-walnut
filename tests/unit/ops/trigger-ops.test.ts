@@ -57,18 +57,14 @@ describe('trigger_create output', () => {
     getOp('trigger_create')!.mapResult!({ body: { job, host: '__local__', nextCheckAt: null, wait }, args: {} }) as
       { outcome: string; next: string; wait: unknown }
 
-  it('says the task is parked, until when, and that the receipt went out', () => {
-    const out = mapWith({ parked: true, task_id: 't1', wait_until: '2026-10-07T12:00:00.000Z', letter_id: 'lt-1' })
-    expect(out.outcome).toContain('The task is now Waiting, off the user\'s list, until it fires or 2026-10-07T12:00:00.000Z')
-    expect(out.outcome).toContain('the receipt is in the user\'s inbox')
-    expect(out.next).toMatch(/^End your turn now; the fire starts a new one here\./)
-    expect(out.next).toContain('park again (task_update phase=WAITING with wait_report)')
-    expect(out.wait).toMatchObject({ parked: true, letter_id: 'lt-1' })
-  })
-
-  it('asks the model to tell the user itself when the receipt letter failed', () => {
-    const out = mapWith({ parked: true, task_id: 't1', wait_until: null, letter_error: 'inbox offline' })
-    expect(out.outcome).toContain('until it fires; the receipt letter failed (inbox offline), so tell the user in your reply.')
+  it('says the task is parked and until when, and that a park sends no letter', () => {
+    // 2026-10-05: one receipt letter per (re-)park filled the user's inbox.
+    const out = mapWith({ parked: true, task_id: 't1', wait_until: '2026-10-07T12:00:00.000Z' })
+    expect(out.outcome).toContain('The task is now Waiting, off the user\'s list, until it fires or 2026-10-07T12:00:00.000Z.')
+    expect(out.outcome).not.toMatch(/receipt|inbox/)
+    expect(out.next).toMatch(/^End your turn now with one line saying what you wait on; the fire starts a new one here\./)
+    expect(out.next).toContain('park again (task_update phase=WAITING) as your last call, with no letter')
+    expect(mapWith({ parked: true, task_id: 't1', wait_until: null }).outcome).toContain('until it fires.')
   })
 
   it('says why the task was left alone', () => {
@@ -90,10 +86,11 @@ describe('trigger_create wait inputs', () => {
   const schema = () => z.object(getOp('trigger_create')!.input).strict()
   const base = { ...args, description: 'Checks PR 123 for review comments.' }
 
-  it('accepts wait, wait_until and wait_report, and types them', () => {
+  it('accepts wait and wait_until, types them, and has no wait_report (a park writes no letter)', () => {
     expect(schema().safeParse({ ...base, wait: false }).success).toBe(true)
-    expect(schema().safeParse({ ...base, wait: true, wait_until: '6h', wait_report: 'PR 123 is pushed.' }).success).toBe(true)
+    expect(schema().safeParse({ ...base, wait: true, wait_until: '6h' }).success).toBe(true)
     expect(schema().safeParse({ ...base, wait: 'no' }).success).toBe(false)
+    expect(schema().safeParse({ ...base, wait_report: 'PR 123 is pushed.' }).success).toBe(false)
   })
 
   it('tells the model it parks by default, to use it unasked, and how to opt out', () => {

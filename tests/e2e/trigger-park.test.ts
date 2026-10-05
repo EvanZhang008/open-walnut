@@ -1,14 +1,16 @@
 /**
- * A trigger parks the task it is for, and every park a session makes sends the
- * user a receipt (src/core/routines/trigger-api.ts parkForTrigger,
- * src/core/task-wait-receipt.ts, the api-v1 task PATCH).
+ * A trigger parks the task it is for (src/core/routines/trigger-api.ts
+ * parkForTrigger, the api-v1 task PATCH), and no park sends a letter.
  *
  * 2026-10-04: a session finished its part, reported that a review was pending
  * and asked the user to watch it; the user had to say "make a trigger" and then
  * "don't ask me to do it". Now `trigger_create` on the caller's own task moves it
  * to WAITING in the same call (`wait:false` keeps it where it is while work
- * remains), and the user gets ONE inbox letter saying it is parked: the session's
- * `wait_report`, what is watched, when it comes back by itself, how to take it back.
+ * remains).
+ *
+ * 2026-10-05: the inbox letter every park then sent ("Waiting: <title>") filled
+ * the user's inbox, one per re-park after each fire. Parks are quiet now; a stray
+ * `wait_report` from a caller that still sends one is ignored, never a 400.
  *
  * Harness as in task-waiting.test.ts: the daemon LOOKUP is stubbed and fires are
  * handed to the sink directly; delivery and the session's turns are the real
@@ -101,10 +103,6 @@ async function lettersFor(taskId: string): Promise<any[]> {
   return (await letters()).filter((l) => (l.taskRefs ?? []).includes(taskId))
 }
 
-async function letterBody(id: string): Promise<string> {
-  return (await req('GET', `/api/v1/human-inbox/${id}`)).json.letter.body
-}
-
 async function jobCount(): Promise<number> {
   return ((await req('GET', '/api/routines?includeDisabled=true')).json.jobs as unknown[]).length
 }
@@ -129,12 +127,10 @@ afterAll(async () => {
 })
 
 describe('trigger_create parks the caller\'s own task by default', () => {
-  it('Waiting with the 3-day clock, and ONE receipt letter that leads with the session\'s report', async () => {
+  it('Waiting with the 3-day clock, and no letter', async () => {
     const { sid, taskId } = await startSession('fix the menu page and get PR 123 merged')
     const before = Date.now()
-    const r = await createTrigger(sid, {
-      wait_report: 'PR 123 is pushed and CI is green.\nWaiting for the review; I will make any requested change and merge it.',
-    })
+    const r = await createTrigger(sid)
     expect(r.status, JSON.stringify(r.json)).toBe(201)
     expect(r.json.wait).toMatchObject({ parked: true, task_id: taskId })
     expect(r.json.wait.already_waiting).toBeUndefined()
@@ -147,23 +143,17 @@ describe('trigger_create parks the caller\'s own task by default', () => {
     expect(ahead).toBeGreaterThanOrEqual(3 * DAY)
     expect(ahead).toBeLessThan(3 * DAY + 60_000)
     expect(r.json.wait.wait_until).toBe(t.wait_until)
+    expect(r.json.wait).not.toHaveProperty('letter_id')
+    expect(await lettersFor(taskId)).toHaveLength(0)
+  })
 
-    const mine = await lettersFor(taskId)
-    expect(mine).toHaveLength(1)
-    const letter = mine[0]
-    expect(r.json.wait.letter_id).toBe(letter.id)
-    expect(letter.subject).toBe(`Waiting: ${t.title}`)
-    expect(letter.type).toBe('info')
-    expect(letter.read).toBe(false)
-    expect(letter.textPreview).toBe('PR 123 is pushed and CI is green.')
-    // Stamped from the caller: the user sees which session parked it.
-    expect(letter.sender).toMatchObject({ sessionId: sid, taskId })
-    const body = await letterBody(letter.id)
-    expect(body.startsWith('PR 123 is pushed and CI is green.')).toBe(true)
-    expect(body).toContain('This task is parked: it is off your task list until something happens.')
-    expect(body).toContain('- Checks PR 123 for a review every 5 minutes; the session makes the requested change or merges it. (every 5 min)')
-    expect(body).toMatch(/\*\*Back by:\*\* .+ at the latest, even if nothing happens\./)
-    expect(body).toContain('**To take it back now:** send a message in its session.')
+  it('a stray wait_report from an older caller is ignored: still parked, still no letter', async () => {
+    const { sid, taskId } = await startSession('an older session parks with a report')
+    const r = await createTrigger(sid, { wait_report: 'PR 123 is pushed and CI is green.' })
+    expect(r.status, JSON.stringify(r.json)).toBe(201)
+    expect(r.json.wait).toMatchObject({ parked: true, task_id: taskId })
+    expect((await task(taskId)).phase).toBe('WAITING')
+    expect(await lettersFor(taskId)).toHaveLength(0)
   })
 
   it('the op tells the session it is parked and to end its turn', async () => {
@@ -177,12 +167,10 @@ describe('trigger_create parks the caller\'s own task by default', () => {
     const op = getOp('trigger_create')!
     const out = op.mapResult!({ body: await call(op.bind!.method, op.bind!.path, triggerBody()), args: {} }) as any
     expect(out.outcome).toContain('The task is now Waiting, off the user\'s list, until it fires or ')
-    expect(out.outcome).toContain('the receipt is in the user\'s inbox')
-    expect(out.next).toMatch(/^End your turn now/)
+    expect(out.outcome).not.toMatch(/receipt|inbox/)
+    expect(out.next).toMatch(/^End your turn now with one line saying what you wait on/)
     expect((await task(taskId)).phase).toBe('WAITING')
-    // No report written: the receipt still says everything.
-    const [letter] = await lettersFor(taskId)
-    expect(letter.textPreview).toMatch(/^Parked until .+ at the latest\.$/)
+    expect(await lettersFor(taskId)).toHaveLength(0)
   })
 
   it('wait_until takes a duration, an ISO time, or "" for no clock', async () => {
@@ -202,23 +190,20 @@ describe('trigger_create parks the caller\'s own task by default', () => {
     const c = await createTrigger(sid, { wait_until: '' })
     expect(c.json.wait).toMatchObject({ parked: true, wait_until: null })
     expect((await task(taskId)).wait_until).toBeUndefined()
-    const last = (await lettersFor(taskId)).find((l) => l.id === c.json.wait.letter_id)
-    expect(await letterBody(last.id)).toContain('**Back by:** no time limit.')
+    expect(await lettersFor(taskId)).toHaveLength(0)
   })
 
-  it('a second trigger on a task already waiting keeps its clock, and the new receipt lists both', async () => {
+  it('a second trigger on a task already waiting keeps its clock, and still sends no letter', async () => {
     const { sid, taskId } = await startSession('two things to watch')
     await createTrigger(sid, { wait_until: '2d', name: 'First watch' })
     const clock = (await task(taskId)).wait_until
     const second = await createTrigger(sid, { name: 'Second watch', description: 'Watches the release channel for the go-ahead.' })
     expect(second.json.wait).toMatchObject({ parked: true, already_waiting: true, wait_until: clock })
     expect((await task(taskId)).wait_until).toBe(clock)
-    const body = await letterBody(second.json.wait.letter_id)
-    expect(body).toContain('- Checks PR 123 for a review every 5 minutes')
-    expect(body).toContain('- Watches the release channel for the go-ahead. (every 5 min)')
+    expect(await lettersFor(taskId)).toHaveLength(0)
   })
 
-  it('a bad wait, wait_until or wait_report is refused and arms nothing', async () => {
+  it('a bad wait or wait_until is refused and arms nothing', async () => {
     const { sid, taskId } = await startSession('nothing armed')
     const before = await jobCount()
     for (const [extra, message] of [
@@ -226,7 +211,6 @@ describe('trigger_create parks the caller\'s own task by default', () => {
       [{ wait_until: '2020-01-01T00:00:00Z' }, 'not in the future'],
       [{ wait_until: '0h' }, 'not in the future'],
       [{ wait: 'yes' }, 'wait must be true or false'],
-      [{ wait_report: 'x'.repeat(4001) }, 'one phone screen'],
     ] as const) {
       const r = await createTrigger(sid, extra)
       expect(r.status, JSON.stringify(extra)).toBe(400)
@@ -262,8 +246,7 @@ describe('when a trigger does not park', () => {
     const asked = await createTrigger(sid, { session: otherId, wait: true })
     expect(asked.json.wait).toMatchObject({ parked: true, task_id: otherId })
     expect((await task(otherId)).phase).toBe('WAITING')
-    // The session asked, so the user hears about it.
-    expect(await lettersFor(otherId)).toHaveLength(1)
+    expect(await lettersFor(otherId)).toHaveLength(0)
     expect((await task(own)).phase).toBe('NEED_ACTION')
   })
 
@@ -366,25 +349,37 @@ describe('the fire brings it back', () => {
     const back = await until('the fire\'s turn to end', () => task(taskId), (t) => t.phase === 'NEED_ACTION')
     expect(back.unread).toBe(true)
     expect(back.wait_until).toBeUndefined()
+    // The fire needed nothing from the user, so the session parks again: still no letter.
+    const again = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, { 'x-walnut-caller-sid': sid })
+    expect(again.status, JSON.stringify(again.json)).toBe(200)
+    expect((await task(taskId)).phase).toBe('WAITING')
+    expect(await lettersFor(taskId)).toHaveLength(0)
   })
 })
 
-describe('task PATCH into WAITING sends a receipt for a session', () => {
-  it('a session\'s park sends one; the same park again sends none; a new report sends one', async () => {
+describe('task PATCH into WAITING sends no letter', () => {
+  it('a session\'s park sends none, again or with a stray wait_report', async () => {
     const { sid, taskId } = await startSession('park by hand')
     const h = { 'x-walnut-caller-sid': sid }
-    const first = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_report: 'Waiting for the reply from the vendor.' }, h)
+    const first = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, h)
     expect(first.status, JSON.stringify(first.json)).toBe(200)
-    expect(first.json.wait_receipt.letter_id).toBeTruthy()
-    expect(await letterBody(first.json.wait_receipt.letter_id)).toMatch(/^Waiting for the reply from the vendor\.\n\n---\n\n/)
-    expect(await letterBody(first.json.wait_receipt.letter_id)).toContain('**Watching:** nothing; only the clock brings it back.')
+    expect(first.json).not.toHaveProperty('wait_receipt')
+    expect((await task(taskId)).phase).toBe('WAITING')
 
     const again = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, h)
-    expect(again.json.wait_receipt).toBeUndefined()
+    expect(again.status).toBe(200)
+    const stray = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_report: 'Waiting for the vendor.' }, h)
+    expect(stray.status, JSON.stringify(stray.json)).toBe(200)
+    expect(stray.json).not.toHaveProperty('wait_receipt')
+    expect(await lettersFor(taskId)).toHaveLength(0)
 
-    const update = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_report: 'The vendor answered; now waiting for the invoice.' }, h)
-    expect(update.json.wait_receipt.letter_id).toBeTruthy()
-    expect(await lettersFor(taskId)).toHaveLength(2)
+    // A letter the session decides to send (the user asked to be told) still lands,
+    // so the zeros above are about the park, not a broken inbox read.
+    const sent = await req('POST', '/api/v1/human-inbox', {
+      subject: 'The vendor replied', type: 'info', markdown: 'You asked to hear when they did.', task_refs: [taskId],
+    }, h)
+    expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
+    expect(await lettersFor(taskId)).toHaveLength(1)
   })
 
   it('a human\'s park sends none', async () => {
@@ -392,20 +387,12 @@ describe('task PATCH into WAITING sends a receipt for a session', () => {
     const id = t.json.task.id as string
     const r = await req('PATCH', `/api/v1/tasks/${id}`, { phase: 'WAITING' })
     expect(r.status).toBe(200)
-    expect(r.json.wait_receipt).toBeUndefined()
     expect(await lettersFor(id)).toHaveLength(0)
   })
 
-  it('wait_report rides only with phase=WAITING; wait_until takes a duration', async () => {
+  it('wait_until takes a duration, and a past one is refused', async () => {
     const { sid, taskId } = await startSession('patch rules')
     const h = { 'x-walnut-caller-sid': sid }
-    const alone = await req('PATCH', `/api/v1/tasks/${taskId}`, { wait_report: 'x' }, h)
-    expect(alone.status).toBe(400)
-    expect(JSON.stringify(alone.json)).toContain('wait_report only applies with phase=WAITING')
-    const todo = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'TODO', wait_report: 'x' }, h)
-    expect(todo.status).toBe(400)
-    const tooLong = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_report: 'x'.repeat(4001) }, h)
-    expect(tooLong.status).toBe(400)
     const past = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '0h' }, h)
     expect(past.status).toBe(400)
     expect((await task(taskId)).phase).toBe('NEED_ACTION')

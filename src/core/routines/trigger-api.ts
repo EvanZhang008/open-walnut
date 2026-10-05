@@ -158,21 +158,17 @@ export interface TriggerWaitResult {
   wait_until?: string | null;
   /** The task was already WAITING (its clock is kept unless wait_until was passed). */
   already_waiting?: boolean;
-  /** The receipt in the user's inbox (a session caller only). */
-  letter_id?: string;
-  letter_error?: string;
   error?: string;
 }
 
 /**
  * Park the task a new trigger delivers into: WAITING, with the caller's clock
- * or the store's default, plus the receipt letter when a session asked. Never
+ * or the store's default. No letter: a park is not news for the inbox. Never
  * throws: the trigger is already armed, so a park that fails is reported in the
  * result rather than undoing the create.
  */
 async function parkForTrigger(taskId: string, opts: {
   waitUntil: string | undefined;
-  report: string | undefined;
   callerSid: string | undefined;
 }): Promise<TriggerWaitResult> {
   try {
@@ -184,15 +180,9 @@ async function parkForTrigger(taskId: string, opts: {
       ...(opts.waitUntil !== undefined ? { wait_until: opts.waitUntil } : {}),
     }, { source: 'api', asyncPush: true, ...(opts.callerSid ? { actorSid: opts.callerSid } : {}) });
     if (task.phase !== 'WAITING') return { parked: false, task_id: taskId, reason: 'not_written' };
-    const { isSessionCaller, sendWaitReceipt } = await import('../task-wait-receipt.js');
-    const receipt = await isSessionCaller(opts.callerSid)
-      ? await sendWaitReceipt({ taskId, callerSid: opts.callerSid, ...(opts.report ? { report: opts.report } : {}) })
-      : {};
     return {
       parked: true, task_id: taskId, wait_until: task.wait_until ?? null,
       ...(before.phase === 'WAITING' ? { already_waiting: true } : {}),
-      ...(receipt.letterId ? { letter_id: receipt.letterId } : {}),
-      ...(receipt.error ? { letter_error: receipt.error } : {}),
     };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -270,12 +260,10 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   if (b.wait !== undefined && typeof b.wait !== 'boolean') {
     throw new SessionControlError('wait must be true or false', 400);
   }
-  const { parseWaitUntil, parseWaitReport } = await import('../task-wait-receipt.js');
+  const { parseWaitUntil } = await import('../task-wait-clock.js');
   let waitUntil: string | undefined;
-  let waitReport: string | undefined;
   try {
     waitUntil = parseWaitUntil(b.wait_until);
-    waitReport = parseWaitReport(b.wait_report);
   } catch (err) {
     throw new SessionControlError(err instanceof Error ? err.message : String(err), 400);
   }
@@ -307,7 +295,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   // aimed at another task leaves that task alone unless wait:true says so.
   const park = b.wait === true || (b.wait === undefined && resolved.own);
   const wait: TriggerWaitResult = park
-    ? await parkForTrigger(resolved.target, { waitUntil, report: waitReport, callerSid })
+    ? await parkForTrigger(resolved.target, { waitUntil, callerSid })
     : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
 
   log.web.info('trigger created', {

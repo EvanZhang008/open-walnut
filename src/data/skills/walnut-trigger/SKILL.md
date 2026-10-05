@@ -10,7 +10,7 @@ description: >-
   "come back to this when". Use it on your own, without being asked, whenever
   the rest of the work waits on something outside the session (a review, a
   merge, a deploy, a build, a reply): creating the trigger parks the task as
-  Waiting with a receipt in the user's inbox, and the fire brings it back.
+  Waiting, and the fire brings it back.
 ---
 
 # Trigger
@@ -111,13 +111,12 @@ or a file only that host has), and never paste one inline as `curl -H
    Keep going until `parsed` is non-null. `wouldFire: false` with `parsed` set is a
    working check with nothing to report: that is a pass, not a failure.
 3. **Tell the user in ONE line** what will be watched and how often, before arming it.
-4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"...","wait_report":"..."}'`.
+4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"..."}'`.
    `description` is required (see below).
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
-   This also **parks this task as Waiting** and sends the user a receipt (see
-   "Waiting is the default" below). Pass `"wait":false` while you still have work
-   to do here.
+   This also **parks this task as Waiting** (see "Waiting is the default"
+   below). Pass `"wait":false` while you still have work to do here.
 5. **Report the id and the cadence.** Then stop; do not poll the trigger yourself.
 
 Default cadence when the user gave none: **every 5 minutes**. Never poll faster
@@ -129,6 +128,10 @@ The prompt is what a session receives WITH the items. Write it as an
 instruction, not a notification: "Read each new comment; change the code where it
 asks, then reply on the PR" beats "there are new comments". The fire already
 carries the items as JSON, so do not ask the model to go re-fetch them.
+
+When the user asked to be told ("tell me when X", "let me know if"), say so in
+the prompt: "send the user a letter (human_inbox_send) saying X happened". That
+letter is one they asked for. Without that ask, a fire sends no letter.
 
 ## Description writing
 
@@ -158,10 +161,10 @@ session's own task **parks the task as Waiting** in the same call:
 - The task leaves the user's default task list (it keeps its board section; the
   user reveals it with "Show waiting") and the end of your turn does not hand it
   back.
-- The user gets ONE letter in their inbox saying it is parked: your
-  `wait_report` first, then what the trigger watches, when the task comes back
-  by itself, and how to take it back. Every park a session makes sends one, so
-  never park silently and never skip the report.
+- No letter goes to the user's inbox: a park is not news, and the inbox is
+  only for what needs them. End the turn with one line saying what the task
+  waits on; the user reads it in this session, and the task's trigger card
+  says what is watched.
 - The next message into this session (the fire, the user, a peer task) moves it
   to In Progress on its own; that turn ends as Need Action like any other.
 - Nothing else in THIS turn moves it: not your further output, a background
@@ -182,15 +185,8 @@ pass `"wait":false`: the trigger is armed and the task stays where it is. Park
 it later, once only the wait is left, as the LAST call of that turn:
 
 ```
-walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING","wait_report":"..."}'
+walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING"}'
 ```
-
-**`wait_report`** is the opening of the receipt, in the language you use with
-the user: two to five lines saying what was finished, what it waits on now, and
-what you will do when it fires. Example: "PR 123 is pushed and CI is green.
-Waiting for the review. When a reviewer comments I make the change and reply;
-when it is approved I merge it." The facts under it (watched trigger, clock,
-how to take it back) are added by Walnut, so do not repeat them.
 
 **`wait_until`** is the clock. Without it the task comes back by itself 3 days
 from now, whether or not anything happened: Walnut wakes this session with a
@@ -208,8 +204,10 @@ only when the user explicitly wants no time limit.
   only what needs them."
 - When it fires and the event does not need the user (an acknowledgement, an
   intermediate stage, a change you can make yourself), handle it, then park
-  again as the last call with `task_update` WAITING and a fresh `wait_report`
-  saying what happened. The trigger keeps polling and keeps what it has seen.
+  again as the last call with `task_update` WAITING, and send no letter. The
+  trigger keeps polling and keeps what it has seen. Write to the user's inbox
+  only when the event needs them (a decision, a blocker) or they asked to hear
+  about it.
 - When the work it watched is done, `trigger_delete` it, so it stops firing.
 - When the user writes to this session meanwhile, the task is In Progress again;
   answer them. If the plan still holds, park it again as your last call. If the

@@ -80,9 +80,9 @@ defineOp({
     + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card. '
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
-    + 'It PARKS your own task by default: the task goes to Waiting (off the user\'s list), the user gets a '
-    + 'receipt letter in their inbox, and the fire (or the clock, 3 days unless wait_until says otherwise) '
-    + 'brings it back. Write wait_report for that letter. Pass wait:false while you or the user still have '
+    + 'It PARKS your own task by default: the task goes to Waiting (off the user\'s list, no letter is sent), '
+    + 'and the fire (or the clock, 3 days unless wait_until says otherwise) brings it back. '
+    + 'Pass wait:false while you or the user still have '
     + 'work on this task, and park it later with task_update phase=WAITING once only the wait is left. '
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
     + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it.',
@@ -90,7 +90,9 @@ defineOp({
     run: z.string().min(1).describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh")'),
     every: z.union([z.number().int().positive(), z.string().min(1)])
       .describe('Poll interval: "30s" | "5m" | "1h", or milliseconds. Minimum 10s'),
-    prompt: z.string().min(1).describe('What the session should DO when it fires — the message it receives'),
+    prompt: z.string().min(1).describe('What the session should DO when it fires — the message it receives. '
+      + 'When the user asked to be told ("tell me when X"), say so here: "send the user a letter saying X happened"; '
+      + 'without that ask a fire sends no letter'),
     description: z.string().min(1)
       .describe('One or two plain sentences for the user: what this watches, when it fires, and what the session '
         + 'does then (e.g. "Checks PR 123 for new review comments every 5 minutes; when one arrives, the session '
@@ -106,15 +108,12 @@ defineOp({
       + 'false for another task. Pass false while you or the user still have work on this task'),
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("6h", "2d"). Default 3 days; "" = no clock (only the fire or a message brings it back)'),
-    wait_report: z.string().optional().describe('The receipt the user reads in their inbox, in their language, markdown, a few lines: '
-      + 'what is done, what you are waiting on, what you will do when it fires, anything they may want to do meanwhile. '
-      + 'Walnut adds what is watched, the clock and how to take it back'),
   },
   bind: { method: 'POST', path: '/routines/trigger' },
   mapResult: ({ body }) => {
     const b = (body ?? {}) as {
       job?: { id?: string; name?: string; schedule?: { everyMs?: number } }; host?: string
-      wait?: { parked?: boolean; reason?: string; wait_until?: string | null; letter_id?: string; letter_error?: string; error?: string }
+      wait?: { parked?: boolean; reason?: string; wait_until?: string | null; error?: string }
     }
     const id = b.job?.id ?? ''
     const every = everyLabel(b.job?.schedule?.everyMs)
@@ -125,15 +124,16 @@ defineOp({
     // What the call did to the task is said in the outcome, so the model never
     // tells the user "it is waiting" when it is not, or the reverse.
     const parked = w?.parked
-      ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}`
-        + `${w.letter_id ? '; the receipt is in the user\'s inbox' : w.letter_error ? `; the receipt letter failed (${w.letter_error}), so tell the user in your reply` : ''}.`
+      ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.`
       : w?.reason === 'wait_false' ? ' The task was left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left.'
       : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
       : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'
       : w ? ` The task could not be parked${w.error ? ` (${w.error})` : ''}.`
       : ''
     const next = w?.parked
-      ? `End your turn now; the fire starts a new one here. When a fire does not need the user, handle it and park again (task_update phase=WAITING with wait_report) as your last call. ${off}`
+      ? 'End your turn now with one line saying what you wait on; the fire starts a new one here. When a fire does not '
+        + 'need the user, handle it and park again (task_update phase=WAITING) as your last call, with no letter: '
+        + `a fire is not news for the user's inbox. ${off}`
       : `Tell the user in one line what is watched and how often. ${off}`
     // The id at the top level too: trigger_pause/resume/delete take it, and a
     // caller reading `.id` should not have to know the job sits under `.job`.

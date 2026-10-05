@@ -2514,13 +2514,12 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     // without this forward the :id param would swallow it as a task id. Task
     // ids are hex-ish and can never be the literal word "reorder".
     if (id === 'reorder') { next(); return }
-    const { status, phase, wait_until: waitUntilRaw, wait_report: waitReportRaw, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
+    const { status, phase, wait_until: waitUntilRaw, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
       project, title, description, tags,
       unread, parent_task_id: parentTaskId } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
       wait_until?: unknown
-      wait_report?: unknown
       priority?: unknown
       due_date?: unknown
       start_date?: unknown
@@ -2555,7 +2554,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     let waitUntil = waitUntilRaw
     if (typeof waitUntil === 'string' && /^\d+(?:\.\d+)?\s*(ms|s|m|h|d)$/i.test(waitUntil.trim())) {
       try {
-        waitUntil = (await import('../../core/task-wait-receipt.js')).parseWaitUntil(waitUntil)
+        waitUntil = (await import('../../core/task-wait-clock.js')).parseWaitUntil(waitUntil)
       } catch (err) {
         sendError(res, 400, 'bad_request', err instanceof Error ? err.message : String(err))
         return
@@ -2567,19 +2566,6 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     }
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase !== undefined && phase !== 'WAITING') {
       sendError(res, 400, 'bad_request', 'wait_until only applies with phase=WAITING')
-      return
-    }
-    // wait_report: a session's own opening for the receipt letter its park sends
-    // the user (task-wait-receipt.ts). It rides with phase=WAITING only.
-    let waitReport: string | undefined
-    try {
-      waitReport = (await import('../../core/task-wait-receipt.js')).parseWaitReport(waitReportRaw)
-    } catch (err) {
-      sendError(res, 400, 'bad_request', err instanceof Error ? err.message : String(err))
-      return
-    }
-    if (waitReport !== undefined && phase !== 'WAITING') {
-      sendError(res, 400, 'bad_request', 'wait_report only applies with phase=WAITING')
       return
     }
     if (priority !== undefined
@@ -2799,14 +2785,6 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const result = await tm.updateDescription(id, description as string)
         updated = result.task
       }
-      // A session's park sends the user a receipt (task-wait-receipt.ts): on the
-      // move into WAITING, or whenever it writes a wait_report. The phase BEFORE
-      // the write says which.
-      const rawCaller = req.headers['x-walnut-caller-sid']
-      const callerSidForWait = (Array.isArray(rawCaller) ? rawCaller[0] : rawCaller)?.trim() || undefined
-      const phaseBeforeWait = phase === 'WAITING' && callerSidForWait && !CLOUD_MODE
-        ? (await tm.getTask(id).catch(() => undefined))?.phase
-        : undefined
       if (Object.keys(patch).length > 0) {
         // The acting session rides on the phase event, so a notice this change
         // causes can skip its own author (a leader completing its worker).
@@ -2814,14 +2792,6 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
         const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true, ...(actorSid ? { actorSid } : {}) })
         updated = result.task
-      }
-      let waitReceipt: { letter_id?: string; error?: string } | undefined
-      if (phaseBeforeWait !== undefined && updated?.phase === 'WAITING' && (phaseBeforeWait !== 'WAITING' || waitReport)) {
-        const { isSessionCaller, sendWaitReceipt } = await import('../../core/task-wait-receipt.js')
-        if (await isSessionCaller(callerSidForWait)) {
-          const sent = await sendWaitReceipt({ taskId: updated.id, callerSid: callerSidForWait, ...(waitReport ? { report: waitReport } : {}) })
-          waitReceipt = sent.letterId ? { letter_id: sent.letterId } : { error: sent.error ?? 'not sent' }
-        }
       }
       // A parent link that was already in place was the only field: nothing to write.
       if (!updated && parentLink) updated = parentLink.current
@@ -2869,12 +2839,10 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         void refineShortTitle(updated.id, patchTitle, titleShortenedFrom)
       }
       // `title_shortened_from` (additive): the long title the session sent.
-      // `wait_receipt` (additive): the letter a session's park sent the user.
       res.json({
         task: projectTask(updated),
         ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
         ...(placement ? { placement } : {}),
-        ...(waitReceipt ? { wait_receipt: waitReceipt } : {}),
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

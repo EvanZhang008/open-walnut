@@ -1,6 +1,9 @@
 /**
  * Human-inbox ops — how an agent writes to the ONE human who reads its letters.
  *
+ * The default is NOT to send (2026-10-05, the user: "only the most important
+ * information"; notifications go to the inbox only when the user asked).
+ *
  * Two ops only: send a letter, reply in an existing letter's thread. The
  * envelope (which session, task, project, host) is stamped server-side from the
  * caller's session id, so the descriptions below spend their words on the thing
@@ -32,8 +35,11 @@ defineOp({
   name: 'human_inbox_send',
   title: 'Send the human a letter',
   description:
-    'Send your user a letter they read in Walnut (web or phone) and can reply to. Use it for a '
-    + 'finished result, a report worth keeping, a heads-up, or a decision you are blocked on. '
+    'Send your user a letter they read in Walnut (web or phone) and can reply to. The inbox is only for '
+    + 'what needs them, and every letter buzzes their phone: send one when you are blocked on their '
+    + 'decision, when something must have their review, or when they asked for it (a digest or report they '
+    + 'set up, "tell me when X"). Never for a notification they did not ask for: progress, a finished step, '
+    + 'a parked task, an FYI. Your task and its session already show those. When unsure, do not send. '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
     + 'self-contained (never "see the session"); link long artifacts by path instead of pasting them. '
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '

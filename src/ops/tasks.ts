@@ -626,8 +626,8 @@ defineOp({
     'of this turn does not hand it back, and the next message into it (a trigger fire, the user, a peer) moves ' +
     'it to IN_PROGRESS. Set it as the LAST call of the turn, once only the wait is left. wait_until (ISO datetime, or a duration like "2d") wakes it at ' +
     'that time when nothing else did; left out, a task entering WAITING gets 3 days from now, and "" means ' +
-    'no clock at all. A session\'s park sends the user a receipt letter in their inbox; write its opening in ' +
-    'wait_report. `tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
+    'no clock at all. A park sends no letter: say what you wait on in your last message. ' +
+    '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     // No `status` input. It was the more dangerous of the two write paths: a
@@ -640,10 +640,6 @@ defineOp({
     wait_until: z.string().optional()
       .describe('With phase=WAITING: ISO-8601 datetime, or a duration from now ("6h", "3d"), at which the task is woken if nothing else did. '
         + 'Left out when entering WAITING = 3 days from now; "" = no clock (the wait has no end of its own)'),
-    wait_report: z.string().optional()
-      .describe('With phase=WAITING: the receipt the user reads in their inbox, in their language, markdown, a few lines: '
-        + 'what is done, what the task waits on, what happens when it comes back. Walnut adds what is watched, the clock '
-        + 'and how to take it back'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
@@ -663,7 +659,7 @@ defineOp({
       throw new Error('task_update needs at least one field to change besides `id`.')
     }
     const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
-      { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement; wait_receipt?: { letter_id?: string; error?: string } } | undefined
+      { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement } | undefined
     const task = patched?.task
     const changed = Object.keys(body).join(', ')
     // A phase write is bookkeeping. It does not start work, and it does not
@@ -685,8 +681,6 @@ defineOp({
       : body.phase === 'WAITING'
         ? 'The task is waiting. End your turn now: the next message into it (a trigger fire, the user, a peer'
           + `${waitClockNote(task, body.wait_until)}) brings it back to In Progress.`
-          + (patched?.wait_receipt?.letter_id ? ' The receipt is in the user\'s inbox.'
-            : patched?.wait_receipt?.error ? ` The receipt letter failed (${patched.wait_receipt.error}); tell the user in your reply.` : '')
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')
@@ -789,7 +783,6 @@ defineOp({
       id: z.string().min(1).describe('Task id or a unique id prefix'),
       phase: TASK_PHASE.optional(),
       wait_until: z.string().optional(),
-      wait_report: z.string().optional(),
       priority: PRIORITY.optional(),
       due_date: z.string().optional(),
       start_date: z.string().optional(),
