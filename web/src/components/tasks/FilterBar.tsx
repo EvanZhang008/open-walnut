@@ -1,15 +1,19 @@
 /**
- * FilterBar: the filter row under the home toolbar (`.fb-row`, spec 6.4).
- * One chip per non-default dimension (body opens the chip menu, x removes),
- * `Clear`, and the right-aligned count. Rendered only while there is something
- * to say: a chip, the open panel menu (placeholder `No filters yet`), a
- * view name with the tab bar hidden, or search mode.
+ * FilterBar: the filter row right above the home task list (`.fb-row`, spec 6.4),
+ * under the toolbar, the tier heading and the tab bar. One chip per non-default
+ * dimension (body opens the chip menu, x removes), `Clear`, and the right-aligned
+ * count. Rendered only while there is something to say: a chip, a view name with
+ * the tab bar hidden, or search mode. Opening the Display menu adds nothing: the
+ * menu hangs from its button, and the bars above the list stay where they are
+ * (2026-10-04: a two-line placeholder row floated over the Focus heading and the
+ * tab bar while the menu was open).
  *
- * Layout promises: at most two chip lines, the rest behind a `+N` chip
- * (FilterOverflowMenu); the first visible list row keeps its screen position
- * when the row mounts or unmounts (scrollTop compensation, C41); removing the
- * last chip with the pointer keeps the row's height until the pointer leaves
- * it (G30), so a quick second click never lands on the tab bar that moved up.
+ * Layout promises: at most three chip lines (four in a narrow panel), the rest
+ * behind a `+N` chip (FilterOverflowMenu); the first visible list row keeps its
+ * screen position when the row mounts or unmounts (scrollTop compensation, C41);
+ * removing the last chip with the pointer keeps the row's height until the
+ * pointer leaves it (G30), so a quick second click never lands on a list row
+ * that moved up.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ICON_CHECK } from '../common/Icons';
@@ -21,9 +25,6 @@ import { FilterChipView, FilterOverflowMenu, type RemoveHow } from './FilterOver
 import { useFilterWriter } from './FilterValueList';
 
 export const ROW_COLLAPSE_MS = 120;
-/** One chip line (24px chip + 4px gap) in the row. */
-const CHIP_LINE_PX = 28;
-const CHIP_GAP_PX = 4;
 
 export interface FilterBarProps {
   controller: FilterBarController;
@@ -84,7 +85,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const pendingFocus = useRef<(FilterDim | undefined)[] | null>(null);
   const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const visible = chips.length > 0 || c.menuOpen || c.viewItem !== null || c.search.active || linger;
+  const visible = chips.length > 0 || c.viewItem !== null || c.search.active || linger;
 
   // Any chip (from anywhere) ends a pending pointer-removal hold of an empty row.
   useEffect(() => {
@@ -117,18 +118,13 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     return () => ro.disconnect();
   }, [visible]);
 
-  // Two chip lines at most: shrink `fit` until the box wraps into <= 2 lines.
-  // While the popover is open the row holds both lines from the start
-  // (`.is-menu-open`): the popover hangs under the row, so a row that grew
-  // would move every value under the pointer (C47).
+  // Shrink `fit` until the box wraps into at most `maxLines` lines (F02: the row
+  // wraps the whole set and overflows only when space is really gone). The menu
+  // hangs from the Display button, not from this row, so the row growing under an
+  // open menu moves no menu row (C47).
   // Once the fit settles: close an overflow that has nothing left to hold, and
   // move focus after a removal (never on a refit frame, which draws every chip).
-  // F02: while the popover hangs under the row it holds two lines (C47); closed,
-  // the row wraps the whole set and overflows only when space is really gone.
-  // While open it holds max(2, the lines it had closed), so opening never hides a chip.
-  const closedLines = useRef(0);
-  const heldLines = c.menuOpen ? Math.max(2, closedLines.current) : 0;
-  const maxLines = c.menuOpen ? heldLines : width > 0 && width < 360 ? 4 : 3;
+  const maxLines = width > 0 && width < 360 ? 4 : 3;
   const sig = `${maxLines}#${chips.map((ch) => `${ch.dim}=${ch.value}`).join('|')}#${width}#${c.search.active}#${c.viewItem?.label ?? ''}#${c.archiveLoading}#${c.count}`;
   const lastSig = useRef('');
   useLayoutEffect(() => {
@@ -140,7 +136,6 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     const shownNow = Math.min(fit, chips.length);
     if (box && shownNow > 0 && countLines(box) > maxLines) { setFit(shownNow - 1); return; }
     if (box && overflowOpen && shownNow >= chips.length) setOverflowOpen(false);
-    if (!c.menuOpen) closedLines.current = box && chips.length > 0 ? countLines(box) : 0;
     const order = pendingFocus.current;
     pendingFocus.current = null;
     if (order) focusAfterRemoval(c, order);
@@ -159,16 +154,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     if (overflowOpen && chips.length === 0) setOverflowOpen(false);
   }, [overflowOpen, chips.length]);
 
-  // F03: while the popover is open the row floats over the tab bar (no layout
-  // shift on open or close); its in-flow spacer keeps the height the row had
-  // before the popover opened. The popover hangs under the floating row, so a
-  // chip landing there moves nothing under the pointer.
-  const overlay = c.menuOpen && !c.search.active;
   const inFlowHeight = useRef(0);
-  const spacerHeight = useRef(0);
-  const wasOverlay = useRef(false);
-  if (overlay && !wasOverlay.current) spacerHeight.current = inFlowHeight.current;
-  wasOverlay.current = overlay;
 
   // C41: the list's first visible row keeps its screen place whenever the row's
   // in-flow height changes (the scroll box sits below it). The box is taken at
@@ -177,7 +163,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const scrollerRef = useRef<HTMLElement | null>(null);
   scrollerRef.current = listScroller(c.listScrollRef.current) ?? scrollerRef.current;
   useLayoutEffect(() => {
-    const h = !visible ? 0 : overlay ? spacerHeight.current : c.rowRef.current?.offsetHeight ?? 0;
+    const h = !visible ? 0 : c.rowRef.current?.offsetHeight ?? 0;
     const delta = h - inFlowHeight.current;
     inFlowHeight.current = h;
     const el = scrollerRef.current;
@@ -189,7 +175,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const remove = (chip: FilterChip, how: RemoveHow) => {
     const i = chips.findIndex((ch) => ch.dim === chip.dim);
     pendingFocus.current = [chips[i + 1]?.dim, chips[i - 1]?.dim];
-    const fromRow = how === 'pointer' && !overlay && !!c.rowRef.current?.matches(':hover');
+    const fromRow = how === 'pointer' && !!c.rowRef.current?.matches(':hover');
     if (fromRow) {
       heldKey.current = chips.filter((ch) => ch.dim !== chip.dim).map((ch) => ch.dim).join('|');
       setHoldHeight(c.rowRef.current?.offsetHeight ?? null);
@@ -238,16 +224,15 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const inc = c.search.active ? c.search.includeComplete : null;
   const rowStyle = holdHeight !== null ? { minHeight: holdHeight } : undefined;
   return (
-    <>
     <div
       ref={c.rowRef}
-      className={`fb-row${collapsing ? ' is-collapsing' : ''}${c.search.active ? ' is-search' : ''}${c.menuOpen ? ' is-menu-open' : ''}${overlay ? ' is-overlay' : ''}`}
+      className={`fb-row${collapsing ? ' is-collapsing' : ''}${c.search.active ? ' is-search' : ''}`}
       role="toolbar"
       aria-label="Active filters"
       style={rowStyle}
       onPointerLeave={onPointerLeave}
     >
-      <div ref={chipsRef} className="fb-row-chips" style={heldLines ? { minHeight: heldLines * CHIP_LINE_PX - CHIP_GAP_PX } : undefined}>
+      <div ref={chipsRef} className="fb-row-chips">
         {c.search.active && (
           <span className="fb-row-lead">{chips.length > 0 ? 'Search uses these filters' : 'Searching all tasks'}</span>
         )}
@@ -294,7 +279,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
           </button>
         )}
         {chips.length === 0 && !c.search.active && !c.viewItem && (
-          <span className="fb-row-empty">{linger ? 'No filters' : 'No filters yet'}</span>
+          <span className="fb-row-empty">No filters</span>
         )}
       </div>
       {/* The tail sits outside the chip box at the top right: the count, then Clear. Its
@@ -340,8 +325,5 @@ export function FilterBar({ controller: c }: FilterBarProps) {
         />
       )}
     </div>
-    {/* After the row: the floating row's static position is right under the toolbar. */}
-    {overlay && <div className="fb-row-spacer" aria-hidden="true" style={{ height: spacerHeight.current }} />}
-    </>
   );
 }

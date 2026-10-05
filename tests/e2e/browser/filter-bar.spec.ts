@@ -39,7 +39,7 @@ test.describe('Mia: first week', () => {
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
   })
 
-  test('S1 + S3 + C3 + C5 + C55: one click narrows to Garden; the row sits above the menu', async ({ page }) => {
+  test('S1 + S3 + C3 + C5 + C55: one click narrows to Garden; the menu hangs from Display and the row comes in above the list', async ({ page }) => {
     // C3: default state has no row, no badge; page one reads every default.
     await expect(filterRow(page)).toHaveCount(0)
     await expect(badge(page)).toHaveCount(0)
@@ -57,15 +57,16 @@ test.describe('Mia: first week', () => {
     }
     // Nothing set: nothing to clear.
     await expect(clearInTitle(page)).toHaveCount(0)
-    // C55: the row is there with its placeholder; the menu hangs under it, right edges aligned.
-    await expect(filterRow(page)).toContainText('No filters yet')
+    // C55: opening adds no row (2026-10-04: a placeholder row covered the tier heading and
+    // the tab bar); the menu hangs from the Display button, right edges aligned.
+    await expect(filterRow(page)).toHaveCount(0)
     await settled(filterMenu(page))
-    const rowBefore = await box(filterRow(page))
     const menu = await box(filterMenu(page))
     const btn = await box(filterButton(page))
     // One width for every page: 320px, or the viewport less a margin.
     expect(Math.round(menu.width)).toBe(Math.min(320, page.viewportSize()!.width - 16))
-    expect(menu.y).toBeGreaterThanOrEqual(rowBefore.y + rowBefore.height - 1)
+    expect(menu.y).toBeGreaterThanOrEqual(btn.y + btn.height - 1)
+    expect(menu.y).toBeLessThanOrEqual(btn.y + btn.height + 8)
     // Right edges align when the menu fits on the panel left of the button's right edge;
     // else its left edge is clamped to the panel's left edge (F11).
     const panelLeft = await page.locator('.todo-panel').first().evaluate((el) => el.getBoundingClientRect().left)
@@ -91,12 +92,15 @@ test.describe('Mia: first week', () => {
     expect((await listIds(page)).every((id) => id?.startsWith('fb-mia-g'))).toBe(true)
     await expect(page.locator('.todo-panel [data-task-id^="fb-mia-h"]')).toHaveCount(0)
     await expect(page.getByTestId('filter-count')).toHaveText('2 tasks')
+    // The row came in right above the list, one line; the menu did not move.
     const rowAfter = await box(filterRow(page))
-    expect(Math.abs(rowAfter.y - rowBefore.y)).toBeLessThanOrEqual(1)
-    expect(Math.abs(rowAfter.height - rowBefore.height)).toBeLessThanOrEqual(1)
-    const chipBox = await box(filterChip(page, 'project'))
+    const toolbar = await box(page.locator('.todo-panel-toolbar').first())
+    const firstRow = await box(row(page, 'fb-mia-g2'))
+    expect(rowAfter.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height - 1)
+    expect(rowAfter.y + rowAfter.height).toBeLessThanOrEqual(firstRow.y + 1)
+    expect(rowAfter.height).toBeLessThanOrEqual(33)
     const menuNow = await box(filterMenu(page))
-    expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(menuNow.y + 1)
+    expect(Math.abs(menuNow.y - menu.y)).toBeLessThanOrEqual(1)
     // Page one says what is set in its rows (no summary line, no footer); Clear sits in the Filter title.
     await filterMenu(page).getByRole('button', { name: 'Back to all filters' }).click()
     await expect(summary(page, 'project')).toHaveText('Garden')
@@ -257,7 +261,7 @@ test.describe('Mia: menu layout and words', () => {
     await openFilterMenu(page)
     await expect(filterMenu(page).locator('#fb-more-body .fb-prop[data-filter-dim="time"]')).toHaveCount(1)
     await expect(summary(page, 'time')).toHaveText('Updated in 24h')
-    // The row holds two lines while the menu hangs under it, so the third chip waits behind +N until it closes.
+    // The third chip is in the row.
     await closeFilterMenu(page)
     await expect(filterChip(page, 'time')).toBeVisible()
     await openFilterMenu(page)
@@ -415,7 +419,7 @@ test.describe('Themes, narrow panels and the view item', () => {
     await openHome(page)
     await expect(row(page, 'fb-own-1')).toBeAttached({ timeout: 30_000 })
     await addFilter(page, 'project', 'Walnut')
-    await page.locator('.fb-toolbar-scope').evaluate((el) => { (el as HTMLElement).style.width = '360px' })
+    await page.locator('.fb-row-scope').evaluate((el) => { (el as HTMLElement).style.width = '360px' })
     const body = filterChip(page, 'project').locator('.fb-chip-body')
     // F01: the default panel is narrow, so the narrow row must still read on its own, on one
     // line (WebKit's innerText breaks between flex items, hence the whitespace).
@@ -436,7 +440,7 @@ test.describe('Themes, narrow panels and the view item', () => {
     await addFilter(page, 'blocked', 'Not blocked')
     await addFilter(page, 'time', '24h')
     await addFilter(page, 'tags', 't03')
-    await page.locator('.fb-toolbar-scope').evaluate((el) => { (el as HTMLElement).style.width = '320px' })
+    await page.locator('.fb-row-scope').evaluate((el) => { (el as HTMLElement).style.width = '320px' })
     const plus = filterRow(page).locator('.fb-chip-plus')
     await expect(plus).toBeVisible()
     // The fit settles over a frame or two after the width change, and again whenever the
@@ -468,11 +472,10 @@ test.describe('Themes, narrow panels and the view item', () => {
     const tabBarSwitch = filterMenu(page).locator('[data-view-option="quick-views"]')
     await expect(tabBarSwitch).toHaveAttribute('aria-checked', 'true')
     await tabBarSwitch.click()
-    // C56: switching the bar off closes the menu and leaves focus on Display.
-    await expect(filterMenu(page)).toHaveCount(0)
-    await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Display')
-    await openDisplayMenu(page)
+    // A switch: the menu stays open, the switch reads off, the bar is gone.
     await expect(tabBarSwitch).toHaveAttribute('aria-checked', 'false')
+    await expect(filterMenu(page)).toBeVisible()
+    await expect(page.locator('.todo-section-tabs')).toHaveCount(0)
     // A view is picked on the View page; the pick closes the menu.
     await chooseDisplayOption(page, 'pinned')
     await expect(filterMenu(page)).toHaveCount(0)

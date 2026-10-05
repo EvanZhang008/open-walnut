@@ -367,16 +367,14 @@ describe('FilterBar: the filter row', () => {
     expect(renderToStaticMarkup(createElement(FilterBar, { controller: controller() }))).toBe('')
   })
 
-  it('C55: menu open with no chips draws the "No filters yet" placeholder and no Clear', () => {
-    const doc = bar(controller({ menuOpen: true }))
-    const row = doc.querySelector('.fb-row')!
+  it('opening the menu adds no row: no placeholder floats over the tier heading or the tab bar', () => {
+    // 2026-10-04: a two-line `No filters yet` row covered the Focus heading and the tab bar.
+    expect(renderToStaticMarkup(createElement(FilterBar, { controller: controller({ menuOpen: true }) }))).toBe('')
+    const row = bar(controller({ menuOpen: true, state: withState({ projects: ['Garden'] }) })).querySelector('.fb-row')!
     expect(row.getAttribute('role')).toBe('toolbar')
     expect(row.getAttribute('aria-label')).toBe('Active filters')
-    // C47: the open menu holds both chip lines, so the row never grows under it.
-    expect(row.className).toContain('is-menu-open')
-    expect(bar(controller({ state: withState({ projects: ['Garden'] }) })).querySelector('.fb-row')?.className).not.toContain('is-menu-open')
-    expect(row.querySelector('.fb-row-empty')?.textContent).toBe('No filters yet')
-    expect(row.querySelector('.fb-clear')).toBeNull()
+    expect(row.className).toBe('fb-row')
+    expect(row.querySelector('.fb-row-empty')).toBeNull()
   })
 
   it('C5 + C25: a Project chip with body, x, then the count and Clear in the tail outside the chips', () => {

@@ -1,6 +1,6 @@
 /*
- * filter-bar-row: the filter row under the home toolbar (.fb-row, spec 6.4)
- * and its overflow list. Split from filter-bar.css (each file < 500 lines).
+ * filter-bar-row: the filter row right above the home task list (.fb-row,
+ * spec 6.4) and its overflow list. Split from filter-bar.css (each file < 500 lines).
  */
 
 /* ── Filter row (6.4) ── */
@@ -15,19 +15,12 @@
   transition: opacity 120ms ease-out;
 }
 .fb-row.is-collapsing { opacity: 0; }
-/* Popover open (F03): the row floats at its in-flow place over the tab bar; the
-   spacer after it keeps the height the row had before, so nothing below moves. */
-.fb-row.is-overlay {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 20;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+/* The row sits apart from the toolbar, so it carries its own `todo-toolbar` scope for the narrow rules below. */
+.fb-row-scope {
+  flex-shrink: 0;
+  container-type: inline-size;
+  container-name: todo-toolbar;
 }
-.fb-row-spacer { flex: none; }
-/* Popover open: the chip lines are held (inline min-height), so a new line never moves it (C47). */
-.fb-row.is-menu-open .fb-row-chips { align-content: flex-start; }
 .fb-row-chips {
   flex: 1;
   min-width: 0;
@@ -151,7 +144,7 @@
   overflow-y: auto;
 }
 
-/* ── Narrow panel (container query on .fb-toolbar-scope, 5.5) ──
+/* ── Narrow panel (container query on .fb-row-scope, 5.5) ──
    Chips keep their dimension names and the count keeps its unit at every
    width (F01): a bare `Any` or `Complete` means nothing alone. Only the
    value text gets a shorter cap. */

@@ -397,13 +397,18 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   await openDisplayMenu(page)
   await option(page, 'quick-views').click()
   await expect(page.locator('.todo-section-tabs')).toHaveCount(0)
-  // C56: like hiding it from the bar's own menu: Display closes and keeps focus, a toast says so.
-  await expect(displayMenu(page)).toHaveCount(0)
-  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Display')
-  await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true }).first()).toBeVisible()
-  await openDisplayMenu(page)
+  // A switch (2026-10-04: "don't make the menu disappear, it is a toggle"): the menu stays
+  // open both ways, so the bar is seen going and coming back, and no toast is needed.
+  await expect(displayMenu(page)).toBeVisible()
   await expect(option(page, 'quick-views')).toHaveAttribute('aria-checked', 'false')
-  // The open menu hangs under the row (`No filters yet`); shut, on All with no chip, the row does not exist at all.
+  await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true })).toHaveCount(0)
+  await option(page, 'quick-views').click()
+  await expect(page.locator('.todo-section-tabs')).toBeVisible()
+  await expect(displayMenu(page)).toBeVisible()
+  await option(page, 'quick-views').click()
+  await expect(page.locator('.todo-section-tabs')).toHaveCount(0)
+  // On All with no chip there is no row, open or shut.
+  await expect(filterRow(page)).toHaveCount(0)
   await closeDisplayMenu(page)
   await expect(filterRow(page)).toHaveCount(0)
 
@@ -437,6 +442,49 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   await include.click()
   await expect(page.locator(`#home-task-navigation [data-task-id="${done}"]`).first()).toBeVisible({ timeout: 15_000 })
   await page.locator('#home-task-navigation .todo-search-bar input').fill('')
+})
+
+test('a tier view: opening Display covers neither the tier heading nor the tab bar, and the row comes in below both', async ({ page, baseURL }) => {
+  // 2026-10-04: with Focus open, a two-line `No filters yet` row floated over the Focus
+  // heading and the tab bar, and switching the bar off from the menu closed the menu.
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await boot(page, baseURL!, { 'open-walnut-todo-width': '50' })
+  await pickView(page, 'focus')
+  const heading = page.getByTestId('tier-view-bar')
+  const tabs = page.locator('#home-task-navigation .todo-section-tabs')
+  await expect(heading).toBeVisible()
+  await expect(tabs).toBeVisible()
+  const [h0, t0] = [await box(heading), await box(tabs)]
+  await openDisplayMenu(page)
+  await expect(filterRow(page)).toHaveCount(0)
+  const [h1, t1] = [await box(heading), await box(tabs)]
+  expect(Math.abs(h1.y - h0.y)).toBeLessThanOrEqual(1)
+  expect(Math.abs(t1.y - t0.y)).toBeLessThanOrEqual(1)
+  // The menu hangs from Display on the right: at the heading's name and the bar's first tab,
+  // the heading and the bar are what the pointer meets.
+  const onTop = (sel: string, b: { x: number; y: number; height: number }) => page.evaluate(
+    ([s, x, y]) => !!document.elementFromPoint(x as number, y as number)?.closest(s as string), [sel, b.x + 12, b.y + b.height / 2] as const)
+  expect(await onTop('[data-testid="tier-view-bar"]', h1)).toBe(true)
+  expect(await onTop('.todo-section-tabs', t1)).toBe(true)
+  await page.locator('.todo-panel').first().screenshot({ path: `${SHOTS}/tier-view-menu-open.png` })
+  // The switch keeps the menu open both ways.
+  await option(page, 'quick-views').click()
+  await expect(tabs).toHaveCount(0)
+  await expect(displayMenu(page)).toBeVisible()
+  await option(page, 'quick-views').click()
+  await expect(tabs).toBeVisible()
+  await expect(displayMenu(page)).toBeVisible()
+  await closeDisplayMenu(page)
+  // A chip: the row comes in under the heading and the bar, one line, right above the list.
+  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+  const [r, t2] = [await box(filterRow(page)), await box(tabs)]
+  expect(r.y).toBeGreaterThanOrEqual(t2.y + t2.height - 1)
+  expect(r.height).toBeLessThanOrEqual(33)
+  const list = await box(page.locator('#home-task-navigation .home-navigation-scroll').first())
+  expect(r.y + r.height).toBeLessThanOrEqual(list.y + 1)
+  await page.locator('.todo-panel').first().screenshot({ path: `${SHOTS}/tier-view-row-under-bars.png` })
+  await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
+  await expect(filterRow(page)).toHaveCount(0)
 })
 
 test('a view put on the bar moves above the hairline on the View page, in bar order', async ({ page, baseURL }) => {

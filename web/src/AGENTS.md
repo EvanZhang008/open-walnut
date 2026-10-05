@@ -137,9 +137,13 @@ show inline after the open ones, other completed hits that show the query fold i
   filter value AND every view on page one (hits ranked by `RecentEntry.uses`, `filter-home-model.ts`
   `rankByUse`) and filters the rows on page two. Never bring the wall back: a first page is a
   handful of 28px rows, not every value of every property, and never a `Most used` block (it was
-  the first thing dropped). What the filter sets shows as chips in the filter row under the toolbar
-  (`FilterBar.tsx`, one chip per dimension; the count and `Clear` in the row's tail at the top
-  right), the one place that says "a filter is on". There is ONE Status (To Do, In Progress, Need
+  the first thing dropped). What the filter sets shows as chips in the filter row right above the
+  list, under the toolbar, the tier heading and the tab bar (`FilterBar.tsx`, one chip per
+  dimension; the count and `Clear` in the row's tail at the top right), the one place that says "a
+  filter is on". Opening the menu adds nothing to the panel: no placeholder row, and the menu hangs
+  from the Display button, never from the row (2026-10-04: a two-line `No filters yet` row floated
+  over the Focus heading and the tab bar). Show tab bar is a switch: the menu stays open both ways.
+  There is ONE Status (To Do, In Progress, Need
   Action, Waiting, Complete; the default is the three open ones), never a Status AND a Phase. Tier
   names never sit at the first level. Open state is the filter controller's (`useHomeFilters.ts`
   `menuOpen`, `buttonRef`): the F shortcut, the board's "Filter to this project", the row's view

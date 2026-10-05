@@ -364,11 +364,12 @@ test.describe('Owner: geometry, events and narrow panels', () => {
       return { id: hit.dataset.taskId, y: hit.getBoundingClientRect().y }
     })
     const a = await firstVisible()
-    await openFilterMenu(page)
+    // The row comes with the first chip. Waiting matches no task here, so the list is the same.
+    await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
     await expect(filterRow(page)).toBeVisible()
     const b = await page.evaluate(([id]) => document.querySelector(`.todo-panel-list [data-task-id="${id}"]`)!.getBoundingClientRect().y, [a.id])
     expect(Math.abs(b - a.y)).toBeLessThanOrEqual(2)
-    await closeFilterMenu(page)
+    await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
     await expect(filterRow(page)).toHaveCount(0)
     const c = await page.evaluate(([id]) => document.querySelector(`.todo-panel-list [data-task-id="${id}"]`)!.getBoundingClientRect().y, [a.id])
     expect(Math.abs(c - a.y)).toBeLessThanOrEqual(2)
@@ -388,30 +389,36 @@ test('C28: one task with no project adds Inbox as the first value of the Project
   await expect(filterMenu(page).getByRole('button', { name: /^\d+ more$/ })).toHaveCount(0)
 })
 
-test('F03: opening the menu with no chip moves nothing; a pointer removal holds the row height until the pointer leaves', async ({ page }) => {
+test('F03: opening the menu adds no row and moves nothing; a pointer removal holds the row until the pointer leaves', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await stubBoard(page, ownerSeeds(), [], { tabBar: true })
   await openHome(page)
   await expect(row(page, 'fb-own-1')).toBeAttached({ timeout: 30_000 })
-  const tabsY = () => page.locator('.todo-section-tabs').first().evaluate((el) => Math.round(el.getBoundingClientRect().y))
+  const tabs = page.locator('.todo-section-tabs').first()
+  const tabsY = () => tabs.evaluate((el) => Math.round(el.getBoundingClientRect().y))
+  const listY = () => row(page, 'fb-own-1').evaluate((el) => Math.round(el.getBoundingClientRect().y))
   const y0 = await tabsY()
-  // Open with nothing set: the row floats over the tab bar, the list stays put.
+  const l0 = await listY()
+  // Open with nothing set: no row comes (2026-10-04: a placeholder row floated over the
+  // tier heading and the tab bar), and the tab bar and the list stay put.
   await openFilterMenu(page)
-  await expect(filterRow(page)).toContainText('No filters yet')
+  await expect(filterRow(page)).toHaveCount(0)
   expect(Math.abs((await tabsY()) - y0)).toBeLessThanOrEqual(1)
-  const rowBox = await box(filterRow(page))
-  expect((await box(filterMenu(page))).y).toBeGreaterThanOrEqual(rowBox.y + rowBox.height - 1)
+  expect(Math.abs((await listY()) - l0)).toBeLessThanOrEqual(1)
   await closeFilterMenu(page)
-  expect(Math.abs((await tabsY()) - y0)).toBeLessThanOrEqual(1)
-  // Three chips, then remove the first with the pointer: the next x does not move up.
-  await addFilter(page, 'project', 'iOS App')
-  await addFilter(page, 'source', 'Local')
+  // One chip (Waiting matches no task here): the row comes in under the tab bar, above the list.
   await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
-  await closeFilterMenu(page)
-  const yChips = await tabsY()
+  const rowBox = await box(filterRow(page))
+  const tabsBox = await box(tabs)
+  expect(rowBox.y).toBeGreaterThanOrEqual(tabsBox.y + tabsBox.height - 1)
+  expect(rowBox.height).toBeLessThanOrEqual(33)
+  expect(Math.abs((await tabsY()) - y0)).toBeLessThanOrEqual(1)
+  const l1 = await listY()
+  // Remove it with the pointer: the row holds its place until the pointer leaves, then goes.
   await filterChip(page, 'status').locator('.fb-chip-x').click()
   await expect(filterChip(page, 'status')).toHaveCount(0)
-  expect(Math.abs((await tabsY()) - yChips)).toBeLessThanOrEqual(1)
+  await expect(filterRow(page)).toContainText('No filters')
+  expect(Math.abs((await listY()) - l1)).toBeLessThanOrEqual(1)
   await page.mouse.move(900, 700)
-  await expect.poll(tabsY).toBeLessThan(yChips + 1)
+  await expect(filterRow(page)).toHaveCount(0)
 })

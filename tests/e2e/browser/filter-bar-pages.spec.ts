@@ -267,6 +267,9 @@ test('chip menu: plain clicks toggle; it stays open over the panel menu; the las
   await expect(cm).toHaveCount(0)
   await expect(filterChip(page, 'project').locator('.fb-chip-body')).toBeFocused()
   // With the panel menu open, a chip menu opens over it; a press inside keeps both; Escape takes the top one.
+  // The row sits above the list, so the chip shows beside the open menu only in a panel
+  // wider than the menu (a narrow panel's menu covers the row, as any dropdown would).
+  await page.setViewportSize({ width: 2200, height: 900 })
   await openFilterMenu(page)
   await filterChip(page, 'project').locator('.fb-chip-body').click()
   await expect(cm).toBeVisible()

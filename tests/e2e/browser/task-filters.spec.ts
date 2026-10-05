@@ -316,6 +316,8 @@ test('/tasks reached through the UI matches the homepage hit set', async ({ page
 })
 
 test('the menu spells out the active filters on its property rows and each chip x removes one', async ({ page }) => {
+  // A panel wide enough for the row's chips to show beside the open menu (it hangs from Display).
+  await page.setViewportSize({ width: 2200, height: 900 })
   await openHomePanel(page)
   await addFilter(page, 'project', 'Meadow', { keepOpen: true })
   await openFilterPage(page, 'time')
@@ -328,7 +330,7 @@ test('the menu spells out the active filters on its property rows and each chip 
   // Something is set: the Filter title offers Clear.
   const clearInTitle = filterMenu(page).locator('.fb-home .fb-group-title .fb-group-action')
   await expect(clearInTitle).toHaveText('Clear')
-  // The row stays live under the open menu: its x removes exactly one condition.
+  // The row stays live beside the open menu: its x removes exactly one condition.
   await filterChip(page, 'project').locator('.fb-chip-x').click()
   await expect(filterChip(page, 'project')).toHaveCount(0)
   await expect(summaryOf('project')).toHaveText('Any')

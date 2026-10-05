@@ -5,15 +5,12 @@
  * white badge text the spec names.
  */
 
-/* Container query scope: wraps ONLY the toolbar and the filter row, never
-   .todo-panel (its fixed dnd-kit overlays must not get a new containing block). */
+/* Container query scope: wraps ONLY the toolbar (the filter row has its own,
+   .fb-row-scope), never .todo-panel (its fixed dnd-kit overlays must not get a
+   new containing block). */
 .fb-toolbar-scope {
   container-type: inline-size;
   container-name: todo-toolbar;
-  /* Containment makes this a stacking context: lift it so the floating filter
-     row (popover open) paints over the tab bar and list below. */
-  position: relative;
-  z-index: 6;
 }
 
 /* Toolbar button: icon + label, 28px tall. */

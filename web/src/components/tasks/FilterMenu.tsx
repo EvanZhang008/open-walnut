@@ -96,8 +96,9 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
     c.setMenuOpen(false);
     if (reason === 'escape' || reason === 'pick') c.buttonRef.current?.focus({ preventScroll: true });
   };
+  // Hangs from the Display button, never from the filter row: the row comes, goes
+  // and grows while the menu is open, and a menu riding on it would move.
   const placement = useMenuPlacement(true, c.buttonRef, menuRef, {
-    verticalAnchorRef: c.rowRef,
     align: 'right',
     onAnchorLost: () => close('lost'),
   });

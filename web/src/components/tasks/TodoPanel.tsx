@@ -7860,15 +7860,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onSectionChange: (id: string) => handleSectionChange(id as TodoSection),
     customTiers: customTiers ?? [],
     quickViews,
-    onQuickViewsChange: (next: boolean) => {
-      setQuickViews(next);
-      if (next) return;
-      // C56: hiding the bar from Display reads like hiding it from its own menu:
-      // the menu closes, focus lands on Display (where the bar comes back), a toast says so.
-      homeFilters.setMenuOpen(false);
-      requestAnimationFrame(() => homeFilters.buttonRef.current?.focus({ preventScroll: true }));
-      notify({ kind: 'sort', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden' });
-    },
+    // A switch: the menu stays open both ways, so the bar is seen coming and going.
+    onQuickViewsChange: (next: boolean) => setQuickViews(next),
     viewTitleHint: viewItemLabel,
     order: displayOrder,
     allCollapsed,
@@ -7908,7 +7901,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {ICONS.ICON_SIDE_PANEL}
         </button>
       </div>
-      <FilterBar controller={filterBar} />
       </div>
 
       {banner}
@@ -7949,6 +7941,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         countsReady={!loading}
         customTiers={customTiers}
       />}
+
+      {/* The filter row sits right above the list it narrows, below the tier heading
+          and the tab bar; opening Display adds nothing here (FilterBar.tsx). */}
+      <div className="fb-row-scope">
+        <FilterBar controller={filterBar} />
+      </div>
 
       {/* Projects view only: Running and Collapse/Expand (spec 5.6). */}
       {quickViews && !isSearchMode && effectiveSection === 'tasks' && (
