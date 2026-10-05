@@ -21,7 +21,6 @@ import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
-import { createProcSampler, type ProcSampleExecFile, type ProcSampleRoot } from '../../src/providers/proc-sample-core.js'
 import { createTurnSnapshots, type TurnSnapshotExecFile, type TurnSnapshotFs } from '../../src/providers/turn-snapshot-core.js'
 import { createTurnGuard } from '../../src/providers/turn-guard-core.js'
 import { computeHostLocalChanges } from '../../src/providers/session-changes-core.js'
@@ -290,9 +289,6 @@ export class MockDaemon {
       case 'fs.mkdir': return this.cmdFsMkdir(ws, id, cmd)
       case 'fs.ls': return this.cmdFsLs(ws, id, cmd)
       case 'list': return this.cmdList(ws, id)
-      // proc.sample (proc-sample-v1): the REAL sampler over the real ps, with the
-      // mock CLI processes as roots, so the Machine readout shows live numbers.
-      case 'proc.sample': return this.cmdProcSample(ws, id)
       // 'turn-snapshot-v1': the REAL snapshot and guard cores, pinned to turnSnapshotRoot.
       case 'turns.list': case 'turns.diff': case 'turns.restore': case 'turns.guard':
       case 'turns.configure': return this.cmdTurns(ws, id, cmd)
@@ -821,28 +817,6 @@ export class MockDaemon {
     } catch (err) {
       this.sendError(ws, id, `fs.ls failed: ${(err as Error).message}`)
     }
-  }
-
-  private procSampler = createProcSampler({
-    execFile: execFile as unknown as ProcSampleExecFile,
-    platform: process.platform,
-    env: process.env,
-    totalmem: () => os.totalmem(),
-    loadavg: () => os.loadavg(),
-    cpuCount: () => os.cpus().length,
-  })
-
-  private cmdProcSample(ws: WebSocket, id: number): void {
-    const roots: ProcSampleRoot[] = []
-    for (const [sid, session] of this.sessions) {
-      if (session.exitCode === null && session.pid) roots.push({ sid, pid: session.pid, kind: 'cli' })
-    }
-    for (const [rid, w] of this._acp.workers) {
-      if (w.state === 'running' && w.proc.pid) roots.push({ sid: rid, pid: w.proc.pid, kind: 'acp' })
-    }
-    void this.procSampler.sample(roots).then((r) => {
-      if (ws.readyState === WebSocket.OPEN) this.sendOk(ws, id, r as unknown as Record<string, unknown>)
-    })
   }
 
   /**

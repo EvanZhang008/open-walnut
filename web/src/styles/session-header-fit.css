@@ -7,8 +7,8 @@
 
 .session-meta-row-2 [data-header-id][data-hidden="true"] { display: none !important; }
 
-/* A wrapper around a component that rendered nothing (Fork without a task, the
-   heavy pill on a quiet session) must not take a gap. */
+/* A wrapper around a component that rendered nothing (Fork without a task)
+   must not take a gap. */
 .session-header-item { display: inline-flex; align-items: center; flex-shrink: 0; }
 .session-header-item:empty { display: none; }
 

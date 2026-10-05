@@ -182,8 +182,8 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
 /** The order the chips leave the tool row, first to go first. Lock, Expand and Close never leave. */
 const CHIP_LEAVE_ORDER = ['terminal', 'board', 'files', 'changed', 'fork']
 const WINDOW_BUTTONS = ['locate', 'popout']
-/** The chips a "..." row stands in for (the heavy pill is one too, when a session wears it). */
-const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal', 'resources']
+/** The chips a "..." row stands in for. */
+const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal']
 /** Everything the "..." menu lists: the time is the one hidden item it does not. */
 const LISTED = [...VIEW_CHIPS, ...WINDOW_BUTTONS]
 

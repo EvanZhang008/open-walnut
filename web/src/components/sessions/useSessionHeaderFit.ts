@@ -46,7 +46,6 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   board: { kind: 'chip', priority: 5, name: 'Board' },
   terminal: { kind: 'chip', priority: 6, name: 'Terminal' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
-  resources: { kind: 'chip', priority: 8, name: 'Heavy' },
   // Locate, the way back to the task from the Ask and Mail drawers, is the last
   // of the two movable window buttons to leave.
   locate: { kind: 'window', priority: 9, name: 'Locate task' },

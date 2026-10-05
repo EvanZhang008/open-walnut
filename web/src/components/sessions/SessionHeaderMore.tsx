@@ -4,7 +4,7 @@
  * (2026-10-03: window buttons in the task kebab read as task actions and confused).
  *
  * `SessionHeaderMoreMenu` is the "..." chip on the tool row and its menu: one row
- * per hidden view chip (Changed, Files, Board, Terminal, Fork, the heavy pill),
+ * per hidden view chip (Changed, Files, Board, Terminal, Fork),
  * then, after a divider, one per hidden window button (Open in new tab,
  * Locate task). `HiddenPillRows` is the kebab's leading section: one row per
  * title-row pill that did not fit even as a letter.
@@ -32,7 +32,7 @@ function activate(row: HTMLElement | null, id: string) {
 }
 
 interface ItemState {
-  /** The open view, the heavy pill's number. */
+  /** The open view. */
   value: string;
   /** The real button's accessible name ("Find on Home" where the panel is not on Home). */
   label: string;
@@ -50,7 +50,6 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   const label = button.getAttribute('aria-label') ?? '';
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
-  else if (id === 'resources') value = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
   return { value, label, disabled };
 }
 
@@ -160,23 +159,21 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
 function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
   const { value, disabled } = useItemState(rowRef, id);
   const name = TOOL_ITEMS[id]?.name ?? id;
-  // The heavy pill has nothing to click; its row is the number, not an action.
-  const info = id === 'resources';
   return (
     <button
       type="button"
-      className={`task-kebab-item${info ? ' task-kebab-info' : ''}`}
+      className="task-kebab-item"
       role="menuitem"
       // A disabled chip (Fork on an engine without session forking) stays a
       // disabled row, with the chip's own reason as its hover text.
       disabled={!!disabled}
       title={disabled ?? undefined}
-      onClick={(e) => { e.stopPropagation(); if (!info) onChoose(id); }}
+      onClick={(e) => { e.stopPropagation(); onChoose(id); }}
       data-testid={`session-header-more-item-${id}`}
       data-state={value || undefined}
     >
-      <span className="session-header-more-name">{info ? `${name}: ${value}` : name}</span>
-      {!info && value && <span className="session-header-more-value">{value}</span>}
+      <span className="session-header-more-name">{name}</span>
+      {value && <span className="session-header-more-value">{value}</span>}
     </button>
   );
 }

@@ -1007,7 +1007,6 @@ export interface SystemHealthEvent {
  * client (including lightweight ones that filtered to one session).
  */
 export type HostStatusEvent = import('./hosts/host-status.js').HostStatus;
-export type SessionResourcesEvent = import('./sessions/session-resources.js').HostResourceFrame;
 
 // ── Cloud-companion setup events ──
 
@@ -1324,7 +1323,6 @@ export interface EventPayloadMap {
 
   'system:health': SystemHealthEvent;
   'host:status': HostStatusEvent;
-  'session:resources': SessionResourcesEvent;
 
   'client:incident': ClientIncidentEvent;
 

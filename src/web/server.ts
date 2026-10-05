@@ -99,7 +99,6 @@ import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { setSelfApiRoot } from '../lib/self-api-root.js'
 import { systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
-import { resourcesRouter } from './routes/resources.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { searchIndexRouter } from './routes/search-index.js'
 import { notesRouter } from './routes/notes.js'
@@ -1774,7 +1773,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // the `host:status` WS event, so nothing polls this.
   app.use('/api/hosts', hostsRouter)
   app.use('/api/workspaces', (await import('./routes/workspaces.js')).workspacesRouter) // per-task isolated workspaces
-  app.use('/api/resources', resourcesRouter)
   // Test-only remote-host fixture: mounted solely by the Playwright fixture
   // server (the flag, AND ephemeral, AND not cloud: hostFixtureRouteAllowed).
   const { hostFixtureRouteAllowed } = await import('../core/hosts/host-fixture.js')
@@ -3339,12 +3337,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       setHostWarmup(hostWarmup)
       hostWarmup.start()
-    }
-    // What each session costs its host (CPU, RSS per process tree): the daemon
-    // runs one ps per tick and the server only relays the per-session totals.
-    {
-      const { startSessionResourceSampler } = await import('../core/sessions/session-resources.js')
-      await startSessionResourceSampler({ cloudMode: CLOUD_MODE, vitest: !!process.env.VITEST })
     }
     // Lid opened / network changed: redial failed and reconnecting hosts once (C51).
     if (!isEphemeral && !process.env.VITEST && process.env.WALNUT_TEST_HOST_FIXTURE_MODE !== '1') {
@@ -5622,10 +5614,6 @@ export async function stopServer(): Promise<void> {
     hostWarmup.stop()
     hostWarmup = null
   }
-  try {
-    const { stopSessionResourceSampler } = await import('../core/sessions/session-resources.js')
-    stopSessionResourceSampler()
-  } catch { /* import failed (partial dist) — nothing to stop */ }
   try {
     const { setHostWarmup } = await import('../core/hosts/host-warmup-registry.js')
     setHostWarmup(null)

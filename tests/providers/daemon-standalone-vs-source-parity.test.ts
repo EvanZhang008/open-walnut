@@ -632,34 +632,6 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const advEnd = capsSrc.indexOf('] as const', advStart)
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'changes-v1'/)
   })
-  // proc.sample (proc-sample-core.ts): the binary twin imports the factory, the
-  // source twin inlines it; a daemon that lacks it stays usable (the Machine
-  // readout says the host's daemon needs an upgrade).
-  it("both twins dispatch proc.sample; 'proc-sample-v1' advertised but NOT required, not bridge-reachable", () => {
-    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
-    for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/case 'proc\.sample': return cmdProcSample\(ws, id/)
-      expect(src).toMatch(/async function cmdProcSample\(/)
-      expect(src).toMatch(/procSampler\.sample\(roots\)/)
-      // The roots: the registry's running CLIs plus the ACP workers.
-      expect(src).toMatch(/s\.state === 'running'\) roots\.push\(\{ sid(: sid)?, pid: s\.pid, kind: 'cli' \}\)/)
-      expect(src).toMatch(/kind: 'acp' \}\)/)
-    }
-    expect(templateSrc).toMatch(/\(__CREATE_PROC_SAMPLER__\)\(\{/)
-    expect(standaloneSrc).toMatch(/createProcSampler\(\{/)
-    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
-    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
-    const reqEnd = capsSrc.indexOf('] as const', reqStart)
-    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'proc-sample-v1'/)
-    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
-    const advEnd = capsSrc.indexOf('] as const', advStart)
-    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'proc-sample-v1'/)
-    for (const src of [standaloneSrc, templateSrc]) {
-      const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
-      const end = src.indexOf('])', start)
-      expect(src.slice(start, end)).not.toMatch(/proc\.sample/)
-    }
-  })
   // turns.* (turn-snapshot-core.ts + turn-guard-core.ts): the binary twin imports
   // both factories, the source twin inlines them; both snapshot at every result
   // line and at spawn. A daemon without it keeps working (no Turns view, no guard).

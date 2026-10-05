@@ -967,26 +967,6 @@ export async function listAllSessionIds(): Promise<Set<string>> {
 }
 
 /**
- * The session an ACP worker runs, by the daemon's runtime id (`acpRuntimeId`
- * spills into `payload`, hence json_extract; same json_valid guard as the lane
- * lookup). Newest first, archived rows excluded.
- */
-export function getSessionByAcpRuntimeIdSync(acpRuntimeId: string): SessionRecord | null {
-  if (!acpRuntimeId) return null;
-  const db = getDb();
-  if (!db) return null;
-  const row = db.prepare(`
-    SELECT * FROM sessions
-    WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
-      AND json_extract(payload, '$.acpRuntimeId') = ?
-      AND (archived IS NULL OR archived = 0)
-    ORDER BY started_at DESC
-    LIMIT 1
-  `).get(acpRuntimeId) as Record<string, any> | undefined;
-  return row ? rowToSession(row) : null;
-}
-
-/**
  * The session bound to `lane`, or null. Newest-first so a lane that somehow holds
  * two records (a crash between mint and spawn) resolves to the live one rather
  * than a stale corpse.

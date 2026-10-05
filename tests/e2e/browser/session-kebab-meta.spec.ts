@@ -11,6 +11,8 @@
  */
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { openBell } from './host-problems-fixture-helpers'
+import { railButton } from './banner-placement-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SCREENSHOT_DIR = '/tmp/session-kebab-times'
@@ -206,4 +208,44 @@ test('sending a message moves Updated; Created stays; every reopening agrees', a
     }
     await closeMenu(page)
   }
+})
+
+// 2026-10-04: the user removed the per-session Memory and CPU readout ("really
+// not necessary"): no rows at the foot of this menu, no pill on the tool row,
+// no Machine load card in the System section, and nothing asks for it.
+test('a live session shows no memory or CPU anywhere, and nothing samples it', async ({ page, request }) => {
+  const asked: string[] = []
+  page.on('request', (r) => { if (/\/api\/resources\b/.test(r.url())) asked.push(r.url()) })
+  // snapshot-clean-turn: the mock CLI answers and stays alive, a live process the old readout measured.
+  const start = await request.post('/api/sessions/quick-start', {
+    data: { cwd: `${fixtureRoot}/projects/walnut`, message: `snapshot-clean-turn:no readout ${Date.now()}` },
+  })
+  expect(start.ok(), await start.text()).toBeTruthy()
+  const { sessionId } = await start.json() as { sessionId: string }
+  litter.push((await readSession(request, sessionId)).taskId)
+  await expect.poll(async () => ((await (await request.get(`/api/sessions/${sessionId}`)).json()) as { session?: { pid?: number } }).session?.pid ?? null,
+    { timeout: 60_000 }).toBeTruthy()
+
+  const panel = await openColumn(page, sessionId)
+  const menu = await openMenu(page, panel)
+  const meta = menu.getByTestId('session-kebab-meta')
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
+  // The old rows landed within a few seconds of the menu opening; give them that long.
+  await page.waitForTimeout(3_000)
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
+  await expect(menu.locator('[data-meta="memory"], [data-meta="cpu"]')).toHaveCount(0)
+  await meta.evaluate((el) => el.scrollIntoView({ block: 'end' }))
+  await menu.screenshot({ path: shot('05-live-no-readout') })
+  await closeMenu(page)
+  await expect(panel.locator('[data-header-id="resources"], [data-testid="session-resource-pill"]')).toHaveCount(0)
+
+  await openBell(page)
+  const system = railButton(page, 'System')
+  if (await system.getAttribute('aria-current') !== 'true') await system.click()
+  await expect(system).toHaveAttribute('aria-current', 'true')
+  await expect(page.locator('.notification-panel .notification-card').first()).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('[data-testid="nfc-machine-load"]')).toHaveCount(0)
+  await page.screenshot({ path: shot('06-system-no-machine-load'), clip: { x: 0, y: 0, width: 1280, height: 720 } })
+  expect(asked, 'no request for session resources').toEqual([])
+  expect((await request.get('/api/resources')).status()).toBe(404)
 })

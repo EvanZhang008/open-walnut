@@ -130,29 +130,29 @@ describe('fitToolRow', () => {
   });
 
   it('fills the room a wide hidden chip leaves with the window buttons (the 2026-10-04 report)', () => {
-    // A heavy session wears a 90px pill (priority 8, after Terminal). With all five chips on the row it is
-    // the first item that does not fit; the old strict prefix stopped there and left Locate, Open in new
-    // tab and Lock in the menu beside 60px of empty row.
-    const heavy: ToolRowItem = { id: 'resources', kind: 'chip', priority: 8, width: 90 };
+    // A 90px chip after Terminal (the report's was the heavy pill, since removed). With all five chips on
+    // the row it is the first item that does not fit; the old strict prefix stopped there and left Locate,
+    // Open in new tab and Lock in the menu beside 60px of empty row.
+    const wide: ToolRowItem = { id: 'wide', kind: 'chip', priority: 8, width: 90 };
     const row = ROW.filter((i) => i.id !== 'time');
-    const withHeavy = [...row.slice(0, 5), heavy, ...row.slice(5)];
+    const withWide = [...row.slice(0, 5), wide, ...row.slice(5)];
     // Five chips 248 + "..." 22 + 5 gaps 30 = 300; Lock, Expand, Close 72; group gap 6 → 378, plus Locate 25 → 403.
-    const r = fitToolRow(withHeavy, 403, OPTS);
-    expect(r.inMore).toEqual(['resources', 'popout']);
+    const r = fitToolRow(withWide, 403, OPTS);
+    expect(r.inMore).toEqual(['wide', 'popout']);
     expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'locate', 'lock', 'expand', 'close']);
-    expect(fitToolRow(withHeavy, 428, OPTS).visible).toContain('popout');
-    // The chips stay in order: Heavy never jumps the queue, and Terminal is not evicted for it.
+    expect(fitToolRow(withWide, 428, OPTS).visible).toContain('popout');
+    // The chips stay in order: the wide chip never jumps the queue, and Terminal is not evicted for it.
     for (let w = 150; w <= 540; w++) {
-      const v = fitToolRow(withHeavy, w, OPTS).visible;
-      if (v.includes('resources')) expect(v, `${w}px`).toContain('terminal');
+      const v = fitToolRow(withWide, w, OPTS).visible;
+      if (v.includes('wide')) expect(v, `${w}px`).toContain('terminal');
     }
   });
 
   it('never brings the time back as the row narrows', () => {
-    const withHeavy = [...ROW.slice(0, 6), { id: 'resources', kind: 'chip', priority: 8, width: 90 } as ToolRowItem, ...ROW.slice(6)];
+    const withWide = [...ROW.slice(0, 6), { id: 'wide', kind: 'chip', priority: 8, width: 90 } as ToolRowItem, ...ROW.slice(6)];
     let seenGone = false;
     for (let w = 700; w >= 100; w--) {
-      const has = fitToolRow(withHeavy, w, OPTS).visible.includes('time');
+      const has = fitToolRow(withWide, w, OPTS).visible.includes('time');
       if (!has) seenGone = true;
       else expect(seenGone, `the time came back at ${w}px`).toBe(false);
     }

@@ -63,7 +63,6 @@ import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
-import { createProcSampler, type ProcSampleRoot } from './proc-sample-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
@@ -1842,9 +1841,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
-    // 'proc-sample-v1': what each session costs this host. NOT in
-    // BRIDGE_ALLOWED_COMMANDS: it names host processes. Keep in sync with daemon-source.ts.
-    case 'proc.sample': return cmdProcSample(ws, id as number)
     // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS: they read and write host files. Keep in sync with daemon-source.ts.
     case 'turns.list':
@@ -7287,33 +7283,6 @@ async function cmdDescribeExternalSessions(
   } finally {
     release()
   }
-}
-
-// ── proc.sample: what each session costs this host ──
-// PARITY: keep in sync with daemon-source.ts cmdProcSample. The attribution
-// (one ps, nearest-root claim, process-group sweep, cpu deltas) is
-// proc-sample-core.ts, shared with the source twin. The roots are the registry's
-// running CLIs plus the ACP workers; a dead root still reports what its group
-// left behind, so a leaked child shows up under the session that made it.
-const procSampler = createProcSampler({
-  execFile: execFileCb as unknown as import('./proc-sample-core.js').ProcSampleExecFile,
-  platform: process.platform,
-  env: process.env,
-  totalmem: () => os.totalmem(),
-  loadavg: () => os.loadavg(),
-  cpuCount: () => os.cpus().length,
-})
-
-async function cmdProcSample(ws: ServerWebSocket<WsData>, id: number) {
-  const roots: ProcSampleRoot[] = []
-  for (const [sid, s] of sessions) {
-    if (s.pid && s.state === 'running') roots.push({ sid, pid: s.pid, kind: 'cli' })
-  }
-  for (const [rid, w] of acp.workers) {
-    if (w.state === 'running' && w.proc.pid) roots.push({ sid: rid, pid: w.proc.pid, kind: 'acp' })
-  }
-  const r = await procSampler.sample(roots)
-  sendOk(ws, id, r as unknown as Record<string, unknown>)
 }
 
 // ── List all sessions ──

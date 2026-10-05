@@ -5,7 +5,7 @@
  * session on it reports a reading; the frames land here keyed by host. A frame
  * never goes backwards (an older `updatedAt` is ignored). Hydration is a GET on
  * the first subscriber and on every WS reconnect (a push missed while away is
- * gone for good). Same shape as session-resources-store.ts.
+ * gone for good).
  *
  * Each frame carries the server's clock; the store keeps the offset so a
  * browser on another device ages a reading by the server's clock, not its own.
