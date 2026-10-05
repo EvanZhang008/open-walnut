@@ -31,7 +31,7 @@ import { withFileLock } from '../utils/file-lock.js';
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
-import { splitBatchAtUuid } from '../providers/batch-uuid.js';
+import { lineUuidFor, splitBatchAtUuid } from '../providers/batch-uuid.js';
 
 // ── Types ──
 
@@ -66,11 +66,29 @@ export interface QueuedMessage {
    */
   userUuid?: string;
   stopFence?: string;
+  /**
+   * The uuid of the stdin line that carries this row, fixed the first time the
+   * row is picked for delivery and never changed after. Every later attempt
+   * (a redelivery after a crash, a restart, an unanswered send, a Retry) sends
+   * the same line under the same uuid, so the CLI and the daemon can both
+   * recognise it. Rows of one line share it and are never merged with others.
+   */
+  lineUuid?: string;
+  /** How many deliveries took this row. Above one, its line may already be in a CLI. */
+  lineTries?: number;
+  /**
+   * Its line went to a CLI that reports its command queue (command_lifecycle).
+   * Kept across a restart, so the server that resends the line also waits for
+   * the CLI's word on it, as the one that first wrote it did.
+   */
+  lineTracked?: true;
 }
 
 interface QueueStore {
   version: 1;
   queues: Record<string, QueuedMessage[]>;
+  /** Row id → uuid of the line it went out in, for rows that left the queue (bounded, oldest first). */
+  settled?: Record<string, string>;
 }
 
 // ── In-memory cache (backed by disk) ──
@@ -120,6 +138,7 @@ function normalizeShape(s: QueueStore): QueueStore {
   if (!s || !s.queues || typeof s.queues !== 'object') {
     return { version: 1, queues: {} };
   }
+  if (s.settled !== undefined && (typeof s.settled !== 'object' || s.settled === null)) delete s.settled;
   return s;
 }
 
@@ -177,7 +196,10 @@ async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false): Promise
 
 /**
  * Load the queue from disk into memory. Call once at startup.
- * Resets any 'processing' messages back to 'pending' (crash recovery).
+ * Resets any 'processing' messages back to 'pending' (crash recovery). A row
+ * keeps its `lineUuid` and `lineTries`, so its next delivery goes out alone
+ * under the same uuid and asks the daemon first: a line a live CLI already holds
+ * is not written to it again.
  */
 export async function loadQueue(): Promise<void> {
   store = null; // force re-read from disk
@@ -213,13 +235,16 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; lineUuid?: string },
 ): Promise<QueuedMessage> {
   const { sessionStops, SessionStopSupersededError } = await import('./sessions/session-stop.js');
   const stopFence = await sessionStops.fence(sessionId);
   if (opts?.stopFence !== undefined && opts.stopFence !== stopFence) {
     throw new SessionStopSupersededError('Message predates the latest stop; send a new message to continue');
   }
+  // A resend of a message that already went out (a Retry, the phone's same-id
+  // resend) keeps that line's uuid: the CLI then skips it if it already ran it.
+  const inherited = opts?.lineUuid ?? (opts?.id ? await settledLineUuid(opts.id) : undefined);
   const msg: QueuedMessage = {
     id: opts?.id ?? generateId(),
     ...(stopFence ? { stopFence } : {}),
@@ -231,6 +256,7 @@ export async function enqueueMessage(
     // Additive: absent ⇒ the key never lands on the row, so an old-shaped row and
     // a new-shaped one are byte-identical on disk.
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+    ...(inherited ? { lineUuid: inherited, lineTries: 1 } : {}),
   };
   const outcome = await mutateStore((s) => {
     if (!s.queues[sessionId]) {
@@ -282,6 +308,8 @@ export async function sendMessageToSession(
     messageId?: string;
     userUuid?: string;
     stopFence?: string | null;
+    /** A resend of a line that already went out keeps its uuid (see QueuedMessage.lineUuid). */
+    lineUuid?: string;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
@@ -289,6 +317,7 @@ export async function sendMessageToSession(
     id: opts?.messageId,
     ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+    ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
   });
   const source = opts?.source ?? 'unknown';
 
@@ -336,11 +365,17 @@ export async function sendMessageToSession(
  * marks NOTHING while any pending row carries a uuid: a question must start its
  * own turn, never ride inside the answer to another one; processNext picks it
  * up when the current turn ends.
+ *
+ * The batch is one stdin line. Rows that already went out in a line (they carry
+ * its `lineUuid`) go out again alone and together, under that uuid; fresh rows
+ * never join them. Fresh rows get their line's uuid here, in the same write
+ * that marks them, so a crash right after can never send them under another.
+ * `tracked`: the CLI they go to reports its queue (QueuedMessage.lineTracked).
  */
 export async function markProcessing(
   sessionId: string,
   stopFence?: string | null,
-  opts?: { midTurn?: boolean },
+  opts?: { midTurn?: boolean; tracked?: boolean },
 ): Promise<QueuedMessage[]> {
   let deferredForQuestion = false;
   const pending = await mutateStore((s) => {
@@ -359,9 +394,20 @@ export async function markProcessing(
       deferredForQuestion = true;
       return [];
     }
-    const batch = splitBatchAtUuid(pendingRows);
+    const head = pendingRows[0];
+    if (!head) return [];
+    const run: QueuedMessage[] = [];
+    for (const m of pendingRows) {
+      if (m.lineUuid !== head.lineUuid) break;
+      run.push(m);
+    }
+    const batch = head.lineUuid ? run : splitBatchAtUuid(run);
+    const lineUuid = head.lineUuid ?? lineUuidFor(batch);
     for (const m of batch) {
       m.status = 'processing';
+      m.lineUuid = lineUuid;
+      m.lineTries = (m.lineTries ?? 0) + 1;
+      if (opts?.tracked) m.lineTracked = true;
     }
     return batch;
   }, stopFence !== undefined);
@@ -420,8 +466,11 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
     if (!queue) return false;
 
     const idSet = ids ? new Set(ids) : null;
-    s.queues[sessionId] = queue.filter((m) =>
-      m.status !== 'processing' || (idSet !== null && !idSet.has(m.id)));
+    s.queues[sessionId] = queue.filter((m) => {
+      const keep = m.status !== 'processing' || (idSet !== null && !idSet.has(m.id));
+      if (!keep) noteSettledLine(s, m);
+      return keep;
+    });
     // Clean up empty queues
     if (s.queues[sessionId].length === 0) {
       delete s.queues[sessionId];
@@ -429,6 +478,100 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
     return true;
   });
   if (found) log.session.debug('message queue drained', { sessionId, scoped: !!ids });
+}
+
+/**
+ * Remove rows the CLI itself reported taking (or a Stop cancelling), whatever
+ * their state: a row put back to pending while its delivery was unconfirmed
+ * must not be delivered again once the CLI says it has it. `ran: false` (a
+ * cancelled line): a resend of the row is a new line, not this one again.
+ */
+export async function removeTaken(sessionId: string, ids: string[], opts?: { ran?: boolean }): Promise<void> {
+  if (ids.length === 0) return;
+  const idSet = new Set(ids);
+  const ran = opts?.ran !== false;
+  const found = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return false;
+    s.queues[sessionId] = queue.filter((m) => {
+      if (!idSet.has(m.id)) return true;
+      // A cancelled line never ran: sending its text again is a new line.
+      if (ran) noteSettledLine(s, m);
+      return false;
+    });
+    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
+    return queue.length !== (s.queues[sessionId]?.length ?? 0);
+  });
+  if (found) log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
+}
+
+/**
+ * Put rows still in the queue back to pending, and nothing else: unlike
+ * revertToPending it never re-inserts a missing row, because a row whose line
+ * may be in a CLI is missing exactly when the CLI said it took it (removeTaken).
+ */
+export async function revertIfQueued(messages: QueuedMessage[]): Promise<void> {
+  if (messages.length === 0) return;
+  await mutateStore((s) => {
+    for (const m of messages) {
+      const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
+      if (row?.status === 'processing') row.status = 'pending';
+    }
+  });
+}
+
+/**
+ * Park the rows still in the queue (never re-inserting a missing one: the CLI
+ * took it). `freshLine`: the CLI dropped the line for good, so a Retry must go
+ * out as a new line (the old uuid would be skipped as already seen). Returns
+ * the rows it parked.
+ */
+export async function parkIfQueued(
+  messages: QueuedMessage[],
+  reason: string,
+  opts?: { freshLine?: boolean },
+): Promise<QueuedMessage[]> {
+  if (messages.length === 0) return [];
+  const parkedAt = new Date().toISOString();
+  const parked = await mutateStore((s) => {
+    const done: QueuedMessage[] = [];
+    for (const m of messages) {
+      const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
+      if (!row || row.status === 'parked') continue;
+      row.status = 'parked';
+      row.parkedAt = parkedAt;
+      row.parkedReason = reason;
+      if (opts?.freshLine) { delete row.lineUuid; delete row.lineTries; delete row.lineTracked; }
+      done.push({ ...row });
+    }
+    return done;
+  });
+  logParked(parked, reason);
+  return parked;
+}
+
+// ── Lines that settled ──
+//
+// A row leaves the queue once its line ran. If the user (or the phone) sends
+// it again, the new row must go out under the SAME uuid so the CLI skips it.
+// Kept in the queue file, so a Retry after a server restart still finds it.
+// Bounded: the file is read and written whole on every queue change, and a
+// Retry follows its failure closely.
+
+const MAX_SETTLED_LINES = 256;
+
+function noteSettledLine(s: QueueStore, m: QueuedMessage): void {
+  if (!m.lineUuid) return;
+  const settled = s.settled ?? (s.settled = {});
+  delete settled[m.id];
+  settled[m.id] = m.lineUuid;
+  const ids = Object.keys(settled);
+  for (let i = 0; i < ids.length - MAX_SETTLED_LINES; i++) delete settled[ids[i]];
+}
+
+/** The uuid of the line a removed row went out in. */
+export async function settledLineUuid(messageId: string): Promise<string | undefined> {
+  return (await getStore()).settled?.[messageId];
 }
 
 /**

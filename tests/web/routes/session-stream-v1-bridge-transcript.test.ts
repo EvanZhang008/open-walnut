@@ -105,3 +105,45 @@ describe('buildTranscriptViaBridge user-line filtering', () => {
     expect(messages.map((m) => m.text)).toEqual(['user words via marker'])
   })
 })
+
+// M3: a line queued behind a turn whose CLI then crashed is resent to the next
+// process, and that delivery is marked again. One message id is one row: the
+// phone showed the message twice (the dead process's marker, then the resend's).
+describe('buildTranscriptViaBridge: one row per message id', () => {
+  it('keeps only the last marker of a resent message, at the delivery that ran', async () => {
+    const marker = (id: string, text: string, pid: number, at: string) => ({
+      type: 'user', subtype: 'walnut-injected', walnutMessageId: id, walnutDelivery: 'ordered', walnutPid: pid,
+      timestamp: at, message: { role: 'user', content: text },
+    })
+    bridgeRequestMock.mockResolvedValue({
+      ok: true,
+      main: jsonl([
+        marker('qm-1', 'a long turn', 100, '2026-10-05T11:52:44Z'),
+        marker('qm-3', 'sent mid-turn', 100, '2026-10-05T11:52:45Z'),
+        // The CLI crashes here; the next process gets qm-3 again, then qm-5.
+        marker('qm-3', 'sent mid-turn', 200, '2026-10-05T11:52:47Z'),
+        { type: 'assistant', timestamp: '2026-10-05T11:52:48Z', message: { content: [{ type: 'text', text: 'answer to the mid-turn send' }] } },
+        marker('qm-5', 'probe', 200, '2026-10-05T11:52:49Z'),
+        { type: 'assistant', timestamp: '2026-10-05T11:52:50Z', message: { content: [{ type: 'text', text: 'answer to the probe' }] } },
+      ]),
+    })
+    const t = await buildTranscriptViaBridge(SID)
+    const messages = t!.messages as Array<{ role: string; text: string; timestamp: string }>
+    expect(messages.map((m) => `${m.role}:${m.text}`)).toEqual([
+      'user:a long turn', 'user:sent mid-turn', 'assistant:answer to the mid-turn send', 'user:probe', 'assistant:answer to the probe',
+    ])
+    expect(messages[1].timestamp).toBe('2026-10-05T11:52:47Z')
+  })
+
+  it('a user line with no message id is never folded', async () => {
+    bridgeRequestMock.mockResolvedValue({
+      ok: true,
+      main: jsonl([
+        { type: 'user', timestamp: '2026-10-05T00:00:01Z', message: { content: 'same words' } },
+        { type: 'user', timestamp: '2026-10-05T00:00:02Z', message: { content: 'same words' } },
+      ]),
+    })
+    const t = await buildTranscriptViaBridge(SID)
+    expect((t!.messages as Array<{ text: string }>).map((m) => m.text)).toEqual(['same words', 'same words'])
+  })
+})

@@ -313,9 +313,11 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).toContain('fs.writeSync(fd, buf, offset, limit - offset)')
       expect(src).toContain('appendUserMarkerLine(sid, session, m.message, m.messageId, true)')
       expect(src).toMatch(/walnutDelivery(?::| =)\s*'ordered'/)
-      expect(src).toContain('chainFifoWrite(sid, session, buf, beforeNewline)')
+      // send-dedupe-v1: the fate check and the write record ride the same chained write
+      // (behavior: daemon-send-dedupe.test.ts and daemon-send-dedupe-twins-e2e.test.ts).
+      expect(src).toContain('chainFifoWrite(sid, session, buf, beforeNewline, {')
     }
-    expect(standaloneSrc).toMatch(/core\.handleSendCommand\(sid, message, [^\n]*, markers\)/)
+    expect(standaloneSrc).toMatch(/core\.handleSendCommand\(sid, message, [^\n]*, markers, \{ dedupe: cmd\.dedupe === true \}\)/)
   })
 
   it.each(['standalone', 'template'])('deferred resume adopts a live process without writing or signalling: %s', async (twin) => {

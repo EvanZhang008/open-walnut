@@ -12,7 +12,7 @@ const SID = 'a4da7628-4924-4047-854f-d9f5f498c615'
 
 describe('streamFileSessionId', () => {
   it('maps the stream and every daemon sidecar to its session id', () => {
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pipe', '.pgid', '.log']) {
       expect(streamFileSessionId(SID + ext), ext).toBe(SID)
     }
   })

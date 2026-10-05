@@ -3824,7 +3824,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (!isSubagentSessionResult && (
       event.name === 'session:started' || event.name === 'session:result' || event.name === 'session:error'
       || event.name === 'session:batch-completed' || event.name === 'session:batch-failed'
-      || event.name === 'session:message-queued' || event.name === 'session:messages-delivered')) {
+      || event.name === 'session:message-queued' || event.name === 'session:messages-delivered'
+      || event.name === 'session:delivery-held')) {
       const enrichedData = { ...(event.data as Record<string, unknown>) }
       if ((event.name === 'session:result' || event.name === 'session:error') && enrichedData.taskId) {
         try {

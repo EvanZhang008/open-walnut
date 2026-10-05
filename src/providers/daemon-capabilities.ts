@@ -311,6 +311,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'acpSteer',
   // 'send-markers-v1': send accepts markers and writes them after the body enters the pipe but before the newline; an old daemon ignores the field and keeps using the appendUserMarker RPC after delivery.
   'send-markers-v1',
+  // 'send-dedupe-v1': send accepts `dedupe:true` (a resend of a line that may already
+  // be in a CLI) and then writes nothing, answering {ok:true, duplicate:true, fate},
+  // when the CLI's lifecycle frames or the daemon's after-newline write record say
+  // what became of it (ran / cancelled / dropped / waiting, line-fate-core.ts). Both
+  // twins run the same inlined function. Optional: without it the server never
+  // resends an unanswered line and reports it unconfirmed instead.
+  'send-dedupe-v1',
   // 'agent-commands-v1' — unified agent.* command family (engine-routed aliases
   // over the legacy start/send/... and acp* families). Optional: without it the
   // server keeps speaking the legacy families directly.

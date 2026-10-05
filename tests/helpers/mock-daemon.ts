@@ -20,6 +20,7 @@ import crypto from 'node:crypto'
 import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { lineFate } from '../../src/providers/line-fate-core.js'
 import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
 import { createTurnSnapshots, type TurnSnapshotExecFile, type TurnSnapshotFs } from '../../src/providers/turn-snapshot-core.js'
 import { createTurnGuard } from '../../src/providers/turn-guard-core.js'
@@ -86,6 +87,9 @@ export class MockDaemon {
    *  log may have failed (ENXIO once the CLI exited) and been retried, so the
    *  log alone over-counts deliveries. Cleared with the command log. */
   private _fifoWrites: Array<{ sid: string; message: string; timestamp: number }> = []
+  /** send-dedupe-v1: the daemon's write records (one JSON line per whole line
+   *  written, as daemon-core keeps in `<stream>.lines`), per session. */
+  private _lineRecords = new Map<string, string>()
   /** Connection-order index per live socket (never reused). */
   private _connIndices = new WeakMap<WebSocket, number>()
   private _connSeq = 0
@@ -549,19 +553,36 @@ export class MockDaemon {
       return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
     }
 
+    // send-dedupe-v1, same rule as daemon-core: a resend whose fate the CLI's
+    // lifecycle frames or this daemon's write records prove is not written again.
+    const uuid = typeof cmd.uuid === 'string' ? cmd.uuid : undefined
+    const ids = Array.isArray(cmd.markers)
+      ? (cmd.markers as Array<{ messageId?: unknown }>).map((m) => m?.messageId).filter((v): v is string => typeof v === 'string')
+      : []
+    if (cmd.dedupe === true) {
+      let stream = ''
+      try { stream = fs.readFileSync(session.jsonlPath, 'utf8') } catch { /* no output yet */ }
+      const known = lineFate(stream, this._lineRecords.get(sid) ?? '', { uuid: uuid ?? '', messageIds: ids, pid: session.pid })
+      if (known) return this.sendOk(ws, id, { ok: true, duplicate: true, ...known })
+    }
+
     // 3. Normal path — write to FIFO
     try {
       // Same envelope as daemon-core: the pre-assigned uuid rides the line when set.
       const payload = JSON.stringify({
         type: 'user',
         message: { role: 'user', content: message },
-        ...(typeof cmd.uuid === 'string' ? { uuid: cmd.uuid } : {}),
+        ...(uuid ? { uuid } : {}),
       })
       const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
       fs.writeSync(fd, Buffer.from(payload + '\n'))
       fs.closeSync(fd)
       this._fifoWrites.push({ sid, message, timestamp: Date.now() })
       this._turnActive.add(sid)
+      if (ids.length > 0 && session.pid) {
+        this._lineRecords.set(sid, (this._lineRecords.get(sid) ?? '')
+          + JSON.stringify({ pid: session.pid, ...(uuid ? { uuid } : {}), ids }) + '\n')
+      }
       this.sendOk(ws, id, { ok: true })
     } catch (err) {
       this.sendError(ws, id, `write failed: ${(err as Error).message}`)

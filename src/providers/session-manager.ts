@@ -149,6 +149,22 @@ export interface TransportAttachResult {
 
 // ── SessionManager Interface ──
 
+/** Options for one user line written into a CLI's stdin (SessionManager.writeMessage). */
+export interface LineWriteOptions {
+  uuid?: string
+  markers?: Array<{ message: string; messageId: string }>
+  stopFence?: string | null
+  onDispatch?: () => void
+  /** The line may already be in the CLI: the daemon writes it only if it cannot tell what became of it. */
+  dedupe?: boolean
+  /** The daemon answered without writing, with what became of the line (send-dedupe-v1). */
+  onFate?: (fate: { fate: string; state?: string }) => void
+  /** This line waits behind one whose answer is still being asked for. */
+  onHeld?: () => void
+  /** True once the user stopped the session: stop asking about this line. */
+  isStopped?: () => boolean
+}
+
 /**
  * Unified session manager. ClaudeCodeSession only depends on this interface.
  *
@@ -183,8 +199,10 @@ export interface SessionManager {
    *
    * `opts.uuid` — pre-assigned v4 uuid for this user line, forwarded into the
    * stream-json envelope. Absent ⇒ envelope unchanged (CLI mints its own).
+   * May throw SendOutcomeUnknownError (delivery-failure.ts): neither delivered
+   * nor refused; or SendHeldError: not sent, it waited behind such a line.
    */
-  writeMessage(message: string, opts?: { uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null; onDispatch?: () => void }): Promise<boolean> | boolean
+  writeMessage(message: string, opts?: LineWriteOptions): Promise<boolean> | boolean
 
   /**
    * Write raw JSON to the FIFO (no stream-json wrapping).

@@ -497,7 +497,7 @@ function sweepDeadStreams(): void {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)) } catch {}
     }
     reaped.add(sid)
@@ -5096,7 +5096,8 @@ async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: 
   // markers (send-markers-v1): the daemon writes them between the body and the newline; core validates them.
   const markers = (cmd as { markers?: UserMarkerInput[] }).markers
   cancelTurnRetry(sid, 'superseded-by-send')
-  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers)
+  // dedupe (send-dedupe-v1): a resend after an unanswered send; core writes it only if this CLI lacks it.
+  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true })
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
@@ -5624,7 +5625,7 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext) } catch {}
     }
     session.jsonlPath = newBase + '.jsonl'

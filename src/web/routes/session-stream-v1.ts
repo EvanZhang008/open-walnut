@@ -651,9 +651,18 @@ async function readTranscriptViaBridge(host: string, sessionId: string): Promise
     }
   }
 
+  // One message id gives one row. A line whose process died before running it
+  // is marked again when it is resent; the last marker is the delivery that ran.
+  const lastMarker = new Map<string, number>()
+  lines.forEach((parsed, i) => {
+    if (parsed.subtype === 'walnut-injected' && typeof parsed.walnutMessageId === 'string') lastMarker.set(parsed.walnutMessageId, i)
+  })
+
   const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string; isError?: true }> = []
-  for (const parsed of lines) {
+  for (const [i, parsed] of lines.entries()) {
     if (parsed.parent_tool_use_id) continue // subagent lane
+    if (typeof parsed.walnutMessageId === 'string' && parsed.subtype === 'walnut-injected'
+        && lastMarker.get(parsed.walnutMessageId) !== i) continue
     // CLI-injected user lines (skill dumps, compaction summaries) — same skip
     // as buildSessionTranscript's `m.injected` filter on the primary box.
     // walnut-injected markers are exempt: they ARE the user's words.

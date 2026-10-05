@@ -162,6 +162,9 @@ export interface OptimisticMessage extends SessionHistoryMessage {
    *  the conversation, above every persisted row, until the first typed user row
    *  history shows absorbs it (optimistic-dedup.ts). */
   launch?: boolean;
+  /** The server holds this row behind a line it is still confirming (read back
+   *  from session:get-queue on load, so a reload keeps the waiting note). */
+  heldReason?: string;
 }
 
 /** Renders base64 image thumbnails for optimistic messages */
@@ -451,6 +454,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Consumed queueIds already reported to the owner (useSessionSend GC).
   const notifiedConsumedIds = useRef<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Queued messages held behind an earlier one whose delivery is still being
+  // confirmed with the host ('session:delivery-held'). Order is kept, so they
+  // wait; the note says why. Cleared when they deliver or fail; a reloaded panel
+  // reads the hold back from the queue (OptimisticMessage.heldReason).
+  const [heldIds, setHeldIds] = useState<ReadonlySet<string>>(() => new Set());
   // The pinned Initial Prompt renders through the same markdown path as every
   // other user bubble, so its task pills and file links need the same delegate.
   const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
@@ -811,10 +819,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // 2. Server delivers to CLI (FIFO/resume) → 'session:messages-delivered' → status: 'delivered' (normal)
   // 3. Turn completes → 'session:batch-completed' → removed (id-first), refresh history
 
+  const releaseHeld = useCallback((ids?: readonly string[]) => {
+    setHeldIds((prev) => {
+      if (prev.size === 0) return prev;
+      if (!ids) return new Set();
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next.size === prev.size ? prev : next;
+    });
+  }, []);
+
+  // A queued message waits for the host to confirm the one before it.
+  useEvent('session:delivery-held', (data) => {
+    const d = data as { sessionId?: string; messageIds?: string[] };
+    if (d.sessionId !== sessionId || !Array.isArray(d.messageIds) || d.messageIds.length === 0) return;
+    log.info('stream', `delivery held ids=${d.messageIds.join(',')}`, { sessionId });
+    setHeldIds((prev) => new Set([...prev, ...d.messageIds!]));
+  });
+
   // Messages delivered to CLI: transition from grey (pending) to normal (delivered).
   useEvent('session:messages-delivered', (data) => {
     const d = data as { sessionId?: string; count?: number; messageIds?: string[] };
     if (d.sessionId === sessionId) {
+      releaseHeld(d.messageIds);
       onMessagesDelivered?.(d.count ?? 1, d.messageIds);
     }
   });
@@ -835,6 +862,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const d = data as { sessionId?: string; count?: number; messageIds?: string[] };
     if (d.sessionId === sessionId) {
       log.info('stream', `batch-completed count=${d.count ?? 1} ids=${d.messageIds?.length ?? 0} blocks=${blocks.length} isStreaming=${isStreaming}`, { sessionId });
+      releaseHeld(d.messageIds);
       setHistoryVersion((v) => v + 1);
     }
   });
@@ -846,6 +874,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEvent('session:batch-failed', (data) => {
     const d = data as { sessionId?: string; messageIds?: string[]; error?: string };
     if (d.sessionId === sessionId && Array.isArray(d.messageIds)) {
+      releaseHeld(d.messageIds);
       onBatchFailed?.(d.messageIds, d.error ?? 'Send failed');
     }
   });
@@ -3784,6 +3813,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   {queuedBehind && (
                     <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
+                  )}
+                  {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (
+                    <div className="thread-queue-note session-msg-held-note" role="status">Waiting to confirm the previous message</div>
                   )}
                   <OptimisticImagePreviews images={m.images} />
                   {m.status === 'received' && (

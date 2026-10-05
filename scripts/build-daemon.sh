@@ -111,6 +111,7 @@ SOURCES=(
   src/providers/git-diff-core.ts
   src/providers/bridge-uplink-core.ts
   src/providers/workspace-core.ts
+  src/providers/line-fate-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

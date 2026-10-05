@@ -104,6 +104,9 @@ function dedupKeyOf(m: OptimisticLike): string {
 }
 interface QueuedOptimisticLike extends OptimisticLike {
   queueId: string;
+  /** A failed bubble's error, and whether the server parked its row. */
+  failedError?: string;
+  parked?: boolean;
 }
 
 /**
@@ -432,8 +435,14 @@ export function removeBatchMessages<T extends QueuedOptimisticLike>(
 
 /**
  * Mark the bubbles a delivery consumed as 'delivered'.
- * Id path marks exactly the matched pending/received bubbles; if none matched
- * (tempId race), the count fallback marks the first N pending/received.
+ *
+ * With ids, exactly the bubbles they name, and nothing else: a FAILED one too
+ * (a send the server could not confirm, which the CLI later reported taking),
+ * losing its error and Retry, since a Retry would run it twice. An id no bubble
+ * carries yet (its send RPC has not answered) is never guessed at by count: the
+ * caller keeps it, and the bubble starts 'delivered' when it learns the id
+ * (statusOnAdopt). Without ids (an older server), the first `count`
+ * pending/received bubbles, as before.
  */
 export function markDeliveredMessages<T extends QueuedOptimisticLike>(
   optimistic: readonly T[],
@@ -441,16 +450,16 @@ export function markDeliveredMessages<T extends QueuedOptimisticLike>(
   messageIds?: readonly string[],
 ): T[] {
   const idSet = new Set(messageIds ?? []);
-  let idMatched = 0;
-  const afterIds = optimistic.map(m => {
-    if (m.status !== 'pending' && m.status !== 'received') return m;
-    if (idSet.has(m.queueId)) {
-      idMatched++;
-      return { ...m, status: 'delivered' };
-    }
-    return m;
-  });
-  if (idMatched > 0) return afterIds;
+  if (idSet.size > 0) {
+    return optimistic.map(m => {
+      if (!idSet.has(m.queueId) || m.status === 'delivered') return m;
+      if (m.status === 'failed') {
+        const { failedError: _error, parked: _parked, ...rest } = m;
+        return { ...rest, status: 'delivered' } as T;
+      }
+      return m.status === 'pending' || m.status === 'received' ? { ...m, status: 'delivered' } : m;
+    });
+  }
   let remaining = count;
   return optimistic.map(m => {
     if (remaining > 0 && (m.status === 'pending' || m.status === 'received')) {
@@ -459,4 +468,19 @@ export function markDeliveredMessages<T extends QueuedOptimisticLike>(
     }
     return m;
   });
+}
+
+/** Ids a delivery named that no bubble carries yet (their send RPC is still out). */
+export function unmatchedDeliveredIds(
+  optimistic: readonly QueuedOptimisticLike[],
+  messageIds?: readonly string[],
+): string[] {
+  if (!messageIds?.length) return [];
+  const have = new Set(optimistic.map(m => m.queueId));
+  return messageIds.filter(id => !have.has(id));
+}
+
+/** The status a bubble takes when its send RPC answers with `messageId`. */
+export function statusOnAdopt(messageId: string, deliveredEarly: Set<string>): 'received' | 'delivered' {
+  return deliveredEarly.delete(messageId) ? 'delivered' : 'received';
 }

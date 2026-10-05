@@ -24,7 +24,7 @@ import {
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
-import { isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
+import { isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
 import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from '../core/sessions/stop-provenance.js'
 import {
@@ -36,6 +36,7 @@ import {
 import type { SshTarget } from './session-io.js'
 import { spawnGateSentence } from '../core/hosts/host-readiness.js'
 import type {
+  LineWriteOptions,
   SessionManager,
   TransportStartOptions,
   TransportStartResult,
@@ -49,7 +50,19 @@ import type {
 // twice, the duplication is upstream of walnut.
 let __rsmIdCounter = 0
 
+/** A `send` carrying `dedupe` writes nothing when the daemon can tell what became of the line. */
+const SEND_DEDUPE_CAPABILITY = 'send-dedupe-v1'
+
 export class RemoteSessionManager implements SessionManager {
+  /**
+   * How long a send whose answer never came keeps asking the daemon (tests
+   * shorten it). A reachable daemon answers the first ask within a second; this
+   * bounds a host whose answers are stuck, while lines behind it wait (visibly).
+   */
+  static SEND_CONFIRM_DEADLINE_MS = 60_000
+  /** One ask's own timeout: shorter than a send's, so a stuck answer is asked again soon. */
+  static SEND_CONFIRM_ATTEMPT_MS = 10_000
+
   private readonly _rsmId: number = ++__rsmIdCounter
   private conn: DaemonConnection | null = null
   private sshTarget: SshTarget | null
@@ -517,14 +530,50 @@ export class RemoteSessionManager implements SessionManager {
 
   // ── Messaging ──
 
-  async writeMessage(message: string, opts?: { uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null; onDispatch?: () => void }): Promise<boolean> {
+  /**
+   * `dedupe`: this line may already be in the CLI (an earlier attempt's outcome
+   * is unknown), so a daemon with send-dedupe-v1 writes nothing when it can tell
+   * what became of it, and says so through `onFate` (line-fate-core.ts).
+   *
+   * Throws SendOutcomeUnknownError when the request may have reached the daemon
+   * and no answer came even after asking again: the caller must not take that
+   * as "not delivered" (stopping the CLI and resending would run it twice).
+   * Lines already queued behind that one are not written (they would overtake
+   * it): they throw SendHeldError and go back to the queue behind it.
+   */
+  writeMessage(message: string, opts?: LineWriteOptions): Promise<boolean> {
+    // One user line at a time: a line whose outcome is still being asked about
+    // must not be overtaken by the next one (the daemon writes in arrival order).
+    const seq = ++this._writeSeq
+    const held = opts?.onHeld
+    if (held) {
+      if (this._confirming) held()
+      else this._waitingWrites.add(held)
+    }
+    const run = this._writeChain.then(() => {
+      if (held) this._waitingWrites.delete(held)
+      return this.writeMessageNow(message, opts, seq)
+    })
+    this._writeChain = run.then(() => {}, () => {})
+    return run
+  }
+
+  private _writeChain: Promise<void> = Promise.resolve()
+  private _writeSeq = 0
+  /** Writes up to this sequence number were queued behind a line whose outcome stayed unknown. */
+  private _heldThrough = 0
+  /** A line's answer is being asked for; lines queued behind it are told. */
+  private _confirming = false
+  private _waitingWrites = new Set<() => void>()
+
+  private async writeMessageNow(message: string, opts: LineWriteOptions | undefined, seq: number): Promise<boolean> {
+    if (seq <= this._heldThrough) throw new SendHeldError()
     // Strict ack: we await the daemon's `cmdSend` reply and return false on any
-    // failure (FIFO write ENXIO/EAGAIN, session not found, transport error).
+    // REFUSAL (FIFO write ENXIO/EAGAIN, session not found, request never sent).
     // Caller (SessionRunner.processNext) takes the false and falls through to
     // gracefulStop + --resume respawn, so the current message is not drained
-    // from the queue until delivery is truly confirmed. Previously this method
-    // returned true optimistically and the fire-and-forget daemon reply only
-    // logged a warning — any ENXIO silently lost the message.
+    // from the queue until delivery is truly confirmed. A reply that never came
+    // is not a refusal: see confirmSend.
     if (!this.conn?.connected || !this._sid) return false
 
     // Capture conn/sid synchronously — they may change during the async image upload
@@ -538,14 +587,32 @@ export class RemoteSessionManager implements SessionManager {
       // `uuid` is spread, never passed as an explicit undefined: an old daemon
       // sees exactly the payload it always saw when no uuid was assigned.
       const orderedMarkers = conn.hasCapability('send-markers-v1')
-      const result = await this.dispatch(sid, opts?.stopFence, () => {
-        opts?.onDispatch?.()
-        return conn.send('send', {
-          sid, message: prepared, ...(opts?.uuid ? { uuid: opts.uuid } : {}),
-          ...(conn.hasCapability('cron-supervision-v1') ? { stopFence: opts?.stopFence ?? null } : {}),
-          ...(orderedMarkers && opts?.markers?.length ? { markers: opts.markers } : {}),
-        })
+      const confirmable = orderedMarkers && !!opts?.markers?.length && conn.hasCapability(SEND_DEDUPE_CAPABILITY)
+      const payload = (c: DaemonConnection, dedupe: boolean) => ({
+        sid, message: prepared, ...(opts?.uuid ? { uuid: opts.uuid } : {}),
+        ...(c.hasCapability('cron-supervision-v1') ? { stopFence: opts?.stopFence ?? null } : {}),
+        ...(c.hasCapability('send-markers-v1') && opts?.markers?.length ? { markers: opts.markers } : {}),
+        ...(dedupe ? { dedupe: true } : {}),
       })
+      let result: Record<string, unknown>
+      try {
+        result = await this.dispatch(sid, opts?.stopFence, () => {
+          opts?.onDispatch?.()
+          return conn.send('send', payload(conn, confirmable && opts?.dedupe === true))
+        })
+      } catch (err) {
+        if (isSessionStopSuperseded(err) || !sendMayHaveLanded(err)) throw err
+        try {
+          if (!confirmable) throw new SendOutcomeUnknownError(err instanceof Error ? err.message : String(err))
+          result = await this.confirmSend(sid, (c) => payload(c, true), opts, err)
+        } catch (unknown) {
+          if (unknown instanceof SendOutcomeUnknownError) this._heldThrough = this._writeSeq
+          throw unknown
+        }
+      }
+      if (result.ok && result.duplicate === true) {
+        opts?.onFate?.({ fate: String(result.fate ?? 'waiting'), ...(typeof result.state === 'string' ? { state: result.state } : {}) })
+      }
       if (result.ok) {
         if (!orderedMarkers) {
           for (const marker of opts?.markers ?? []) this.writeSyntheticUserEvent(marker.message, marker.messageId)
@@ -603,10 +670,81 @@ export class RemoteSessionManager implements SessionManager {
       return false
     } catch (err) {
       if (isSessionStopSuperseded(err)) throw err
+      if (err instanceof SendOutcomeUnknownError || err instanceof SendHeldError) {
+        log.session.warn('RemoteSessionManager: send outcome unknown', { host: this.hostKey, sid, error: err.message })
+        throw err
+      }
       log.session.warn('RemoteSessionManager: send error', {
         host: this.hostKey, error: err instanceof Error ? err.message : String(err),
       })
       return false
+    }
+  }
+
+  /**
+   * The send's request may have reached the daemon, but its answer never came
+   * (a stuck host, a one-way backlog, a socket that closed with it pending).
+   * Ask the daemon again with the SAME line and `dedupe`: it writes nothing when
+   * it can tell what became of the line and writes it otherwise, so the answer
+   * is the delivery itself, exactly once. Never stop the CLI over this: it is
+   * usually alive and already answering the line. Lines queued behind this one
+   * are told they wait (onHeld). Gives up (throws SendOutcomeUnknownError) after
+   * SEND_CONFIRM_DEADLINE_MS with no answer, or at once when the user stops the
+   * session (the stopped line must not be delivered after the Stop).
+   */
+  private async confirmSend(
+    sid: string,
+    payload: (conn: DaemonConnection) => Record<string, unknown>,
+    opts: LineWriteOptions | undefined,
+    first: unknown,
+  ): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + RemoteSessionManager.SEND_CONFIRM_DEADLINE_MS
+    let last = first instanceof Error ? first.message : String(first)
+    let pause = 1_000
+    log.session.warn('RemoteSessionManager: send unanswered, asking the daemon whether the line landed', { host: this.hostKey, sid, error: last })
+    this._confirming = true
+    for (const held of this._waitingWrites) held()
+    this._waitingWrites.clear()
+    try {
+      for (let attempt = 1; Date.now() < deadline; attempt++) {
+        if (opts?.isStopped?.()) throw new SendOutcomeUnknownError(`${last}; the session was stopped while the host was being asked`)
+        try {
+          // A pooled connection reconnects itself; a fresh instance needs our listener.
+          // A private one (a test daemon url) is never replaced here: that would leak it.
+          const pooled = this._directWsUrl
+            ? this.hostKey === '__local__' && process.env.WALNUT_LOCAL_CONN_POOL !== '0'
+            : !!this.sshTarget
+          if (!this.conn?.connected && pooled) {
+            const before = this.conn
+            await this.ensureConnected()
+            if (this.conn !== before) this.rebindEventListener()
+          }
+          const conn = this.conn
+          if (conn?.connected) {
+            // Reconnected to a daemon that cannot dedupe: a resend could run the line twice.
+            if (!conn.hasCapability(SEND_DEDUPE_CAPABILITY)) throw new SendOutcomeUnknownError(`${last}; the host's daemon cannot confirm delivery`)
+            const result = await this.dispatch(sid, opts?.stopFence, () =>
+              conn.send('send', payload(conn), RemoteSessionManager.SEND_CONFIRM_ATTEMPT_MS))
+            log.session.info('RemoteSessionManager: send outcome confirmed', {
+              host: this.hostKey, sid, attempt, ok: result.ok === true, duplicate: result.duplicate === true,
+              fate: result.fate ?? null, reason: result.reason ?? result.error ?? null,
+            })
+            return result
+          }
+          last = 'not connected'
+        } catch (err) {
+          if (isSessionStopSuperseded(err) || err instanceof SendOutcomeUnknownError) throw err
+          last = err instanceof Error ? err.message : String(err)
+        }
+        const until = Date.now() + Math.max(0, Math.min(pause, deadline - Date.now()))
+        while (Date.now() < until && !opts?.isStopped?.()) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(200, until - Date.now())))
+        }
+        pause = Math.min(pause * 2, 8_000)
+      }
+      throw new SendOutcomeUnknownError(last)
+    } finally {
+      this._confirming = false
     }
   }
 

@@ -407,6 +407,11 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
         return n
       }) as typeof fs.writeSync,
       appendFileSync: ((p: string, data: string) => {
+        // send-dedupe-v1's write record (`<stream>.lines`): written only after the newline.
+        if (String(p).endsWith('.lines')) {
+          events.push('record')
+          return fs.appendFileSync(p, data)
+        }
         events.push('append')
         if (opts.failAppend) {
           const err = new Error('ENOSPC: no space left on device') as NodeJS.ErrnoException
@@ -453,7 +458,7 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
           { message: 'ordered-send', messageId: 'qm-1' },
         ])
         expect(res).toEqual({ ok: true })
-        expect(traced.events).toEqual(['body', 'append', 'newline'])
+        expect(traced.events).toEqual(['body', 'append', 'newline', 'record'])
 
         const lines = jsonlLines(jsonlPath)
         expect(lines).toHaveLength(1)
@@ -526,7 +531,7 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
           { message: 'b', messageId: 'qm-b' },
         ])
         expect(res).toEqual({ ok: true })
-        expect(traced.events).toEqual(['body', 'append', 'append', 'newline'])
+        expect(traced.events).toEqual(['body', 'append', 'append', 'newline', 'record'])
         expect(jsonlLines(jsonlPath).map((l) => l.walnutMessageId)).toEqual(['qm-a', 'qm-b'])
       } finally {
         fs.closeSync(readerFd)
@@ -667,7 +672,7 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
         }
         chunks.push(Buffer.from(drain(readerFd)))
 
-        // Every delivery is body...append...newline; an append never lands in the middle of another delivery.
+        // Every delivery is body...append...newline(...record); an append never lands in the middle of another delivery.
         const appendPositions = traced.events
           .map((e, i) => ({ e, i }))
           .filter(({ e }) => e === 'append')

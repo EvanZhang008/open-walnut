@@ -46,9 +46,16 @@ import {
   loadQueue,
   getAllSessionsWithPending,
   getQueue,
+  removeTaken,
+  revertIfQueued,
+  parkIfQueued,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
-import { noteTurnUserUuid, pickBatchUuid } from './batch-uuid.js'
+import { lineUuidFor, noteTurnUserUuid, pickBatchUuid } from './batch-uuid.js'
+import {
+  announceReclaimed, awaitLine, dropLine, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld,
+  takeLine, takeUnconfirmed, untakenLines, type LineState,
+} from './line-consumption.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
@@ -59,7 +66,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isWakeupArmed } from './daemon-fold.js'
-import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
+import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
@@ -614,6 +621,8 @@ const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
 const LIVENESS_INTERVAL_MS = 3000
 const INTERRUPT_ACK_TIMEOUT_MS = 5_000
 const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
+/** Sessions a host reconnect redelivers to at once (redeliverPendingForHost). */
+export const REDELIVERY_PARALLEL = 4
 
 /**
  * `system` subtypes that are BOOKKEEPING, not content: nothing a reader could act
@@ -724,8 +733,12 @@ export class ClaudeCodeSession {
   private _queuedLines = new Map<string, Array<{ message: string; messageId: string }>>()
   private _cancelledLines: Array<{ message: string; messageId: string }> = []
   /** The CLI reports each queued line's fate (command_lifecycle, 2.1.25x+). Without
-   *  that, the tracked lines may long have run, so none can be said to be dropped. */
+   *  that, the tracked lines may long have run, so none can be said to be dropped.
+   *  Survives a server restart: the record keeps the pid that reported it
+   *  (lineLifecyclePid), and attachToExisting reads it back for that process. */
   private _sawCommandLifecycle = false
+  /** The pid last written to the record as reporting lifecycle (one write per process). */
+  private _lifecyclePidSaved: number | null = null
   /** Monotonic counter of OBSERVED TURN-START EDGES. Stamped onto every SESSION_RESULT
    *  so a LATE consumer can tell "this result is still the current turn" from "a newer
    *  turn has already started" (incident ed347bde, 2026-08-05: the result's ~800ms-late
@@ -2487,6 +2500,10 @@ export class ClaudeCodeSession {
         else if (code !== 0 && !this.resultEmitted) {
           this.handleRemoteProcessExit(code, stderr)
         }
+        // A quiet exit reports nothing, so the lines it never took are handed back
+        // here; only while this process is still the session's (a replaced one's
+        // late exit must not take its successor's lines).
+        else if (this._transport === transport) this.reclaimUntakenLines('exit', true)
       },
       })
     }
@@ -2739,6 +2756,12 @@ export class ClaudeCodeSession {
     // (fresh) process starts its total at 0 and keeps the reset watermark.
     if (record.pid && record.costWatermarkPid === record.pid) {
       session._costWatermark.seed(record.costWatermark)
+    }
+    // The process this record reported lifecycle for is still the one attached:
+    // its queued lines keep waiting for its word, as before the restart.
+    if (record.pid && record.lineLifecyclePid === record.pid) {
+      session._sawCommandLifecycle = true
+      session._lifecyclePidSaved = record.pid
     }
 
     // ── resultEmitted recovery after server restart (evidence-based) ──
@@ -3099,6 +3122,7 @@ export class ClaudeCodeSession {
         fromOffset: fromOffset === Number.MAX_SAFE_INTEGER ? 'MAX_SAFE_INTEGER (skip replay)' : fromOffset,
       })
       try {
+        const attachedTransport = session._transport
         const attachResult = await session._transport.attach({
           sessionId: record.claudeSessionId,
           fromOffset,
@@ -3111,6 +3135,9 @@ export class ClaudeCodeSession {
             // Applies to all daemon-backed sessions (both remote and local via __local__ daemon).
             if (code !== 0 && !session.resultEmitted) {
               session.handleRemoteProcessExit(code, stderr)
+            } else if (session._transport === attachedTransport) {
+              // A quiet exit: hand back the lines this process never took.
+              session.reclaimUntakenLines('exit', true)
             }
           },
         })
@@ -3304,7 +3331,19 @@ export class ClaudeCodeSession {
    * `opts.uuid` — pre-assigned v4 uuid for this user line (the batch's, picked by
    * pickBatchUuid). Optional; absent leaves the envelope exactly as it was.
    */
-  async writeMessage(message: string, opts?: { uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null }): Promise<boolean> {
+  async writeMessage(message: string, opts?: {
+    uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null
+    /** The line may already be in the CLI: the daemon writes it only if it cannot tell what became of it. */
+    dedupe?: boolean
+    /** Queue rows this line carries: for a CLI that reports its queue they stay queued until it takes the line (line-consumption.ts). */
+    rows?: QueuedMessage[]
+    /** The line was not written because its fate was already known (ran, waiting, cancelled, dropped); the rows are settled here. */
+    onFate?: (fate: { fate: string; state?: string }) => void
+    /** The line waits behind one whose answer is still being asked for. */
+    onHeld?: () => void
+    /** True once the user stopped the session: stop asking about this line. */
+    isStopped?: () => boolean
+  }): Promise<boolean> {
     if (this._interruptPromise) await this._interruptPromise
     if (!this._transport) return false
     const { sessionStops } = await import('../core/sessions/session-stop.js')
@@ -3403,19 +3442,71 @@ export class ClaudeCodeSession {
     // A line written behind a running turn waits in the CLI's queue. It needs a uuid
     // for the CLI to name it when a Stop cancels it (uuid-less lines go unlisted).
     let uuid = opts?.uuid
-    const queuedBehindTurn = this._processStatus === 'running' && !this._turnResultEmitted
-      && !!opts?.markers?.length
+    const midTurn = this._processStatus === 'running' && !this._turnResultEmitted
+    const queuedBehindTurn = midTurn && !!opts?.markers?.length
     if (queuedBehindTurn) {
       uuid ??= crypto.randomUUID()
       this._queuedLines.set(uuid, opts!.markers!)
       // Bounded: a line the CLI never reports on must not pin memory.
       if (this._queuedLines.size > 32) this._queuedLines.delete(this._queuedLines.keys().next().value!)
     }
+    // A CLI that reports its command queue names this line by uuid when it takes
+    // it, so its rows stay queued until then (line-consumption.ts). Registered
+    // before the write: the report may beat the send ack. A CLI that has not
+    // reported lifecycle keeps the old rule: the rows leave on the write.
+    const rows = opts?.rows ?? []
+    // A row whose line went to a CLI that reports its queue keeps waiting for its
+    // word, also when this object has seen no frame yet (a restarted server).
+    const tracked = this._sawCommandLifecycle || rows.some((r) => r.lineTracked)
+    const lineSid = uuid && rows.length && tracked ? this.claudeSessionId : null
+    if (lineSid) {
+      // The CLI may already have reported this line (it raced a restart's redelivery).
+      const reported = awaitLine(lineSid, uuid!, rows, this.pid, (evicted) => {
+        log.session.warn('line registry full: the oldest untaken line settles by its write', { sessionId: lineSid, messageIds: evicted.map((r) => r.id) })
+        this.removeWrittenRows(evicted)
+      })
+      if (reported) {
+        log.session.info('line already reported by the CLI, not written again', { sessionId: lineSid, uuid, state: reported, messageIds: rows.map((r) => r.id) })
+        const fate = reported === 'started' || reported === 'completed' ? 'ran' : reported === 'cancelled' ? 'cancelled' : 'dropped'
+        this.settleLineFate(uuid!, rows, opts?.markers ?? [], { fate, state: reported })
+        opts?.onFate?.({ fate, state: reported })
+        return true
+      }
+    }
+    const forget = (mayHaveLanded = false) => {
+      // An unanswered line may still be in the CLI: keep listening for the CLI to take it.
+      if (!mayHaveLanded) {
+        if (queuedBehindTurn) this._queuedLines.delete(uuid!)
+        if (lineSid) dropLine(lineSid, uuid!)
+      }
+      undoDispatch?.()
+    }
+    const { rows: _rows, onFate, ...wireOpts } = opts ?? {}
+    let known: { fate: string; state?: string } | undefined
     let ok: boolean
-    try { ok = await transport.writeMessage(message, { ...opts, ...(uuid ? { uuid } : {}), stopFence, onDispatch }) }
-    catch (error) { if (queuedBehindTurn) this._queuedLines.delete(uuid!); undoDispatch?.(); throw error }
-    if (!ok) { if (queuedBehindTurn) this._queuedLines.delete(uuid!); undoDispatch?.(); return false }
-    log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
+    try {
+      ok = await transport.writeMessage(message, {
+        ...wireOpts, ...(uuid ? { uuid } : {}), stopFence, onDispatch,
+        onFate: (f) => { known = f },
+      })
+    }
+    catch (error) { forget(error instanceof SendOutcomeUnknownError); throw error }
+    if (!ok) { forget(); return false }
+    // Written, or settled without a write: no longer held behind another line.
+    releaseHeld(this.claudeSessionId, rows.map((r) => r.id))
+    if (known) {
+      // The daemon wrote nothing: it told us what became of the line.
+      log.session.info('line not written again: the daemon knows its fate', { sessionId: this.claudeSessionId, uuid, ...known, messageIds: rows.map((r) => r.id) })
+      if (known.fate !== 'waiting') { undoDispatch?.(); if (queuedBehindTurn) this._queuedLines.delete(uuid!) }
+      this.settleLineFate(uuid ?? '', rows, opts?.markers ?? [], known, !lineSid)
+      onFate?.(known)
+      if (known.fate !== 'waiting') return true
+    } else {
+      log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
+      // The old rule for a CLI that does not report its queue: the write is the last word.
+      // Scoped to these ids so a concurrent in-flight batch is never swept.
+      if (!lineSid) this.removeWrittenRows(rows)
+    }
     // If a fast reply already settled the turn, a late send ack must not reopen it.
     if (this._turnResultEmitted) return true
     this.emitStatusChanged('IN_PROGRESS')
@@ -3521,8 +3612,17 @@ export class ClaudeCodeSession {
     log.session.info('gracefulStop: complete', { taskId: this.taskId })
   }
 
+  /**
+   * Counts the user's Stops. A delivery compares it across its write: a line
+   * whose outcome was still unknown when the user pressed Stop is never
+   * delivered after the Stop (it is parked for an explicit Retry instead).
+   */
+  get stopEpoch(): number { return this._stopEpoch }
+  private _stopEpoch = 0
+
   interrupt(): Promise<void> {
     if (this._interruptPromise) return this._interruptPromise
+    this._stopEpoch++
     const pending = this.interruptTurnInPlace().then(async (keptAlive) => {
       if (!keptAlive) await this.hardInterrupt()
     }).finally(() => {
@@ -3604,30 +3704,163 @@ export class ClaudeCodeSession {
     return true
   }
 
+  /** Does this session's CLI report its command queue (command_lifecycle)? Learnt from its own frames, never assumed. */
+  get reportsLineLifecycle(): boolean { return this._sawCommandLifecycle }
+
+  /** Record which process reported lifecycle, so a restarted server knows it before that process prints another frame. */
+  private saveLifecyclePid(): void {
+    const sid = this.claudeSessionId
+    const pid = this.pid
+    if (!sid || !pid || this._lifecyclePidSaved === pid) return
+    this._lifecyclePidSaved = pid
+    import('../core/session-tracker.js')
+      .then(({ updateSessionRecord }) => updateSessionRecord(sid, { lineLifecyclePid: pid }))
+      .catch(() => { if (this._lifecyclePidSaved === pid) this._lifecyclePidSaved = null })
+  }
+
+  /** Queue rows whose line the CLI took, or whose line is gone with a Stop, leave the queue. */
+  private releaseLineRows(rows: QueuedMessage[], why: string): void {
+    const sid = this.claudeSessionId
+    if (!sid || rows.length === 0) return
+    const ids = rows.map((r) => r.id)
+    log.session.info('queued line settled by the CLI, rows leave the queue', { sessionId: sid, why, messageIds: ids })
+    removeTaken(sid, ids, { ran: why !== 'cancelled' && why !== 'stopped' }).catch((err) => {
+      log.session.warn('removing taken queue rows failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    })
+    // Rows the user was told were unconfirmed did reach the CLI after all.
+    const told = why === 'cancelled' || why === 'stopped' ? [] : takeUnconfirmed(sid, ids)
+    if (told.length > 0) {
+      bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, { sessionId: sid, count: told.length, messageIds: told, turnGen: this.turnGen },
+        ['main-ai'], { source: 'session-runner' })
+    }
+  }
+
+  /** The old rule, for a CLI that does not report its queue: the write is the last word. */
+  private removeWrittenRows(rows: QueuedMessage[]): void {
+    const sid = this.claudeSessionId
+    if (!sid || rows.length === 0) return
+    removeProcessed(sid, rows.map((m) => m.id)).catch((err) => {
+      log.session.warn('removeProcessed failed after FIFO write', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  /**
+   * Rows whose line never ran and never will in this process: they stay in the
+   * queue, parked (never redelivered on their own), and the user is told, with
+   * the text kept for a Retry. `freshLine`: the CLI saw the uuid and dropped it,
+   * so a Retry goes out as a new line.
+   */
+  private parkLineRows(rows: QueuedMessage[], reason: string, freshLine = false): void {
+    const sid = this.claudeSessionId
+    if (!sid || rows.length === 0) return
+    log.session.warn('a line never ran: its rows are parked and the user is told', { sessionId: sid, reason, messageIds: rows.map((r) => r.id) })
+    void parkIfQueued(rows, reason, { freshLine }).catch(() => []).then((parked) => {
+      if (parked.length === 0) return
+      bus.emit(EventNames.SESSION_BATCH_FAILED, {
+        sessionId: sid, messageIds: parked.map((m) => m.id), error: reason,
+      }, ['main-ai'], { source: 'session-runner' })
+    })
+  }
+
+  /**
+   * What the CLI (or the daemon, reading the CLI's frames) says became of a
+   * line: ran, cancelled by a Stop, dropped unrun, or waiting in the live CLI's
+   * stdin. `untracked`: this CLI does not report its queue, so a waiting line
+   * follows the old rule (its rows leave now).
+   */
+  private settleLineFate(uuid: string, rows: QueuedMessage[], markers: Array<{ message: string; messageId: string }>,
+    known: { fate: string; state?: string }, untracked = false): void {
+    const sid = this.claudeSessionId
+    if (!sid || rows.length === 0) return
+    if (known.fate === 'waiting') {
+      if (untracked) this.removeWrittenRows(rows)
+      return
+    }
+    if (uuid) takeLine(sid, uuid)
+    if (known.fate === 'ran') { this.releaseLineRows(rows, known.state ?? 'ran'); return }
+    if (known.fate === 'cancelled') {
+      this.releaseLineRows(rows, 'cancelled')
+      this.returnToComposer(markers.length ? markers : rows.map((r) => ({ message: r.message, messageId: r.id })))
+      return
+    }
+    this.parkLineRows(rows, `Claude Code dropped this message without running it (${known.state ?? 'dropped'})`, true)
+  }
+
+  private _lineReclaims = 0
+  private _lineReclaimDone: Promise<void> = Promise.resolve()
+
+  /** How many times this session handed untaken lines back (compare across a write). */
+  get lineReclaimCount(): number { return this._lineReclaims }
+
+  /** Resolves once the latest hand-back is on disk. */
+  lineReclaimSettled(): Promise<void> { return this._lineReclaimDone }
+
+  /**
+   * The CLI process is gone: the lines it never took go back to pending under
+   * their own uuid, so the next delivery runs each once and in order. Only an
+   * observed death calls this, never a send that merely could not reach the
+   * daemon (the CLI may be alive and still hold the line). A teardown Walnut
+   * asked for (the task completed, the session was stopped) does not deliver
+   * them to a new process: they are parked and the user is told they never ran.
+   * `announce`: no turn event follows this exit, so the runner is told directly
+   * that the queue has work again.
+   */
+  reclaimUntakenLines(why: 'exit' | 'death' | 'crash' | 'teardown', announce = false): void {
+    const sid = this.claudeSessionId
+    if (!sid) return
+    const lines = untakenLines(sid, this.pid)
+    if (lines.length === 0) return
+    const rows = lines.flatMap((line) => line.rows)
+    if (this._expectedTeardown) {
+      for (const line of lines) this._queuedLines.delete(line.uuid)
+      this.parkLineRows(rows, 'The session ended before Claude Code ran this message')
+      return
+    }
+    log.session.warn('CLI exited before taking queued lines: they go back to the queue', {
+      sessionId: sid, why, pid: this.pid, messageIds: rows.map((r) => r.id),
+    })
+    // Started synchronously: the queue's writes run in call order, so a delivery
+    // started after this event already sees the rows pending.
+    const reverted = revertIfQueued(rows).catch((err) => {
+      log.session.warn('returning untaken lines to the queue failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    })
+    this._lineReclaims++
+    this._lineReclaimDone = reverted
+    if (announce) void reverted.then(() => announceReclaimed(sid))
+  }
+
   /** Queued lines the CLI dropped go back to the composer, like Esc in Claude Code.
    *  One event per burst: a Stop's cancellations arrive as several frames at once. */
   private returnCancelledLines(uuids: unknown[]): void {
     for (const uuid of uuids) {
+      // The CLI dropped the line: its queue rows go too, never to be redelivered.
+      if (typeof uuid === 'string') this.releaseLineRows(takeLine(this.claudeSessionId, uuid), 'cancelled')
       const markers = typeof uuid === 'string' ? this._queuedLines.get(uuid) : undefined
       if (!markers) continue
       this._queuedLines.delete(uuid as string)
-      if (this._cancelledLines.length === 0) {
-        setTimeout(() => {
-          const lines = this._cancelledLines
-          this._cancelledLines = []
-          if (!this.claudeSessionId || lines.length === 0) return
-          log.session.info('queued messages cancelled by stop, returning them to the composer', {
-            sessionId: this.claudeSessionId, taskId: this.taskId, messageIds: lines.map((l) => l.messageId),
-          })
-          bus.emit(EventNames.SESSION_QUEUED_CANCELLED, {
-            sessionId: this.claudeSessionId,
-            messageIds: lines.map((l) => l.messageId),
-            messages: lines.map((l) => l.message),
-          }, ['web-ui'], { source: 'session-runner' })
-        }, 0)
-      }
-      this._cancelledLines.push(...markers)
+      this.returnToComposer(markers)
     }
+  }
+
+  /** Hand messages back to the composer (one event per burst: a Stop's cancellations arrive as several frames at once). */
+  private returnToComposer(markers: Array<{ message: string; messageId: string }>): void {
+    if (markers.length === 0) return
+    if (this._cancelledLines.length === 0) {
+      setTimeout(() => {
+        const lines = this._cancelledLines
+        this._cancelledLines = []
+        if (!this.claudeSessionId || lines.length === 0) return
+        log.session.info('queued messages cancelled by stop, returning them to the composer', {
+          sessionId: this.claudeSessionId, taskId: this.taskId, messageIds: lines.map((l) => l.messageId),
+        })
+        bus.emit(EventNames.SESSION_QUEUED_CANCELLED, {
+          sessionId: this.claudeSessionId,
+          messageIds: lines.map((l) => l.messageId),
+          messages: lines.map((l) => l.message),
+        }, ['web-ui'], { source: 'session-runner' })
+      }, 0)
+    }
+    this._cancelledLines.push(...markers)
   }
 
   /** Stop the CLI process itself. interrupt() only aborts the running turn and keeps
@@ -3652,9 +3885,15 @@ export class ClaudeCodeSession {
     this._pendingPermissionRequests.clear()
     this._clearAllPermissionReEmitTimers()
     this._rejectAllSideQuestions('session stopped')
+    this._stopEpoch++
     // The CLI's queue died with the process: nothing it held will ever run.
     if (this._sawCommandLifecycle) this.returnCancelledLines([...this._queuedLines.keys()])
     this._queuedLines.clear()
+    // Lines it held and never started go back to the composer too: a Stop drops
+    // queued lines (as Esc does in Claude Code), it never replays them later.
+    const untaken = untakenLines(this.claudeSessionId).flatMap((line) => line.rows)
+    this.releaseLineRows(untaken, 'stopped')
+    this.returnToComposer(untaken.map((r) => ({ message: r.message, messageId: r.id })))
     // The daemon confirmed the stop, and its exit event lands after stopMonitoring(),
     // so nothing else reports it: the record would stay 'running' with a dead pid.
     this.pid = null
@@ -3774,6 +4013,9 @@ export class ClaudeCodeSession {
     this._active = false
     this._processStatus = 'stopped'
     this.stopLivenessMonitor()
+    // Before the turn events below, so the runner's next delivery already sees
+    // them; with no turn event to follow (died between turns), it is told directly.
+    this.reclaimUntakenLines('death', this.resultEmitted || this._turnResultEmitted)
 
     // Diagnostics for the death. For local sessions, read stderr from the .err file
     // on disk; for remote sessions the local path doesn't exist — use _exitStderr
@@ -3994,6 +4236,7 @@ export class ClaudeCodeSession {
     // A teardown WE asked for (task completed, capacity eviction, idle timeout) is
     // not an error, regardless of the CLI's exit code — SIGINT surfaces as -1 here.
     if (this._expectedTeardown) {
+      this.reclaimUntakenLines('teardown')
       this._active = false
       this._processStatus = 'stopped'
       this._activity = undefined
@@ -4036,6 +4279,7 @@ export class ClaudeCodeSession {
     // error path.
     const suppressibleExit = code === 0 || code === -1 || code === 143 || code === 130
     if (!cleanStderr && stderr && suppressibleExit) {
+      this.reclaimUntakenLines('exit', true)
       this._active = false
       this._processStatus = 'stopped'
       this._activity = undefined
@@ -4078,6 +4322,8 @@ export class ClaudeCodeSession {
       stderr: cleanStderr.slice(0, 200) || undefined,
     })
 
+    // Before the session:error below, so the runner's next delivery already sees them.
+    this.reclaimUntakenLines('crash', this.resultEmitted)
     this._active = false
     this._processStatus = 'error'
     this._activity = undefined
@@ -6507,11 +6753,24 @@ export class ClaudeCodeSession {
         // every turn (reported 2026-09-18). A queued line's fate rides it too:
         // started means the model has it; cancelled means a Stop dropped it.
         const lc = event as unknown as StreamCommandLifecycleEvent
+        // This CLI reports its queue: from now on its lines' rows wait for its word.
         this._sawCommandLifecycle = true
-        if (typeof lc.command_uuid === 'string' && lc.state !== 'queued') {
-          if (lc.state === 'cancelled') this.returnCancelledLines([lc.command_uuid])
-          else this._queuedLines.delete(lc.command_uuid)
+        this.saveLifecyclePid()
+        if (typeof lc.command_uuid !== 'string' || typeof lc.state !== 'string') break
+        noteLineState(this.claudeSessionId, lc.command_uuid, lc.state as LineState)
+        if (lc.state === 'queued') break
+        if (lc.state === 'cancelled') { this.returnCancelledLines([lc.command_uuid]); break }
+        if (lc.state === 'started' || lc.state === 'completed') {
+          this._queuedLines.delete(lc.command_uuid)
+          // The model has the line: only now do its rows leave the queue.
+          this.releaseLineRows(takeLine(this.claudeSessionId, lc.command_uuid), lc.state)
+          break
         }
+        // discarded / refused: it never ran and never will in this session. Not taken:
+        // the rows stay, parked, and the user is told (the text is kept for a Retry).
+        this._queuedLines.delete(lc.command_uuid)
+        this.parkLineRows(takeLine(this.claudeSessionId, lc.command_uuid),
+          `Claude Code dropped this message without running it (${lc.state})`, true)
         break
       }
 
@@ -8018,6 +8277,8 @@ export class SessionRunner {
   private batchMessageIds = new Map<string, string[]>()
   /** Safety timers that auto-clear stuck activeProcessing entries */
   private activeProcessingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Unregisters this runner from reclaimed-line announcements (line-consumption.ts). */
+  private stopReclaimListener?: () => void
   /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
    *  event before acpAbortTurn has killed the worker process group; queue drain
    *  must wait for the operation's completion, not merely that terminal frame. */
@@ -8279,6 +8540,16 @@ export class SessionRunner {
       })
     }).catch(() => {})
 
+    // A CLI that died with lines it never took, and no turn event to follow:
+    // deliver them now rather than at some later send.
+    this.stopReclaimListener?.()
+    this.stopReclaimListener = onLinesReclaimed((sessionId) => {
+      if (this.activeProcessing.has(sessionId)) return
+      this.processNext(sessionId).catch((err) => {
+        log.session.warn('delivering reclaimed lines failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      })
+    })
+
     bus.subscribe('session-runner', async (event) => {
       switch (event.name) {
         case EventNames.SESSION_START: {
@@ -8525,13 +8796,13 @@ export class SessionRunner {
             this.clearPendingResumeSessionAt(resolvedSessionId)
           }
 
-          // NO un-scoped removeProcessed here. Every delivery point already removes
-          // its own batch eagerly (FIFO write / mid-turn inject / settleResumeSuccess),
-          // so by turn-end there is nothing legitimately left in 'processing'. The only
-          // thing an un-scoped sweep could hit is a CONCURRENT in-flight batch (e.g. a
-          // --resume spawn settling seconds later) — deleting it silently lost the
-          // user's message. Worst case of not sweeping: a stuck 'processing' message
-          // survives until restart and gets redelivered (duplicate > loss).
+          // NO removal here. Every delivery point settles its own batch
+          // (settleResumeSuccess at spawn; a FIFO line on the write, or, for a CLI
+          // that reports its queue, when it names the line: line-consumption.ts).
+          // A turn end proves nothing about a line queued behind it, and an
+          // un-scoped sweep could only hit a CONCURRENT in-flight batch (e.g. a
+          // --resume spawn settling seconds later): deleting it silently lost the
+          // user's message.
 
           // Tell frontend which optimistic messages to clear (ids when known)
           bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
@@ -8608,6 +8879,8 @@ export class SessionRunner {
   destroy(): void {
     this.acpLifecycleEpoch++
     this.acpDestroyed = true
+    this.stopReclaimListener?.()
+    this.stopReclaimListener = undefined
     for (const [, session] of this.sessions) {
       session.detach()
     }
@@ -8650,6 +8923,8 @@ export class SessionRunner {
   destroyAndKill(): void {
     this.acpLifecycleEpoch++
     this.acpDestroyed = true
+    this.stopReclaimListener?.()
+    this.stopReclaimListener = undefined
     for (const [, session] of this.sessions) {
       session.kill()
     }
@@ -10611,21 +10886,43 @@ export class SessionRunner {
     // Atomically move pending messages to processing state. `midTurn` leaves the
     // whole queue to processNext while any row carries a pre-assigned uuid: a
     // question's head row must start its own turn (session-message-queue.ts).
-    const newMsgs = await markProcessing(sessionId, stopFence, { midTurn: true })
+    // One line per batch, under the uuid its rows were given the first time they
+    // went out: rows that may already be in the CLI go alone, and the daemon is
+    // asked before anything is written for them (lineTries > 1).
+    const newMsgs = await markProcessing(sessionId, stopFence, { midTurn: true, tracked: targetSession.reportsLineLifecycle })
     if (newMsgs.length === 0) return
+    releaseHeld(sessionId, newMsgs.map((m) => m.id))
 
     const combined = newMsgs.map((m) => m.message).join('\n\n')
-    // ONE user line per batch ⇒ ONE uuid survives. The CLI's own rule is
-    // findLast, so the LAST pre-assigned uuid in the batch wins (batch-uuid.ts).
-    const uuid = pickBatchUuid(newMsgs)
+    const uuid = newMsgs[0].lineUuid
+    const stops = targetSession.stopEpoch
+    let known: { fate: string } | undefined
 
     let delivered: boolean
     try {
       delivered = await targetSession.writeMessage(combined, {
         uuid, stopFence, markers: newMsgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+        rows: newMsgs, dedupe: (newMsgs[0].lineTries ?? 1) > 1,
+        onFate: (f) => { known = f },
+        onHeld: () => this.announceHeld(sessionId, newMsgs),
+        isStopped: () => targetSession!.stopEpoch !== stops,
       })
     } catch (error) {
+      if (error instanceof SendOutcomeUnknownError || error instanceof SendHeldError) {
+        // The line may be queued in the running CLI: the turn goes on, and the rows
+        // wait under their uuid for the CLI to name the line or for the next delivery,
+        // which asks the daemon before writing anything.
+        log.session.warn('injectMidTurn: send outcome unknown; rows wait under their uuid', { sessionId, count: newMsgs.length, error: error.message })
+        await this.settleUnansweredLine(sessionId, newMsgs, error, targetSession.stopEpoch !== stops)
+        return
+      }
       this.settleResumeFailure(sessionId, newMsgs, error instanceof Error ? error : new Error(String(error)))
+      return
+    }
+    // The daemon or the CLI already knew this line's end (a Stop cancelled it, or the
+    // CLI dropped it): writeMessage settled the rows and told the user.
+    if (delivered && known && known.fate !== 'ran' && known.fate !== 'waiting') {
+      this.deliverRest(sessionId)
       return
     }
     if (delivered) {
@@ -10646,11 +10943,9 @@ export class SessionRunner {
       log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length })
       this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
 
-      // Eagerly remove from disk queue — message written to FIFO, no re-delivery on crash.
-      // Scoped to THIS batch's ids so a concurrent in-flight batch is never swept.
-      removeProcessed(sessionId, newMsgs.map((m) => m.id)).catch((err) => {
-        log.session.warn('eager removeProcessed failed after mid-turn injection', { sessionId, error: err instanceof Error ? err.message : String(err) })
-      })
+      // For a CLI that reports its queue the rows stay queued until it takes the
+      // line: a line queued behind the turn dies with the process if it crashes
+      // first, and must then reach the next one (line-consumption.ts).
 
       // Tell frontend these messages have been delivered to the CLI
       bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
@@ -10661,6 +10956,8 @@ export class SessionRunner {
         // answers it is this one. Lane-turn result correlation keys on it.
         turnGen: targetSession.turnGen,
       }, ['main-ai'], { source: 'session-runner' })
+      // Rows a line held apart (an earlier line's) leave the rest for the next line.
+      this.deliverRest(sessionId)
     } else {
       // stdin write failed — the daemon's FIFO probe says the CLI isn't reading
       // (turn-between gap, process died, etc.). Revert to pending, then delegate to
@@ -10673,7 +10970,12 @@ export class SessionRunner {
       // authoritative recovery path and is the one that emits the terminal
       // delivery_failed (via settleResumeFailure) if the --resume also fails.
       // Emitting here too would double-report the same failure.
-      await revertToPending(newMsgs)
+      // A Stop during the write: the line is not delivered after it.
+      if (targetSession.stopEpoch !== stops) {
+        await this.settleUnansweredLine(sessionId, newMsgs, new Error('stopped'), true)
+        return
+      }
+      await revertIfQueued(newMsgs)
       log.session.info('injectMidTurn: stdin write failed — delegating to processNext', { sessionId, count: newMsgs.length })
       return this.processNext(sessionId)
     }
@@ -10722,6 +11024,7 @@ export class SessionRunner {
     // remote host), so the claim must hold THAT text (inc-1787704938224).
     registerEchoClaims(sessionId, msgs.map((m) => m.id),
       session.lastPreparedOutbound ?? msgs.map((m) => m.message).join('\n\n'))
+    // The resumed process's first line: it takes it at start, before anything else.
     removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
       log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
     })
@@ -10755,17 +11058,29 @@ export class SessionRunner {
     // SAME text isn't shadowed by it (FIFO text-match binding would give the dead
     // claim the retry's echo line — see revokeEchoClaims).
     revokeEchoClaims(sessionId, msgs.map((m) => m.id))
+    // A spawned process whose first line went unanswered may hold it: the rows
+    // keep their uuid, so the next attempt goes alone and asks first (processNext).
+    // Rows the CLI reported taking meanwhile are gone, and are not reported failed.
+    const unanswered = err instanceof SendOutcomeUnknownError
     // Announce the failure only once the batch is back on disk (processNext's
     // failure path awaits the same way). batch-failed is what offers Retry, and a
     // Retry that ran while the batch still read 'processing' picked nothing up,
     // leaving the message pending with no send to deliver it.
-    const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict.reason) : revertToPending(msgs)
-    void settled.catch(() => {}).then(() => {
-      bus.emit(EventNames.SESSION_BATCH_FAILED, {
-        sessionId,
-        messageIds: msgs.map((m) => m.id),
-        error: err.message,
-      }, ['main-ai'], { source: 'session-runner' })
+    const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict.reason)
+      : unanswered ? revertIfQueued(msgs) : revertToPending(msgs)
+    void settled.catch(() => {}).then(async () => {
+      const ids = new Set(msgs.map((m) => m.id))
+      const failed = unanswered
+        ? (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
+        : msgs.map((m) => m.id)
+      if (unanswered) markUnconfirmed(sessionId, failed)
+      if (failed.length > 0) {
+        bus.emit(EventNames.SESSION_BATCH_FAILED, {
+          sessionId,
+          messageIds: failed,
+          error: err.message,
+        }, ['main-ai'], { source: 'session-runner' })
+      }
       // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
       // Consumers (server.ts chat persist, hook dispatcher, push notify, and the
       // session-runner's own handler) all short-circuit on it: no batch-completed,
@@ -11206,18 +11521,23 @@ export class SessionRunner {
       getAcpIdentityReplacementTarget,
       getSessionByClaudeId,
     } = await import('../core/session-tracker.js')
-    for (const sessionId of pendingSessions) {
+    // Each session on its own: one whose delivery is slow (a line being confirmed
+    // with the host, a cold resume) must not hold up the others on the host.
+    // processNext already serializes per session. At most REDELIVERY_PARALLEL at
+    // once: a reconnect with many queued sessions must not start that many resume
+    // spawns and daemon round trips together.
+    const redeliver = async (sessionId: string): Promise<void> => {
       // Skip sessions mid-delivery — their batch is already in flight.
-      if (this.activeProcessing.has(sessionId)) continue
+      if (this.activeProcessing.has(sessionId)) return
       try {
         const record = await getSessionByClaudeId(sessionId)
-        if (!record) continue
+        if (!record) return
         // Don't resurrect an archived session on reconnect — it's been retired
         // (plan executed / user closed); resuming it would spawn a CLI for a
         // session no UI entry point points at. Leave its messages pending.
-        if (record.archived && !getAcpIdentityReplacementTarget(record)) continue
+        if (record.archived && !getAcpIdentityReplacementTarget(record)) return
         const recordHost = record.host ?? '__local__'
-        if (recordHost !== hostKey) continue
+        if (recordHost !== hostKey) return
         log.session.info('daemon reconnected — redelivering pending messages', { sessionId, hostKey })
         await this.processNext(sessionId)
       } catch (err) {
@@ -11226,13 +11546,85 @@ export class SessionRunner {
         })
       }
     }
+    let next = 0
+    await Promise.all(Array.from({ length: Math.min(REDELIVERY_PARALLEL, pendingSessions.length) }, async () => {
+      while (next < pendingSessions.length) await redeliver(pendingSessions[next++])
+    }))
   }
 
   /**
    * Drain all pending messages for a session, combine them, and send as one claude --resume call.
    * @param mode - Optional permission mode override for the resumed session.
+   *
+   * One delivery attempt per session at a time. Two at once (a turn event and a
+   * redelivery, say) could each take a part of the queue and race two --resume
+   * spawns for one session, or run a later line before an earlier one.
    */
-  private async processNext(sessionId: string, mode?: string): Promise<void> {
+  private processNext(sessionId: string, mode?: string): Promise<void> {
+    const run = (this.nextRuns.get(sessionId) ?? Promise.resolve()).then(() => this.processNextNow(sessionId, mode))
+    const tail = run.then(() => {}, () => {})
+    this.nextRuns.set(sessionId, tail)
+    void tail.then(() => { if (this.nextRuns.get(sessionId) === tail) this.nextRuns.delete(sessionId) })
+    return run
+  }
+
+  private nextRuns = new Map<string, Promise<void>>()
+
+  /**
+   * Rows a delivery left behind (a line that already went out goes alone, and
+   * fresh rows never join it) go out as the next line. A no-op, without a queue
+   * write, when nothing is pending.
+   */
+  private deliverRest(sessionId: string): void {
+    void getQueue(sessionId).then((rows) => {
+      if (!rows.some((m) => m.status === 'pending')) return
+      return this.activeProcessing.has(sessionId) ? this.injectMidTurn(sessionId) : this.processNext(sessionId)
+    }).catch((err) => log.session.warn('delivering the rest of the queue failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    }))
+  }
+
+  /** Lines queued behind one whose answer is being asked for: the user sees why they wait. */
+  private announceHeld(sessionId: string, msgs: QueuedMessage[]): void {
+    log.session.info('line waits for the previous one to be confirmed', { sessionId, messageIds: msgs.map((m) => m.id) })
+    noteHeld(sessionId, msgs.map((m) => m.id), 'Waiting to confirm the previous message')
+    bus.emit(EventNames.SESSION_DELIVERY_HELD, {
+      sessionId, messageIds: msgs.map((m) => m.id), reason: 'Waiting to confirm the previous message',
+    }, ['main-ai'], { source: 'session-runner' })
+  }
+
+  /**
+   * A line whose write gave no clear answer: its reply never came
+   * (SendOutcomeUnknownError), it was held behind such a line (SendHeldError),
+   * or the user stopped the session while it was being asked about. Rows the
+   * CLI took meanwhile are gone and stay gone, and are never reported failed.
+   * After a Stop the rest are parked for an explicit Retry (never delivered
+   * after the Stop); otherwise they go back to pending under their uuid, so the
+   * next delivery asks the daemon first, and the user is told they are
+   * unconfirmed (a Retry re-drains the same row, same uuid).
+   */
+  private async settleUnansweredLine(sessionId: string, msgs: QueuedMessage[], err: Error, stopped: boolean): Promise<void> {
+    revokeEchoClaims(sessionId, msgs.map((m) => m.id))
+    if (stopped) {
+      const parked = await parkIfQueued(msgs, 'Session stopped by user; retry explicitly to send').catch(() => [])
+      if (parked.length > 0) {
+        bus.emit(EventNames.SESSION_BATCH_FAILED, {
+          sessionId, messageIds: parked.map((m) => m.id), error: 'Stopped before delivery was confirmed; retry to send',
+        }, ['main-ai'], { source: 'session-runner' })
+      }
+      return
+    }
+    await revertIfQueued(msgs).catch(() => {})
+    const ids = new Set(msgs.map((m) => m.id))
+    const left = (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
+    if (left.length === 0) return
+    if (!(err instanceof SendHeldError)) markUnconfirmed(sessionId, left)
+    bus.emit(EventNames.SESSION_BATCH_FAILED, {
+      sessionId, messageIds: left, error: err.message,
+    }, ['main-ai'], { source: 'session-runner' })
+  }
+
+  private async processNextNow(sessionId: string, mode?: string): Promise<void> {
     if (this.nativeInterrupts.has(sessionId)) await this.nativeInterrupts.get(sessionId)
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const stopRecord = await getSessionByClaudeId(sessionId)
@@ -11264,28 +11656,34 @@ export class SessionRunner {
       return this.drainAcpQueue(acpSession, acpSession.sessionId ?? sessionId)
     }
 
-    const msgs = await markProcessing(sessionId, stopFence)
+    // One line per batch, under the uuid its rows were given the first time they
+    // went out. Rows that may already be in a CLI (lineTries > 1) go out alone,
+    // and the daemon is asked before anything is written for them.
+    // A CLI this server already knows reports its queue: its rows say so on disk.
+    let tracked = false
+    for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; break }
+    const msgs = await markProcessing(sessionId, stopFence, { tracked })
     if (msgs.length === 0) return
+    releaseHeld(sessionId, msgs.map((m) => m.id))
+    const dedupe = (msgs[0].lineTries ?? 1) > 1
 
     this.setActiveProcessing(sessionId, msgs.length, msgs.map((m) => m.id))
 
     let combined = msgs.map((m) => m.message).join('\n\n')
     // ONE user line per batch ⇒ ONE uuid survives; the CLI's own rule is findLast
-    // (batch-uuid.ts). Rides BOTH delivery paths below: the live FIFO write and
-    // the cold `--resume` spawn's initial-message envelope.
+    // (batch-uuid.ts).
     const batchUuid = pickBatchUuid(msgs)
     // The uuid this turn answers (undefined for a plain batch): the thread titler
     // reads it at session:result to prove which question a result belongs to.
     noteTurnUserUuid(sessionId, batchUuid)
-    // Set once a FIFO write has been ATTEMPTED for this batch. The CLI dedups an
-    // inbound uuid against the transcript on disk and silently runs NO turn for a
-    // repeat (print.ts `Skipping duplicate user message`), so a --resume that
-    // re-delivers the same text after a write whose outcome is unknown (ack lost,
-    // command timeout) must NOT carry the uuid again: with it, a message the CLI
-    // had already persisted would be dropped and the bubble would still read
-    // "delivered". Without it the worst case is the old one, a visible duplicate.
-    // The anchor keyed by that uuid then dangles, which is invisible by design.
-    let fifoAttempted = false
+    // The uuid the line goes out under on EVERY path below (live FIFO write and
+    // cold --resume), fixed when its rows first went out (QueuedMessage.lineUuid).
+    // The CLI skips a uuid its transcript already holds, so a resume after the old
+    // process took the line (and died on it) does not run it twice, while a line
+    // the old process only queued runs once on the new one. The resume happens only
+    // after the daemon refused the write (the process is gone), never after a
+    // write whose answer was lost: that one is confirmed in place (confirmSend).
+    const lineUuid = msgs[0].lineUuid ?? lineUuidFor(msgs)
 
     try {
       // Find the session that has this Claude session ID
@@ -11413,11 +11811,43 @@ export class SessionRunner {
         // All sessions now go through daemon. The daemon's `cmdSend` does atomic
         // FIFO liveness detection (O_WRONLY|O_NONBLOCK → ENXIO if nobody is reading).
         // No local PID pre-flight check needed.
-        fifoAttempted = true
-        if (await targetSession.writeMessage(combined, {
-          uuid: batchUuid, stopFence, markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
-        })) {
-          log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
+        const reclaimsBefore = targetSession.lineReclaimCount
+        const stops = targetSession.stopEpoch
+        const target = targetSession
+        let known: { fate: string } | undefined
+        let written: boolean
+        try {
+          written = await targetSession.writeMessage(combined, {
+            uuid: lineUuid, stopFence, markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+            rows: msgs, dedupe,
+            onFate: (f) => { known = f },
+            onHeld: () => this.announceHeld(sessionId, msgs),
+            isStopped: () => target.stopEpoch !== stops,
+          })
+        } catch (error) {
+          if (!(error instanceof SendOutcomeUnknownError || error instanceof SendHeldError)) throw error
+          // Unanswered, not refused: the line may be in the CLI. Never stop the CLI
+          // or resend it blind over this: the next delivery asks the daemon first.
+          this.clearActiveProcessing(sessionId, { kind: 'error', message: error.message })
+          log.session.warn('processNext: send outcome unknown; rows wait under their uuid', { sessionId, error: error.message })
+          await this.settleUnansweredLine(sessionId, msgs, error, target.stopEpoch !== stops)
+          return
+        }
+        if (written && known && known.fate !== 'waiting') {
+          // Nothing was written: the CLI already ran the line (a resend after a
+          // restart), a Stop cancelled it, or the CLI dropped it. writeMessage
+          // settled the rows and told the user; no turn opens from this write.
+          this.clearActiveProcessing(sessionId)
+          if (known.fate === 'ran') {
+            bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
+              sessionId, count: msgs.length, messageIds: msgs.map((m) => m.id), turnGen: targetSession.turnGen,
+            }, ['main-ai'], { source: 'session-runner' })
+          }
+          this.deliverRest(sessionId)
+          return
+        }
+        if (written) {
+          log.session.info('processNext: message sent via stdin (no new process)', { sessionId, ...(dedupe ? { dedupe } : {}), ...(known ? { fate: known.fate } : {}) })
           this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
           // Echo-claim: bind the canonical user-echo uuid to these qm ids at the
           // next history parse (exact-id optimistic dedup upstream of text match).
@@ -11425,15 +11855,10 @@ export class SessionRunner {
           // remote-rewritten image paths, not the queue text (inc-1787704938224).
           registerEchoClaims(sessionId, msgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
 
-          // ── Eagerly remove from disk queue ──
-          // Once the message is written to the FIFO, Claude has it. Remove from the
-          // persistent queue immediately so a server crash/restart won't re-deliver it.
-          // This prevents the infinite loop where: session kills server → restart →
-          // loadQueue() resets processing→pending → re-delivers same message → loop.
-          // Scoped to THIS batch's ids so a concurrent in-flight batch is never swept.
-          removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
-            log.session.warn('eager removeProcessed failed after FIFO write', { sessionId, error: err instanceof Error ? err.message : String(err) })
-          })
+          // For a CLI that reports its queue the rows stay queued ('processing',
+          // never redelivered while this server runs) until it takes the line
+          // (line-consumption.ts): a CLI that dies first never ran them, and its
+          // successor must get them.
 
           // Tell frontend these messages have been delivered to the CLI
           bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
@@ -11449,6 +11874,17 @@ export class SessionRunner {
           // long-running operations (compaction on large contexts, slow API calls).
           // The 30-min health monitor idle timeout is the proper safety net.
 
+          this.deliverRest(sessionId)
+          return
+        }
+        // The user stopped the session while this line was on its way: it is not
+        // delivered after the Stop, on this process or a fresh one.
+        if (target.stopEpoch !== stops) {
+          // The turn this write opened ends as the user's Stop, not as a normal end:
+          // a caller awaiting it (currentTurn) must not read it as answered.
+          this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+          log.session.info('processNext: stopped during the write; the line is parked, not resumed', { sessionId })
+          await this.settleUnansweredLine(sessionId, msgs, new Error('stopped'), true)
           return
         }
         log.session.info('processNext: writeMessage failed, falling back to --resume spawn', {
@@ -11458,6 +11894,17 @@ export class SessionRunner {
           pid: targetSession.processPid,
           host: targetSession.host,
         })
+
+        // The refused write found the process dead and handed back the lines it
+        // never took: they are older than this batch, so the delivery starts
+        // over with them first.
+        if (targetSession.lineReclaimCount !== reclaimsBefore) {
+          await targetSession.lineReclaimSettled()
+          log.session.info('processNext: the dead process held untaken lines; delivering them first', { sessionId })
+          await revertIfQueued(msgs)
+          this.clearActiveProcessing(sessionId)
+          return this.processNextNow(sessionId, mode)
+        }
 
         // Gracefully stop old process before respawning (SIGINT → wait → SIGTERM).
         // This ensures Claude Code flushes session state to disk so --resume can find it.
@@ -11526,13 +11973,13 @@ export class SessionRunner {
           // that confirmation is what silently lost messages. See onSpawnSettled doc.
           session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, resolvedResumePrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err) => {
-              if (ok) this.settleResumeSuccess(sessionId, session, msgs)
+              if (ok) { this.settleResumeSuccess(sessionId, session, msgs); this.deliverRest(sessionId) }
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
             },
             // Cold resume: re-emit the record's profile flags (spawn-time only),
-            // plus the batch's pre-assigned user-line uuid when it has one.
+            // plus the batch's line uuid.
             {
-              ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, batchUuid),
+              ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, lineUuid),
               stopFence,
               markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
             })
@@ -11584,15 +12031,14 @@ export class SessionRunner {
       const settleTarget = targetSession
       targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, resolvedResumePrompt, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
         (ok, err) => {
-          if (ok) this.settleResumeSuccess(sessionId, settleTarget, msgs)
+          if (ok) { this.settleResumeSuccess(sessionId, settleTarget, msgs); this.deliverRest(sessionId) }
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
         },
         // Cold resume: re-emit the record's profile flags (spawn-time only), plus
-        // the batch's pre-assigned user-line uuid ONLY when no FIFO write was ever
-        // attempted for it (see fifoAttempted: a repeat uuid makes the CLI skip the
-        // turn if the first write did land).
+        // the batch's line uuid (the old process may have taken the line before it
+        // died; the CLI then skips it instead of running it twice).
         {
-          ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, fifoAttempted ? undefined : batchUuid),
+          ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, lineUuid),
           stopFence,
           markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
         })
@@ -11612,6 +12058,13 @@ export class SessionRunner {
       // would steal a same-text Retry's echo line (see revokeEchoClaims).
       // PERMANENT failures (deleted cwd, no session record to --resume) park instead:
       // pending here means "retry on every boot and reconnect", and this one can't win.
+      // Unanswered, not refused: the line may be in the CLI, so its rows keep their
+      // uuid and the next attempt asks the daemon first (dedupe). Rows the CLI
+      // reported taking meanwhile are gone, stay gone, and are not reported failed.
+      if (err instanceof SendOutcomeUnknownError || err instanceof SendHeldError) {
+        await this.settleUnansweredLine(sessionId, msgs, err, false)
+        return
+      }
       revokeEchoClaims(sessionId, msgs.map((m) => m.id))
       const verdict = classifyDeliveryFailure(err)
       if (verdict.kind === 'permanent') await parkMessages(msgs, verdict.reason).catch(() => {})
@@ -11655,7 +12108,7 @@ export const sessionRunner = new SessionRunner()
  * restart fold a whale stream from byte 0 (fold-checkpoint-core.ts).
  */
 export function streamFileSessionId(file: string): string {
-  return file.replace(/\.(jsonl\.err|jsonl\.fold|jsonl|pipe|pgid|log)$/, '')
+  return file.replace(/\.(jsonl\.err|jsonl\.fold|jsonl\.lines|jsonl|pipe|pgid|log)$/, '')
 }
 
 export async function cleanupStreamFiles(preserveSessionIds?: Set<string>): Promise<number> {

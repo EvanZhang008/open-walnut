@@ -117,7 +117,7 @@ describe('dedupeOptimisticMessages', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // Phase 1 (ACP dialect): id-first batch consumption
 // ═══════════════════════════════════════════════════════════════════════════
-import { removeBatchMessages, markDeliveredMessages } from '@/components/sessions/optimistic-dedup';
+import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
 
 describe('removeBatchMessages', () => {
   it('removes exactly the id-matched bubbles, sparing an identical-text newer one', () => {
@@ -160,10 +160,34 @@ describe('markDeliveredMessages', () => {
     expect(out[1].status).toBe('delivered');
   });
 
-  it('tempId race (no id matched) falls back to first-N count marking', () => {
-    const msgs = [opt('a', 'pending', 'temp-123')];
+  it('ids that match no bubble mark nothing by count (the caller keeps them for the RPC answer)', () => {
+    const msgs = [opt('a', 'pending', 'temp-123'), opt('b', 'received', 'qm-2')];
     const out = markDeliveredMessages(msgs, 1, ['qm-real']);
-    expect(out[0].status).toBe('delivered');
+    expect(out.map((m) => m.status)).toEqual(['pending', 'received']);
+    expect(unmatchedDeliveredIds(msgs, ['qm-real', 'qm-2'])).toEqual(['qm-real']);
+    expect(unmatchedDeliveredIds(msgs)).toEqual([]);
+  });
+
+  it('a bubble whose RPC answers with an id a delivery already named starts delivered, once', () => {
+    const early = new Set(['qm-real']);
+    expect(statusOnAdopt('qm-real', early)).toBe('delivered');
+    expect(statusOnAdopt('qm-real', early)).toBe('received');
+    expect(statusOnAdopt('qm-other', early)).toBe('received');
+  });
+
+  it('B1: an unconfirmed (failed) bubble the CLI later took is marked delivered, and no other bubble is', () => {
+    // A: the server gave up confirming it. B: held behind it, never written.
+    const a = { ...opt('unconfirmed first', 'failed', 'qm-a'), failedError: 'Delivery unconfirmed', parked: true };
+    const b = opt('still waiting second', 'received', 'qm-b');
+    const out = markDeliveredMessages([a, b], 1, ['qm-a']);
+    expect(out[0]).toEqual({ text: 'unconfirmed first', status: 'delivered', queueId: 'qm-a' });
+    expect(out[1]).toBe(b);
+  });
+
+  it('a failed bubble no id names stays failed', () => {
+    const a = { ...opt('x', 'failed', 'qm-a'), failedError: 'boom' };
+    expect(markDeliveredMessages([a], 1, ['qm-other'])[0]).toBe(a);
+    expect(markDeliveredMessages([a], 1)[0]).toBe(a);
   });
 
   it('id-less event marks first N pending/received', () => {

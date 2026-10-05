@@ -439,6 +439,14 @@ export interface SessionBatchFailedEvent {
   error: string;
 }
 
+/** Messages that wait, not yet written, behind one whose delivery is being confirmed. */
+export interface SessionDeliveryHeldEvent {
+  sessionId: string;
+  messageIds: string[];
+  /** One sentence for the user, shown on the waiting bubbles. */
+  reason: string;
+}
+
 export interface SessionMessageQueuedEvent {
   sessionId: string;
   messageId: string;
@@ -1268,6 +1276,7 @@ export interface EventPayloadMap {
   'session:queued-cancelled': SessionQueuedCancelledEvent;
   'session:batch-completed': SessionBatchCompletedEvent;
   'session:batch-failed': SessionBatchFailedEvent;
+  'session:delivery-held': SessionDeliveryHeldEvent;
   'session:message-queued': SessionMessageQueuedEvent;
   'session:system-event': SessionSystemEventPayload;
   'session:background-tasks': SessionBackgroundTasksPayload;

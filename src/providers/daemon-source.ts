@@ -58,6 +58,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
+import { lineFateScan, lineFateVerdict } from './line-fate-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -244,6 +245,8 @@ export function getDaemonSource(): string {
     ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
     ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
     ['__CREATE_WORKSPACE_CORE__', createWorkspaceCore.toString()],
+    ['__LINE_FATE_SCAN__', lineFateScan.toString()],
+    ['__LINE_FATE_VERDICT__', lineFateVerdict.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -380,6 +383,20 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (marker.ev !== 'bridge-ping') throw new Error('bridge uplink did not ask for an ack when blocked')
       up.ack(marker.seq)
       if (wrote[wrote.length - 1] !== 'y') throw new Error('bridge uplink did not release the held frame on ack')
+    }
+    // Line fate smoke: send-dedupe-v1 rides this text, so a reconstructed copy
+    // must never take a bare marker (written before the newline) as proof, and
+    // must take the CLI's own lifecycle word and the write record.
+    const scanOf = reconstructed['__LINE_FATE_SCAN__'] as typeof lineFateScan | undefined
+    const verdictOf = reconstructed['__LINE_FATE_VERDICT__'] as typeof lineFateVerdict | undefined
+    if (scanOf && verdictOf) {
+      const marker = JSON.stringify({ type: 'system', subtype: 'walnut-injected', walnutMessageId: 'm', walnutPid: 7 })
+      const q = { uuid: 'u', messageIds: ['m'], pid: 7 }
+      const started = JSON.stringify({ type: 'command_lifecycle', command_uuid: 'u', state: 'started' })
+      if (verdictOf(scanOf(marker, q, null), '', q) !== null) throw new Error('line fate took a bare marker as proof')
+      // Two pieces fold like one: the daemon scans a long tail piece by piece.
+      if (verdictOf(scanOf(started, q, scanOf(marker + '\n', q, null)), '', q)?.fate !== 'ran') throw new Error('line fate missed a started line')
+      if (verdictOf(null, JSON.stringify({ pid: 7, ids: ['m'] }), q)?.fate !== 'waiting') throw new Error('line fate missed a write record')
     }
     const createDrift = reconstructed['__CREATE_LOOP_DRIFT_PROBE__'] as typeof createLoopDriftProbe | undefined
     if (createDrift) {
@@ -1238,7 +1255,7 @@ function sweepDeadStreams() {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10);
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue;
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)); } catch {}
     }
     reaped.add(sid);
@@ -4552,12 +4569,18 @@ async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeN
 // lines into one corrupted line. Chain each write behind the previous one.
 // Returns the write outcome, or 'dead' if the session was reaped while queued.
 // Keep in sync with daemon-core.ts chainFifoWrite.
-async function chainFifoWrite(sid, session, buf, beforeNewline) {
+async function chainFifoWrite(sid, session, buf, beforeNewline, line) {
   const deadline = Date.now() + FIFO_WRITE_DEADLINE_MS;
   const prev = session.fifoWriteChain || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
     if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead';
-    return writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline);
+    // send-dedupe-v1, inside the chain: a known fate means do not write; a whole
+    // line written is recorded before the next write may ask.
+    const known = line && line.fate ? await line.fate() : null;
+    if (known) return known;
+    const written = await writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline);
+    if (written === 'ok' && line && line.written) line.written();
+    return written;
   });
   session.fifoWriteChain = run;
   const result = await run;
@@ -6389,15 +6412,17 @@ async function cmdSend(ws, id, cmd) {
 async function sendSessionMessage(ws, id, cmd) {
   const { sid, message, uuid } = cmd;
   cancelTurnRetry(sid, 'superseded-by-send');
-  const result = await handleSendCommand(sid, message, uuid, cmd.markers);
+  // dedupe (send-dedupe-v1): a resend after an unanswered send; written only if this CLI lacks it.
+  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true });
   if (result.error) return sendError(ws, id, result.error);
   return sendOk(ws, id, result);
 }
 
-async function handleSendCommand(sid, message, uuid, inputMarkers) {
+async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
   if (!sid || !message) return { error: 'send: missing sid or message' };
   const markers = normalizeMarkers(inputMarkers);
   if (markers.error) return { error: markers.error };
+  const dedupe = !!(opts && opts.dedupe === true) && markers.list.length > 0;
   const session = sessions.get(sid);
   if (!session) return { ok: false, reason: 'not_found' };
   if (session.state === 'dead') return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
@@ -6414,7 +6439,17 @@ async function handleSendCommand(sid, message, uuid, inputMarkers) {
     const beforeNewline = markers.list.length > 0
       ? function () { for (const m of markers.list) appendUserMarkerLine(sid, session, m.message, m.messageId, true); }
       : undefined;
-    const result = await chainFifoWrite(sid, session, buf, beforeNewline);
+    const ids = markers.list.map(function (m) { return m.messageId; });
+    const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
+      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids); } : undefined,
+      written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
+    });
+    if (result && typeof result === 'object') {
+      logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null });
+      const out = { ok: true, duplicate: true, fate: result.fate };
+      if (result.state) out.state = result.state;
+      return out;
+    }
     if (result === 'ok') {
       session.ttftSendTs = Date.now();
       session.ttftSawFirstLine = false;
@@ -6495,12 +6530,69 @@ function appendUserMarkerLine(sid, session, message, messageId, ordered) {
     walnutMessageId: messageId,
   };
   if (ordered) marker.walnutDelivery = 'ordered';
+  // Which CLI process got the line (send-dedupe-v1 asks per process).
+  if (session.pid) marker.walnutPid = session.pid;
   marker.timestamp = new Date().toISOString();
   const line = JSON.stringify(marker) + '\\n';
   fs.appendFileSync(session.jsonlPath, line);
   const size = fs.statSync(session.jsonlPath).size;
   // Wait for the tailer to read the marker's real v before pushing; an optimistic snapshot at an old v would be rejected and swallow the next turn-open signal.
   return size;
+}
+
+// send-dedupe-v1: what became of a line, from the CLI's lifecycle frames in the
+// stream file and this daemon's write records (lineFateScan / lineFateVerdict,
+// line-fate-core.ts, inlined). Null: not proven in the CLI running now, so it is
+// written. Async, read piece by piece: a resend never holds the loop for the
+// whole window. Keep in sync with daemon-core.ts scanTail / lineFateInProcess /
+// recordLineWritten.
+const DEDUPE_SCAN_BYTES = 8 * 1024 * 1024;
+const DEDUPE_SCAN_CHUNK_BYTES = 256 * 1024;
+const LINE_RECORD_SCAN_BYTES = 256 * 1024;
+const lineFateScan = (__LINE_FATE_SCAN__);
+const lineFateVerdict = (__LINE_FATE_VERDICT__);
+async function scanTail(filePath, max, onText) {
+  let fh;
+  try { fh = await fs.promises.open(filePath, 'r'); } catch { return; }
+  try {
+    const size = (await fh.stat()).size;
+    let pos = Math.max(0, size - max);
+    let carry = Buffer.alloc(0);
+    while (pos < size) {
+      const buf = Buffer.alloc(Math.min(DEDUPE_SCAN_CHUNK_BYTES, size - pos));
+      const got = await fh.read(buf, 0, buf.length, pos);
+      if (got.bytesRead <= 0) break;
+      pos += got.bytesRead;
+      const data = carry.length > 0 ? Buffer.concat([carry, buf.subarray(0, got.bytesRead)]) : buf.subarray(0, got.bytesRead);
+      const cut = pos < size ? data.lastIndexOf(10) + 1 : data.length;
+      if (cut > 0) onText(data.toString('utf8', 0, cut));
+      carry = Buffer.from(data.subarray(cut));
+    }
+  } catch {
+    // A read that fails part way proves nothing more: the scan keeps what it saw.
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
+async function lineFateInProcess(session, uuid, messageIds) {
+  const q = { uuid: typeof uuid === 'string' ? uuid : '', messageIds: messageIds, pid: session.pid };
+  let scan = null;
+  await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan); });
+  let records = '';
+  await scanTail(session.jsonlPath + '.lines', LINE_RECORD_SCAN_BYTES, (text) => { records += text; });
+  return lineFateVerdict(scan, records, q);
+}
+function recordLineWritten(session, uuid, messageIds) {
+  if (!session.pid) return;
+  const rec = { pid: session.pid };
+  if (typeof uuid === 'string' && uuid) rec.uuid = uuid;
+  rec.ids = messageIds;
+  rec.at = Date.now();
+  try {
+    fs.appendFileSync(session.jsonlPath + '.lines', JSON.stringify(rec) + '\\n');
+  } catch (err) {
+    logMsg('warn', 'send: could not record the written line', { pid: session.pid, error: err.message });
+  }
 }
 
 // Validate markers before writing the first FIFO byte.
@@ -6993,7 +7085,7 @@ function cmdRename(ws, id, cmd) {
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext); } catch {}
     }
     session.jsonlPath = newBase + '.jsonl';

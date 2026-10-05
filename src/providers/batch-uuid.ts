@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * pickBatchUuid — which pre-assigned user-message uuid a DRAINED BATCH carries.
  *
@@ -20,6 +22,22 @@ export function pickBatchUuid(rows: ReadonlyArray<{ userUuid?: string }>): strin
     if (uuid) return uuid;
   }
   return undefined;
+}
+
+/**
+ * The uuid a drained batch's user line goes out under: the pre-assigned one
+ * when a row carries it (pickBatchUuid), else one derived from the batch's row
+ * ids. Derived, not random, so every attempt at the SAME batch carries the same
+ * uuid (the CLI skips a uuid its transcript already holds, and names it in its
+ * command_lifecycle events), while a batch of different rows never shares one.
+ * Only the wire uses it: the turn's question link stays pickBatchUuid's.
+ */
+export function lineUuidFor(rows: ReadonlyArray<{ id: string; userUuid?: string }>): string {
+  const picked = pickBatchUuid(rows);
+  if (picked) return picked;
+  const h = createHash('sha256').update(`walnut-line:${rows.map((r) => r.id).join(',')}`).digest('hex');
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
 /**

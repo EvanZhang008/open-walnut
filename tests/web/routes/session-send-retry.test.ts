@@ -45,8 +45,9 @@ import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { registerSessionChatRpc } from '../../../src/web/routes/session-chat.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
 import {
-  enqueueMessage, getQueue, markProcessing, revertToPending, parkMessages, resetCache,
+  enqueueMessage, getQueue, loadQueue, markProcessing, removeTaken, revertToPending, parkMessages, resetCache,
 } from '../../../src/core/session-message-queue.js'
+import { noteHeld, resetLineConsumption } from '../../../src/providers/line-consumption.js'
 
 const SID = 'ffffffff-1111-2222-3333-444444444444'
 const TEXT = 'please summarize the whole investigation and write it down'
@@ -208,6 +209,53 @@ describe('session:send retryOf — retry of a PARKED row', () => {
     const nextBatch = await markProcessing(SID)
     expect(nextBatch).toHaveLength(1)
     expect(nextBatch.map((m) => m.message).join('\n\n')).toBe(TEXT)
+  })
+})
+
+// A Retry of a message whose row already left the queue (its line ran, but the
+// user only saw "not confirmed") goes out under the SAME line uuid, so the CLI
+// skips it instead of running it twice. Also after a server restart (M2).
+describe('session:send retryOf: the original row already left the queue', () => {
+  it.each([['in the same server', false], ['after a server restart', true]])(
+    'the fresh row keeps the line uuid the original went out in: %s', async (_name, restart) => {
+      const original = await enqueueMessage(SID, TEXT)
+      const [sent] = await markProcessing(SID)
+      expect(sent.lineUuid).toBeTruthy()
+      await removeTaken(SID, [original.id])
+      if (restart) { resetCache(); await loadQueue() }
+
+      const res = await callSend({ sessionId: SID, message: TEXT, retryOf: original.id })
+      expect(res.messageId).not.toBe(original.id)
+      const [row] = await getQueue(SID)
+      expect(row.id).toBe(res.messageId)
+      expect(row.lineUuid).toBe(sent.lineUuid)
+    })
+
+  it('a Retry of a row nobody knows goes out as a new line', async () => {
+    await callSend({ sessionId: SID, message: TEXT, retryOf: 'qm-never-seen' })
+    expect((await getQueue(SID))[0].lineUuid).toBeUndefined()
+  })
+})
+
+// A row held behind a line still being confirmed was never written: a reloaded
+// panel must read it as waiting, with the reason, not as delivered (P2).
+describe('session:get-queue held rows', () => {
+  it('reports the hold on a processing row, and nothing on the others', async () => {
+    resetLineConsumption()
+    await enqueueMessage(SID, 'first')
+    await enqueueMessage(SID, 'second')
+    const [a, b] = await markProcessing(SID)
+    noteHeld(SID, [b.id], 'Waiting to confirm the previous message')
+    const handler = methods.get('session:get-queue')!
+    const res = await handler({ sessionId: SID }, fakeClient) as { messages: Array<{ id: string; heldReason?: string }> }
+    const byId = new Map(res.messages.map((m) => [m.id, m]))
+    expect(byId.get(a.id)?.heldReason).toBeUndefined()
+    expect(byId.get(b.id)?.heldReason).toBe('Waiting to confirm the previous message')
+    // Back to pending (the hold failed): no longer shown as held.
+    await revertToPending([b])
+    const again = await handler({ sessionId: SID }, fakeClient) as { messages: Array<{ id: string; heldReason?: string }> }
+    expect(again.messages.find((m) => m.id === b.id)?.heldReason).toBeUndefined()
+    resetLineConsumption()
   })
 })
 

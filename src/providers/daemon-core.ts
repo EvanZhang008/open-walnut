@@ -17,6 +17,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
+import { lineFateScan, lineFateVerdict, type LineFate, type LineFateKind, type LineFateScan } from './line-fate-core.js'
 
 // ── Shared types ──
 
@@ -209,9 +210,21 @@ export interface UserMarkerInput {
   messageId: string
 }
 
+/** How far back a send-dedupe-v1 check reads the stream file for a line's lifecycle frames. */
+export const DEDUPE_SCAN_BYTES = 8 * 1024 * 1024
+/** One async read of that window: the check scans piece by piece and yields to the loop between reads. */
+export const DEDUPE_SCAN_CHUNK_BYTES = 256 * 1024
+/** How much of the write-record file (`<stream>.lines`) a check reads. */
+export const LINE_RECORD_SCAN_BYTES = 256 * 1024
+
+/** The daemon's record of whole lines it wrote, next to the stream file (send-dedupe-v1). */
+export function lineRecordPath(jsonlPath: string): string {
+  return jsonlPath + '.lines'
+}
+
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
 export type SendResult =
-  | { ok: true }
+  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'session_dead'; exitCode: number | null }
   | { ok: false; reason: 'ENXIO'; exitCode: number | null }
@@ -243,12 +256,20 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * every payload written before this parameter existed.
    *
    * `markers` (send-markers-v1): written to disk after the body enters the pipe and before the final newline, so the CLI can never answer before the marker exists.
+   *
+   * `opts.dedupe` (send-dedupe-v1): the caller never heard how an earlier send of
+   * this line went. Write nothing when the evidence says what became of it
+   * (line-fate-core.ts): `{ok:true, duplicate:true, fate}`, fate = ran /
+   * cancelled / dropped / waiting. The check runs in the per-session write
+   * chain, after any earlier write of the same line settled. Every whole line
+   * written with markers is recorded (`<stream>.lines`) after its newline.
    */
   handleSendCommand: (
     sid: string | undefined,
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
+    opts?: { dedupe?: boolean },
   ) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
@@ -801,11 +822,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
+    opts?: { dedupe?: boolean },
   ): Promise<SendResult> {
     if (!sid || !message) return { error: 'send: missing sid or message' }
     const normalized = normalizeMarkers(markers)
     if ('error' in normalized) return { error: normalized.error }
     const pending = normalized.markers
+    const dedupe = opts?.dedupe === true && pending.length > 0
 
     const session = sessions.get(sid)
     if (!session) return { ok: false, reason: 'not_found' }
@@ -839,7 +862,17 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       const beforeNewline = pending.length > 0
         ? () => { for (const m of pending) appendUserMarkerLine(sid, session, m.message, m.messageId, true) }
         : undefined
-      const result = await chainFifoWrite(sid, session, buf, beforeNewline)
+      const ids = pending.map((m) => m.messageId)
+      const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
+        fate: dedupe ? () => lineFateInProcess(session, uuid, ids) : undefined,
+        written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
+      })
+      if (typeof result === 'object') {
+        logger('info', 'send: the line was not written again', {
+          sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state ?? null,
+        })
+        return { ok: true, duplicate: true, fate: result.fate, ...(result.state ? { state: result.state } : {}) }
+      }
       if (result === 'ok') {
         // TTFT anchor: the tailer logs send→first-line / send→first-text
         // latencies against this (CLI-side half of the text-latency attribution).
@@ -951,12 +984,69 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       message: { role: 'user', content: message },
       walnutMessageId: messageId,
       ...(ordered ? { walnutDelivery: 'ordered' } : {}),
+      // Which CLI process got the line (send-dedupe-v1 asks per process).
+      ...(session.pid ? { walnutPid: session.pid } : {}),
       timestamp: new Date(clock()).toISOString(),
     }) + '\n'
     fs.appendFileSync(session.jsonlPath, line)
     const size = fs.statSync(session.jsonlPath).size
     // Wait for the tailer to read the marker's real v before pushing; an optimistic snapshot at an old v would be rejected and swallow the next turn-open signal.
     return size
+  }
+
+  /**
+   * Feed the last `max` bytes of a file to `onText`, one async read of at most
+   * DEDUPE_SCAN_CHUNK_BYTES at a time, each piece cut after its last newline
+   * (the rest rides into the next piece). A missing file feeds nothing.
+   */
+  async function scanTail(filePath: string, max: number, onText: (text: string) => void): Promise<void> {
+    let fh: import('node:fs/promises').FileHandle
+    try { fh = await fs.promises.open(filePath, 'r') } catch { return }
+    try {
+      const size = (await fh.stat()).size
+      let pos = Math.max(0, size - max)
+      let carry = Buffer.alloc(0)
+      while (pos < size) {
+        const buf = Buffer.alloc(Math.min(DEDUPE_SCAN_CHUNK_BYTES, size - pos))
+        const { bytesRead } = await fh.read(buf, 0, buf.length, pos)
+        if (bytesRead <= 0) break
+        pos += bytesRead
+        const data = carry.length > 0 ? Buffer.concat([carry, buf.subarray(0, bytesRead)]) : buf.subarray(0, bytesRead)
+        const cut = pos < size ? data.lastIndexOf(10) + 1 : data.length
+        if (cut > 0) onText(data.toString('utf8', 0, cut))
+        carry = Buffer.from(data.subarray(cut))
+      }
+    } catch {
+      // A read that fails part way proves nothing more: the scan keeps what it saw.
+    } finally {
+      await fh.close().catch(() => {})
+    }
+  }
+
+  /**
+   * send-dedupe-v1: what became of this line, from the CLI's lifecycle frames in
+   * the stream file and this daemon's write records (line-fate-core.ts). Null:
+   * not proven in the CLI running now, so the caller writes it. Async and read
+   * piece by piece: a resend never holds the daemon's loop for the whole window.
+   */
+  async function lineFateInProcess(session: S, uuid: string | undefined, messageIds: string[]): Promise<LineFate | null> {
+    const q = { uuid: uuid ?? '', messageIds, pid: session.pid }
+    let scan: LineFateScan | null = null
+    await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan) })
+    let records = ''
+    await scanTail(lineRecordPath(session.jsonlPath), LINE_RECORD_SCAN_BYTES, (text) => { records += text })
+    return lineFateVerdict(scan, records, q)
+  }
+
+  /** The whole line, newline included, is in the pipe of process `session.pid`. */
+  function recordLineWritten(session: S, uuid: string | undefined, messageIds: string[]): void {
+    if (!session.pid) return
+    try {
+      fs.appendFileSync(lineRecordPath(session.jsonlPath),
+        JSON.stringify({ pid: session.pid, ...(uuid ? { uuid } : {}), ids: messageIds, at: clock() }) + '\n')
+    } catch (err) {
+      logger('warn', 'send: could not record the written line', { pid: session.pid, error: (err as Error).message })
+    }
   }
 
   /** Validate markers before writing the first FIFO byte: a bad entry only reports an error and never leaves a half delivery. */
@@ -1015,7 +1105,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     session: S,
     buf: Buffer,
     beforeNewline?: () => void,
-  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead'> {
+    /** send-dedupe-v1, run inside the chain: `fate` before the write (non-null = do not
+     *  write), `written` right after a whole line went in (before the next write may ask). */
+    line?: { fate?: () => Promise<LineFate | null>; written?: () => void },
+  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
     // walnut client's 30s RPC timeout even when writes stack up.
@@ -1025,7 +1118,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // Re-check state after waiting in the chain — a predecessor's failure
       // (or the orphan poll) may have reaped the session meanwhile.
       if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead' as const
-      return writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline)
+      const known = line?.fate ? await line.fate() : null
+      if (known) return known
+      const written = await writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline)
+      if (written === 'ok') line?.written?.()
+      return written
     })
     session.fifoWriteChain = run
     const result = await run

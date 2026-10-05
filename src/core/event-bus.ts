@@ -79,6 +79,7 @@ export const EventNames = {
   SESSION_QUEUED_CANCELLED: 'session:queued-cancelled',
   SESSION_BATCH_COMPLETED: 'session:batch-completed',
   SESSION_BATCH_FAILED: 'session:batch-failed',
+  SESSION_DELIVERY_HELD: 'session:delivery-held',
   SESSION_MESSAGE_QUEUED: 'session:message-queued',
   SESSION_SYSTEM_EVENT: 'session:system-event',
   SESSION_BACKGROUND_TASKS: 'session:background-tasks',

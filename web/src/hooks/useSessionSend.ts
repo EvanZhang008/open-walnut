@@ -5,7 +5,7 @@ import { spillOversizedText } from '@/api/paste-spill';
 import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { ImageAttachment } from '@/api/chat';
-import { removeBatchMessages, markDeliveredMessages } from '@/components/sessions/optimistic-dedup';
+import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
 import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
 
 /** Per-send extras that ride the `session:send` RPC. */
@@ -199,6 +199,9 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Ref for accessing current optimistic messages in callbacks without stale closures
   const msgsRef = useRef(optimisticMsgs);
   msgsRef.current = optimisticMsgs;
+  // Ids a delivery named before their send RPC answered: the bubble that learns
+  // one starts 'delivered' (a delivery never marks some other bubble by count).
+  const deliveredEarlyRef = useRef<Set<string>>(new Set());
 
   // Clear optimistic messages on session switch + rehydrate from server disk queue.
   // The queue only contains messages NOT yet delivered to Claude (pending/processing).
@@ -212,7 +215,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
     if (activeSessionId) {
       wsClient.sendRpc<{
-        messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string }>;
+        messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string; heldReason?: string }>;
         launchPrompt?: { id: string; text: string; at: string };
       }>(
         'session:get-queue',
@@ -243,13 +246,17 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                 // 'failed' presentation so it keeps Retry + Discard instead of looking
                 // like an ordinary "Queued" message that is still on its way.
                 const parked = m.status === 'parked';
+                // A row held behind a line still being confirmed was never written:
+                // it shows as waiting, with the reason, not as delivered.
+                const held = m.status === 'processing' && !!m.heldReason;
                 return {
                   role: 'user' as const,
                   text: display,
                   timestamp: m.enqueuedAt ?? new Date().toISOString(),
                   queueId: m.id,
-                  status: (m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
+                  status: (held ? 'received' : m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
                   ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
+                  ...(held ? { heldReason: m.heldReason } : {}),
                   ...(display !== historyBasis ? { dedupText: historyBasis } : {}),
                   // The pre-assigned CLI uuid: a question's follow-up keeps its
                   // place in the question tree across a reload (its own page,
@@ -323,9 +330,10 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         // Adopt dedupText when the server augmented the text (image refs) — the
         // bubble keeps rendering the user's original, but dedups against what was
         // actually enqueued. See OptimisticMessage.dedupText.
+        const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
         setOptimisticMsgs((prev) => prev.map((m) =>
           m.queueId === tempId
-            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
+            ? { ...m, queueId: res.messageId, status: m.status === 'delivered' ? m.status : adopted, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
             : m
         ));
       }
@@ -378,9 +386,10 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
+        const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
         setOptimisticMsgs((prev) => prev.map((m) =>
           m.queueId === tempId
-            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
+            ? { ...m, queueId: res.messageId, status: m.status === 'delivered' ? m.status : adopted, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
             : m
         ));
       }
@@ -435,9 +444,10 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       ))
       .then((res) => {
         if (res?.messageId) {
+          const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
           setOptimisticMsgs((prev) => prev.map((m) =>
             m.queueId === queueId
-              ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
+              ? { ...m, queueId: res.messageId, status: m.status === 'delivered' ? m.status : adopted, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
               : m
           ));
         }
@@ -458,9 +468,17 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
   const handleMessagesDelivered = useCallback((count: number, messageIds?: string[]) => {
     log.info('send', 'delivered', { count, messageIds });
-    // Id-first (exactly the batch's bubbles), count fallback for tempId races /
-    // id-less events — rules live in optimistic-dedup.ts (unit-tested).
+    // Exactly the bubbles the ids name (a failed one too: it ran after all); the
+    // count only for an id-less event. Rules live in optimistic-dedup.ts (unit-tested).
+    const early = deliveredEarlyRef.current;
+    for (const id of unmatchedDeliveredIds(msgsRef.current, messageIds)) early.add(id);
+    while (early.size > 64) early.delete(early.values().next().value!);
+    const ids = new Set(messageIds ?? []);
+    const revived = msgsRef.current.some((m) => m.status === 'failed' && ids.has(m.queueId));
+    const stillFailed = msgsRef.current.some((m) => m.status === 'failed' && !ids.has(m.queueId));
     setOptimisticMsgs((prev) => markDeliveredMessages(prev, count, messageIds) as OptimisticMessage[]);
+    // The red error was about a message that did reach the CLI: nothing failed now.
+    if (revived && !stillFailed) setSendError(null);
   }, []);
 
   const handleBatchCompleted = useCallback((count: number, messageIds?: string[]) => {

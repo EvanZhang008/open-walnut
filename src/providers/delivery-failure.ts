@@ -80,6 +80,45 @@ export function isPermanentDeliveryFailure(err: unknown): boolean {
 const CONN_OUTCOME_UNKNOWN = /daemon command timeout|not connected|connection to .+ failed \d+s ago/i;
 
 export function isDaemonCommandOutcomeUnknown(err: unknown): boolean {
+  if (err instanceof SendOutcomeUnknownError) return true;
   if (!(err instanceof Error)) return false;
   return CONN_OUTCOME_UNKNOWN.test(err.message);
+}
+
+/**
+ * A user-line send that may have reached the daemon but whose answer never came,
+ * and that the daemon could not be asked about in time. Not a refusal: the CLI
+ * may already hold the line, so the caller must neither re-send it blind (a later
+ * attempt carries `dedupe`) nor stop the CLI to retry it on a fresh process.
+ */
+export class SendOutcomeUnknownError extends Error {
+  readonly code = 'SEND_OUTCOME_UNKNOWN';
+  constructor(cause: string) {
+    super(`Delivery unconfirmed: the host never said whether the message reached the session (${cause})`);
+    this.name = 'SendOutcomeUnknownError';
+  }
+}
+
+/**
+ * A user line that was not sent at all: it was queued behind a line whose
+ * outcome stayed unknown, and writing it would let it overtake that line. It
+ * goes back to the queue, behind the unknown one.
+ */
+export class SendHeldError extends Error {
+  readonly code = 'SEND_HELD';
+  constructor() {
+    super('Not sent yet: waiting to confirm the previous message');
+    this.name = 'SendHeldError';
+  }
+}
+
+/**
+ * The send's request may already be on the wire: its command timed out, or the
+ * socket closed while it was pending. "not connected" is thrown before anything
+ * is written, so it is a plain failure, not this.
+ */
+const SEND_MAY_HAVE_LANDED = /daemon command timeout|connection closed/i;
+
+export function sendMayHaveLanded(err: unknown): boolean {
+  return err instanceof Error && SEND_MAY_HAVE_LANDED.test(err.message);
 }

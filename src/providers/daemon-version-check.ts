@@ -154,6 +154,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/bridge-uplink-core.ts',
   // Task workspaces (workspace.create / status / remove): same import-or-inline rule.
   'src/providers/workspace-core.ts',
+  // What became of a line (send-dedupe-v1): same import-or-inline rule.
+  'src/providers/line-fate-core.ts',
 ] as const
 
 /**

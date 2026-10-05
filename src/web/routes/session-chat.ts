@@ -13,7 +13,8 @@ import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage, settledLineUuid } from '../../core/session-message-queue.js'
+import { heldRows } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
 import { parseSideLaneKey } from '../../core/sessions/side-thread-fork.js'
@@ -231,6 +232,7 @@ export function registerSessionChatRpc(): void {
     // The surviving row is already queued and drainable, so a retry must only
     // re-trigger delivery. Falls through to a normal enqueue when the row is gone
     // (already drained / deleted), so a retry can never silently do nothing.
+    let retryLine: string | undefined
     if (typeof data.retryOf === 'string' && data.retryOf) {
       const stillQueued = await isMessageQueued(data.sessionId, data.retryOf)
       if (stillQueued) {
@@ -252,8 +254,9 @@ export function registerSessionChatRpc(): void {
         }, ['session-runner'], { source: 'web-ui-retry' })
         return { messageId: data.retryOf }
       }
+      retryLine = await settledLineUuid(data.retryOf)
       log.web.info('session:send retry — original row no longer queued, enqueueing fresh', {
-        sessionId: data.sessionId, messageId: data.retryOf,
+        sessionId: data.sessionId, messageId: data.retryOf, lineUuid: retryLine,
       })
     }
 
@@ -300,6 +303,9 @@ export function registerSessionChatRpc(): void {
       // The queue row carries the uuid; the drain hands it to the CLI (one uuid
       // per batch — see providers/batch-uuid.ts).
       ...(userUuid ? { userUuid } : {}),
+      // A Retry of a row that already went out keeps its line's uuid, so the CLI
+      // skips it when it did run (the failed bubble only meant "not confirmed").
+      ...(retryLine ? { lineUuid: retryLine } : {}),
     })
 
     // Advance the edge only AFTER the text is safely queued: a throw above must
@@ -436,7 +442,12 @@ export function registerSessionChatRpc(): void {
     // queued, can't be edited or deleted, and must not look like a row to any
     // other reader of the queue. See core/sessions/launch-prompts.ts.
     const launchPrompt = launchPromptFor(data.sessionId)
-    return { messages: await getQueue(data.sessionId), ...(launchPrompt ? { launchPrompt } : {}) }
+    // A row held behind a line whose delivery is being confirmed says so, so a
+    // reloaded panel shows it waiting rather than delivered.
+    const held = heldRows(data.sessionId)
+    const messages = (await getQueue(data.sessionId)).map((m) =>
+      m.status === 'processing' && held?.has(m.id) ? { ...m, heldReason: held.get(m.id) } : m)
+    return { messages, ...(launchPrompt ? { launchPrompt } : {}) }
   })
 
   registerMethod('session:stream-subscribe', async (payload: unknown, _ws) => {

@@ -2464,6 +2464,10 @@ export interface SessionRecord {
    *  into `payload`. */
   costWatermark?: number;
   costWatermarkPid?: number;
+  /** The CLI process that reported its command queue (`command_lifecycle`):
+   *  a server that re-attaches to that same process knows its queued lines wait
+   *  for its word before it prints another frame. Spilled into `payload`. */
+  lineLifecyclePid?: number;
 
   /** Launch-config bundle re-applied on every cold resume. Spawn-time CLI flags
    *  (system prompt / MCP mounts / allowedTools) are in-process only, so a
