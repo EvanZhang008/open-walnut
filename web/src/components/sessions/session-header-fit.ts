@@ -17,9 +17,9 @@
  * if it fits, so a wide chip that just missed the cut never leaves a
  * button-sized hole beside the "..." menu (2026-10-04: a hidden Heavy pill,
  * 90px wide, kept 60px of empty row and three buttons in the menu). The
- * activity time just hides (the kebab shows it) and takes what is left last. Pin, Expand and Close never
+ * activity time just hides (the kebab shows it) and takes what is left last. Lock, Expand and Close never
  * leave: a cramped column is the moment to go full screen, and the user asked for
- * Expand and Close (2026-10-03) and for Pin (2026-10-04) to stay whatever the
+ * Expand and Close (2026-10-03) and for Lock (2026-10-04) to stay whatever the
  * width. Nothing from this row goes into the title row's kebab, which is the
  * task's menu.
  *

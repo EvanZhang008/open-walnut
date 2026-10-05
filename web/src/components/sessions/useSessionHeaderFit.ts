@@ -51,10 +51,10 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // of the two movable window buttons to leave.
   locate: { kind: 'window', priority: 9, name: 'Locate task' },
   popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
-  // Pin, Expand and Close stay at every width: a cramped column is the moment to
+  // Lock, Expand and Close stay at every width: a cramped column is the moment to
   // go full screen (the user: "at the very least keep close and expand",
-  // 2026-10-03), and Pin is the one that keeps the panel there (2026-10-04).
-  lock: { kind: 'fixed', priority: 0, name: 'Pin panel' },
+  // 2026-10-03), and Lock is the one that keeps the panel there (2026-10-04).
+  lock: { kind: 'fixed', priority: 0, name: 'Lock panel' },
   expand: { kind: 'fixed', priority: 0, name: 'Expand' },
   close: { kind: 'fixed', priority: 0, name: 'Close' },
 };

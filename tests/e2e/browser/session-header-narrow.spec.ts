@@ -164,7 +164,8 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.titleRow.pillsStartAfterTitle, `${label}: a pill overlaps the title`).toBe(true)
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
   expect(state.toolRow.visible, `${label}: expand must stay`).toContain('expand')
-  expect(state.toolRow.visible, `${label}: pin must stay`).toContain('lock')
+  expect(state.toolRow.visible, `${label}: lock must stay`).toContain('lock')
+  expect(state.toolRow.visible.slice(-3), `${label}: Lock, Expand and Close end the row, in that order`).toEqual(['lock', 'expand', 'close'])
 }
 
 /** The header alone, or the header plus `below` px of the page under it (an open menu). */
@@ -178,7 +179,7 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
   })
 }
 
-/** The order the chips leave the tool row, first to go first. Pin, Expand and Close never leave. */
+/** The order the chips leave the tool row, first to go first. Lock, Expand and Close never leave. */
 const CHIP_LEAVE_ORDER = ['terminal', 'board', 'files', 'changed', 'fork']
 const WINDOW_BUTTONS = ['locate', 'popout']
 /** The chips a "..." row stands in for (the heavy pill is one too, when a session wears it). */
@@ -251,7 +252,7 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
     await shootHeader(panel, String(width))
   }
   // The movable window buttons are the first to go (400px has room for the chips, not for five
-  // buttons too); Pin, Expand and Close stay at every width.
+  // buttons too); Lock, Expand and Close stay at every width.
   expect(states[400].toolRow.hidden).toContain('popout')
   expect(['changed', 'files', 'board', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
   // 240px cannot hold five chips; 180px holds Fork and little else.
@@ -294,7 +295,7 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await meta.locator('.task-kebab-btn').click()
   const kebab = page.locator('.task-kebab-menu').last()
   await expect(kebab.locator('[data-testid^="session-header-kebab-pill-"]').first()).toBeVisible()
-  await expect(kebab.getByText(/Locate task|Pin panel|Open in new tab/)).toHaveCount(0)
+  await expect(kebab.getByText(/Locate task|Lock panel|Open in new tab/)).toHaveCount(0)
   const hiddenPills180 = states[180].titleRow.hiddenPills.split(' ').filter(Boolean)
   expect(hiddenPills180, '180px cannot hold three letter pills beside a title').toContain('trigger')
   for (const kind of hiddenPills180) {
@@ -309,7 +310,7 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('trigger-jobs-flyout')).toHaveCount(0, { timeout: 10_000 })
 
-  // 320px: something is in the "..." menu while the pills are still on the row; Pin and Expand
+  // 320px: something is in the "..." menu while the pills are still on the row; Lock and Expand
   // are still buttons. It goes full screen, where the whole header comes back;
   // Escape returns to the same narrow shape.
   const at320 = await settleAt(page, panel, 320)

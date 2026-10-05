@@ -1,22 +1,22 @@
 /**
  * The session header's tool row uses the room it has (2026-10-04 report: in a
  * mid-width column the row left 60px of empty space beside the "..." menu while
- * Locate, Pin and Open-in-new-tab sat in that menu, and Pin, the button people
+ * Locate, Lock and Open-in-new-tab sat in that menu, and Lock, the button people
  * use to keep a panel, was one of them).
  *
  * Cause: the chips and the window buttons shared one strict priority queue, so
  * the first item that did not fit (a hidden Terminal, or a 90px Heavy pill)
  * kept every 24px button behind it out of the row. Now the chips keep their
- * order and the window buttons fill what is left; Pin, Expand and Close always
+ * order and the window buttons fill what is left; Lock, Expand and Close always
  * stay. The panel is drawn at its width from the first frame (the clamp is
  * installed before the app loads), as a window opened narrow or a Mac app
  * launched zoomed draws it.
  *
  * Rules, at every width from 200px to 520px:
- *  - Pin, Expand and Close are on the row, as one line, inside the panel;
+ *  - Lock, Expand and Close are on the row, as one line, inside the panel;
  *  - the room left before the window buttons is smaller than every window
  *    button that was sent to the "..." menu, and than the first hidden chip;
- *  - the "..." menu never lists Pin, Expand or Close.
+ *  - the "..." menu never lists Lock, Expand or Close.
  * Runs in Chromium and, with PW_WEBKIT=1 --project webkit, in WebKit (the Mac app).
  */
 import fs from 'node:fs/promises'
@@ -123,7 +123,7 @@ async function measureNaturalWidths(context: BrowserContext): Promise<Record<str
   return wide.widths
 }
 
-test('a panel drawn at any width keeps Pin on the row and never leaves room for the next button it hid', async ({ context }) => {
+test('a panel drawn at any width keeps Lock on the row and never leaves room for the next button it hid', async ({ context }) => {
   test.setTimeout(900_000)
   const errors: string[] = []
   context.on('page', (p) => p.on('pageerror', (e) => errors.push(e.message)))
@@ -142,6 +142,8 @@ test('a panel drawn at any width keeps Pin on the row and never leaves room for 
     expect(row.lines, `${label}: the tool row wrapped`).toBeLessThanOrEqual(1)
     expect(row.overflowBy, `${label}: the tool row runs past the panel`).toBeLessThanOrEqual(0)
     for (const id of ALWAYS_ON_THE_ROW) if (!row.visible.includes(id)) violations.push(`${label}: ${id} is not on the row (visible: ${row.visible.join(',')})`)
+    // The three that matter most end the row, in this order, whatever else comes and goes before them.
+    if (row.visible.slice(-3).join() !== ALWAYS_ON_THE_ROW.join()) violations.push(`${label}: the row ends ${row.visible.slice(-3).join(',')}, not ${ALWAYS_ON_THE_ROW.join(',')}`)
     table.push(`${label}: visible [${row.visible.join(',')}] menu [${row.hidden.join(',')}] free ${Math.round(row.freeBeforeWindowButtons)}px`)
     // What was sent to the menu did not fit: the room left is smaller than the first hidden chip
     // (chips keep their order) and than any hidden window button (they fill what the chips leave).
@@ -164,22 +166,23 @@ test('a panel drawn at any width keeps Pin on the row and never leaves room for 
   expect(errors, errors.join('\n')).toEqual([])
 })
 
-test('Pin stays on a 200px row, works from there, and the "..." menu never lists Pin, Expand or Close', async ({ context }) => {
+test('Lock stays on a 200px row, works from there, and the "..." menu never lists Lock, Expand or Close', async ({ context }) => {
   test.setTimeout(120_000)
   const { page, panel } = await openAtWidth(context, 200)
   const row = await settled(panel, page)
   expect(row.visible).toEqual(expect.arrayContaining(ALWAYS_ON_THE_ROW))
+  expect(row.visible.slice(-3), 'Lock, Expand and Close end the row, in that order').toEqual(ALWAYS_ON_THE_ROW)
   expect(row.overflowBy).toBeLessThanOrEqual(0)
   expect(row.lines).toBeLessThanOrEqual(1)
   expect(row.moreVisible, 'something is in the menu at 200px').toBe(true)
 
-  const pin = panel.locator('.session-meta-row-2 [data-header-id="lock"]')
-  await expect(pin).toHaveAttribute('aria-pressed', 'false')
-  await pin.click()
-  await expect(pin).toHaveAttribute('aria-pressed', 'true')
-  await expect(pin).toHaveClass(/is-locked/)
-  await pin.click()
-  await expect(pin).toHaveAttribute('aria-pressed', 'false')
+  const lock = panel.locator('.session-meta-row-2 [data-header-id="lock"]')
+  await expect(lock).toHaveAttribute('aria-pressed', 'false')
+  await lock.click()
+  await expect(lock).toHaveAttribute('aria-pressed', 'true')
+  await expect(lock).toHaveClass(/is-locked/)
+  await lock.click()
+  await expect(lock).toHaveAttribute('aria-pressed', 'false')
 
   await panel.getByTestId('session-header-more-btn').click()
   const more = page.getByTestId('session-header-more-menu')

@@ -1974,6 +1974,22 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   {ICON_LOCATE}
                 </button>
               )}
+              {/* The three that matter most sit together at the right end, always in this
+                  order: Lock, Expand, Close. Open in new tab and Locate come before them,
+                  so a narrow column drops those two first and the three never move. */}
+              {/* Inset (a task opened from a Board): no popout or fullscreen of its own. */}
+              {!inset && (
+                <button
+                  className="task-action-btn session-panel-popout"
+                  data-header-id="popout"
+                  data-hidden={hid('popout')}
+                  onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
+                  title="Open in new tab"
+                  aria-label="Open session in new tab"
+                >
+                  {ICON_NEW_TAB}
+                </button>
+              )}
               {/* Embedded (the Ask Walnut slot): lock pins a panel within the
                   column rotation, and there is no rotation there. Everything else
                   behaves as in a column. */}
@@ -1983,37 +1999,24 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   data-header-id="lock"
                   data-hidden={hid('lock')}
                   onClick={() => onToggleLock(sessionId)}
-                  title={locked ? 'Unlock — panel will rejoin the rotation' : 'Pin to right — panel stays when new sessions open'}
+                  title={locked ? 'Unlock — panel will rejoin the rotation' : 'Lock to the right — panel stays when new sessions open'}
                   aria-label={locked ? 'Unlock session panel' : 'Lock session panel to the right'}
                   aria-pressed={locked}
                 >
                   {locked ? ICON_LOCK : ICON_UNLOCK}
                 </button>
               )}
-              {/* Inset (a task opened from a Board): no popout or fullscreen of its own. */}
               {!inset && (
-                <>
-                  <button
-                    className="task-action-btn session-panel-popout"
-                    data-header-id="popout"
-                    data-hidden={hid('popout')}
-                    onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
-                    title="Open in new tab"
-                    aria-label="Open session in new tab"
-                  >
-                    {ICON_NEW_TAB}
-                  </button>
-                  <button
-                    className="task-action-btn session-panel-expand"
-                    data-header-id="expand"
-                    data-hidden={hid('expand')}
-                    onClick={isFullscreen ? exitFullscreen : enterFullscreen}
-                    title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
-                    aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
-                  >
-                    {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
-                  </button>
-                </>
+                <button
+                  className="task-action-btn session-panel-expand"
+                  data-header-id="expand"
+                  data-hidden={hid('expand')}
+                  onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                  title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
+                  aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
+                >
+                  {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
+                </button>
               )}
               {/* In fullscreen the panel reads as an overlay, so its X dismisses the
                   overlay (same path as Escape / backdrop click) and never destroys

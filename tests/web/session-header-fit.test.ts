@@ -7,7 +7,7 @@
  * the same width always gives the same answer (no flicker on resize), the view
  * chips leave in priority order and never come back as the row narrows, the
  * window buttons fill whatever room the chips leave (no button-sized hole beside
- * the "..." menu), Pin, Expand and Close never leave, and the title row steps
+ * the "..." menu), Lock, Expand and Close never leave, and the title row steps
  * down full → dot → letters before it hides anything.
  */
 import { describe, it, expect } from 'vitest';
@@ -50,7 +50,7 @@ describe('fitToolRow', () => {
     expect(fitToolRow(ROW, -50, OPTS).visible).toEqual(['fork', 'lock', 'expand', 'close']);
   });
 
-  it('never hides Pin, Expand or Close, whatever the width', () => {
+  it('never hides Lock, Expand or Close, whatever the width', () => {
     for (const w of [427, 380, 300, 200, 152, 60, 1]) {
       const r = fitToolRow(ROW, w, OPTS);
       for (const id of ['lock', 'expand', 'close']) expect(r.visible, `${id} at ${w}px`).toContain(id);
@@ -71,7 +71,7 @@ describe('fitToolRow', () => {
 
   it('sends the two movable window buttons to the "..." menu before any chip leaves', () => {
     // 399: the "..." button (22 + a gap) comes with the first hidden button, and then there is
-    // room for neither: chips 248 + "..." 22 + 5 gaps 30 = 300; Pin, Expand, Close 66 + 2 gaps 6 = 72;
+    // room for neither: chips 248 + "..." 22 + 5 gaps 30 = 300; Lock, Expand, Close 66 + 2 gaps 6 = 72;
     // group gap 6 → 378. One more button (97 + 300 + 6 = 403) does not fit.
     const r = fitToolRow(ROW, 399, OPTS);
     expect(r.inMore).toEqual(['locate', 'popout']);
@@ -95,14 +95,14 @@ describe('fitToolRow', () => {
     expect(r2.visible).toEqual(['fork', 'changed', 'files', 'lock', 'expand', 'close']);
     expect(r2.inMore).toEqual(['board', 'terminal', 'locate', 'popout']);
     expect(fitToolRow(ROW, 262, OPTS).visible).toContain('files');
-    // 152 (a 180px column): Fork + "..." + Pin, Expand, Close = 42 + 28 + 72 + 6 = 148; Changed (58 + 6) would need 212.
+    // 152 (a 180px column): Fork + "..." + Lock, Expand, Close = 42 + 28 + 72 + 6 = 148; Changed (58 + 6) would need 212.
     const r3 = fitToolRow(ROW, 152, OPTS);
     expect(r3.visible).toEqual(['fork', 'lock', 'expand', 'close']);
     expect(r3.inMore).toEqual(['changed', 'files', 'board', 'terminal', 'locate', 'popout']);
   });
 
   it('stops the chips at the first that does not fit: the order is the contract', () => {
-    // 150: Fork + "..." + Pin, Expand, Close = 42 + 28 + 72 + 6 = 148; Changed (58 + 6) does not fit.
+    // 150: Fork + "..." + Lock, Expand, Close = 42 + 28 + 72 + 6 = 148; Changed (58 + 6) does not fit.
     // The two window buttons do not fit either (one more button is 148 + 25 = 173).
     const r = fitToolRow(ROW, 150, OPTS);
     expect(r.visible).toEqual(['fork', 'lock', 'expand', 'close']);
@@ -132,11 +132,11 @@ describe('fitToolRow', () => {
   it('fills the room a wide hidden chip leaves with the window buttons (the 2026-10-04 report)', () => {
     // A heavy session wears a 90px pill (priority 8, after Terminal). With all five chips on the row it is
     // the first item that does not fit; the old strict prefix stopped there and left Locate, Open in new
-    // tab and Pin in the menu beside 60px of empty row.
+    // tab and Lock in the menu beside 60px of empty row.
     const heavy: ToolRowItem = { id: 'resources', kind: 'chip', priority: 8, width: 90 };
     const row = ROW.filter((i) => i.id !== 'time');
     const withHeavy = [...row.slice(0, 5), heavy, ...row.slice(5)];
-    // Five chips 248 + "..." 22 + 5 gaps 30 = 300; Pin, Expand, Close 72; group gap 6 → 378, plus Locate 25 → 403.
+    // Five chips 248 + "..." 22 + 5 gaps 30 = 300; Lock, Expand, Close 72; group gap 6 → 378, plus Locate 25 → 403.
     const r = fitToolRow(withHeavy, 403, OPTS);
     expect(r.inMore).toEqual(['resources', 'popout']);
     expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'locate', 'lock', 'expand', 'close']);
@@ -158,7 +158,7 @@ describe('fitToolRow', () => {
     }
   });
 
-  it('keeps Pin out of the window group: it is a fixed item, like Expand and Close', () => {
+  it('keeps Lock out of the window group: it is a fixed item, like Expand and Close', () => {
     expect(TOOL_ITEMS.lock!.kind).toBe('fixed');
     expect(TOOL_ITEMS.expand!.kind).toBe('fixed');
     expect(TOOL_ITEMS.close!.kind).toBe('fixed');
@@ -178,7 +178,7 @@ describe('fitToolRow', () => {
   });
 
   it('assumes a 24px button, not a chip, for a window button that has never been on screen', () => {
-    // A panel drawn narrow from its first frame never shows Locate, Open in new tab, Pin, Expand or
+    // A panel drawn narrow from its first frame never shows Locate, Open in new tab, Lock, Expand or
     // Close to be measured. 2026-10-04 they were priced like chips (44 each), so a 70px gap sat beside
     // a "..." menu that held three of them. Fork..Board 190 + 3 gaps 18 = 208; 5 buttons 120 + 4 gaps
     // 12 = 132; group gap 6 → 346 (446 at 44px each).
