@@ -13,8 +13,8 @@ name: Release
 #            `npm run release -- patch|minor|major` publishes through job `stable`.
 #            Either way the release then gets its self-contained archives, the
 #            Homebrew formula and install.sh (release-archives.yml).
-#   nightly  about every six hours (checked when CI finishes on main and every 30
-#            minutes; and by hand): the newest commit on main that CI passed,
+#   nightly  about every six hours (checked when CI finishes on main and on the
+#            schedule; and by hand): the newest commit on main that CI passed,
 #            when it is not the last nightly. Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`. Nothing is
 #            committed: the version lives in the registry, not in package.json,
@@ -45,7 +45,7 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
-  # The checks only ask, and a gap decides: a nightly when the last one is 5.5h old
+  # The checks only ask, and a gap decides: a nightly when the last one is 4.5h old
   # (scripts/nightly-version.mjs due), a stable when the last one is 23h old
   # (scripts/stable-promote.mjs plan). They ask whenever CI finishes on main,
   # which is when there is something new to ship, and on a schedule for a quiet
