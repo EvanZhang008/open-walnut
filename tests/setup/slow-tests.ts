@@ -76,6 +76,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/turn-snapshot-core.test.ts', // ~24s: 32 tests, each on its own temp repo with real snapshot refs
   'tests/providers/workspace-core.test.ts', // 10-19s: real git worktrees and provider processes in temp dirs
   'tests/providers/daemon-workspace-twins-e2e.test.ts', // 6-15s: boots both daemon twins and makes real worktrees
+  'tests/providers/daemon-source-fallback-loaders-e2e.test.ts', // ~7s: three loaders (two esbuild bundles, tsx) each write and boot the source-fallback daemon
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
   'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict

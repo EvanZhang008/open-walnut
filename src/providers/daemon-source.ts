@@ -136,6 +136,38 @@ export function readSidecarDaemonVersion(fromPath: string): string | null {
   return null
 }
 
+/**
+ * The bundler helpers an injected function may call, defined at the top of the
+ * generated daemon (placeholder __INJECTED_HELPERS__).
+ *
+ * getDaemonSource() inlines each core function by fn.toString(), so the text it
+ * ships is whatever the loader of THIS module made of the function. A loader
+ * that keeps function names (tsx, which runs the e2e fixture servers, or any
+ * esbuild build with keepNames) rewrites a named inner function into
+ * `__name(fn, "f")`, a helper only that loader's own module defines. Without
+ * this definition every source deploy from such a server refused with
+ * "__name is not defined" (2026-10-04), so a host with no daemon binary got no
+ * daemon at all. The definition is the one esbuild
+ * emits. validateFoldInjection() runs every injected body against these same
+ * helpers and refuses a body that calls any other one, so a new helper fails
+ * the deploy (and the loaders ratchet test) here, never on the host.
+ */
+export const INJECTED_HELPERS_SOURCE =
+  "function __name(target, value) { return Object.defineProperty(target, 'name', { value: value, configurable: true }); }"
+const INJECTED_HELPER_NAMES = ['__name']
+
+/**
+ * The helpers an injected body calls (`__x(`, as esbuild and tsc name theirs)
+ * that INJECTED_HELPERS_SOURCE does not define.
+ */
+export function undefinedInjectedHelpers(body: string): string[] {
+  const missing = new Set<string>()
+  for (const m of body.matchAll(/(?<![\w$.])(__[a-z][\w$]*)\s*\(/g)) {
+    if (!INJECTED_HELPER_NAMES.includes(m[1])) missing.add(m[1])
+  }
+  return [...missing]
+}
+
 export function getDaemonSource(): string {
   // Inject capability list so the fallback node daemon answers `hello` with
   // the same list as the compiled binary.
@@ -222,7 +254,8 @@ export function getDaemonSource(): string {
       `daemon-source: expected exactly 1 '${promptLimitPlaceholder}' placeholder in DAEMON_SOURCE, found ${promptLimitMatches}`,
     )
   }
-  for (const [ph] of foldInjections) {
+  const helpersPlaceholder = '__INJECTED_HELPERS__'
+  for (const ph of [helpersPlaceholder, ...foldInjections.map(([p]) => p)]) {
     const n = DAEMON_SOURCE.split(ph).length - 1
     if (n !== 1) {
       throw new Error(
@@ -233,7 +266,8 @@ export function getDaemonSource(): string {
 
   // Deploy-time validation: reconstruct each injected function under strict
   // mode and run a smoke fold (user line → result → idle ⇒ assembled cliState
-  // 'idle'). A bundler-mangled toString (captured import, __name helper) would
+  // 'idle'), with the helpers the generated daemon defines. A bundler-mangled
+  // toString (captured import, a helper this daemon does not define) would
   // otherwise only ReferenceError at runtime on the REMOTE host. On ANY
   // failure, THROW — never deploy a corrupt daemon.
   validateFoldInjection(foldInjections)
@@ -242,6 +276,7 @@ export function getDaemonSource(): string {
     .replaceAll(placeholder, capsLiteral)
     .replaceAll(versionPlaceholder, version)
     .replaceAll(promptLimitPlaceholder, String(CRON_PROMPT_LIMIT))
+    .replace(helpersPlaceholder, () => INJECTED_HELPERS_SOURCE)
   for (const [ph, body] of foldInjections) {
     // Function replacer: a literal replacement string would reinterpret any
     // `$&`/`$'` sequences inside the function source.
@@ -257,11 +292,21 @@ export function getDaemonSource(): string {
  */
 export function validateFoldInjection(injections: Array<[string, string]>): void {
   const reconstructed: Record<string, unknown> = {}
+  // The same helper definitions the generated daemon starts with.
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const helpers = new Function(`"use strict"; ${INJECTED_HELPERS_SOURCE}\nreturn [${INJECTED_HELPER_NAMES.join(', ')}]`)() as unknown[]
   for (const [ph, body] of injections) {
+    const missing = undefinedInjectedHelpers(body)
+    if (missing.length > 0) {
+      throw new Error(
+        `daemon-source: injected function for ${ph} calls ${missing.join(', ')}, a bundler helper the `
+        + 'generated daemon does not define (add it to INJECTED_HELPERS_SOURCE): refusing to deploy',
+      )
+    }
     let fn: unknown
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      fn = new Function('"use strict"; return ' + body)()
+      fn = new Function(...INJECTED_HELPER_NAMES, '"use strict"; return ' + body)(...helpers)
     } catch (err) {
       throw new Error(
         `daemon-source: injected function for ${ph} failed strict-mode reconstruction `
@@ -445,6 +490,10 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
 
 const DAEMON_SOURCE = `#!/usr/bin/env node
 'use strict';
+
+// Bundler helpers the injected core functions may call (INJECTED_HELPERS_SOURCE
+// in daemon-source.ts): a function declaration, so every one of them sees it.
+__INJECTED_HELPERS__
 
 /**
  * walnut-daemon — Remote session manager for Open Walnut.

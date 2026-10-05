@@ -45,7 +45,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
-import { getDaemonSource, validateFoldInjection } from '../../src/providers/daemon-source.js'
+import { getDaemonSource, validateFoldInjection, undefinedInjectedHelpers, INJECTED_HELPERS_SOURCE } from '../../src/providers/daemon-source.js'
 import { createDaemonCore } from '../../src/providers/daemon-core.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers, type SessionSnapshot } from '../../src/providers/daemon-fold.js'
 
@@ -1485,14 +1485,32 @@ describe('C1 getDaemonSource deploy-time validation', () => {
     ])).not.toThrow()
   })
 
+  it('a body calling __name (a keepNames loader, e.g. tsx) runs with the helper the daemon defines', () => {
+    // What tsx makes of foldLine: a named inner function wrapped in __name.
+    const kept = foldLine.toString().replace(/\{/, '{ const named = __name(function () {}, "named"); if (named.name !== "named") throw new Error("helper"); ')
+    expect(kept).not.toBe(foldLine.toString())
+    expect(() => validateFoldInjection([
+      ['__FOLD_LINE__', kept],
+      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
+      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
+    ])).not.toThrow()
+    const src = getDaemonSource()
+    expect(src.split(INJECTED_HELPERS_SOURCE)).toHaveLength(2)
+    expect(src).not.toContain('__INJECTED_HELPERS__')
+  })
+
   it('corrupt injection throws (never deploy a corrupt daemon)', () => {
-    // Simulates a bundler-mangled toString: a captured module-scope helper.
-    const corrupt = 'function foldLine(s, l, v) { return __name(s, "x") }'
+    // Simulates a bundler-mangled toString: a module-scope helper the generated
+    // daemon does not define (tsc's async helper here).
+    const corrupt = 'function foldLine(s, l, v) { return __awaiter(this, void 0, void 0, function* () { return s }) }'
     expect(() => validateFoldInjection([
       ['__FOLD_LINE__', corrupt],
       ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
       ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ])).toThrow(/corrupt daemon|reconstruction/)
+    ])).toThrow(/__FOLD_LINE__ calls __awaiter, a bundler helper the generated daemon does not define/)
+    // A member call or a longer name is not a helper call.
+    expect(undefinedInjectedHelpers('function f(o) { return o.__awaiter(1) + x__awaiter(2) }')).toEqual([])
+    expect(undefinedInjectedHelpers('function f() { return __name(g, "g") && __spreadValues({}, a) && __spreadValues(b) }')).toEqual(['__spreadValues'])
 
     // Non-function injection throws too.
     expect(() => validateFoldInjection([
