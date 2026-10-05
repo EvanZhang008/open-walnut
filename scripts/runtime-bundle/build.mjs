@@ -7,7 +7,10 @@
  *
  *   node scripts/runtime-bundle/build.mjs --spec open-walnut@0.6.2 --out <dir>
  *   node scripts/runtime-bundle/build.mjs --spec <open-walnut-0.6.2.tgz> --out <dir>
+ *   node scripts/runtime-bundle/build.mjs --check --spec open-walnut@0.6.3   ->  supported=true|false
  *
+ * --check answers, without building, whether a version can have an archive at
+ * all: one whose updater predates it cannot (release-archives.yml skips it).
  * Builds for THIS machine's platform and architecture only: the native modules
  * (better-sqlite3, node-pty, sharp) are fetched for the Node that runs them.
  *
@@ -162,22 +165,44 @@ async function fetchOk(url, as) {
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex')
 
+/**
+ * `supported=true|false` for $GITHUB_OUTPUT: the package npm serves for `spec`,
+ * unpacked from `npm pack`, has an updater that knows the archive.
+ */
+function checkSupport(spec) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-runtime-check-'))
+  try {
+    const name = execFileSync('npm', ['pack', spec, '--pack-destination', work, '--silent'], { encoding: 'utf8', cwd: work, timeout: 300_000 }).trim().split('\n').pop()
+    execFileSync('tar', ['-xzf', path.join(work, name), '-C', work])
+    const pkgRoot = path.join(work, 'package')
+    const { version } = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'))
+    const supported = updaterKnowsArchive(pkgRoot)
+    process.stderr.write(supported ? `open-walnut@${version} can have an archive\n` : `open-walnut@${version} predates the self-contained archive: its updater would not update one\n`)
+    process.stdout.write(`supported=${supported}\n`)
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true })
+  }
+}
+
 function parseArgs(argv) {
-  const out = { spec: null, out: null, node: process.env.WALNUT_RUNTIME_NODE_VERSION ?? null, keep: false }
+  const out = { spec: null, out: null, node: process.env.WALNUT_RUNTIME_NODE_VERSION ?? null, keep: false, check: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--spec') out.spec = argv[++i]
     else if (a === '--out') out.out = path.resolve(argv[++i])
     else if (a === '--node') out.node = argv[++i]
     else if (a === '--keep') out.keep = true
+    else if (a === '--check') out.check = true
     else throw new Error(`unknown argument ${a}`)
   }
+  if (out.check && out.spec) return out
   if (!out.spec || !out.out) throw new Error('usage: build.mjs --spec <open-walnut@x.y.z | tarball> --out <dir> [--node <x.y.z>]')
   return out
 }
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
+  if (opts.check) return checkSupport(opts.spec)
   const target = targetOf()
   const spec = fs.existsSync(opts.spec) ? path.resolve(opts.spec) : opts.spec
   const nodeVersion = opts.node ?? newestOfMajor(await fetchOk(`${NODE_DIST}/index.json`, 'json'))
