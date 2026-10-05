@@ -24,8 +24,14 @@ swiftc -O -o "$MACOS/$APP_NAME" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
+    "$SCRIPT_DIR/BundledRuntime.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit
+
+# The installer Get Started runs (BundledRuntime.swift): the same install.sh
+# every release attaches, so the app and `curl … | sh` install the same way.
+cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
+chmod 755 "$RESOURCES/install.sh"
 
 # Create Info.plist
 cat > "$CONTENTS/Info.plist" << 'EOF'

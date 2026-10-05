@@ -7,6 +7,10 @@ import ApplicationServices
 struct WalnutConfig: Codable {
     var walnutHome: String
     var walnutSourceDir: String
+    /// Set when the app runs the self-contained Walnut (BundledRuntime.swift):
+    /// its install dir. `walnutSourceDir` is then that runtime's package root.
+    /// Absent in every config written before it, which keeps meaning "source".
+    var runtimeDir: String? = nil
 }
 
 func configFilePath() -> URL {
@@ -68,6 +72,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var lastServerOutput: String = ""
     var walnutHome: String?
     var walnutSourceDir: String?
+    /// The self-contained runtime this app runs, when it is not a source checkout.
+    var runtime: BundledRuntime?
+    /// What Retry does while nothing is set up yet (a first download or build
+    /// that failed): that setup again. Retry used to restart a server there was
+    /// none of, and sat on the loading screen forever.
+    var retrySetup: (() -> Void)?
     var statusLabel: NSTextField?
     var retryTimer: Timer?
     var bootstrapProcess: Process?
@@ -127,8 +137,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
            FileManager.default.fileExists(atPath: config.walnutSourceDir + "/dist/cli.js") {
             walnutHome = config.walnutHome
             walnutSourceDir = config.walnutSourceDir
+            runtime = config.runtimeDir.map { BundledRuntime(installDir: $0) }
             showLoadingScreen()
             startServer()
+        } else if ProcessInfo.processInfo.environment["WALNUT_DESKTOP_AUTOSETUP"] == "1" {
+            // Unattended first launch (the release workflow's smoke test): what
+            // Get Started does, without a click.
+            startFreshSetup()
         } else {
             showSetupScreen()
         }
@@ -177,6 +192,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func showSetupScreen() {
         let container = NSView(frame: window.contentView!.bounds)
         container.autoresizingMask = [.width, .height]
+        // These screens paint a fixed light cream; in Dark Mode the system's
+        // button and label colours would be white on it (Retry was invisible).
+        container.appearance = NSAppearance(named: .aqua)
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 1).cgColor
 
@@ -200,10 +218,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         spacer1.heightAnchor.constraint(equalToConstant: 20).isActive = true
         stack.addArrangedSubview(spacer1)
 
-        // Option 1: Get Started (auto-bootstrap)
+        // Option 1: Get Started (the self-contained Walnut, BundledRuntime.swift)
         let freshBtn = makeButton(
             title: "Get Started",
-            subtitle: "Download and set up Walnut automatically (~2 min)",
+            subtitle: "Download Walnut with everything it needs (about 300 MB)",
             action: #selector(startFreshSetup)
         )
         stack.addArrangedSubview(freshBtn)
@@ -211,7 +229,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Option 2: Use existing
         let existingBtn = makeButton(
             title: "Use Existing Installation",
-            subtitle: "Point to an existing .open-walnut directory",
+            subtitle: "Point to an existing .open-walnut directory or a source checkout",
             action: #selector(chooseExistingFolder)
         )
         stack.addArrangedSubview(existingBtn)
@@ -220,7 +238,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         spacer2.heightAnchor.constraint(equalToConstant: 20).isActive = true
         stack.addArrangedSubview(spacer2)
 
-        let reqNote = NSTextField(wrappingLabelWithString: "Requires: Node.js 20+ and Git installed on your Mac.")
+        let reqNote = NSTextField(wrappingLabelWithString: "Get Started needs nothing else installed. Running from a source checkout needs Node.js 22 or newer.")
         reqNote.font = NSFont.systemFont(ofSize: 12)
         reqNote.textColor = NSColor(white: 0.55, alpha: 1)
         reqNote.preferredMaxLayoutWidth = 400
@@ -278,44 +296,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Fresh Setup (Auto-Bootstrap)
 
+    /// Get Started: the self-contained Walnut, installed by the install.sh this
+    /// app carries, with its data in ~/.open-walnut (an existing one is kept and
+    /// used as it is). A Mac where install.sh already ran uses that copy.
     @objc func startFreshSetup() {
-        let defaultHome = NSHomeDirectory() + "/.open-walnut"
-        let sourceDir = defaultHome + "/source"
+        let home = NSHomeDirectory()
+        let dataHome = home + "/.open-walnut"
+        let env = BundledRuntime.installEnvironment(base: ProcessInfo.processInfo.environment, home: home)
+        let bundled = BundledRuntime(installDir: env["OPEN_WALNUT_INSTALL_DIR"]!)
+        try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
 
-        // Check if .open-walnut already exists
-        if FileManager.default.fileExists(atPath: defaultHome) {
-            let alert = NSAlert()
-            alert.messageText = "Folder Already Exists"
-            alert.informativeText = "~/.open-walnut already exists. What would you like to do?"
-            alert.addButton(withTitle: "Use Existing")
-            alert.addButton(withTitle: "Delete and Start Fresh")
-            alert.addButton(withTitle: "Cancel")
-            alert.alertStyle = .warning
-
-            alert.beginSheetModal(for: window) { [weak self] response in
-                switch response {
-                case .alertFirstButtonReturn:
-                    if FileManager.default.fileExists(atPath: sourceDir + "/dist/cli.js") {
-                        self?.walnutHome = defaultHome
-                        self?.walnutSourceDir = sourceDir
-                        self?.finishSetup()
-                    } else {
-                        self?.runBootstrap(walnutHome: defaultHome)
-                    }
-                case .alertSecondButtonReturn:
-                    try? FileManager.default.removeItem(atPath: defaultHome)
-                    self?.runBootstrap(walnutHome: defaultHome)
-                default:
-                    break
-                }
-            }
+        if bundled.isInstalled() {
+            DesktopLogger.shared.log("runtime_found", fields: ["dir": bundled.installDir])
+            useRuntime(bundled, home: dataHome)
+            return
+        }
+        guard let script = Bundle.main.path(forResource: "install", ofType: "sh") else {
+            showError("This copy of Walnut.app is missing its installer (Contents/Resources/install.sh). Download it again from https://github.com/EvanZhang008/open-walnut/releases/latest")
             return
         }
 
-        runBootstrap(walnutHome: defaultHome)
+        retrySetup = { [weak self] in self?.startFreshSetup() }
+        showBootstrapScreen()
+        statusLabel?.stringValue = "Downloading Walnut..."
+        try? FileManager.default.removeItem(at: bootstrapLogPath())
+        DesktopLogger.shared.log("runtime_install_started", fields: ["dir": bundled.installDir])
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = BundledRuntime.runInstaller(script: script, environment: env) { line in
+                self?.updateStatus(line)
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.appendToBootstrapLog("install.sh", result.output)
+                DesktopLogger.shared.log("runtime_install_finished", fields: ["ok": String(result.success)])
+                if result.success, bundled.isInstalled() {
+                    self.useRuntime(bundled, home: dataHome)
+                } else if result.success {
+                    self.showError("The download finished, but Walnut is not in \(bundled.appDir) where this app looks for it.", details: result.output)
+                } else {
+                    self.showError("Walnut could not be downloaded. Check the internet connection and try again.", details: result.output)
+                }
+            }
+        }
+    }
+
+    func useRuntime(_ bundled: BundledRuntime, home: String) {
+        runtime = bundled
+        walnutHome = home
+        walnutSourceDir = bundled.packageRoot
+        finishSetup()
     }
 
     func runBootstrap(walnutHome home: String) {
+        runtime = nil
+        retrySetup = { [weak self] in self?.runBootstrap(walnutHome: home) }
         // Verify prerequisites
         guard let nodePath = findNodeOrNil() else {
             showError("Node.js 20+ not found.\n\nInstall Node.js from https://nodejs.org or via Homebrew:\n  brew install node")
@@ -349,6 +383,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func showBootstrapScreen() {
         let container = NSView(frame: window.contentView!.bounds)
         container.autoresizingMask = [.width, .height]
+        // These screens paint a fixed light cream; in Dark Mode the system's
+        // button and label colours would be white on it (Retry was invisible).
+        container.appearance = NSAppearance(named: .aqua)
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 1).cgColor
 
@@ -608,6 +645,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
+            self?.runtime = nil
             let home = url.path
             let sourceDir = home + "/source"
 
@@ -646,7 +684,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func finishSetup() {
         guard let home = walnutHome, let source = walnutSourceDir else { return }
-        saveConfig(WalnutConfig(walnutHome: home, walnutSourceDir: source))
+        saveConfig(WalnutConfig(walnutHome: home, walnutSourceDir: source, runtimeDir: runtime?.installDir))
         showLoadingScreen()
         startServer()
     }
@@ -656,6 +694,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func showLoadingScreen() {
         let container = NSView(frame: window.contentView!.bounds)
         container.autoresizingMask = [.width, .height]
+        // These screens paint a fixed light cream; in Dark Mode the system's
+        // button and label colours would be white on it (Retry was invisible).
+        container.appearance = NSAppearance(named: .aqua)
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 1).cgColor
 
@@ -687,7 +728,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Server Management
 
-    let portsToTry = [3456, 4567]
+    /// WALNUT_DESKTOP_PORTS (comma-separated) moves a test copy off the real ports,
+    /// where it would otherwise attach to the server already running there.
+    let portsToTry: [Int] = {
+        let custom = (ProcessInfo.processInfo.environment["WALNUT_DESKTOP_PORTS"] ?? "")
+            .split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        return custom.isEmpty ? [3456, 4567] : custom
+    }()
     var ownsServer = false
 
     func startServer() {
@@ -816,7 +863,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSHomeDirectory() + "/.fnm/current/bin"
         ]
         let currentPath = env["PATH"] ?? "/usr/bin:/bin"
-        env["PATH"] = ([nodeDir] + extraPaths + [currentPath]).joined(separator: ":")
+        if let runtime = runtime {
+            env["PATH"] = runtime.serverPath(current: currentPath, extra: extraPaths)
+        } else {
+            env["PATH"] = ([nodeDir] + extraPaths + [currentPath]).joined(separator: ":")
+        }
         process.environment = env
 
         let pipe = Pipe()
@@ -957,8 +1008,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.handleServerStartupFailure(
                         "The Walnut server exited during startup (exit code \(proc.terminationStatus)).\n\n"
                         + "\(detail)\n\n"
-                        + "This is usually a stale build. In the source directory run:\n"
-                        + "    npm run web:build")
+                        + (self.runtime != nil
+                            ? "Reset Setup... and Get Started again downloads a fresh copy (your data stays)."
+                            : "This is usually a stale build. In the source directory run:\n    npm run web:build"))
                 }
             }
         }
@@ -1245,6 +1297,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Find Executables
 
     func findNode() -> String {
+        // The self-contained Walnut runs on the Node inside it, never another one.
+        if let runtime = runtime { return runtime.node }
         return findNodeOrNil() ?? "/usr/local/bin/node"
     }
 
@@ -1462,6 +1516,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func showError(_ message: String, details: String? = nil) {
         let container = NSView(frame: window.contentView!.bounds)
         container.autoresizingMask = [.width, .height]
+        // These screens paint a fixed light cream; in Dark Mode the system's
+        // button and label colours would be white on it (Retry was invisible).
+        container.appearance = NSAppearance(named: .aqua)
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 1).cgColor
 
@@ -1558,6 +1615,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func retryStart() {
+        if walnutHome == nil || walnutSourceDir == nil {
+            if let again = retrySetup { again() } else { showSetupScreen() }
+            return
+        }
         stopServer()
         serverRestartPolicy.reset()
         serverPort = nil
@@ -1629,6 +1690,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(at: configFilePath())
             self.walnutHome = nil
             self.walnutSourceDir = nil
+            self.runtime = nil
             self.showSetupScreen()
         }
     }

@@ -1,17 +1,20 @@
 # Walnut Desktop App
 
 A tiny native macOS wrapper (Swift + AppKit + WebKit) that runs Open Walnut as a
-real desktop app instead of a browser tab. It bootstraps the source, starts the
-local server, and shows the web console in a `WKWebView` window.
+real desktop app instead of a browser tab. It installs Walnut on first launch,
+starts the local server, and shows the web console in a `WKWebView` window.
 
 It's deliberately thin — **all** the product lives in the main Open Walnut
 codebase. This wrapper only:
 
-- On first launch, offers to **download and set up** Walnut automatically
-  (clone → `npm install` → build server + web), or point at an existing
-  `~/.open-walnut` install.
-- Locates a suitable **Node.js** (mise / nvm / fnm / Homebrew / system, newest
-  first, requires **Node 20+**) and **Git**.
+- On first launch, **Get Started** installs the self-contained Walnut (its own
+  Node inside, about 300 MB) with the `install.sh` it carries in
+  `Contents/Resources`, the same script `curl … | sh` runs, into
+  `~/.local/share/open-walnut` (also linking `walnut` into `~/.local/bin`). Nothing
+  else needs to be installed. That copy updates itself; the app is never modified.
+  Or point it at an existing `~/.open-walnut` install or a source checkout.
+- For a source checkout, locates a suitable **Node.js** (mise / nvm / fnm /
+  Homebrew / system, newest first, requires **Node 22+**) and **Git**.
 - Starts the server (`dist/cli.js web`) on port **3456** (falls back to 4567),
   reclaiming a stale server orphaned by a previous crash, and loads
   `http://localhost:<port>` in the window.
@@ -22,10 +25,10 @@ codebase. This wrapper only:
 ## Requirements
 
 - macOS 12+ (Monterey or newer)
-- **Xcode Command Line Tools** — provides `swiftc` to build and `git`:
-  `xcode-select --install`
-- **Node.js 20+** — via [mise](https://mise.jdx.dev), `nvm`, `fnm`, or
-  [Homebrew](https://brew.sh) (`brew install node`)
+- To build it: **Xcode Command Line Tools** (`swiftc`): `xcode-select --install`
+- To run it from a source checkout: **Node.js 22+**, via [mise](https://mise.jdx.dev),
+  `nvm`, `fnm`, or [Homebrew](https://brew.sh) (`brew install node`). The
+  downloaded app needs neither.
 
 ## Build
 
@@ -47,12 +50,23 @@ The two scripts deliberately accept different identities:
 - `build-release.sh` (for other people) takes **only Developer ID Application**, and falls back to ad-hoc otherwise. An Apple Development certificate is worthless to recipients (Gatekeeper does not trust it for distribution) and actively dangerous: it expires yearly, and an expired or revoked identity makes the app refuse to launch behind a misleading "you can't use this version of the application" alert. Ad-hoc never expires, so it is the safer fallback.
 - Both scripts assess the signature after applying it and move to the next identity when the certificate itself is untrusted (revoked or expired).
 
-For a warning-free first run for other users, sign with a Developer ID and notarize:
+For a warning-free first run for other users the app must be signed with a
+Developer ID, with the hardened runtime and `Walnut.entitlements` (the microphone
+and the calendar, which the hardened runtime withholds otherwise), and notarized.
+`build-release.sh` does all of it when told how:
 
 ```bash
-xcrun notarytool submit Walnut.dmg --apple-id <id> --team-id <team> --wait
-xcrun stapler staple Walnut.dmg
+WALNUT_SIGN_IDENTITY="Developer ID Application: …" \
+WALNUT_NOTARY_KEY=AuthKey_XXXX.p8 WALNUT_NOTARY_KEY_ID=XXXX WALNUT_NOTARY_ISSUER=<issuer-id> \
+  ./build-release.sh   # signs, notarizes and staples the app, then the DMG
 ```
+
+Releases do this in GitHub Actions (`.github/workflows/mac-app.yml`, called by
+`release-archives.yml` once the archives are attached): the identity and an App
+Store Connect API key live only in the repository's `release` environment, go
+into a keychain made for the job, and the DMG is attached only after Gatekeeper
+accepts it as a browser download and its first launch has installed that release
+and served the console (`scripts/desktop-smoke.mjs`).
 
 Then either launch it in place or install it:
 
@@ -66,28 +80,31 @@ disk image you can hand to other users.
 
 ## First run
 
-Unless the release build was signed with a Developer ID and notarized (see
-[Signing](#signing)), Gatekeeper warns the first time. Right-click `Walnut.app`
-→ **Open** → **Open**, or:
+A build that was not signed with a Developer ID and notarized (see
+[Signing](#signing)) makes Gatekeeper warn the first time. Right-click
+`Walnut.app` → **Open** → **Open**, or:
 
 ```bash
 xattr -dr com.apple.quarantine Walnut.app
 ```
 
-On first launch pick **Get Started** to auto-download and build Walnut into
-`~/.open-walnut`, or **Use Existing Installation** to point at a directory you
-already have. Setup takes a couple of minutes the first time (npm install +
-build); subsequent launches start instantly.
+On first launch pick **Get Started** to download the self-contained Walnut (a
+minute or so), or **Use Existing Installation** to point at a directory you
+already have (a `~/.open-walnut` with a built `source/`, or a dev checkout).
+A Mac where `install.sh` already ran uses that copy without downloading.
+Subsequent launches start instantly.
 
 ## How it works
 
 `main.swift` is the whole app (one file, AppKit). Key pieces:
 
-- **Setup / bootstrap** — clones `https://github.com/EvanZhang008/open-walnut.git`,
-  runs `npm install`, then builds the CLI/server (`tsup`) and web UI (`vite`)
-  directly (skips the `bun`-only daemon cross-compile the desktop app doesn't
-  need). Progress and a full `bootstrap.log` land in
-  `~/Library/Application Support/Walnut/`.
+- **Setup** — Get Started runs the bundled `install.sh` (`BundledRuntime.swift`)
+  and the server then runs on that copy's own Node. **Set Up Now** (from Use
+  Existing, for a folder with no build) clones
+  `https://github.com/EvanZhang008/open-walnut.git`, runs `npm install`, then
+  builds the CLI/server (`tsup`) and web UI (`vite`) directly. Progress and a full
+  `bootstrap.log` land in `~/Library/Application Support/Walnut/`; Retry runs
+  the setup that failed again.
 - **Server lifecycle** — spawns `node dist/cli.js web --port <port>` with
   `OPEN_WALNUT_EXIT_ON_ORPHAN=1` so the server self-terminates if the app dies
   uncleanly (no port left held). Detects an already-running server and only
@@ -95,13 +112,20 @@ build); subsequent launches start instantly.
 - **Window** — a `WKWebView` pointed at `http://localhost:<port>`; external
   links open in the default browser.
 
-Config (chosen home + source dir) is stored at
-`~/Library/Application Support/Walnut/config.json`. Use **Reset Setup…** from the
+Config (chosen home, source dir and, for the self-contained copy, its install
+dir) is stored at `~/Library/Application Support/Walnut/config.json`. Use **Reset Setup…** from the
 app menu to start over.
 
 Desktop lifecycle events are written as JSON lines to
 `~/Library/Application Support/Walnut/desktop.log`. The log rotates at 1 MB
 and keeps one previous copy.
+
+Test knobs (environment): `WALNUT_DESKTOP_PORTS` (comma-separated, instead of
+3456 and 4567), `WALNUT_DESKTOP_AUTOSETUP=1` (Get Started without a click on a
+first launch), and install.sh's own `OPEN_WALNUT_*` knobs, which pass through.
+`scripts/desktop-smoke.mjs` uses them with a throwaway `HOME` and
+`CFFIXED_USER_HOME` (which `NSHomeDirectory()` follows) to launch a built app
+the way a new Mac would; CI's macOS release rehearsal runs it on every push.
 
 ## Notes
 

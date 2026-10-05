@@ -25,3 +25,9 @@ swiftc \
     "$ROOT/tests/desktop/link-policy-tests.swift" \
     -o "$OUT_DIR/walnut-link-policy-tests"
 "$OUT_DIR/walnut-link-policy-tests"
+
+swiftc \
+    "$ROOT/desktop/BundledRuntime.swift" \
+    "$ROOT/tests/desktop/bundled-runtime-tests.swift" \
+    -o "$OUT_DIR/walnut-bundled-runtime-tests"
+"$OUT_DIR/walnut-bundled-runtime-tests"

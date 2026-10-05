@@ -28,6 +28,10 @@ afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 const touch = (p: string, body = '') => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, body) }
 const SHA = (c: string) => c.repeat(64)
 
+type Step = { name?: string; uses?: string; run?: string; if?: string; env?: Record<string, string>; with?: Record<string, unknown> }
+type Job = { needs?: string | string[]; if?: string; 'runs-on': string; permissions?: Record<string, string>; strategy?: { matrix?: { include?: Array<{ target: string; os: string }> } }; steps: Step[] }
+const load = (f: string) => parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows', f), 'utf8')) as { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> }
+
 describe('build.mjs', () => {
   it('builds for macOS and Linux on arm64 and x64, under the names Node releases use', () => {
     expect(targetOf('darwin', 'arm64').name).toBe('darwin-arm64')
@@ -192,9 +196,6 @@ describe('runtime.mjs helpers', () => {
 })
 
 describe('the archive workflows', () => {
-  type Step = { name?: string; uses?: string; run?: string; if?: string; env?: Record<string, string>; with?: Record<string, unknown> }
-  type Job = { needs?: string | string[]; if?: string; 'runs-on': string; permissions?: Record<string, string>; strategy?: { matrix?: { include?: Array<{ target: string; os: string }> } }; steps: Step[] }
-  const load = (f: string) => parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows', f), 'utf8')) as { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> }
   const archives = load('release-archives.yml')
   const release = load('release.yml')
 
@@ -249,5 +250,82 @@ describe('the archive workflows', () => {
     const step = ci.jobs.rehearsal.steps.find((s) => s.run?.includes('release-rehearsal/run.mjs'))!
     expect(step.run).toContain('--runtime')
     expect(step.env!.WALNUT_REHEARSAL_BREW).toContain('/home/linuxbrew/.linuxbrew/bin/brew')
+  })
+})
+
+describe('the Mac app', () => {
+  const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
+  const archives = load('release-archives.yml')
+  const swift = read('desktop/BundledRuntime.swift')
+  const installSh = read('scripts/install.sh')
+
+  it('looks for the runtime where install.sh puts it, in the layout build.mjs builds', () => {
+    // install.sh's defaults, and the folder it swaps each new copy into.
+    expect(installSh).toContain('install_dir="${OPEN_WALNUT_INSTALL_DIR:-$HOME/.local/share/open-walnut}"')
+    expect(installSh).toContain('bin_dir="${OPEN_WALNUT_BIN_DIR:-$HOME/.local/bin}"')
+    expect(installSh).toContain('mv "$staging/${stem}" "$install_dir/app"')
+    expect(swift).toContain('home + "/.local/share/open-walnut"')
+    expect(swift).toContain('home + "/.local/bin"')
+    expect(swift).toContain('installDir + "/app"')
+    // build.mjs: runtime/ is the npm prefix, the package inside it, the launcher beside it.
+    expect(LAUNCHER).toContain('"$root/runtime/bin/node" "$root/runtime/lib/node_modules/open-walnut/bin/open-walnut.js"')
+    expect(swift).toContain('appDir + "/runtime/bin"')
+    expect(swift).toContain('appDir + "/runtime/lib/node_modules/open-walnut"')
+  })
+
+  it('both builds compile it and carry the same install.sh every release attaches', () => {
+    for (const script of ['desktop/build.sh', 'desktop/build-release.sh']) {
+      const body = read(script)
+      for (const cmd of body.split('swiftc ').slice(1)) expect(cmd.slice(0, cmd.indexOf('-framework Carbon')), script).toContain('BundledRuntime.swift')
+      expect(body, script).toContain('cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"')
+    }
+    expect(read('scripts/test-desktop.sh')).toContain('tests/desktop/bundled-runtime-tests.swift')
+  })
+
+  it('the release build signs for notarization, and claims what its usage strings promise', () => {
+    const build = read('desktop/build-release.sh')
+    expect(build).toContain('codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS"')
+    expect(build).toMatch(/xcrun notarytool submit "\$file"/)
+    expect(build).toContain('xcrun stapler staple "$APP_BUNDLE"')
+    expect(build).toContain('xcrun stapler staple "$DMG_OUT"')
+    // Never an Apple Development certificate for other people's Macs.
+    expect(build).not.toMatch(/grep -o '"\\\(Developer ID Application\\\|Apple Development/)
+    const entitlements = read('desktop/Walnut.entitlements')
+    // Under the hardened runtime a usage string alone gets no prompt: each needs its entitlement.
+    const plist = build.slice(build.indexOf('<plist'), build.indexOf('</plist>'))
+    if (plist.includes('NSMicrophoneUsageDescription')) expect(entitlements).toContain('com.apple.security.device.audio-input')
+    if (plist.includes('NSCalendarsUsageDescription')) expect(entitlements).toContain('com.apple.security.personal-information.calendars')
+    expect(execFileSync('plutil', ['-lint', path.join(ROOT, 'desktop/Walnut.entitlements')], { encoding: 'utf8' })).toContain('OK')
+  })
+
+  it('is built after the archives it installs, signed only inside the release environment, and attached only when notarized and launched', () => {
+    const app = load('mac-app.yml')
+    const job = app.jobs.app as Job & { environment?: string }
+    expect(job.environment).toBe('release')
+    const mac = archives.jobs['mac-app'] as unknown as { needs: string; uses: string; secrets: string }
+    expect(mac.needs).toBe('publish')
+    expect(mac.uses).toBe('./.github/workflows/mac-app.yml')
+    expect(mac.secrets).toBe('inherit')
+    const names = job.steps.map((s) => s.name ?? s.uses ?? '')
+    const at = (pattern: RegExp) => names.findIndex((n) => pattern.test(n))
+    // Smoke-launched and assessed by Gatekeeper before the upload, the keychain gone after it.
+    expect(at(/^Gatekeeper opens it/)).toBeLessThan(at(/^Attach Walnut\.dmg/))
+    expect(at(/^First launch installs/)).toBeLessThan(at(/^Attach Walnut\.dmg/))
+    expect(job.steps[job.steps.length - 1].if).toBe('always()')
+    expect(job.steps[job.steps.length - 1].run).toContain('security delete-keychain')
+    expect(job.steps.find((s) => s.name?.startsWith('Attach Walnut.dmg'))!.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
+    // The secrets reach one step, as environment variables.
+    const withSecrets = job.steps.filter((s) => JSON.stringify(s).includes('secrets.'))
+    expect(withSecrets.map((s) => s.name)).toEqual(['Signing identity and notary key, from the release environment'])
+    expect(withSecrets[0].run).not.toContain('secrets.')
+    // The release's own app: built from its tag.
+    expect(job.steps[0].with).toEqual({ ref: 'v${{ inputs.version }}' })
+  })
+
+  it('CI launches the app on every push, on the archive the rehearsal builds', () => {
+    const ci = load('ci.yml')
+    const steps = ci.jobs.rehearsal.steps
+    expect(steps.find((s) => s.name === 'Build the Mac app')!.run).toBe('bash scripts/test-desktop.sh && bash desktop/build.sh')
+    expect(steps.find((s) => s.run?.includes('release-rehearsal/run.mjs'))!.env!.WALNUT_REHEARSAL_APP).toContain('desktop/Walnut.app')
   })
 })

@@ -15,6 +15,9 @@ breaking changes).
   Every release ships the archives for macOS and Linux on arm64 and x64, each one installed and
   started on its own platform before it is attached. These installs update themselves the way
   an npm install does, with the Node inside them.
+- **The Mac app needs nothing else installed.** Its Get Started now installs the same
+  self-contained Walnut that `install.sh` installs (no Node, npm or git needed) instead of cloning
+  and building the source, and Retry after a failed download tries the download again.
 
 ## [0.6.2] - 2026-10-04
 

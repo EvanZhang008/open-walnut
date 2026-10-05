@@ -14,6 +14,7 @@ name: Release archives
 # (a few minutes), install.sh takes the newest release that has them.
 #
 # By hand: rebuild any released version's archives (the upload replaces them).
+# Job `mac-app` then builds the Mac app on them (mac-app.yml).
 #
 # A version whose updater predates the archive (0.6.2 and older, or a stable
 # promoted from a nightly built before it) gets none: its updater would update
@@ -191,3 +192,15 @@ jobs:
           brew test walnut-release/test/open-walnut
       - name: Attach it to the release
         run: gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber
+
+  # Walnut.app, signed and notarized, whose first launch installs these archives
+  # (mac-app.yml; its signing secrets live in the `release` environment).
+  mac-app:
+    name: Mac app for v${{ inputs.version }}
+    needs: publish
+    uses: ./.github/workflows/mac-app.yml
+    with:
+      version: ${{ inputs.version }}
+    secrets: inherit
+    permissions:
+      contents: write

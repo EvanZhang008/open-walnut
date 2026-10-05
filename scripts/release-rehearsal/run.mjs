@@ -218,7 +218,7 @@ async function main() {
 
   if (opts.runtime) await rehearseRuntime({ work, fromTgz: opts.older, toTgz: opts.current, scenario, walnuts })
 
-  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 1 : 0) + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) : 0)
+  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 1 : 0) + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0)
   return finish(opts, work, `open-walnut@${current.version}`, expected)
 }
 
