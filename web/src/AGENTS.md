@@ -537,7 +537,7 @@ show inline after the open ones, other completed hits that show the query fold i
   own "Unpin" and "Mark unread" rows this way).
 - **The kebab is lean by default** (2026-09-10 user feedback: "too noisy"). No session-status row (clicking the task row opens its session), no unread row
   (opening the task marks it read), no Unpin row (the lit tier pill IS the pin; clicking it
-  again unpins), Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, and
+  again unpins), Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, the team actions sit behind one collapsed Team row (`TeamMenuItems`: Adopt / Release a worker / Leave leader), and
   priority renders only when `ui.show_priority` is on (`useShowPriority`, Settings → Tasks;
   off by default and hidden on every surface, not just menus). Ratchets:
   `tests/web/task-kebab-lean.test.ts`, `tests/e2e/browser/kebab-menu-lean.spec.ts`.

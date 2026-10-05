@@ -390,9 +390,11 @@ test('the Worker pill, Adopt a worker… from the kebab and the Leader pill, and
   await expect(row(worker).locator('[data-testid="subtask-pill"]')).toHaveAttribute('title', `Worker of "${engine}-board-lead ${stamp}". Click to go to that task.`)
   await expect(row(third).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
-  // Kebab → Adopt a worker… → the picker never offers the task itself.
+  // Kebab → Team (collapsed) → Adopt a worker… → the picker never offers the task itself.
   await row(third).getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible')
+  await expect(menu.getByTestId('kebab-adopt-worker')).toHaveCount(0)
+  await menu.getByTestId('kebab-team-toggle').click()
   await menu.getByTestId('kebab-adopt-worker').click()
   const flyout = page.getByTestId('adopt-worker-flyout')
   await expect(flyout).toBeVisible()
@@ -416,8 +418,11 @@ test('the Worker pill, Adopt a worker… from the kebab and the Leader pill, and
   await expect(row(fourth).locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
   await expect.poll(() => parentOf(fourth)).toBe(third)
 
-  // Leave leader “…” on the worker undoes it.
+  // Leave leader “…” on the worker undoes it; the folded Team row names the leader.
   await row(fourth).getByRole('button', { name: 'More actions' }).click()
+  const team = page.locator('.task-kebab-menu:visible').getByTestId('kebab-team-toggle')
+  await expect(team).toContainText(`Team: Worker of “${thirdTitle}”`)
+  await team.click()
   const leave = page.locator('.task-kebab-menu:visible').getByTestId('kebab-leave-leader')
   await expect(leave).toContainText(`Leave leader “${thirdTitle}”`)
   await leave.click()
