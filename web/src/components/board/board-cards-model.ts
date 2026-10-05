@@ -330,6 +330,17 @@ export function parseCardParts(raw: string | null | undefined): CardParts {
   return out;
 }
 
+/** A message on one line, its light markdown marks dropped (the line is plain text). */
+export function peekText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|`)/g, '')
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** The author of a message in the card's words: You, Leader, a teammate's title, else Agent. */
 export function authorLabel(author: string, ownerId: string, titleOf: (id: string) => string): string {
   if (author === 'user') return 'You';

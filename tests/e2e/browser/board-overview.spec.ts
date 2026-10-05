@@ -585,6 +585,8 @@ test('D. a board with projects is a project board: strip, cards, the user\'s wri
   const loose = await sub('loose')
   const looseDone = await sub('loose finished')
   await patch(looseDone, { phase: 'COMPLETE' })
+  // A ticket filed elsewhere that B's area tracks: on B's card, never in the team's counts.
+  const ext = await createTask(t('ext ticket'), { project: `${project} ext` })
   // The page shows B before A, a choice and a thread inside A, a loose thread at the end; C is recorded only.
   await api('PUT', `/api/v1/tasks/${lead}/board`, {
     html: `<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px sans-serif;padding:12px">
@@ -606,7 +608,7 @@ test('D. a board with projects is a project board: strip, cards, the user\'s wri
     latest: 'Fix in review, one more check `kube-401` to go.', next: 'Ship Monday after the review.',
     waiting: '3 CRs to deploy', meta: '12 tickets',
   })
-  await setProject('area-b', { title: 'B leader handover', status: 'done', tasks: [bOpen], summary: 'Handed over.' })
+  await setProject('area-b', { title: 'B leader handover', status: 'done', tasks: [bOpen, ext], summary: 'Handed over.' })
   await setProject('area-c', { title: 'C image CVE', status: 'wait' })
   await api('POST', `/api/v1/tasks/${lead}/board/threads/area-a`, { text: 'Found the cause: the watcher.' }, asLeader)
   await expect.poll(() => historyText(viewerSid), { timeout: 60_000 }).toContain('Viewer D ready')
@@ -660,7 +662,7 @@ test('D. a board with projects is a project board: strip, cards, the user\'s wri
   await expect(b.getByTestId('board-card-fold')).toHaveAttribute('aria-expanded', 'false')
   await expect(b.getByTestId('board-card-chip')).toHaveCount(0)
   await b.getByTestId('board-card-fold').click()
-  expect(await chipIds(b)).toEqual([bOpen])
+  expect((await chipIds(b)).sort()).toEqual([bOpen, ext].sort())
   // A project with no task and no text: its own Questions thread, a quiet "not written yet".
   const c = cardOf(pane, 'area-c')
   await expect(c.getByTestId('board-card-status')).toContainText('Waiting on others')

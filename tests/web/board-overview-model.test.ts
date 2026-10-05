@@ -419,6 +419,35 @@ describe('sections: the board\'s projects', () => {
     ]);
   });
 
+  it('a task named from outside the team is a row of its section when the store has it, never of the team or the rest', () => {
+    const tasks = [
+      task('lead-0001'), task('w-0001', { parent_task_id: 'lead-0001' }), task('w-0002', { parent_task_id: 'lead-0001' }),
+      task('ext-0001', { project: 'Elsewhere', phase: 'NEED_ACTION' }), task('ext-0002', { project: 'Elsewhere', phase: 'COMPLETE', status: 'done' }),
+    ];
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const projects = {
+      'sec-a': project({ tasks: ['w-0001', 'ext-0001', 'ext-0002', 'gone-0001', 'lead-0001'] }),
+      'sec-b': project({ tasks: ['ext-0001'] }), // named twice: the first section keeps it
+    };
+    const overview = buildTeamOverview({
+      ownerId: 'lead-0001', owner: tasks[0], childrenOf: (id) => subtasksOf(tasks, id), statusOf: () => null,
+      elements: NO_ELEMENTS, board: null, projects, seen: {}, now: NOW, taskById: (id) => byId.get(id) ?? null,
+    });
+    expect(overview.sections!.map((s) => [s.id, s.rows.map((r) => r.id), s.attention, s.done])).toEqual([
+      ['sec-a', ['ext-0001', 'w-0001', 'ext-0002'], 1, 1],
+      ['sec-b', [], 0, 0],
+      [REST_SECTION_ID, ['w-0002'], 0, 0],
+    ]);
+    // The team is still the owner's subtree.
+    expect([overview.members, overview.open, overview.done, overview.attention]).toEqual([2, 2, 0, 0]);
+    // Without the store's lookup an outsider is not a row (the earlier rule).
+    const plain = buildTeamOverview({
+      ownerId: 'lead-0001', owner: tasks[0], childrenOf: (id) => subtasksOf(tasks, id), statusOf: () => null,
+      elements: NO_ELEMENTS, board: null, projects, seen: {}, now: NOW,
+    });
+    expect(plain.sections![0].rows.map((r) => r.id)).toEqual(['w-0001']);
+  });
+
   it('a project with no title reads by its id; no rest section when every member has a section', () => {
     const rows = [row('w-0001')];
     const out = buildSections(rows, { 'sec-x': project({ title: '  ', tasks: ['w-0001'] }) }, [], 'lead-0001', titleOf)!;

@@ -121,9 +121,11 @@ export function useTeamOverview(
       if (!sid) return null;
       return sessionStatusStore.getStatus(sid) ?? task.session_status ?? null;
     };
+    const byId = new Map(tasks.map((t) => [t.id, t]));
     return buildTeamOverview({
       ownerId,
       owner,
+      taskById: (id) => byId.get(id) ?? null,
       childrenOf: teamChildren(tasks, ownerId),
       statusOf,
       elements,

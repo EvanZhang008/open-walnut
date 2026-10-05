@@ -18,7 +18,7 @@ import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { log } from '@/utils/log';
 import { timeAgo } from '@/utils/time';
-import { authorLabel, type CardThread } from './board-cards-model';
+import { authorLabel, peekText, type CardThread } from './board-cards-model';
 
 /** Unsent words per `${board}|${target}`. */
 const drafts = new Map<string, string>();
@@ -196,7 +196,7 @@ export function CardThreadBlock({ thread, label, ctx, onPost, onSeen, startOpen 
       {!open && newest && (
         <button type="button" className="bpc-thread-peek" onClick={() => setOpen(true)} title="Open the thread">
           <span className="bpc-who">{authorLabel(newest.author, ctx.ownerId, ctx.titleOf)}</span>
-          <span className="bpc-peek-text">{newest.text.replace(/\s+/g, ' ')}</span>
+          <span className="bpc-peek-text">{peekText(newest.text)}</span>
         </button>
       )}
       {open && (

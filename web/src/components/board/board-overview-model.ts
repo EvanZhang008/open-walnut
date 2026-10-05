@@ -434,6 +434,8 @@ export interface OverviewInput {
   board: BoardSignalInput | null;
   /** The board's projects (`payload.projects`); none or empty = the state groups alone. */
   projects?: Record<string, BoardProject> | null;
+  /** The store's task for a full id, for the tasks a project names outside the team. */
+  taskById?: (id: string) => Task | null;
   seen: BoardSeen;
   now?: number;
   formatWaitUntil?: (iso: string) => string;
@@ -512,12 +514,13 @@ function orderSection(rows: readonly OverviewRow[], titleOf: (id: string) => str
 /**
  * The team by the board's projects. Each project is a section, in `pageOrder`
  * then as recorded, holding the team members its `tasks` name (an id or a prefix
- * that names exactly one member; the owner and tasks outside the team are not
- * rows here) that no earlier section took, plus the members under those (a
- * worker's own subtasks, which the leader's list rarely knows). A project naming
- * nothing is still a section (its status is part of the picture). Members no
- * project names close the list: the open ones, then the done ones apart. Null
- * without projects.
+ * that names exactly one member; never the owner) that no earlier section took,
+ * plus the members under those (a worker's own subtasks, which the leader's list
+ * rarely knows). A named task outside the team is a row of its section too when
+ * `outsider` resolves it (the store's row: a leader's area often holds tickets
+ * filed elsewhere), never a team member or the rest. A project naming nothing is
+ * still a section (its status is part of the picture). Members no project names
+ * close the list: the open ones, then the done ones apart. Null without projects.
  */
 export function buildSections(
   rows: readonly OverviewRow[],
@@ -525,6 +528,7 @@ export function buildSections(
   pageOrder: readonly string[],
   ownerId: string,
   titleOf: (id: string) => string,
+  outsider?: (ref: string) => OverviewRow | null,
 ): OverviewSection[] | null {
   if (!projects) return null;
   const order = orderProjects(projects, pageOrder);
@@ -533,13 +537,24 @@ export function buildSections(
   const byId = new Map(rows.map((r) => [r.id, r]));
   // row id → index into `order` of the section it belongs to.
   const sectionOf = new Map<string, number>();
+  // Named tasks outside the team, in the section that named them first.
+  const outside: OverviewRow[][] = order.map(() => []);
+  const outsideIds = new Set<string>();
   for (const [at, id] of order.entries()) {
     const project = projectRecord(projects[id]);
     const refs = Array.isArray(project?.tasks) ? project.tasks : [];
-    for (const ref of refs) {
-      const member = memberOf(typeof ref === 'string' ? ref : '', ownerId, teamIds);
-      if (!member || member === ownerId || sectionOf.has(member) || !byId.has(member)) continue;
-      sectionOf.set(member, at);
+    for (const raw of refs) {
+      const ref = typeof raw === 'string' ? raw : '';
+      const member = memberOf(ref, ownerId, teamIds);
+      if (member) {
+        if (member === ownerId || sectionOf.has(member) || !byId.has(member)) continue;
+        sectionOf.set(member, at);
+        continue;
+      }
+      const row = ref && outsider ? outsider(ref) : null;
+      if (!row || row.id === ownerId || teamIds.has(row.id) || outsideIds.has(row.id)) continue;
+      outsideIds.add(row.id);
+      outside[at].push(row);
     }
   }
   // Depth first, so a parent is settled before its children: an unnamed row takes its parent's section.
@@ -548,7 +563,7 @@ export function buildSections(
     const inherited = sectionOf.get(r.parentId);
     if (inherited !== undefined) sectionOf.set(r.id, inherited);
   }
-  const own: OverviewRow[][] = order.map(() => []);
+  const own: OverviewRow[][] = order.map((_, at) => [...outside[at]]);
   const rest: OverviewRow[] = [];
   for (const r of rows) {
     const at = sectionOf.get(r.id);
@@ -605,6 +620,16 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
   };
 
   const rows = members.map((m) => rowOf(m.task, m.depth, m.parentId));
+  // A task a project names from outside the team: a row of that section, never counted in the team.
+  const taskById = input.taskById;
+  const outsider = taskById
+    ? (ref: string): OverviewRow | null => {
+      const t = taskById(ref);
+      if (!t) return null;
+      titles.set(t.id, t.title);
+      return rowOf(t, 0, '');
+    }
+    : undefined;
   const leader = owner ? rowOf(owner, 0, '') : null;
   const titleOf = (id: string) => titles.get(id) ?? '';
   const groups: OverviewGroup[] = [];
@@ -618,7 +643,7 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
     ownerId,
     leader,
     groups,
-    sections: buildSections(rows, input.projects, input.elements.projects ?? [], ownerId, titleOf),
+    sections: buildSections(rows, input.projects, input.elements.projects ?? [], ownerId, titleOf, outsider),
     members: rows.length,
     open: rows.length - done,
     done,

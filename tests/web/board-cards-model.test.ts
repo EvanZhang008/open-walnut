@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
   GENERAL_CARD_ID, authorLabel, buildProjectCards, cardThread, cardsFor, choiceAnswered, foldedByDefault,
-  parseCardParts, parseOptions, statusCounts, type CardsInput, type ProjectCard,
+  parseCardParts, parseOptions, peekText, statusCounts, type ProjectCard,
 } from '../../web/src/components/board/board-cards-model';
 import {
   REST_DONE_SECTION_ID, REST_SECTION_ID, buildTeamOverview, type BoardElement, type BoardElements,
@@ -301,6 +301,13 @@ describe('the reader\'s picks and words', () => {
       .toEqual({ summary: true, latest: false, next: true, tasks: false, questions: true });
     expect(parseCardParts('not json')).toEqual(parseCardParts(null));
     expect(parseCardParts('[false]')).toEqual(parseCardParts(null));
+  });
+
+  it('a thread\'s one-line peek drops the markdown marks, keeps the words', () => {
+    expect(peekText('**Me (10-01 18:00)**, fixed: see `kube-401`\n- one\n- two')).toBe('Me (10-01 18:00), fixed: see kube-401 one two');
+    expect(peekText('> quoted\n# Head\n1. first')).toBe('quoted Head first');
+    expect(peekText('a [link](https://example.com/x) and\n```\ncode block\n```\nafter')).toBe('a link and after');
+    expect(peekText('snake__case stays')).toBe('snake__case stays');
   });
 
   it('names a message\'s author: You, Leader, a teammate by title, else Agent', () => {
