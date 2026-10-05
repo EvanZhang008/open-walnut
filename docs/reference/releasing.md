@@ -128,6 +128,7 @@ own npm prefix, HOME, data dir and daemon dir, with a mock `claude`
 | archive | `scripts/runtime-bundle/build.mjs` builds the self-contained archive of "older" for this machine; `scripts/install.sh` finds it on a local server laid out like GitHub Releases, checks it and installs it |
 | archive-serve | that install serves, finds `claude` and answers a session with no Node on PATH, and its updater says `walnut update` |
 | archive-brew | the Homebrew formula written for it installs from a scratch tap and passes `brew test` (Homebrew comes with both runner images) |
+| archive-app | (macOS) `Walnut.app`, built from this commit by `desktop/build.sh`, installs that archive on its first launch with the `install.sh` inside it, serves the console with no Node on PATH, takes its server with it when it dies, and starts again without downloading (`scripts/desktop-smoke.mjs`) |
 | archive-update | that install, started, updates itself to "current" through its own Node's npm |
 
 The two update scenarios use `registry.mjs`, a local registry that serves the chosen
@@ -165,6 +166,18 @@ version whose updater does not know the layout.
   (its own workflow, hourly). The formula keeps the archive packed through `install` and unpacks
   it in `post_install_steps`: Homebrew rewrites the install name of every Mach-O file in a keg it
   builds, and one prebuilt native module has no header room for that, so `brew install` failed.
+- **The Mac app**: job `mac-app` (`.github/workflows/mac-app.yml`) builds `Walnut.app` from the
+  release's tag, signs it with the Developer ID Application identity (hardened runtime,
+  `desktop/Walnut.entitlements`), notarizes and staples the app and then its DMG, has Gatekeeper
+  assess the DMG with a browser's quarantine mark on it, launches the mounted app on a fresh
+  `HOME` (it installs the release's own archive and serves the console), and only then attaches
+  `Walnut.dmg`. The identity (`MACOS_CERT_P12_BASE64`, `MACOS_CERT_P12_PASSWORD`) and the
+  notary key (`APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, an App Store
+  Connect API key with the Developer role) are secrets of the `release` environment, which only
+  `main` may deploy to; the identity goes into a keychain made for the job and deleted after it.
+  Without them the app is built ad-hoc and kept as a workflow artifact, never attached. The app
+  is a small shell that is never modified: its first launch runs the bundled `install.sh`, and
+  the runtime it installed updates itself like any archive install.
 - **Updates**: the archive carries `runtime/open-walnut-runtime.json`. The updater
   (`src/core/self-update/install-kind.ts`) sees it and installs a newer release with the
   archive's own Node and npm into the archive's own prefix (`walnut update`, and on start), never
