@@ -19,6 +19,22 @@ breaking changes).
   self-contained Walnut that `install.sh` installs (no Node, npm or git needed) instead of cloning
   and building the source, and Retry after a failed download tries the download again.
 
+## [0.6.3] - 2026-10-05
+
+### Fixed
+
+- **An effort you pick right after starting a session is kept.** A reasoning effort chosen
+  while the session's Claude Code was still starting was saved, then replaced by the launch
+  effort a moment later, and that Claude Code ran the launch effort until it ended. The pick
+  now holds, and the starting Claude Code is told.
+- **A session keeps the mode you picked while it was not running.** Switching a session's
+  permission mode (to accept edits, say) while its Claude Code process had ended was saved,
+  but the next message resumed it in the old mode.
+- **Stopping the search model can no longer crash the server.** The model ran on a thread
+  inside the server, and ending that thread in the middle of a model run (an idle stop
+  firing after the Mac woke, a shutdown, the server exiting) aborted the whole server. It
+  now runs in a process of its own, which is the only thing a forced stop can end.
+
 ## [0.6.2] - 2026-10-04
 
 ### Changed
