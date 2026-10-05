@@ -27,7 +27,7 @@ import { CLAUDE_HOME } from '../../../src/constants.js';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { encodeProjectPath } from '../../../src/core/session-history.js';
-import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
+import { createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { computeHistoryAnchor } from '../../../web/src/hooks/history-anchor.js';
 
 const CWD = '/tmp/marina/whale-reach';
@@ -255,6 +255,30 @@ describe('turn-end delta whose anchor slid out of the 4 MB tail', () => {
     const q = { ...deltaQuery(held), anchorMsgId: 'msg_never_written' };
     const res = await request(app).get(`/api/sessions/${WHALE_SESSION}/history`).query(q);
     expect(res.body.delta).toBe(false);
+  });
+
+  it('a fork reaches back in its own transcript; the parent prefix is untouched', async () => {
+    const PARENT = 'anchor-reach-parent';
+    const dir = path.dirname(jsonlPath());
+    await fsp.writeFile(path.join(dir, `${PARENT}.jsonl`), [
+      JSON.stringify({ type: 'user', uuid: 'p-ask-0', sessionId: PARENT, timestamp: new Date(Date.now() - 7_200_000).toISOString(), message: { role: 'user', content: 'parent ask 0' } }),
+      JSON.stringify({ type: 'assistant', uuid: 'p-reply-0', sessionId: PARENT, timestamp: new Date(Date.now() - 7_199_000).toISOString(), message: { id: 'msg_parent_0', role: 'assistant', content: [{ type: 'text', text: 'parent reply 0' }] } }),
+    ].join('\n') + '\n');
+    await createSessionRecord(PARENT, CWD, 'p');
+    // The whale itself is the fork child (beforeEach made it a plain session).
+    await updateSessionRecord(WHALE_SESSION, { forkedFromSessionId: PARENT });
+
+    const app = createApp();
+    const first = await request(app).get(`/api/sessions/${WHALE_SESSION}/history`).query({ tail: 400 });
+    expect(first.body.windowed).toBe(true);
+    expect(first.body.forkBoundaryIndex, 'the parent prefix is in the payload').toBe(2);
+    const held: Row[] = first.body.messages;
+    expect(held[0].text).toBe('parent ask 0');
+    await appendTurn(WHALE_TURNS, { shots: 5, shotBytes: 1.2 * MB });
+    const res = await request(app).get(`/api/sessions/${WHALE_SESSION}/history`).query(deltaQuery(held));
+    expect(res.body.delta).toBe(true);
+    expect(proseOf(res.body.messages)).toEqual([`ask:${WHALE_TURNS}`, `reply:${WHALE_TURNS}`, `done:${WHALE_TURNS}`]);
+    expect(res.body.cursor).toBe(held.length + res.body.messages.length);
   });
 
   it('an anchor still inside the tail is served without reaching back', async () => {

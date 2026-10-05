@@ -1620,9 +1620,11 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         // A whale's tail slid past the anchor (one turn of screenshots appends more
         // than the window holds). Declining here handed the client a window sharing
         // no row with its own, which it could only swap in: every AI reply vanished
-        // until a reload (2026-10-05). Reach back for the anchor instead.
+        // until a reload (2026-10-05). Reach back for the anchor instead. A fork
+        // reaches in its OWN transcript: the anchor is the client's newest row, so it
+        // sits past the parent prefix, and the rows after it are the same either way.
         if (resolved.kind === 'rebuild' && resolved.reason === 'anchor-missing' && historyWindowed
-            && anchorMsgId && record && !forkedFromSessionId) {
+            && anchorMsgId && record) {
           const reached = await reachDeltaAnchor(sessionId, record, anchorMsgId)
           if (reached) {
             const again = resolveDeltaStart(reached, anchorReq, { windowed: true })
