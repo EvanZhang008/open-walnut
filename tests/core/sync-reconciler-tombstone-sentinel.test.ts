@@ -99,6 +99,33 @@ afterEach(() => {
   fs.rmSync(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
+describe('the full pull has a deadline', () => {
+  it('a pull that never answers is a FAILED tick after the deadline, with a streak and a backoff', async () => {
+    // 2026-10-05: a plugin's own retry wrapper kept a full pull going for 16
+    // minutes during a network outage and held the plugin's sync tick with it.
+    const warn = vi.spyOn(log.web, 'warn');
+    const bounded = new SyncReconciler({ fullPullTimeoutMs: 50 });
+    const plugin = makePlugin([]);
+    (plugin.sync.fullPull as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
+
+    const outcome = await bounded.tick(plugin, makeCtx([]));
+    expect(outcome.status).toBe('failed');
+    if (outcome.status !== 'failed') throw new Error('unreachable');
+    expect(String((outcome.error as Error).message)).toMatch(/full pull exceeded \d+s/);
+    expect(outcome.consecutiveFailures).toBe(1);
+    expect(outcome.retryInMs).toBeGreaterThan(0);
+    expect(bounded.hasOpenFailureStreak('ms-todo')).toBe(true);
+    expect(warn.mock.calls.some(([m]) => m === 'sync-reconciler: full reconcile failed')).toBe(true);
+  });
+
+  it('a pull that answers in time is unaffected by the deadline', async () => {
+    const bounded = new SyncReconciler({ fullPullTimeoutMs: 5_000 });
+    const outcome = await bounded.tick(makePlugin([remoteItem({ remoteId: 'r1', title: 'Quick' })]), makeCtx([]));
+    expect(outcome.status).toBe('completed');
+    expect((await listTasks()).map((t) => t.title)).toEqual(['Quick']);
+  });
+});
+
 describe('retired .metadata sentinels', () => {
   it('are dropped before the diff, so `created` counts only real writes', async () => {
     const info = vi.spyOn(log.web, 'info');

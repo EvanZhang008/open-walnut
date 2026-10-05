@@ -290,14 +290,46 @@ async function recoverListRefusals(keys: string[]): Promise<void> {
   }
 }
 
+/**
+ * The longest a plugin's full pull may run before the tick counts it as failed.
+ *
+ * The pull is the plugin's code, and its own retry wrapper decides how long it
+ * keeps trying: during a network outage on 2026-10-05 one spun for 16 minutes
+ * (its 30 s per-attempt budget, retried inside) and held that plugin's whole
+ * sync tick for the duration. A full pull of a thousand items normally takes
+ * seconds; five minutes is far past any healthy pull and well short of the
+ * 30-minute full-reconcile cadence. The timed-out pull keeps running in the
+ * background until the plugin gives up; the backoff keeps the next attempt
+ * minutes away, so two never overlap for long.
+ */
+export const FULL_PULL_TIMEOUT_MS = 5 * 60_000;
+
 export class SyncReconciler {
   private stateCache = new Map<string, ReconcileState>();
   private isFirstTick = new Map<string, boolean>();
   /** `${pluginId}:${lower(project)}` → consecutive full reconciles refused. */
   private refusalStreaks = new Map<string, number>();
+  private readonly fullPullTimeoutMs: number;
 
-  constructor() {
+  constructor(options: { fullPullTimeoutMs?: number } = {}) {
     fs.mkdirSync(SYNC_DIR, { recursive: true });
+    this.fullPullTimeoutMs = options.fullPullTimeoutMs ?? FULL_PULL_TIMEOUT_MS;
+  }
+
+  /** The plugin's full pull, bounded by the deadline above. */
+  private async pullWithDeadline(plugin: RegisteredPlugin, ctx: SyncPollContext): Promise<RemoteSyncItem[] | null | undefined> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`full pull exceeded ${Math.round(this.fullPullTimeoutMs / 1000)}s; the provider or the network is not answering`));
+      }, this.fullPullTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([plugin.sync.fullPull!(ctx), deadline]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -333,7 +365,7 @@ export class SyncReconciler {
     log.web.info(`sync-reconciler: starting full reconcile`, { pluginId: plugin.id, trigger: this.getTriggerReason(state, opts, first) });
 
     try {
-      const pulled = await plugin.sync.fullPull(ctx);
+      const pulled = await this.pullWithDeadline(plugin, ctx);
       if (!pulled) {
         log.web.debug('sync-reconciler: fullPull returned null/undefined, skipping', { pluginId: plugin.id });
         this.saveState(plugin.id, state);

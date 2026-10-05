@@ -86,7 +86,7 @@ import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
-import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, type ConnectionWatch } from '../core/plugin-sync-health.js'
+import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, type ConnectionWatch } from '../core/plugin-sync-health.js'
 import { syncReconciler, type ReconcileTickOutcome } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
@@ -5369,13 +5369,14 @@ function startPluginSyncPolling(): void {
             })
           }
         }
-        // The full comparison failing while delta sync works is its own condition,
-        // and it reaches here only on that shape (a failing delta throws past this).
-        // The reconciler keeps the streak and backs off; it logs a warn, never an
-        // error, so the log bridge cannot card the first timed-out page. ONE scope
-        // for the whole condition: seven different `$skip` pages of one list used to
-        // be seven cards.
-        if (reconcile.status === 'failed' && reconcile.escalate) {
+        // The full comparison failing while delta sync works is its own condition.
+        // This tick's delta did not throw (a failing one throws past this), but the
+        // delta STREAK may still be open from earlier ticks, and then the plugin's
+        // own card already names the cause (reconcileCardWanted). The reconciler
+        // keeps the streak and backs off; it logs a warn, never an error, so the
+        // log bridge cannot card the first timed-out page. ONE scope for the whole
+        // condition: seven different `$skip` pages of one list used to be seven cards.
+        if (reconcile.status === 'failed' && reconcileCardWanted(reconcile, getSyncHealth(plugin.id))) {
           const firstLine = (reconcile.error instanceof Error ? reconcile.error.message : String(reconcile.error))
             .split('\n')[0].slice(0, 300)
           const published = await publishErrorNotification({

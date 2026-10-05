@@ -149,6 +149,26 @@ export function decideSyncFailureNotice(
   return { level: 'none', title: '', body: '' };
 }
 
+/**
+ * Whether a repeating full-reconcile failure deserves its own card right now.
+ *
+ * The full comparison failing is its own condition only while the regular
+ * (delta) sync works: then "full sync keeps failing" is the one thing wrong.
+ * While the delta loop is mid-streak, the plugin's account or network is what
+ * is broken, that card (sign-in, unreachable, repeating) already says so, and
+ * a second card under the same recovery key reports the same cause twice
+ * (2026-10-05: an expired sign-in showed as "sync keeps failing" AND "full
+ * sync keeps failing"). The reconcile card is raised again on a later
+ * escalation once the delta loop is healthy and the full pull still fails.
+ */
+export function reconcileCardWanted(
+  reconcile: { status: string; escalate?: boolean },
+  health: Pick<PluginSyncHealth, 'consecutiveFailures'> | undefined,
+): boolean {
+  if (reconcile.status !== 'failed' || !reconcile.escalate) return false;
+  return (health?.consecutiveFailures ?? 0) === 0;
+}
+
 /** Per-plugin memory of whether the sign-in card is up (the loop owns one per plugin). */
 export interface ConnectionWatch {
   noticed: boolean;

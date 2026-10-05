@@ -6,6 +6,7 @@ import {
   decideSyncFailureNotice,
   decideConnectionNotice,
   REPEATING_THRESHOLD,
+  reconcileCardWanted,
   _resetSyncHealthForTesting,
 } from '../../src/core/plugin-sync-health.js';
 
@@ -106,6 +107,25 @@ describe('decideSyncFailureNotice', () => {
     const n = decideSyncFailureNotice('Acme', 'acme', 'stringy', { consecutiveFailures: REPEATING_THRESHOLD });
     expect(n.level).toBe('repeating');
     expect(n.body).toContain('stringy');
+  });
+});
+
+describe('reconcileCardWanted', () => {
+  it('wants the card only for an ESCALATED failure while the delta loop is healthy', () => {
+    expect(reconcileCardWanted({ status: 'failed', escalate: true }, { consecutiveFailures: 0 })).toBe(true);
+    expect(reconcileCardWanted({ status: 'failed', escalate: true }, undefined)).toBe(true);
+    expect(reconcileCardWanted({ status: 'failed', escalate: false }, { consecutiveFailures: 0 })).toBe(false);
+    expect(reconcileCardWanted({ status: 'failed' }, { consecutiveFailures: 0 })).toBe(false);
+    expect(reconcileCardWanted({ status: 'completed' }, { consecutiveFailures: 0 })).toBe(false);
+  });
+
+  it('stays quiet while the delta loop is mid-streak: that card already names the cause', () => {
+    // 2026-10-05: an expired sign-in raised "sync keeps failing" AND "full sync
+    // keeps failing" under one recovery key, the same cause reported twice.
+    recordSyncFailure('p', new AuthErr('sign-in-required', 'expired'));
+    expect(reconcileCardWanted({ status: 'failed', escalate: true }, getSyncHealth('p'))).toBe(false);
+    recordSyncSuccess('p');
+    expect(reconcileCardWanted({ status: 'failed', escalate: true }, getSyncHealth('p'))).toBe(true);
   });
 });
 
