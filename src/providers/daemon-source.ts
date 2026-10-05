@@ -1122,7 +1122,6 @@ const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version');
 const DAEMON_VERSION = '__DAEMON_VERSION__';
 const AGENT_POLL_INTERVAL_MS = 2000;
 const AGENT_REDISCOVER_INTERVAL_MS = 10000;
-const PING_INTERVAL_MS = 15000;
 // Env override exists so tests can exercise heartbeat-driven behavior (the
 // parent-liveness watchdog) without waiting 30s. Production leaves it unset.
 const HEARTBEAT_INTERVAL_MS = (function() {
@@ -2430,6 +2429,22 @@ function reapAllSessionGroupsSync() {
 
 // ── WebSocket connections ──
 const wsClients = new Set();
+
+// When each trusted (non-bridge) client was last HEARD from: any frame, ping or
+// pong. Keep in sync with daemon-standalone.ts. A trusted client is a walnut
+// server, normally over an SSH port forward. When that forward dies on the far
+// side (a Mac asleep, a network that changed under it), the host's sshd keeps
+// the forwarded socket to this daemon open for many minutes: nothing ever
+// closes it and nothing ever comes back on it. The keepalive (each
+// connection's ping timer) pings every trusted client once a beat and closes
+// one it has not heard from for CLIENT_KEEPALIVE_MISSED beats; a live walnut
+// server is heard every beat (it pings every 15s and answers these pings). The
+// env override exists for tests (sub-second beats); production leaves it
+// unset. Parsed once, here, with the floor every daemon timer knob has
+// (envTimerMs).
+var TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15000, 100);
+function heardFrom(client) { client.lastHeardAt = Date.now(); }
+
 let cronMetadataConfig = null;
 let cronMetadataReplay = Promise.resolve();
 const cronMetadata = (__CREATE_CRON_METADATA__)({
@@ -2543,6 +2558,31 @@ function createManualWsServer(httpServer) {
   return emitter;
 }
 
+// Keepalive for trusted clients (twin of daemon-standalone.ts): a client nothing
+// was heard from (no frame, ping or pong) for CLIENT_KEEPALIVE_MISSED beats in a
+// row is closed. An SSH forward that died on the far side while sshd keeps this
+// end open ACKs every byte and never resets, so nothing else ever closes it, and
+// a dead client first in wsClients took every relay (gate P5, 2026-10-03: all
+// lost for 165 s and on). Bound: closed on the 8th silent beat, 120 to 135 s
+// after its last frame at the 15 s beat, long enough that a Mac asleep a minute
+// or two keeps its links (matrix M3, 90 s). Beats are counted, not wall time, so
+// a daemon that was itself suspended does not drop its clients on wake.
+const CLIENT_KEEPALIVE_MISSED = 8;
+const clientKeepalive = new WeakMap();
+function clientKeepaliveExpired(ws) {
+  const heardAt = ws.lastHeardAt;
+  const prev = clientKeepalive.get(ws);
+  const missed = prev && prev.heardAt === heardAt ? prev.missed + 1 : 0;
+  if (missed < CLIENT_KEEPALIVE_MISSED) {
+    clientKeepalive.set(ws, { heardAt: heardAt, missed: missed });
+    return false;
+  }
+  logMsg('warn', 'client silent, closing it', { silentMs: heardAt != null ? Date.now() - heardAt : null, missed: missed });
+  clientKeepalive.delete(ws);
+  try { ws.terminate(); } catch { try { ws.close(); } catch {} }
+  return true;
+}
+
 function createWsWrapper(socket) {
   const EventEmitter = require('events');
   const ws = new EventEmitter();
@@ -2566,6 +2606,12 @@ function createWsWrapper(socket) {
     try { socket.write(encodeFrame(Buffer.alloc(0), 0x09)); } catch {}
   };
 
+  // close() only ends our half, which a dead peer never answers: destroy.
+  ws.terminate = function() {
+    ws.readyState = 3;
+    try { socket.destroy(); } catch {}
+  };
+
   socket.on('data', (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     while (buffer.length >= 2) {
@@ -2583,12 +2629,16 @@ function createWsWrapper(socket) {
         return;
       } else if (opcode === 0x09) { // ping
         try { socket.write(encodeFrame(payload, 0x0A)); } catch {} // pong
+        ws.emit('ping');
       } else if (opcode === 0x0A) { // pong
         ws.emit('pong');
       }
     }
   });
 
+  // An upgraded socket is half-open: a client's FIN alone never closes it, and
+  // the client stayed in wsClients for good. Its FIN ends it.
+  socket.on('end', () => { try { socket.destroy(); } catch {} });
   socket.on('close', () => {
     ws.readyState = 3;
     ws.emit('close');
@@ -2602,29 +2652,36 @@ function createWsWrapper(socket) {
   return ws;
 }
 
-function encodeFrame(payload, opcode) {
+// mask: a client's frames must be masked (RFC 6455 5.3); a server's never are.
+function encodeFrame(payload, opcode, mask) {
   const len = payload.length;
+  const maskBit = mask ? 0x80 : 0;
   let header;
   if (len < 126) {
     header = Buffer.alloc(2);
     header[0] = 0x80 | opcode; // FIN + opcode
-    header[1] = len;
+    header[1] = maskBit | len;
   } else if (len < 65536) {
     header = Buffer.alloc(4);
     header[0] = 0x80 | opcode;
-    header[1] = 126;
+    header[1] = maskBit | 126;
     header.writeUInt16BE(len, 2);
   } else {
     header = Buffer.alloc(10);
     header[0] = 0x80 | opcode;
-    header[1] = 127;
+    header[1] = maskBit | 127;
     header.writeBigUInt64BE(BigInt(len), 2);
   }
-  return Buffer.concat([header, payload]);
+  if (!mask) return Buffer.concat([header, payload]);
+  const key = crypto.randomBytes(4);
+  const body = Buffer.alloc(len);
+  for (let i = 0; i < len; i++) body[i] = payload[i] ^ key[i & 3];
+  return Buffer.concat([header, key, body]);
 }
 
 function decodeFrame(buf) {
   if (buf.length < 2) return null;
+  const fin = !!(buf[0] & 0x80);
   const opcode = buf[0] & 0x0F;
   const masked = !!(buf[1] & 0x80);
   let payloadLen = buf[1] & 0x7F;
@@ -2646,11 +2703,11 @@ function decodeFrame(buf) {
     offset += 4;
     const payload = buf.slice(offset, offset + payloadLen);
     for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
-    return { opcode, payload, remaining: buf.slice(offset + payloadLen) };
+    return { fin, opcode, payload, remaining: buf.slice(offset + payloadLen) };
   } else {
     if (buf.length < offset + payloadLen) return null;
     const payload = buf.slice(offset, offset + payloadLen);
-    return { opcode, payload, remaining: buf.slice(offset + payloadLen) };
+    return { fin, opcode, payload, remaining: buf.slice(offset + payloadLen) };
   }
 }
 
@@ -8944,6 +9001,11 @@ let bridgeBackoffMs = 1000;
 // When the pending redial is due (null = none pending) — lets the Mac's heal
 // push preempt a far-away redial instead of waiting out backoff earned offline.
 let bridgeRedialDueAt = null;
+// When the drop that armed the fast redial window happened (null = none is
+// armed), and whether any established link was lost yet (bridgeRedialStep and
+// armsBridgeFastWindow below).
+let bridgeDroppedAt = null;
+let bridgeHasDropped = false;
 let bridgeGeneration = 0;
 let bridgeLastInbound = 0;
 // Per-connection uplink (pacing + counters) and its identity in the logs; the
@@ -8961,11 +9023,29 @@ const bridgeDrift = (__CREATE_LOOP_DRIFT_PROBE__)({
 });
 
 const BRIDGE_BACKOFF_MAX_MS = 60000;
-const BRIDGE_PING_INTERVAL_MS = 30000;
-const BRIDGE_SILENCE_MS = 75000;
+// The fast redial window after a healthy link drops: waits stop doubling at
+// 5 s for 180 s. Armed only by a link that had been up 120 s (or the first one
+// lost), so a flapping link redials on the plain backoff.
+const BRIDGE_FAST_REDIAL_MAX_MS = 5000;
+const BRIDGE_FAST_WINDOW_MS = 180000;
+const BRIDGE_FAST_ARM_UPTIME_MS = 120000;
+// The silence watchdog (onOpen). Anything the replica sends counts as heard.
+// After a ping interval with nothing heard the daemon pings (also an ack
+// marker, bridge-uplink-core.ts), and when the BRIDGE_SILENT_PINGS-th ping is
+// due with still nothing, the link is dead: torn down 45 to 50 s after the last
+// inbound frame (a 75 s threshold checked every 30 s took 77 to 105 s, half of
+// matrix H7's wait). Checked BRIDGE_CHECKS_PER_PING times an interval; checks
+// are counted, not wall time, so a daemon that was itself suspended does not
+// tear down on wake. A busy link stays heard: the replica answers the markers
+// the uplink adds after every 64 KB, so after every chunk it moves. The numbers are BRIDGE_WATCHDOG in
+// daemon-core.ts (the parity test pins these literals to it). The env
+// override is for tests.
+const BRIDGE_PING_INTERVAL_MS = envTimerMs(process.env.WALNUT_BRIDGE_PING_MS, 15000, 150);
+const BRIDGE_CHECKS_PER_PING = 3;
+const BRIDGE_SILENT_PINGS = 3;
 // No onopen within this window → the dial is wedged (e.g. stuck in
 // CONNECTING); abandon it and redial. Env override is for tests.
-const BRIDGE_DIAL_TIMEOUT_MS = parseInt(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS || '', 10) || 20000;
+const BRIDGE_DIAL_TIMEOUT_MS = envTimerMs(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS, 20000, 500);
 
 // Mirror of daemon-core.ts decideBridgeRestart (template can't import).
 function decideBridgeRestart(s) {
@@ -8982,13 +9062,168 @@ function decideBridgeRestart(s) {
   return { restart: true, reason: 'reconcile' };
 }
 
+// Mirrors of daemon-core.ts envTimerMs, bridgeRedialStep and
+// armsBridgeFastWindow (template can't import).
+function envTimerMs(raw, fallbackMs, minMs) {
+  const v = Math.round(Number(raw));
+  return Number.isFinite(v) && v > 0 ? Math.min(Math.max(v, minMs), 2147483647) : fallbackMs;
+}
+function bridgeRedialStep(s) {
+  const fast = s.sinceDropMs != null && s.sinceDropMs < s.fastWindowMs;
+  const cap = fast ? Math.min(s.fastMaxMs, s.maxMs) : s.maxMs;
+  const wait = Math.min(s.backoffMs, cap);
+  return { delayMs: Math.round(wait * s.jitter), nextBackoffMs: Math.min(wait * 2, cap) };
+}
+function armsBridgeFastWindow(s) {
+  return s.firstDrop || s.uptimeMs >= s.armUptimeMs;
+}
+
 function getWsClientCtor() {
-  // Node 22+ has a global browser-style WebSocket client; older deploys get
-  // the ws package installed by deploySource(). Either works for dialing out.
-  if (typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
-  try { return require('ws').WebSocket || require('ws'); } catch {}
-  try { return require('node:ws').WebSocket; } catch {}
-  return null;
+  // Under Bun its global WebSocket can terminate(). Under Node: the ws package
+  // when it is installed (deploySource() installs it on a remote host), else
+  // createBridgeWsClient. Never Node's global WebSocket: it has no
+  // terminate(), so a link torn down as dead stayed CLOSING and went on
+  // draining what it had buffered; behind one slow bottleneck those streams
+  // starved the new link (gate 2026-10-04: 8 of them in 420 s).
+  if (typeof Bun !== 'undefined' && typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
+  try { const m = require('ws'); return m.WebSocket || m; } catch {}
+  return function BridgeWsClient(url) { return createBridgeWsClient(url); };
+}
+
+// The bridge's WebSocket client on Node without the ws package: what the
+// bridge needs (text frames, ping and pong, close) on the frame code of the
+// trusted-client server, with the ws package's events (open, message,
+// close(code, reason), error). terminate() destroys the socket at once; close()
+// sends a close frame and gives the peer 5 s to answer it.
+function createBridgeWsClient(url) {
+  const EventEmitter = require('events');
+  const ws = new EventEmitter();
+  ws.readyState = 0; // CONNECTING
+  const u = new URL(url);
+  const secure = u.protocol === 'wss:' || u.protocol === 'https:';
+  const host = u.hostname.charAt(0) === '[' ? u.hostname.slice(1, -1) : u.hostname;
+  const key = crypto.randomBytes(16).toString('base64');
+  let socket = null;
+  let ended = false;
+  let closeTimer = null;
+  let pending = [];
+  let have = 0;
+  let need = 0;
+  let parts = null;
+  const finish = function(code, reason, gentle) {
+    if (ended) return;
+    ended = true;
+    ws.readyState = 3;
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    const s = socket;
+    if (s && gentle) {
+      try { s.end(); } catch {}
+      setTimeout(function() { try { s.destroy(); } catch {} }, 5000).unref();
+    } else if (s) {
+      try { s.destroy(); } catch {}
+    }
+    ws.emit('close', code, reason || '');
+  };
+  const fail = function(err) {
+    if (ended) return;
+    ws.emit('error', err);
+    finish(1006, '');
+  };
+  // Bytes a frame needs in all, once its header is in (0 until then).
+  const frameSize = function(buf) {
+    if (buf.length < 2) return 0;
+    let len = buf[1] & 0x7F;
+    let off = 2;
+    if (len === 126) { if (buf.length < 4) return 0; len = buf.readUInt16BE(2); off = 4; }
+    else if (len === 127) { if (buf.length < 10) return 0; len = Number(buf.readBigUInt64BE(2)); off = 10; }
+    return off + ((buf[1] & 0x80) ? 4 : 0) + len;
+  };
+  const onData = function(chunk) {
+    pending.push(chunk);
+    have += chunk.length;
+    if (have < need) return; // a large frame: join its chunks once, when it is all here
+    let buf = pending.length === 1 ? pending[0] : Buffer.concat(pending, have);
+    pending = []; have = 0; need = 0;
+    while (!ended) {
+      const f = decodeFrame(buf);
+      if (!f) {
+        if (buf.length > 0) { pending = [buf]; have = buf.length; need = frameSize(buf); }
+        return;
+      }
+      buf = f.remaining;
+      if (f.opcode === 0x01 || f.opcode === 0x02 || f.opcode === 0x00) {
+        if (f.opcode !== 0x00) parts = [];
+        if (!parts) continue; // a continuation with nothing to continue
+        parts.push(f.payload);
+        if (!f.fin) continue;
+        const text = (parts.length === 1 ? parts[0] : Buffer.concat(parts)).toString('utf-8');
+        parts = null;
+        ws.emit('message', text);
+      } else if (f.opcode === 0x08) {
+        const code = f.payload.length >= 2 ? f.payload.readUInt16BE(0) : 1005;
+        const reason = f.payload.length > 2 ? f.payload.slice(2).toString('utf-8') : '';
+        // The peer closed first: answer its close frame, then end gently.
+        if (ws.readyState === 1) { try { socket.write(encodeFrame(f.payload.slice(0, 2), 0x08, true)); } catch {} }
+        finish(code, reason, true);
+      } else if (f.opcode === 0x09) {
+        try { socket.write(encodeFrame(f.payload, 0x0A, true)); } catch {}
+      }
+    }
+  };
+  const req = (secure ? require('https') : require('http')).request({
+    hostname: host,
+    port: u.port || (secure ? 443 : 80),
+    path: (u.pathname || '/') + u.search,
+    agent: false,
+    servername: secure && !net.isIP(host) ? host : undefined,
+    headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key },
+  });
+  req.on('error', fail);
+  req.on('response', function(res) {
+    res.resume();
+    fail(new Error('Unexpected server response: ' + res.statusCode));
+  });
+  req.on('upgrade', function(res, sock, head) {
+    socket = sock;
+    if (ended) { try { sock.destroy(); } catch {} return; }
+    const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    if (res.headers['sec-websocket-accept'] !== accept) { fail(new Error('Invalid Sec-WebSocket-Accept header')); return; }
+    sock.setNoDelay(true);
+    sock.on('data', onData);
+    sock.on('end', function() { finish(1006, ''); });
+    sock.on('close', function() { finish(1006, ''); });
+    sock.on('error', function(err) { if (!ended) ws.emit('error', err); });
+    ws.readyState = 1; // OPEN
+    ws.emit('open');
+    if (head && head.length > 0 && !ended) onData(head);
+  });
+  req.end();
+  ws.send = function(data) {
+    if (ws.readyState !== 1) throw new Error('WebSocket is not open: readyState ' + ws.readyState);
+    socket.write(encodeFrame(Buffer.from(String(data), 'utf-8'), 0x01, true));
+  };
+  ws.close = function() {
+    if (ended) return;
+    if (ws.readyState !== 1) { try { req.destroy(); } catch {} finish(1006, ''); return; }
+    ws.readyState = 2; // CLOSING
+    const body = Buffer.alloc(2);
+    body.writeUInt16BE(1000, 0);
+    try { socket.write(encodeFrame(body, 0x08, true)); } catch {}
+    closeTimer = setTimeout(function() { finish(1006, ''); }, 5000);
+  };
+  ws.terminate = function() {
+    if (ended) return;
+    try { req.destroy(); } catch {}
+    finish(1006, '');
+  };
+  return ws;
+}
+
+// A socket given up on is destroyed, not closed: a close handshake on a slow
+// or dead link keeps the stream draining (see getWsClientCtor). Keep in sync
+// with daemon-standalone.ts.
+function abandonBridgeSocket(client) {
+  try { if (typeof client.terminate === 'function') client.terminate(); else client.close(); } catch {}
 }
 
 function loadBridgeConfig() {
@@ -9076,9 +9311,13 @@ function scheduleBridgeRedial(gen) {
   // One pending redial at a time — a dial-timeout teardown and a late onclose
   // from the same dead socket must not stack two timers.
   if (bridgeRedialTimer) return;
-  const jitter = 0.75 + Math.random() * 0.5;
-  const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter);
-  bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS);
+  const step = bridgeRedialStep({
+    backoffMs: bridgeBackoffMs, maxMs: BRIDGE_BACKOFF_MAX_MS, jitter: 0.75 + Math.random() * 0.5,
+    sinceDropMs: bridgeDroppedAt != null ? Date.now() - bridgeDroppedAt : null,
+    fastWindowMs: BRIDGE_FAST_WINDOW_MS, fastMaxMs: BRIDGE_FAST_REDIAL_MAX_MS,
+  });
+  const delay = step.delayMs;
+  bridgeBackoffMs = step.nextBackoffMs;
   bridgeRedialDueAt = Date.now() + delay;
   bridgeRedialTimer = setTimeout(function() {
     bridgeRedialTimer = null;
@@ -9149,10 +9388,8 @@ function dialBridge(gen) {
   if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
   const cfg = bridgeConfig;
   const WsCtor = getWsClientCtor();
-  if (!WsCtor) {
-    logMsg('error', 'bridge: no WebSocket client available on this runtime');
-    return;
-  }
+  // Which client dials (the conn-open line names it): Bun's, the ws package's, or createBridgeWsClient.
+  const wsClient = WsCtor === globalThis.WebSocket ? 'bun' : WsCtor.name === 'BridgeWsClient' ? 'builtin' : 'ws';
   let dialUrl;
   try {
     // Token rides a query param — browser-style clients can't set headers,
@@ -9188,7 +9425,7 @@ function dialBridge(gen) {
     });
     bridgeDialStartedAt = null;
     if (bridgeClient === client) bridgeClient = null;
-    try { client.close(); } catch {}
+    abandonBridgeSocket(client);
     // Don't rely on close() firing onclose for a wedged socket — schedule
     // directly. scheduleBridgeRedial dedupes if onclose does fire too.
     scheduleBridgeRedial(gen);
@@ -9213,7 +9450,7 @@ function dialBridge(gen) {
       onOverflow: function(queuedBytes) {
         logMsg('error', 'bridge: uplink queue overflow, closing the socket', { connId: connId, queuedBytes: queuedBytes });
         bridgeLastError = 'uplink queue overflow (daemon closed)';
-        try { client.close(); } catch {}
+        abandonBridgeSocket(client);
       },
     });
     bridgeUplink = uplink;
@@ -9221,7 +9458,7 @@ function dialBridge(gen) {
     bridgeAdapter = adapter;
     wsClients.add(adapter);
     bridgeDrift.start();
-    logMsg('info', 'bridge-conn-open', { connId: connId, dialMs: dialMs });
+    logMsg('info', 'bridge-conn-open', { connId: connId, dialMs: dialMs, wsClient: wsClient });
     // uplink: 1 tells the replica it may send bridge.peer and echo ackSeq.
     adapter.send(JSON.stringify({
       ev: 'hello',
@@ -9233,23 +9470,38 @@ function dialBridge(gen) {
       uplink: 1,
     }));
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias });
+    // The silence watchdog: see BRIDGE_SILENT_PINGS.
+    let heardAt = bridgeLastInbound;
+    let silentChecks = 0;
     bridgePingTimer = setInterval(function() {
       if (gen !== bridgeGeneration) return;
-      if (Date.now() - bridgeLastInbound > BRIDGE_SILENCE_MS) {
+      if (bridgeLastInbound !== heardAt) { heardAt = bridgeLastInbound; silentChecks = 0; return; }
+      silentChecks++;
+      if (silentChecks % BRIDGE_CHECKS_PER_PING !== 0) return;
+      if (silentChecks >= BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS) {
         logMsg('warn', 'bridge: inbound silence — tearing down', {
           silentMs: Date.now() - bridgeLastInbound,
+          // The least silence this watchdog tears down at; the bridge monitor
+          // tells a counted watchdog from the old wall-clock one by it.
+          limitMs: BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS * Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING),
         });
         bridgeLastError = 'inbound silence (daemon closed)';
-        try { client.close(); } catch {}
+        // Tear down and redial here, as the dial timeout does: Node's WebSocket
+        // close handshake has no timeout, so on a link that drops every byte
+        // onclose (and the redial hung off it) never came (matrix B7/H7: the
+        // bridge stayed down for good). onClose runs once per socket.
+        onClose({ code: null, reason: 'inbound silence', wasClean: false });
+        abandonBridgeSocket(client);
         return;
       }
       // The keepalive is also an ack marker (bridge-uplink-core.ts).
       uplink.ping();
-    }, BRIDGE_PING_INTERVAL_MS);
+    }, Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING));
   };
 
   const onMessage = function(data) {
-    if (gen !== bridgeGeneration || !bridgeAdapter) return;
+    // Not from a socket this daemon already gave up on (its adapter is gone).
+    if (gen !== bridgeGeneration || !bridgeAdapter || bridgeClient !== client) return;
     bridgeLastInbound = Date.now();
     const text = typeof data === 'string' ? data : data.toString();
     if (bridgeUplink) bridgeUplink.noteInbound(Buffer.byteLength(text, 'utf8'));
@@ -9257,8 +9509,9 @@ function dialBridge(gen) {
   };
 
   // ws package: (code, reasonBuffer); browser-style: a CloseEvent.
+  let closeHandled = false;
   const onClose = function(a, b) {
-    if (gen !== bridgeGeneration) return;
+    if (gen !== bridgeGeneration || closeHandled) return;
     // Late close from a socket the dial timeout already abandoned — a newer
     // dial may be in flight; don't clobber its state.
     // LOAD-BEARING with scheduleBridgeRedial's dedupe: after the dial timeout
@@ -9267,6 +9520,7 @@ function dialBridge(gen) {
     // scheduleBridgeRedial — only the "if (bridgeRedialTimer) return" dedupe
     // stops a SECOND stacked redial then. Change either side only in tandem.
     if (bridgeClient !== null && bridgeClient !== client) return;
+    closeHandled = true;
     if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
     bridgeDialStartedAt = null;
     if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
@@ -9278,14 +9532,19 @@ function dialBridge(gen) {
       wsClients.delete(bridgeAdapter);
       for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
       bridgeAdapter = null;
+      bridgeDroppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null;
+      bridgeHasDropped = true;
     }
     bridgeClient = null;
     logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs });
     scheduleBridgeRedial(gen);
   };
 
-  // onclose always follows an error; keep what it said for the close line.
+  // onclose always follows an error; keep what it said for the close line. A
+  // socket already given up on (it can sit in CLOSING for minutes) must not
+  // overwrite the cause the next link's close line reports.
   const onError = function(e) {
+    if (gen !== bridgeGeneration || bridgeClient !== client) return;
     var m = e && (e.message || (e.error && e.error.message));
     bridgeLastError = typeof m === 'string' && m ? m.slice(0, 200) : ((e && e.type) || 'error');
   };
@@ -9840,15 +10099,20 @@ async function startDaemon() {
   const wss = createWsServer(httpServer);
 
   wss.on('connection', (ws) => {
+    heardFrom(ws);
     wsClients.add(ws);
     logMsg('info', 'client connected', { clients: wsClients.size });
 
-    // Ping/pong keepalive
+    // Ping/pong keepalive. Every frame back is proof of life (heardFrom).
     const pingTimer = setInterval(() => {
+      if (clientKeepaliveExpired(ws)) return;
       if (ws.readyState === 1) ws.ping();
-    }, PING_INTERVAL_MS);
+    }, TRUSTED_CLIENT_BEAT_MS);
+    ws.on('pong', () => heardFrom(ws));
+    ws.on('ping', () => heardFrom(ws));
 
     ws.on('message', (msg) => {
+      heardFrom(ws);
       handleCommand(ws, typeof msg === 'string' ? msg : msg.toString());
     });
 

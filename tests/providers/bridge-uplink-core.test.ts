@@ -157,6 +157,43 @@ describe('flow control', () => {
     expect(h.up.send('more')).toBe('dropped')
   })
 
+  // On a busy link the marker answers are the only frames the daemon hears, and
+  // its watchdog tears the link down 45 to 50 s after the last one. At the
+  // replica's 256 KB chunks an envelope is a little under 256 KB, so a 256 KB
+  // marker spacing put a marker after every SECOND chunk (about 508 KB apart),
+  // and a link under about 11 KB/s was torn down mid-transfer (gate 2026-10-04:
+  // a 2 MB reply at 8 KB/s, 8 drops in 420 s and no reply).
+  const longestRunWithoutMarker = (wire: string[]): number => {
+    let run = 0
+    let worst = 0
+    for (const f of wire) {
+      if (f.startsWith('{"ev":"bridge-ping"')) { run = 0; continue }
+      run += Buffer.byteLength(f)
+      worst = Math.max(worst, run)
+    }
+    return worst
+  }
+  it('a marker follows every chunk of a large reply', () => {
+    const h = harness({ chunkBytes: 256 * 1024 })
+    h.up.send(JSON.stringify({ id: 7, ok: true, data: 'r'.repeat(2 * MiB) }))
+    h.run(60_000)
+    expect(h.up.queuedBytes).toBe(0)
+    const chunks = h.wire.filter((f) => f.startsWith('{"ev":"chunk"'))
+    expect(chunks.length).toBeGreaterThanOrEqual(8)
+    for (let i = 0; i < h.wire.length - 1; i++) {
+      if (h.wire[i].startsWith('{"ev":"chunk"')) expect(h.wire[i + 1].startsWith('{"ev":"bridge-ping"')).toBe(true)
+    }
+    expect(longestRunWithoutMarker(h.wire)).toBeLessThanOrEqual(256 * 1024)
+  })
+  it('a stream of small frames gets a marker every 64 KB', () => {
+    const h = harness()
+    const frame = JSON.stringify({ ev: 'jsonl', line: 'l'.repeat(10 * 1024) })
+    for (let i = 0; i < 100; i++) h.up.send(frame)
+    h.run(60_000)
+    expect(h.up.queuedBytes).toBe(0)
+    expect(longestRunWithoutMarker(h.wire)).toBeLessThan(64 * 1024 + Buffer.byteLength(frame))
+  })
+
   it('the keepalive ping is a marker, and its echo measures the round trip', () => {
     const h = harness({ ackDelayMs: 120 })
     h.up.send('{"ev":"hello"}')

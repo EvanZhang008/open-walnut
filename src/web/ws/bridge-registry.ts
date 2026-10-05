@@ -70,7 +70,10 @@ const CLOSE_REPLACED = 4000
 /** Close code for a hello whose hostAlias doesn't match the token identity. */
 const CLOSE_UNAUTHORIZED = 4001
 const DEFAULT_TIMEOUT_MS = 15_000
-// Daemon pings every 30s; two misses + margin = dead link.
+// A live idle link carries a frame each way about every 15s: the daemon sends
+// a bridge-ping after 15s with nothing heard, and each one starts an exchange
+// (the marker, our ping RPC, its reply). 75s is several of those missed.
+// scripts/bridge-monitor/fake-bridge.mjs models this sweep; classify.test.ts keeps them equal.
 const SILENCE_MS = 75_000
 const SILENCE_SWEEP_MS = 30_000
 
@@ -272,11 +275,13 @@ function handleFrame(conn: BridgeConn, raw: string): void {
   if (!ev) return
 
   if (ev === 'bridge-ping') {
-    // Answer with a real RPC ping. The daemon tears the link down after 75s
-    // of INBOUND silence — with no phone activity the only traffic was its
-    // own pings, which we silently ate, so every bridge flapped on a ~90s
-    // cycle (dial → 90s silence → teardown → redial). Any frame feeds its
-    // liveness clock; `ping` is a no-op command every daemon understands.
+    // Answer with a real RPC ping. The daemon tears the link down 45 to 50s
+    // after the last INBOUND frame (BRIDGE_WATCHDOG in daemon-core.ts). With no
+    // phone activity the only traffic used to be its own pings, which we
+    // silently ate, so every bridge flapped on a ~90s cycle (dial, silence,
+    // teardown, redial). Any frame feeds its liveness clock; `ping` is a no-op
+    // command every daemon understands. On a busy link these answers are the
+    // only frames it hears, which is why it sends a marker after every chunk.
     // Echoing `seq` confirms every byte the daemon wrote before this marker,
     // which is what paces its uplink (bridge-uplink-core.ts); an older daemon
     // ignores the field.

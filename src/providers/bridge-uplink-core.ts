@@ -21,6 +21,16 @@
  * A marker nobody confirms within `ackTimeoutMs` releases the window (fail
  * open): a dead link is the silence watchdog's job, not a reason to wedge.
  *
+ * On a busy link the marker answers are the only frames the daemon hears, and
+ * its silence watchdog tears a link down 45 to 50 s after the last one
+ * (BRIDGE_WATCHDOG in daemon-core.ts). So a marker follows every
+ * `markerEveryBytes` (64 KB): at least one per chunk, since markers only go
+ * between frames. At 256 KB a marker followed every second chunk (an envelope
+ * is a little under 256 KB), about 508 KB apart, and a link slower than about
+ * 11 KB/s was torn down mid-transfer and never finished one (gate 2026-10-04:
+ * a 2 MB reply at 8 KB/s, 8 drops in 420 s). Now a link stays up down to about
+ * 6 KB/s, one chunk per watchdog window.
+ *
  * Frames larger than the chunk size are split into `{ev:'chunk'}` envelopes,
  * but only after the replica has said it can reassemble them (`bridge.peer`).
  */
@@ -44,7 +54,7 @@ export interface BridgeUplinkOptions {
 
 export function createBridgeUplink(deps: BridgeUplinkDeps, opts?: BridgeUplinkOptions) {
   const HWM = (opts && opts.hwmBytes) || 1024 * 1024
-  const MARKER_EVERY = (opts && opts.markerEveryBytes) || 256 * 1024
+  const MARKER_EVERY = (opts && opts.markerEveryBytes) || 64 * 1024
   const ACK_TIMEOUT_MS = (opts && opts.ackTimeoutMs) || 15_000
   const MAX_QUEUE = (opts && opts.maxQueueBytes) || 64 * 1024 * 1024
   const CHUNK_MIN = 16 * 1024

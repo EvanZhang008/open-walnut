@@ -6,12 +6,15 @@
  * cloud side (both links drop together) versus the daemon (only it drops).
  *
  *   hello {ev:'hello', hostAlias:'probe'} on open, like the daemon
- *   every 30 s  {ev:'bridge-ping'}; the replica answers with a `ping` RPC,
- *               which the probe acks (that round trip is the RTT sample)
+ *   watchdog    the daemon's (BRIDGE_WATCHDOG in lib/classify.mjs): after a
+ *               ping interval (15 s) with nothing heard, {ev:'bridge-ping'};
+ *               the replica answers with a `ping` RPC, which the probe acks
+ *               (that round trip is the RTT sample). When the third ping is
+ *               due with still nothing, the link is torn down, 45 to 50 s
+ *               after the last inbound frame.
  *   every 30 s  a 64 KB frame; every 15 min a 2 MB burst, placed away from
  *               the replica's 5-minute tick. Each frame carries seq + sha256.
- *   watchdog    75 s of inbound silence tears the link down (as the daemon)
- *   redial      1 s doubling to 60 s with jitter (as the daemon)
+ *   redial      1 s doubling to 60 s with jitter
  *
  * Per connection it logs the daemon's open/close fields to
  * ~/Library/Logs/Walnut/bridge-monitor/probe-YYYY-MM-DD.ndjson.
@@ -28,7 +31,7 @@ import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
 import { ensureDir, loadConfig } from './lib/config.mjs'
 import { Store } from './lib/store.mjs'
-import { quantile } from './lib/classify.mjs'
+import { BRIDGE_WATCHDOG, quantile } from './lib/classify.mjs'
 
 const VERSION = 'bridge-probe/1'
 
@@ -139,8 +142,16 @@ export function startProbe(o) {
       }
       log({ kind: 'probe', ev: 'connected', connId: conn.connId, dialMs: conn.dialMs })
       send({ ev: 'hello', hostAlias: o.hostAlias, version: VERSION, instanceId, sids: [] }, 'hello')
+      // The daemon's watchdog: checks are counted, any inbound frame resets
+      // the count, a ping goes out on every checksPerPing-th silent check.
+      const w = { ...BRIDGE_WATCHDOG, ...(o.pingEveryMs ? { pingIntervalMs: o.pingEveryMs } : {}) }
+      let heardAt = conn.lastInbound
+      let silentChecks = 0
       pingTimer = setInterval(() => {
-        if (Date.now() - conn.lastInbound > o.silenceMs) {
+        if (conn.lastInbound !== heardAt) { heardAt = conn.lastInbound; silentChecks = 0; return }
+        silentChecks++
+        if (silentChecks % w.checksPerPing !== 0) return
+        if (silentChecks >= w.checksPerPing * w.silentPings) {
           silence = true
           log({ kind: 'probe', ev: 'silence-detected', connId: conn.connId, silentMs: Date.now() - conn.lastInbound })
           try { sock.close() } catch { /* already closing */ }
@@ -149,7 +160,7 @@ export function startProbe(o) {
         }
         pingSentAt = Date.now()
         send({ ev: 'bridge-ping', ts: pingSentAt }, 'ping')
-      }, o.pingEveryMs)
+      }, Math.round(w.pingIntervalMs / w.checksPerPing))
       payloadTimer = setInterval(() => sendPayload(o.payloadBytes, 'payload'), o.payloadEveryMs)
     })
 

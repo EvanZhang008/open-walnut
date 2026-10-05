@@ -25,7 +25,7 @@ async function until(fn: () => boolean, timeoutMs = 8000) {
 
 const FAST = {
   hostAlias: 'probe', pingEveryMs: 100, payloadEveryMs: 150, payloadBytes: 64 * 1024, burstEveryMs: 1000,
-  burstBytes: 2 * 1024 * 1024, burstPhaseSec: 0, silenceMs: 600, dialTimeoutMs: 2000, backoffMaxMs: 400,
+  burstBytes: 2 * 1024 * 1024, burstPhaseSec: 0, dialTimeoutMs: 2000, backoffMaxMs: 400,
 }
 
 let cleanup: Array<() => Promise<void>> = []
@@ -88,12 +88,13 @@ describe('control probe', () => {
     await until(() => evs('connected').length >= 2)
   })
 
-  it('the silence watchdog tears a quiet link down and redials', async () => {
+  it("the daemon's silence watchdog tears a quiet link down when the third ping is due, and redials", async () => {
     const { fb, evs } = await setup()
     await until(() => fb.stats.rpcAnswered >= 2)
     fb.setSilent(true)
     await until(() => evs('silence').length >= 1)
-    expect(evs('silence-detected')[0].silentMs).toBeGreaterThanOrEqual(600)
+    // Three ping intervals of silence (the test's 100 ms interval), as the daemon.
+    expect(evs('silence-detected')[0].silentMs).toBeGreaterThanOrEqual(3 * FAST.pingEveryMs - 50)
     fb.setSilent(false)
     await until(() => evs('connected').length >= 2)
   })

@@ -63,14 +63,14 @@ export const DEFAULTS = Object.freeze({
     url: null,
     tokenFile: null,
     hostAlias: 'probe',
-    pingEveryMs: 30_000,
+    // No ping interval or silence limit here: the probe runs the daemon's
+    // watchdog (BRIDGE_WATCHDOG in classify.mjs); pingEveryMs overrides it for tests.
     payloadEveryMs: 30_000,
     payloadBytes: 64 * 1024,
     burstEveryMs: 15 * 60_000,
     burstBytes: 2 * 1024 * 1024,
     /** Seconds into the 5-minute cycle; 'auto' = the summarizer's M1 phase + 150 s. */
     burstPhaseSec: 'auto',
-    silenceMs: 75_000,
     dialTimeoutMs: 20_000,
     backoffMaxMs: 60_000,
     tokenInQuery: true,

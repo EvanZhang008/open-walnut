@@ -23,9 +23,12 @@
  *       stopped.
  *   M6  Mac daemon froze: the watchdog fired while the Mac was awake, and the
  *       daemon's event-loop stall covers so much of the silence that what is
- *       left is under the 75 s watchdog limit. Without the stall it would not
- *       have fired; the cause is on the Mac. (Live 2026-09-27/28: 7 of 8
- *       "silent while awake" drops were this, at load around 300.)
+ *       left is under the old 75 s watchdog limit. Without the stall it would
+ *       not have fired; the cause is on the Mac. (Live 2026-09-27/28: 7 of 8
+ *       "silent while awake" drops were this, at load around 300.) Only a
+ *       daemon from before the counted watchdog can do this: it read the wall
+ *       clock. A current daemon counts checks, a stall adds one check at most,
+ *       and its silence line says so (limitMs); its silences stay M5.
  *   M?  no cause found yet: a close with no corroborating evidence, a local
  *       abort, or a silence with no record of whether the Mac was awake.
  */
@@ -44,8 +47,19 @@ export const MECH_LABELS = {
 }
 export const MECHS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M?']
 
-/** The daemon's inbound silence watchdog (BRIDGE_SILENCE_MS in daemon-standalone.ts). */
-export const BRIDGE_SILENCE_MS = 75_000
+/**
+ * The daemon's inbound silence watchdog: BRIDGE_WATCHDOG in daemon-core.ts,
+ * which tests/scripts/bridge-monitor/classify.test.ts pins this copy to. It
+ * pings after a ping interval of silence and tears the link down when the
+ * third ping is due, 45 to 50 s after the last inbound frame. The probe runs
+ * the same watchdog.
+ */
+export const BRIDGE_WATCHDOG = Object.freeze({ pingIntervalMs: 15_000, checksPerPing: 3, silentPings: 3 })
+/** The least silence the current daemon tears the link down at. */
+export const BRIDGE_SILENCE_MS = BRIDGE_WATCHDOG.checksPerPing * BRIDGE_WATCHDOG.silentPings
+  * Math.round(BRIDGE_WATCHDOG.pingIntervalMs / BRIDGE_WATCHDOG.checksPerPing)
+/** The limit daemons before the counted watchdog read off the wall clock (checked every 30 s). */
+export const LEGACY_BRIDGE_SILENCE_MS = 75_000
 /** Load samples come every 60 s; two more than this apart leave a hole in the coverage. */
 export const MAX_SAMPLE_GAP_MS = 120_000
 
@@ -95,6 +109,7 @@ export function buildLinks(daemonEvents) {
     Object.assign(cur, {
       downAt: e.t, downMs: t, upS: (t - cur.upMs) / 1000, cause,
       ...(e.silentMs != null ? { silentMs: e.silentMs } : {}),
+      ...(cause === 'silence' && e.limitMs != null ? { silenceLimitMs: e.limitMs } : {}),
       ...(e.reason != null && cause === 'restart' ? { restartReason: e.reason } : {}),
     })
     links.push(cur)
@@ -259,7 +274,8 @@ export function classifyDrop(link, c) {
     if (!c.covered) return { mech: 'M?', basis: 'silence watchdog, Mac state unknown (no collector samples through the silence)' }
     const drift = link.close?.loopDriftMax60sMs
     const silentMs = link.silentMs ?? link.close?.lastInboundAgeMs
-    if (drift != null && silentMs != null && silentMs - drift < BRIDGE_SILENCE_MS) {
+    // A daemon that logs its limit counts checks: no stall trips it (M6 is the old watchdog).
+    if (link.silenceLimitMs == null && drift != null && silentMs != null && silentMs - drift < LEGACY_BRIDGE_SILENCE_MS) {
       return { mech: 'M6', basis: `daemon event loop stalled ${secs(drift)} of ${secs(silentMs)} silent${c.load1 != null ? `, load ${Math.round(c.load1)}` : ''}` }
     }
     return { mech: 'M5', basis: drift == null ? 'silence watchdog while the Mac was awake, no drift data' : `silence watchdog while the Mac was awake, daemon loop drift ${secs(drift)}` }
@@ -437,12 +453,12 @@ function mechText(mech, k, n, drops, phase) {
     const stall = measured === k ? ' and the daemon was not stalled'
       : measured > 0 ? ` (the daemon's stall was measured for ${measured} of them and was too short to explain the silence; ${k - measured} have no measurement)`
         : ' (the daemon recorded no stall measurement for them)'
-    return `${k} of ${n} drops were the daemon's silence watchdog firing while the Mac was awake${stall}: nothing arrived from the cloud for 75 s or more. The Mac side cannot say where the traffic stopped (the replica, its proxy, or the path between); the replica close log for these times can.`
+    return `${k} of ${n} drops were the daemon's silence watchdog firing while the Mac was awake${stall}: nothing arrived from the cloud for ${secs(BRIDGE_SILENCE_MS)} or more. The Mac side cannot say where the traffic stopped (the replica, its proxy, or the path between); the replica close log for these times can.`
   }
   if (mech === 'M6') {
     const drift = Math.max(0, ...mine.map((d) => d.close?.loopDriftMax60sMs ?? 0))
     const loads = mine.map((d) => d.ctx?.load1).filter((x) => x != null)
-    return `${k} of ${n} drops were the Walnut daemon on this Mac freezing: its event loop stalled for up to ${Math.round(drift / 1000)} s${loads.length ? ` at a machine load of up to ${Math.round(Math.max(...loads))}` : ''}, long enough for its own 75 s silence watchdog to close the link. The stall alone explains these, so the fix is on the Mac: less load, or a daemon that stays responsive under it.`
+    return `${k} of ${n} drops were the Walnut daemon on this Mac freezing: its event loop stalled for up to ${Math.round(drift / 1000)} s${loads.length ? ` at a machine load of up to ${Math.round(Math.max(...loads))}` : ''}, long enough for its own ${secs(LEGACY_BRIDGE_SILENCE_MS)} silence watchdog to close the link. The stall alone explains these, so the fix is on the Mac: less load, or a daemon that stays responsive under it (a daemon updated since 2026-10 counts its checks and does not fire on a stall).`
   }
   const unknown = countOf(mine, (d) => String(d.basis).includes('Mac state unknown'))
   return `${k} of ${n} drops have no cause yet${unknown ? ` (${unknown} were silences with no record of whether the Mac was awake)` : ''}. The replica close log (initiator, code) will settle the closes.`

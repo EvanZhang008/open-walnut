@@ -19,6 +19,7 @@ import { describe, it, expect, vi } from 'vitest'
 import ts from 'typescript'
 import fs from 'node:fs'
 import path from 'node:path'
+import { BRIDGE_WATCHDOG } from '../../src/providers/daemon-core.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const corePath = path.join(ROOT, 'src/providers/daemon-core.ts')
@@ -2086,7 +2087,7 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
   })
   it('both enforce a dial timeout so a wedged CONNECTING socket gets redialed', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/BRIDGE_DIAL_TIMEOUT_MS = parseInt\(process\.env\.WALNUT_BRIDGE_DIAL_TIMEOUT_MS \|\| '', 10\) \|\| 20[_]?000/)
+      expect(src).toMatch(/BRIDGE_DIAL_TIMEOUT_MS = envTimerMs\(process\.env\.WALNUT_BRIDGE_DIAL_TIMEOUT_MS, 20[_]?000, 500\)/)
       expect(src).toMatch(/bridge: dial timeout — abandoning socket/)
       // The timeout handler must schedule the redial itself (a wedged socket
       // may never fire onclose).
@@ -2110,12 +2111,148 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       expect(src).toMatch(/ev: 'hello',\s*hostAlias: cfg\.hostAlias,\s*version: DAEMON_VERSION,\s*instanceId: DAEMON_INSTANCE_ID,\s*sids: \[\.\.\.sessions\.keys\(\)\]/)
     }
   })
-  it('both share ping interval, silence threshold, and backoff cap', () => {
+  it('both share the ping interval, the silence watchdog, and the redial caps', () => {
+    // The bun twin reads BRIDGE_WATCHDOG (daemon-core.ts); the JS twin's literals are it.
+    expect(standaloneSrc).toMatch(/BRIDGE_PING_INTERVAL_MS = envTimerMs\(process\.env\.WALNUT_BRIDGE_PING_MS, BRIDGE_WATCHDOG\.pingIntervalMs, 150\)/)
+    expect(standaloneSrc).toMatch(/BRIDGE_CHECKS_PER_PING = BRIDGE_WATCHDOG\.checksPerPing\n/)
+    expect(standaloneSrc).toMatch(/BRIDGE_SILENT_PINGS = BRIDGE_WATCHDOG\.silentPings\n/)
+    expect(templateSrc).toContain(`const BRIDGE_PING_INTERVAL_MS = envTimerMs(process.env.WALNUT_BRIDGE_PING_MS, ${BRIDGE_WATCHDOG.pingIntervalMs}, 150);`)
+    expect(templateSrc).toContain(`const BRIDGE_CHECKS_PER_PING = ${BRIDGE_WATCHDOG.checksPerPing};`)
+    expect(templateSrc).toContain(`const BRIDGE_SILENT_PINGS = ${BRIDGE_WATCHDOG.silentPings};`)
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/BRIDGE_PING_INTERVAL_MS = 30[_]?000/)
-      expect(src).toMatch(/BRIDGE_SILENCE_MS = 75[_]?000/)
+      expect(src).not.toMatch(/BRIDGE_SILENCE_MS/)
       expect(src).toMatch(/BRIDGE_BACKOFF_MAX_MS = 60[_]?000/)
+      expect(src).toMatch(/BRIDGE_FAST_REDIAL_MAX_MS = 5[_]?000/)
+      expect(src).toMatch(/BRIDGE_FAST_WINDOW_MS = 180[_]?000/)
+      expect(src).toMatch(/BRIDGE_FAST_ARM_UPTIME_MS = 120[_]?000/)
     }
+  })
+  // Matrix B7/H7 (2026-10-02): the watchdog only called close() and the redial
+  // hung off onclose, which Node's WebSocket never fires on a link that drops
+  // every byte. The teardown must redial by itself, like the dial timeout.
+  it('both tear down and redial from the silence watchdog itself (no wait for onclose)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const idx = src.indexOf("'bridge: inbound silence")
+      expect(idx).toBeGreaterThan(-1)
+      const branch = src.slice(idx, src.indexOf('return', idx))
+      expect(branch).toMatch(/onClose\(\{ code: null, reason: 'inbound silence', wasClean: false \}\)/)
+      // The bridge monitor reads this to tell the counted watchdog from the old one.
+      expect(branch).toMatch(/limitMs: BRIDGE_CHECKS_PER_PING \* BRIDGE_SILENT_PINGS \* Math\.round\(BRIDGE_PING_INTERVAL_MS \/ BRIDGE_CHECKS_PER_PING\),/)
+      // onClose ends in the redial and runs once per socket.
+      expect(src).toMatch(/if \(gen !== bridgeGeneration \|\| closeHandled\) return/)
+      expect(src).toMatch(/closeHandled = true/)
+      const body = src.slice(src.indexOf('const onClose = '), src.indexOf('const onClose = ') + 2500)
+      expect(body).toMatch(/scheduleBridgeRedial\(gen\)/)
+    }
+  })
+  // The behavior is pinned in daemon-link-liveness-twins-e2e.test.ts; this keeps the twins' text in step.
+  it('both count silent checks, ping only on a silent interval, and give up when the third ping is due', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('// The silence watchdog: see BRIDGE_SILENT_PINGS.')
+      expect(start).toBeGreaterThan(-1)
+      const w = src.slice(start, src.indexOf('Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING))', start) + 70)
+      expect(w).toMatch(/if \(bridgeLastInbound !== heardAt\) \{ heardAt = bridgeLastInbound; silentChecks = 0; return;? \}/)
+      expect(w).toMatch(/if \(silentChecks % BRIDGE_CHECKS_PER_PING !== 0\) return/)
+      expect(w).toMatch(/if \(silentChecks >= BRIDGE_CHECKS_PER_PING \* BRIDGE_SILENT_PINGS\) \{/)
+      expect(w).toMatch(/uplink\.ping\(\)/)
+    }
+  })
+  // A socket the daemon gave up on (torn down by the watchdog, abandoned by the
+  // dial timeout) can sit in CLOSING for minutes on Node: its late frames and
+  // errors must not reach the live link's state or its close line.
+  it('both ignore frames and errors from a socket they already gave up on', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/if \(gen !== bridgeGeneration \|\| !bridgeAdapter \|\| bridgeClient !== client\) return/)
+      const err = src.slice(src.search(/(const onError = function\(e\) \{|client\.onerror = \(e: Event\) => \{)/), src.search(/(const onError = function\(e\) \{|client\.onerror = \(e: Event\) => \{)/) + 200)
+      expect(err).toMatch(/if \(gen !== bridgeGeneration \|\| bridgeClient !== client\) return/)
+    }
+  })
+  for (const fn of ['envTimerMs', 'bridgeRedialStep', 'armsBridgeFastWindow']) {
+    it(`template mirrors ${fn} from daemon-core verbatim (modulo types and semicolons)`, () => {
+      const extract = (src: string) => {
+        const start = src.search(new RegExp(`function ${fn}\\(`))
+        expect(start).toBeGreaterThan(-1)
+        // The body only: the signature line differs by its types.
+        const body = src.slice(src.indexOf('\n', start), src.indexOf('\n}', start) + 2)
+        return body.replace(/;/g, '').replace(/\s+/g, ' ').trim()
+      }
+      expect(extract(templateSrc)).toBe(extract(readFile(corePath)))
+    })
+  }
+  it('both size every redial with bridgeRedialStep and arm the fast window only from a healthy drop', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const sched = src.slice(src.indexOf('function scheduleBridgeRedial('), src.indexOf('function scheduleBridgeRedial(') + 1200)
+      expect(sched).toMatch(/bridgeRedialStep\(\{/)
+      expect(sched).toMatch(/sinceDropMs: bridgeDroppedAt != null \? Date\.now\(\) - bridgeDroppedAt : null/)
+      expect(sched).toMatch(/bridgeBackoffMs = step\.nextBackoffMs/)
+      // Only where an open adapter is torn down (an established link).
+      expect(src).toMatch(/bridgeAdapter = null;?\s*\n\s*bridgeDroppedAt = armsBridgeFastWindow\(\{ uptimeMs: Date\.now\(\) - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS \}\) \? Date\.now\(\) : null;?\s*\n\s*bridgeHasDropped = true/)
+    }
+  })
+  // Gate P5 (2026-10-03): an SSH forward that died on the far side while sshd
+  // keeps this end open ACKs and never resets. Only the bun twin closed it; the
+  // JS twin kept it first in wsClients and every relay went into it. Both twins
+  // now ping every trusted client each beat and close one silent for 8 beats.
+  it('both ping every trusted client each beat and close one that stays silent for 8 beats', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      // The beat is parsed once, with the floor (gate 2026-10-04: a second
+      // parse without one gave the two readers different beats).
+      expect(src).toMatch(/(const|var) TRUSTED_CLIENT_BEAT_MS = envTimerMs\(process\.env\.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15[_]?000, 100\)/)
+      expect(src.match(/WALNUT_TRUSTED_CLIENT_BEAT_MS/g)).toHaveLength(1)
+      expect(src).toMatch(/const CLIENT_KEEPALIVE_MISSED = 8\b/)
+      const fnStart = src.search(/clientKeepaliveExpired(\(ws\)|) ?(=|\{|\()/)
+      const fn = src.slice(src.indexOf('clientKeepaliveExpired'), src.indexOf('clientKeepaliveExpired') + 900)
+      expect(fnStart).toBeGreaterThan(-1)
+      expect(fn).toMatch(/const missed = prev && prev\.heardAt === heardAt \? prev\.missed \+ 1 : 0/)
+      expect(fn).toMatch(/if \(missed < CLIENT_KEEPALIVE_MISSED\) \{/)
+      expect(fn).toMatch(/ws\.terminate\(\)/)
+    }
+    // JS: the per-connection timer asks before it pings; its socket wrapper can destroy.
+    expect(templateSrc).toMatch(/if \(clientKeepaliveExpired\(ws\)\) return;\s*\n\s*if \(ws\.readyState === 1\) ws\.ping\(\);\s*\n\s*\}, TRUSTED_CLIENT_BEAT_MS\)/)
+    expect(templateSrc).toMatch(/ws\.terminate = function\(\) \{\s*\n\s*ws\.readyState = 3;\s*\n\s*try \{ socket\.destroy\(\); \} catch \{\}/)
+    // bun: one loop over every client, the bridge adapter skipped.
+    const loop = standaloneSrc.slice(standaloneSrc.indexOf('const clientKeepaliveExpired'), standaloneSrc.indexOf('}, TRUSTED_CLIENT_BEAT_MS).unref?.()') + 40)
+    expect(loop).toMatch(/if \(ws\.data\?\.origin === 'bridge'\) continue\s*\n\s*if \(clientKeepaliveExpired\(ws\)\) continue\s*\n\s*try \{ ws\.ping\(\) \} catch \{\}/)
+    // Every inbound frame counts as an answer, on both twins.
+    for (const h of [/open\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /message\(ws, msg\) \{\s*\n\s*heardFrom\(ws\)/, /ping\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /pong\(ws\) \{\s*\n\s*heardFrom\(ws\)/]) {
+      expect(standaloneSrc).toMatch(h)
+    }
+    for (const h of [/wss\.on\('connection', \(ws\) => \{\s*\n\s*heardFrom\(ws\);/, /ws\.on\('pong', \(\) => heardFrom\(ws\)\);/, /ws\.on\('ping', \(\) => heardFrom\(ws\)\);/, /ws\.on\('message', \(msg\) => \{\s*\n\s*heardFrom\(ws\);/, /\/\/ pong\s*\n\s*ws\.emit\('ping'\);/]) {
+      expect(templateSrc).toMatch(h)
+    }
+  })
+  // Gate 2026-10-04: on the JS twin a link given up on was only close()d (Node's
+  // global WebSocket has no terminate()), so it stayed CLOSING and went on
+  // draining what it had buffered; behind one slow bottleneck those streams
+  // starved every later link. Every site that gives a socket up destroys it.
+  it('both destroy a bridge socket they give up on (dial timeout, overflow, silence)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const helper = src.slice(src.indexOf('function abandonBridgeSocket('), src.indexOf('function abandonBridgeSocket(') + 300)
+      expect(helper).toMatch(/terminate/)
+      for (const site of ["'bridge: dial timeout", "'bridge: uplink queue overflow, closing the socket'", "'bridge: inbound silence"]) {
+        const idx = src.indexOf(site)
+        expect(idx).toBeGreaterThan(-1)
+        expect(src.slice(idx, idx + 900)).toMatch(/abandonBridgeSocket\(client\)/)
+      }
+    }
+  })
+  it('the JS twin dials with a client that can terminate, never Node\'s global WebSocket', () => {
+    const ctor = templateSrc.slice(templateSrc.indexOf('function getWsClientCtor()'), templateSrc.indexOf('function createBridgeWsClient('))
+    expect(ctor).toMatch(/if \(typeof Bun !== 'undefined' && typeof globalThis\.WebSocket === 'function'\) return globalThis\.WebSocket;/)
+    expect(ctor).toMatch(/require\('ws'\)/)
+    expect(ctor).toMatch(/return function BridgeWsClient\(url\) \{ return createBridgeWsClient\(url\); \};/)
+    expect(ctor.match(/return globalThis\.WebSocket/g)).toHaveLength(1)
+    const client = templateSrc.slice(templateSrc.indexOf('function createBridgeWsClient('), templateSrc.indexOf('function abandonBridgeSocket('))
+    // A client's frames are masked (RFC 6455 5.3); its terminate() destroys the socket.
+    expect(client).toMatch(/socket\.write\(encodeFrame\(Buffer\.from\(String\(data\), 'utf-8'\), 0x01, true\)\)/)
+    expect(client).toMatch(/ws\.terminate = function\(\) \{/)
+    expect(client).toMatch(/s\.destroy\(\)/)
+  })
+  // Half-open sockets: a client's FIN alone never closes an upgraded socket, so
+  // the client stayed in wsClients for good (gate 2026-10-04).
+  it('the JS twin ends a trusted client\'s socket on its FIN', () => {
+    const wrapper = templateSrc.slice(templateSrc.indexOf('function createWsWrapper('), templateSrc.indexOf('function encodeFrame('))
+    expect(wrapper).toMatch(/socket\.on\('end', \(\) => \{ try \{ socket\.destroy\(\); \} catch \{\} \}\);/)
   })
   it('both route inbound bridge frames through handleCommand (no second dispatch)', () => {
     for (const src of [standaloneSrc, templateSrc]) {

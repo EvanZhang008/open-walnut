@@ -37,7 +37,7 @@ const DAEMON_KINDS = [
  * token) is never recorded until the monitor is changed to use it.
  */
 export const DAEMON_FIELDS = Object.freeze([
-  'connId', 'dialMs', 'silentMs', 'uptimeMs', 'code', 'reason', 'wasClean', 'lastError', 'bytesIn', 'bytesOut',
+  'connId', 'dialMs', 'silentMs', 'limitMs', 'uptimeMs', 'code', 'reason', 'wasClean', 'lastError', 'bytesIn', 'bytesOut',
   'framesIn', 'framesOut', 'maxOutFrameBytes', 'maxOutFrameKind', 'bufferedAmountPeak', 'bufferedAmountAtClose',
   'lastInboundAgeMs', 'rttMsP50', 'rttMsMax', 'loopDriftMax60sMs', 'loopDriftMax5sMs',
 ])

@@ -33,6 +33,10 @@ import {
   shouldAutoRespond,
   buildControlResponse,
   decideBridgeRestart,
+  bridgeRedialStep,
+  armsBridgeFastWindow,
+  envTimerMs,
+  BRIDGE_WATCHDOG,
   detectCronFires,
   hasDiskCronInterest,
   durableCronDenyMessage,
@@ -671,6 +675,8 @@ interface WsData {
    * SSH-tunneled client path. Absent = trusted local/SSH client.
    */
   origin?: 'bridge'
+  /** When this socket last sent anything (a frame, a ping, a pong). See heardFrom. */
+  lastHeardAt?: number
 }
 
 /**
@@ -1075,6 +1081,23 @@ const sessions = new Map<string, SessionData>()
 
 // ── WebSocket connections ──
 const wsClients = new Set<ServerWebSocket<WsData>>()
+
+// When each trusted (non-bridge) client was last HEARD from: any frame, ping or
+// pong. Keep in sync with daemon-source.ts. A trusted client is a walnut
+// server, normally over an SSH port forward. When that forward dies on the far
+// side (a Mac asleep, a network that changed under it), the host's sshd keeps
+// the forwarded socket to this daemon open for many minutes: nothing ever
+// closes it and nothing ever comes back on it. The keepalive in main() pings
+// every trusted client once a beat and closes one it has not heard from for
+// CLIENT_KEEPALIVE_MISSED beats; a live walnut server is heard every beat (it
+// pings every 15s and answers these pings). The env override exists for tests
+// (sub-second beats); production leaves it unset. Parsed once, here, with the
+// floor every daemon timer knob has (envTimerMs).
+const TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15_000, 100)
+function heardFrom(ws: ServerWebSocket<WsData>): void {
+  if (ws.data) ws.data.lastHeardAt = Date.now()
+}
+
 let cronMetadataConfig: Awaited<ReturnType<typeof readCronCliConfig>> | null = null
 let cronMetadataReplay: Promise<void> = Promise.resolve()
 const cronMetadata = createCronMetadataTracker({
@@ -7914,6 +7937,11 @@ let bridgeBackoffMs = 1000
 // heal push preempt a far-away redial instead of waiting out backoff that was
 // earned while the network was down — see decideBridgeRestart in daemon-core.ts.
 let bridgeRedialDueAt: number | null = null
+// When the drop that armed the fast redial window happened (null = none is
+// armed), and whether any established link was lost yet (bridgeRedialStep and
+// armsBridgeFastWindow in daemon-core.ts).
+let bridgeDroppedAt: number | null = null
+let bridgeHasDropped = false
 // Generation guard: every (re)start bumps this; stale socket callbacks and
 // queued redials check it and no-op, so an old dial can't fight a new config.
 let bridgeGeneration = 0
@@ -7928,14 +7956,31 @@ let bridgeLastError: string | null = null
 const bridgeDrift = createLoopDriftProbe({ now: Date.now, setInterval, clearInterval: (t) => clearInterval(t as ReturnType<typeof setInterval>) })
 
 const BRIDGE_BACKOFF_MAX_MS = 60_000
-const BRIDGE_PING_INTERVAL_MS = 30_000
-// 2 missed 30s pings + margin — half-open sockets get torn down and redialed.
-const BRIDGE_SILENCE_MS = 75_000
+// The fast redial window after a healthy link drops: waits stop doubling at
+// 5 s for 180 s. Armed only by a link that had been up 120 s (or the first one
+// lost), so a flapping link redials on the plain backoff.
+const BRIDGE_FAST_REDIAL_MAX_MS = 5_000
+const BRIDGE_FAST_WINDOW_MS = 180_000
+const BRIDGE_FAST_ARM_UPTIME_MS = 120_000
+// The silence watchdog (onopen). Anything the replica sends counts as heard.
+// After a ping interval with nothing heard the daemon pings (also an ack
+// marker, bridge-uplink-core.ts), and when the BRIDGE_SILENT_PINGS-th ping is
+// due with still nothing, the link is dead: torn down 45 to 50 s after the last
+// inbound frame (a 75 s threshold checked every 30 s took 77 to 105 s, half of
+// matrix H7's wait). Checked BRIDGE_CHECKS_PER_PING times an interval; checks
+// are counted, not wall time, so a daemon that was itself suspended does not
+// tear down on wake. A busy link stays heard: the replica answers the markers
+// the uplink adds after every 64 KB, so after every chunk it moves. The
+// numbers are BRIDGE_WATCHDOG in daemon-core.ts, which the bridge monitor is
+// checked against. The env override is for tests.
+const BRIDGE_PING_INTERVAL_MS = envTimerMs(process.env.WALNUT_BRIDGE_PING_MS, BRIDGE_WATCHDOG.pingIntervalMs, 150)
+const BRIDGE_CHECKS_PER_PING = BRIDGE_WATCHDOG.checksPerPing
+const BRIDGE_SILENT_PINGS = BRIDGE_WATCHDOG.silentPings
 // A dial that hasn't reached onopen within this window is wedged (TCP up but
 // upgrade never completing) — abandon it and redial. Without this a socket
 // stuck in CONNECTING was NEVER torn down (the silence watchdog only started
 // in onopen), which held the bridge down for days. Env override is for tests.
-const BRIDGE_DIAL_TIMEOUT_MS = parseInt(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS || '', 10) || 20_000
+const BRIDGE_DIAL_TIMEOUT_MS = envTimerMs(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS, 20_000, 500)
 
 function loadBridgeConfig(): void {
   try {
@@ -8014,9 +8059,13 @@ function scheduleBridgeRedial(gen: number): void {
   // One pending redial at a time — a dial-timeout teardown and a late onclose
   // from the same dead socket must not stack two timers.
   if (bridgeRedialTimer) return
-  const jitter = 0.75 + Math.random() * 0.5
-  const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter)
-  bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS)
+  const step = bridgeRedialStep({
+    backoffMs: bridgeBackoffMs, maxMs: BRIDGE_BACKOFF_MAX_MS, jitter: 0.75 + Math.random() * 0.5,
+    sinceDropMs: bridgeDroppedAt != null ? Date.now() - bridgeDroppedAt : null,
+    fastWindowMs: BRIDGE_FAST_WINDOW_MS, fastMaxMs: BRIDGE_FAST_REDIAL_MAX_MS,
+  })
+  const delay = step.delayMs
+  bridgeBackoffMs = step.nextBackoffMs
   // When this redial is due — lets a heal push preempt a far-away one instead
   // of waiting out backoff earned while the network was down (decideBridgeRestart).
   bridgeRedialDueAt = Date.now() + delay
@@ -8025,6 +8074,17 @@ function scheduleBridgeRedial(gen: number): void {
     bridgeRedialDueAt = null
     dialBridge(gen)
   }, delay)
+}
+
+// A socket given up on is destroyed, not closed: a close handshake on a slow
+// or dead link keeps the stream draining what it had buffered, and behind one
+// slow bottleneck those streams starve the new link. Keep in sync with
+// daemon-source.ts.
+function abandonBridgeSocket(client: WebSocket) {
+  try {
+    const t = (client as unknown as { terminate?: () => void }).terminate
+    if (typeof t === 'function') t.call(client); else client.close()
+  } catch {}
 }
 
 // Adapter: presents the outbound client WebSocket as a ServerWebSocket so
@@ -8130,7 +8190,7 @@ function dialBridge(gen: number): void {
     })
     bridgeDialStartedAt = null
     if (bridgeClient === client) bridgeClient = null
-    try { client.close() } catch {}
+    abandonBridgeSocket(client)
     // Don't rely on close() firing onclose for a wedged socket — schedule
     // directly. scheduleBridgeRedial dedupes if onclose does fire too.
     scheduleBridgeRedial(gen)
@@ -8155,7 +8215,7 @@ function dialBridge(gen: number): void {
       onOverflow: (queuedBytes) => {
         logMsg('error', 'bridge: uplink queue overflow, closing the socket', { connId, queuedBytes })
         bridgeLastError = 'uplink queue overflow (daemon closed)'
-        try { client.close() } catch {}
+        abandonBridgeSocket(client)
       },
     })
     bridgeUplink = uplink
@@ -8163,7 +8223,7 @@ function dialBridge(gen: number): void {
     bridgeAdapter = adapter
     wsClients.add(adapter)
     bridgeDrift.start()
-    logMsg('info', 'bridge-conn-open', { connId, dialMs })
+    logMsg('info', 'bridge-conn-open', { connId, dialMs, wsClient: 'bun' })
     // hello registers this host in the cloud bridge registry (first frame).
     // `uplink: 1` tells the replica it may send bridge.peer and echo ackSeq.
     safeSend(adapter, JSON.stringify({
@@ -8176,33 +8236,47 @@ function dialBridge(gen: number): void {
       uplink: 1,
     }))
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter) })
+    // The silence watchdog: see BRIDGE_SILENT_PINGS.
+    let heardAt = bridgeLastInbound
+    let silentChecks = 0
     bridgePingTimer = setInterval(() => {
       if (gen !== bridgeGeneration) return
-      if (Date.now() - bridgeLastInbound > BRIDGE_SILENCE_MS) {
-        // Half-open link: the cloud stopped answering. close() triggers
-        // onclose → redial with backoff.
+      if (bridgeLastInbound !== heardAt) { heardAt = bridgeLastInbound; silentChecks = 0; return }
+      silentChecks++
+      if (silentChecks % BRIDGE_CHECKS_PER_PING !== 0) return
+      if (silentChecks >= BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS) {
+        // Half-open link: the cloud stopped answering. Tear down and redial
+        // here, as the dial timeout does: on a link that drops every byte the
+        // close handshake may never finish, so onclose (and a redial hung off
+        // it) may never come. onClose runs once per socket.
         logMsg('warn', 'bridge: inbound silence — tearing down', {
           silentMs: Date.now() - bridgeLastInbound,
+          // The least silence this watchdog tears down at; the bridge monitor
+          // tells a counted watchdog from the old wall-clock one by it.
+          limitMs: BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS * Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING),
         })
         bridgeLastError = 'inbound silence (daemon closed)'
-        try { client.close() } catch {}
+        onClose({ code: null, reason: 'inbound silence', wasClean: false })
+        abandonBridgeSocket(client)
         return
       }
       // The keepalive is also an ack marker (bridge-uplink-core.ts).
       uplink.ping()
-    }, BRIDGE_PING_INTERVAL_MS)
+    }, Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING))
   }
 
   client.onmessage = (e: MessageEvent) => {
-    if (gen !== bridgeGeneration || !bridgeAdapter) return
+    // Not from a socket this daemon already gave up on (its adapter is gone).
+    if (gen !== bridgeGeneration || !bridgeAdapter || bridgeClient !== client) return
     bridgeLastInbound = Date.now()
     const msg = typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString()
     bridgeUplink?.noteInbound(Buffer.byteLength(msg, 'utf8'))
     handleCommand(bridgeAdapter, msg)
   }
 
-  client.onclose = (ev?: CloseEvent) => {
-    if (gen !== bridgeGeneration) return
+  let closeHandled = false
+  const onClose = (ev?: { code?: number | null; reason?: string; wasClean?: boolean | null }) => {
+    if (gen !== bridgeGeneration || closeHandled) return
     // Late close from a socket the dial timeout already abandoned — a newer
     // dial may be in flight; don't clobber its state.
     // LOAD-BEARING with scheduleBridgeRedial's dedupe: after the dial timeout
@@ -8211,6 +8285,7 @@ function dialBridge(gen: number): void {
     // scheduleBridgeRedial — only the "if (bridgeRedialTimer) return" dedupe
     // stops a SECOND stacked redial then. Change either side only in tandem.
     if (bridgeClient !== null && bridgeClient !== client) return
+    closeHandled = true
     if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
     bridgeDialStartedAt = null
     if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
@@ -8218,14 +8293,20 @@ function dialBridge(gen: number): void {
       logBridgeConnClose({ code: ev?.code ?? null, reason: ev?.reason ?? '', wasClean: ev?.wasClean ?? null })
       try { handleDisconnect(bridgeAdapter) } catch {}
       bridgeAdapter = null
+      bridgeDroppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null
+      bridgeHasDropped = true
     }
     bridgeClient = null
     logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs })
     scheduleBridgeRedial(gen)
   }
+  client.onclose = onClose
 
-  // onclose always follows; keep what the error said for the close line.
+  // onclose always follows; keep what the error said for the close line. A
+  // socket already given up on must not overwrite the cause the next link's
+  // close line reports.
   client.onerror = (e: Event) => {
+    if (gen !== bridgeGeneration || bridgeClient !== client) return
     const m = (e as { message?: unknown }).message
     bridgeLastError = typeof m === 'string' && m ? m.slice(0, 200) : e.type || 'error'
   }
@@ -8401,6 +8482,7 @@ if (action === '--start' || SERVICE_MODE) {
 
     websocket: {
       open(ws) {
+        heardFrom(ws)
         wsClients.add(ws)
         // DUP-DEBUG: assign + log a stable wsId so subsequent logs can
         // distinguish per-ws activity. Pair this with the matching close()
@@ -8410,7 +8492,17 @@ if (action === '--start' || SERVICE_MODE) {
       },
 
       message(ws, msg) {
+        heardFrom(ws)
         handleCommand(ws, typeof msg === 'string' ? msg : Buffer.from(msg).toString())
+      },
+
+      // Every frame back is proof of life (heardFrom).
+      ping(ws) {
+        heardFrom(ws)
+      },
+
+      pong(ws) {
+        heardFrom(ws)
       },
 
       // Socket buffer drained — flush messages that Bun dropped (send() === 0)
@@ -8424,6 +8516,40 @@ if (action === '--start' || SERVICE_MODE) {
       },
     },
   })
+
+  // Keepalive for trusted clients (twin of daemon-source.ts): every trusted
+  // client is pinged once a beat and one nothing was heard from (no frame, ping
+  // or pong) for CLIENT_KEEPALIVE_MISSED beats in a row is closed. An SSH
+  // forward that died on the far side while sshd keeps this end open ACKs every
+  // byte and never resets, so nothing else ever closes it; Bun's idleTimeout
+  // cannot either, since every send, these pings included, restarts it. Bound:
+  // closed on the 8th silent beat, 120 to 135 s after its last frame at the
+  // 15 s beat, long enough that a Mac asleep a minute or two keeps its links
+  // (matrix M3, 90 s). Beats are counted, not wall time, so a daemon that was
+  // itself suspended does not drop its clients on wake. The bridge adapter is
+  // not a trusted client: it has its own watchdog.
+  const CLIENT_KEEPALIVE_MISSED = 8
+  const clientKeepalive = new WeakMap<ServerWebSocket<WsData>, { heardAt: number | undefined; missed: number }>()
+  const clientKeepaliveExpired = (ws: ServerWebSocket<WsData>): boolean => {
+    const heardAt = ws.data?.lastHeardAt
+    const prev = clientKeepalive.get(ws)
+    const missed = prev && prev.heardAt === heardAt ? prev.missed + 1 : 0
+    if (missed < CLIENT_KEEPALIVE_MISSED) {
+      clientKeepalive.set(ws, { heardAt, missed })
+      return false
+    }
+    logMsg('warn', 'client silent, closing it', { wsId: wsId(ws), silentMs: heardAt != null ? Date.now() - heardAt : null, missed })
+    clientKeepalive.delete(ws)
+    try { ws.terminate() } catch { try { ws.close() } catch {} }
+    return true
+  }
+  setInterval(() => {
+    for (const ws of wsClients) {
+      if (ws.data?.origin === 'bridge') continue
+      if (clientKeepaliveExpired(ws)) continue
+      try { ws.ping() } catch {}
+    }
+  }, TRUSTED_CLIENT_BEAT_MS).unref?.()
 
   // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both
   // additive — failures log a warning and never abort daemon startup.

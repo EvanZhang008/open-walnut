@@ -16,7 +16,13 @@ import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 
-export async function createFakeBridge({ port = 0, token = 'test-token', helloTimeoutMs = 10_000, silenceMs = 75_000, sweepMs = 30_000 } = {}) {
+// The replica's silence sweep (SILENCE_MS and SILENCE_SWEEP_MS in
+// src/web/ws/bridge-registry.ts): a link it has heard nothing from for this
+// long is closed. tests/scripts/bridge-monitor/classify.test.ts keeps them equal.
+export const REPLICA_SILENCE_MS = 75_000
+export const REPLICA_SWEEP_MS = 30_000
+
+export async function createFakeBridge({ port = 0, token = 'test-token', helloTimeoutMs = 10_000, silenceMs = REPLICA_SILENCE_MS, sweepMs = REPLICA_SWEEP_MS } = {}) {
   const stats = { upgrades: 0, rejected: 0, hellos: 0, pings: 0, rpcAnswered: 0, verified: 0, corrupt: 0, seqGaps: 0, bytesIn: 0, maxFrameBytes: 0 }
   const events = []
   const conns = new Set()

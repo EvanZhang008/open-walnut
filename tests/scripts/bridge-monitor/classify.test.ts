@@ -6,9 +6,12 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  analyze, awakeThrough, buildLinks, classifyDrop, cyclePhase, dayRows, dropContext, findOutages, findStorms, isAligned,
-  MECHS, replicaJoin, settleOldGaps, topHypothesis,
+  analyze, awakeThrough, BRIDGE_SILENCE_MS, BRIDGE_WATCHDOG, buildLinks, classifyDrop, cyclePhase, dayRows, dropContext,
+  findOutages, findStorms, isAligned, MECHS, replicaJoin, settleOldGaps, topHypothesis,
 } from '../../../scripts/bridge-monitor/lib/classify.mjs'
+import { DEFAULTS } from '../../../scripts/bridge-monitor/lib/config.mjs'
+import { REPLICA_SILENCE_MS, REPLICA_SWEEP_MS } from '../../../scripts/bridge-monitor/fake-bridge.mjs'
+import { BRIDGE_WATCHDOG as DAEMON_BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../../src/providers/daemon-core.js'
 import { parseDaemonLine, parseReplicaLine, parseServerLine } from '../../../scripts/bridge-monitor/lib/parse-bridge.mjs'
 import { parseTcpSummaries } from '../../../scripts/bridge-monitor/lib/parse-tcp.mjs'
 
@@ -37,6 +40,13 @@ describe('buildLinks (census)', () => {
     expect(links[2]).toMatchObject({ cause: 'restart', restartReason: 'startup' })
     expect(links[2].reconnectS).toBeCloseTo(0.2, 3)
     expect(links[3].downMs).toBeUndefined()
+  })
+
+  it("a current daemon's silence line carries its watchdog limit onto the link", () => {
+    const rec = parseDaemonLine(JSON.stringify({ ts: at(1200), level: 'warn', msg: 'bridge: inbound silence', silentMs: 47_100, limitMs: 45_000 }))
+    expect(rec).toMatchObject({ ev: 'silence', silentMs: 47_100, limitMs: 45_000 })
+    const [l] = buildLinks([dev(0, 'connected'), { ...rec, kind: 'daemon' }])
+    expect(l).toMatchObject({ cause: 'silence', silentMs: 47_100, silenceLimitMs: 45_000 })
   })
 
   it('a duplicate connected while up and events out of order do not split a link', () => {
@@ -86,6 +96,28 @@ describe('replicaJoin (join.py)', () => {
   })
 })
 
+// 2026-10-03: the daemon's teardown went from 75 s to 45 to 50 s and both
+// monitor copies (the classifier's limit, the probe's watchdog) stayed at 75 s.
+describe("the watchdog the classifier and the probe model is the daemon's", () => {
+  it('equals BRIDGE_WATCHDOG in daemon-core.ts, and the limit is its least teardown silence', () => {
+    expect(BRIDGE_WATCHDOG).toEqual(DAEMON_BRIDGE_WATCHDOG)
+    expect(BRIDGE_SILENCE_MS).toBe(bridgeSilenceTeardownMs(DAEMON_BRIDGE_WATCHDOG).minMs)
+    // The probe keeps no watchdog numbers of its own that could drift.
+    expect(DEFAULTS.probe).not.toHaveProperty('pingEveryMs')
+    expect(DEFAULTS.probe).not.toHaveProperty('silenceMs')
+  })
+  it("the fake bridge's silence sweep is the replica's (bridge-registry.ts)", () => {
+    const registry = fs.readFileSync(path.join(import.meta.dirname, '../../../src/web/ws/bridge-registry.ts'), 'utf8')
+    const num = (name: string): number => {
+      const m = new RegExp(`^const ${name} = ([0-9_]+)$`, 'm').exec(registry)
+      expect(m, name).toBeTruthy()
+      return Number(m![1].replace(/_/g, ''))
+    }
+    expect(REPLICA_SILENCE_MS).toBe(num('SILENCE_MS'))
+    expect(REPLICA_SWEEP_MS).toBe(num('SILENCE_SWEEP_MS'))
+  })
+})
+
 describe('classifyDrop (M1-M5)', () => {
   const link = (cause: string, extra: AnyRec = {}) => ({ upMs: T0 - 300_000, upS: 300, downMs: T0, cause, ...extra })
   const classify = (l: AnyRec, ctx: AnyRec) => classifyDrop(l, dropContext(l.downMs, l, { ...emptyCtx(), ...ctx }))
@@ -120,6 +152,11 @@ describe('classifyDrop (M1-M5)', () => {
     expect(classify(quiet, { load: everyMinute(-400, 120) })).toMatchObject({ mech: 'M5', basis: expect.stringContaining('drift 0 s') })
     // A stall while the Mac slept is the sleep, not a freeze.
     expect(classify(drop, { load: everyMinute(-400, 120), gaps: [{ t: iso(0), wallMs: 90_000, sleptMs: 80_000 }] }).mech).toBe('M3')
+  })
+
+  it('a current daemon (its silence line names its limit) counts checks, so a stall never makes its silence M6', () => {
+    const drop = link('silence', { silentMs: 94_000, silenceLimitMs: 45_000, close: { code: 1000, lastError: 'inbound silence (daemon closed)', loopDriftMax60sMs: 71_000 } })
+    expect(classify(drop, { load: everyMinute(-400, 120, 301) })).toMatchObject({ mech: 'M5', basis: expect.stringContaining('drift 71 s') })
   })
 
   it('coverage needs samples THROUGH the silence: a 282 s hole across it is not "awake"', () => {

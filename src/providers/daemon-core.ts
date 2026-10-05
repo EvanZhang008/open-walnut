@@ -1666,6 +1666,99 @@ export function decideBridgeRestart(s: BridgeConfigureState): BridgeRestartDecis
   return { restart: true, reason: 'reconcile' }
 }
 
+/**
+ * The cloud bridge silence watchdog both twins run (daemon-standalone.ts reads
+ * it from here; daemon-source.ts can't import and keeps the same literals,
+ * which the parity test pins). Checked `checksPerPing` times a ping interval;
+ * any inbound frame resets the count; a ping goes out on every
+ * `checksPerPing`-th silent check, and the link is torn down when the
+ * `silentPings`-th ping is due. The bridge monitor's classifier and probe
+ * model this; tests/scripts/bridge-monitor/classify.test.ts pins them to it.
+ */
+export const BRIDGE_WATCHDOG = Object.freeze({ pingIntervalMs: 15_000, checksPerPing: 3, silentPings: 3 })
+
+/**
+ * How long after its last inbound frame a healthy daemon tears a silent link
+ * down: the first check after that frame only resets the count, so teardown
+ * comes `checksPerPing * silentPings` checks after a check that may lag the
+ * frame by up to one check interval (45 to 50 s at the production values).
+ * A stalled event loop adds at most one check (timers do not catch up), so a
+ * stall can bring a teardown forward by one check, never cause one by itself.
+ */
+export function bridgeSilenceTeardownMs(w: { pingIntervalMs: number; checksPerPing: number; silentPings: number } = BRIDGE_WATCHDOG): { minMs: number; maxMs: number } {
+  const check = Math.round(w.pingIntervalMs / w.checksPerPing)
+  const n = w.checksPerPing * w.silentPings
+  return { minMs: n * check, maxMs: (n + 1) * check }
+}
+
+/**
+ * A test-only env override for a daemon timer, read with a floor: unset, junk
+ * or non-positive values give the default, and nothing below `minMs` is used,
+ * so a stray value can never spin a timer (gate P7, 2026-10-03: a ping knob of
+ * -1 meant some 800 bridge pings a second). The value is read as a whole
+ * number: parseInt read "1e9" as 1 and "15s" as 15. Nothing above the largest
+ * delay a timer takes is used either, since Node runs a longer one after 1 ms.
+ * Mirrored verbatim in daemon-source.ts (template can't import); the parity
+ * test locks the sync.
+ */
+export function envTimerMs(raw: string | undefined, fallbackMs: number, minMs: number): number {
+  const v = Math.round(Number(raw))
+  return Number.isFinite(v) && v > 0 ? Math.min(Math.max(v, minMs), 2147483647) : fallbackMs
+}
+
+/** Inputs to one bridge redial wait. */
+export interface BridgeRedialState {
+  /** The backoff so far (the caller keeps each step's nextBackoffMs). */
+  backoffMs: number
+  /** The normal cap on a wait. */
+  maxMs: number
+  /** Multiplier in [0.75, 1.25] so a fleet of daemons does not dial in step. */
+  jitter: number
+  /** Time since the drop that armed the fast window, or null when none is armed. */
+  sinceDropMs: number | null
+  /** How long after that drop the waits stay short. */
+  fastWindowMs: number
+  /** The cap on a wait inside that window. */
+  fastMaxMs: number
+}
+
+/**
+ * The next bridge redial: how long to wait, and the backoff after it.
+ *
+ * Plain capped exponential backoff, except in the fast window after a healthy
+ * link dropped (armsBridgeFastWindow): there the backoff stops doubling at
+ * `fastMaxMs`, so a companion restart or deploy, back within a minute or two,
+ * is redialed within one short wait of its return. Matrix R1 (2026-10-02): the
+ * companion was down 32 s, the plain backoff had grown to 32 s, and the next
+ * dial came 34.5 s after it was back. When the window ends the backoff doubles
+ * on from `fastMaxMs` (10, 20, 40, 60 s), so a companion that stays down drifts
+ * back to one dial a minute with no jump at the window's edge.
+ *
+ * Mirrored verbatim in daemon-source.ts (template can't import); the parity
+ * test locks the sync.
+ */
+export function bridgeRedialStep(s: BridgeRedialState): { delayMs: number; nextBackoffMs: number } {
+  const fast = s.sinceDropMs != null && s.sinceDropMs < s.fastWindowMs
+  const cap = fast ? Math.min(s.fastMaxMs, s.maxMs) : s.maxMs
+  const wait = Math.min(s.backoffMs, cap)
+  return { delayMs: Math.round(wait * s.jitter), nextBackoffMs: Math.min(wait * 2, cap) }
+}
+
+/**
+ * Whether the drop of an established bridge link arms the fast redial window:
+ * only when that link had been up for `armUptimeMs`, or when it is the first
+ * link this daemon has lost (nothing says it flaps). A link that keeps dropping
+ * soon after it comes up is flapping, not a companion restart, and rearming on
+ * every drop kept it in the window for good (gate P2, 2026-10-03: 8.5 to 9.7
+ * dials a minute against 2.2 to 4.3 on the plain backoff).
+ *
+ * Mirrored verbatim in daemon-source.ts (template can't import); the parity
+ * test locks the sync.
+ */
+export function armsBridgeFastWindow(s: { uptimeMs: number; firstDrop: boolean; armUptimeMs: number }): boolean {
+  return s.firstDrop || s.uptimeMs >= s.armUptimeMs
+}
+
 // ── Turn-error auto-retry (upstream transient failures) ──
 //
 // A `claude -p` turn can die to a TRANSIENT upstream failure — a Bedrock/API

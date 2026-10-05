@@ -150,8 +150,12 @@ Five rules keep one busy Mac and one busy phone from knocking the link over.
   with a `seq`; the companion answers each with a `ping` RPC carrying
   `ackSeq`, which confirms everything written before that marker. A companion
   that predates `ackSeq` answers each marker in order, which confirms the
-  oldest one. A marker nobody confirms within 15s releases the window. Frames
-  over 256KB are cut into `{ev:'chunk', cid, i, n, part}` envelopes once the
+  oldest one. A marker nobody confirms within 15s releases the window. A
+  marker follows every 64KB written, so at least one follows every chunk: on
+  a busy link these answers are all the daemon hears, and its silence
+  watchdog would otherwise tear a slow link down mid-transfer (two chunks per
+  marker lost every link under about 11KB/s; one per chunk holds down to
+  about 6KB/s). Frames over 256KB are cut into `{ev:'chunk', cid, i, n, part}` envelopes once the
   companion asks for them with `bridge.peer {chunkBytes}` (it does so when
   the daemon's `hello` says `uplink: 1`). The `mobile-event` ack reports
   `relayed`, `queued`, `queuedBytes` and `connId`.
@@ -214,6 +218,7 @@ Counts and sizes only, never content. The daemon's lines are in its own log
 |---|---|
 | `connId` | `<daemon instance id>.<n>`, also sent in `hello` |
 | `dialMs` | time from starting the dial to the socket opening |
+| `wsClient` | the WebSocket client that dialed: `bun`, `ws` (the package, when the source twin finds it) or `builtin` (the source twin's own client). Never Node's global WebSocket: it has no `terminate()`, so a link given up on stayed open |
 
 `bridge-conn-close` (daemon), once per connection that opened:
 
@@ -597,7 +602,7 @@ still show roaming.
 | M3 | Mac asleep or in dark wake | a sleep across the drop, whether the daemon's silence watchdog or a plain close ended it |
 | M4 | daemon restart | a deploy or reconfigure |
 | M5 | silent while awake | the watchdog fired, the collector sampled the Mac awake through the whole silence, and the daemon's measured stall is too short to explain it (with no measurement, the letter says the stall is unknown); the Mac side cannot say where the traffic stopped |
-| M6 | Mac daemon froze | the watchdog fired while the Mac was awake, and the daemon's own event-loop stall covers so much of the silence that the rest is under the 75 s limit: the stall alone tripped it |
+| M6 | Mac daemon froze | the watchdog fired while the Mac was awake, and the daemon's own event-loop stall covers so much of the silence that the rest is under the old 75 s limit: the stall alone tripped it. Only a daemon from before 2026-10 can do this, because its watchdog read the wall clock. A current daemon counts its checks (a stall adds one at most), tears the link down 45 to 50 s after the last inbound frame and names that limit on its silence line, so its silences are M5 |
 | M? | no cause found yet | a close with no other evidence, a local abort (the kernel's `tcp_drop` with no error: a process on the Mac reset the socket), or a silence with no record of whether the Mac was awake |
 
 "Awake" is shown, never assumed: a load sample at most 2 minutes apart
@@ -675,7 +680,9 @@ sweep then also waits while every slot is held by a live process.
 
 **Control probe (off by default).** `probe.mjs` is a second, independent
 `/bridge` client (Node and the `ws` package, not the daemon's runtime) that
-mimics the daemon's traffic: a ping every 30 s, a 64 KB frame every 30 s,
+mimics the daemon's traffic and runs its silence watchdog (a ping after 15 s
+with nothing heard, a teardown when the third ping is due, 45 to 50 s after the
+last inbound frame), plus a 64 KB frame every 30 s,
 and a 2 MB burst every 15 minutes placed half a cycle away from the replica's
 5-minute tick, each frame carrying a sequence number and a sha256. If both
 links drop together the cause is the path or the cloud; if only the daemon
