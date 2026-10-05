@@ -190,7 +190,9 @@ jobs:
             echo "no recent commit on main passed CI; nothing to publish"
           elif ! git cat-file -e "$green:scripts/nightly-version.mjs" 2>/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "$green predates the nightly pipeline; nothing to publish"
+            # Only a lookup that went wrong lands here: every commit since 2026-09-30 has the
+            # pipeline. Loud, so a run that keeps choosing it shows on the run's page.
+            echo "::warning::the newest green commit found is $green, which predates the nightly pipeline; nothing published (last nightly $last)"
           elif [ "$last" = "$green" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "that commit is already the last nightly; nothing to publish"
@@ -199,7 +201,7 @@ jobs:
             # may be an older commit; a nightly must never move installs backwards
             # (`force` overrides, for a last nightly built on a rewritten history).
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "$green is not newer than the last nightly; nothing to publish"
+            echo "::warning::$green is not newer than the last nightly ($last); nothing published"
           else
             git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"

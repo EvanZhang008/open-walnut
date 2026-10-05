@@ -225,11 +225,16 @@ old (`scripts/nightly-version.mjs due`), so nightlies come about every six hours
 `main` moves. The gap is short of six hours because GitHub runs this repo's schedule only
 every 3 to 6.5 hours, whatever the cron says: at 5.5 hours, a check that found the nightly
 5.4 hours old handed the commit to one five hours later (2026-10-05). It asks for the newest commit
-on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
-when there is none among the last 30 runs, when that commit is already the last nightly's,
-or when it is not a descendant of it (GitHub's runs list can show a finished run as still
-running for a minute or two, so the newest green may be an older commit, and a nightly
-must never move installs backwards). The last nightly's commit is the `gitHead` npm
+on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`): it walks the last 40
+commits of `origin/main` in git, newest first, and asks GitHub about each one by its sha,
+passing over a commit with no CI run (docs only, a release commit), a red, running or
+cancelled one. It never reads the branch's run list: on 2026-10-05 that list answered from
+a stale index for six hours (118 runs where there were 190, the newest a week old), and every
+nightly took a week-old commit for the newest green one and published nothing. It does
+nothing when no commit qualifies, when that commit is already the last nightly's, or when it
+is not a descendant of it (a nightly must never move installs backwards). That last case,
+and a commit older than the nightly pipeline itself, leave a warning on the run: either
+means the lookup went wrong. The last nightly's commit is the `gitHead` npm
 records for the version under the `nightly` dist-tag (`scripts/nightly-version.mjs last`).
 A `nightly` git tag used to say it, until 2026-10-03, when GitHub refused to move it: the
 newest green commit trailed a `main` whose newest commit changed a workflow (see the token
