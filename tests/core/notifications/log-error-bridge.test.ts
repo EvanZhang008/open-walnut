@@ -586,6 +586,14 @@ describe('humanized copy on the way into the feed', () => {
     expect(dedupFingerprintForTest({
       subsystem: 'acme/sync', message: 'failed to push task', meta: { taskId: 'mt-a', error: 'title too long' },
     })).not.toBe(fpA);
+    // A plugin key that NAMES the task (one refused create, retired when that
+    // create lands) keeps the task in its identity: two tasks are two cards, or
+    // the first task's success would retire the card for the other.
+    expect(dedupFingerprintForTest({
+      subsystem: 'web', message: 'Task sync refused to create a task', meta: { taskId: 'mt-a', recoveryKey: 'plugin:acme:create:mt-a' },
+    })).not.toBe(dedupFingerprintForTest({
+      subsystem: 'web', message: 'Task sync refused to create a task', meta: { taskId: 'mt-b', recoveryKey: 'plugin:acme:create:mt-b' },
+    }));
     // A session-family error keeps the task in its identity: a start failure is
     // about THAT task (keyed task:<id>), so two tasks are two cards.
     expect(dedupFingerprintForTest({

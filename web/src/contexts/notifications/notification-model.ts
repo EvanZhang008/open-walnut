@@ -409,7 +409,7 @@ export function categoryOf(n: Notification): string {
     if (key.startsWith('session:') || key.startsWith('task:')) return 'Sessions';
     if (key.startsWith('route:')) return 'API';
     if (key.startsWith('bus:')) return 'Internal';
-    if (key === 'git' || key === 'git:compaction' || key === 'backup' || key === 'disk') {
+    if (key === 'git' || key === 'git:compaction' || key === 'git:repo-size' || key === 'backup' || key === 'disk') {
       return 'Data & Sync';
     }
     if (key === 'server-lifecycle' || key === 'web-assets') return 'Server';

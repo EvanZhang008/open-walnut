@@ -55,6 +55,7 @@ describe('category precedence', () => {
     expect(categoryFromRecoveryKey('bus:main-ai:task:updated')).toBe('Internal');
     expect(categoryFromRecoveryKey('git')).toBe('Data & Sync');
     expect(categoryFromRecoveryKey('git:compaction')).toBe('Data & Sync');
+    expect(categoryFromRecoveryKey('git:repo-size')).toBe('Data & Sync');
     expect(categoryFromRecoveryKey('backup')).toBe('Data & Sync');
     expect(categoryFromRecoveryKey('disk')).toBe('Data & Sync');
     expect(categoryFromRecoveryKey('server-lifecycle')).toBe('Server');

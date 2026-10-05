@@ -243,10 +243,16 @@ function dedupFingerprint(payload: ErrorNotifyPayload): string {
   // task the user touched minted its own "couldn't save a task change" card
   // (2026-10-05). The task still rides on the record as its deep link, and
   // follows the latest occurrence; a different error text is still its own card.
-  const pluginCondition = recoveryKeyOf(payload)?.startsWith('plugin:') === true;
+  // Unless the KEY itself names the task (`plugin:<id>:create:<taskId>`, one
+  // refused create): that card is retired per task, so it must be minted per
+  // task, or the first task's success would retire the card for the rest.
+  const recoveryKey = recoveryKeyOf(payload);
+  const taskId = payload.meta?.taskId;
+  const pluginWideCondition = recoveryKey?.startsWith('plugin:') === true
+    && !(typeof taskId === 'string' && taskId !== '' && recoveryKey.endsWith(`:${taskId}`));
   const stableMeta: Record<string, unknown> = {};
   for (const key of DEDUP_META_KEYS) {
-    if (pluginCondition && key === 'taskId') continue;
+    if (pluginWideCondition && key === 'taskId') continue;
     const value = payload.meta?.[key];
     if (value !== undefined) stableMeta[key] = value;
   }

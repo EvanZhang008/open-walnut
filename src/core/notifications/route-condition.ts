@@ -111,3 +111,22 @@ export function canonicalRecoveryKey(key: string): string {
 export function routeLogMessage(method: string, url: string, status: number): string {
   return `${method} ${normalizeRoutePath(url)} → ${status}`;
 }
+
+/**
+ * The condition names a hand-published error card answers to: its recovery key
+ * (in today's normalization) and, when the card's dedup scope refines that key
+ * (`error:git:repo-size` under `git`), the scope itself. A condition that later
+ * earns its own recovery key keeps retiring the cards written under the shared
+ * one: the repo-size card used to sit under `git`, whose commit edge never
+ * measured size, and a recovery published for `git:repo-size` must still reach
+ * it. Only `error:` scopes count: `logerr:` hashes name no condition.
+ */
+export function conditionKeysOf(record: { recoveryKey?: string; dedupKey?: string }): string[] {
+  const keys: string[] = [];
+  if (record.recoveryKey) keys.push(canonicalRecoveryKey(record.recoveryKey));
+  const scope = record.dedupKey?.startsWith('error:') ? record.dedupKey.slice('error:'.length) : '';
+  if (scope && record.recoveryKey && scope !== record.recoveryKey && scope.startsWith(`${record.recoveryKey}:`)) {
+    keys.push(scope);
+  }
+  return keys;
+}

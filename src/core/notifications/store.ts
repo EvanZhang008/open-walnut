@@ -17,7 +17,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
-import { canonicalRecoveryKey } from './route-condition.js';
+import { conditionKeysOf } from './route-condition.js';
 import { WRITER_ORIGIN, type NotificationOrigin } from './origin.js';
 
 export type { NotificationOrigin } from './origin.js';
@@ -674,7 +674,8 @@ export async function recoverNotifications(
   // companion whose cards share the feed (see NotificationRecord.origin).
   const matches = (rec: NotificationRecord): boolean =>
     writtenHere(rec)
-    && ((!!rec.recoveryKey && (keys.has(rec.recoveryKey) || keys.has(canonicalRecoveryKey(rec.recoveryKey))))
+    && ((!!rec.recoveryKey && keys.has(rec.recoveryKey))
+      || conditionKeysOf(rec).some(k => keys.has(k))
       || (!!rec.causeKey && keys.has(rec.causeKey)));
   // Lock-free pre-check, same reasoning as expireErrorNotifications: the
   // host-connected recovery path fires on EVERY daemon (re)connect — including

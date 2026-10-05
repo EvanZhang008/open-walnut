@@ -210,6 +210,7 @@ export function categoryFromRecoveryKey(recoveryKey: string | undefined): string
   switch (key) {
     case 'git':
     case 'git:compaction':
+    case 'git:repo-size':
     case 'backup':
     case 'disk':
       return CATEGORY_DATA;

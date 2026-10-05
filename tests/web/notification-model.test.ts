@@ -596,6 +596,7 @@ describe('categoryOf', () => {
     expect(c('bus:main-ai:task:updated')).toBe('Internal');
     expect(c('git')).toBe('Data & Sync');
     expect(c('git:compaction')).toBe('Data & Sync');
+    expect(c('git:repo-size')).toBe('Data & Sync');
     expect(c('backup')).toBe('Data & Sync');
     expect(c('disk')).toBe('Data & Sync');
     expect(c('server-lifecycle')).toBe('Server');

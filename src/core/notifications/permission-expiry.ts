@@ -36,7 +36,7 @@ import {
 } from './store.js';
 import { getSessionByClaudeId } from '../session-tracker.js';
 import { getTask } from '../task-manager.js';
-import { canonicalRecoveryKey } from './route-condition.js';
+import { conditionKeysOf } from './route-condition.js';
 import { log } from '../../logging/index.js';
 
 /** The request id a permission record is about; legacy rows only have dedupKey. */
@@ -170,7 +170,7 @@ export async function unresolvedErrorRecoveryKeys(): Promise<string[]> {
     for (const record of feed) {
       if (record.kind !== 'operation-error' || record.resolved || !record.recoveryKey) continue;
       if (!writtenHere(record)) continue;
-      keys.add(canonicalRecoveryKey(record.recoveryKey));
+      for (const key of conditionKeysOf(record)) keys.add(key);
     }
     return [...keys];
   } catch (err) {

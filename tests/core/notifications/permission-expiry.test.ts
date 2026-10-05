@@ -313,6 +313,16 @@ describe('expireStaleErrorNotifications', () => {
     expect(keys).toEqual(['git', 'route:PATCH /api/tasks/:id', 'session:s-1']);
   });
 
+  it('SEEDING: a card whose dedup scope narrows its key arms the scope as well', async () => {
+    // The repo-size card was filed under `git` with the scope `git:repo-size`.
+    // After a restart the size sentinel must see `git:repo-size` as failing, or
+    // its first pass under the threshold has no edge to fire on.
+    await seedError('error:git:repo-size', { recoveryKey: 'git' });
+    await seedError('error:git:auto-commit', { recoveryKey: 'git' });
+    const keys = (await unresolvedErrorRecoveryKeys()).sort();
+    expect(keys).toEqual(['git', 'git:auto-commit', 'git:repo-size']);
+  });
+
   it('does not overwrite a card the real success point already RECOVERED', async () => {
     await seedError('error:won', { recoveryKey: 'session:sess-gone' });
     await recoverNotifications(['session:sess-gone']);

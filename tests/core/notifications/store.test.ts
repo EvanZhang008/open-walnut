@@ -465,6 +465,20 @@ describe('recoverNotifications', () => {
     expect(byKey.get('cron:x')?.resolved).toBeUndefined();
   });
 
+  it('retires a card through its dedup scope when the scope narrows the key', async () => {
+    // The repo-size card was filed under `git` while its scope was `git:repo-size`;
+    // once the size sentinel publishes recovery under its own key, that older
+    // card must still hear it, and the auto-commit card under `git` must not.
+    await seedError('error:git:repo-size', 'git');
+    await seedError('error:git:auto-commit', 'git');
+    await seedError('error:git:repo-size-new', 'git:repo-size');
+    const { recovered } = await recoverNotifications(['git:repo-size']);
+    expect(recovered.map(r => r.dedupKey).sort()).toEqual(['error:git:repo-size', 'error:git:repo-size-new']);
+    const { feed } = await listNotifications();
+    const byKey = new Map(feed.map(n => [n.dedupKey, n]));
+    expect(byKey.get('error:git:auto-commit')?.resolved).toBeUndefined();
+  });
+
   it('remaps severity to info and returns the changed records', async () => {
     await seedError('error:sev', 'git');
     const { recovered } = await recoverNotifications(['git']);

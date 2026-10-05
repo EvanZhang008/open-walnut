@@ -81,7 +81,7 @@ import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
+import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
@@ -1031,7 +1031,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // recoverSessionErrors only publishes for a key this tracker saw fail.
       onConditionRaised: (key) => {
         if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
-        else if (key === 'git') gitRecoveryTracker.observe(key, true)
+        else if (key === 'git' || key === REPO_SIZE_RECOVERY_KEY) gitRecoveryTracker.observe(key, true)
       },
     })
 
@@ -3120,7 +3120,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           seedFailingRoutes(seeded)
           for (const key of seeded) {
             if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
-            else if (key === 'git') gitRecoveryTracker.observe(key, true)
+            else if (key === 'git' || key === REPO_SIZE_RECOVERY_KEY) gitRecoveryTracker.observe(key, true)
           }
           log.web.info('startup: re-armed recovery for unresolved error cards', { count: seeded.length })
         }
@@ -4850,15 +4850,26 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
       // Repo-size sentinel (self-throttled to one real check per 6h): the
       // last line of defense if gitignores/compaction/timeout-reaping all
       // fail again — a ballooning .git warns here instead of starving the box.
-      const sizeWarning = checkRepoSize()
-      if (sizeWarning) {
-        log.git.warn(sizeWarning)
-        void publishErrorNotification({
-          title: 'Data Repo Growing Too Large',
-          body: sizeWarning,
-          dedupScope: 'git:repo-size',
-          recoveryKey: 'git',
-        })
+      const size = checkRepoSize()
+      if (size) {
+        if (size.sweptBytes > 0) {
+          log.git.warn('repo-size sentinel swept dead transfer debris', { sweptBytes: size.sweptBytes, liveBytes: size.liveBytes })
+        }
+        if (size.over && size.warning) {
+          log.git.warn(size.warning)
+          void publishErrorNotification({
+            title: 'Data Repo Growing Too Large',
+            body: size.warning,
+            dedupScope: 'git:repo-size',
+            recoveryKey: REPO_SIZE_RECOVERY_KEY,
+          })
+        }
+        // The card retires on the size itself (a gc, an aged backup branch, a
+        // removed file), measured on the sentinel's own cadence; the commit edge
+        // below knows nothing about size.
+        if (gitRecoveryTracker.observe(REPO_SIZE_RECOVERY_KEY, size.over)) {
+          void publishRecovery([REPO_SIZE_RECOVERY_KEY])
+        }
       }
       // Mass-revert / torn-worktree safe mode: surface the refusal to the
       // human (health + one notification per episode) — commits are paused

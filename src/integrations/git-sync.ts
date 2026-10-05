@@ -2084,7 +2084,24 @@ async function pullFromRemote(branch: string): Promise<{ pulled: number; conflic
   // it: lwwMerge compares the two to tell a rewritten upstream from ordinary
   // divergence (see the force-moved check there).
   const remoteBefore = await gitSafeAsync(`rev-parse --verify -q origin/${branch}`);
-  const pullResult = await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: PULL_TIMEOUT });
+  // Sweep dead transfer corpses on EVERY pull, not only after a failed fetch.
+  // The failure-path sweep in lwwMerge cannot see the corpses younger than the
+  // age gate at the moment of the LAST failure, and a pull or fetch that
+  // succeeded never swept at all: one rewrite adoption (three 15s kills, a 60s
+  // pull kill per tick, then the 10-minute recovery fetch) left 19 corpses /
+  // 7.5GB on the cloud box for the weekly maintenance to find (2026-10-05).
+  // Age-gated, so a transfer in flight anywhere (ours runs under the latch;
+  // gitPullWalnut's touches its file continuously) is never touched.
+  sweepDeadFetchPacks(WALNUT_HOME);
+  // During a fetch-failure streak the pull's fetch half is the SAME transfer
+  // that just died: retrying it under PULL_TIMEOUT is one more guaranteed kill
+  // and one more tmp_pack corpse per tick (the 1.4GB ones of 2026-10-05, four
+  // of them in six minutes), and only lwwMerge's fetch carries the widened
+  // recovery timeout. Go straight there; a merge is what a failed pull falls
+  // back to anyway.
+  const pullResult = guard.consecutiveNetworkFailures > 0
+    ? null
+    : await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: PULL_TIMEOUT });
   if (pullResult === null) {
     // Rebase failed — could be a content conflict or a network error.
     // Abort any half-applied rebase (no-op if none), then take the merge path.
@@ -2457,6 +2474,23 @@ export async function gitPullWalnut(): Promise<void> {
       // Cached async probes: this runs on EVERY session:result / session:error,
       // so the old execSync triple froze the event loop once per finished turn.
       if (!(await isGitAvailableAsync()) || !(await isRepoAsync()) || !(await hasRemoteAsync())) return;
+      // The tick's sync owns the repo while it runs: a pull beside it races its
+      // fetch and merge for index.lock and the refs, and during a rewrite
+      // adoption it downloaded the same 1.8GB chain a second time just to be
+      // killed (2026-10-05). The tick pulls every cycle, so nothing is lost by
+      // standing aside. A fetch-failure streak means the transfer is bigger than
+      // any fail-fast budget; only the tick's fetch carries the widened timeout,
+      // so a pull here would be one more kill and one more corpse per turn end.
+      if (syncInflight) {
+        log.git.debug('gitPullWalnut skipped — a sync is in flight');
+        return;
+      }
+      if (guard.consecutiveNetworkFailures > 0) {
+        log.git.debug('gitPullWalnut skipped — fetch failure streak, the sync tick owns recovery', {
+          consecutiveNetworkFailures: guard.consecutiveNetworkFailures,
+        });
+        return;
+      }
       clearStaleLock();
       // gitSafeAsync applies the credential-helper guard itself (pull is a
       // network subcommand) and swallows errors — same best-effort semantics
@@ -2464,9 +2498,15 @@ export async function gitPullWalnut(): Promise<void> {
       // a pull checks out files, and killing it mid-checkout is what tears a
       // worktree (2026-08-03 incident) — give it room to finish.
       const pullOut = await gitSafeAsync('pull --ff-only', { timeout: PULL_TIMEOUT });
+      if (pullOut === null) {
+        // A killed pull leaves its partial tmp_pack behind like a killed fetch
+        // does; the age gate keeps a transfer still running out of reach.
+        sweepDeadFetchPacks(WALNUT_HOME);
+        return;
+      }
       // Same torn-worktree sentinel as the sync tick: if this pull moved HEAD
       // but died mid-checkout, flag it before any add -A can snapshot it.
-      if (pullOut !== null && (pullOut.includes('Updating') || pullOut.includes('Fast-forward'))) {
+      if (pullOut.includes('Updating') || pullOut.includes('Fast-forward')) {
         await verifyWorktreeAfterPull('gitPullWalnut --ff-only');
       }
     } catch {
@@ -2575,50 +2615,94 @@ export function isLockContention(err: unknown): boolean {
 const REPO_SIZE_WARN_BYTES = 3 * 1024 * 1024 * 1024;
 const REPO_SIZE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
+/**
+ * The repo-size card's own recovery key. It used to share `git` with the
+ * auto-commit card, whose recovery edge (commits failing, then healthy) says
+ * nothing about size: a shrunk repo never retired its card, and a commit
+ * hiccup retired it while the repo was still too large.
+ */
+export const REPO_SIZE_RECOVERY_KEY = 'git:repo-size';
+
 let lastRepoSizeCheck = 0;
 
-/** du -sk equivalent for .git via pack files only — packs dominate (>95%) and
- * enumerating just objects/pack avoids walking hundreds of loose-object dirs. */
-function measureGitDirBytes(repoDir: string): number {
-  let total = 0;
-  const addDir = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (!e.isFile()) continue;
-      try {
-        total += fs.statSync(path.join(dir, e.name)).size;
-      } catch { /* raced with gc — skip */ }
-    }
-  };
-  addDir(path.join(repoDir, '.git', 'objects', 'pack'));
-  return total;
+/** What one sentinel pass measured. `warning` is set only while `over`. */
+export interface RepoSizeVerdict {
+  /** Bytes of real pack files (pack-*.pack and their indexes) under objects/pack. */
+  liveBytes: number;
+  /** Bytes of tmp_pack_* transfer corpses still on disk after the age-gated sweep. */
+  debrisBytes: number;
+  /** Bytes of corpses this pass removed. */
+  sweptBytes: number;
+  over: boolean;
+  warning: string | null;
 }
 
+function isTransferDebris(name: string): boolean {
+  return name.startsWith('tmp_pack_') || name.startsWith('tmp_idx_');
+}
+
+/** du -sk equivalent for .git via pack files only — packs dominate (>95%) and
+ * enumerating just objects/pack avoids walking hundreds of loose-object dirs.
+ * Live packs and transfer corpses are summed apart: the corpses are not the
+ * repo, and the fix for them (a sweep) is not the fix for a large repo. */
+function measurePackDir(repoDir: string): { liveBytes: number; debrisBytes: number } {
+  let liveBytes = 0;
+  let debrisBytes = 0;
+  const dir = path.join(repoDir, '.git', 'objects', 'pack');
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { liveBytes, debrisBytes };
+  }
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    try {
+      const size = fs.statSync(path.join(dir, e.name)).size;
+      if (isTransferDebris(e.name)) debrisBytes += size;
+      else liveBytes += size;
+    } catch { /* raced with gc — skip */ }
+  }
+  return { liveBytes, debrisBytes };
+}
+
+const gbText = (bytes: number): string => `${(bytes / 1024 / 1024 / 1024).toFixed(1)}GB`;
+
 /**
- * Periodic sentinel: returns a human-readable warning when the data repo has
- * grown past the threshold, null otherwise. Self-throttles to one real check
- * per REPO_SIZE_CHECK_INTERVAL_MS; callers can invoke it every tick.
+ * Periodic sentinel: measures the data repo and says whether it has grown past
+ * the threshold. Returns null when throttled (one real pass per
+ * REPO_SIZE_CHECK_INTERVAL_MS; callers can invoke it every tick). Dead transfer
+ * corpses are swept first (age-gated) and never count as repo size: on
+ * 2026-10-05 the cloud box reported 10.7GB of which 7.1GB was corpses of one
+ * rewrite adoption, and the live repo was 3.6GB.
  */
-export function checkRepoSize(repoDir = WALNUT_HOME): string | null {
+export function checkRepoSize(repoDir = WALNUT_HOME): RepoSizeVerdict | null {
   const now = Date.now();
   if (now - lastRepoSizeCheck < REPO_SIZE_CHECK_INTERVAL_MS) return null;
   lastRepoSizeCheck = now;
 
-  const bytes = measureGitDirBytes(repoDir);
-  if (bytes < REPO_SIZE_WARN_BYTES) return null;
+  const before = measurePackDir(repoDir);
+  let sweptBytes = 0;
+  let debrisBytes = before.debrisBytes;
+  if (before.debrisBytes > 0 && sweepDeadFetchPacks(repoDir, now) > 0) {
+    debrisBytes = measurePackDir(repoDir).debrisBytes;
+    sweptBytes = before.debrisBytes - debrisBytes;
+  }
+  const liveBytes = before.liveBytes;
+  const over = liveBytes >= REPO_SIZE_WARN_BYTES;
+  if (!over) return { liveBytes, debrisBytes, sweptBytes, over, warning: null };
 
-  const gb = (bytes / 1024 / 1024 / 1024).toFixed(1);
   // Name the three things that have actually been behind this alert, in the
   // order they were found (2026-09-10): a compaction that ran fine but left
   // backup-* branches pinning the whole old chain, a large regenerable file
   // that .gitignore missed, and a killed gc's tmp_pack_* counted as pack bytes.
   // "compaction may be failing" sent the reader to the one layer that was OK.
-  return `data repo .git has grown to ${gb}GB (threshold 3GB): check for backup-* branches pinning old history, large tracked files, or tmp_pack_* debris; see open-walnut logs -s git`;
+  const debrisNote = debrisBytes > 0
+    ? `; another ${gbText(debrisBytes)} of tmp_pack_* debris from a transfer still in flight is not counted`
+    : '';
+  const warning = `data repo .git has grown to ${gbText(liveBytes)} of live packs (threshold 3GB)${debrisNote}: `
+    + 'check for backup-* branches pinning old history, large tracked files, or tmp_pack_* debris; see open-walnut logs -s git';
+  return { liveBytes, debrisBytes, sweptBytes, over, warning };
 }
 
 /** Test hook: reset the sentinel's throttle window. */

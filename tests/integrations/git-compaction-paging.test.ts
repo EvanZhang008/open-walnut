@@ -16,7 +16,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 import { collectCommitsPaged } from '../../src/integrations/git-compaction.js';
-import { checkRepoSize, resetRepoSizeCheckForTest } from '../../src/integrations/git-sync.js';
+import { checkRepoSize, resetRepoSizeCheckForTest, REPO_SIZE_RECOVERY_KEY } from '../../src/integrations/git-sync.js';
 
 let repoDir: string;
 
@@ -64,20 +64,38 @@ describe('collectCommitsPaged', () => {
 describe('checkRepoSize sentinel', () => {
   beforeEach(() => resetRepoSizeCheckForTest());
 
-  it('returns null for a small repo', () => {
+  const GB = 1024 * 1024 * 1024;
+  async function sparse(name: string, bytes: number, ageMs = 0): Promise<string> {
+    const packDir = path.join(repoDir, '.git', 'objects', 'pack');
+    await fsp.mkdir(packDir, { recursive: true });
+    const p = path.join(packDir, name);
+    const fd = fs.openSync(p, 'w');
+    fs.ftruncateSync(fd, bytes);
+    fs.closeSync(fd);
+    if (ageMs > 0) {
+      const t = new Date(Date.now() - ageMs);
+      await fsp.utimes(p, t, t);
+    }
+    return p;
+  }
+
+  it('measures a small repo as under the threshold, with no warning', () => {
     sh('git commit -q --allow-empty -m init');
-    expect(checkRepoSize(repoDir)).toBeNull();
+    const verdict = checkRepoSize(repoDir);
+    expect(verdict).not.toBeNull();
+    expect(verdict!.over).toBe(false);
+    expect(verdict!.warning).toBeNull();
+    expect(verdict!.debrisBytes).toBe(0);
   });
 
   it('warns when pack files exceed the threshold', async () => {
     // Fabricate an oversized pack — the sentinel measures objects/pack bytes.
-    const packDir = path.join(repoDir, '.git', 'objects', 'pack');
-    await fsp.mkdir(packDir, { recursive: true });
-    const fd = fs.openSync(path.join(packDir, 'pack-fake.pack'), 'w');
-    fs.ftruncateSync(fd, 3.5 * 1024 * 1024 * 1024); // sparse 3.5GB
-    fs.closeSync(fd);
+    await sparse('pack-fake.pack', 3.5 * GB);
 
-    const warning = checkRepoSize(repoDir);
+    const verdict = checkRepoSize(repoDir);
+    expect(verdict!.over).toBe(true);
+    expect(verdict!.liveBytes).toBe(3.5 * GB);
+    const warning = verdict!.warning;
     expect(warning).toMatch(/3\.5GB/);
     // Points at the causes that have actually produced this alert, not at the
     // compaction layer (which was healthy each time).
@@ -86,15 +104,47 @@ describe('checkRepoSize sentinel', () => {
     expect(warning).not.toMatch(/compaction may be failing/);
   });
 
+  it('sweeps dead transfer corpses first and never counts them as repo size', async () => {
+    // 2026-10-05: the cloud box reported 10.7GB; 7.1GB of it was tmp_pack_*
+    // corpses from one rewrite adoption, and the live repo was 3.6GB. The
+    // corpses are not the repo, and they are the sentinel's to remove.
+    await sparse('pack-live.pack', 1 * GB);
+    const corpse = await sparse('tmp_pack_dead01', 4 * GB, 10 * 60_000);
+
+    const verdict = checkRepoSize(repoDir);
+    expect(verdict!.over).toBe(false);
+    expect(verdict!.warning).toBeNull();
+    expect(verdict!.liveBytes).toBe(1 * GB);
+    expect(verdict!.sweptBytes).toBe(4 * GB);
+    expect(verdict!.debrisBytes).toBe(0);
+    expect(fs.existsSync(corpse)).toBe(false);
+  });
+
+  it('leaves a fresh tmp_pack alone (a transfer may be writing it) and names it beside a real overage', async () => {
+    await sparse('pack-live.pack', 3.5 * GB);
+    const inflight = await sparse('tmp_pack_live01', 1 * GB);
+
+    const verdict = checkRepoSize(repoDir);
+    expect(verdict!.over).toBe(true);
+    expect(verdict!.sweptBytes).toBe(0);
+    expect(verdict!.debrisBytes).toBe(1 * GB);
+    expect(fs.existsSync(inflight)).toBe(true);
+    expect(verdict!.warning).toMatch(/3\.5GB of live packs/);
+    expect(verdict!.warning).toMatch(/1\.0GB of tmp_pack_\* debris from a transfer still in flight is not counted/);
+  });
+
   it('self-throttles: second call within the window returns null', async () => {
-    const packDir = path.join(repoDir, '.git', 'objects', 'pack');
-    await fsp.mkdir(packDir, { recursive: true });
-    const fd = fs.openSync(path.join(packDir, 'pack-fake.pack'), 'w');
-    fs.ftruncateSync(fd, 4 * 1024 * 1024 * 1024);
-    fs.closeSync(fd);
+    await sparse('pack-fake.pack', 4 * GB);
 
     expect(checkRepoSize(repoDir)).not.toBeNull();
     // Called every 30s tick — must not re-stat or re-notify each time.
     expect(checkRepoSize(repoDir)).toBeNull();
+  });
+
+  it('keeps its own recovery key apart from the auto-commit family', () => {
+    // A commit edge says nothing about size; the card retires on a measured
+    // pass under the threshold, never on `git` recovering.
+    expect(REPO_SIZE_RECOVERY_KEY).toBe('git:repo-size');
+    expect(REPO_SIZE_RECOVERY_KEY).not.toBe('git');
   });
 });
