@@ -1,0 +1,163 @@
+name: Release archives
+
+# The self-contained Open Walnut, one archive per platform: its own Node with
+# the released package npm-installed beside it (scripts/runtime-bundle/build.mjs).
+# What `curl -fsSL .../install.sh | sh` (scripts/install.sh) and the Homebrew
+# formula (scripts/homebrew/formula.mjs) install, on a machine with no Node.
+#
+# Release.yml dispatches this once a stable version's GitHub Release is open
+# (jobs `promote` and `stable`). Each archive is built from the version npm
+# serves, so it holds exactly what an npm install of that version holds, and it
+# must install with install.sh and serve a session with no Node on PATH before
+# it is attached. Attached last: SHA256SUMS and install.sh, so a release lists
+# no checksum for an archive that is not there yet. Until its archives are up
+# (a few minutes), install.sh takes the newest release that has them.
+#
+# By hand: rebuild any released version's archives (the upload replaces them).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'A released stable version (x.y.z), already on npm and on GitHub Releases'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-archives-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: open-walnut ${{ inputs.version }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, os: macos-26 }
+          - { target: darwin-x64, os: macos-26-intel }
+          - { target: linux-x64, os: ubuntu-24.04 }
+          - { target: linux-arm64, os: ubuntu-24.04-arm }
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      # main: the build script, install.sh and the mock `claude` the smoke runs.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: A stable version npm serves
+        run: |
+          case "$VERSION" in
+            *[!0-9.]* | '' ) echo "::error::$VERSION is not a stable version (x.y.z)"; exit 1 ;;
+          esac
+          # npm validates a new version for a few minutes before it serves it.
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null --max-time 30 -H 'cache-control: no-cache' "https://registry.npmjs.org/open-walnut/$VERSION"; then
+              echo "npm serves open-walnut@$VERSION"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::npm did not serve open-walnut@$VERSION within 30 minutes"; exit 1
+      - name: Build the archive
+        run: node scripts/runtime-bundle/build.mjs --spec "open-walnut@$VERSION" --out "$RUNNER_TEMP/out"
+      - name: It is this platform's
+        run: test -f "$RUNNER_TEMP/out/open-walnut-$VERSION-${{ matrix.target }}.tar.gz"
+      - name: It installs with install.sh, serves and answers a session with no Node on PATH
+        run: node scripts/release-rehearsal/run.mjs --archive "$RUNNER_TEMP/out/open-walnut-$VERSION-${{ matrix.target }}.tar.gz" --work "$RUNNER_TEMP/rehearsal" --keep
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: ${{ runner.temp }}/out/open-walnut-${{ inputs.version }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          # Already gzip.
+          compression-level: 0
+          retention-days: 7
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-logs-${{ matrix.target }}
+          path: ${{ runner.temp }}/rehearsal/*/log.txt
+          if-no-files-found: ignore
+
+  # The platforms that built go up even when another failed (install.sh tells
+  # that platform to use npm); the run is still red so the failure is seen, and
+  # "Re-run failed jobs" builds the missing one and uploads the set again.
+  publish:
+    name: Attach to v${{ inputs.version }}
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: ${{ runner.temp }}/archives
+          merge-multiple: true
+      - name: Upload the archives, then SHA256SUMS and install.sh
+        run: |
+          cd "$RUNNER_TEMP/archives"
+          ls open-walnut-"$VERSION"-*.tar.gz > /dev/null 2>&1 || { echo "::error::no archive built"; exit 1; }
+          sha256sum open-walnut-"$VERSION"-*.tar.gz | tee SHA256SUMS
+          gh release upload "v$VERSION" open-walnut-"$VERSION"-*.tar.gz --clobber
+          cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
+          gh release upload "v$VERSION" SHA256SUMS install.sh --clobber
+      - name: Every platform built
+        if: needs.build.result != 'success'
+        run: |
+          echo "::error::some platforms did not build (${{ needs.build.result }}); the others are attached. Re-run failed jobs to finish the set."
+          exit 1
+
+  # The formula is written from what the release really holds, installed from
+  # GitHub with brew, tested, and attached as open-walnut.rb. The tap
+  # (EvanZhang008/homebrew-tap) copies the newest release's open-walnut.rb.
+  homebrew:
+    name: Homebrew formula for v${{ inputs.version }}
+    needs: publish
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+      HOMEBREW_NO_ENV_HINTS: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Write the formula from the release's SHA256SUMS
+        run: |
+          gh release download "v$VERSION" --pattern SHA256SUMS --dir "$RUNNER_TEMP" --clobber
+          node scripts/homebrew/formula.mjs --version "$VERSION" --sums "$RUNNER_TEMP/SHA256SUMS" > "$RUNNER_TEMP/open-walnut.rb"
+          cat "$RUNNER_TEMP/open-walnut.rb"
+      - name: It installs from GitHub with brew and passes brew test
+        run: |
+          brew tap-new --no-git walnut-release/test
+          mkdir -p "$(brew --repository walnut-release/test)/Formula"
+          cp "$RUNNER_TEMP/open-walnut.rb" "$(brew --repository walnut-release/test)/Formula/open-walnut.rb"
+          brew install walnut-release/test/open-walnut
+          "$(brew --prefix)/bin/walnut" --version | tee "$RUNNER_TEMP/version.txt"
+          grep -q "^$VERSION " "$RUNNER_TEMP/version.txt" || { echo "::error::Homebrew's walnut is not $VERSION"; exit 1; }
+          brew test walnut-release/test/open-walnut
+      - name: Attach it to the release
+        run: gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber

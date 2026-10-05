@@ -125,12 +125,47 @@ own npm prefix, HOME, data dir and daemon dir, with a mock `claude`
 | restart | after a server restart the history is intact and a third message is answered |
 | update | "older", started, updates itself to "current" before it serves |
 | field | the version on npm today, started, updates itself to "current": the update every existing install will take |
+| archive | `scripts/runtime-bundle/build.mjs` builds the self-contained archive of "older" for this machine; `scripts/install.sh` finds it on a local server laid out like GitHub Releases, checks it and installs it |
+| archive-serve | that install serves, finds `claude` and answers a session with no Node on PATH, and its updater says `walnut update` |
+| archive-brew | the Homebrew formula written for it installs from a scratch tap and passes `brew test` (Homebrew comes with both runner images) |
+| archive-update | that install, started, updates itself to "current" through its own Node's npm |
 
 The two update scenarios use `registry.mjs`, a local registry that serves the chosen
 tarballs under chosen dist-tags and passes every other package through to npm, with
 `WALNUT_UPDATE_REGISTRY_URL` and `npm_config_registry` pointing at it. Locally, run
 `pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
 outside CI), then `node scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
+
+## Self-contained archives, install.sh and Homebrew
+
+Every stable release also ships one archive per platform (`open-walnut-X.Y.Z-<darwin|linux>-<arm64|x64>.tar.gz`):
+the newest Node 22 from nodejs.org, checked against its SHASUMS256.txt, used as an npm prefix
+with `open-walnut@X.Y.Z` installed into it by that Node's own npm, the other platforms' native
+binaries dropped, and two launchers (`bin/walnut`, `bin/open-walnut`) that run that Node on that
+package. `scripts/runtime-bundle/build.mjs` builds it for the machine it runs on and refuses a
+version whose updater does not know the layout.
+
+- **Built by** `.github/workflows/release-archives.yml`, which job `promote` (or `stable`)
+  starts once the GitHub Release is open: one runner per platform builds from the version npm
+  serves, installs the result with `install.sh` and serves a session with no Node on PATH, then
+  job `publish` attaches the archives, and only after them `SHA256SUMS` and `install.sh`. Job
+  `homebrew` writes the formula from that `SHA256SUMS` (`scripts/homebrew/formula.mjs`),
+  installs it from GitHub with brew, runs `brew test` and attaches `open-walnut.rb`. A platform
+  that failed is left out and the run is red; "Re-run failed jobs" finishes the set. By hand:
+  dispatch it with any released version to rebuild its archives.
+- **`install.sh`** (`curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`)
+  reads the version from the newest release's `SHA256SUMS`; in the minutes before a release's
+  archives are up it takes the newest release that has one for this platform (GitHub's API).
+  It checks the download against `SHA256SUMS`, runs the new `walnut --version` before it touches
+  anything, and swaps the old copy aside so a failure leaves one in place.
+- **Homebrew**: the tap `EvanZhang008/homebrew-tap` copies the newest release's `open-walnut.rb`
+  (its own workflow, hourly). The formula keeps the archive packed through `install` and unpacks
+  it in `post_install_steps`: Homebrew rewrites the install name of every Mach-O file in a keg it
+  builds, and one prebuilt native module has no header room for that, so `brew install` failed.
+- **Updates**: the archive carries `runtime/open-walnut-runtime.json`. The updater
+  (`src/core/self-update/install-kind.ts`) sees it and installs a newer release with the
+  archive's own Node and npm into the archive's own prefix (`walnut update`, and on start), never
+  with whatever `npm` is first on PATH. A Homebrew install updates the same way, inside its keg.
 
 ## Cutting a stable release by hand
 
@@ -272,7 +307,8 @@ lazy import fail (the same reason `scripts/dev-prod.sh` runs a staged copy). An 
 applied by a restart, in one of two ways:
 
 - `open-walnut update` installs the newer version now through the package manager that
-  installed Walnut (npm, pnpm, bun or yarn, read off the install path) and reminds you that
+  installed Walnut (npm, pnpm, bun or yarn, read off the install path; for a self-contained
+  archive, the archive's own Node and npm) and reminds you that
   a running server keeps the old code until restarted. `--check` only reports;
   `--channel stable|nightly` follows the other channel.
 - `open-walnut web` installs a newer published version before it listens, then starts

@@ -71,7 +71,7 @@ export function decideStartupUpdate(status: UpdateStatus, inputs: StartupUpdateI
   if (!inputs.writable) {
     return { action: 'skip', reason: 'not-writable', note: `sudo ${status.install.updateCommand ?? 'npm install -g open-walnut@latest'}` }
   }
-  return { action: 'install', version: status.latest, argv: managerArgv(status.install.manager, `open-walnut@${status.latest}`) }
+  return { action: 'install', version: status.latest, argv: managerArgv(status.install.manager, `open-walnut@${status.latest}`, status.install.runtimePrefix) }
 }
 
 export interface StartupUpdateDeps {

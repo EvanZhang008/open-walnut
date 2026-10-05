@@ -4,7 +4,8 @@
  * make it work, on this machine, without publishing anything.
  *
  *   node scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--field latest] [--work <dir>] [--keep]
- *   node scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --field latest   (pack.mjs --rehearsal wrote it)
+ *   node scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --field latest --runtime   (pack.mjs --rehearsal wrote it)
+ *   node scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
  *
  * Scenarios (each isolated: own npm prefix, HOME, data, daemon; mock `claude`):
  *   install    `npm install -g` the tarball with the updater's --allow-scripts list;
@@ -22,6 +23,9 @@
  *              local registry whose `latest` is B.
  *   field      (--field latest) the same, starting from the version on npm today:
  *              the update every existing install will take.
+ *   archive*   (--runtime: built from --older, updated to --current; --archive:
+ *              a built one, alone) the self-contained archive install.sh puts
+ *              in place, run with no Node on PATH (runtime.mjs).
  *
  * CI runs it on Linux and macOS for every push (ci.yml, job `rehearsal`), so the
  * release only ever publishes code whose package has done all of this.
@@ -32,12 +36,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readPackedManifest, startRegistry } from './registry.mjs'
+import { rehearseRuntime } from './runtime.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
 import { compareVersions } from './version-order.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 
 function parseArgs(argv) {
-  const out = { current: null, older: null, field: null, work: null, keep: false }
+  const out = { current: null, older: null, field: null, work: null, keep: false, runtime: false, archive: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--packs') {
@@ -49,9 +54,12 @@ function parseArgs(argv) {
     else if (a === '--field') out.field = argv[++i]
     else if (a === '--work') out.work = path.resolve(argv[++i])
     else if (a === '--keep') out.keep = true
+    else if (a === '--runtime') out.runtime = true
+    else if (a === '--archive') out.archive = path.resolve(argv[++i])
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.current) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--field latest] [--work <dir>] [--keep]')
+  if (!out.current && !out.archive) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--field latest] [--runtime] [--work <dir>] [--keep] | --archive <archive>')
+  if (out.runtime && !out.older) throw new Error('--runtime builds the archive from --older and updates it to --current')
   return out
 }
 
@@ -113,11 +121,35 @@ async function rehearseUpdate(work, label, fromTgz, toTgz) {
   }
 }
 
+/** Stop what is left, print the table, and fail unless `expected` scenarios ran and passed. */
+async function finish(opts, work, title, expected) {
+  // A scenario that failed half way left its server and daemon running.
+  for (const x of walnuts) await x.shutdown().catch(() => {})
+  for (const r of results.filter((r) => !r.ok)) {
+    for (const x of walnuts) process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}) ──\n${tailOf(x.logFile)}\n`)
+    break
+  }
+  const table = ['| Scenario | Result | Time | Detail |', '|---|---|---|---|',
+    ...results.map((r) => `| ${r.name} | ${r.ok ? 'pass' : '**FAIL**'} | ${Math.round(r.secs)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 200)} |`)]
+  process.stdout.write(`\n${table.join('\n')}\n`)
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Release rehearsal: ${title} (${process.platform}-${process.arch})\n\n${table.join('\n')}\n\n`)
+  }
+  if (!opts.keep) fs.rmSync(work, { recursive: true, force: true })
+  const failed = results.filter((r) => !r.ok).length
+  if (failed || results.length < expected) process.exit(1)
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
   // Create before resolving: CI names a --work dir that does not exist yet.
   if (opts.work) fs.mkdirSync(opts.work, { recursive: true })
   const work = fs.realpathSync(opts.work ?? fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-rehearsal-')))
+  if (opts.archive) {
+    process.stdout.write(`rehearsing ${path.basename(opts.archive)} in ${work}\n`)
+    const ran = await rehearseRuntime({ work, archive: opts.archive, scenario, walnuts })
+    return finish(opts, work, path.basename(opts.archive), Math.max(ran, 2))
+  }
   const current = readPackedManifest(opts.current)
   process.stdout.write(`rehearsing open-walnut@${current.version} in ${work}\n`)
 
@@ -184,22 +216,10 @@ async function main() {
     })
   }
 
-  // A scenario that failed half way left its server and daemon running.
-  for (const x of walnuts) await x.shutdown().catch(() => {})
-  for (const r of results.filter((r) => !r.ok)) {
-    for (const x of walnuts) process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}) ──\n${tailOf(x.logFile)}\n`)
-    break
-  }
-  const table = ['| Scenario | Result | Time | Detail |', '|---|---|---|---|',
-    ...results.map((r) => `| ${r.name} | ${r.ok ? 'pass' : '**FAIL**'} | ${Math.round(r.secs)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 200)} |`)]
-  process.stdout.write(`\n${table.join('\n')}\n`)
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Release rehearsal: open-walnut@${current.version} (${process.platform})\n\n${table.join('\n')}\n\n`)
-  }
-  if (!opts.keep) fs.rmSync(work, { recursive: true, force: true })
-  const failed = results.filter((r) => !r.ok).length
-  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 1 : 0)
-  if (failed || results.length < expected) process.exit(1)
+  if (opts.runtime) await rehearseRuntime({ work, fromTgz: opts.older, toTgz: opts.current, scenario, walnuts })
+
+  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 1 : 0) + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) : 0)
+  return finish(opts, work, `open-walnut@${current.version}`, expected)
 }
 
 main().catch(async (err) => {

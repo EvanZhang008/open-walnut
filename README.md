@@ -43,7 +43,8 @@ self-hosted, local-first, and has no telemetry.
 
 ### Requirements
 
-- Node.js 22 or newer. If you don't have it: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`.
+- macOS or Linux. The one-line installer and Homebrew bring their own Node; the npm and
+  checkout routes need Node.js 22 or newer (`curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`).
 - git, only for the checkout route below (macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`)
 - Linux: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `npm start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`)
@@ -52,8 +53,25 @@ That is the whole AI setup. Every AI turn Walnut runs is a Claude Code session: 
 
 ### Install
 
-The published package is the quickest way in. Nothing to build, and it starts in a few
-seconds:
+One command on macOS or Linux. It needs nothing installed first, not even Node:
+
+```bash
+curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
+walnut web
+```
+
+It downloads the newest release for your machine, with its own Node inside, checks it
+against the release's checksums, puts it in `~/.local/share/open-walnut` and links `walnut`
+into `~/.local/bin`. Running it again installs the newest release over the old one.
+
+With Homebrew:
+
+```bash
+brew install evanzhang008/tap/open-walnut
+walnut web
+```
+
+With Node 22 or newer, the npm package (nothing to build either):
 
 ```bash
 npm install -g open-walnut
@@ -80,7 +98,8 @@ For provider options, remote hosts, and troubleshooting, see
 
 Walnut checks npm once a day for a newer release and shows it in the notification panel
 (System) and at the bottom of Settings, with the one command that updates your install.
-Restarting applies it: `open-walnut web` installs a newer published version before it
+Restarting applies it, however you installed it (the one-line installer and Homebrew
+update with their own Node): `open-walnut web` installs a newer published version before it
 starts (Settings > General > `Install updates on start`, or `updates.auto: false` in
 config.yaml, or `WALNUT_NO_AUTO_UPDATE=1`, to turn that off). `open-walnut update` does the
 same right away, `open-walnut update --check` only reports, and `open-walnut doctor` carries

@@ -6,6 +6,16 @@ breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **Install with one command, no Node needed.** On macOS or Linux,
+  `curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`
+  installs a self-contained Walnut (its own Node inside) into `~/.local/share/open-walnut` and
+  links `walnut` into `~/.local/bin`; with Homebrew, `brew install evanzhang008/tap/open-walnut`.
+  Every release ships the archives for macOS and Linux on arm64 and x64, each one installed and
+  started on its own platform before it is attached. These installs update themselves the way
+  an npm install does, with the Node inside them.
+
 ## [0.6.2] - 2026-10-04
 
 ### Changed

@@ -92,16 +92,19 @@ describe('flake-report.mjs as the workflow runs it', () => {
 })
 
 describe('runner images', () => {
-  it('every job of CI, Release and the hunt runs on a pinned image, never a -latest label', () => {
+  it('every job of CI, Release, the archives and the hunt runs on a pinned image, never a -latest label', () => {
     // ubuntu-latest moves to 26.04 from 2026-10-19 on GitHub's schedule; a moving
-    // label turns CI red without a commit.
-    for (const file of ['ci.yml', 'release.yml', 'flake-hunt.yml']) {
+    // label turns CI red without a commit. The archives also need each image's
+    // other architecture (both standard runners for a public repository).
+    for (const file of ['ci.yml', 'release.yml', 'release-archives.yml', 'flake-hunt.yml']) {
       const doc = parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows', file), 'utf8')) as {
-        jobs: Record<string, { 'runs-on': string; strategy?: { matrix?: { os?: string[] } } }>
+        jobs: Record<string, { 'runs-on': string; strategy?: { matrix?: { os?: string[]; include?: Array<{ os: string }> } } }>
       }
       for (const [name, job] of Object.entries(doc.jobs)) {
-        const labels = job['runs-on'] === '${{ matrix.os }}' ? job.strategy!.matrix!.os! : [job['runs-on']]
-        for (const label of labels) expect(label, `${file} ${name}`).toMatch(/^(ubuntu-24\.04|macos-26)$/)
+        const matrix = job.strategy?.matrix
+        const labels = job['runs-on'] === '${{ matrix.os }}' ? (matrix!.os ?? matrix!.include!.map((x) => x.os)) : [job['runs-on']]
+        expect(labels.length, `${file} ${name}`).toBeGreaterThan(0)
+        for (const label of labels) expect(label, `${file} ${name}`).toMatch(/^(ubuntu-24\.04(-arm)?|macos-26(-intel)?)$/)
       }
     }
   })

@@ -10,7 +10,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
-import { detectInstall, INSTALL_SCRIPT_PACKAGES, managerArgv, managerCommand, managerFromPath } from '../../../src/core/self-update/install-kind.js'
+import { detectInstall, globalPrefixOf, INSTALL_SCRIPT_PACKAGES, managerArgv, managerCommand, managerFromPath, RUNTIME_MARKER, runtimePrefixOf } from '../../../src/core/self-update/install-kind.js'
 
 describe('managerFromPath', () => {
   it('names the manager a global install path belongs to', () => {
@@ -48,6 +48,24 @@ describe('managerCommand and managerArgv', () => {
   })
 })
 
+describe('the self-contained archive', () => {
+  it('finds the prefix of a global install path, and only of one', () => {
+    expect(globalPrefixOf('/x/runtime/lib/node_modules/open-walnut')).toBe('/x/runtime')
+    expect(globalPrefixOf('/Users/alice/open-walnut')).toBeNull()
+    expect(globalPrefixOf('/x/node_modules/open-walnut')).toBeNull()
+    expect(runtimePrefixOf('/x/runtime/lib/node_modules/open-walnut', (p) => p === `/x/runtime/${RUNTIME_MARKER}`)).toBe('/x/runtime')
+    expect(runtimePrefixOf('/x/runtime/lib/node_modules/open-walnut', () => false)).toBeNull()
+  })
+
+  it('updates with its own Node and npm into its own prefix, never the npm on PATH', () => {
+    const prefix = '/home/alice/.local/share/open-walnut/app/runtime'
+    expect(managerArgv('npm', 'open-walnut@0.6.3', prefix)).toEqual({
+      file: `${prefix}/bin/node`,
+      args: [`${prefix}/lib/node_modules/npm/bin/npm-cli.js`, 'install', '-g', '--prefix', prefix, 'open-walnut@0.6.3', `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`],
+    })
+  })
+})
+
 describe('detectInstall', () => {
   const npmRoot = '/usr/local/lib/node_modules/open-walnut'
 
@@ -77,6 +95,18 @@ describe('detectInstall', () => {
   it('is "other" for a package root with no checkout and no node_modules parent, or no root at all', () => {
     expect(detectInstall({ cloud: false, installDir: null, packageRoot: '/opt/open-walnut' })).toMatchObject({ kind: 'other', updateCommand: null })
     expect(detectInstall({ cloud: false, installDir: null, packageRoot: null })).toMatchObject({ kind: 'other', packageRoot: null })
+  })
+
+  it('is the self-contained archive when its prefix carries the marker, updated by its own Node', () => {
+    const prefix = '/Users/alice/.local/share/open-walnut/app/runtime'
+    const root = `${prefix}/lib/node_modules/open-walnut`
+    const exists = (p: string) => p === `${prefix}/${RUNTIME_MARKER}`
+    const info = detectInstall({ cloud: false, installDir: null, packageRoot: root, exists })
+    expect(info).toMatchObject({ kind: 'npm', manager: 'npm', runtimePrefix: prefix, updateCommand: 'walnut update' })
+    // The same shape without the marker is an ordinary global install (nvm, Homebrew's
+    // node, /usr/local): its own npm on PATH, the command people know.
+    const nvm = detectInstall({ cloud: false, installDir: null, packageRoot: root, exists: () => false })
+    expect(nvm).toMatchObject({ kind: 'npm', runtimePrefix: null, updateCommand: 'npm install -g open-walnut@latest' })
   })
 
   it('reads the process defaults from constants when called bare', () => {

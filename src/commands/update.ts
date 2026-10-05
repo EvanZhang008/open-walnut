@@ -83,7 +83,7 @@ export function planUpdate(status: UpdateStatus, opts: { check: boolean }): Upda
   if (install.kind !== 'npm' || !install.manager) {
     return { exitCode: 0, lines: [head, `This install has no package manager to update it with. Releases: ${status.packageUrl}`] }
   }
-  const argv = managerArgv(install.manager, `open-walnut@${status.latest}`)
+  const argv = managerArgv(install.manager, `open-walnut@${status.latest}`, install.runtimePrefix)
   if (opts.check) return { exitCode: 0, lines: [head, `Run: ${install.updateCommand}`] }
   return { exitCode: 0, lines: [head, `Running: ${argv.file} ${argv.args.join(' ')}`], install: argv }
 }

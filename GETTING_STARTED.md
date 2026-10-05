@@ -8,6 +8,10 @@ Open Walnut is a Personal AI that manages tasks, accumulates knowledge, and coor
 
 ## Fast Track (5 Minutes + Model Download)
 
+No Node.js? One command installs a self-contained Walnut (its own Node inside) on macOS or
+Linux: `curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`
+(or `brew install evanzhang008/tap/open-walnut`), then `walnut web`.
+
 If you already have Node.js >= 22, here's the quickest path:
 
 ```bash
