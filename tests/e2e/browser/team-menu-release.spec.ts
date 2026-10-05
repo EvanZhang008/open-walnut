@@ -1,6 +1,7 @@
 /**
- * The task kebab's Team row (web/src/components/tasks/TeamMenuItems.tsx), as a
- * user meets it in a session column's header ⋮ (2026-10-05 ask: "an option to
+ * Leaving a team, as a user meets it in a session column's header: the task
+ * kebab's Team row (web/src/components/tasks/TeamMenuItems.tsx) and the Leader
+ * pill's flyout (LeaderPill.tsx). The header ⋮ (2026-10-05 ask: "an option to
  * unadopt a worker, or a worker unadopts its parent, in the menu but collapsed,
  * because it is not important; a click expands it").
  *
@@ -13,6 +14,9 @@
  *   3. A worker released elsewhere (API) leaves the open picker at once.
  *   4. Escape closes the picker alone, then the menu.
  *   5. A big team (12 workers) gets a filter; Enter releases the highlighted one.
+ *   6. The Leader pill's flyout (2026-10-05 follow-up ask): every open worker's row
+ *      ends in an unlink icon that releases it in place; the flyout stays on the
+ *      rest, and the last open one leaving takes the pill with it.
  *
  * The leader is a fixture column with a long transcript; the chromium and webkit
  * projects share one fixture board, so each engine takes its own leader.
@@ -236,6 +240,46 @@ test('a big team gets a filter, and Enter releases the highlighted worker', asyn
   await expect.poll(() => parentOf(t.ids[6])).toBe('')
   await expect(col(page, t.k).locator('[data-testid="leader-pill"]').first()).toHaveText('Leader · 11')
   for (const id of t.ids.filter((_, i) => i !== 6)) expect(await parentOf(id)).toBe(t.leader)
+
+  expect(t.failed, 'no API request failed').toEqual([])
+  expect(t.pageErrors).toEqual([])
+})
+
+test('the Leader pill lists the open workers, and a row unlink icon releases one in place', async ({ page, browserName }, info) => {
+  const t = await setup(page, browserName, 0)
+  const first = await t.mk(`Unlink worker one ${t.stamp}`)
+  // Test data: a CJK title (escaped).
+  const second = await t.mk(`\u6bcf\u65e5\u6458\u8981 unlink worker ${t.stamp}`)
+  const finished = await t.mk(`Unlink finished worker ${t.stamp}`)
+  await api('POST', `/api/tasks/${finished}/complete`)
+  await openHomeWithColumns(page, t.k)
+  const pill = col(page, t.k).locator('[data-testid="leader-pill"]').first()
+  await expect(pill).toHaveText('Leader · 2', { timeout: 20_000 })
+
+  await pill.click()
+  const pillFlyout = page.getByTestId('leader-subtasks-flyout')
+  await expect(pillFlyout).toBeVisible()
+  const unlink = (id: string) => pillFlyout.locator(`[data-testid="leader-sub-unlink"][data-task-id="${id}"]`)
+  await expect(pillFlyout.locator('[data-testid="leader-sub-unlink"]')).toHaveCount(2)
+  await expect(unlink(first)).toHaveAttribute('title', `Release "Unlink worker one ${t.stamp}" from this team. It keeps running on its own.`)
+  await pillFlyout.locator(`[data-testid="leader-sub-row"][data-task-id="${first}"]`).hover()
+  await inViewport(page, pillFlyout)
+  await pillFlyout.screenshot({ path: `${SHOTS}/${info.project.name}-5-leader-pill-unlink.png` })
+
+  // The icon releases that worker and nothing else: the flyout stays open on the rest (no jump to the task).
+  await unlink(first).click()
+  await expect.poll(() => parentOf(first)).toBe('')
+  await expect(pillFlyout).toBeVisible()
+  await expect(pillFlyout.locator('[data-testid="leader-sub-row"]')).toHaveCount(1)
+  await expect(pill).toHaveText('Leader · 1')
+  await expect(homeColumns(page)).toHaveCount(3)
+
+  // The last open one leaving takes the pill and its flyout; the finished worker keeps its link.
+  await unlink(second).click()
+  await expect.poll(() => parentOf(second)).toBe('')
+  await expect(pillFlyout).toHaveCount(0)
+  await expect(pill).toHaveCount(0)
+  expect(await parentOf(finished)).toBe(t.leader)
 
   expect(t.failed, 'no API request failed').toEqual([])
   expect(t.pageErrors).toEqual([])

@@ -133,6 +133,38 @@
   outline: none;
 }
 
+/* A row and its unlink icon (LeaderPill.tsx): the icon stays faint until the
+   row is pointed at or the icon has focus, so the list still reads as a list. */
+.leader-sub-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.leader-sub-item > .leader-sub-row { flex: 1 1 auto; min-width: 0; }
+.leader-sub-unlink {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: 0.45;
+  cursor: pointer;
+}
+.leader-sub-item:hover .leader-sub-unlink,
+.leader-sub-unlink:focus-visible { opacity: 1; }
+.leader-sub-unlink:hover,
+.leader-sub-unlink:focus-visible {
+  background: var(--bg-hover);
+  color: var(--error, #d93025);
+  outline: none;
+}
+
 .leader-sub-row .leader-sub-phase { cursor: inherit; }
 .leader-sub-row .leader-sub-phase:hover { background: none; }
 

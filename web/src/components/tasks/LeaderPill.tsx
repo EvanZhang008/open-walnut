@@ -7,9 +7,19 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
+import { log } from '@/utils/log';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
 import '@/styles/subtask-pill.css';
+
+/** A broken chain link: the row's "release from this team" control. */
+const ICON_UNLINK = (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M6.5 9.5 5 11a2.1 2.1 0 0 1-3-3l1.5-1.5" />
+    <path d="M9.5 6.5 11 5a2.1 2.1 0 0 1 3 3l-1.5 1.5" />
+    <path d="M5.5 1.5v2M1.5 5.5h2M10.5 14.5v-2M14.5 10.5h-2" />
+  </svg>
+);
 
 /**
  * "Leader · N" pill: this task has subtasks still open, and the pill lists them.
@@ -24,7 +34,8 @@ import '@/styles/subtask-pill.css';
  * had nothing but a count. The flyout lists every open subtask, wherever it
  * lives (its project named when it is not the leader's), with its phase; a row is
  * the same locate a Sub pill does, so the user can walk the whole team from
- * the leader's row.
+ * the leader's row. The unlink icon at a row's end releases that worker from
+ * the team (2026-10-05 user ask), without leaving the flyout.
  *
  * Overlay rules (web/src/AGENTS.md): placed by useMenuPlacement, portalled to
  * <body>, root stops pointerdown propagation (the rows are dnd-kit draggables),
@@ -86,6 +97,15 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
 
   if (subtasks.length === 0) return null;
 
+  // The row's unlink icon: the worker leaves this team and keeps running where
+  // it is (the same store write as Release a worker…). The flyout stays open on
+  // the rest; the last one leaving takes the pill and the flyout with it.
+  const release = (sub: Task) => {
+    if (!store) return;
+    log.info('tasks', 'worker released', { leaderTaskId: task.id, workerTaskId: sub.id, from: 'leader-pill' });
+    store.reparentTask(sub.id, null);
+  };
+
   const goTo = (sub: Task) => {
     close(false);
     const sid = resolveTaskSessionId(sub);
@@ -142,7 +162,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                 {subtasks.map((sub) => {
                   const place = subtaskPlaceLabel(sub, task.project);
                   return (
-                    <li key={sub.id}>
+                    <li key={sub.id} className="leader-sub-item">
                       <button
                         type="button"
                         className="leader-sub-row"
@@ -157,6 +177,17 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         <span className="leader-sub-title">{sub.title}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
                         <span className="leader-sub-phase-label">{PHASE_LABELS[sub.phase] ?? sub.phase}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="leader-sub-unlink"
+                        data-testid="leader-sub-unlink"
+                        data-task-id={sub.id}
+                        title={`Release "${sub.title}" from this team. It keeps running on its own.`}
+                        aria-label={`Release ${sub.title} from ${task.title}`}
+                        onClick={() => release(sub)}
+                      >
+                        {ICON_UNLINK}
                       </button>
                     </li>
                   );
