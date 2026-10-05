@@ -49,15 +49,24 @@ export function releaseGateRev(changedFiles) {
   return onlyRelease ? 'parent' : 'self'
 }
 
-/** The newest green commit among completed push runs on a branch (runs newest first). */
-export function pickLastGreen(runs, jobsOf) {
-  const sorted = [...(runs ?? [])].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-  const seen = new Set()
-  for (const run of sorted) {
-    if (seen.has(run.head_sha)) continue
-    seen.add(run.head_sha)
-    if (run.status !== 'completed' || run.conclusion === 'cancelled') continue
-    if (verdictOf([run], jobsOf).verdict === 'green') return run.head_sha
+/** How many commits back on the branch the nightly looks for one CI passed. */
+export const LAST_GREEN_DEPTH = 40
+
+/**
+ * The newest of `shas` (the branch's commits, newest first, from git) whose own
+ * CI passed, asking about each commit in turn. A commit without a CI run (docs
+ * only, a release commit), a red, running or cancelled one is passed over.
+ *
+ * Why per commit and not the branch's run list: on 2026-10-05 the list endpoint
+ * (`runs?branch=main`) answered from a stale index for six hours (118 runs where
+ * there were 190, the newest a week old), the nightly took a week-old commit for
+ * the newest green one and published nothing. The commits come from git, so a
+ * stale answer can only make this look further back, never pick an old commit
+ * over a newer green one.
+ */
+export function pickLastGreen(shas, verdictFor) {
+  for (const sha of shas) {
+    if (verdictFor(sha).verdict === 'green') return sha
   }
   return null
 }
@@ -76,8 +85,12 @@ export function commitVerdict(sha) {
 }
 
 export function lastGreen(branch = 'main') {
-  const runs = gh(`repos/{owner}/{repo}/actions/workflows/${CI_WORKFLOW}/runs?branch=${encodeURIComponent(branch)}&event=push&per_page=30`).workflow_runs
-  return pickLastGreen(runs, jobsOf)
+  // The remote branch when it is fetched (the release job's checkout), else the local one.
+  let tip
+  try { tip = git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}^{commit}`) } catch { tip = '' }
+  if (!tip) tip = git('rev-parse', '--verify', `${branch}^{commit}`)
+  const shas = git('rev-list', '--first-parent', `--max-count=${LAST_GREEN_DEPTH}`, tip).split('\n').filter(Boolean)
+  return pickLastGreen(shas, commitVerdict)
 }
 
 function git(...args) {

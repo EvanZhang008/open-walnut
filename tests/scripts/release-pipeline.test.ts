@@ -16,6 +16,7 @@
  */
 import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
@@ -313,19 +314,69 @@ describe('ci-gate', () => {
     expect(releaseGateRev([])).toBe('self')
   })
 
-  it('the nightly takes the newest green commit, skipping red, running and cancelled ones', () => {
-    const runs = [
-      run(5, 'e', '2026-10-01T05:00:00Z', 'in_progress', null),
-      run(4, 'd', '2026-10-01T04:00:00Z', 'completed', 'cancelled'),
-      run(3, 'c', '2026-10-01T03:00:00Z', 'completed', 'failure'),
-      run(2, 'b', '2026-10-01T02:00:00Z', 'completed', 'success'),
-      run(1, 'a', '2026-10-01T01:00:00Z', 'completed', 'success'),
-    ]
-    const jobs = (id: number) => (id === 3 ? gate('failure') : gate('success'))
-    expect(pickLastGreen(runs, jobs)).toBe('b')
-    expect(pickLastGreen(runs.slice(0, 3), jobs)).toBeNull()
-    // Report-only failures fail the run but not the gate: still green.
-    expect(pickLastGreen([run(3, 'c', '2026-10-01T03:00:00Z', 'completed', 'failure')], () => gate('success'))).toBe('c')
+  it('the nightly takes the newest green commit, skipping red, running, cancelled and CI-less ones', () => {
+    const verdicts: Record<string, string> = { f: 'none', e: 'pending', d: 'cancelled', c: 'red', b: 'green', a: 'green' }
+    const asked: string[] = []
+    const verdictFor = (sha: string) => { asked.push(sha); return { verdict: verdicts[sha]!, url: null } }
+    expect(pickLastGreen(['f', 'e', 'd', 'c', 'b', 'a'], verdictFor)).toBe('b')
+    // Newest first, and no further than the first green.
+    expect(asked).toEqual(['f', 'e', 'd', 'c', 'b'])
+    expect(pickLastGreen(['f', 'e', 'd', 'c'], verdictFor)).toBeNull()
+    expect(pickLastGreen([], verdictFor)).toBeNull()
+  })
+
+  it('last-green walks the branch in git and asks GitHub per commit, never the branch run list', () => {
+    // 2026-10-05: `runs?branch=main` answered from a stale index for six hours and
+    // the nightly took a week-old commit for the newest green one.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-last-green-'))
+    try {
+      const repo = path.join(tmp, 'repo')
+      fs.mkdirSync(repo)
+      // Never the caller's GIT_DIR (a hook exports one): it outranks cwd.
+      const gitEnv = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.test', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.test' } as NodeJS.ProcessEnv
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: gitEnv }).trim()
+      git('init', '-q', '-b', 'main')
+      const commit = (msg: string) => { git('commit', '-q', '--allow-empty', '-m', msg); return git('rev-parse', 'HEAD') }
+      const old = commit('old, green long ago')
+      const green = commit('green')
+      const red = commit('red')
+      const docs = commit('docs only, no CI run')
+      git('update-ref', 'refs/remotes/origin/main', docs)
+      // The local branch moved on (unpushed work): origin's tip is the one that counts.
+      commit('local only')
+      const runsFor: Record<string, unknown[]> = {
+        [old]: [{ id: 1, head_sha: old, created_at: '2026-09-28T00:00:00Z', status: 'completed', conclusion: 'success', html_url: 'u1' }],
+        [green]: [{ id: 2, head_sha: green, created_at: '2026-10-05T01:00:00Z', status: 'completed', conclusion: 'success', html_url: 'u2' }],
+        [red]: [{ id: 3, head_sha: red, created_at: '2026-10-05T02:00:00Z', status: 'completed', conclusion: 'failure', html_url: 'u3' }],
+      }
+      const jobsFor: Record<string, unknown[]> = { 1: [{ name: 'CI OK', conclusion: 'success' }], 2: [{ name: 'CI OK', conclusion: 'success' }], 3: [{ name: 'CI OK', conclusion: 'failure' }] }
+      fs.writeFileSync(path.join(tmp, 'fixture.json'), JSON.stringify({ runsFor, jobsFor }))
+      // A fake `gh api <endpoint>` that logs every endpoint and answers from the fixture.
+      const bin = path.join(tmp, 'bin')
+      fs.mkdirSync(bin)
+      fs.writeFileSync(path.join(bin, 'gh'), `#!${process.execPath}
+const fs = require('fs'), path = require('path')
+const dir = ${JSON.stringify(tmp)}
+const endpoint = process.argv[3]
+fs.appendFileSync(path.join(dir, 'calls.log'), endpoint + '\\n')
+const { runsFor, jobsFor } = JSON.parse(fs.readFileSync(path.join(dir, 'fixture.json'), 'utf8'))
+let m
+if ((m = /runs\\?head_sha=([0-9a-f]+)/.exec(endpoint))) process.stdout.write(JSON.stringify({ workflow_runs: runsFor[m[1]] ?? [] }))
+else if ((m = /runs\\/(\\d+)\\/jobs/.exec(endpoint))) process.stdout.write(JSON.stringify({ jobs: jobsFor[m[1]] ?? [] }))
+else { process.stderr.write('unexpected endpoint ' + endpoint); process.exit(1) }
+`, { mode: 0o755 })
+      const out = execFileSync(process.execPath, [path.resolve(__dirname, '../../scripts/ci-gate.mjs'), 'last-green', 'main'], {
+        cwd: repo, encoding: 'utf8', env: { ...gitEnv, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+      }).trim()
+      expect(out).toBe(green)
+      const calls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n')
+      expect(calls.some((c) => c.includes('runs?branch='))).toBe(false)
+      // docs (no run), red (one run, its jobs), green (one run, its jobs): then it stops.
+      expect(calls.filter((c) => c.includes('head_sha='))).toHaveLength(3)
+      expect(calls.some((c) => c.includes(`head_sha=${old}`))).toBe(false)
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })
 
