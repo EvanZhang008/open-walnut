@@ -15,6 +15,11 @@
  *      the user acts on the page; the hidden page never marks a thread read.
  *   C. An empty team (the leader alone, "Ask for a board" as a small link), long
  *      and Unicode titles, and a narrow pane (the "now" line moves to the tooltip).
+ *   D. A board with projects reads BY SECTION: the page's order, each section's
+ *      status pill and red "needs you" count, a done section folded, a project
+ *      with no task as a plain head, the members no section names at the end
+ *      (done ones apart); a task moved into a section and a worker handed back
+ *      move live; the projects deleted, the state groups come back.
  *
  * The chromium and webkit projects share ONE fixture board, so every task is
  * named `${engine}-overview-…` with a stamp, in a project of its own.
@@ -531,5 +536,272 @@ test('C. an empty team, long and Unicode titles, a narrow pane', async ({ page }
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
   await page.waitForTimeout(200)
   await pane.screenshot({ path: `${SHOT_DIR}/${engine}-C4-narrow-dark.png` })
+  expect(pageErrors).toEqual([])
+})
+
+const sectionOf = (pane: Locator, id: string) => pane.getByTestId(`board-overview-section-${id}`)
+const sectionIds = (pane: Locator) => pane.locator('.bo-section').evaluateAll((els) => els.map((el) => el.getAttribute('data-section')))
+const idsInSection = (pane: Locator, id: string) => sectionOf(pane, id).getByTestId('board-overview-row')
+  .evaluateAll((els) => els.map((el) => el.getAttribute('data-task-id')))
+
+test('D. a board with projects reads by section, in the page\'s order, live', async ({ page }) => {
+  test.setTimeout(360_000)
+  const engine = test.info().project.name
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const project = `${engine}-overview-D ${stamp}`
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message))
+  const t = (name: string) => `${engine}-overview ${name} ${stamp}`
+
+  // The leader has no session (a project write by the user would start its turn); the user
+  // reads the team's board from a worker's panel, and that worker writes the projects as the
+  // leader would (board_project_set: a session's write, nothing delivered).
+  const lead = await createTask(t('lead D'), { project })
+  const viewer = await createTask(t('viewer'), { project, parent_task_id: lead })
+  const viewerSid = await startSession(viewer, 'snapshot-clean-turn:Viewer D ready')
+  const sub = (name: string) => createTask(t(name), { project, parent_task_id: lead })
+  const aNeed = await sub('A handed back')
+  await patch(aNeed, { phase: 'NEED_ACTION' })
+  const aDone = await sub('A finished')
+  await patch(aDone, { phase: 'COMPLETE' })
+  // The worker's own subtask: the leader's list does not name it, it follows its parent.
+  const aSub = await createTask(t('A probe'), { project, parent_task_id: aNeed })
+  const bOpen = await sub('B open')
+  const loose = await sub('loose')
+  const looseDone = await sub('loose finished')
+  await patch(looseDone, { phase: 'COMPLETE' })
+  // The page shows B before A; C is recorded but not on the page.
+  await api('PUT', `/api/v1/tasks/${lead}/board`, {
+    html: `<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px sans-serif;padding:12px">
+<h1 style="font-size:17px">${engine} page D ${stamp}</h1>
+<section data-project="area-b"><h2>B <walnut-project id="area-b"></walnut-project></h2></section>
+<section data-project="area-a"><h2>A <walnut-project id="area-a"></walnut-project></h2></section>
+</body></html>`,
+  })
+  const asLeader = { 'x-walnut-caller-sid': viewerSid }
+  const setProject = (id: string, body: Record<string, unknown>) => api('PUT', `/api/v1/tasks/${lead}/board/projects/${id}`, body, asLeader)
+  await setProject('area-a', { title: 'A bus race', status: 'decide', tasks: [aNeed, aDone] })
+  await setProject('area-b', { title: 'B leader handover', status: 'done', tasks: [bOpen] })
+  await setProject('area-c', { title: 'C image CVE', status: 'wait' })
+  await expect.poll(() => historyText(viewerSid), { timeout: 60_000 }).toContain('Viewer D ready')
+  await expect.poll(async () => (await sessionOf(viewerSid)).process_status ?? '', { timeout: 60_000 }).not.toBe('running')
+
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page)
+  const leadRow = page.locator(`.todo-panel-item[data-task-id="${lead}"]`)
+  await expect(leadRow).toBeVisible({ timeout: 90_000 })
+  const chevron = leadRow.locator('.collapse-chevron')
+  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
+  const { pane } = await openBoardTab(page, viewer, viewerSid)
+  const overview = pane.getByTestId('board-overview')
+  await expect(overview).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-overview-leader')).toHaveAttribute('data-task-id', lead)
+
+  // ── By section, in the page's order, the recorded-only project after, the rest last ──
+  await expect(sectionOf(pane, 'area-a')).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => sectionIds(pane), { timeout: 15_000 }).toEqual(['area-b', 'area-a', 'area-c', '_rest', '_rest-done'])
+  await expect(pane.locator('.bo-group[data-group]')).toHaveCount(0) // no state groups beside the sections
+  const a = sectionOf(pane, 'area-a')
+  await expect(a.getByTestId('board-overview-section-title')).toHaveText('A bus race')
+  await expect(a.getByTestId('board-overview-count')).toHaveText('3')
+  await expect(a.getByTestId('board-overview-section-attention')).toHaveText('1')
+  await expect(a.getByTestId('board-overview-section-status')).toHaveText('Needs you')
+  await expect(a.getByTestId('board-overview-section-status')).toHaveAttribute('data-tone', 'red')
+  await expect(a.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'true')
+  expect(await idsInSection(pane, 'area-a')).toEqual([aNeed, aSub, aDone]) // the open rows first (the subtask under its parent), done after
+  await expect(rowOf(pane, aSub)).toHaveAttribute('data-indent', '1')
+  await expect(rowOf(pane, aNeed)).toHaveAttribute('data-group', 'needs')
+  await expect(rowOf(pane, aDone)).toHaveAttribute('data-group', 'done')
+  // A done section starts folded, its status green; a click unfolds it.
+  const b = sectionOf(pane, 'area-b')
+  await expect(b.getByTestId('board-overview-section-status')).toHaveText('Done')
+  await expect(b.getByTestId('board-overview-section-status')).toHaveAttribute('data-tone', 'green')
+  await expect(b.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
+  await expect(b.getByTestId('board-overview-count')).toHaveText('1')
+  await expect(b.getByTestId('board-overview-row')).toHaveCount(0)
+  await expect(b.getByTestId('board-overview-section-attention')).toHaveCount(0)
+  await b.locator('.bo-group-head').click()
+  await expect(rowOf(pane, bOpen)).toBeVisible()
+  await expect(rowOf(pane, bOpen)).toHaveAttribute('data-group', 'open')
+  // A project naming no task: a plain head (no button), its status still shown.
+  const c = sectionOf(pane, 'area-c')
+  await expect(c.locator('.bo-group-head-empty')).toHaveCount(1)
+  await expect(c.locator('button.bo-group-head')).toHaveCount(0)
+  await expect(c.getByTestId('board-overview-count')).toHaveText('no task')
+  await expect(c.getByTestId('board-overview-section-status')).toHaveText('Waiting on others')
+  await expect(c.getByTestId('board-overview-section-status')).toHaveAttribute('data-tone', 'amber')
+  // The rest: the members no section names, the done ones apart and folded.
+  const rest = sectionOf(pane, '_rest')
+  await expect(rest.getByTestId('board-overview-section-title')).toHaveText('Not in a section')
+  await expect(rest.getByTestId('board-overview-section-status')).toHaveCount(0)
+  expect((await idsInSection(pane, '_rest')).sort()).toEqual([loose, viewer].sort())
+  const restDone = sectionOf(pane, '_rest-done')
+  await expect(restDone.getByTestId('board-overview-section-title')).toHaveText('Done, not in a section')
+  await expect(restDone.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
+  await expect(restDone.getByTestId('board-overview-count')).toHaveText('1')
+  await restDone.locator('.bo-group-head').click()
+  expect(await idsInSection(pane, '_rest-done')).toEqual([looseDone])
+  await expect(pane.getByTestId('board-overview-rollup')).toContainText('5 open · 2 done')
+  // Every section head's right edge stays inside the pane (long titles cut, the pill at the end).
+  const paneBox = (await overview.boundingBox())!
+  for (const head of await pane.locator('.bo-section .bo-group-head').all()) {
+    const box = (await head.boundingBox())!
+    expect(box.x + box.width).toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
+    expect(box.height).toBeLessThanOrEqual(36)
+  }
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D1-sections.png` })
+
+  // ── Live: a task moved into a section; a worker handed back inside its section ──
+  await setProject('area-c', { tasks: [loose] })
+  // The row was on screen already (in the rest): wait for it INSIDE its new section.
+  await expect(sectionOf(pane, 'area-c').locator(`[data-task-id="${loose}"]`)).toBeVisible({ timeout: 15_000 })
+  expect(await idsInSection(pane, 'area-c')).toEqual([loose])
+  await expect(c.locator('button.bo-group-head')).toHaveCount(1)
+  await expect(c.getByTestId('board-overview-count')).toHaveText('1')
+  expect(await idsInSection(pane, '_rest')).toEqual([viewer])
+  await patch(bOpen, { phase: 'NEED_ACTION' })
+  await expect(rowOf(pane, bOpen)).toHaveAttribute('data-group', 'needs', { timeout: 15_000 })
+  await expect(b.getByTestId('board-overview-section-attention')).toHaveText('1', { timeout: 15_000 })
+  expect(await idsInSection(pane, 'area-b')).toEqual([bOpen]) // it stays in its section
+
+  // ── Dark theme, same pane ──
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
+  await page.waitForTimeout(200)
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-D2-sections-dark.png` })
+  await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
+
+  // ── The projects gone: the state groups are back ──
+  for (const id of ['area-a', 'area-b', 'area-c']) await setProject(id, { delete: true })
+  await expect(pane.locator('.bo-section')).toHaveCount(0, { timeout: 15_000 })
+  expect(await groupIds(pane)).toEqual(['needs', 'open', 'done'])
+  expect(await idsIn(pane, 'needs')).toEqual(expect.arrayContaining([aNeed, bOpen])) // the viewer may be handed back too
+  expect(pageErrors).toEqual([])
+})
+
+test('E. a 21-section board over a 42-member team: every head one line, wide and narrow', async ({ page }) => {
+  test.setTimeout(420_000)
+  const engine = test.info().project.name
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const project = `${engine}-overview-E ${stamp}`
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message))
+  const t = (name: string) => `${engine}-overview ${name} ${stamp}`
+
+  const lead = await createTask(t('lead E'), { project })
+  const viewer = await createTask(t('viewer'), { project, parent_task_id: lead })
+  const viewerSid = await startSession(viewer, 'snapshot-clean-turn:Viewer E ready')
+  // 21 areas, A..U: 13 hold one task each (3 of them done), 8 hold none; the rest of the
+  // team is 2 more open tasks and 26 done ones (the usual shape: merged tickets). Titles
+  // are long, some in Japanese with an emoji (as escapes), as a real board's are.
+  const letters = 'ABCDEFGHIJKLMNOPQRSTU'.split('')
+  const statuses = ['wait', 'decide', 'done', 'wait', 'wait', 'wip', 'wip', 'done', 'wait', 'wait', 'wait', 'decide', 'done', 'done', 'wait', 'decide', 'done', 'decide', 'wip', 'decide', 'decide']
+  const longTail = ' after the regional rollout, with the on-call confirming the purge window and the deploy train held until the cache is warm'
+  const members: Record<string, string> = {}
+  const sectionTasks: Record<string, string[]> = {}
+  for (const [i, letter] of letters.entries()) {
+    if (i >= 13) continue
+    const title = i % 4 === 2
+      ? `${letter} \u30ea\u30fc\u30c0\u30fc\u5207\u308a\u66ff\u3048\u3067\u30a4\u30d9\u30f3\u30c8\u6d88\u5931 \u{1F6A8} ${stamp}`
+      : `${t(`area ${letter} probe`)}${i % 3 === 0 ? longTail : ''}`
+    const id = await createTask(title, { project, parent_task_id: lead })
+    members[letter] = id
+    sectionTasks[`sec-${letter.toLowerCase()}`] = [id]
+    if (statuses[i] === 'done') await patch(id, { phase: 'COMPLETE' })
+    else if (statuses[i] === 'decide') await patch(id, { phase: 'NEED_ACTION' })
+  }
+  const restOpen = [await createTask(t('ops report review'), { project, parent_task_id: lead }), await createTask(t('dashboard sweep'), { project, parent_task_id: lead })]
+  for (let i = 1; i <= 26; i++) {
+    const id = await createTask(t(`merged ticket ${i}`), { project, parent_task_id: lead })
+    await patch(id, { phase: 'COMPLETE' })
+  }
+  // The page shows 20 of the areas, not alphabetically (U is recorded only).
+  const pageOrder = ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'i', 'j', 'l', 'n', 'q', 'r', 's', 't', 'k', 'o', 'g', 'm', 'p']
+  await api('PUT', `/api/v1/tasks/${lead}/board`, {
+    html: `<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px sans-serif;padding:12px">
+<h1 style="font-size:17px">${engine} page E ${stamp}</h1>
+${pageOrder.map((l) => `<section data-project="sec-${l}"><h2>${l.toUpperCase()} <walnut-project id="sec-${l}"></walnut-project></h2></section>`).join('\n')}
+</body></html>`,
+  })
+  const asLeader = { 'x-walnut-caller-sid': viewerSid }
+  for (const [i, letter] of letters.entries()) {
+    const id = `sec-${letter.toLowerCase()}`
+    const title = i % 5 === 1
+      ? `${letter} \u30ce\u30fc\u30c9\u30e1\u30e2\u30ea\u56de\u53ce\u30da\u30fc\u30b8 (D${100 + i}, 09-10 \u5fa9\u65e7\u6e08\u307f)`
+      : `${letter} ${['Bus race', 'Memory reclaim page', 'Grey failure', 'Alert family', 'Dropped events'][i % 5]}${i % 3 === 0 ? longTail : ''}`
+    await api('PUT', `/api/v1/tasks/${lead}/board/projects/${id}`, { title, status: statuses[i], ...(sectionTasks[id] ? { tasks: sectionTasks[id] } : {}) }, asLeader)
+  }
+  await expect.poll(() => historyText(viewerSid), { timeout: 60_000 }).toContain('Viewer E ready')
+  await expect.poll(async () => (await sessionOf(viewerSid)).process_status ?? '', { timeout: 60_000 }).not.toBe('running')
+
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page)
+  const leadRow = page.locator(`.todo-panel-item[data-task-id="${lead}"]`)
+  await expect(leadRow).toBeVisible({ timeout: 90_000 })
+  const chevron = leadRow.locator('.collapse-chevron')
+  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
+  const { panel, pane } = await openBoardTab(page, viewer, viewerSid)
+  const overview = pane.getByTestId('board-overview')
+  await expect(overview).toBeVisible({ timeout: 15_000 })
+  await expect(sectionOf(pane, 'sec-u')).toBeVisible({ timeout: 20_000 })
+
+  // ── 21 sections in the page's order, U after them, then the rest ──
+  await expect.poll(() => sectionIds(pane), { timeout: 15_000 }).toEqual([...pageOrder.map((l) => `sec-${l}`), 'sec-u', '_rest', '_rest-done'])
+  await expect(pane.getByTestId('board-overview-rollup')).toContainText('13 open · 29 done')
+  await expect(sectionOf(pane, '_rest-done').getByTestId('board-overview-count')).toHaveText('26')
+  await expect(sectionOf(pane, '_rest-done').locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
+  expect((await idsInSection(pane, '_rest')).sort()).toEqual([...restOpen, viewer].sort())
+  // Every area with a NEED_ACTION task carries the red count; done areas start folded.
+  for (const [i, letter] of letters.entries()) {
+    const s = sectionOf(pane, `sec-${letter.toLowerCase()}`)
+    await expect(s.getByTestId('board-overview-section-status')).toHaveText(
+      { wait: 'Waiting on others', decide: 'Needs you', wip: 'In progress', done: 'Done' }[statuses[i]]!)
+    if (i < 13 && statuses[i] === 'decide') await expect(s.getByTestId('board-overview-section-attention')).toHaveText('1')
+    else await expect(s.getByTestId('board-overview-section-attention')).toHaveCount(0)
+    if (statuses[i] === 'done' && i < 13) await expect(s.locator('.bo-group-head')).toHaveAttribute('aria-expanded', 'false')
+    if (i >= 13) await expect(s.getByTestId('board-overview-count')).toHaveText('no task')
+  }
+  const fits = async (maxHeight: number) => {
+    const paneBox = (await overview.boundingBox())!
+    for (const head of await pane.locator('.bo-section .bo-group-head').all()) {
+      await head.scrollIntoViewIfNeeded()
+      const box = (await head.boundingBox())!
+      expect(box.height, 'one line per head').toBeLessThanOrEqual(maxHeight)
+      expect(box.x + box.width, 'inside the pane').toBeLessThanOrEqual(paneBox.x + paneBox.width + 1)
+      expect(box.x, 'inside the pane').toBeGreaterThanOrEqual(paneBox.x - 1)
+    }
+    // The long title is cut, not wrapped; the pill stays whole.
+    const cut = await sectionOf(pane, 'sec-a').getByTestId('board-overview-section-title').evaluate((el) => ({
+      clipped: el.scrollWidth > el.clientWidth, overflow: getComputedStyle(el).textOverflow,
+    }))
+    expect(cut.overflow).toBe('ellipsis')
+    return cut.clipped
+  }
+  await fits(36)
+  await overview.evaluate((el) => { el.scrollTop = 0 })
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-E1-dense-wide.png` })
+
+  // ── A narrow pane (about 400px): the heads still fit, the long titles cut ──
+  const wide = (await overview.boundingBox())!.width
+  const handle = panel.locator(':scope > .session-panel-split > .session-panel-chat-resize')
+  const grab = await handle.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const y = r.top + r.height / 2
+    for (const dx of [-2, -1, 0.5, 0, 1]) {
+      const hit = document.elementFromPoint(r.left + dx, y)
+      if (hit === el) return { x: r.left + dx, y }
+    }
+    return null
+  })
+  expect(grab).not.toBeNull()
+  await page.mouse.move(grab!.x, grab!.y)
+  await page.mouse.down()
+  await page.mouse.move(grab!.x - (wide - 400), grab!.y, { steps: 12 })
+  await page.mouse.up()
+  await expect.poll(async () => (await overview.boundingBox())!.width).toBeLessThanOrEqual(420)
+  expect(await fits(36)).toBe(true)
+  await overview.evaluate((el) => { el.scrollTop = 0 })
+  await pane.screenshot({ path: `${SHOT_DIR}/${engine}-E2-dense-narrow.png` })
   expect(pageErrors).toEqual([])
 })

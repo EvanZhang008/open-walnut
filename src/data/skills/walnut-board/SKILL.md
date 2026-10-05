@@ -35,7 +35,7 @@ notes and read ticks are readable by you, task chips and section status show liv
 | `board_edit {task?, edits: [{old, new}]}` | Replace exact strings. Each `old` must occur ONCE in the current html, or nothing is written and the error names the edit. This is the normal way to update. |
 | `board_post {task?, thread, text}` | Your answer or note in a section's thread. One message per post. The outcome names the new message id. |
 | `board_post_delete {task?, thread, id}` | Delete one of your own posts (a wrong or outdated answer). The user can delete any post from the Board tab. |
-| `board_project_set {task?, id, title?, status?, tasks?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title and tasks. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. |
+| `board_project_set {task?, id, title?, status?, tasks?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title and tasks. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. `tasks` also shapes the Board tab's Overview: it lists the team by project, in the page's order (a named task's own subtasks follow it), and a team member no project names falls to "Not in a section" at the end, so name every task of an area. |
 | `board_remind {task?, target, at, note?}` | A reminder on a choice or a thread (`at` is an ISO time, `""` clears). |
 
 **A team shares one board**: the nearest ancestor that has a board, else the root

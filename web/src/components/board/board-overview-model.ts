@@ -18,9 +18,18 @@
  * Needs you sorts by that reason order, every group then by the latest status
  * change, newest first. Inside a group a row whose parent is in the same group
  * follows it, indented; one whose parent sits elsewhere says whom it is under.
+ *
+ * A board whose leader defined projects (`board_project_set`: the page's
+ * sections, each with a status and the tasks it holds) is read BY SECTION
+ * instead (`sections`, null otherwise): the sections in the page's order (the
+ * ones the page does not show after, as recorded), each with its status and its
+ * tasks (and their subtasks) in the attention order above, open rows before done
+ * ones; then the team members no section names ("Not in a section", the done
+ * ones apart). A row's state group is still on it, so a blocked worker stays red
+ * inside its section.
  */
 import type { Task } from '@open-walnut/core';
-import type { BoardChoice, BoardMessage, BoardReminder, BoardSeen } from './board-model';
+import type { BoardChoice, BoardMessage, BoardProject, BoardProjectStatus, BoardReminder, BoardSeen } from './board-model';
 import { reminderDue } from './board-items-model';
 import { PHASE_LABELS, deriveDisplayStatus, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import { subtaskPlaceLabel, subtasksOf } from '@/components/tasks/subtask-index';
@@ -42,7 +51,7 @@ export interface LiveStatus {
 
 export type OverviewGroupId = 'needs' | 'running' | 'open' | 'done';
 export type NeedReason = 'permission' | 'error' | 'need-action' | 'unread' | 'board';
-export type BadgeTone = 'red' | 'green' | 'amber' | 'grey' | 'violet';
+export type BadgeTone = 'red' | 'green' | 'amber' | 'grey' | 'violet' | 'blue';
 
 /** Needs you, most urgent first. */
 export const REASON_RANK: Record<NeedReason, number> = {
@@ -110,9 +119,11 @@ export interface BoardElement {
 export interface BoardElements {
   choices: BoardElement[];
   threads: BoardElement[];
+  /** The board projects the page shows (`[data-project]` sections, `<walnut-project id>` pills), ids in document order. */
+  projects?: string[];
 }
 
-export const NO_BOARD_ELEMENTS: BoardElements = { choices: [], threads: [] };
+export const NO_BOARD_ELEMENTS: BoardElements = { choices: [], threads: [], projects: [] };
 
 export type BoardSignalKind = 'reminder' | 'choice' | 'thread';
 
@@ -359,12 +370,45 @@ export interface OverviewGroup {
   rows: PlacedRow[];
 }
 
+// ── Sections: the board's projects ──
+
+export type SectionKind = 'project' | 'rest' | 'rest-done';
+/** A board project id starts with a letter or a digit (BOARD_ITEM_ID_RE), so these never collide with one. */
+export const REST_SECTION_ID = '_rest';
+export const REST_DONE_SECTION_ID = '_rest-done';
+
+/** A project status in the page's own default words (board-runtime.frame.js DEFAULT_LABELS). */
+export const PROJECT_STATUS_LABELS: Record<BoardProjectStatus, string> = {
+  decide: 'Needs you', wip: 'In progress', wait: 'Waiting on others', done: 'Done',
+};
+/** The page's colors for a status: red, blue, amber, green. */
+export const PROJECT_STATUS_TONES: Record<BoardProjectStatus, BadgeTone> = {
+  decide: 'red', wip: 'blue', wait: 'amber', done: 'green',
+};
+
+/** One section of the by-section reading: a board project, or the trailing rest. */
+export interface OverviewSection {
+  kind: SectionKind;
+  /** The project's id as the board records it; REST_SECTION_ID / REST_DONE_SECTION_ID for the rest. */
+  id: string;
+  title: string;
+  /** The project's status, null when it has none the page knows (and for the rest). */
+  status: BoardProjectStatus | null;
+  rows: PlacedRow[];
+  /** Rows that need the user. */
+  attention: number;
+  /** Rows that are done. */
+  done: number;
+}
+
 export interface TeamOverview {
   ownerId: string;
   /** The owner's row; null when the store does not have the owner (deleted, or not loaded). */
   leader: OverviewRow | null;
   /** The non-empty groups, in GROUP_ORDER. */
   groups: OverviewGroup[];
+  /** The board's projects as sections (see the module comment); null when the board defines none. */
+  sections: OverviewSection[] | null;
   members: number;
   open: number;
   done: number;
@@ -381,6 +425,8 @@ export interface OverviewInput {
   statusOf: (task: Task) => LiveStatus | null;
   elements: BoardElements;
   board: BoardSignalInput | null;
+  /** The board's projects (`payload.projects`); none or empty = the state groups alone. */
+  projects?: Record<string, BoardProject> | null;
   seen: BoardSeen;
   now?: number;
   formatWaitUntil?: (iso: string) => string;
@@ -422,6 +468,100 @@ export function orderGroup(rows: readonly OverviewRow[], titleOf: (id: string) =
     for (const c of [...(kids.get(r.id) ?? [])].sort(compareRows)) emit(c, level + 1);
   };
   for (const r of [...roots].sort(compareRows)) emit(r, 0);
+  return out;
+}
+
+/** A project record as an object (the store's file can be edited by hand; a null or a string is not a project). */
+function projectRecord(v: unknown): Partial<BoardProject> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v as Partial<BoardProject> : null;
+}
+
+/**
+ * The project ids in the page's order, then the recorded ones the page does
+ * not show, as recorded. Only ids whose record is an object count.
+ */
+export function orderProjects(projects: Record<string, BoardProject>, pageOrder: readonly string[] = []): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of [...pageOrder, ...Object.keys(projects)]) {
+    if (!id || seen.has(id) || !Object.prototype.hasOwnProperty.call(projects, id) || !projectRecord(projects[id])) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** A recorded status the page knows; anything else is none. */
+export function projectStatusOf(project: Pick<BoardProject, 'status'> | null | undefined): BoardProjectStatus | null {
+  const s = projectRecord(project)?.status;
+  return typeof s === 'string' && Object.prototype.hasOwnProperty.call(PROJECT_STATUS_LABELS, s) ? s : null;
+}
+
+/** Open rows in attention order, then the done ones (a section's history) after them. */
+function orderSection(rows: readonly OverviewRow[], titleOf: (id: string) => string): PlacedRow[] {
+  return [...orderGroup(rows.filter((r) => r.group !== 'done'), titleOf), ...orderGroup(rows.filter((r) => r.group === 'done'), titleOf)];
+}
+
+/**
+ * The team by the board's projects. Each project is a section, in `pageOrder`
+ * then as recorded, holding the team members its `tasks` name (an id or a prefix
+ * that names exactly one member; the owner and tasks outside the team are not
+ * rows here) that no earlier section took, plus the members under those (a
+ * worker's own subtasks, which the leader's list rarely knows). A project naming
+ * nothing is still a section (its status is part of the picture). Members no
+ * project names close the list: the open ones, then the done ones apart. Null
+ * without projects.
+ */
+export function buildSections(
+  rows: readonly OverviewRow[],
+  projects: Record<string, BoardProject> | null | undefined,
+  pageOrder: readonly string[],
+  ownerId: string,
+  titleOf: (id: string) => string,
+): OverviewSection[] | null {
+  if (!projects) return null;
+  const order = orderProjects(projects, pageOrder);
+  if (order.length === 0) return null;
+  const teamIds = new Set(rows.map((r) => r.id));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  // row id → index into `order` of the section it belongs to.
+  const sectionOf = new Map<string, number>();
+  for (const [at, id] of order.entries()) {
+    const project = projectRecord(projects[id]);
+    const refs = Array.isArray(project?.tasks) ? project.tasks : [];
+    for (const ref of refs) {
+      const member = memberOf(typeof ref === 'string' ? ref : '', ownerId, teamIds);
+      if (!member || member === ownerId || sectionOf.has(member) || !byId.has(member)) continue;
+      sectionOf.set(member, at);
+    }
+  }
+  // Depth first, so a parent is settled before its children: an unnamed row takes its parent's section.
+  for (const r of rows) {
+    if (sectionOf.has(r.id)) continue;
+    const inherited = sectionOf.get(r.parentId);
+    if (inherited !== undefined) sectionOf.set(r.id, inherited);
+  }
+  const own: OverviewRow[][] = order.map(() => []);
+  const rest: OverviewRow[] = [];
+  for (const r of rows) {
+    const at = sectionOf.get(r.id);
+    if (at === undefined) rest.push(r); else own[at].push(r);
+  }
+  const section = (kind: SectionKind, id: string, title: string, status: BoardProjectStatus | null, list: OverviewRow[]): OverviewSection => ({
+    kind, id, title, status,
+    rows: orderSection(list, titleOf),
+    attention: list.filter((r) => r.group === 'needs').length,
+    done: list.filter((r) => r.group === 'done').length,
+  });
+  const out: OverviewSection[] = order.map((id, at) => {
+    const project = projectRecord(projects[id]);
+    const title = typeof project?.title === 'string' ? project.title.trim() : '';
+    return section('project', id, title || id, projectStatusOf(project), own[at]);
+  });
+  const restOpen = rest.filter((r) => r.group !== 'done');
+  const restDone = rest.filter((r) => r.group === 'done');
+  if (restOpen.length) out.push(section('rest', REST_SECTION_ID, 'Not in a section', null, restOpen));
+  if (restDone.length) out.push(section('rest-done', REST_DONE_SECTION_ID, 'Done, not in a section', null, restDone));
   return out;
 }
 
@@ -471,6 +611,7 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
     ownerId,
     leader,
     groups,
+    sections: buildSections(rows, input.projects, input.elements.projects ?? [], ownerId, titleOf),
     members: rows.length,
     open: rows.length - done,
     done,

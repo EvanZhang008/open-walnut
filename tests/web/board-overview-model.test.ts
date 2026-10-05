@@ -9,10 +9,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
-  INDENT_CAP, boardSignals, buildTeamOverview, compactAgo, describeTask, donePercent, orderGroup, rollupText,
-  rowTooltip, signalsText, teamChildren, walkTeam,
+  INDENT_CAP, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, REST_DONE_SECTION_ID, REST_SECTION_ID,
+  boardSignals, buildSections, buildTeamOverview, compactAgo, describeTask, donePercent, orderGroup, orderProjects,
+  projectStatusOf, rollupText, rowTooltip, signalsText, teamChildren, walkTeam,
   type BoardElements, type LiveStatus, type OverviewRow,
 } from '../../web/src/components/board/board-overview-model';
+import type { BoardProject } from '../../web/src/components/board/board-model';
 import { subtasksOf } from '../../web/src/components/tasks/subtask-index';
 import {
   BOARD_VIEW_PREFIX, parseBoardView, readBoardView, shownBoardView, writeBoardView,
@@ -344,6 +346,164 @@ describe('buildTeamOverview', () => {
     expect(empty.groups).toEqual([]);
     expect(rollupText(empty)).toBe('No workers yet');
     expect(donePercent(empty)).toBe(0);
+  });
+});
+
+describe('sections: the board\'s projects', () => {
+  const project = (extra: Partial<BoardProject> = {}): BoardProject => ({ updated_at: ago(10), updated_by: 'task:lead-0001', ...extra });
+  const titles: Record<string, string> = { 'lead-0001': 'Lead', 'area-a-0001': 'Area A' };
+  const titleOf = (id: string) => titles[id] ?? '';
+
+  it('page order first, then the recorded projects the page does not show; unknown ids and repeats dropped', () => {
+    const projects = { 'sec-a': project(), 'sec-b': project(), 'sec-c': project() };
+    expect(orderProjects(projects, ['sec-c', 'sec-a', 'sec-c', 'sec-zz', ''])).toEqual(['sec-c', 'sec-a', 'sec-b']);
+    expect(orderProjects(projects)).toEqual(['sec-a', 'sec-b', 'sec-c']);
+    expect(orderProjects({})).toEqual([]);
+  });
+
+  it('a status the page knows, in its words and colors; anything else is none', () => {
+    expect(projectStatusOf(project({ status: 'decide' }))).toBe('decide');
+    expect(projectStatusOf(project({ status: 'later' as 'wip' }))).toBeNull();
+    expect(projectStatusOf(project())).toBeNull();
+    expect(projectStatusOf(null)).toBeNull();
+    expect(PROJECT_STATUS_LABELS).toEqual({ decide: 'Needs you', wip: 'In progress', wait: 'Waiting on others', done: 'Done' });
+    expect(PROJECT_STATUS_TONES).toEqual({ decide: 'red', wip: 'blue', wait: 'amber', done: 'green' });
+  });
+
+  it('no projects, no sections: the state groups stay', () => {
+    const rows = [row('w-0001')];
+    expect(buildSections(rows, null, [], 'lead-0001', titleOf)).toBeNull();
+    expect(buildSections(rows, undefined, [], 'lead-0001', titleOf)).toBeNull();
+    expect(buildSections(rows, {}, ['sec-a'], 'lead-0001', titleOf)).toBeNull();
+  });
+
+  it('each project holds the members it names, open rows in attention order, done ones after; the rest close the list', () => {
+    const rows = [
+      row('a-open-0001', { at: ago(30) }),
+      row('a-need-0001', { group: 'needs', reason: 'need-action', at: ago(60) }),
+      row('a-done-0001', { group: 'done', at: ago(1) }),
+      row('b-run-0001', { group: 'running', at: ago(2) }),
+      row('loose-0001', { at: ago(5) }),
+      row('loose-done-0001', { group: 'done', at: ago(5) }),
+      row('loose-done-0002', { group: 'done', at: ago(6) }),
+    ];
+    const projects = {
+      'sec-b': project({ title: 'B leader handover', status: 'wip', tasks: ['b-run-0001'] }),
+      'sec-a': project({ title: 'A bus race', status: 'decide', tasks: ['a-open-0001', 'a-need-0001', 'a-done-0001'] }),
+      'sec-c': project({ title: 'C image CVE', status: 'wait' }),
+    };
+    // The page shows A then B; C is recorded but not on the page.
+    const out = buildSections(rows, projects, ['sec-a', 'sec-b'], 'lead-0001', titleOf)!;
+    expect(out.map((s) => [s.kind, s.id, s.title, s.status, s.rows.map((r) => r.id), s.attention, s.done])).toEqual([
+      ['project', 'sec-a', 'A bus race', 'decide', ['a-need-0001', 'a-open-0001', 'a-done-0001'], 1, 1],
+      ['project', 'sec-b', 'B leader handover', 'wip', ['b-run-0001'], 0, 0],
+      ['project', 'sec-c', 'C image CVE', 'wait', [], 0, 0],
+      ['rest', REST_SECTION_ID, 'Not in a section', null, ['loose-0001'], 0, 0],
+      ['rest-done', REST_DONE_SECTION_ID, 'Done, not in a section', null, ['loose-done-0001', 'loose-done-0002'], 0, 2],
+    ]);
+  });
+
+  it('a prefix names the one member it fits; the owner, an outsider, an ambiguous prefix and a second naming are not rows', () => {
+    const rows = [row('work-0001'), row('work-0002'), row('other-0001')];
+    const projects = {
+      // 'work-00' fits two members: a guess, not a ref.
+      'sec-a': project({ tasks: ['work-0001', 'lead-0001', 'stranger-0001', 'work-00'] }),
+      // work-0001 is A's already; 'other-00' fits exactly one member.
+      'sec-b': project({ tasks: ['work-0001', 'other-00'] }),
+    };
+    const out = buildSections(rows, projects, [], 'lead-0001', titleOf)!;
+    expect(out.map((s) => [s.id, s.rows.map((r) => r.id)])).toEqual([
+      ['sec-a', ['work-0001']],
+      ['sec-b', ['other-0001']],
+      [REST_SECTION_ID, ['work-0002']],
+    ]);
+  });
+
+  it('a project with no title reads by its id; no rest section when every member has a section', () => {
+    const rows = [row('w-0001')];
+    const out = buildSections(rows, { 'sec-x': project({ title: '  ', tasks: ['w-0001'] }) }, [], 'lead-0001', titleOf)!;
+    expect(out.map((s) => [s.id, s.title, s.kind])).toEqual([['sec-x', 'sec-x', 'project']]);
+  });
+
+  it('a nested row in a section follows its parent there, or says whom it is under', () => {
+    const rows = [
+      row('p-0001', { at: ago(10) }),
+      row('c-0001', { depth: 2, parentId: 'p-0001', at: ago(1) }),
+      row('c-0002', { depth: 2, parentId: 'area-a-0001', at: ago(2) }),
+    ];
+    const out = buildSections(rows, { 'sec-a': project({ tasks: ['p-0001', 'c-0001', 'c-0002'] }) }, [], 'lead-0001', titleOf)!;
+    expect(out[0].rows.map((r) => [r.id, r.indent, r.under])).toEqual([
+      ['c-0002', 0, 'Area A'], ['p-0001', 0, ''], ['c-0001', 1, ''],
+    ]);
+  });
+
+  it('a worker\'s own subtasks follow it into its section, however deep; one named elsewhere goes there', () => {
+    const rows = [
+      row('w-0001', { at: ago(10) }),
+      row('w1-0001', { depth: 2, parentId: 'w-0001', at: ago(3) }),
+      row('w1x-0001', { depth: 3, parentId: 'w1-0001', at: ago(2), group: 'done' }),
+      row('w2-0001', { depth: 2, parentId: 'w-0001', at: ago(1) }),
+      row('loose-0001'),
+    ];
+    const out = buildSections(rows, {
+      'sec-a': project({ tasks: ['w-0001'] }),
+      'sec-b': project({ tasks: ['w2-0001'] }),
+    }, [], 'lead-0001', titleOf)!;
+    expect(out.map((s) => [s.id, s.rows.map((r) => r.id)])).toEqual([
+      ['sec-a', ['w-0001', 'w1-0001', 'w1x-0001']],
+      ['sec-b', ['w2-0001']],
+      [REST_SECTION_ID, ['loose-0001']],
+    ]);
+    expect(out[0].done).toBe(1);
+  });
+
+  it('the rest ids can never be a board project id, and a project of that name is its own section', () => {
+    // A board project id starts with a letter or a digit (BOARD_ITEM_ID_RE).
+    expect(REST_SECTION_ID).toMatch(/^_/);
+    expect(REST_DONE_SECTION_ID).toMatch(/^_/);
+    const rows = [row('a-0001'), row('b-0001')];
+    const out = buildSections(rows, { rest: project({ title: 'Rest', tasks: ['a-0001'] }) }, [], 'lead-0001', titleOf)!;
+    expect(out.map((s) => [s.kind, s.id, s.rows.map((r) => r.id)])).toEqual([
+      ['project', 'rest', ['a-0001']], ['rest', REST_SECTION_ID, ['b-0001']],
+    ]);
+    expect(new Set(out.map((s) => s.id)).size).toBe(out.length);
+  });
+
+  it('a hand-edited projects file does not take the Overview down', () => {
+    const rows = [row('a-0001')];
+    const projects = {
+      'sec-null': null, 'sec-str': 'wip', 'sec-arr': [],
+      'sec-odd': { title: 42, status: 7, tasks: [null, 3, 'a-0001'], updated_at: '', updated_by: '' },
+    } as unknown as Record<string, BoardProject>;
+    const out = buildSections(rows, projects, ['sec-null', 'sec-odd'], 'lead-0001', titleOf)!;
+    expect(out.map((s) => [s.id, s.title, s.status, s.rows.map((r) => r.id)])).toEqual([['sec-odd', 'sec-odd', null, ['a-0001']]]);
+    expect(orderProjects(projects, ['sec-str'])).toEqual(['sec-odd']);
+    expect(buildSections(rows, { 'sec-null': null } as unknown as Record<string, BoardProject>, [], 'lead-0001', titleOf)).toBeNull();
+  });
+
+  it('buildTeamOverview carries the sections from the payload\'s projects and the page\'s order', () => {
+    const lead = withSession('lead', { title: 'Ship the probe', phase: 'IN_PROGRESS' });
+    const tasks = [
+      lead,
+      task('w1', { parent_task_id: 'lead', phase: 'NEED_ACTION' }),
+      task('w2', { parent_task_id: 'lead' }),
+      task('w3', { parent_task_id: 'lead', phase: 'COMPLETE', status: 'done', completed_at: ago(3) }),
+    ];
+    const base = {
+      ownerId: 'lead', owner: lead, childrenOf: (id: string) => subtasksOf(tasks, id), statusOf: () => null,
+      board: null, seen: {}, now: NOW,
+    };
+    const o = buildTeamOverview({
+      ...base,
+      elements: { choices: [], threads: [], projects: ['sec-b', 'sec-a'] },
+      projects: { 'sec-a': project({ title: 'A', status: 'decide', tasks: ['w1'] }), 'sec-b': project({ title: 'B', status: 'done', tasks: ['w2'] }) },
+    });
+    expect(o.sections!.map((s) => [s.id, s.rows.map((r) => r.id)])).toEqual([['sec-b', ['w2']], ['sec-a', ['w1']], [REST_DONE_SECTION_ID, ['w3']]]);
+    // The state groups and the counts are the same picture, read the other way.
+    expect(o.groups.map((g) => g.id)).toEqual(['needs', 'open', 'done']);
+    expect(o).toMatchObject({ members: 3, open: 2, done: 1, attention: 1 });
+    expect(buildTeamOverview({ ...base, elements: NO_ELEMENTS }).sections).toBeNull();
+    expect(buildTeamOverview({ ...base, elements: NO_ELEMENTS, projects: {} }).sections).toBeNull();
   });
 });
 

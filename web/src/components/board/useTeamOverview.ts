@@ -46,15 +46,28 @@ function elementsOf(doc: Document, selector: string): BoardElement[] {
   })).filter((el) => el.id);
 }
 
+/** The board projects the page shows, in document order (a section's `data-project`, a pill's id), each once. */
+function projectsOf(doc: Document): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const el of Array.from(doc.querySelectorAll('[data-project], walnut-project[id]'))) {
+    const id = (el.getAttribute('data-project') ?? el.getAttribute('id') ?? '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 /**
- * The page's choices and threads, read with DOMParser: an inert document (no
- * script runs, nothing loads), parsed once per html version.
+ * The page's choices, threads and projects, read with DOMParser: an inert
+ * document (no script runs, nothing loads), parsed once per html version.
  */
 export function parseBoardElements(html: string | null | undefined): BoardElements {
   if (!html || typeof DOMParser === 'undefined') return NO_BOARD_ELEMENTS;
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    return { choices: elementsOf(doc, 'walnut-choice[id]'), threads: elementsOf(doc, 'walnut-thread[id]') };
+    return { choices: elementsOf(doc, 'walnut-choice[id]'), threads: elementsOf(doc, 'walnut-thread[id]'), projects: projectsOf(doc) };
   } catch (err) {
     log.warn('board', 'board html not parsed for the overview', { error: err instanceof Error ? err.message : String(err) });
     return NO_BOARD_ELEMENTS;
@@ -98,6 +111,7 @@ export function useTeamOverview(
       statusOf,
       elements,
       board: payload ? { choices: payload.choices, reminders: payload.reminders, threads: payload.threads } : null,
+      projects: payload?.projects ?? null,
       seen,
       now: Date.now(),
       formatWaitUntil,

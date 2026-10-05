@@ -4,11 +4,14 @@
  *
  * Top: the owner as the Leader row (its own live state), then a rollup
  * ("12 open · 30 done") with a thin progress bar (none for an empty team,
- * whose body says "No workers yet."). Below: the team in attention
- * order, Needs you, Running, Open, Done (collapsed to its count), each row one
- * line: phase circle, title, the grey "now" line (what it does, waits on, or
- * why it needs you), its live badge and how long ago it last changed. The
- * grouping rules live in board-overview-model.ts.
+ * whose body says "No workers yet."). Below: the team, each row one line: phase
+ * circle, title, the grey "now" line (what it does, waits on, or why it needs
+ * you), its live badge and how long ago it last changed. A board whose leader
+ * defined projects reads BY SECTION: one head per project in the page's order
+ * (its title, its task count, a red count of what needs you, its status pill),
+ * done sections folded, the members no section names at the end. Without
+ * projects the team is in attention order, Needs you, Running, Open, Done
+ * (collapsed to its count). The rules live in board-overview-model.ts.
  *
  * A row opens its task the way a chip on the page does (the session panel's
  * peek). Up / Down walk the rows and group heads; Enter or Space opens one.
@@ -21,8 +24,8 @@ import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { log } from '@/utils/log';
 import { timeAgo } from '@/utils/time';
 import {
-  compactAgo, donePercent, rollupText, rowTooltip,
-  type OverviewGroup, type OverviewGroupId, type OverviewRow, type PlacedRow, type TeamOverview,
+  PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, compactAgo, donePercent, rollupText, rowTooltip,
+  type OverviewGroup, type OverviewRow, type OverviewSection, type PlacedRow, type TeamOverview,
 } from './board-overview-model';
 import { useAskForBoard } from './useAskForBoard';
 import '@/styles/subtask-pill.css';
@@ -61,10 +64,12 @@ function onListKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
 export function BoardOverview({
   overview, ownerTitle, hasPage, loading, completedHidden, onLoadArchive, onOpenTask, onSendToSession,
 }: BoardOverviewProps) {
-  // Done starts folded: finished work is history, the count is enough until asked.
-  const [folded, setFolded] = useState<Partial<Record<OverviewGroupId, boolean>>>({ done: true });
-  const toggle = useCallback((id: OverviewGroupId) => {
-    setFolded((cur) => ({ ...cur, [id]: !cur[id] }));
+  // Finished work is history, the count is enough until asked: the Done group and a
+  // done section start folded. Keyed `g:<group>` / `s:<section>`; unset = the default.
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  const isFolded = (key: string, byDefault: boolean) => folded[key] ?? byDefault;
+  const toggle = useCallback((key: string, byDefault: boolean) => {
+    setFolded((cur) => ({ ...cur, [key]: !(cur[key] ?? byDefault) }));
   }, []);
   const open = useCallback((taskId: string, from: string) => {
     log.info('board', 'overview row opened', { taskId: overview.ownerId, targetTaskId: taskId, from });
@@ -108,17 +113,37 @@ export function BoardOverview({
           <div className="bo-empty-title">No workers yet.</div>
           <div className="bo-empty-text">Subtasks the leader files show up here, with their live status.</div>
         </div>
+      ) : overview.sections ? (
+        <>
+          {overview.sections.map((s) => {
+            const byDefault = s.status === 'done' || s.kind === 'rest-done';
+            return (
+              <OverviewSectionBlock
+                key={`s:${s.id}`}
+                section={s}
+                folded={isFolded(`s:${s.id}`, byDefault)}
+                onToggle={() => toggle(`s:${s.id}`, byDefault)}
+                onOpen={open}
+              />
+            );
+          })}
+          {/* Finished work older than the store's window is missing from every section, so the note closes the list. */}
+          {completedHidden > 0 && <ArchiveLine onLoad={onLoadArchive} />}
+        </>
       ) : (
-        overview.groups.map((g) => (
-          <OverviewGroupSection
-            key={g.id}
-            group={g}
-            folded={!!folded[g.id]}
-            onToggle={toggle}
-            onOpen={open}
-            archive={g.id === 'done' && completedHidden > 0 ? onLoadArchive : undefined}
-          />
-        ))
+        overview.groups.map((g) => {
+          const byDefault = g.id === 'done';
+          return (
+            <OverviewGroupSection
+              key={g.id}
+              group={g}
+              folded={isFolded(`g:${g.id}`, byDefault)}
+              onToggle={() => toggle(`g:${g.id}`, byDefault)}
+              onOpen={open}
+              archive={g.id === 'done' && completedHidden > 0 ? onLoadArchive : undefined}
+            />
+          );
+        })
       )}
 
       {!hasPage && <AskForPageLine taskId={overview.ownerId} onSendToSession={onSendToSession} />}
@@ -129,7 +154,7 @@ export function BoardOverview({
 function OverviewGroupSection({ group, folded, onToggle, onOpen, archive }: {
   group: OverviewGroup;
   folded: boolean;
-  onToggle: (id: OverviewGroupId) => void;
+  onToggle: () => void;
   onOpen: (taskId: string, from: string) => void;
   /** Done only, when older finished tasks are not loaded: loads them. */
   archive?: () => void;
@@ -143,26 +168,90 @@ function OverviewGroupSection({ group, folded, onToggle, onOpen, archive }: {
         data-bo-nav=""
         aria-expanded={!folded}
         title={folded ? `Show ${group.label.toLowerCase()}` : `Hide ${group.label.toLowerCase()}`}
-        onClick={() => onToggle(group.id)}
+        onClick={onToggle}
       >
         <span className={`bo-chevron${folded ? '' : ' is-open'}`} aria-hidden="true" />
         <span className="bo-group-label">{group.label}</span>
         <span className="bo-group-count" data-testid="board-overview-count">{n}</span>
       </button>
-      {!folded && (
-        <ul className="bo-list">
-          {group.rows.map((r) => (
-            <li key={r.id}><OverviewRowButton row={r} onOpen={onOpen} /></li>
-          ))}
-        </ul>
-      )}
-      {!folded && archive && (
-        <div className="bo-archive">
-          Tasks finished more than {RECENT_COMPLETED_DAYS} days ago are not loaded.{' '}
-          <button type="button" className="bo-link" data-testid="board-overview-load-archive" onClick={archive}>Load all</button>
-        </div>
-      )}
+      {!folded && <RowList rows={group.rows} onOpen={onOpen} />}
+      {!folded && archive && <ArchiveLine onLoad={archive} />}
     </section>
+  );
+}
+
+/**
+ * One board project as a section (or the trailing rest): its title as written,
+ * its task count, a red count of the rows that need the user, its status pill.
+ * A project naming no task is a plain head (nothing to unfold), its status still
+ * part of the picture.
+ */
+function OverviewSectionBlock({ section, folded, onToggle, onOpen }: {
+  section: OverviewSection;
+  folded: boolean;
+  onToggle: () => void;
+  onOpen: (taskId: string, from: string) => void;
+}) {
+  const n = section.rows.length;
+  const status = section.status;
+  const head = (
+    <>
+      <span className={`bo-chevron${folded ? '' : ' is-open'}`} aria-hidden="true" />
+      <span className="bo-group-label" data-testid="board-overview-section-title">{section.title}</span>
+      <span className="bo-group-count" data-testid="board-overview-count">{n === 0 ? 'no task' : n}</span>
+      {section.attention > 0 && (
+        <span className="bo-section-attention" data-testid="board-overview-section-attention" title={`${section.attention} ${section.attention === 1 ? 'needs' : 'need'} you`}>
+          {section.attention}
+        </span>
+      )}
+      {status && (
+        <span className="bo-badge bo-section-status" data-tone={PROJECT_STATUS_TONES[status]} data-testid="board-overview-section-status">
+          {PROJECT_STATUS_LABELS[status]}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <section
+      className="bo-group bo-section"
+      data-kind={section.kind}
+      data-section={section.id}
+      data-status={status ?? undefined}
+      data-testid={`board-overview-section-${section.id}`}
+    >
+      {n === 0 ? (
+        <div className="bo-group-head bo-group-head-empty" title={section.title}>{head}</div>
+      ) : (
+        <button
+          type="button"
+          className="bo-group-head"
+          data-bo-nav=""
+          aria-expanded={!folded}
+          title={`${folded ? 'Show' : 'Hide'} ${section.title}`}
+          onClick={onToggle}
+        >{head}</button>
+      )}
+      {!folded && n > 0 && <RowList rows={section.rows} onOpen={onOpen} />}
+    </section>
+  );
+}
+
+function RowList({ rows, onOpen }: { rows: readonly PlacedRow[]; onOpen: (taskId: string, from: string) => void }) {
+  return (
+    <ul className="bo-list">
+      {rows.map((r) => (
+        <li key={r.id}><OverviewRowButton row={r} onOpen={onOpen} /></li>
+      ))}
+    </ul>
+  );
+}
+
+function ArchiveLine({ onLoad }: { onLoad: () => void }) {
+  return (
+    <div className="bo-archive">
+      Tasks finished more than {RECENT_COMPLETED_DAYS} days ago are not loaded.{' '}
+      <button type="button" className="bo-link" data-testid="board-overview-load-archive" onClick={onLoad}>Load all</button>
+    </div>
   );
 }
 

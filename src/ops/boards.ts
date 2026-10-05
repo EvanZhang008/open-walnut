@@ -321,7 +321,9 @@ defineOp({
     status: z.enum(['decide', 'wip', 'wait', 'done', '']).optional().describe(
       'decide (needs the user), wip (a task is on it), wait (waiting on someone else), done; "" clears'),
     tasks: z.array(z.string().min(1)).max(200).optional().describe(
-      'The task ids working on this area (full ids or unique prefixes); replaces the whole list'),
+      'The task ids working on this area (full ids or unique prefixes); replaces the whole list. The Board ' +
+      'tab\'s Overview groups the team by these (a named task\'s own subtasks follow it): a team member no ' +
+      'project names falls to "Not in a section" at the end'),
     delete: z.boolean().optional().describe('Remove the project'),
     override_user: z.boolean().optional().describe(
       'true: replace (or remove) a status the user picked on the page; without it that status stays'),

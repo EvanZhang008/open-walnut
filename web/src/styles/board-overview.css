@@ -73,11 +73,13 @@
   --bo-green: #1b7f3b;
   --bo-amber: #9e5300;
   --bo-violet: #6d4ad6;
+  --bo-blue: #2a63c9;
   --bo-grey: var(--fg-secondary);
   --bo-red-tint: rgba(255, 59, 48, 0.1);
   --bo-green-tint: rgba(52, 199, 89, 0.14);
   --bo-amber-tint: rgba(255, 149, 0, 0.14);
   --bo-violet-tint: rgba(139, 92, 246, 0.13);
+  --bo-blue-tint: rgba(47, 111, 235, 0.12);
   --bo-grey-tint: color-mix(in srgb, var(--fg) 7%, transparent);
   --bo-needs-row: rgba(255, 59, 48, 0.06);
   --bo-needs-row-hover: rgba(255, 59, 48, 0.11);
@@ -101,10 +103,12 @@
   --bo-green: #30d158;
   --bo-amber: #ffb340;
   --bo-violet: #b9a8ff;
+  --bo-blue: #7fb0ff;
   --bo-red-tint: rgba(255, 69, 58, 0.18);
   --bo-green-tint: rgba(48, 209, 88, 0.16);
   --bo-amber-tint: rgba(255, 179, 64, 0.16);
   --bo-violet-tint: rgba(160, 140, 255, 0.18);
+  --bo-blue-tint: rgba(100, 160, 255, 0.18);
   --bo-needs-row: rgba(255, 69, 58, 0.1);
   --bo-needs-row-hover: rgba(255, 69, 58, 0.16);
 }
@@ -115,10 +119,12 @@
     --bo-green: #30d158;
     --bo-amber: #ffb340;
     --bo-violet: #b9a8ff;
+    --bo-blue: #7fb0ff;
     --bo-red-tint: rgba(255, 69, 58, 0.18);
     --bo-green-tint: rgba(48, 209, 88, 0.16);
     --bo-amber-tint: rgba(255, 179, 64, 0.16);
     --bo-violet-tint: rgba(160, 140, 255, 0.18);
+    --bo-blue-tint: rgba(100, 160, 255, 0.18);
     --bo-needs-row: rgba(255, 69, 58, 0.1);
     --bo-needs-row-hover: rgba(255, 69, 58, 0.16);
   }
@@ -226,7 +232,8 @@
 
 .board-overview .bo-group[data-group="needs"] .bo-group-label { color: var(--bo-red); }
 
-.board-overview .bo-group[data-group="needs"] .bo-group-count {
+.board-overview .bo-group[data-group="needs"] .bo-group-count,
+.board-overview .bo-section-attention {
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
@@ -236,8 +243,47 @@
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;
+  letter-spacing: 0;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
+
+/* A board project's head: the title as the leader wrote it (no caps: it is a
+   name, often long, often not Latin), cut with an ellipsis; the status pill
+   sits at the right end, where a row's badge does. */
+.board-overview .bo-section .bo-group-head {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.board-overview .bo-section .bo-group-head:hover { color: var(--fg); }
+
+.board-overview .bo-section .bo-group-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.board-overview .bo-section .bo-group-count { flex: 0 0 auto; }
+
+.board-overview .bo-section .bo-section-status {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* A project naming no task: a head with nothing to unfold, so not a button; the chevron keeps the title aligned. */
+.board-overview .bo-group-head.bo-group-head-empty { cursor: default; }
+.board-overview .bo-group-head.bo-group-head-empty:hover { color: var(--fg-secondary); }
+.board-overview .bo-group-head-empty .bo-chevron { visibility: hidden; }
+.board-overview .bo-group-head-empty .bo-group-label { color: var(--fg-muted); }
 
 .board-overview .bo-list {
   margin: 0;
@@ -377,6 +423,7 @@
 .board-overview .bo-badge[data-tone="green"] { background: var(--bo-green-tint); color: var(--bo-green); }
 .board-overview .bo-badge[data-tone="amber"] { background: var(--bo-amber-tint); color: var(--bo-amber); }
 .board-overview .bo-badge[data-tone="violet"] { background: var(--bo-violet-tint); color: var(--bo-violet); }
+.board-overview .bo-badge[data-tone="blue"] { background: var(--bo-blue-tint); color: var(--bo-blue); }
 
 .board-overview .bo-time {
   min-width: 26px;
