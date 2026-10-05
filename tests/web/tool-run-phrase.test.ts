@@ -4,7 +4,7 @@
  * listed one file.
  */
 import { describe, it, expect } from 'vitest'
-import { toolRunPhrase } from '../../web/src/components/sessions/tool-run-phrase.js'
+import { isRoutedQuestion, toolRunPhrase } from '../../web/src/components/sessions/tool-run-phrase.js'
 
 const edit = (file_path: string) => ({ name: 'Edit', input: { file_path, old_string: 'a', new_string: 'b' } })
 const read = (file_path: string) => ({ name: 'Read', input: { file_path } })
@@ -31,5 +31,22 @@ describe('toolRunPhrase', () => {
   it('commands and other tools still count calls', () => {
     expect(toolRunPhrase([{ name: 'Bash', input: { command: 'ls' } }, { name: 'Bash', input: { command: 'ls' } }, { name: 'Grep' }, { name: 'Grep' }]))
       .toBe('Ran 2 commands, ran 2 searches')
+  })
+})
+
+describe('a question in the tool run', () => {
+  it('reads as asking, not as an anonymous tool', () => {
+    expect(toolRunPhrase([{ name: 'AskUserQuestion' }])).toBe('Asked a question')
+    expect(toolRunPhrase([{ name: 'AskUserQuestion' }, { name: 'Bash' }, { name: 'AskUserQuestion' }])).toBe('Asked 2 questions, ran a command')
+  })
+
+  it('a worker question Walnut sent to its leader is not a failure (worker-question.ts)', () => {
+    const routed = 'In this team your questions go to your leader, "Triage" (task t-1), not to the user. Your question was sent to it as request rq-abc123.'
+    expect(isRoutedQuestion('AskUserQuestion', routed)).toBe(true)
+    expect(isRoutedQuestion('AskUserQuestion', `\n${routed}`)).toBe(true)
+    // Anything else stays what it is: a user's deny, another tool, no text.
+    expect(isRoutedQuestion('AskUserQuestion', 'User denied permission')).toBe(false)
+    expect(isRoutedQuestion('Bash', routed)).toBe(false)
+    expect(isRoutedQuestion('AskUserQuestion', undefined)).toBe(false)
   })
 })

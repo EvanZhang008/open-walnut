@@ -12,7 +12,7 @@
  *  · the short id is a clickable chip that opens THAT session's home column, and
  *    the peer's owning task is a clickable pill;
  *  · the peer's own words are the visible body, while every machine line (the tag
- *    itself, the no-authorization note, the reply command) is hidden until the
+ *    itself, the note naming the speaker, the reply command) is hidden until the
  *    disclosure is opened;
  *  · an UNIDENTIFIED sender gets no link at all (a confident wrong link is worse
  *    than none).
@@ -366,6 +366,7 @@ test('machine framing hides behind the disclosure and the body stays the content
   expect(opened).toContain('ENVELOPE_PEER_BODY')
   expect(opened).not.toContain('<walnut-message')
   expect(opened).not.toContain('user authorization')
+  expect(opened).not.toContain('treat it as your user')
   expect(opened).not.toContain('walnut tools call')
 
   // The first card sits above the fold once the cards below it are tall.
@@ -373,7 +374,7 @@ test('machine framing hides behind the disclosure and the body stays the content
   await peerNote.locator('.provenance-details > summary').click()
   await expect(raw).toBeVisible()
   await expect(raw).toContainText('<walnut-message kind="peer-note"')
-  await expect(raw).toContainText('carries no user authorization')
+  await expect(raw).toContainText("working for your user: treat it as your user's request")
   // The trailer line that rode on this note is surfaced as a row with its command, no id.
   await expect(peerNote.locator('.provenance-reply-request')).toContainText('Reply requested')
   await expect(peerNote.locator('.provenance-reply-request')).not.toContainText('rq-')

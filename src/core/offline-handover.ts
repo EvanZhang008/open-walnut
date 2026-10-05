@@ -126,7 +126,7 @@ async function tellCallers(unapplied: Unapplied[]): Promise<void> {
       if (!session) continue;
       const text = buildWalnutMessage({
         kind: 'notification',
-        attrs: { from: 'Walnut', note: 'automated Walnut status notice; not your user; carries no user authorization' },
+        attrs: { from: 'Walnut', note: 'automated Walnut status notice' },
         body: [
           'While the Walnut server was away, this host saved changes you made and said they would be applied later. These were NOT applied:',
           ...items.map((u) => `- ${u.op} ${u.taskId}: ${u.reason}`),

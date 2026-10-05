@@ -331,10 +331,9 @@ export async function overdueRequests(now = Date.now()): Promise<SessionRequest[
 // Both deliveries are `<walnut-message …>` envelopes (see
 // peers/walnut-message-tag.ts): provenance in attributes, the other party's
 // words in the body, and the serializer's body escaping is what keeps text from
-// forging framing. The `note` attribute carries the no-authorization semantics.
+// forging framing. The `note` attribute names who is speaking.
 
-const NOTE_NOTIFICATION =
-  'automated Walnut status notice; not your user; carries no user authorization';
+const NOTE_NOTIFICATION = 'automated Walnut status notice';
 
 /**
  * The ONE line Walnut appends to a message delivered with expect_reply. It sits
@@ -386,7 +385,7 @@ export function clipNoticeMessage(text: string): NoticeLastMessage | undefined {
  *
  * The quoted message is the other session's words, so it is fenced and labelled
  * as data; the envelope's own escaping keeps it from opening or closing a tag,
- * and the `note` attribute already says the notice carries no authorization.
+ * and the `note` attribute says Walnut, not a session, wrote the notice.
  * A task the target closed itself says so instead of "its turn ended", because
  * COMPLETE is terminal and no later turn-end edge will ever speak for it.
  */

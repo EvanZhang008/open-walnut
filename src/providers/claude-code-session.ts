@@ -6384,50 +6384,12 @@ export class ClaudeCodeSession {
               this._pendingPermissionRequests.delete(request_id)
               this.respondToControlRequest(request_id, request, true)
             })
+          } else if (request.tool_name === 'AskUserQuestion' && this.taskId && this.claudeSessionId) {
+            // A worker's question goes to its leader, not to the user (worker-question.ts).
+            this._routeQuestionOrAskUser(request_id, request)
           } else {
             // Non-bypass modes (and AskUserQuestion in any mode): emit to UI for user decision.
-            // Store the pending request so the API route can resolve it later.
-            this._pendingPermissionRequests.set(request_id, { request_id, request })
-            log.session.info('control_request pending — waiting for user decision', {
-              sessionId: this.claudeSessionId,
-              taskId: this.taskId,
-              requestId: request_id,
-              toolName: request.tool_name,
-              mode: this._mode,
-            })
-
-            // Layer 2: Persist to session record on disk — survives server crashes.
-            // Best-effort: don't block the event handler on disk I/O.
-            if (this.claudeSessionId) {
-              import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-                updateSessionRecord(this.claudeSessionId!, {
-                  pendingPermission: {
-                    requestId: request_id,
-                    toolName: request.tool_name,
-                    input: request.input,
-                    reason: request.decision_reason,
-                    subtype: request.subtype,
-                    receivedAt: new Date().toISOString(),
-                  },
-                }),
-              ).catch(err => log.session.warn('failed to persist pendingPermission', {
-                sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err),
-              }))
-
-              // Layer 4: Periodic re-emit of permission request every 60s.
-              // If the UI missed the initial event, the re-emit ensures visibility.
-              // No auto-approve or auto-deny — the session waits indefinitely for human decision.
-              this._startPermissionReEmitTimer(request_id, request)
-
-              bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
-                sessionId: this.claudeSessionId,
-                taskId: this.taskId,
-                requestId: request_id,
-                toolName: request.tool_name,
-                input: request.input,
-                reason: request.decision_reason,
-              }, ['*'], { source: 'session-runner', urgency: 'urgent' })
-            }
+            this._awaitUserDecision(request_id, request)
           }
         } else {
           // Send deny for unknown subtypes to prevent Claude Code from blocking forever
@@ -7859,6 +7821,87 @@ export class ClaudeCodeSession {
       input: p.request.input,
       reason: p.request.decision_reason,
     }))
+  }
+
+  /**
+   * A worker's AskUserQuestion: ask its leader (worker-question.ts) and answer the
+   * CLI with where the question went; anything not routed waits for the user.
+   * The sentinel keeps hasPendingPermission true across the async gap, as the
+   * bypass branch does, so a send in that window takes the pending-prompt path.
+   */
+  private _routeQuestionOrAskUser(
+    request_id: string,
+    request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string },
+  ): void {
+    this._pendingPermissionRequests.set(request_id, { request_id, request })
+    const sessionId = this.claudeSessionId!
+    const taskId = this.taskId
+    import('../core/sessions/worker-question.js')
+      .then(({ routeWorkerQuestion }) => routeWorkerQuestion({ sessionId, taskId, requestId: request_id, input: request.input }))
+      .catch(() => null)
+      .then((routed) => {
+        // Withdrawn (control_cancel_request) or answered during the gap.
+        if (!this._pendingPermissionRequests.has(request_id)) return
+        if (!routed) {
+          this._awaitUserDecision(request_id, request)
+          return
+        }
+        this._pendingPermissionRequests.delete(request_id)
+        if (!this.respondToControlRequest(request_id, request, false, routed.message)) {
+          // Transport gone: a re-attach replays the request and the route answers
+          // it again from its cache, without asking the leader twice.
+          log.session.warn('worker question routed but the answer was not written', { sessionId, requestId: request_id })
+        }
+      })
+  }
+
+  /** Show a permission request to the user and wait for their decision. */
+  private _awaitUserDecision(
+    request_id: string,
+    request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string },
+  ): void {
+    // Store the pending request so the API route can resolve it later.
+    this._pendingPermissionRequests.set(request_id, { request_id, request })
+    log.session.info('control_request pending — waiting for user decision', {
+      sessionId: this.claudeSessionId,
+      taskId: this.taskId,
+      requestId: request_id,
+      toolName: request.tool_name,
+      mode: this._mode,
+    })
+
+    // Layer 2: Persist to session record on disk — survives server crashes.
+    // Best-effort: don't block the event handler on disk I/O.
+    if (this.claudeSessionId) {
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(this.claudeSessionId!, {
+          pendingPermission: {
+            requestId: request_id,
+            toolName: request.tool_name,
+            input: request.input,
+            reason: request.decision_reason,
+            subtype: request.subtype,
+            receivedAt: new Date().toISOString(),
+          },
+        }),
+      ).catch(err => log.session.warn('failed to persist pendingPermission', {
+        sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err),
+      }))
+
+      // Layer 4: Periodic re-emit of permission request every 60s.
+      // If the UI missed the initial event, the re-emit ensures visibility.
+      // No auto-approve or auto-deny — the session waits indefinitely for human decision.
+      this._startPermissionReEmitTimer(request_id, request)
+
+      bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
+        sessionId: this.claudeSessionId,
+        taskId: this.taskId,
+        requestId: request_id,
+        toolName: request.tool_name,
+        input: request.input,
+        reason: request.decision_reason,
+      }, ['*'], { source: 'session-runner', urgency: 'urgent' })
+    }
   }
 
   /**

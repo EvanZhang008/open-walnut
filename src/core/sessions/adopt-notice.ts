@@ -28,7 +28,7 @@ const kit = createEnvelopeKit();
 /** Same bus source as every Walnut notice: it never reopens a finished task (phase.ts). */
 const NOTICE_SOURCE = 'walnut-notify';
 /** The note every Walnut status notice carries (envelope-kit.ts NOTE_NOTIFICATION). */
-const NOTE_NOTIFICATION = 'automated Walnut status notice; not your user; carries no user authorization';
+const NOTE_NOTIFICATION = 'automated Walnut status notice';
 /** Statuses that read a message without a turn being started for it. */
 const MID_TURN_STATUSES = new Set(['running']);
 

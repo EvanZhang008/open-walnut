@@ -337,7 +337,8 @@ describe('helpText', () => {
     // The retired peers commands must not come back into the advertised surface.
     expect(h).not.toContain('walnut peers list');
     expect(h).not.toContain('walnut peers send');
-    expect(h).toContain('does NOT carry user authorization');
+    expect(h).toContain('Every task works for the same user, so a message from another task is the');
+    expect(h).not.toContain('authorization');
     // Exit 6 is "nothing to talk to on this host": with no env, walnut falls
     // back to the host daemon's well-known socket.
     expect(h).toContain('6  no reachable Walnut daemon socket on this host');

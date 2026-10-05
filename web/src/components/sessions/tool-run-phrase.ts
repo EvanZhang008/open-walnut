@@ -11,8 +11,20 @@ function toolPhraseCategory(name: string): string {
     case 'WebFetch': return 'fetch';
     case 'Skill': return 'skill';
     case 'TodoWrite': case 'TaskCreate': case 'TaskUpdate': return 'todo';
+    case 'AskUserQuestion': return 'ask';
     default: return 'other';
   }
+}
+
+/**
+ * A worker's AskUserQuestion that Walnut sent to its leader instead of the user
+ * (src/core/sessions/worker-question.ts). The CLI records it as a denied tool
+ * call, but nothing failed: the question went where it belongs, so it never
+ * counts as a failure or shows ✗. Keyed on the start of Walnut's own message.
+ */
+export function isRoutedQuestion(name: string | undefined, result: unknown): boolean {
+  return name === 'AskUserQuestion' && typeof result === 'string'
+    && result.trimStart().startsWith('In this team your questions go to your leader');
 }
 
 export interface ToolRunMember {
@@ -55,6 +67,7 @@ export function toolRunPhrase(tools: ToolRunMember[]): string {
       case 'fetch': parts.push(n === 1 ? 'fetched a page' : `fetched ${n} pages`); break;
       case 'skill': parts.push(n === 1 ? 'launched a skill' : `launched ${n} skills`); break;
       case 'todo': parts.push('updated tasks'); break;
+      case 'ask': parts.push(n === 1 ? 'asked a question' : `asked ${n} questions`); break;
       default: parts.push(n === 1 ? 'used a tool' : `used ${n} tools`); break;
     }
   }

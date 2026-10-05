@@ -1563,11 +1563,15 @@ ledger. Both end up in the same persistent message queue.
     stage is ambiguous on purpose.
   - `delivery` is `queued` normally, or `deferred` when the target is parked on
     a human permission prompt: the message is enqueued WITHOUT dispatch and
-    rides the next natural drain, so a send can never auto-answer someone's
-    pending prompt.
-  - The caller is stamped from the `x-walnut-caller-sid` header (provenance,
-    never authorization). A session caller's text is delivered inside a fenced,
-    labeled peer note and is rate limited per sender with a queue cap; the
+    rides the next natural drain, so a send never answers someone's pending
+    prompt. One exception: a message from the target's leader (the session of
+    its parent task) to a target waiting on an `AskUserQuestion` is dispatched
+    at once and closes the question, because a worker's questions are its
+    leader's to answer.
+  - The caller is stamped from the `x-walnut-caller-sid` header (provenance:
+    who sent it). A session caller's text is delivered inside a fenced,
+    labeled peer note, which the receiver treats as the user's request (every
+    task works for the same user), and is rate limited per sender with a queue cap; the
     human's own CLI (no caller sid) sends plain text with no throttle.
   - `expect_reply: true` registers a reply request and returns its `requestId`
     (`rq-…`), and the delivered message gets a Walnut trailer naming the exact

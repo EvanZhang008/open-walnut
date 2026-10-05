@@ -852,3 +852,151 @@ describe('performSessionSend — input validation', () => {
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 });
+
+describe('a worker waiting on a question: its leader is not held behind it', () => {
+  // 2026-10-05: a worker asked the user a question; its leader's two messages,
+  // carrying the user's answer, were parked behind that prompt for hours.
+  const LEADER = 'sess-lead-q1';
+  const WORKER = 'sess-work-q1';
+  const PEER = 'sess-peer-q1';
+  const question = { requestId: 'req-q', toolName: 'AskUserQuestion', input: {}, receivedAt: NOW };
+
+  beforeEach(() => {
+    sessions = [
+      rec(LEADER, { title: 'Ticket triage', taskId: 'task-lead-q' }),
+      rec(WORKER, { title: 'Marketplace ticket', taskId: 'task-work-q', pendingPermission: question } as Partial<SessionRecord>),
+      rec(PEER, { title: 'Other work', taskId: 'task-peer-q' }),
+    ];
+    tasks = [
+      { id: 'task-lead-q', title: 'Ticket triage', phase: 'IN_PROGRESS' },
+      { id: 'task-work-q', title: 'Marketplace ticket', phase: 'NEED_ACTION', parent_task_id: 'task-lead-q' },
+      { id: 'task-peer-q', title: 'Other work', phase: 'IN_PROGRESS' },
+    ];
+  });
+
+  it('the leader message is dispatched now (the delivery path closes the question)', async () => {
+    const result = await performSessionSend({ to: WORKER, text: 'The user said go: post and resolve.', callerSid: LEADER, expectReply: false });
+    expect(result.delivery).toBe('queued');
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('a leader reply to the worker request is dispatched now too', async () => {
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    const rq = await createSessionRequest({ fromSessionId: WORKER, toSessionId: LEADER, toTaskId: 'task-lead-q', text: 'which one?' });
+    const result = await performSessionSend({ text: 'Option one.', inReplyTo: rq.id, callerSid: LEADER });
+    expect(result.delivery).toBe('queued');
+    expect(dispatched().sid).toBe(WORKER);
+  });
+
+  it('a legacy short-prefix parent link still makes the sender the leader', async () => {
+    tasks[1].parent_task_id = 'task-lead';
+    expect((await performSessionSend({ to: WORKER, text: 'go', callerSid: LEADER, expectReply: false })).delivery).toBe('queued');
+  });
+
+  it('anyone else waits behind the question, as before', async () => {
+    const peer = await performSessionSend({ to: WORKER, text: 'fyi', callerSid: PEER, expectReply: false });
+    expect(peer.delivery).toBe('deferred');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a tool permission prompt still holds the leader message (only the user answers it)', async () => {
+    sessions[1] = rec(WORKER, { title: 'Marketplace ticket', taskId: 'task-work-q', pendingPermission: { ...question, toolName: 'Bash' } } as Partial<SessionRecord>);
+    const result = await performSessionSend({ to: WORKER, text: 'go on the tool', callerSid: LEADER, expectReply: false });
+    expect(result.delivery).toBe('deferred');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('routeWorkerQuestion: a worker AskUserQuestion goes to its leader', () => {
+  const LEADER = 'sess-lead-r1';
+  const WORKER = 'sess-work-r1';
+  // Test data in the real case's language: CJK as \u escapes.
+  const INPUT = {
+    questions: [{
+      question: 'Which of these should I do on P5? (勾哪件做哪件)',
+      header: 'Wrap up',
+      multiSelect: true,
+      options: [
+        { label: '1 Post reply + resolve', description: 'Post the drafted reply, then resolve' },
+        { label: '2 Log follow-up', description: 'Comment on the tracking item' },
+      ],
+    }],
+  };
+
+  beforeEach(async () => {
+    const { _clearRoutedQuestions } = await import('../../src/core/sessions/worker-question.js');
+    _clearRoutedQuestions();
+    sessions = [
+      rec(LEADER, { title: 'Ticket triage', taskId: 'task-lead-r' }),
+      rec(WORKER, { title: 'Marketplace ticket', taskId: 'task-work-r' }),
+    ];
+    tasks = [
+      { id: 'task-lead-r', title: 'Ticket triage', phase: 'IN_PROGRESS', session_id: LEADER },
+      { id: 'task-work-r', title: 'Marketplace ticket', phase: 'IN_PROGRESS', parent_task_id: 'task-lead-r' },
+      { id: 'task-solo-r', title: 'Solo', phase: 'IN_PROGRESS' },
+    ];
+  });
+
+  it('sends the question to the leader as a request from the worker and tells the worker where it went', async () => {
+    const { routeWorkerQuestion } = await import('../../src/core/sessions/worker-question.js');
+    const routed = await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-work-r', requestId: 'req-1', input: INPUT });
+    expect(routed).not.toBeNull();
+    expect(routed!.leaderTaskId).toBe('task-lead-r');
+    expect(routed!.requestId).toMatch(/^rq-/);
+    expect(routed!.message).toContain('your leader, "Ticket triage" (task task-lead-r), not to the user');
+    expect(routed!.message).toContain(`as request ${routed!.requestId}`);
+    expect(routed!.message).toContain('Do not ask the user.');
+
+    expect(dispatched().sid).toBe(LEADER);
+    const delivered = deliveredText();
+    const env = parseWalnutMessage(delivered)!;
+    expect(env.kind).toBe('peer-note');
+    expect(env.attrs['from-task']).toBe('task-work-r');
+    expect(env.attrs.request).toBe(routed!.requestId);
+    expect(env.attrs.title).toBe('Question: Wrap up: Which of these should I do on P5? (勾哪件做哪件)');
+    expect(env.body).toContain('Question (Wrap up), pick any number: Which of these should I do on P5?');
+    expect(env.body).toContain('  - 1 Post reply + resolve: Post the drafted reply, then resolve');
+    expect(env.body).toContain('  - 2 Log follow-up: Comment on the tracking item');
+    expect(delivered).toContain(`Reply when done: walnut tools call task_send '{"in_reply_to":"${routed!.requestId}"`);
+    expect((await getSessionRequest(routed!.requestId!))).toMatchObject({ fromSessionId: WORKER, toSessionId: LEADER, status: 'pending' });
+  });
+
+  it('a replay of the same CLI request answers from the first route, without asking the leader twice', async () => {
+    const { routeWorkerQuestion } = await import('../../src/core/sessions/worker-question.js');
+    // Its own question text: the peer throttle suppresses a duplicate send.
+    const input = { questions: [{ question: 'Is the rollout done?' }] };
+    const first = await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-work-r', requestId: 'req-2', input });
+    const again = await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-work-r', requestId: 'req-2', input });
+    expect(first).not.toBeNull();
+    expect(again).toEqual(first);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays with the user: no parent, a COMPLETE parent, a parent with no session, or no question text', async () => {
+    const { routeWorkerQuestion } = await import('../../src/core/sessions/worker-question.js');
+    expect(await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-solo-r', requestId: 'req-3', input: INPUT })).toBeNull();
+    expect(await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-work-r', requestId: 'req-4', input: { questions: [{ question: '  ' }] } })).toBeNull();
+    tasks[0].phase = 'COMPLETE';
+    expect(await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-work-r', requestId: 'req-5', input: INPUT })).toBeNull();
+    tasks[0].phase = 'IN_PROGRESS';
+    sessions = sessions.filter((s) => s.claudeSessionId !== LEADER);
+    tasks[0].session_id = undefined;
+    expect(await routeWorkerQuestion({ sessionId: WORKER, taskId: 'task-work-r', requestId: 'req-6', input: INPUT })).toBeNull();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('formats several questions, numbered, and skips empty options', async () => {
+    const { formatWorkerQuestion } = await import('../../src/core/sessions/worker-question.js');
+    const out = formatWorkerQuestion({ questions: [
+      { question: 'First?', options: [{ label: 'A' }, { label: ' ' }] },
+      { question: 'Second?', header: 'H2' },
+    ] })!;
+    expect(out.title).toBe('Question: First?');
+    expect(out.text).toContain('Question 1 of 2: First?\n  - A');
+    expect(out.text).toContain('Question 2 of 2 (H2): Second?');
+    expect(out.text).not.toContain('  - \n');
+    expect(formatWorkerQuestion(undefined)).toBeNull();
+  });
+});

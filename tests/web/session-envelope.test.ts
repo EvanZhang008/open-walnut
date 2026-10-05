@@ -287,7 +287,7 @@ describe('v2 notification', () => {
     expect(isEnvelopeOnly(segments)).toBe(true);
     const cards = segments.filter((s) => s.kind === 'envelope').map((s) => (s as { envelope: SessionEnvelope }).envelope);
     expect(cards.map((c) => c.peer.taskId)).toEqual(['task-a', 'task-b']);
-    expect(cards[1].statusLine).toContain('is WAITING ON THE USER: a Bash prompt');
+    expect(cards[1].statusLine).toContain('is WAITING ON THE USER: a Bash permission prompt');
   });
 });
 

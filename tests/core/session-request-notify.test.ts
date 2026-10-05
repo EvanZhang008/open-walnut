@@ -439,7 +439,7 @@ describe('sessionRequestWatchHook — outcome selection at the turn-end edge', (
     expect(notifySpy).toHaveBeenCalledTimes(1);
     expect(notifySpy.mock.calls[0][0]).toMatchObject({ id: rq.id });
     expect(notifySpy.mock.calls[0][1]).toBe('awaiting_human');
-    expect(deliveredText()).toContain('Do NOT send it messages while it waits');
+    expect(deliveredText()).toContain('A message to it waits until the prompt is answered');
   });
 
   it('reports error when the target session is in an error state', async () => {
@@ -634,7 +634,7 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
       : s);
     await fire();
     expect(parentNotices()[0].attrs.outcome).toBe('blocked');
-    expect(parentNotices()[0].body).toContain('a AskUserQuestion prompt');
+    expect(parentNotices()[0].body).toContain('is asking the user a question it could not send to you');
 
     sendMessageToSession.mockClear();
     sessions = sessions.map((s) => s.claudeSessionId === TARGET ? rec(TARGET, { title: 'Target', taskId: 'task-77' }) : s);

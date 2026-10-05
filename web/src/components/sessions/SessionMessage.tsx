@@ -31,7 +31,7 @@ import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
-import { toolRunPhrase } from './tool-run-phrase';
+import { isRoutedQuestion, toolRunPhrase } from './tool-run-phrase';
 import { splitSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
 
@@ -471,7 +471,7 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
   tools: SessionHistoryTool[];
 } & Omit<SessionToolCallProps, 'tool'>) {
   const phrase = toolRunPhrase(tools);
-  const failCount = tools.filter(t => t.isError).length;
+  const failCount = tools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length;
   return (
     <ToolRunShell phrase={phrase} failCount={failCount}>
       {tools.map((t, i) => (
@@ -556,7 +556,7 @@ export function streamRunSummary(members: readonly StreamRunMember[]): { phrase:
   const tools = members.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
   return {
     phrase: toolRunPhrase(tools.map(b => ({ name: b.name ?? 'unknown', input: b.input }))),
-    failCount: tools.filter(b => b.status === 'error').length,
+    failCount: tools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length,
   };
 }
 
@@ -633,8 +633,8 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
     ...allTools,
     ...trailingTools.map(b => ({ name: b.name ?? 'unknown', input: b.input })),
   ]);
-  const failCount = allTools.filter(t => t.isError).length
-    + trailingTools.filter(b => b.status === 'error').length;
+  const failCount = allTools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length
+    + trailingTools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
   return (
     <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive}>
       {messages.map((m, mi) => (
@@ -706,8 +706,11 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;
   // Persisted history carries isError (tool_result.is_error) — a failed tool must
-  // render ✗ after reload, matching what the streaming view showed live.
-  const status = (tool as { isError?: boolean }).isError ? 'error' : statusProp;
+  // render ✗ after reload, matching what the streaming view showed live. A
+  // worker's question sent to its leader is denied by design, not failed.
+  const routed = isRoutedQuestion(tool.name, result);
+  const status = (tool as { isError?: boolean }).isError && !routed ? 'error'
+    : statusProp === 'error' && routed ? 'done' : statusProp;
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const rawDesc = typeof safeInput.description === 'string' ? safeInput.description.trim() : '';
   const description = rawDesc ? (rawDesc.length > 120 ? rawDesc.slice(0, 120) + '...' : rawDesc) : null;

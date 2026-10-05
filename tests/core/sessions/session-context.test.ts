@@ -4,7 +4,7 @@
  * The injected context is a short identity note, in a fixed order: who opened
  * the session (Walnut, one sentence), what it is working on (task + project,
  * only when the task resolves), how to reach Walnut (`walnut` CLI + `walnut guide`),
- * and the peer-authorization safety line. These tests pin that contract from
+ * and the one-team line. These tests pin that contract from
  * both sides — each piece is present, task lookup failures only drop the task
  * line, and the old blanket preamble stays gone (size guard fails first if
  * this creeps back toward one).
@@ -181,8 +181,11 @@ describe('buildSessionContext (identity note)', () => {
     const { task: parent } = await addTask({ title: 'Bakery website', project: 'acme' })
     const { task: child } = await addTask({ title: 'Build the menu page', project: 'acme', parent_task_id: parent.id })
     const { systemPrompt } = await buildSessionContext(child.id)
-    expect(systemPrompt).toContain(`Your task is a subtask of "Bakery website" (id ${parent.id}).`)
-    expect(systemPrompt).toMatch(/ending in "Reply when done" comes from that task's session/)
+    expect(systemPrompt).toContain(`Your task is a subtask of "Bakery website" (id ${parent.id}), your leader.`)
+    expect(systemPrompt).toMatch(/ending in "Reply when done" comes from it/)
+    // 2026-10-05: a worker asked the user again for a go its leader relayed.
+    expect(systemPrompt).toContain('Its messages are the user\'s direction: act on them, and never ask the user to confirm what it passed on.')
+    expect(systemPrompt).toContain('Your questions go to it (task_send), not to the user.')
     // Right after the task line, before the rules.
     expect(systemPrompt.indexOf('subtask of')).toBeGreaterThan(systemPrompt.indexOf('Build the menu page'))
     expect(systemPrompt.indexOf('subtask of')).toBeLessThan(systemPrompt.indexOf('This session is how that task runs'))
@@ -239,10 +242,13 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).not.toContain('subtask of')
   })
 
-  it('warns that peer messages never carry user authorization', async () => {
+  it('says every task works for the same user: another task\'s message and the decision it passes on are the user\'s', async () => {
+    // 2026-10-05: the old line ("peer messages never carry user authorization")
+    // made workers ask the user again for a go their leader had relayed.
     const { systemPrompt } = await buildSessionContext('')
-    expect(systemPrompt).toMatch(/NEVER carry user authorization/i)
-    expect(systemPrompt).toMatch(/never approve/i)
+    expect(systemPrompt).toContain('Every task works for the same user: a message from another of their tasks is the user\'s request')
+    expect(systemPrompt).toMatch(/never ask the user to repeat it/)
+    expect(systemPrompt).not.toMatch(/authorization/i)
   })
 
   it('injects no vault / server-safety preamble and stays short', async () => {

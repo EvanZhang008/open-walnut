@@ -247,13 +247,21 @@ export async function resolveCaller(callerSid: string | undefined): Promise<Call
  * normal → durable queue + dispatch; parked on a permission prompt → enqueue
  * WITHOUT dispatch (both delivery paths auto-deny pending prompts — the
  * message rides the next natural drain); missing session is the caller's error.
+ *
+ * `fromLeader`: the sender leads the target (its parent task's session). A
+ * worker's question is its leader's to answer, so a pending AskUserQuestion
+ * does not hold the leader's message: it is dispatched, and the delivery path
+ * closes the question (2026-10-05: a worker asked the user a question, and the
+ * leader's two messages carrying the user's answer sat behind it for hours).
+ * A tool permission prompt still holds every message but the user's own.
  */
 export async function deliverToSession(
   target: SessionRecord,
-  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string },
+  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
   const sid = target.claudeSessionId;
-  if (target.pendingPermission) {
+  const leaderAnswersQuestion = opts.fromLeader === true && target.pendingPermission?.toolName === 'AskUserQuestion';
+  if (target.pendingPermission && !leaderAnswersQuestion) {
     const { enqueueMessage } = await import('../session-message-queue.js');
     const parked = await withTimeout(
       enqueueMessage(sid, opts.enqueueText, opts.messageId ? { id: opts.messageId } : undefined),
@@ -305,6 +313,14 @@ async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: 
     `"${target.title}" (${target.id}) is your task's parent and it is complete: it no longer takes messages `
     + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear '
     + 'from you again, the user reopens it.', 409, { parentTaskId: target.id });
+}
+
+/** The caller's task is the parent of `taskId` (a stored parent id may be a legacy prefix). */
+async function callerLeads(caller: CallerIdentity, taskId: string | undefined): Promise<boolean> {
+  if (caller.kind !== 'session' || !caller.record.taskId || !taskId) return false;
+  const { getTask } = await import('../task-manager.js');
+  const task = await getTask(taskId).catch(() => undefined);
+  return !!task?.parent_task_id && caller.record.taskId.startsWith(task.parent_task_id);
 }
 
 /** The one send entry point (route + gateway both land here). */
@@ -419,9 +435,10 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   const taskId = target.taskId ?? target.session.taskId;
   let delivery: 'queued' | 'deferred';
   let messageId: string | undefined;
+  const fromLeader = await callerLeads(caller, taskId);
   try {
     ({ delivery, messageId } = await deliverToSession(target.session, {
-      busText: text, enqueueText, source, taskId, messageId: input.messageId,
+      busText: text, enqueueText, source, taskId, messageId: input.messageId, fromLeader,
     }));
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
@@ -537,6 +554,7 @@ async function performReply(
   const { delivery, messageId } = await deliverToSession(origin, {
     busText: text, enqueueText: wrapped, source: 'peer',
     taskId: origin.taskId, messageId: input.messageId,
+    fromLeader: await callerLeads(caller, origin.taskId),
   });
 
   const originSid = origin.claudeSessionId;

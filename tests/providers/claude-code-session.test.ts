@@ -2470,13 +2470,13 @@ describe('ClaudeCodeSession AskUserQuestion answers injection', () => {
 
   it('a BYPASS session leaves it pending for the human instead of auto-approving', async () => {
     const { session, writes } = makeAskSession('bypass');
-    // Let the bypass branch's async config read settle — if the exemption regressed,
-    // an allow control_response lands in `writes` within this window.
-    await new Promise((r) => setTimeout(r, 30));
+    // A question first asks whether it is a worker's (worker-question.ts: this task
+    // has no leader, so it is the user's); the prompt then waits for the human. If
+    // the exemption regressed, an allow control_response would land in `writes`.
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    await vi.waitFor(() => expect((session as any)._permissionReEmitTimers.size).toBe(1));
     expect(session.hasPendingPermission).toBe(true);
     expect(writes.filter((w) => w.includes('control_response'))).toEqual([]);
-    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-    expect((session as any)._permissionReEmitTimers.size).toBe(1);
     session.forceSettlePermissionRequests('test cleanup');
   });
 

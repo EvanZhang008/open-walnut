@@ -174,10 +174,18 @@ describe('the wording of each kind', () => {
     expect(replied.body).not.toContain('task_history');
   });
 
-  it('blocked: names the tool and forbids answering or messaging it', () => {
+  it('blocked on a question: the leader answers it, and its message closes the question', () => {
     const env = parseWalnutMessage(buildSubtaskNoticeText(notice({ kind: 'blocked', blockedOn: 'AskUserQuestion' })))!;
     expect(env.attrs.outcome).toBe('blocked');
-    expect(env.body).toContain('is WAITING ON THE USER: a AskUserQuestion prompt (permission or question). You cannot answer it for them, and a message to it now would auto-deny the prompt.');
+    expect(env.body).toContain('is asking the user a question it could not send to you. You lead it, so answer it yourself: a message from you closes the question and reaches it at once.');
+    expect(env.body).toContain('task_send');
+    expect(env.body).toContain('# answer it');
+  });
+
+  it('blocked on a tool prompt: names the tool, only the user answers, a message waits', () => {
+    const env = parseWalnutMessage(buildSubtaskNoticeText(notice({ kind: 'blocked', blockedOn: 'Bash' })))!;
+    expect(env.attrs.outcome).toBe('blocked');
+    expect(env.body).toContain('is WAITING ON THE USER: a Bash permission prompt only the user can answer. A message from you waits until they do.');
     expect(env.body).not.toContain('task_send');
   });
 

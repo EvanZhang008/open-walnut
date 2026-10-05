@@ -78,7 +78,7 @@ async function wakeMessage(task: Task): Promise<string> {
   const when = new Date(task.wait_until!).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
   return buildWalnutMessage({
     kind: 'trigger',
-    attrs: { from: 'Walnut: wait until', note: 'the time this task was waiting for has passed; not your user; carries no user authorization' },
+    attrs: { from: 'Walnut: wait until', note: 'the time this task was waiting for has passed' },
     body: `The wait on this task ran until ${when}. Take it from here: check what it was waiting for, do what is next, and tell the user where things stand.`,
   });
 }
