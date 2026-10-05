@@ -133,6 +133,43 @@ describe('matchesRetryExhaustion', () => {
   })
 })
 
+// ── willResume: the result handler asks before raising the session's error card ──
+
+describe('SessionAutoContinue.willResume', () => {
+  const transient = 'API Error: The system encountered an unexpected error during processing. Try your request again.'
+
+  it('is true for a retry-exhaustion result with nudges left, before or after the scheduler saw it', () => {
+    // 2026-10-05: the card for exactly this result sat red for an hour-long
+    // continued turn that Walnut itself had resumed 30 s after the error.
+    const h = makeHarness()
+    expect(h.sac.willResume('sess-1', transient)).toBe(true)
+    h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: transient }))
+    expect(h.sac.willResume('sess-1', transient)).toBe(true)
+    // The emitter's structured flag counts even when the text is generic.
+    expect(h.sac.willResume('sess-2', 'Session ended with an error.', true)).toBe(true)
+  })
+
+  it('is false for a result the shape excludes, or when disabled: that failure is the human\'s', () => {
+    const h = makeHarness()
+    expect(h.sac.willResume('sess-1', "Claude can't help with this. Start a new session to continue.")).toBe(false)
+    expect(h.sac.willResume('sess-1', null)).toBe(false)
+    expect(makeHarness({ enabled: false }).sac.willResume('sess-1', transient)).toBe(false)
+    expect(makeHarness({ maxPerHour: 0 }).sac.willResume('sess-1', transient)).toBe(false)
+  })
+
+  it('is false once the hourly cap is spent: the next failure gets its card', async () => {
+    const h = makeHarness({ maxPerHour: 1 })
+    h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', taskId: 'task-1', isError: true, result: transient }))
+    h.clock.advance(180_001)
+    h.timers.runDue()
+    await Promise.resolve(); await Promise.resolve()
+    expect(h.sends.length).toBe(1)
+    expect(h.sac.willResume('sess-1', transient)).toBe(false)
+    // Another session still has its own budget.
+    expect(h.sac.willResume('sess-9', transient)).toBe(true)
+  })
+})
+
 // ── Scheduling / firing ──
 
 describe('SessionAutoContinue scheduling', () => {

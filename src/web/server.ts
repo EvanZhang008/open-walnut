@@ -4159,13 +4159,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const isLaneSession = !!(sessionId && (await laneCheckRead(sessionId).catch(() => null))?.lane)
       const willBeTriage = !isError && !!taskId
       if (isError) {
-        await publishSessionErrorNotification({
-          title: 'Session Error',
-          body: `${taskRef ? `${taskRef}: ` : ''}${result || 'Session ended with an error.'}`,
-          dedupScope: `session:${sessionId ?? taskId ?? 'unknown'}:runtime`,
-          sessionId,
-          taskId,
-        })
+        // A retry-exhaustion result that auto-continue is about to resume is not
+        // a condition for the human: the card sat red for the whole continued
+        // turn and retired only when that turn ended. A result the cap or the
+        // shape excludes still gets its card (the failure is then the human's).
+        const { getSessionAutoContinue } = await import('../core/session-auto-continue.js')
+        const resumed = !!sessionId && !!getSessionAutoContinue()?.willResume(
+          sessionId, result, eventData<'session:result'>(event).retryExhausted,
+        )
+        if (resumed) {
+          log.session.info('session error card held: auto-continue resumes this turn', { sessionId, taskId })
+        } else {
+          await publishSessionErrorNotification({
+            title: 'Session Error',
+            body: `${taskRef ? `${taskRef}: ` : ''}${result || 'Session ended with an error.'}`,
+            dedupScope: `session:${sessionId ?? taskId ?? 'unknown'}:runtime`,
+            sessionId,
+            taskId,
+          })
+        }
       } else {
         // A clean result is this session's recovery signal: the turn ran, so
         // whatever its previous error card described (a failed turn, a delivery

@@ -187,6 +187,21 @@ export class SessionAutoContinue {
     }
   }
 
+  /**
+   * Whether this error result is one the scheduler resumes on its own: the
+   * retry-exhaustion shape, with nudges left in the hourly window (or one
+   * already pending). The result handler asks before raising the session's
+   * error card: a turn Walnut is about to continue is not a condition the
+   * human can act on, and the card sat red for the whole continued turn
+   * (2026-10-05, an hour-long agent turn). A result the cap or the shape
+   * excludes still gets its card.
+   */
+  willResume(sessionId: string, result: string | null | undefined, retryExhausted?: boolean): boolean {
+    if (!this.cfg.enabled || this.cfg.maxPerHour <= 0) return false
+    if (!retryExhausted && !matchesRetryExhaustion(result)) return false
+    return this.pending.has(sessionId) || this.firesInWindow(sessionId) < this.cfg.maxPerHour
+  }
+
   private firesInWindow(sessionId: string): number {
     const arr = this.fires.get(sessionId)
     if (!arr) return 0
