@@ -63,11 +63,14 @@
  *
  * Held phase: WAITING — set on purpose (the status control, task_update, the
  * /walnut-trigger snooze), it means "nothing to do until something happens".
- * The machine leaves it alone on the quiet edges (session:result, session:error,
- * the reconciler: the turn that SET it ends without a hand-back) and moves it on
- * the loud ones: any new turn (session:input, session:turn-start: a trigger
- * fire, a human, a peer) takes it to IN_PROGRESS, a prompt that needs the human
- * (session:awaiting-human) to NEED_ACTION. Its optional `wait_until` is a server
+ * Nothing of the turn that SET it moves it, whoever set it: not that turn's
+ * further output, a background agent coming back inside it, its end
+ * (session:result), its error, or any reconcile (the snapshot pull, the
+ * reconciler). The NEXT turn does: any message (session:input: a human, a peer,
+ * a trigger fire, a Walnut notice) or a turn the CLI starts on its own
+ * (session:turn-start) takes it to IN_PROGRESS. The one exit inside the turn is
+ * a prompt that blocks on the human (session:awaiting-human → NEED_ACTION): a
+ * hidden task could never show it. Its optional `wait_until` is a server
  * clock (task-wait-until.ts) that wakes the session the way a trigger would.
  * Background writes (a sync pull echoing the TODO it was shown) may move it
  * only to COMPLETE; see the held-phase guard in task-manager.ts.
@@ -461,15 +464,6 @@ export async function applySessionPhase(
       || ((trigger === 'session:turn-start' || trigger === 'session:result') && opts.turnGen !== undefined))) {
     phaseRunner = (await import('../providers/claude-code-session.js')).sessionRunner
   }
-  // A WAITING set during the turn that is running now belongs to that turn: its
-  // own turn-start, replayed or reconciled later (the snapshot pull runs every
-  // 30s with no turn generation), must not pull it back. 2026-10-04: a session
-  // armed its trigger, the task parked, and six seconds later the snapshot pull
-  // moved it to In Progress, so the turn's end handed it back as Need Action.
-  const heldRunner = newPhase && opts?.sessionId && trigger === 'session:turn-start' && HELD_PHASES.has(task.phase)
-    ? phaseRunner ?? (await import('../providers/claude-code-session.js')).sessionRunner
-    : undefined
-
   if (!newPhase) {
     log.session.debug('applySessionPhase: skip (no transition needed)', {
       taskId, currentPhase: task.phase, trigger, source, sessionId: opts?.sessionId,
@@ -524,13 +518,21 @@ export async function applySessionPhase(
             skipReason = 'superseded-snapshot'
             return false
           }
-          if (heldRunner && HELD_PHASES.has(current.phase)) {
-            const turnStartedAt = heldRunner.findSessionByClaudeId(opts!.sessionId!)?.turnStartedAt
-            const heldAt = Date.parse(current.phase_changed_at ?? '')
-            if (turnStartedAt !== undefined && Number.isFinite(heldAt) && heldAt >= turnStartedAt) {
-              skipReason = 'held-this-turn'
-              return false
+          // WAITING ends on the NEXT turn, never inside the one that set it,
+          // whoever set it (the user's rule, 2026-10-04). A turn-start with no
+          // generation is a reconcile (the 30s snapshot pull saw the CLI
+          // running), never a new turn; an edge is a new turn only when its turn
+          // began after the WAITING was stamped. That day a session armed its
+          // trigger, the task parked, and six seconds later the snapshot pull
+          // moved it to In Progress, so the turn's end handed it back.
+          if (trigger === 'session:turn-start' && HELD_PHASES.has(current.phase)) {
+            if (opts?.turnGen === undefined) skipReason = 'held-reconcile'
+            else {
+              const turnStartedAt = phaseRunner?.findSessionByClaudeId(opts.sessionId ?? '')?.turnStartedAt
+              const heldAt = Date.parse(current.phase_changed_at ?? '')
+              if (turnStartedAt !== undefined && Number.isFinite(heldAt) && heldAt >= turnStartedAt) skipReason = 'held-this-turn'
             }
+            if (skipReason) return false
           }
           const live = opts?.sessionId ? phaseRunner?.findSessionByClaudeId(opts.sessionId) : undefined
           if (live) {

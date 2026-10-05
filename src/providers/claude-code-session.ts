@@ -751,7 +751,7 @@ export class ClaudeCodeSession {
    *  Never reset — a reset would make a live gen look older than an in-flight result's
    *  gen, and the stale-result gate in core/phase.ts fails OPEN on that comparison. */
   private _turnGen = 0
-  /** When the last turn-start edge happened (see turnStartedAt). */
+  /** When the current turn began (see turnStartedAt). */
   private _turnEdgeAt: number | undefined
   /** Did any MAIN-lane assistant text reach the UI stream during this turn?
    *
@@ -1313,7 +1313,12 @@ export class ClaudeCodeSession {
   ): void {
     const sid = this.claudeSessionId ?? sidHint
     this._turnGen++
-    this._turnEdgeAt = Date.now()
+    // A {running} inside a turn that has not ended (a background agent's result
+    // picked up, an answered prompt, the CLI's own echo of a turn writeMessage
+    // started) is that same turn: it keeps the turn's start (see turnStartedAt).
+    if (source !== 'state-running' || this._turnResultEmitted || this._turnEdgeAt === undefined) {
+      this._turnEdgeAt = Date.now()
+    }
     // A turn walnut did not deliver itself (a message injected straight into
     // the daemon's FIFO, a queued mid-turn message the CLI picks up after the
     // previous result) starts its speed meter here; a turn writeMessage already
@@ -1896,9 +1901,10 @@ export class ClaudeCodeSession {
     return this._turnGen
   }
 
-  /** Epoch ms of the last turn-start edge (undefined before the first). Read by
-   *  core/phase.ts: a WAITING set after this moment was set DURING the current
-   *  turn, and a reconcile of that same turn must not pull it back. */
+  /** Epoch ms the current turn began (undefined before the first): the edge that
+   *  opened it, not a later {running} inside it. Read by core/phase.ts: a WAITING
+   *  set after this moment was set DURING the current turn, and nothing of that
+   *  same turn may pull it back. */
   get turnStartedAt(): number | undefined {
     return this._turnEdgeAt
   }

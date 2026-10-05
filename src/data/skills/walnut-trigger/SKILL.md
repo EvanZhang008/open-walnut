@@ -164,6 +164,10 @@ session's own task **parks the task as Waiting** in the same call:
   never park silently and never skip the report.
 - The next message into this session (the fire, the user, a peer task) moves it
   to In Progress on its own; that turn ends as Need Action like any other.
+- Nothing else in THIS turn moves it: not your further output, a background
+  agent coming back, or the turn's end. So if you find, later in the same turn,
+  that the user is needed after all, take it back yourself:
+  `task_update '{"id":"<this task's id>","phase":"NEED_ACTION"}'`.
 
 **Use it on your own.** When the rest of the work waits on something outside
 this session (a review, a merge, a deploy, a build, a CI run, a reply from a

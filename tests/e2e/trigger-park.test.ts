@@ -316,6 +316,42 @@ describe('the turn that parks it', () => {
     await req('POST', `/api/v1/sessions/${sid}/messages`, { text: 'any news?' })
     await until('the new turn to hand it back', () => task(taskId), (t) => t.phase === 'NEED_ACTION')
   })
+
+  it('a background agent coming back inside that turn leaves it Waiting', async () => {
+    // The CLI says {running} again when a background agent's result comes back
+    // and the model picks the turn up. That is still the turn that parked the
+    // task, so it must not count as a new one.
+    const prevHold = process.env.MOCK_HOLD_TURN_MS
+    process.env.MOCK_HOLD_TURN_MS = '2000'
+    try {
+      const { sid, taskId } = await startSession('get the change reviewed')
+      await req('POST', `/api/v1/sessions/${sid}/messages`, { text: 'hold-turn-test:The reviewer found nothing to change.' })
+      await until('the held turn to run', () => task(taskId), (t) => t.phase === 'IN_PROGRESS')
+      expect((await createTrigger(sid)).json.wait.parked).toBe(true)
+      // The agent returns at 2s and its summary ends the turn 4s later.
+      const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+      await new Promise((resolve) => setTimeout(resolve, 6_500))
+      await until('the held turn to end', () => getSessionByClaudeId(sid), (s) => s?.process_status === 'idle')
+      const after = await task(taskId)
+      expect(after.phase).toBe('WAITING')
+      expect(after.unread).toBeFalsy()
+    } finally {
+      if (prevHold === undefined) delete process.env.MOCK_HOLD_TURN_MS
+      else process.env.MOCK_HOLD_TURN_MS = prevHold
+    }
+  }, 40_000)
+
+  it('a reconcile with no turn to compare against (the server restarted mid-turn) leaves it Waiting', async () => {
+    // A restarted server attaches to the running CLI without its turn's start,
+    // and its first snapshot pull used to read that as a new turn.
+    const { sid, taskId } = await startSession('wait for the deploy')
+    await createTrigger(sid)
+    expect((await task(taskId)).phase).toBe('WAITING')
+    const { applySessionPhase } = await import('../../src/core/phase.js')
+    const res = await applySessionPhase(taskId, 'session:turn-start', 'snapshot-apply:test', { sessionId: 'attached-elsewhere' })
+    expect(res.changed).toBe(false)
+    expect((await task(taskId)).phase).toBe('WAITING')
+  })
 })
 
 describe('the fire brings it back', () => {
