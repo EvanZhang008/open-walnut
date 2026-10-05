@@ -21,11 +21,18 @@ contradicts a stated preference) surface it with a recommendation — otherwise 
 obvious option and proceed. Fix root causes, not symptoms. Verify your own work
 (build + real-UI E2E) before claiming it's done. Default to finishing the whole job.
 
-**Commit automatically after the loop.** Once the full dev loop is done (implement →
-build → deploy → real-UI verification passed), commit the change yourself — don't stop
-and wait to be asked. Scope the commit to your own changes only (never sweep up other
-agents' uncommitted files), and run the usual pre-commit sensitive-content scan. Push
-still only happens on request.
+**Done means live on prod, and you saw it there.** A change is finished only when it is
+committed, deployed to the live server on :3456, and you opened live prod yourself and
+watched it work (the real UI for a UI change, a read-only check for the rest). After the
+review, commit and deploy on your own; don't stop and wait to be asked. The shared tree
+almost always holds other agents' uncommitted work, so deploy the commit, not the tree:
+`bash scripts/deploy-committed.sh` builds the committed HEAD in a clean clone and serves
+it as this checkout. Never wait for the tree to be clean, and never stash, revert or commit
+their files to get there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix
+what it names or report it as the blocker. Never end with "committed, not deployed, say
+deploy". Scope the commit to your own changes only (never sweep up other agents'
+uncommitted files), and run the usual pre-commit sensitive-content scan. Push still only
+happens on request.
 
 ## CRITICAL: Open Source Repository
 
@@ -44,7 +51,8 @@ No company-internal names, personal info, internal URLs, credentials, or interna
 
 ## Production Server Safety
 
-**Port 3456 = PRODUCTION. NEVER kill, restart, or interfere.**
+**Port 3456 = PRODUCTION. NEVER kill, restart, or interfere with it by hand: the deploy
+scripts below are the only way to replace it.**
 
 ### Never block the web server (each rule = a shipped outage)
 
@@ -52,7 +60,8 @@ No company-internal names, personal info, internal URLs, credentials, or interna
 - **Every route touching daemon/SSH/network/whale files needs a deadline** — answer degraded (204/stale), never hang: one pinned response starves the browser's 6-connection pool → app-wide fake 15s timeouts.
 
 ```bash
-npm run dev:prod        # Build all → restart 3456 with latest code
+bash scripts/deploy-committed.sh  # Deploy the committed HEAD (clean clone) → restart 3456
+npm run dev:prod        # Build the working tree as it is → restart 3456
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
 
 # Verify the deploy script itself WITHOUT deploying: runs every guard, then stops

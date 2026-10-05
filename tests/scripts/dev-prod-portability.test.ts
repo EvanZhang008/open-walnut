@@ -162,6 +162,25 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(fs.existsSync(path.join(r.tmp, 'open-walnut-dev-prod.lock'))).toBe(false)
   })
 
+  it('serves as WALNUT_DEVPROD_SERVE_ROOT, and refuses one that is not a checkout before any step', async () => {
+    const repo = path.resolve(path.dirname(SCRIPT), '..')
+    const ok = await dryRun({ WALNUT_DEVPROD_SERVE_ROOT: repo })
+    expect(ok.status).toBe(0)
+    expect(ok.stdout).toMatch(/every guard passed/)
+    const bad = await dryRun({ WALNUT_DEVPROD_SERVE_ROOT: `/definitely-not-a-checkout-${process.pid}` })
+    expect(bad.status).toBe(1)
+    expect(bad.stderr).toMatch(/WALNUT_DEVPROD_SERVE_ROOT is not a Walnut checkout/)
+    expect(bad.stdout).not.toMatch(/every guard passed/)
+    // The server runs as the serve root: its cwd, its node_modules (stage and
+    // rollback copy alike) and the source repo it reports. The build stays REPO_ROOT's.
+    expect(script).toMatch(/ln -sfn "\$SERVE_ROOT\/node_modules" "\$STAGE_DIR\/node_modules"/)
+    expect(script).toMatch(/ln -sfn "\$SERVE_ROOT\/node_modules" "\$LKG_DIR\.tmp\/node_modules"/)
+    expect(script).toMatch(/printf '%s\\n' "\$SERVE_ROOT" > "\$STAGE_DIR\/\.walnut-source-root"/)
+    expect(script).toMatch(/open-walnut\n\s*"\$SERVE_ROOT" \/usr\/bin\/env/)
+    expect(script).toMatch(/cp -Rc "\$REPO_ROOT\/dist" "\$STAGE_DIR\/dist"/)
+    expect(script).not.toMatch(/ln -sfn "\$REPO_ROOT\/node_modules"/)
+  })
+
   it('honours the port override only in dry-run mode', () => {
     // The override must never let a real deploy start a second server against the
     // production data dir, so it is read inside the dry-run branch only.

@@ -21,6 +21,18 @@ LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"
 SERVER_LOG="${WALNUT_SERVER_LOG:-/tmp/open-walnut-launchd.log}"
 LAUNCH_LABEL=com.open-walnut.dev-prod
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# The checkout the server RUNS AS: its working directory, the node_modules the
+# staged dist resolves from, and the source repo it reports ("Fix Walnut" works
+# there). REPO_ROOT is what gets type-checked and built. They differ only when
+# scripts/deploy-committed.sh builds the committed HEAD in a clean clone, so a
+# shared working tree's uncommitted files never ship, while the server keeps
+# running as the real checkout.
+SERVE_ROOT="${WALNUT_DEVPROD_SERVE_ROOT:-$REPO_ROOT}"
+if [[ ! -f "$SERVE_ROOT/package.json" || ! -d "$SERVE_ROOT/node_modules" ]]; then
+  echo "WALNUT_DEVPROD_SERVE_ROOT is not a Walnut checkout with node_modules: $SERVE_ROOT" >&2
+  exit 1
+fi
+SERVE_ROOT="$(cd "$SERVE_ROOT" && pwd -P)"
 SUCCESS_STAMP="${TMPDIR:-/tmp}/open-walnut-dev-prod.last-success"
 ATTEMPT_STAMP="${TMPDIR:-/tmp}/open-walnut-dev-prod.last-attempt"
 COOLDOWN_SECS=120
@@ -349,7 +361,7 @@ stage_dist() {
     rm -rf "$STAGE_DIR/dist" 2>/dev/null || true
     cp -R "$REPO_ROOT/dist" "$STAGE_DIR/dist" || return 1
   fi
-  ln -sfn "$REPO_ROOT/node_modules" "$STAGE_DIR/node_modules" || return 1
+  ln -sfn "$SERVE_ROOT/node_modules" "$STAGE_DIR/node_modules" || return 1
   # getVersion() walks UP from dist/cli.js for the nearest package.json; a stage
   # without one reports 0.0.0 and every version-gated builtin plugin turns off.
   cp "$REPO_ROOT/package.json" "$STAGE_DIR/package.json" || return 1
@@ -358,7 +370,7 @@ stage_dist() {
   # server believed it was an npm install, so "Fix Walnut" hid and "Ask AI to
   # fix" would have cloned upstream instead of repairing THIS checkout. The
   # marker hands it the repo the stage was built from.
-  printf '%s\n' "$REPO_ROOT" > "$STAGE_DIR/.walnut-source-root" || return 1
+  printf '%s\n' "$SERVE_ROOT" > "$STAGE_DIR/.walnut-source-root" || return 1
 }
 
 # A stage that never became the running server is trash on exit (smoke failure,
@@ -653,7 +665,7 @@ for spid in $stray_pids; do
   # Only OUR production server; never an ephemeral/test instance. Three launch
   # shapes over time: repo dist (old deploys), staged dist (current deploys),
   # LKG dist (rollback servers).
-  if [[ "$cmd" != *"$REPO_ROOT/dist/cli.js"* \
+  if [[ "$cmd" != *"$REPO_ROOT/dist/cli.js"* && "$cmd" != *"$SERVE_ROOT/dist/cli.js"* \
      && "$cmd" != *"open-walnut-stage."*"/dist/cli.js"* \
      && "$cmd" != *"open-walnut-lkg/dist/cli.js"* ]]; then
     continue
@@ -792,7 +804,7 @@ xml_escape() {
 # The job's command line, shared by the plist and the submit fallback.
 launchd_job_argv() {
   launchd_argv=(/bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut
-    "$REPO_ROOT" /usr/bin/env
+    "$SERVE_ROOT" /usr/bin/env
     -u OPEN_WALNUT_EPHEMERAL
     -u OPEN_WALNUT_HOME
     -u WALNUT_DAEMON_DIR
@@ -967,7 +979,7 @@ snapshot_lkg() {
     rm -rf "$LKG_DIR.tmp/dist" 2>/dev/null || true
     cp -R "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" || return 1
   fi
-  ln -sfn "$REPO_ROOT/node_modules" "$LKG_DIR.tmp/node_modules" || return 1
+  ln -sfn "$SERVE_ROOT/node_modules" "$LKG_DIR.tmp/node_modules" || return 1
   # Same reason as stage_dist: without a package.json the LKG boots as 0.0.0.
   cp "$REPO_ROOT/package.json" "$LKG_DIR.tmp/package.json" || return 1
   rm -rf "$LKG_DIR" 2>/dev/null || true
