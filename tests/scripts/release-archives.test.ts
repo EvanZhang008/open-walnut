@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { LAUNCHER, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
+import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
@@ -48,6 +48,13 @@ describe('build.mjs', () => {
     expect(RUNTIME_MARKER).toBe(UPDATER_MARKER)
   })
 
+  it('its npm never fetches a GPU provider, in the build or in any update after it', () => {
+    // onnxruntime-node reads npm_config_onnxruntime_node_install; Walnut's embedder is CPU only.
+    expect(NPMRC).toMatch(/^onnxruntime-node-install=skip$/m)
+    const embedder = fs.readFileSync(path.join(ROOT, 'src/lib/hybrid-search/embed-worker.ts'), 'utf8')
+    expect(embedder.match(/device: '([a-z]+)'/g)?.every((d) => d === "device: 'cpu'")).toBe(true)
+  })
+
   it('refuses a package whose updater does not know the archive', () => {
     const old = path.join(tmp, 'old-pkg')
     touch(path.join(old, 'dist/cli.js'), 'console.log("0.6.2")')
@@ -63,12 +70,15 @@ describe('build.mjs', () => {
   it('drops the native binaries a dependency carries for other platforms, and keeps this one\'s', () => {
     const m = path.join(tmp, 'modules')
     for (const p of ['darwin/arm64', 'darwin/x64', 'linux/arm64', 'linux/x64', 'win32/x64']) touch(path.join(m, 'onnxruntime-node/bin/napi-v6', p, 'onnxruntime_binding.node'))
+    // The CUDA and TensorRT providers onnxruntime-node fetches on Linux x64 by default.
+    for (const lib of GPU_PROVIDER_LIBS) touch(path.join(m, 'onnxruntime-node/bin/napi-v6/linux/x64', lib))
     for (const p of ['arm64-darwin', 'x64-darwin', 'x64-linux', 'arm64-linux', 'x64-win32']) touch(path.join(m, '@anthropic-ai/claude-agent-sdk/vendor/ripgrep', p, 'rg'))
     for (const p of ['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-x64-musl', 'win32-x64']) touch(path.join(m, '@homebridge/node-pty-prebuilt-multiarch/prebuilds', p, 'pty.node'))
     touch(path.join(m, '@anthropic-ai/claude-agent-sdk/vendor/ripgrep/COPYING'))
     const removed = pruneForeignBinaries(m, { platform: 'linux', arch: 'x64' })
     expect(fs.readdirSync(path.join(m, 'onnxruntime-node/bin/napi-v6'))).toEqual(['linux'])
     expect(fs.readdirSync(path.join(m, 'onnxruntime-node/bin/napi-v6/linux'))).toEqual(['x64'])
+    expect(fs.readdirSync(path.join(m, 'onnxruntime-node/bin/napi-v6/linux/x64'))).toEqual(['onnxruntime_binding.node'])
     expect(fs.readdirSync(path.join(m, '@anthropic-ai/claude-agent-sdk/vendor/ripgrep')).sort()).toEqual(['COPYING', 'x64-linux'])
     expect(fs.readdirSync(path.join(m, '@homebridge/node-pty-prebuilt-multiarch/prebuilds')).sort()).toEqual(['linux-x64', 'linux-x64-musl'])
     expect(removed).toContain(path.join('onnxruntime-node/bin/napi-v6', 'win32'))
@@ -120,9 +130,12 @@ describe('formula.mjs', () => {
     expect(rb).not.toMatch(/depends_on/)
   })
 
-  it('refuses a prerelease and a release with no archives', () => {
-    expect(() => formula({ version: '0.7.0-nightly.1', sums })).toThrow(/not a stable version/)
+  it('refuses what is not a version, and a version with no archives', () => {
+    expect(() => formula({ version: 'v0.7.0"; system "x', sums })).toThrow(/not a version/)
     expect(() => formula({ version: '0.8.0', sums })).toThrow(/lists no archive/)
+    // CI's rehearsal writes one for its prerelease build.
+    const pre = `${SHA('4')}  open-walnut-0.7.1-rehearsal.1-linux-x64.tar.gz`
+    expect(formula({ version: '0.7.1-rehearsal.1', sums: pre })).toContain('version "0.7.1-rehearsal.1"')
   })
 
   it('is Ruby that parses', () => {

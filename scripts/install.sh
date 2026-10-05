@@ -76,6 +76,8 @@ cleanup() {
   # A swap that stopped half way puts the old copy back before anything is removed.
   if [ ! -e "$install_dir/app" ] && [ -e "$staging/previous" ]; then mv "$staging/previous" "$install_dir/app"; fi
   rm -rf "$staging"
+  # A first install that failed leaves no empty directory behind.
+  rmdir "$install_dir" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT

@@ -60,6 +60,21 @@ export function shaFromSums(sums, file) {
   throw new Error(`${file} is not listed in SHASUMS256.txt`)
 }
 
+/**
+ * The archive's npm global config (runtime/etc/npmrc, which its npm reads for
+ * every install it runs: this build and each update after it). Walnut's
+ * embedder runs on the CPU, so onnxruntime-node's install script must not fetch
+ * its CUDA provider (about 240 MB on Linux x64, where it is the default).
+ */
+export const NPMRC = `onnxruntime-node-install=skip
+update-notifier=false
+fund=false
+audit=false
+`
+
+/** GPU execution providers onnxruntime-node may carry; Walnut never loads one. */
+export const GPU_PROVIDER_LIBS = ['libonnxruntime_providers_cuda.so', 'libonnxruntime_providers_tensorrt.so']
+
 /** The launcher every entry point is: this archive's Node, this archive's package. */
 export const LAUNCHER = `#!/bin/sh
 # Open Walnut, self-contained: it runs on the Node beside it and updates itself
@@ -99,6 +114,10 @@ export function pruneForeignBinaries(modules, { platform, arch }) {
   for (const napi of fs.existsSync(onnx) ? fs.readdirSync(onnx) : []) {
     keepOnly(path.join(onnx, napi), (os) => os === platform)
     keepOnly(path.join(onnx, napi, platform), (a) => a === arch)
+    for (const lib of GPU_PROVIDER_LIBS) {
+      const file = path.join(onnx, napi, platform, arch, lib)
+      if (fs.existsSync(file)) { fs.rmSync(file); removed.push(path.relative(modules, file)) }
+    }
   }
   keepOnly(path.join(modules, '@anthropic-ai', 'claude-agent-sdk', 'vendor', 'ripgrep'), (name) => name === `${arch}-${platform}`)
   for (const pkg of [['@homebridge', 'node-pty-prebuilt-multiarch'], ['screencapturekit-audio-capture']]) {
@@ -178,6 +197,8 @@ async function main() {
     fs.writeFileSync(path.join(work, nodeFile), tarball)
     execFileSync('tar', ['-xzf', path.join(work, nodeFile), '-C', runtime, '--strip-components=1'])
     for (const extra of ['include', 'share', 'CHANGELOG.md', 'README.md']) fs.rmSync(path.join(runtime, extra), { recursive: true, force: true })
+    fs.mkdirSync(path.join(runtime, 'etc'))
+    fs.writeFileSync(path.join(runtime, 'etc', 'npmrc'), NPMRC)
 
     // The package, installed by that Node's npm the way the updater installs it.
     const node = path.join(runtime, 'bin', 'node')
@@ -191,6 +212,8 @@ async function main() {
       npm_config_update_notifier: 'false',
       npm_config_fund: 'false',
       npm_config_audit: 'false',
+      // Read from runtime/etc/npmrc as well; said here so a caller's npm config cannot undo it.
+      ONNXRUNTIME_NODE_INSTALL: 'skip',
     }
     const args = [npmCli, 'install', '-g', '--prefix', runtime, spec]
     args.push(`--allow-scripts=${allow.join(',')}`)
