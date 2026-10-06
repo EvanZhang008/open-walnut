@@ -71,30 +71,26 @@ show inline after the open ones, other completed hits that show the query fold i
   in `tests/e2e/browser/draft-helpers.ts`), or pin it by `data-session-id`: the slot's panel
   sits earlier in the DOM, so an unscoped `.first()` grabs it instead of the column under test.
 - **Completing a task from its column's header closes the column, with an Undo**
-  (`pages/useColumnCompleteRollUp.ts`, `utils/column-roll-up.ts`; the person picked "roll up" from
-  ten candidates, at half speed). The ring and the kebab's status menu are the only triggers
+  (`pages/useColumnCompleteClose.ts`). The ring and the kebab's status menu are the only triggers
   (`TaskQuickActions` `onCompleted` -> `SessionPanel` `onTaskCompleted` -> the hook): completing
   from the board, or an agent finishing its task, closes nothing, because the person may be reading
   that column. 400ms after the click (the tick is read, and a server that refused has rolled the
-  phase back by then; reduced motion keeps the tick and skips only the roll) the column's
-  `clip-path` rolls up into its header strip (890ms, nothing is laid out again), then the ordinary
-  `handleCloseSession` runs and the sessions area's own removal (auto-animate) fades the strip
-  while the neighbours take the width. The held strip is written to the node's inline style before
-  the close, because auto-animate re-inserts that very node to fade it; a roll stopped by × or an
-  eviction is FROZEN there too (`RollUp.freeze`), never cleared, or the fade would show the whole
-  column again. A locked column is never closed (a pin means keep it, also one pinned mid-roll), and
-  a task that is no longer COMPLETE (refused, or the ring clicked again) cancels the roll and the
-  column stays. A refusal that lands AFTER the close (a failed write is retried with backoff before
-  the list is re-read) is still answered: for the toast's life (8s) the hook watches the task, and
-  a phase that is no longer COMPLETE gives the column back and dismisses the toast. A completion
-  through the REST fallback (task not in the store) is reported only after the write succeeded.
-  The toast (`hint`, 8s) is "Task completed" + the task title + Undo: Undo sets the phase back to
-  the one it left and puts the column back at its index (`restoreSessionColumn`); with no room left
-  under the panel count it goes through the ordinary open (`openSessionOrToast`), so the lock grant
-  and the panel count follow like any open. Undo restores the PHASE only: what the server clears on
-  completion (a plan/exec slot, a WAITING clock) is not brought back. The column node carries
-  `data-column-id` (the session id) and `data-rolling-up`. Ratchets:
-  `tests/e2e/browser/column-complete-roll-up.spec.ts`, `tests/web/column-roll-up.test.ts`,
+  phase back by then) the ordinary `handleCloseSession` runs, so the close is the same fade the ×
+  gives (the sessions area's own removal, the neighbours take the width) and a toast (`hint`, 8s)
+  says "Task completed" + the task title + Undo. There is deliberately NO custom close animation:
+  a clip-path roll-up into the header strip shipped first (2026-10-04) and the person asked for the
+  ordinary fade back. A locked column is never closed (a pin means keep it, also one pinned during
+  the tick), and a task that is no longer COMPLETE (refused, or the ring clicked again) cancels the
+  close. A refusal that lands AFTER the close (a failed write is retried with backoff before the
+  list is re-read) is still answered: for the toast's life the hook watches the task, and a phase
+  that is no longer COMPLETE gives the column back and dismisses the toast. A completion through
+  the REST fallback (task not in the store) is reported only after the write succeeded. Undo sets
+  the phase back to the one it left and puts the column back at its index (`restoreSessionColumn`);
+  with no room left under the panel count it goes through the ordinary open (`openSessionOrToast`),
+  so the lock grant and the panel count follow like any open. Undo restores the PHASE only: what the
+  server clears on completion (a plan/exec slot, a WAITING clock) is not brought back. The column
+  node carries `data-column-id` (the session id). Ratchets:
+  `tests/e2e/browser/column-complete-close.spec.ts` (holds the tick to act inside it),
   `tests/web/session-columns.test.ts`.
 - **Pins never block an open, and the count follows the strip** (`panelBudget` in
   `pages/sessionColumns.ts`, read ONLY by `addSessionColumn`). The panel count

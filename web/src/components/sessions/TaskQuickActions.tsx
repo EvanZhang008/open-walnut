@@ -87,7 +87,7 @@ interface TaskQuickActionsProps {
    * The person just completed this task from this control (the ring, or the status menu's
    * Complete). Fired once the shared store has applied it (which rolls itself back on a
    * refusal), or, with no store row, once the server accepted the write; `from` is the phase
-   * it left. A session column uses it to roll itself up.
+   * it left. A session column uses it to close itself.
    */
   onCompleted?: (info: { taskId: string; from: TaskPhase }) => void;
 }

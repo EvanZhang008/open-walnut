@@ -1,7 +1,7 @@
-// Completing a task from its session column's header closes that column: it rolls up into
-// its header, then leaves through the sessions area's ordinary removal. A person who shut it
-// and wanted to look again (or who clicked by mistake) has an Undo for as long as the toast
-// lives: it puts the task's phase and the column back where they were.
+// Completing a task from its session column's header closes that column, the ordinary way
+// (the sessions area's own removal fades it and the neighbours take the width). A person who
+// shut it and wanted to look again (or who clicked by mistake) has an Undo for as long as the
+// toast lives: it puts the task's phase and the column back where they were.
 //
 // Only a completion made IN the column counts. Completing from the board, or an agent
 // finishing its own task, closes nothing: the person may be reading that column.
@@ -10,11 +10,13 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import type { Task } from '@open-walnut/core';
 import type { SessionSlot } from './sessionColumns';
 import { realColumnCount, restoreSessionColumn } from './sessionColumns';
-import { prefersReducedMotion, rollUpColumn, ROLL_UP_TICK_MS, type RollUp } from '@/utils/column-roll-up';
 
+/** The ring's tick is read before the column goes (also the window in which a refused
+ *  completion rolls back, so a quick refusal never costs the person a column). */
+const CLOSE_TICK_MS = 400;
 /** How long a close is still answerable by the server's refusal: the Undo toast's life. A
  *  write that fails is retried with backoff and then the list is re-read, which lands well
- *  after the roll-up is over. */
+ *  after the column is gone. */
 const REFUSAL_WATCH_MS = 8000;
 
 interface Entry {
@@ -24,8 +26,6 @@ interface Entry {
   index: number;
   toastId: string;
   timer?: ReturnType<typeof setTimeout>;
-  roll?: RollUp;
-  announced: boolean;
 }
 
 interface Deps {
@@ -47,21 +47,18 @@ interface Deps {
   maxPanelsRef: { current: number };
 }
 
-const columnEl = (sessionId: string) =>
-  document.querySelector<HTMLElement>(`.main-page-session-column[data-column-id="${CSS.escape(sessionId)}"]`);
-
-export interface ColumnCompleteRollUp {
+export interface ColumnCompleteClose {
   /** A task was completed from the header of the column showing `sessionId`. */
   onTaskCompleted: (sessionId: string, info: { taskId: string; from: string }) => void;
-  /** The person closed the column themselves (×): drop any roll-up in flight; the Undo stays. */
+  /** The person closed the column themselves (×) before the tick ended: nothing left to do. */
   release: (sessionId: string) => void;
 }
 
-export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
+export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
   const { sessionColumns, tasks } = deps;
   const latest = useRef(deps);
   latest.current = deps;
-  const entries = useRef(new Map<string, Entry>());
+  const pending = useRef(new Map<string, Entry>());
   /** Columns this hook closed within the refusal window, keyed by session id. */
   const closed = useRef(new Map<string, { entry: Entry; timer: ReturnType<typeof setTimeout> }>());
 
@@ -73,22 +70,11 @@ export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
     return phase !== undefined && phase !== 'COMPLETE';
   };
 
-  /** Stop the roll-up and hand the column back as it was. */
-  const abort = useCallback((sessionId: string, entry: Entry, dismiss: boolean) => {
-    if (entries.current.get(sessionId) === entry) entries.current.delete(sessionId);
-    if (entry.timer) clearTimeout(entry.timer);
-    entry.roll?.cancel();
-    if (dismiss && entry.announced) latest.current.dismissToast(entry.toastId);
-  }, []);
-
-  /** The column is going away for another reason (×, eviction): stop the roll where it is and
-   *  leave the clip on the node, so the removal fades the strip instead of the whole column. */
   const release = useCallback((sessionId: string) => {
-    const entry = entries.current.get(sessionId);
+    const entry = pending.current.get(sessionId);
     if (!entry) return;
-    entries.current.delete(sessionId);
+    pending.current.delete(sessionId);
     if (entry.timer) clearTimeout(entry.timer);
-    entry.roll?.freeze();
   }, []);
 
   /** Put the column back: where it sat when there is room, otherwise as a normal open. */
@@ -103,7 +89,7 @@ export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
   const onTaskCompleted = useCallback((sessionId: string, info: { taskId: string; from: string }) => {
     const d = latest.current;
     const index = d.sessionColumns.findIndex((c) => c.id === sessionId);
-    if (index < 0 || entries.current.has(sessionId)) return;
+    if (index < 0 || pending.current.has(sessionId)) return;
     const slot = d.sessionColumns[index];
     if (slot.locked) return; // a pin means "keep this panel"
     const entry: Entry = {
@@ -112,14 +98,10 @@ export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
       slot,
       index,
       toastId: `column-done:${info.taskId}`,
-      announced: false,
     };
-    entries.current.set(sessionId, entry);
-    const reduced = prefersReducedMotion();
+    pending.current.set(sessionId, entry);
 
     const undo = () => {
-      const live = entries.current.get(sessionId);
-      if (live === entry) abort(sessionId, entry, false);
       const watch = closed.current.get(sessionId);
       if (watch?.entry === entry) { clearTimeout(watch.timer); closed.current.delete(sessionId); }
       if (!reopened(entry.taskId)) latest.current.setPhase(entry.taskId, entry.from);
@@ -136,24 +118,15 @@ export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
       closed.current.set(sessionId, watch);
     };
 
-    const leave = () => {
-      if (entries.current.get(sessionId) !== entry) return;
-      // Refused or reopened while the column rolled: it stays. So does a column pinned in the
-      // meantime (the header strip is still there to click).
-      const pinned = latest.current.sessionColumns.find((c) => c.id === sessionId)?.locked;
-      if (pinned || reopened(entry.taskId)) { abort(sessionId, entry, true); return; }
-      entries.current.delete(sessionId);
-      watchAfterClose();
-      latest.current.closeColumn(sessionId);
-    };
-
     const begin = () => {
       entry.timer = undefined;
-      if (entries.current.get(sessionId) !== entry) return;
-      // The tick had its moment; a server that refused in that time has rolled the phase back.
-      if (reopened(entry.taskId)) { entries.current.delete(sessionId); return; }
+      if (pending.current.get(sessionId) !== entry) return;
+      pending.current.delete(sessionId);
+      // Refused or reopened during the tick, or pinned in the meantime: the column stays.
+      const pinned = latest.current.sessionColumns.find((c) => c.id === sessionId)?.locked;
+      if (pinned || reopened(entry.taskId)) return;
       const title = latest.current.tasks.find((t) => t.id === entry.taskId)?.title;
-      entry.announced = true;
+      watchAfterClose();
       latest.current.notify({
         kind: 'hint',
         severity: 'success',
@@ -165,26 +138,19 @@ export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
         action: { label: 'Undo', kind: 'callback' },
         onAction: undo,
       });
-      const col = reduced ? null : columnEl(sessionId);
-      const roll = col ? rollUpColumn(col) : null;
-      if (!roll) { leave(); return; }
-      entry.roll = roll;
-      void roll.finished.then((reached) => { if (reached) leave(); });
+      latest.current.closeColumn(sessionId);
     };
 
-    // Reduced motion skips the roll, not the tick: the tick is also the window in which a
-    // server that refused has already rolled the phase back.
-    entry.timer = setTimeout(begin, ROLL_UP_TICK_MS);
-  }, [abort, restoreColumn]);
+    entry.timer = setTimeout(begin, CLOSE_TICK_MS);
+  }, [restoreColumn]);
 
-  // A roll-up outlives neither a reopened/refused task, a pin, nor a column that something
-  // else closed; and a refusal that lands after the column went gives the column back.
+  // A pending close outlives neither a reopened task, a pin, nor a column that something else
+  // closed; and a refusal that lands after the column went gives the column back.
   useEffect(() => {
-    if (entries.current.size === 0 && closed.current.size === 0) return;
-    for (const [sessionId, entry] of [...entries.current]) {
+    if (pending.current.size === 0 && closed.current.size === 0) return;
+    for (const [sessionId, entry] of [...pending.current]) {
       const slot = sessionColumns.find((c) => c.id === sessionId);
-      if (!slot) { release(sessionId); continue; }
-      if (slot.locked || (entry.roll && reopened(entry.taskId))) abort(sessionId, entry, true);
+      if (!slot || slot.locked || reopened(entry.taskId)) release(sessionId);
     }
     for (const [sessionId, watch] of [...closed.current]) {
       if (!reopened(watch.entry.taskId)) continue;
@@ -197,11 +163,8 @@ export function useColumnCompleteRollUp(deps: Deps): ColumnCompleteRollUp {
   }, [tasks, sessionColumns]);
 
   useEffect(() => () => {
-    for (const entry of entries.current.values()) {
-      if (entry.timer) clearTimeout(entry.timer);
-      entry.roll?.cancel();
-    }
-    entries.current.clear();
+    for (const entry of pending.current.values()) if (entry.timer) clearTimeout(entry.timer);
+    pending.current.clear();
     for (const watch of closed.current.values()) clearTimeout(watch.timer);
     closed.current.clear();
   }, []);

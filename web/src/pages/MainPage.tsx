@@ -80,7 +80,7 @@ import {
   replaceSessionColumn,
   toggleLockSlot,
 } from './sessionColumns';
-import { useColumnCompleteRollUp } from './useColumnCompleteRollUp';
+import { useColumnCompleteClose } from './useColumnCompleteClose';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -1616,8 +1616,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
 
-  // Completing a task from its column's header rolls the column up and closes it, with an Undo.
-  const columnRollUp = useColumnCompleteRollUp({
+  // Completing a task from its column's header closes the column, with an Undo.
+  const columnComplete = useColumnCompleteClose({
     sessionColumns,
     setSessionColumns,
     tasks,
@@ -1629,11 +1629,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     triageOpenRef,
     maxPanelsRef,
   });
-  // The × on a column: whatever roll-up was in flight gives way to the person's own close.
+  // The × on a column: a completion's pending close gives way to the person's own close.
   const handleClosePanel = useCallback((sessionId: string) => {
-    columnRollUp.release(sessionId);
+    columnComplete.release(sessionId);
     handleCloseSession(sessionId);
-  }, [columnRollUp.release, handleCloseSession]);
+  }, [columnComplete.release, handleCloseSession]);
 
   useEffect(() => {
     const pending = pendingSessionFocusRef.current;
@@ -3262,7 +3262,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   sessionId={sid}
                   locked={slot.locked}
                   onToggleLock={handleToggleLockSession}
-                  onTaskCompleted={columnRollUp.onTaskCompleted}
+                  onTaskCompleted={columnComplete.onTaskCompleted}
                   onClose={handleClosePanel}
                   onTaskClick={handleFocusTaskById}
                   onLocateTask={handleLocateTaskById}

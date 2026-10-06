@@ -261,7 +261,7 @@ interface SessionPanelProps {
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
   onToggleLock?: (sessionId: string) => void;
   /** The person completed this panel's task from its header (the ring or the status menu). The
-   *  home page's column answers by rolling itself up. Not called while the panel is fullscreen. */
+   *  home page's column answers by closing itself. Not called while the panel is fullscreen. */
   onTaskCompleted?: (sessionId: string, info: { taskId: string; from: TaskPhase }) => void;
   onTaskClick?: (taskId: string) => void;
   /** The header's Locate button: find this panel's task in the task panel. Its session is
@@ -341,7 +341,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const modelPickerServed = useRef(0);
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
-  // A fullscreen panel is an overlay over its column: rolling the column up behind it would
+  // A fullscreen panel is an overlay over its column: closing the column behind it would
   // show the person nothing, so the host hears about completions only from the normal view.
   const completedInColumn = useMemo(
     () => (onTaskCompleted && !isFullscreen
