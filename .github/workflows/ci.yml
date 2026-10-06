@@ -462,9 +462,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: archive-logs-${{ matrix.target }}
-          path: |
-            ${{ runner.temp }}/rehearsal/*/log.txt
-            ${{ runner.temp }}/rehearsal/*.log
+          path: ${{ runner.temp }}/rehearsal/*/log.txt
           if-no-files-found: ignore
 
   # ── Informational: the browser suite ────────────────────────────────────────

@@ -130,6 +130,24 @@ export function pruneForeignBinaries(modules, { platform, arch }) {
 }
 
 /**
+ * The native modules whose package ships a binary for this target, judged on
+ * the install as npm left it (before pruneForeignBinaries). Only those must load
+ * on the archive's Node. onnxruntime-node ships no macOS x64 binary since 1.24
+ * (1.23.2 was the last with one): an Intel Mac's archive goes out without it,
+ * and search there runs on keywords alone, as on an npm install on that Mac
+ * (the embedder degrades to keyword results, src/lib/hybrid-search/embedder.ts).
+ * 2026-10-06: 0.6.4's darwin-x64 archive failed to build on exactly this.
+ */
+export function shipsNativeBinary(modules, mod, { platform, arch }) {
+  if (mod === 'onnxruntime-node') {
+    const bin = path.join(modules, 'onnxruntime-node', 'bin')
+    if (!fs.existsSync(bin)) return false
+    return fs.readdirSync(bin).some((napi) => fs.existsSync(path.join(bin, napi, platform, arch)))
+  }
+  return true
+}
+
+/**
  * Does this package's updater know the archive? One that does not would update
  * an archive with whatever `npm` is first on PATH, into that npm's own prefix,
  * and leave the archive behind on the old version forever.
@@ -246,16 +264,21 @@ async function main() {
     const pkgRoot = path.join(runtime, 'lib', 'node_modules', 'open-walnut')
     const version = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version
     if (!updaterKnowsArchive(pkgRoot)) throw new Error(`open-walnut@${version} predates the self-contained archive: its updater would not update one`)
-    const pruned = pruneForeignBinaries(path.join(pkgRoot, 'node_modules'), target)
-    process.stdout.write(`dropped ${pruned.length} other-platform binary folders\n`)
-    // The native modules that stayed load on this runtime's Node.
+    const modules = path.join(pkgRoot, 'node_modules')
+    // The native modules that must load on this runtime's Node: every one whose
+    // package ships this target's binary, decided before pruning, so a prune that
+    // removed this target's own copy fails here instead of passing unnoticed.
     const loads = {
       'better-sqlite3': "new (require('better-sqlite3'))(':memory:').close()",
       'onnxruntime-node': "require('onnxruntime-node')",
     }
-    for (const [mod, probe] of Object.entries(loads)) {
-      if (!fs.existsSync(path.join(pkgRoot, 'node_modules', mod))) continue
-      execFileSync(node, ['-e', probe], { cwd: pkgRoot, env, stdio: 'inherit', timeout: 120_000 })
+    const installed = Object.keys(loads).filter((mod) => fs.existsSync(path.join(modules, mod)))
+    const withoutBinary = installed.filter((mod) => !shipsNativeBinary(modules, mod, target))
+    for (const mod of withoutBinary) process.stdout.write(`${mod} ships no ${target.name} binary: the archive goes without it\n`)
+    const pruned = pruneForeignBinaries(modules, target)
+    process.stdout.write(`dropped ${pruned.length} other-platform binary folders\n`)
+    for (const mod of installed.filter((m) => !withoutBinary.includes(m))) {
+      execFileSync(node, ['-e', loads[mod]], { cwd: pkgRoot, env, stdio: 'inherit', timeout: 120_000 })
     }
     fs.writeFileSync(path.join(runtime, RUNTIME_MARKER), `${JSON.stringify({ node: nodeVersion, target: target.name, built: version }, null, 2)}\n`)
 
@@ -270,7 +293,7 @@ async function main() {
     const archive = path.join(opts.out, `${stem}.tar.gz`)
     // No AppleDouble files from macOS tar.
     execFileSync('tar', ['-czf', archive, '-C', work, stem], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
-    const result = { archive, sha256: sha256(fs.readFileSync(archive)), version, node: nodeVersion, target: target.name, bytes: fs.statSync(archive).size }
+    const result = { archive, sha256: sha256(fs.readFileSync(archive)), version, node: nodeVersion, target: target.name, bytes: fs.statSync(archive).size, withoutBinary }
     process.stdout.write(`${JSON.stringify(result)}\n`)
   } finally {
     if (!opts.keep) fs.rmSync(work, { recursive: true, force: true })
