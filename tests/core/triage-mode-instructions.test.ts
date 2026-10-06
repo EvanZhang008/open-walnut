@@ -21,6 +21,7 @@ import {
   triageInstructionsFor,
 } from '../../src/core/triage/bootstrap.js';
 import { readTriageConfig } from '../../src/core/triage/config.js';
+import { TRIAGE_MARK_READ_RULE, TRIAGE_NO_REMOVAL } from '../../src/core/triage/letter-rules.js';
 import type { CronJob } from '../../src/core/cron/types.js';
 import type { TriageConfig } from '../../src/core/triage/types.js';
 
@@ -115,17 +116,39 @@ describe('changing the mode re-patches the routine', () => {
       ...layer.deps, getConfig: cfg({ ...assist, auto_mark_read: true }),
     });
     expect(patched.outcome).toBe('patched');
-    expect(instructionsOf(layer.jobs[0])).toContain('mark the mail you triaged as read');
+    expect(instructionsOf(layer.jobs[0])).toContain(TRIAGE_MARK_READ_RULE);
   });
 
-  it('auto_mark_read does nothing in ask mode — the run may not mark read at all', async () => {
+  it('auto_mark_read moves ask mode as well: promotional mail may be marked read there too', async () => {
     const layer = spyLayer();
     await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ASK) });
     const before = instructionsOf(layer.jobs[0]);
+    expect(before).not.toContain('mail_mark_read');
     const again = await ensureTriageRoutine({
       ...layer.deps, getConfig: cfg({ ...ASK, auto_mark_read: true }),
     });
-    expect(again.outcome).toBe('unchanged');
-    expect(instructionsOf(layer.jobs[0])).toBe(before);
+    expect(again.outcome).toBe('patched');
+    expect(instructionsOf(layer.jobs[0])).toContain('Mode: ask');
+    expect(instructionsOf(layer.jobs[0])).toContain(TRIAGE_MARK_READ_RULE);
+  });
+});
+
+describe('what a run does with each item', () => {
+  const text = triageInstructionsFor(readTriageConfig({ triage: ASK }));
+
+  it('hands an item to the task that already owns it, without a reply and without a letter', () => {
+    expect(text).toContain('hand the item to that task with task_send (expect_reply=false)');
+    expect(text).toContain('Do not do its work, and do not write the user a letter about it as well.');
+  });
+
+  it('does the homework before it asks the user', () => {
+    expect(text).toContain('mail_draft');
+    expect(text).toContain('the user only decides');
+  });
+
+  it('never removes mail, in either mode', () => {
+    for (const mode of ['ask', 'assist'] as const) {
+      expect(triageInstructionsFor(readTriageConfig({ triage: { ...ASK, mode } }))).toContain(TRIAGE_NO_REMOVAL);
+    }
   });
 });

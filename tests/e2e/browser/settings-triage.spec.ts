@@ -136,6 +136,33 @@ test.describe('Settings → Inbox Triage', () => {
     await expect(reopened.locator('#inbox-triage-enabled')).toHaveAttribute('aria-checked', 'true')
   })
 
+  test('marking promotional mail read is a choice in ask mode too', async ({ page, request }) => {
+    const section = await openTriageSection(page)
+    // The previous test left triage on, in assist, with marking read on.
+    await section.getByTestId('inbox-triage-mode-ask').click()
+    const toggle = section.locator('#inbox-triage-auto-mark-read')
+    await expect(toggle).toBeEnabled()
+    await expect(section.getByText('Triage never deletes mail')).toBeVisible()
+    await toggle.click()
+    await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
+      .toMatchObject({ mode: 'ask', auto_mark_read: false })
+    await toggle.click()
+    await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
+      .toMatchObject({ mode: 'ask', auto_mark_read: true })
+
+    // The routine's instructions follow, in ask mode: the switch is a permission there too.
+    const reopened = await reopenTriageSection(page)
+    await expect(reopened.locator('#inbox-triage-auto-mark-read')).toHaveAttribute('aria-checked', 'true')
+    await expect(reopened.getByTestId('inbox-triage-mode-ask')).toHaveAttribute('aria-checked', 'true')
+    await expect.poll(async () => {
+      const res = await request.get('/api/routines?includeDisabled=true')
+      const body = await res.json() as { jobs?: Array<Record<string, any>> }
+      const row = (body.jobs ?? []).find((j) => j?.initProcessor?.actionId === 'inbox-triage-batch')
+      const text = String(row?.executor?.config?.instructions ?? '')
+      return { ask: text.includes('Mode: ask'), markRead: text.includes('mail_mark_read') }
+    }, { timeout: 30_000 }).toEqual({ ask: true, markRead: true })
+  })
+
   test('a save keeps a sibling triage key the card does not render', async ({ page, request }) => {
     // Seed a key no field renders. updateConfig replaces `triage` whole, so this
     // is exactly what a save without the `...config.triage` spread would eat.

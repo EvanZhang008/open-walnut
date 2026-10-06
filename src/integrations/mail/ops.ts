@@ -1,5 +1,5 @@
 /**
- * The same eight operations, registered in the host's op catalogue.
+ * The same nine operations, registered in the host's op catalogue.
  *
  * One implementation, two registrations. The tool list is the Personal AI's audience; the op
  * catalogue is everything that calls a capability by name: `walnut.ops.call` from another plugin,
@@ -32,6 +32,10 @@
  * - There is no `mail_unsubscribe` either, for the same shape of reason: the ladder is run by a human
  *   click or by a human answering the letter `mail_unsubscribe_request` produces, and an agent has no
  *   entry point to it at all.
+ * - `mail_mark_read` is the one write that changes the mailbox itself, and it is a flag: the same op
+ *   with `read: false` undoes it, so it is a write that is NOT destructive. There is no op that
+ *   deletes, archives or moves a message, and that is a decision, not a gap: an agent tidying an
+ *   inbox may mark the noise read, and nothing it does can make a mail disappear.
  *
  * Known limitation, documented rather than papered over: a standalone `walnut` process and the
  * stdio MCP server cannot see plugin-declared ops until the out-of-process slice lands. That is a
@@ -41,8 +45,10 @@
 import {
   asText,
   MAX_LIST_LIMIT,
+  MAX_MARK_READ,
   mailDraft,
   mailList,
+  mailMarkRead,
   mailRead,
   mailRequestSend,
   mailSearch,
@@ -206,6 +212,25 @@ export function createMailOps(deps: MailAgentDeps): MailOpSpec[] {
       readonly: false,
       destructive: false,
       handler: (args) => asText(() => mailRequestSend(deps, args)),
+    },
+    {
+      name: 'mark_read',
+      title: 'Mark mail read or unread',
+      description:
+        `Set the read flag on up to ${MAX_MARK_READ} messages, in the mailbox itself. read=false undoes it. `
+        + 'It deletes, moves and archives nothing; no tool does.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          account: ACCOUNT_FIELD,
+          messages: { type: 'array', items: { type: 'string' }, description: 'Message ids from mail_list or mail_search rows.' },
+          read: { type: 'boolean', description: 'true (the default) marks them read; false marks them unread.' },
+        },
+        required: ['messages'],
+      },
+      readonly: false,
+      destructive: false,
+      handler: (args) => asText(() => mailMarkRead(deps, args)),
     },
     {
       name: 'unsubscribe_request',

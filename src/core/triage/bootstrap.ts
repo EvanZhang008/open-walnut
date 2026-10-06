@@ -64,8 +64,8 @@ export const TRIAGE_PROJECT = askProjectFor({ id: TRIAGE_AGENT_ID, name: TRIAGE_
 
 /** The routine's one-line description, shown on its card. */
 const TRIAGE_ROUTINE_DESCRIPTION =
-  'Reads each batch of new mail and Slack, matches it to your projects and tasks, '
-  + 'keeps the tracking notes true, and asks you about anything that needs a decision.';
+  'Reads each batch of new mail and Slack, hands each item to the task that already owns it, '
+  + 'keeps the tracking notes true, and asks you about the rest with the homework done.';
 
 /**
  * The instructions every run is launched with. The batch action's summary is
@@ -78,13 +78,24 @@ export const TRIAGE_RUN_INSTRUCTIONS = [
   '',
   'Follow the walnut-inbox-triage skill. In order: read notes/Walnut/Triage/State.md,',
   'read what you need about each item, match items to the projects and tasks that',
-  'already exist, update the tracking notes, ask the tasks that are affected, then',
-  'write at most one summary letter and at most three decision letters.',
+  'already exist, and update the tracking notes.',
+  '',
+  'When a task already owns an item\'s work (its title, project or recent work covers it),',
+  'hand the item to that task with task_send (expect_reply=false): what arrived, its message',
+  'id, and what it asks. That task carries on from there, and asks the user itself if it',
+  'needs to. Do not do its work, and do not write the user a letter about it as well.',
+  'A task that was never started answers 409: do not start it, name it in the summary.',
+  '',
+  'When an item needs the user, do the homework before you ask: read the whole thread, look',
+  'up the related mail, tasks and notes, and draft the reply when one is needed (mail_draft).',
+  'The letter then says what you found and what you propose, so the user only decides.',
+  'At most three decision letters, and a summary letter only when the run has something for',
+  'the user (it then names every task you handed something to).',
   '',
   'Before you finish: rewrite notes/Walnut/Triage/State.md, append one line to',
   'notes/Walnut/Triage/Runs/<YYYY-MM>.md, and memory_write anything durable you',
-  'learned. Never send mail, post to Slack, mark anything read or unsubscribe on',
-  'your own — ask. Never invent a project or a task.',
+  'learned. Never send mail, post to Slack or unsubscribe on your own: ask. Never',
+  'invent a project or a task.',
 ].join('\n');
 
 /**

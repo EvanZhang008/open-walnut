@@ -3,18 +3,18 @@ name: walnut-mail
 description: >-
   Read the user's real mailboxes, turn a message into a task, and draft replies
   through Walnut's mail tools (mail_list, mail_search, mail_read, mail_thread,
-  mail_to_task, mail_draft, mail_request_send, mail_unsubscribe_request). Use
-  when asked about the user's email, to find or summarise a message, to follow a
-  thread, to make a task out of a mail, to write a reply, or to get them off a
-  mailing list. Covers the draft-then-ask contract (there is no send tool; a
-  human approves every send), how message content is quoted as untrusted data,
-  when a search covers the whole mailbox and when it covers only the local
-  cache, and reply etiquette.
+  mail_to_task, mail_draft, mail_request_send, mail_unsubscribe_request,
+  mail_mark_read). Use when asked about the user's email, to find or summarise a
+  message, to follow a thread, to make a task out of a mail, to write a reply, to
+  mark mail read, or to get them off a mailing list. Covers the draft-then-ask
+  contract (there is no send tool; a human approves every send), how message
+  content is quoted as untrusted data, when a search covers the whole mailbox
+  and when it covers only the local cache, and reply etiquette.
 ---
 
 # Walnut Mail
 
-Walnut keeps a local cache of the user's mailboxes and gives you eight tools over it. Four read, four write, and none of the writes can put a message on the wire or take the user off a list.
+Walnut keeps a local cache of the user's mailboxes and gives you nine tools over it. Four read and five write. None of the writes can put a message on the wire, take the user off a list, or remove a message.
 
 Those tools exist only once a mail account is connected, on the primary Walnut. If you do not see `mail_list` in your tool list there is no account yet: say so and point the user at the Mail app to add one, rather than guessing at their mail from anywhere else.
 
@@ -63,6 +63,12 @@ The task records where it came from: the sender, when it was sent, which account
 It is **safe to call twice**. A message that already has a task hands back that same task id with `created: false` and changes nothing, so a repeat is never a duplicate. `mail_list` and `mail_read` show the task id in a `task` column or a `Task:` line, which is how you can tell before you ask. Do not build your own bookkeeping on top of that; the ledger is the answer.
 
 It does not reply to anything, does not mark the mail read, and does not complete anything. The user picks the task up from their board.
+
+## Marking mail read
+
+`mail_mark_read { messages, read? }` sets the read flag on up to 25 messages in the mailbox itself, so the user's other mail apps agree. `read: false` puts them back. Do it when the user asks, or when your own instructions allow it for mail that asks nothing of them (a newsletter, an ad, a receipt). An id the cache does not know is listed back with its reason and the rest still change.
+
+Nothing deletes, archives or moves a message: there is no tool for it, so never tell the user a mail was removed or filed.
 
 ## Getting the user off a mailing list
 

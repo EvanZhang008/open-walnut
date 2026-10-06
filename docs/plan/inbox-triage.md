@@ -77,10 +77,11 @@ run may do WITHOUT ASKING, never in what may leave the machine.
 |---|---|---|
 | Read mail, Slack, tasks, notes | yes | yes |
 | Update `State.md`, the run journal, `Tracking.md` | yes | yes |
-| Ask a task what it knows (`task_send`, `expectReply`) | yes | yes |
+| Hand an item to the task that owns it (`task_send`) | yes | yes |
 | Create or update a task | letter | yes |
 | One-click unsubscribe | letter | yes |
-| Mark mail read | letter | only with `auto_mark_read: true` |
+| Mark promotional mail read (`mail_mark_read`) | only with `auto_mark_read: true` | only with `auto_mark_read: true` |
+| Delete, archive or move mail | never: no tool exists | never: no tool exists |
 | Send mail | `mail_request_send` | `mail_request_send` |
 | Post to Slack | `slack_request_post` | `slack_request_post` |
 | Mark Slack read | approval | approval |
@@ -90,6 +91,26 @@ Nothing in either mode sends mail or posts to Slack directly. Those go through t
 approval ledger the console's own Send button uses, so a decision letter answered with
 "reply for me" produces a DRAFT plus a second approval letter, and nothing leaves the
 machine on the run's own authority.
+
+## What a run does with each item
+
+A run sorts every item into one of four, and only one of them costs the user attention:
+
+- **A task already owns it.** A release failure mail, and the task that watches and fixes
+  that release. The run hands the item to that task with `task_send` (`expect_reply: false`):
+  sender, date, subject, message id and what it asks. That task carries on, and asks the user
+  itself if it must; a completed task reopens when the message arrives. The run writes no
+  decision letter about it; a summary, when the run sends one, names the handover.
+- **It needs the user.** The run does the homework BEFORE asking: reads the whole thread,
+  searches the related mail, tasks and notes, and drafts the likely reply. The decision letter
+  says what it found, what it proposes and which button does it, so the user only decides.
+- **Noise.** A newsletter, an ad, a notice that asks nothing and that no task needs. With
+  `auto_mark_read: true` the run marks it read (`mail_mark_read`, undone with `read: false`);
+  otherwise it leaves it alone.
+- **FYI.** One line in the summary.
+
+`mail_mark_read` is the one change a run makes to a mailbox on its own. No mail tool deletes,
+archives or moves a message, so neither can a run.
 
 ## Letters: one summary, three decisions
 
@@ -168,7 +189,7 @@ triage:
   every_messages: 20      # wake threshold; 0 means the clock is the only trigger
   sources: [mail, slack]  # absent means both; an empty array means clock only
   mode: ask               # ask | assist
-  auto_mark_read: false   # assist only, and mail only; Slack is never auto-marked
+  auto_mark_read: false   # either mode, mail only, promotional mail; Slack is never auto-marked
   active_hours: 08:00-22:00  # local; an empty string means 24/7
 
 defaults:

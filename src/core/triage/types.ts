@@ -21,11 +21,13 @@ export type TriageSource = (typeof TRIAGE_SOURCES)[number];
 
 /**
  * How much a run may do on its own.
- *  - 'ask'    — only safe writes (notes, asking a task); every send / post /
- *               unsubscribe / mark-read goes to the user as a letter.
- *  - 'assist' — may also create and update tasks, update the tracking notes,
- *               one-click unsubscribe and mark mail read. Sending mail, posting
- *               to Slack and marking Slack read STILL need approval.
+ *  - 'ask'    — only safe writes (notes, handing an item to the task that owns
+ *               it); creating a task, unsubscribing and every send / post go to
+ *               the user as a letter.
+ *  - 'assist' — may also create and update tasks, update the tracking notes and
+ *               one-click unsubscribe. Sending mail, posting to Slack and
+ *               marking Slack read STILL need approval.
+ * Marking mail read is `auto_mark_read`, a separate switch honoured in both.
  */
 export const TRIAGE_MODES = ['ask', 'assist'] as const;
 export type TriageMode = (typeof TRIAGE_MODES)[number];
@@ -59,8 +61,9 @@ export interface TriageConfig {
   mode?: TriageMode;
 
   /**
-   * Let an 'assist' run mark triaged mail as read. Slack is never auto-marked.
-   * Default: false.
+   * Let a run (either mode) mark mail read when it is purely promotional or low
+   * importance, through `mail_mark_read`. Nothing deletes, archives or moves
+   * mail in any mode. Slack is never auto-marked. Default: false.
    */
   auto_mark_read?: boolean;
 

@@ -118,12 +118,13 @@ export function TriageSection({ config, onSave }: Props) {
               disabled={off}
               onChange={mode.set}
               options={[
-                { value: 'ask', label: 'Ask', testId: 'inbox-triage-mode-ask', title: 'Only notes, then asks you' },
+                { value: 'ask', label: 'Ask', testId: 'inbox-triage-mode-ask', title: 'Hands items to their tasks, asks you about the rest' },
                 { value: 'assist', label: 'Assist', testId: 'inbox-triage-mode-assist', title: 'May also file tasks and unsubscribe' },
               ]}
             />
           } />
-        <SettingsRow indent disabled={off || mode.value !== 'assist'} label="Let Assist mode mark triaged mail as read"
+        <SettingsRow disabled={off} label="Mark promotional mail as read"
+          help="Newsletters, ads and notices that ask nothing of you; Triage never deletes mail."
           htmlFor="inbox-triage-auto-mark-read" error={markRead.error}
           control={<ToggleSwitch id="inbox-triage-auto-mark-read" checked={markRead.value} busy={markRead.busy} disabled={off} onChange={markRead.set} />} />
       </SettingsGroup>

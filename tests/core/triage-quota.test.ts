@@ -41,6 +41,8 @@ import {
 } from '../../src/core/human-inbox/triage-quota.js';
 import {
   TRIAGE_APPROVAL_OPS,
+  TRIAGE_MARK_READ_RULE,
+  TRIAGE_NO_REMOVAL,
   triageLetterBudgetText,
   triageModeText,
   triageRunRules,
@@ -418,11 +420,11 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     ]);
   });
 
-  it('ask creates nothing on its own; assist may create and update tasks and notes', () => {
+  it('ask creates nothing on its own but hands items to their tasks; assist may create and update tasks and notes', () => {
     const ask = triageModeText('ask', false);
-    expect(ask).toContain('only read, update the triage and tracking notes, and ask a');
-    expect(ask).toContain('creating or');
-    expect(ask).toContain('editing a task');
+    expect(ask).toContain('only read, update the triage and tracking notes, and hand an');
+    expect(ask).toContain('item to the task that already owns it (task_send)');
+    expect(ask).toContain('creating or editing a task');
 
     const assist = triageModeText('assist', false);
     expect(assist).toContain('create and update tasks');
@@ -431,11 +433,22 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     expect(assist).toContain('never what may leave this machine');
   });
 
-  it('auto_mark_read is the one extra permission assist can be given', () => {
+  it('auto_mark_read lets either mode mark promotional mail read; without it, ask puts marking read in a letter', () => {
     expect(triageModeText('assist', false)).toContain('may NOT mark mail as read (auto_mark_read is off)');
-    expect(triageModeText('assist', true)).toContain('mark the mail you triaged as read');
-    // ask never gets it, whatever the flag says: the flag is documented as an
-    // assist-only permission (core/triage/types.ts).
-    expect(triageModeText('ask', true)).not.toContain('mark the mail you triaged as read');
+    expect(triageModeText('assist', true)).toContain(TRIAGE_MARK_READ_RULE);
+    expect(triageModeText('ask', true)).toContain(TRIAGE_MARK_READ_RULE);
+    expect(triageModeText('ask', true)).not.toContain('marking mail read, ');
+    expect(triageModeText('ask', false)).not.toContain(TRIAGE_MARK_READ_RULE);
+    expect(triageModeText('ask', false)).toContain('marking mail read, unsubscribing');
+    // The rule names the tool and keeps the doubtful case unread.
+    expect(TRIAGE_MARK_READ_RULE).toContain('mail_mark_read');
+    expect(TRIAGE_MARK_READ_RULE).toContain('when unsure, leave it unread');
+  });
+
+  it('every mode, with the flag on or off, says nothing deletes, archives or moves mail', () => {
+    for (const mode of ['ask', 'assist'] as const) {
+      for (const flag of [false, true]) expect(triageModeText(mode, flag)).toContain(TRIAGE_NO_REMOVAL);
+    }
+    expect(TRIAGE_NO_REMOVAL).toContain('Nothing deletes, archives or moves mail');
   });
 });

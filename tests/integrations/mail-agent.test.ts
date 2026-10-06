@@ -58,8 +58,8 @@ const MESSAGE_COUNT = 7;
 
 /** Every mail tool and op this slice registers, sorted. The catalogue, as a ratchet. */
 const TOOL_NAMES = [
-  'mail_draft', 'mail_list', 'mail_read', 'mail_request_send', 'mail_search', 'mail_thread',
-  'mail_to_task', 'mail_unsubscribe_request',
+  'mail_draft', 'mail_list', 'mail_mark_read', 'mail_read', 'mail_request_send', 'mail_search',
+  'mail_thread', 'mail_to_task', 'mail_unsubscribe_request',
 ];
 
 interface SendCall {
@@ -71,6 +71,8 @@ interface SendCall {
 
 interface Fixture {
   sendCalls: SendCall[];
+  /** Every read flag the provider was asked to set, in order. No bulk call: one per message. */
+  readCalls: Array<{ messageId: string; read: boolean }>;
   /** Accounts the provider will list. The gate is driven by changing this. */
   accounts: string[];
   /** How many times a body was fetched, per message id. Proves `retry` reached the provider. */
@@ -322,7 +324,7 @@ function envelopeOf(message) {
 }
 
 const CAPABILITIES = {
-  search: false, watch: false, drafts: false, markRead: false, flags: false,
+  search: false, watch: false, drafts: false, markRead: true, flags: false,
   threads: false, send: true, sendAsReply: true, bodies: 'text', attachments: 'metadata',
 };
 
@@ -392,6 +394,9 @@ export function activate(walnut) {
       }
       return { format: 'text', text: message.body, bytes: Buffer.byteLength(message.body) };
     },
+    markRead: async (accountId, messageId, read) => {
+      S().readCalls.push({ messageId, read });
+    },
     send: async (accountId, mail, options) => {
       S().sendCalls.push({
         accountId,
@@ -412,7 +417,7 @@ beforeAll(async () => {
   await fsp.mkdir(path.dirname(TASKS_FILE), { recursive: true });
   await fsp.writeFile(TASKS_FILE, JSON.stringify({ version: 1, tasks: [] }));
   (globalThis as unknown as { __mailAgent: Fixture }).__mailAgent = {
-    sendCalls: [], accounts: [], bodyFetches: {},
+    sendCalls: [], readCalls: [], accounts: [], bodyFetches: {},
   };
   await writeFixtureProvider();
   // A long poll interval so no background tick lands between an action and its assertion, and a
@@ -449,7 +454,7 @@ describe('a zero-account install has no agent surface at all', () => {
 });
 
 describe('adding the first account arms the surface', () => {
-  it('registers eight tools, eight ops and one context line naming the account', async () => {
+  it('registers nine tools, nine ops and one context line naming the account', async () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     let entered = false;
@@ -875,19 +880,50 @@ describe('the write surface ends at a letter', () => {
   });
 });
 
-describe('the ops are the same seven, with the same answers', () => {
+describe('the ops are the same nine, with the same answers', () => {
   it('answers a read through the op catalogue with the identical wrapped text', async () => {
     const viaTool = await tool('mail_read', { message: 'INBOX:900:1' });
     const viaOp = await op('mail_read', { message: 'INBOX:900:1' });
     expect(viaOp).toBe(viaTool);
   });
 
-  it('flags the reads readonly and the four writes as writes that are not destructive', async () => {
+  it('flags the reads readonly and the five writes as writes that are not destructive', async () => {
     const ops = (await listPluginOps()).filter((one) => one.owner === 'mail');
     expect(ops.filter((one) => one.readonly).map((one) => one.name).sort())
       .toEqual(['mail_list', 'mail_read', 'mail_search', 'mail_thread']);
     expect(ops.filter((one) => !one.readonly).map((one) => one.name).sort())
-      .toEqual(['mail_draft', 'mail_request_send', 'mail_to_task', 'mail_unsubscribe_request']);
+      .toEqual(['mail_draft', 'mail_mark_read', 'mail_request_send', 'mail_to_task', 'mail_unsubscribe_request']);
+    expect(ops.filter((one) => one.destructive).map((one) => one.name)).toEqual([]);
+  });
+
+  it('marks mail read in the mailbox and in the cache, and read=false puts it back', async () => {
+    const flagsOf = async (id: string) => JSON.parse(
+      (await rows<{ flags_json: string }>('SELECT flags_json FROM messages WHERE message_id = ?', [id]))[0]!.flags_json,
+    ) as string[];
+    marks().readCalls = [];
+    const answered = await op('mail_mark_read', { messages: ['INBOX:900:5', 'INBOX:900:6', 'INBOX:900:5', 'INBOX:900:12345'] });
+    const result = JSON.parse(answered.split('\n')[0]!) as { changed: number; failed?: Array<{ message: string; reason: string }> };
+    // The repeat is one call, and an id the cache never listed reaches no provider at all.
+    expect(result.changed).toBe(2);
+    expect(result.failed).toEqual([{ message: 'INBOX:900:12345', reason: 'unknown_message' }]);
+    expect(marks().readCalls).toEqual([
+      { messageId: 'INBOX:900:5', read: true }, { messageId: 'INBOX:900:6', read: true },
+    ]);
+    expect(await flagsOf('INBOX:900:5')).toContain('\\Seen');
+    expect(answered).toContain('Nothing was deleted, moved or archived');
+
+    const undone = await tool('mail_mark_read', { messages: ['INBOX:900:5'], read: false });
+    expect(JSON.parse(undone.split('\n')[0]!)).toMatchObject({ read: false, changed: 1 });
+    expect(await flagsOf('INBOX:900:5')).not.toContain('\\Seen');
+    expect(marks().readCalls.at(-1)).toEqual({ messageId: 'INBOX:900:5', read: false });
+  });
+
+  it('refuses an empty list and an oversized one in plain words, touching nothing', async () => {
+    marks().readCalls = [];
+    expect(await tool('mail_mark_read', { messages: [] })).toContain('needs message ids');
+    const many = Array.from({ length: 26 }, (_, i) => `INBOX:900:${i + 1}`);
+    expect(await tool('mail_mark_read', { messages: many })).toContain('at most 25 messages');
+    expect(marks().readCalls).toEqual([]);
   });
 
   it('drafts and asks through the ops, and still sends nothing', async () => {
@@ -914,6 +950,8 @@ describe('no agent path reaches the transport', () => {
       'mail_request_send', 'mail_request_send',
     ]);
     expect(names).not.toContain('mail_send');
+    // Nor a door out of the mailbox: marking read is the one change an agent makes to it.
+    expect(names.filter((name) => /delete|trash|archive|move|remove|expunge/i.test(name))).toEqual([]);
     // A `spend`/`consume`-shaped op is the other way this wall gets a door: an approval that
     // exists with nothing having executed it is a state slice 2 deliberately does not have.
     expect(names.filter((name) => /approv|spend|consume|transport|smtp/i.test(name))).toEqual([]);

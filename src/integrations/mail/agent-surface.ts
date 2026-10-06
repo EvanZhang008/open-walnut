@@ -1,8 +1,8 @@
 /**
- * The eight mail operations an agent can perform, as ONE implementation.
+ * The nine mail operations an agent can perform, as ONE implementation.
  *
  * `tools.ts` registers these for the Personal AI's tool list and `ops.ts` registers the same
- * eight for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
+ * nine for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
  * so a rule fixed for a tool is fixed for the op in the same edit.
  *
  * Three contracts this file keeps, and each one is the reason a line here looks the way it does:
@@ -16,6 +16,8 @@
  *   and two requests, and a request produces a letter for the human. Both the send and the
  *   unsubscribe ladder are executed by the approval path itself, so there is no entry point on this
  *   side of the wall for a body's text to reach.
+ * - The one change an agent makes to the mailbox itself is the read flag (`mail_mark_read`), which
+ *   is undone by the same call. Nothing here deletes, archives or moves a message.
  * - The one thing here that WRITES outside mail is `mail_to_task`, and everything it writes into
  *   the task is escaped first (see `message-tasks.ts`). A task is read later by an agent that can
  *   act, so a subject able to plant an instruction in a task description would be the same
@@ -519,6 +521,72 @@ export async function mailToTask(deps: MailAgentDeps, input: Record<string, unkn
     ? ' The body could not be added as a note (Walnut has no readable body for this message yet).'
     : ''
   return `${JSON.stringify({ taskId: result.taskId, created: result.created })}\n${sentence}${noteNote}`
+}
+
+/** How many messages one `mail_mark_read` may flag. A provider without a bulk call is asked once per id. */
+export const MAX_MARK_READ = 25
+
+/**
+ * Set the read flag on up to MAX_MARK_READ messages, in the mailbox itself.
+ *
+ * The one mailbox write an agent has, and it is a flag: `read: false` puts it back. Nothing on this
+ * surface deletes, archives or moves a message, and this handler is not a step towards one. Bulk
+ * when the provider has a bulk call (one IMAP STORE), else one call per id, so an account without
+ * one is slower and still correct. Each id answers for itself: one the cache does not know, or one
+ * the provider refused, is listed with its reason and the rest still change.
+ */
+export async function mailMarkRead(deps: MailAgentDeps, input: Record<string, unknown>): Promise<string> {
+  assertPrimary(deps)
+  const account = await resolveAccount(deps, str(input, 'account'))
+  const raw = Array.isArray(input.messages) ? input.messages : str(input, 'message') ? [str(input, 'message')] : []
+  const ids = [...new Set(raw.filter((one): one is string => typeof one === 'string').map((one) => one.trim()).filter(Boolean))]
+  if (ids.length === 0) {
+    refuse('mail_mark_read needs message ids in "messages", as listed by mail_list or mail_search.')
+  }
+  if (ids.length > MAX_MARK_READ) {
+    refuse(`mail_mark_read takes at most ${MAX_MARK_READ} messages per call; this one named ${ids.length}. Split them.`)
+  }
+  const read = input.read !== false
+  // The cache is asked first, with no provider call: a bulk STORE takes any well-formed uid, so an
+  // id nothing listed would otherwise flag whatever message happens to hold that uid.
+  const known: string[] = []
+  const unknown: Array<{ messageId: string; ok: false; reason: string }> = []
+  for (const messageId of ids) {
+    try {
+      known.push((await deps.service.readEnvelope(account.accountId, messageId)).messageId)
+    } catch (error) {
+      if (!(error instanceof MailServiceError) || error.code !== 'unknown_message') throw error
+      unknown.push({ messageId, ok: false, reason: 'unknown_message' })
+    }
+  }
+  let outcomes: Array<{ messageId: string; ok: boolean; reason?: string }> = []
+  try {
+    if (known.length) {
+      // A bulk failure's reason is the mail server's own line, and server text is never pasted raw.
+      outcomes = (await deps.service.markReadMany(account.accountId, known, read))
+        .map((one) => (one.ok ? one : { messageId: one.messageId, ok: false, reason: 'refused by the mail server' }))
+    }
+  } catch (error) {
+    if (!(error instanceof MailServiceError) || error.code !== 'unsupported-bulk') throw error
+    outcomes = []
+    for (const messageId of known) {
+      try {
+        await deps.service.markRead(account.accountId, messageId, read)
+        outcomes.push({ messageId, ok: true })
+      } catch (one) {
+        // The account cannot change flags at all: every id would say the same, so say it once.
+        if (one instanceof MailServiceError && one.code === 'unsupported') refuse(one.message)
+        outcomes.push({ messageId, ok: false, reason: one instanceof MailServiceError ? one.code : 'failed' })
+      }
+    }
+  }
+  const changed = outcomes.filter((one) => one.ok).map((one) => one.messageId)
+  const failed = [...unknown, ...outcomes.filter((one) => !one.ok)]
+    .map((one) => ({ message: clipChars(one.messageId, MESSAGE_ID_CHARS), reason: clipChars(one.reason ?? 'failed', 60) }))
+  const state = read ? 'read' : 'unread'
+  return `${JSON.stringify({ account: account.accountId, read, changed: changed.length, ...(failed.length ? { failed } : {}) })}\n`
+    + `${changed.length} message(s) are now ${state} in the mailbox itself. Nothing was deleted, moved or archived`
+    + `${read ? '; mail_mark_read with read=false puts them back.' : '.'}`
 }
 
 /**

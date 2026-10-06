@@ -1,5 +1,5 @@
 /**
- * The eight mail tools, as data.
+ * The nine mail tools, as data.
  *
  * A factory rather than a module-level array, following the calendar plugin: the dependencies
  * arrive per activation, and a zero-account install never builds this list at all (see the
@@ -14,8 +14,10 @@
 import {
   asText,
   MAX_LIST_LIMIT,
+  MAX_MARK_READ,
   mailDraft,
   mailList,
+  mailMarkRead,
   mailRead,
   mailRequestSend,
   mailSearch,
@@ -192,6 +194,28 @@ export function createMailTools(deps: MailAgentDeps): MailToolSpec[] {
         required: ['draftId', 'revision'],
       },
       execute: (input) => asText(() => mailRequestSend(deps, input)),
+    },
+    {
+      name: 'mail_mark_read',
+      description:
+        `Mark up to ${MAX_MARK_READ} messages read (or unread with read=false) in the mailbox itself. `
+        + 'Use it when the user asks, or when your instructions allow it for mail that needs nothing '
+        + 'from them. It deletes, moves and archives nothing, and no tool does: never tell the user '
+        + 'a mail was removed.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          account: ACCOUNT_FIELD,
+          messages: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Message ids, as listed by mail_list or mail_search.',
+          },
+          read: { type: 'boolean', description: 'true (the default) marks them read; false marks them unread.' },
+        },
+        required: ['messages'],
+      },
+      execute: (input) => asText(() => mailMarkRead(deps, input)),
     },
     {
       name: 'mail_unsubscribe_request',

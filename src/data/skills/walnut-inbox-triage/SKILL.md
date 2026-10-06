@@ -11,48 +11,39 @@ description: >-
 
 One batch, worked once, then stop.
 
-## Order
+1. Read `notes/Walnut/Triage/State.md` (its body rides the batch).
+2. Read what the batch omits: `mail_list`, `mail_thread`, `slack_*`, `task_search`.
+3. Match each item to a project and its tasks; update the tracking note
+   (`project_tracking_get`, `project_tracking_ensure` if none).
+4. Each item is one of:
+   - **A task owns it** (a build failure mail, the task fixing that build):
+     `task_send` it there, `expect_reply: false`, with sender, date, subject,
+     message id and what it asks. That task carries on (and asks the user if
+     it must); no letter for it.
+   - **Needs the user**: homework first. Read the thread, search related mail,
+     tasks and notes, `mail_draft` the likely reply. The letter says what you
+     found, what you propose, and which button does it.
+   - **Noise** (newsletter, ad, a notice asking nothing): mark it read if your
+     run rules allow.
+   - **FYI**: one line in the summary.
+5. Letters (`human_inbox_send`): **at most one** summary (`review`, `task_refs`
+   for every task touched), only for a decision or an item the user must know;
+   handovers, notes and mark-read alone send none. At most **three**
+   `action_required`, each with buttons (`Make a task` / `Reply for me` /
+   `Unsubscribe` / `Ignore`); a 4th is refused: fold it into the summary. A tap
+   returns to THIS run; act, then `human_inbox_reply`. `Reply for me` = a draft
+   plus `mail_request_send`. Withdraw an earlier run's decision once handled.
+6. Rewrite `State.md` (`## Awaiting`, `## Watching`, `## Recently handled`,
+   `## Notes for next run`), append to `notes/Walnut/Triage/Runs/<YYYY-MM>.md`,
+   `memory_write` what lasts.
 
-1. Read `notes/Walnut/Triage/State.md` (its body rides the batch when present).
-2. Read only what the batch omits: `mail_read`, `slack_*`, `task_search`,
-   `task_list`.
-3. Match each item to a project and tasks that already exist.
-4. Update the project's tracking note: `project_tracking_get`, then
-   `project_tracking_ensure` if it has none.
-5. Ask the tasks affected: `task_send` with `expect_reply`.
-6. Write the letters (below).
-7. Then rewrite `State.md`, append a line to
-   `notes/Walnut/Triage/Runs/<YYYY-MM>.md`, and `memory_write` what lasts (a
-   sender's meaning, a channel → project route, a preference).
-
-## Letters (`human_inbox_send`)
-
-- **At most one** summary, and only when the run has something for the user (a
-  decision, or an item they need to know about): `review`, with `task_refs` for
-  every task you touched. A run that only handed items over, updated notes or
-  marked mail read sends no letter.
-- **Three** decisions at most: `action_required`, each with buttons —
-  `Make a task` / `Reply for me` / `Unsubscribe` / `Ignore`. No buttons is
-  refused, and so is a 4th: fold the rest into the summary, and do not retry.
-- A tap comes back into THIS run, even hours later. Act, then `human_inbox_reply`.
-  `Reply for me` means a DRAFT plus `mail_request_send`, never a send.
-- Withdraw a decision an earlier run left behind once its item is handled.
-
-## The notes
-
-- `notes/Walnut/Triage/State.md` — rewrite every run: `## Awaiting` (rq-/lt- ids),
-  `## Watching`, `## Recently handled`, `## Notes for next run`.
-- `notes/Walnut/Triage/Runs/<YYYY-MM>.md` — append one line per run.
-- `notes/Projects/<P>/Tracking.md` — per item: `## Status`, `## Workstreams`,
-  `## Open questions`, `## Log`. A `## Workstreams` edit needs the `content_hash`
-  from a `note_read` in THIS run, or it is refused. A `## Log` append targets the
-  heading anchor.
+`notes/Projects/<P>/Tracking.md` edits to `## Workstreams` need the
+`content_hash` of a `note_read` in this run; `## Log` appends use the anchor.
 
 ## Never
 
-- Never send mail, post to Slack, mark anything read, or unsubscribe yourself:
-  ask with `mail_request_send`, `slack_request_post`, `mail_unsubscribe_request`.
-  Your run instructions say what `assist` adds; those three never change.
-- Never invent a project, and never create a task for something the user has not
-  shown they care about; if you are unsure, say so in the summary.
-- Never re-handle an item under `## Recently handled`.
+- Send mail, post to Slack or unsubscribe yourself: ask with
+  `mail_request_send`, `slack_request_post`, `mail_unsubscribe_request`.
+- Mark mail read beyond your run rules, or Slack read at all.
+- Delete, archive or move mail: no tool does it; do not ask.
+- Invent a project or a task; re-handle an item under `## Recently handled`.
