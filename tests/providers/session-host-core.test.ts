@@ -229,13 +229,34 @@ describe('classifySessionHostStart', () => {
       .toEqual({ verdict: 'retry_directly', reason: 'host_exited_without_daemon' });
   });
 
-  it('refuses to retry while the host is still running', () => {
+  it('refuses to retry while the host is still running: it waits once more, then gives up', () => {
     // The one case that could produce TWO daemons against one runtime dir. A
     // live host may have a daemon seconds away from writing its port file, so
-    // this must fail loudly instead of starting a competitor. The retry is only
-    // safe in the case above, and only because the host outlives its daemon.
+    // this must never start a competitor. The retry is only safe in the case
+    // above, and only because the host outlives its daemon. Waiting starts
+    // nothing: on 2026-10-05 the daemon came up 1.5s after the first budget.
     expect(classifySessionHostStart({ portFileSeen: false, hostUsed: true, hostAlive: true }))
+      .toEqual({ verdict: 'wait_longer', reason: 'host_still_running' });
+    expect(classifySessionHostStart({ portFileSeen: false, hostUsed: true, hostAlive: true, graceSpent: true }))
       .toEqual({ verdict: 'give_up', reason: 'host_still_running' });
+    // The longer wait settles like the first one.
+    expect(classifySessionHostStart({ portFileSeen: true, hostUsed: true, hostAlive: true, graceSpent: true }))
+      .toEqual({ verdict: 'started', reason: 'port_file_written' });
+    // The host died during the longer wait without a daemon: only now is the retry safe.
+    expect(classifySessionHostStart({ portFileSeen: false, hostUsed: true, hostAlive: false, graceSpent: true }))
+      .toEqual({ verdict: 'retry_directly', reason: 'host_exited_without_daemon' });
+  });
+
+  it('a longer wait is earned only by a live host, and only once', () => {
+    const combos = [true, false].flatMap((portFileSeen) =>
+      [true, false].flatMap((hostUsed) =>
+        [true, false].flatMap((hostAlive) =>
+          [false, true].map((graceSpent) => ({ portFileSeen, hostUsed, hostAlive, graceSpent })),
+        ),
+      ),
+    );
+    const waits = combos.filter((c) => classifySessionHostStart(c).verdict === 'wait_longer');
+    expect(waits).toEqual([{ portFileSeen: false, hostUsed: true, hostAlive: true, graceSpent: false }]);
   });
 
   it('keeps the plain spawn failure exactly as it was', () => {

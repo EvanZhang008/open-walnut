@@ -176,7 +176,7 @@ export function sessionHostUnavailableReason(
   return null;
 }
 
-export type SessionHostStartVerdict = 'started' | 'retry_directly' | 'give_up';
+export type SessionHostStartVerdict = 'started' | 'retry_directly' | 'wait_longer' | 'give_up';
 
 export interface SessionHostStart {
   verdict: SessionHostStartVerdict;
@@ -195,6 +195,8 @@ export interface SessionHostStartFacts {
   hostUsed: boolean;
   /** The host process is still alive. Meaningless when `hostUsed` is false. */
   hostAlive: boolean;
+  /** The one longer wait a live host earns (`wait_longer`) is already spent. */
+  graceSpent?: boolean;
 }
 
 /**
@@ -211,13 +213,16 @@ export interface SessionHostStartFacts {
  * outlives its daemon. A dead host with no port file therefore proves no daemon
  * is running, so the retry cannot end up with two daemons against one runtime
  * dir. A host that is STILL RUNNING proves nothing of the kind (its daemon may
- * be seconds from writing the port file), so that case must fail loudly rather
- * than start a competitor.
+ * be seconds from writing the port file), so that case never starts a
+ * competitor: it earns ONE longer wait (waiting starts nothing), then fails
+ * loudly. On a loaded machine at deploy the daemon wrote its port file about
+ * 1.5s past the first budget (2026-10-05), and the give-up told the user local
+ * sessions would fail while that daemon went on to serve them for hours.
  */
 export function classifySessionHostStart(facts: SessionHostStartFacts): SessionHostStart {
   if (facts.portFileSeen) return { verdict: 'started', reason: 'port_file_written' };
   if (!facts.hostUsed) return { verdict: 'give_up', reason: 'plain_spawn_failed' };
-  if (facts.hostAlive) return { verdict: 'give_up', reason: 'host_still_running' };
+  if (facts.hostAlive) return { verdict: facts.graceSpent ? 'give_up' : 'wait_longer', reason: 'host_still_running' };
   return { verdict: 'retry_directly', reason: 'host_exited_without_daemon' };
 }
 

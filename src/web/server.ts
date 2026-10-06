@@ -409,6 +409,19 @@ const sessionErrorTracker = createRecoveryTransitionTracker()
  */
 const gitRecoveryTracker = createRecoveryTransitionTracker()
 
+/**
+ * The local daemon could not be started ("failed to start local daemon"). Any
+ * later start that ends with a daemon serving retires it: on 2026-10-05 the
+ * boot gave up 1.5s before the daemon came up, and the card stayed for good.
+ */
+const LOCAL_DAEMON_RECOVERY_KEY = 'local-daemon'
+const localDaemonTracker = createRecoveryTransitionTracker()
+
+/** The local daemon is serving: the failing→healthy edge retires its start card. */
+function observeLocalDaemonReady(): void {
+  if (localDaemonTracker.observe(LOCAL_DAEMON_RECOVERY_KEY, false)) void publishRecovery([LOCAL_DAEMON_RECOVERY_KEY])
+}
+
 /** The condition id for a session's error family. */
 function sessionRecoveryKey(sessionId: string): string {
   return `session:${sessionId}`
@@ -597,6 +610,8 @@ let claudeSettingsWatcherStop: (() => void) | null = null
 /** Unhooks the host-connected → publishRecovery listener (daemon-connection's
  *  listener set is module-global, so an in-process restart must not stack them). */
 let unsubscribeHostRecovery: (() => void) | null = null
+/** Unhooks the local daemon's ready → recovery listener (the singleton outlives an in-process restart). */
+let unsubscribeLocalDaemonReady: (() => void) | null = null
 /** Daily error-notification reconcile (expiry + settled-receipt prune). */
 let notificationReconcileTimer: ReturnType<typeof setInterval> | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
@@ -1032,6 +1047,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       onConditionRaised: (key) => {
         if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
         else if (key === 'git' || key === REPO_SIZE_RECOVERY_KEY) gitRecoveryTracker.observe(key, true)
+        else if (key === LOCAL_DAEMON_RECOVERY_KEY) localDaemonTracker.observe(key, true)
       },
     })
 
@@ -1171,6 +1187,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.info('cloud mode: skipping local session daemon startup')
   } else try {
     const { localDaemon } = await import('../providers/local-daemon.js')
+    unsubscribeLocalDaemonReady?.()
+    unsubscribeLocalDaemonReady = localDaemon.onReady(observeLocalDaemonReady)
     await localDaemon.ensureRunning()
     log.web.info('local daemon ready', {
       port: localDaemon.port,
@@ -1179,6 +1197,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   } catch (err) {
     log.web.error('failed to start local daemon — local sessions will fail', {
       error: err instanceof Error ? err.message : String(err),
+      recoveryKey: LOCAL_DAEMON_RECOVERY_KEY,
     })
     // Don't throw — remote sessions may still work, and user can fix daemon issues
   }
@@ -3121,6 +3140,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           for (const key of seeded) {
             if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
             else if (key === 'git' || key === REPO_SIZE_RECOVERY_KEY) gitRecoveryTracker.observe(key, true)
+            else if (key === LOCAL_DAEMON_RECOVERY_KEY) localDaemonTracker.observe(key, true)
+          }
+          // A card from an earlier boot whose daemon this boot already started
+          // has no later start to wait for.
+          if (seeded.includes(LOCAL_DAEMON_RECOVERY_KEY)) {
+            const { localDaemon } = await import('../providers/local-daemon.js')
+            if (localDaemon.port !== null) observeLocalDaemonReady()
           }
           log.web.info('startup: re-armed recovery for unresolved error cards', { count: seeded.length })
         }
@@ -5557,6 +5583,9 @@ export async function stopServer(): Promise<void> {
     unsubscribeHostRecovery()
     unsubscribeHostRecovery = null
   }
+  unsubscribeLocalDaemonReady?.()
+  unsubscribeLocalDaemonReady = null
+  localDaemonTracker.reset()
   try { (await import('../core/turn-snapshots/settings-push.js')).stopTurnSnapshotSettingsSync() } catch { /* never started */ }
   if (notificationReconcileTimer) {
     clearInterval(notificationReconcileTimer)

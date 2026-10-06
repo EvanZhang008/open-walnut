@@ -54,6 +54,8 @@ const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 
 /** Patience for a daemon whose pid is alive but whose first hello timed out. */
 const BUSY_DAEMON_HELLO_MS = 15_000
+/** The longer wait for a port file while the Walnut Sessions host is still running (classifySessionHostStart). */
+const SESSION_HOST_LATE_START_MS = 20_000
 
 export function getLocalDaemonBinaryName(
   platform: string = process.platform,
@@ -285,10 +287,26 @@ export class LocalDaemon {
     // in 35s during one cold start). Concurrent callers share one attempt;
     // the promise clears on settle so a later call can retry after failure.
     if (this._ensureInFlight) return this._ensureInFlight
-    this._ensureInFlight = this.ensureRunningInner().finally(() => {
+    this._ensureInFlight = this.ensureRunningInner().then((port) => {
+      for (const cb of this.readyListeners) {
+        try { cb() } catch { /* a listener never fails the start */ }
+      }
+      return port
+    }).finally(() => {
       this._ensureInFlight = null
     })
     return this._ensureInFlight
+  }
+
+  private readonly readyListeners = new Set<() => void>()
+
+  /**
+   * Called after every ensureRunning() that ends with a daemon serving (adopted,
+   * upgraded or spawned): the server's recovery signal for a failed start's card.
+   */
+  onReady(cb: () => void): () => void {
+    this.readyListeners.add(cb)
+    return () => { this.readyListeners.delete(cb) }
   }
 
   /** The re-run of an upgrade deferred while ACP turns were open. */
@@ -922,13 +940,25 @@ export class LocalDaemon {
     // this path is unreachable from a test on purpose, since the host never
     // engages for an isolated daemon dir.
     const hostPid = this._sessionHostPid
-    const startVerdict = classifySessionHostStart({
-      portFileSeen: port !== null,
-      hostUsed: host.available,
-      hostAlive: hostPid !== null && this.isPidAlive(hostPid),
-    })
+    const hostAlive = (): boolean => hostPid !== null && this.isPidAlive(hostPid)
+    let startVerdict = classifySessionHostStart({ portFileSeen: port !== null, hostUsed: host.available, hostAlive: hostAlive() })
+    if (startVerdict.verdict === 'wait_longer') {
+      log.session.warn('the daemon is slow to start under the Walnut Sessions host; waiting longer', {
+        host: this._sessionHostApp, hostPid, waitMs: SESSION_HOST_LATE_START_MS,
+      })
+      port = await this.waitForPortFile(SESSION_HOST_LATE_START_MS)
+      if (spawnError) {
+        throw new Error(`Local daemon spawn failed: ${(spawnError as Error).message}`)
+      }
+      startVerdict = classifySessionHostStart({
+        portFileSeen: port !== null, hostUsed: host.available, hostAlive: hostAlive(), graceSpent: true,
+      })
+    }
+    // A warning, not an error: when this ends in a throw the caller reports it
+    // (the boot's "failed to start local daemon" card), and a direct retry is
+    // judged by its own outcome. One failure, one card.
     if (startVerdict.verdict !== 'started' && host.available) {
-      log.session.error('the daemon did not start under the Walnut Sessions host', {
+      log.session.warn('the daemon did not start under the Walnut Sessions host', {
         host: host.app,
         hostPid,
         reason: startVerdict.reason,
@@ -961,7 +991,7 @@ export class LocalDaemon {
         // so the operator knows which process to look at, and point at the log
         // that holds the daemon's own last words.
         throw new Error(
-          'Local daemon failed to start — port file not created within 10s, and the Walnut Sessions '
+          `Local daemon failed to start — port file not created within ${(10_000 + SESSION_HOST_LATE_START_MS) / 1000}s, and the Walnut Sessions `
           + `host (pid ${hostPid}) is still running, so a second spawn could race a daemon that is `
           + `about to come up. Check ${path.join(this.daemonDir, 'daemon-stderr.log')}, or set `
           + 'WALNUT_SESSION_HOST=0 to start the daemon without the identity host.',

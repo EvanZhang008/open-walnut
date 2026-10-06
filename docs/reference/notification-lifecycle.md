@@ -18,7 +18,7 @@ record (`resolved`), the identity of the condition is `recoveryKey`.
 
 | Contract | Meaning | Recovery / terminal signal | recoveryKey shape |
 |---|---|---|---|
-| edge | a retried operation; success = recovered | failure→success transition (recovery-transition tracker) | `route:<METHOD> <path>`, `plugin:<id>`, `git`, `git:compaction`, `backup`, `disk`, `bus:<subscriber>:<event>`, `task-db-writers` |
+| edge | a retried operation; success = recovered | failure→success transition (recovery-transition tracker) | `route:<METHOD> <path>`, `plugin:<id>`, `git`, `git:compaction`, `backup`, `disk`, `bus:<subscriber>:<event>`, `task-db-writers`, `local-daemon` (any start that ends with the daemon serving) |
 | liveness | bound to an entity with a lifespan | entity's next clean result = recovered; entity death = expired | `session:<sid>`, `task:<taskId>` |
 | boot | a process-lifetime fact | server startup IS the recovery | `server-lifecycle` |
 | one-shot | a completed past event; nothing can recover | 48h keyless debris sweep → Stale | none + `// lifecycle: one-shot` comment |
