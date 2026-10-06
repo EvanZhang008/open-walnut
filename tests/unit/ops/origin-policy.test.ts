@@ -14,11 +14,11 @@ import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
-  HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN, ORIGIN_HEADER,
+  HEALTH_LOCAL_ONLY_MESSAGE, PLACES_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN, ORIGIN_HEADER,
   hostOrigin, lowerOrigin, withCallerOrigin, ambientCallerOrigin,
 } from '../../../src/lib/caller-origin.js'
 import { requestOrigin, isOnBehalfOfRemote } from '../../../src/web/middleware/request-origin.js'
-import { canonicalForms, isHealthServerPath, localOnlyRoutes, selfCallRefusal } from '../../../src/ops/origin-policy.js'
+import { canonicalForms, isHealthServerPath, isPlacesServerPath, localOnlyRoutes, selfCallRefusal } from '../../../src/ops/origin-policy.js'
 import { executeOp, getOp, listOpEntries, definePluginOp, removePluginOps } from '../../../src/ops/index.js'
 import { controlRelayOrigin } from '../../../src/core/sessions/control-host-policy.js'
 import { labelPluginFetch } from '../../../src/core/plugins/plugin-fetch-origin.js'
@@ -161,6 +161,29 @@ describe('the api passthrough for a caller off this Mac', () => {
       }
       expect(isHealthServerPath(path), path).toBe(true)
     }
+  })
+
+  it('refuses every places path, however it is spelled, and only for a caller off this Mac', () => {
+    const tricks = [
+      ['GET', '/api/places/status'],
+      ['GET', '/api/places/visits?last_days=7'],
+      ['POST', '/api/v1/places/sync'],
+      ['DELETE', '/api/v1/places/data'],
+      ['GET', '/API/Places/Visits'],
+      ['GET', '/api/places'],
+      ['GET', '/api/v1/../places/status'],
+      ['GET', '/api/%70laces/visits'],
+      ['DELETE', '/api/v1%5C..%5Cv1%5Cplaces%5Cdata'],
+    ] as const
+    for (const [method, path] of tricks) {
+      for (const origin of [HOST, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN]) {
+        expect(selfCallRefusal('api', method, path, origin), `${method} ${path} for ${origin}`).toBe(PLACES_LOCAL_ONLY_MESSAGE)
+      }
+      expect(isPlacesServerPath(path), path).toBe(true)
+      expect(selfCallRefusal('api', method, path, LOCAL_ORIGIN)).toBeNull()
+    }
+    expect(isPlacesServerPath('/api/v1/notes/places.md')).toBe(false)
+    expect(selfCallRefusal('api', 'GET', '/api/v1/notes/places-to-see.md', HOST)).toBeNull()
   })
 
   it('refuses every route a local-only op binds or declares, legacy prefix and case included', () => {

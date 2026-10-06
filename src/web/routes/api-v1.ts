@@ -3678,6 +3678,13 @@ import { healthV1Router } from './health-v1.js'
 
 apiV1Router.use(healthV1Router)
 
+// ─── Places (the visits the phone records once the user turns Places on) ───
+// Same device auth as the rest of /api/v1; a replica relays every call.
+
+import { placesV1Router } from './places-v1.js'
+
+apiV1Router.use(placesV1Router)
+
 // ─── Instance identity + routes (tailnet / LAN / cloud direct access) ──────
 // /instance is public (auth.ts PUBLIC_GET_PATHS); /routes needs the device token.
 

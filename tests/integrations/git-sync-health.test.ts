@@ -69,3 +69,26 @@ describe('git-sync keeps the Apple Health store on this Mac', () => {
     expect(execSync('git diff --cached --name-only', { cwd: dir, encoding: 'utf-8' })).toContain('notes/life/health/new.md')
   })
 })
+
+describe('git-sync keeps the Places store on this Mac', () => {
+  it('ignores /places/ (root-anchored), untracks a tracked store, and leaves a notes folder called places alone', async () => {
+    initSync()
+    expect(await lines()).toContain('/places/')
+    await fsp.writeFile(path.join(dir, '.gitignore'), 'images/\n', 'utf-8')
+    const store = path.join(dir, 'places', 'places.sqlite')
+    const note = path.join(dir, 'notes', 'trips', 'places', 'lisbon.md')
+    await fsp.mkdir(path.dirname(store), { recursive: true })
+    await fsp.mkdir(path.dirname(note), { recursive: true })
+    await fsp.writeFile(store, 'sqlite-bytes')
+    await fsp.writeFile(note, '# places to see\n')
+    execSync('git add -A && git commit -q -m "legacy: places tracked"', { cwd: dir })
+
+    ensureCriticalIgnores()
+    expect(await lines()).toContain('/places/')
+    expect(await lines()).not.toContain('places/')
+    expect(ensureMachineLocalUntracked()).toEqual(['places/places.sqlite'])
+    expect(tracked()).not.toContain('places/places.sqlite')
+    expect(tracked()).toContain('notes/trips/places/lisbon.md')
+    await expect(fsp.readFile(store, 'utf-8')).resolves.toBe('sqlite-bytes')
+  })
+})

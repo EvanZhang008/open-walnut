@@ -47,3 +47,17 @@ describe('backup excludes the Apple Health store', () => {
     expect(scanned.some((p) => p.startsWith('health/'))).toBe(false)
   })
 })
+
+describe('backup excludes the Places store', () => {
+  it('places/ is excluded from the raw scan and the sqlite snapshot pass', async () => {
+    expect(EXCLUDED_DIRS.has('places')).toBe(true)
+    await write('places/places.sqlite')
+    await write('places/places.sqlite-wal')
+    await write('sessions.sqlite')
+    await write('notes/trips/places/lisbon.md')
+    expect(await findCanonicalSqlite(root)).toEqual(['sessions.sqlite'])
+    const scanned = (await scanDataDir(root)).map((e) => e.path)
+    expect(scanned).toContain('notes/trips/places/lisbon.md')
+    expect(scanned.some((p) => p.startsWith('places/'))).toBe(false)
+  })
+})

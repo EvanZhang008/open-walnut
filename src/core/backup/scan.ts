@@ -25,6 +25,8 @@ export const EXCLUDED_DIRS = new Set([
   // Apple Health store: personal health data never leaves the Mac (git-sync
   // ignores it too). Also keeps health.sqlite out of the sqlite snapshots.
   'health',
+  // The iPhone's place visits (src/core/places/): same rule as health.
+  'places',
 ]);
 
 const EXCLUDED_FILE_RE = [

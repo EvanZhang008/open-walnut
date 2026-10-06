@@ -50,6 +50,17 @@ describe('ephemeral snapshot copy', () => {
     expect(fs.readFileSync(path.join(dest, 'tasks.json'), 'utf-8')).toBe('{"tasks":[]}')
   })
 
+  it('never copies the Places store either', () => {
+    write(path.join('places', 'places.sqlite'))
+    write(path.join('places', 'export.json'), '{"note":"invented"}')
+    write(path.join('notes', 'places', 'list.md'), '# list')
+
+    copyDataSnapshot(home, dest)
+
+    expect(fs.existsSync(path.join(dest, 'places'))).toBe(false)
+    expect(fs.readFileSync(path.join(dest, 'notes', 'places', 'list.md'), 'utf-8')).toBe('# list')
+  })
+
   it('still copies ordinary data, including a nested folder named health', () => {
     write(path.join('notes', 'health', 'plan.md'), '# plan')
     write('health-notes.md', 'notes')

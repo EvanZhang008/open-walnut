@@ -4,6 +4,8 @@
  *
  *  1. No Apple Health route, for any op: /api/health/* and /api/v1/health/*.
  *     The routes refuse such a self-call too; this answers first, with the rule.
+ *     The same for Places (the visits the iPhone records): /api/places/* and
+ *     /api/v1/places/*.
  *  2. Through the `api` passthrough, no route a `remote: 'deny'` op binds or
  *     declares (`bind`, `routes`), nor the plugin-runtime route that runs that op.
  *     Otherwise the passthrough is a way around every local-only op: a remote
@@ -26,7 +28,7 @@
  */
 
 import { listOpEntries, type HttpBinding } from './registry.js'
-import { HEALTH_LOCAL_ONLY_MESSAGE, isLocalOrigin } from '../lib/caller-origin.js'
+import { HEALTH_LOCAL_ONLY_MESSAGE, PLACES_LOCAL_ONLY_MESSAGE, isLocalOrigin } from '../lib/caller-origin.js'
 
 const BASE = 'http://walnut.invalid'
 const MAX_ROUNDS = 5
@@ -102,16 +104,25 @@ function tailOf(canonical: string): string {
   return (m ? canonical.slice(m[0].length) : canonical) || '/'
 }
 
-function isHealthForm(form: string): boolean {
+function isAreaForm(form: string, area: string): boolean {
   if (!/^\/api(?:\/|$)/.test(form)) return false
   const tail = tailOf(form)
-  return tail === '/health' || tail.startsWith('/health/')
+  return tail === `/${area}` || tail.startsWith(`/${area}/`)
 }
+
+const isHealthForm = (form: string): boolean => isAreaForm(form, 'health')
+const isPlacesForm = (form: string): boolean => isAreaForm(form, 'places')
 
 /** /api/health/* or /api/v1/health/* in any form; a path that cannot be settled counts. */
 export function isHealthServerPath(path: string): boolean {
   const forms = canonicalForms(path)
   return forms === null || forms.some(isHealthForm)
+}
+
+/** /api/places/* or /api/v1/places/* in any form; a path that cannot be settled counts. */
+export function isPlacesServerPath(path: string): boolean {
+  const forms = canonicalForms(path)
+  return forms === null || forms.some(isPlacesForm)
 }
 
 interface LocalOnlyRoute { op: string; method: HttpBinding['method']; tail: RegExp }
@@ -146,6 +157,7 @@ export function selfCallRefusal(opName: string, method: string, path: string, or
   const forms = canonicalForms(path)
   if (forms === null) return `${method} ${path.slice(0, 200)} was refused: the path could not be read`
   if (forms.some(isHealthForm)) return HEALTH_LOCAL_ONLY_MESSAGE
+  if (forms.some(isPlacesForm)) return PLACES_LOCAL_ONLY_MESSAGE
   if (opName !== 'api') return null
   const verb = method.toUpperCase()
   const routes = localOnlyRoutes()

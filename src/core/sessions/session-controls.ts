@@ -861,7 +861,10 @@ export type SessionControlAction =
   // status/settings, and the privacy delete. The primary is the only box with a
   // health store; a replica relays every call and keeps nothing. The result is a
   // `{ status, body }` envelope so a 409 store_mismatch keeps its storeId.
-  | 'server.health.sync' | 'server.health.status' | 'server.health.settings' | 'server.health.delete';
+  | 'server.health.sync' | 'server.health.status' | 'server.health.settings' | 'server.health.delete'
+  // Places (additive 2026-10): the visits the phone records once the user turns
+  // Places on, its state, and the delete. Same primary-only store rule as health.
+  | 'server.places.sync' | 'server.places.status' | 'server.places.delete';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -1424,6 +1427,15 @@ export async function handleSessionControlRelay(
         const sub = action.slice('server.health.'.length);
         if (!isHealthAction(sub)) throw new SessionControlError(`Unknown health action: ${sub}`, 400);
         result = await runHealthAction(sub, p) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.places.sync':
+      case 'server.places.status':
+      case 'server.places.delete': {
+        const { runPlacesAction, isPlacesAction } = await import('../places/relay.js');
+        const sub = action.slice('server.places.'.length);
+        if (!isPlacesAction(sub)) throw new SessionControlError(`Unknown places action: ${sub}`, 400);
+        result = await runPlacesAction(sub, p) as unknown as Record<string, unknown>;
         break;
       }
       // ── Human inbox family: one handler, same functions the routes call ──

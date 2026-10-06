@@ -15,6 +15,7 @@ import './boards.js'
 import './human-inbox.js'
 import './triggers.js'
 import './health.js'
+import './places.js'
 import './time.js'
 import './mcp.js'
 

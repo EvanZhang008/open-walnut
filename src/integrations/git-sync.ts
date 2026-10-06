@@ -731,6 +731,10 @@ cache/
 # ROOT-ANCHORED: a note folder called health/ inside notes/ is user content.
 /health/
 
+# Places store (src/core/places/): the visits the iPhone records stay on this Mac.
+# ROOT-ANCHORED for the same reason.
+/places/
+
 # Hybrid-search embedding model download cache (src/core/search/wiring.ts). One
 # ~600MB ONNX file plus the partial .tmp files a download writes; every version
 # is a full binary copy in history. Re-downloaded on demand — never sync it.
@@ -822,6 +826,8 @@ sessions.json.*
  *  - health/: the Apple Health store (health.sqlite). Personal health data never
  *    leaves the Mac: not through git, not through the S3 backup. ROOT-ANCHORED
  *    like models/, because a health folder inside notes/ is the user's own notes.
+ *  - places/: the visits the iPhone records once the user turns Places on
+ *    (places.sqlite). Same rule as health/, and root-anchored for the same reason.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
@@ -829,7 +835,7 @@ sessions.json.*
  */
 const CRITICAL_IGNORE_FILES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'plugin-data/', 'secrets/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'plugin-data/', 'secrets/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -837,7 +843,7 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'plugin-data/', 'secrets/'];
  * matcher stays on the bare prefix because `ls-files` prints repo-relative paths
  * (and git would take a leading `/` in that pathspec literally).
  */
-const CRITICAL_IGNORE_LINES: Record<string, string> = { 'health/': '/health/', 'models/': '/models/' };
+const CRITICAL_IGNORE_LINES: Record<string, string> = { 'health/': '/health/', 'models/': '/models/', 'places/': '/places/' };
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,
   ...CRITICAL_IGNORE_DIRS.map((dir) => CRITICAL_IGNORE_LINES[dir] ?? dir),

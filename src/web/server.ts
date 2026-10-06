@@ -1605,6 +1605,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/usage', usageRouter)
   app.use('/api/time', timeRouter)
   app.use('/api/health', (await import('./routes/health.js')).healthRouter)
+  app.use('/api/places', (await import('./routes/places.js')).placesRouter)
   app.use('/api/images', imagesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
@@ -5786,6 +5787,7 @@ export async function stopServer(): Promise<void> {
   stopTimeTracking()
   // Awaited so the next start (tests) never finds a store handle or timer still alive.
   try { (await import('../core/health/index.js')).stopHealth() } catch { /* nothing to stop */ }
+  try { (await import('../core/places/index.js')).stopPlaces() } catch { /* nothing to stop */ }
   stopQuiet()
   import('../core/overview-maintainer.js')
     .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())

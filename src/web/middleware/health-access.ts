@@ -26,6 +26,9 @@
  * On a cloud replica the internal reads answer 501 (nothing is stored there), so
  * requireThisMachine steps aside there; the phone contract still takes a device
  * token only (cloud auth has no local waiver).
+ *
+ * Places (the visits the iPhone records, src/core/places/) takes the same two
+ * guards with its own messages.
  */
 
 import type { Request, Response, NextFunction } from 'express'
@@ -40,34 +43,41 @@ export const HEALTH_DEVICE_ONLY_MESSAGE =
 import { classifyLocalRequest } from './local-trust.js'
 import { isOnBehalfOfRemote, requestOrigin } from './request-origin.js'
 
-function refuse(req: Request, res: Response, reason: string, origin: string): void {
-  log.web.warn('health request refused: not this Mac', { path: req.path, reason, origin })
-  res.status(403).json({ error: 'forbidden', message: HEALTH_LOCAL_ONLY_MESSAGE })
-}
-
-/** Guard for /api/health/*: a caller on this Mac only, whatever credential it holds. */
-export function requireThisMachine(req: Request, res: Response, next: NextFunction): void {
-  if (CLOUD_MODE) { next(); return }
-  const origin = requestOrigin(req)
-  if (origin === LOCAL_ORIGIN) { next(); return }
-  const trust = classifyLocalRequest(req)
-  refuse(req, res, trust.trusted ? 'on-behalf-of' : trust.reason, origin)
-}
-
-/** A v1 refusal, in the v1 error shape (docs/reference/api-v1.md "Error shape"). */
-function refuseV1(req: Request, res: Response, reason: string, message: string): void {
-  log.web.warn('v1 health request refused', { path: req.path, reason, origin: requestOrigin(req) })
-  res.status(403).json({ error: { code: 'forbidden', message } })
+/**
+ * A guard for internal reads: a caller on this Mac only, whatever credential it
+ * holds. `area` names the store in the log; `message` is the refusal.
+ */
+export function thisMachineGuard(area: string, message: string) {
+  return function requireThisMachine(req: Request, res: Response, next: NextFunction): void {
+    if (CLOUD_MODE) { next(); return }
+    const origin = requestOrigin(req)
+    if (origin === LOCAL_ORIGIN) { next(); return }
+    const trust = classifyLocalRequest(req)
+    log.web.warn(`${area} request refused: not this Mac`, { path: req.path, reason: trust.trusted ? 'on-behalf-of' : trust.reason, origin })
+    res.status(403).json({ error: 'forbidden', message })
+  }
 }
 
 /**
- * Guard for /api/v1/health/*: this Mac, or a paired device token (auth.ts sets
+ * A guard for a phone contract: this Mac, or a paired device token (auth.ts sets
  * `deviceName` only for one), and never a loopback self-call made for a caller
- * off this Mac.
+ * off this Mac. Refusals use the v1 error shape (docs/reference/api-v1.md).
  */
-export function requirePhoneOrThisMachine(req: Request, res: Response, next: NextFunction): void {
-  if (isOnBehalfOfRemote(req)) { refuseV1(req, res, 'on-behalf-of', HEALTH_LOCAL_ONLY_MESSAGE); return }
-  if (!CLOUD_MODE && classifyLocalRequest(req).trusted) { next(); return }
-  if ((req as Request & { deviceName?: string }).deviceName) { next(); return }
-  refuseV1(req, res, 'not-a-device-token', HEALTH_DEVICE_ONLY_MESSAGE)
+export function phoneOrThisMachineGuard(area: string, localOnlyMessage: string, deviceOnlyMessage: string) {
+  const refuseV1 = (req: Request, res: Response, reason: string, message: string): void => {
+    log.web.warn(`v1 ${area} request refused`, { path: req.path, reason, origin: requestOrigin(req) })
+    res.status(403).json({ error: { code: 'forbidden', message } })
+  }
+  return function requirePhoneOrThisMachine(req: Request, res: Response, next: NextFunction): void {
+    if (isOnBehalfOfRemote(req)) { refuseV1(req, res, 'on-behalf-of', localOnlyMessage); return }
+    if (!CLOUD_MODE && classifyLocalRequest(req).trusted) { next(); return }
+    if ((req as Request & { deviceName?: string }).deviceName) { next(); return }
+    refuseV1(req, res, 'not-a-device-token', deviceOnlyMessage)
+  }
 }
+
+/** Guard for /api/health/*. */
+export const requireThisMachine = thisMachineGuard('health', HEALTH_LOCAL_ONLY_MESSAGE)
+
+/** Guard for /api/v1/health/*. */
+export const requirePhoneOrThisMachine = phoneOrThisMachineGuard('health', HEALTH_LOCAL_ONLY_MESSAGE, HEALTH_DEVICE_ONLY_MESSAGE)

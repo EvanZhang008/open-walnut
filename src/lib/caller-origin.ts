@@ -35,6 +35,8 @@ const HOST_PREFIX = 'host:'
 
 /** The one sentence every health refusal uses. It names the rule, not a way around it. */
 export const HEALTH_LOCAL_ONLY_MESSAGE = 'Health data is only available to sessions on this Mac'
+/** The same rule for the places the iPhone records (src/core/places/). */
+export const PLACES_LOCAL_ONLY_MESSAGE = 'Places data is only available to sessions on this Mac'
 
 /** The origin for work a daemon relays: its host, or local for the Mac's own daemon. */
 export function hostOrigin(hostKey: string | undefined): string {
