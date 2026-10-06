@@ -109,6 +109,8 @@ defineOp({
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("6h", "2d"). Default 3 days; "" = no clock (only the fire or a message brings it back)'),
   },
+  // The old park receipt's text (removed 2026-10-05), still sent by older sessions.
+  retiredInput: ['wait_report'],
   bind: { method: 'POST', path: '/routines/trigger' },
   mapResult: ({ body }) => {
     const b = (body ?? {}) as {

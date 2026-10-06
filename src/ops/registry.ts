@@ -58,6 +58,14 @@ export interface WalnutOp {
    * wants the raw shape, and the CLI builds its JSON validation from the same.
    */
   input: Record<string, z.ZodTypeAny>
+  /**
+   * Fields this op once took that an older caller may still send: a session
+   * whose prompt predates the change, or a write a host queued while the server
+   * was away and replays later. Dropped before validation (any other unknown
+   * key is still refused) and never shown in the catalog. `list[].field` names
+   * a field of every object in the list `list`.
+   */
+  retiredInput?: readonly string[]
   /** Default executor: one HTTP call against /api/v1. */
   bind?: HttpBinding
   /**

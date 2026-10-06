@@ -178,6 +178,67 @@ describe('runOfflineHandover', () => {
     expect(bySid.get(B)).toMatch(/^<walnut-message kind="notification" from="Walnut"/)
   })
 
+  it('a queued park carrying the retired wait_report lands; a refusal is the caller\'s, a Walnut failure carries its session', async () => {
+    // 2026-10-05 21:40Z: a session started before wait_report was retired parked
+    // its task while the server was away; the replay refused the whole write for
+    // that one field, the park was lost, and the log line became a card with no
+    // way to retire (no session, no task named).
+    const { log } = await import('../../src/logging/index.js')
+    const { recoveryKeyOf } = await import('../../src/core/notifications/log-error-bridge.js')
+    const errors = vi.spyOn(log.session, 'error')
+    const warns = vi.spyOn(log.session, 'warn')
+    try {
+      const parked = await newTask('Parked while the server was away')
+      const parkedBefore = await task(parked)
+      const refused = await newTask('Refused at replay, again')
+      const refusedBefore = await task(refused)
+      delivered.length = 0
+      const now = Date.now()
+      const records: OfflineRecord[] = [
+        { seq: 1, at: now, kind: 'op', op: 'task_update', callerSid: B, base: String(parkedBefore.updated_at),
+          args: { id: parked, phase: 'WAITING', wait_until: '2d', wait_report: 'PR 123 is pushed; waiting on review.' } },
+        { seq: 2, at: now, kind: 'op', op: 'task_update', callerSid: B, base: String(refusedBefore.updated_at),
+          args: { id: refused, parent_task_id: refused } },
+        // A record Walnut itself cannot apply (malformed on the wire).
+        { seq: 3, at: now, kind: 'op', op: 'task_update', callerSid: A, args: undefined as never },
+      ]
+      let drained = false
+      const result = await runOfflineHandover({
+        hostKey: 'devbox',
+        send: async (cmd) => {
+          if (cmd !== 'offline.drain') return { ok: true, remaining: 0 }
+          if (drained) return { ok: true, records: [] }
+          drained = true
+          return { ok: true, records }
+        },
+      })
+
+      expect(result).toMatchObject({ records: 3, replayed: 1, failed: 2 })
+      const after = await task(parked)
+      expect(after.phase).toBe('WAITING')
+      expect(Date.parse(String(after.wait_until)) - now).toBeGreaterThan(47 * 3_600_000)
+      // The park is not among the changes its session is told did not land.
+      expect(delivered.map((d) => d.text).join('\n')).not.toContain(parked)
+
+      const handoverErrors = errors.mock.calls.filter(([msg]) => String(msg).startsWith('offline handover'))
+      const handoverWarns = warns.mock.calls.filter(([msg]) => String(msg).startsWith('offline handover'))
+      // The server's refusal is the answer the same call gets online: a warn
+      // naming the write, never an error card.
+      expect(handoverWarns).toContainEqual(['offline handover: queued write refused', expect.objectContaining({
+        host: 'devbox', op: 'task_update', taskId: refused, callerSid: B, error: expect.stringContaining('self_parent'),
+      })])
+      expect(handoverErrors.map(([, meta]) => (meta as { seq: number }).seq)).toEqual([3])
+      // Walnut's own failure names its session, so the card has a lifecycle
+      // (that session's next clean turn retires it, its death expires it).
+      const [msg, meta] = handoverErrors[0]
+      expect(meta).toMatchObject({ host: 'devbox', kind: 'op', sessionId: A })
+      expect(recoveryKeyOf({ subsystem: 'session', message: String(msg), meta: meta as Record<string, unknown> })).toBe(`session:${A}`)
+    } finally {
+      errors.mockRestore()
+      warns.mockRestore()
+    }
+  })
+
   it('a row this server already settled is never reopened by an import', async () => {
     const row = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: child, text: 'q' })
     const { settleNotified } = await import('../../src/core/session-requests.js')

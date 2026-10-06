@@ -33,4 +33,4 @@ export {
   type HttpBinding,
 } from './registry.js'
 export { jsonSchemaToZodShape, jsonSchemaToZodType } from './schema-to-zod.js'
-export { executeOp, resolveApiBase, materializeBinding, CALLER_SID_HEADER, type OpOutcome } from './executor.js'
+export { executeOp, parseOpArgs, resolveApiBase, materializeBinding, CALLER_SID_HEADER, type OpOutcome } from './executor.js'

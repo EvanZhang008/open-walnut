@@ -649,6 +649,10 @@ defineOp({
     tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
   },
+  // The old park receipt's text (removed 2026-10-05). A session started before
+  // then still sends it, and a host replays the writes it queued offline: a park
+  // refused for it was lost (2026-10-05, the handover's "record failed" card).
+  retiredInput: ['wait_report'],
   handler: async (args, call) => {
     const { id, ...fields } = args
     const body: Record<string, unknown> = {}
@@ -794,6 +798,7 @@ defineOp({
     }).strict()).min(1).max(MAX_BULK_WRITE)
       .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),
   },
+  retiredInput: ['updates[].wait_report'],
   routes: [{ method: 'PATCH', path: '/tasks/:id' }],
   handler: async (args, call) => {
     const updates = args.updates as Array<Record<string, unknown>>

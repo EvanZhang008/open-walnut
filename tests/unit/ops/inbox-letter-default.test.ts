@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { getOp } from '../../../src/ops/index.js'
+import { getOp, parseOpArgs } from '../../../src/ops/index.js'
 import { triageLetterBudgetText } from '../../../src/core/triage/letter-rules.js'
 
 describe('human_inbox_send says when NOT to send', () => {
@@ -25,6 +25,9 @@ describe('a park writes no letter', () => {
     expect('wait_report' in update.input).toBe(false)
     expect(update.description).toContain('A park sends no letter')
     expect(z.object(update.input).strict().safeParse({ id: 't1', phase: 'WAITING', wait_report: 'x' }).success).toBe(false)
+    // Not offered, but a stray one from an older caller is dropped, never a refused park
+    // (tests/unit/ops/retired-input.test.ts).
+    expect(parseOpArgs(update, { id: 't1', phase: 'WAITING', wait_report: 'x' })).toEqual({ ok: true, args: { id: 't1', phase: 'WAITING' } })
     const bulk = z.object(getOp('task_update_bulk')!.input).strict()
     expect(bulk.safeParse({ updates: [{ id: 't1', phase: 'WAITING', wait_report: 'x' }] }).success).toBe(false)
     expect(bulk.safeParse({ updates: [{ id: 't1', phase: 'WAITING', wait_until: '2d' }] }).success).toBe(true)

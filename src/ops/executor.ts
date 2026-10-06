@@ -224,6 +224,53 @@ function originRefusal(op: WalnutOp, origin: string): string | null {
   return null
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** `raw` without the fields `op` retired (WalnutOp.retiredInput); copies only what it changes. */
+function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<string, unknown> {
+  let out = raw
+  const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
+  for (const path of op.retiredInput ?? []) {
+    const cut = path.indexOf('[].')
+    if (cut < 0) {
+      if (!own(out, path)) continue
+      if (out === raw) out = { ...raw }
+      delete out[path]
+      continue
+    }
+    const list = path.slice(0, cut)
+    const field = path.slice(cut + 3)
+    const items = out[list]
+    if (!Array.isArray(items) || !items.some((i) => isPlainObject(i) && own(i, field))) continue
+    if (out === raw) out = { ...raw }
+    out[list] = items.map((i) => {
+      if (!isPlainObject(i) || !own(i, field)) return i
+      const { [field]: _retired, ...rest } = i
+      return rest
+    })
+  }
+  return out
+}
+
+/**
+ * Validate `rawArgs` against `op`'s input exactly as every surface does: a
+ * retired field is dropped, any other unknown key is refused.
+ */
+export function parseOpArgs(
+  op: WalnutOp,
+  rawArgs: Record<string, unknown> | undefined,
+): { ok: true; args: Record<string, unknown> } | { ok: false; message: string } {
+  const raw = rawArgs ?? {}
+  const parsed = z.object(op.input).strict().safeParse(isPlainObject(raw) ? dropRetiredInput(op, raw) : raw)
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+    return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}` }
+  }
+  return { ok: true, args: parsed.data as Record<string, unknown> }
+}
+
 /**
  * Execute one op by name. Refuses an origin the op may not run for, then
  * validates args against the op's zod shape, so every surface rejects both
@@ -242,12 +289,9 @@ export async function executeOp(
   const refused = originRefusal(op, origin)
   if (refused) return { ok: false, message: refused }
 
-  const parsed = z.object(op.input).strict().safeParse(rawArgs ?? {})
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
-    return { ok: false, message: `Invalid arguments for ${name}: ${issues}` }
-  }
-  const args = parsed.data as Record<string, unknown>
+  const parsed = parseOpArgs(op, rawArgs)
+  if (!parsed.ok) return parsed
+  const args = parsed.args
 
   const base = resolveApiBase(options.apiBase)
   return runOp(op, args, base, {

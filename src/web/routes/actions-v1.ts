@@ -34,7 +34,6 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { z } from 'zod'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -162,7 +161,7 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
 
     // Imported lazily: src/ops/index.ts pulls in every op module, and no route
     // file should widen the server's boot import graph for a feature that idles.
-    const { getOp, executeOp } = await import('../../ops/index.js')
+    const { getOp, executeOp, parseOpArgs } = await import('../../ops/index.js')
 
     const op = getOp(tool)
     if (!op) {
@@ -187,16 +186,15 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
       return
     }
 
-    const parsed = z.object(op.input).strict().safeParse(args)
-    if (!parsed.success) {
-      const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
-      refuse(res, 400, 'invalid_arguments', `Invalid arguments for ${tool}: ${issues}`, tool)
+    const parsed = parseOpArgs(op, args)
+    if (!parsed.ok) {
+      refuse(res, 400, 'invalid_arguments', parsed.message, tool)
       return
     }
 
     const sid = callerSid(req)
     const startedAt = Date.now()
-    const outcome = await executeOp(tool, parsed.data as Record<string, unknown>, {
+    const outcome = await executeOp(tool, parsed.args, {
       apiBase: apiBaseFor(req),
       ...(sid ? { callerSid: sid } : {}),
       origin,

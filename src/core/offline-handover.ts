@@ -43,6 +43,9 @@ export interface HandoverResult {
 /** A queued write that did not land, told to the session that made it. */
 interface Unapplied { callerSid: string; op: string; taskId: string; reason: string }
 
+/** A queued write the server answered with a refusal (validation, a guard), not a Walnut failure. */
+class RefusedWrite extends Error {}
+
 const MAX_ROUNDS = 10;
 /** The daemon connection's own command budget: a loaded host answered a 10s drain too late (2026-09-28). */
 const RPC_TIMEOUT_MS = 30_000;
@@ -93,8 +96,21 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
         // it, and the session that made a failed write hears about it.
         result.failed++;
         const reason = err instanceof Error ? err.message : String(err);
-        log.session.error('offline handover: record failed', { host: conn.hostKey, seq: record.seq, kind: record.kind, error: reason });
-        if (record.kind === 'op') unapplied.push({ callerSid: record.callerSid, op: record.op, taskId: String(record.args.id ?? ''), reason });
+        if (err instanceof RefusedWrite && record.kind === 'op') {
+          // The server's own answer to the caller's write, the one the same call
+          // made online gets: the caller's to redo (it is told below), not a fault.
+          log.session.warn('offline handover: queued write refused', {
+            host: conn.hostKey, seq: record.seq, op: record.op, taskId: String(record.args.id ?? ''),
+            callerSid: record.callerSid, error: reason,
+          });
+        } else {
+          // Walnut could not apply its own record. Named by the session it
+          // concerns, so the card retires on that session's next clean turn.
+          log.session.error('offline handover: record failed', {
+            host: conn.hostKey, seq: record.seq, kind: record.kind, error: reason, ...await recordScope(record),
+          });
+        }
+        if (record.kind === 'op') unapplied.push({ callerSid: record.callerSid, op: record.op, taskId: String(record.args?.id ?? ''), reason });
       }
       upTo = Math.max(upTo, record.seq);
     }
@@ -216,10 +232,26 @@ async function applyRecord(
       const { hostOrigin } = await import('../lib/caller-origin.js');
       const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host) });
       // The server's own words; the log line and the caller's notice name the op.
-      if (!r.ok) throw new Error(r.message);
+      // A refusal is the server's answer (a 5xx is carded by its route); no
+      // answer at all is Walnut failing its own write.
+      if (!r.ok) throw r.unreachable ? new Error(r.message) : new RefusedWrite(r.message);
       result.replayed++;
       log.session.info('offline handover: queued write applied', { host, op: record.op, taskId: task.id, callerSid: record.callerSid });
       return;
+    }
+  }
+}
+
+/** The session (and task) a record is about, for the log line and the card's lifecycle. */
+async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string; taskId?: string }> {
+  switch (record.kind) {
+    case 'op': return { sessionId: record.callerSid, taskId: String(record.args?.id ?? '') || undefined };
+    case 'row': return { sessionId: record.row.fromSessionId };
+    case 'delivery': return { sessionId: record.toSessionId };
+    case 'settle': {
+      const { getSessionRequest } = await import('./session-requests.js');
+      const row = await getSessionRequest(record.requestId).catch(() => undefined);
+      return row ? { sessionId: row.fromSessionId } : {};
     }
   }
 }
