@@ -11,7 +11,7 @@
  * happens. A trigger fire, a message from a human or a peer, or a prompt for the
  * human moves it to In Progress, and that turn ends as Need Action as usual. Its
  * `wait_until` is the server's own clock on it: picking Waiting opens an "Until"
- * row under the options; the server fills 3 days from now when none is named
+ * row under the options; the server fills 1 day from now when none is named
  * (DEFAULT_WAIT_DAYS), the row sets another time or no time limit. A Waiting
  * task keeps its board tier; the Parked TIER is a shelf on the board, a
  * different thing. The task list hides Waiting tasks by default.
@@ -129,7 +129,7 @@ export function waitingLineText(task: Pick<Task, 'phase' | 'wait_until'>): strin
 function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait_until'>; onSet: (waitUntil: string) => void }) {
   const [open, setOpen] = useState(false);
   const until = formatWaitUntil(task.wait_until);
-  const noClockLabel = task.phase === 'WAITING' ? 'Until: no time limit' : `Until: ${DEFAULT_WAIT_DAYS} days (default)`;
+  const noClockLabel = task.phase === 'WAITING' ? 'Until: no time limit' : `Until: ${DEFAULT_WAIT_DAYS} day${DEFAULT_WAIT_DAYS === 1 ? '' : 's'} (default)`;
   return (
     <div className={`task-status-until${open ? ' open' : ''}`} data-testid="task-status-until">
       <div className="task-status-until-head">

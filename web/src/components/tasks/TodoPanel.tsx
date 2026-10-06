@@ -3556,6 +3556,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const GRACE_MS = 3_150;
   const EXIT_ANIM_MS = 450;
   const EXIT_SLACK_MS = 150;
+  // When this render ran: the batch effect below compares against it to catch a
+  // window that was open while the memos ran but closed before the effect did.
+  const graceRenderAt = Date.now();
   const recentlyCompletedRef = useRef<Set<string>>(new Set());
   // A task just set to Waiting leaves the list the same way (it is hidden by
   // default): same batch deadline, same fade, keyed on phase_changed_at the way
@@ -3625,6 +3628,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   useEffect(() => {
     let extended = false;
+    // A window that closed between the render and this effect: the render's memos
+    // drew the task inline (isIn*Grace) and no timer is armed to redraw it, so it
+    // stayed on the board. A heavy first mount makes that gap a second or more
+    // (a task parked just before the page loaded stuck in its Focus tier).
+    let closedSinceRender = false;
+    const closedAfterRender = (at: number, elapsed: number) => elapsed >= GRACE_MS && at + GRACE_MS > graceRenderAt;
     for (const task of tasks) {
       if (task.status === 'done' && task.completed_at && !recentlyCompletedRef.current.has(task.id)) {
         const completedAt = new Date(task.completed_at).getTime();
@@ -3634,7 +3643,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           // ONE shared deadline for the whole batch: latest completion + GRACE_MS.
           graceDeadlineRef.current = Math.max(graceDeadlineRef.current, completedAt + GRACE_MS);
           extended = true;
-        }
+        } else if (closedAfterRender(completedAt, elapsed)) closedSinceRender = true;
       }
       // A task just parked joins the same batch (it is about to leave the list too).
       if (task.phase === 'WAITING' && task.phase_changed_at && !recentlyParkedRef.current.has(task.id)) {
@@ -3644,7 +3653,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           recentlyParkedRef.current.add(task.id);
           graceDeadlineRef.current = Math.max(graceDeadlineRef.current, parkedAt + GRACE_MS);
           extended = true;
-        }
+        } else if (closedAfterRender(parkedAt, elapsed)) closedSinceRender = true;
       }
     }
     // Reopened tasks leave the batch immediately (they're visible again anyway).
@@ -3672,7 +3681,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       setGraceExiting(false);
     }
     // Trigger re-render so the filters re-run with the new grace entries
-    if (extended || removed) setRecentTick((n) => n + 1);
+    if (extended || removed || closedSinceRender) setRecentTick((n) => n + 1);
+    // graceRenderAt is this render's own clock reading; the effect runs once per tasks change.
   }, [tasks, armGraceTimers]);
 
   // Cleanup shared timers on unmount

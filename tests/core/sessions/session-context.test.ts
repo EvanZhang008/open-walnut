@@ -278,7 +278,10 @@ describe('buildSessionContext (identity note)', () => {
     // to "make a trigger" for the review, which it could have done in one call.
     // 2150 → 2450 (2026-10-05) for the inbox: a letter only when the user is
     // needed or asked for one. Parks, progress and FYIs had filled it.
-    expect(systemPrompt.length).toBeLessThan(2450)
+    // 2450 → 2600 (2026-10-05) for the park's clock: name a short wait_until, and
+    // when it runs out first, check the thing and the trigger before parking again.
+    // A new trigger may be wrong, and the user cannot tell from a hidden task.
+    expect(systemPrompt.length).toBeLessThan(2600)
   })
 
   it('makes waiting the session\'s job: arm a trigger itself, park only when only the wait is left', async () => {
@@ -290,6 +293,16 @@ describe('buildSessionContext (identity note)', () => {
       expect(systemPrompt).toMatch(/parks this task as Waiting, off the user's list; the fire brings it back to you/i)
       expect(systemPrompt).toMatch(/while work remains here, arm it with wait:false/i)
       expect(systemPrompt).not.toMatch(/receipt/i)
+    }
+  })
+
+  it('gives every park a short clock, and makes the clock running out a check on the trigger', async () => {
+    // 2026-10-05, the user: nobody knows yet whether a new trigger works, so the
+    // wait must not run for days, and each time it runs out the session re-checks.
+    for (const id of ['', await seedTask('marina')]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).toMatch(/give it a wait_until for when you expect the event, kept short/i)
+      expect(systemPrompt).toMatch(/when the clock runs out first, the trigger may have missed it, so check the thing and the trigger before parking again/i)
     }
   })
 

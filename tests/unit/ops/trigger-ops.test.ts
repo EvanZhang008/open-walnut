@@ -53,8 +53,8 @@ describe('trigger_create output', () => {
   // The outcome says what the call did to the task, so the model never tells the
   // user "it is waiting" when it is not, or the reverse (2026-10-04).
   const job = { id: 'rt_1', name: 'PR review', schedule: { kind: 'every', everyMs: 300_000 } }
-  const mapWith = (wait: Record<string, unknown>) =>
-    getOp('trigger_create')!.mapResult!({ body: { job, host: '__local__', nextCheckAt: null, wait }, args: {} }) as
+  const mapWith = (wait: Record<string, unknown>, args: Record<string, unknown> = {}) =>
+    getOp('trigger_create')!.mapResult!({ body: { job, host: '__local__', nextCheckAt: null, wait }, args }) as
       { outcome: string; next: string; wait: unknown }
 
   it('says the task is parked and until when, and that a park sends no letter', () => {
@@ -65,6 +65,17 @@ describe('trigger_create output', () => {
     expect(out.next).toMatch(/^End your turn now with one line saying what you wait on; the fire starts a new one here\./)
     expect(out.next).toContain('park again (task_update phase=WAITING) as your last call, with no letter')
     expect(mapWith({ parked: true, task_id: 't1', wait_until: null }).outcome).toContain('until it fires.')
+  })
+
+  it('asks for a short wait_until when the park named none, and a re-check before every re-park', () => {
+    // 2026-10-05: the default clock is a guess; a session usually knows when a
+    // CI run or a review should land, and a new trigger may be wrong.
+    const parked = { parked: true, task_id: 't1', wait_until: '2026-10-06T12:00:00.000Z' }
+    expect(mapWith(parked).outcome)
+      .toContain('You named no wait_until: when you can tell when it should happen, set one (task_update wait_until), kept short.')
+    expect(mapWith(parked, { wait_until: '2h' }).outcome).not.toContain('You named no wait_until')
+    expect(mapWith({ parked: false, task_id: 't1', reason: 'wait_false' }).outcome).not.toContain('You named no wait_until')
+    expect(mapWith(parked).next).toContain('Before each re-park (after a fire or the clock), check that the trigger fired for the right reason')
   })
 
   it('says why the task was left alone', () => {
@@ -98,6 +109,18 @@ describe('trigger_create wait inputs', () => {
     expect(op.description).toContain('It PARKS your own task by default')
     expect(op.description).toContain('Pass wait:false while you or the user still have work on this task')
     expect(op.description).toContain('do not ask the user to watch it')
+  })
+
+  it('tells the model to set a short clock itself, and that the default is 1 day', () => {
+    const op = getOp('trigger_create')!
+    expect(op.description).toContain('Set wait_until yourself to when you expect the event, kept short')
+    expect(op.description).toContain('the clock running out is how you find out')
+    expect(op.description).not.toMatch(/3 days/)
+    expect(op.input.wait_until.description).toMatch(/Default 1 day/)
+    const update = getOp('task_update')!
+    expect(update.description).toContain('Set it to when you expect the event, kept short')
+    expect(update.description).toContain('gets 1 day from now')
+    expect(update.input.wait_until.description).toMatch(/1 day from now/)
   })
 })
 

@@ -2548,7 +2548,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     }
     // wait_until is the clock on a WAITING task: it rides with phase=WAITING, or
     // onto a task already in that phase (checked against the row below). Left
-    // out on the move into WAITING, the store sets 3 days from now; "" / null
+    // out on the move into WAITING, the store sets DEFAULT_WAIT_DAYS out; "" / null
     // asks for no clock at all. A duration from now ("6h", "3d") is accepted as
     // well, the same spelling trigger_create takes.
     let waitUntil = waitUntilRaw

@@ -624,9 +624,10 @@ defineOp({
     'and phase=COMPLETE when it is finished. phase=WAITING parks the task on something that has not ' +
     'happened yet (a trigger you armed, a reply, a time): it keeps its board section but leaves the user\'s task list, the end ' +
     'of this turn does not hand it back, and the next message into it (a trigger fire, the user, a peer) moves ' +
-    'it to IN_PROGRESS. Set it as the LAST call of the turn, once only the wait is left. wait_until (ISO datetime, or a duration like "2d") wakes it at ' +
-    'that time when nothing else did; left out, a task entering WAITING gets 3 days from now, and "" means ' +
-    'no clock at all. A park sends no letter: say what you wait on in your last message. ' +
+    'it to IN_PROGRESS. Set it as the LAST call of the turn, once only the wait is left. wait_until (ISO datetime, or a duration like "6h") wakes it at ' +
+    'that time when nothing else did. Set it to when you expect the event, kept short: a trigger can miss it, and the ' +
+    'clock is how you find out; when it wakes you, check the thing and the trigger before parking again. Left out, a ' +
+    'task entering WAITING gets 1 day from now, and "" means no clock at all. A park sends no letter: say what you wait on in your last message. ' +
     '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
@@ -638,8 +639,8 @@ defineOp({
       .describe('Task lifecycle phase — the one state field. NEED_ACTION = handed back to the human; '
         + 'WAITING = parked until something happens (any new message brings it back)'),
     wait_until: z.string().optional()
-      .describe('With phase=WAITING: ISO-8601 datetime, or a duration from now ("6h", "3d"), at which the task is woken if nothing else did. '
-        + 'Left out when entering WAITING = 3 days from now; "" = no clock (the wait has no end of its own)'),
+      .describe('With phase=WAITING: ISO-8601 datetime, or a duration from now ("2h", "1d"), at which the task is woken if nothing else did. '
+        + 'Set it to when you expect the event, kept short. Left out when entering WAITING = 1 day from now; "" = no clock (the wait has no end of its own)'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),

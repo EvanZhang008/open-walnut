@@ -712,7 +712,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `WAITING` was added in 0.5.2 (a task parked until something happens; its
   `status` is `todo`); a client built before it should treat an unknown phase as
   `TODO`. `wait_until` (ISO datetime) is present only on a `WAITING` task that
-  has a time at which the server wakes it by itself (3 days from the move into
+  has a time at which the server wakes it by itself (1 day from the move into
   `WAITING` unless the writer named a time or asked for none).
   `category` was removed in projection v2 (2026-08); `project` is the single
   grouping layer (`""` = Inbox). `starred?` was removed in 2026-08 when the
@@ -864,7 +864,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     `phase: "WAITING"` or onto a task already waiting (`400` otherwise): at that
     time the server wakes the task's session with a note, or hands the task back
     as `NEED_ACTION` + `unread` when it has no session. A move into `WAITING`
-    that names no `wait_until` gets one 3 days out (`DEFAULT_WAIT_DAYS`), so a
+    that names no `wait_until` gets one 1 day out (`DEFAULT_WAIT_DAYS`), so a
     wait is never open-ended unless asked for. Any move out of `WAITING` clears
     `wait_until`.
   - A move into `WAITING` sends no letter, whoever makes it. The wait

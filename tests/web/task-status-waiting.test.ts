@@ -146,7 +146,7 @@ describe('TaskStatusMenuSection and Waiting', () => {
     // path): the row names the default clock the server is about to set.
     const until = host.querySelector('[data-testid="task-status-until"]')!;
     expect(until).toBeTruthy();
-    expect(until.textContent).toContain('Until: 3 days (default)');
+    expect(until.textContent).toContain('Until: 1 day (default)');
     expect(until.querySelector('[data-testid="task-status-until-clear"]')).toBeNull();
   });
 

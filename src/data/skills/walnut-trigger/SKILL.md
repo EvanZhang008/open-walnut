@@ -111,8 +111,9 @@ or a file only that host has), and never paste one inline as `curl -H
    Keep going until `parsed` is non-null. `wouldFire: false` with `parsed` set is a
    working check with nothing to report: that is a pass, not a failure.
 3. **Tell the user in ONE line** what will be watched and how often, before arming it.
-4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"..."}'`.
-   `description` is required (see below).
+4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"...","wait_until":"4h"}'`.
+   `description` is required (see below). `wait_until` is when you expect the
+   event, kept short (see below); left out it is 1 day.
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
    This also **parks this task as Waiting** (see "Waiting is the default"
@@ -188,12 +189,40 @@ it later, once only the wait is left, as the LAST call of that turn:
 walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING"}'
 ```
 
-**`wait_until`** is the clock. Without it the task comes back by itself 3 days
-from now, whether or not anything happened: Walnut wakes this session with a
-note and the task returns the normal way. Pass an ISO datetime or a duration
-from now (`"6h"`, `"2d"`) when the user named a time ("by Friday either way",
-"give it a week") or the thing has a natural deadline. Pass `"wait_until":""`
-only when the user explicitly wants no time limit.
+**`wait_until`** is the clock, and it is how you find out whether the trigger
+works. A trigger you just wrote may be wrong (the check reads the wrong field,
+the answer lands somewhere it does not look), and from a hidden task the user
+cannot tell, so never let a park run for days on trust:
+
+- **Set it yourself** whenever you can tell when the thing should happen, with a
+  little slack: a CI run or a deploy, minutes to an hour (`"45m"`); a review or a
+  reply, later today or tomorrow morning (`"4h"`, `"1d"`); a release on a known
+  date, that date. Pass an ISO datetime or a duration from now.
+- **Keep it short.** When you cannot tell, a few hours to a day. Left out, it is
+  1 day. Go longer only when the user named the time ("by Friday either way",
+  "give it a week"). Pass `"wait_until":""` only when the user asked for no time
+  limit.
+- If you named none in `trigger_create`, set one right after it:
+  `task_update '{"id":"<this task's id>","wait_until":"2h"}'`.
+
+**When the clock runs out** (a `Walnut: wait until` message), nothing fired in
+time. The message lists the task's triggers with their state and last check.
+Re-check carefully before anything else:
+
+1. Look at the thing itself (the PR, the build, the page, the inbox): has it
+   happened?
+2. If it has and no fire came, the trigger is wrong. Find out why (run the check
+   with `trigger_test`, read its recent checks in `trigger_list`), replace it
+   with a check that would have caught it (`trigger_delete`, then
+   `trigger_create`), and act on what happened.
+3. If it has not, is the trigger still sound: armed (not paused or stopped),
+   checking without errors, and watching every place and state that would count?
+   Fix what is not.
+
+Then, if it is still to come, park again as your last call with a fresh, short
+`wait_until`; that needs no word to the user. If the wait no longer makes sense
+(long overdue, or the plan changed), tell the user in one line and leave the
+task with them.
 
 - A trigger on ANOTHER task does not park it unless you pass `"wait":true`.
   A completed task is never parked.
@@ -208,6 +237,10 @@ only when the user explicitly wants no time limit.
   trigger keeps polling and keeps what it has seen. Write to the user's inbox
   only when the event needs them (a decision, a blocker) or they asked to hear
   about it.
+- Every fire is also a check on the trigger. Did it fire for the right reason
+  (a false fire means the check is too loose)? Will it catch what comes next (a
+  reviewer who answers in another place, a second stage)? Fix it before you
+  park again, and give the new park its own short `wait_until`.
 - When the work it watched is done, `trigger_delete` it, so it stops firing.
 - When the user writes to this session meanwhile, the task is In Progress again;
   answer them. If the plan still holds, park it again as your last call. If the

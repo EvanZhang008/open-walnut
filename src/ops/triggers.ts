@@ -81,7 +81,11 @@ defineOp({
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
     + 'It PARKS your own task by default: the task goes to Waiting (off the user\'s list, no letter is sent), '
-    + 'and the fire (or the clock, 3 days unless wait_until says otherwise) brings it back. '
+    + 'and the fire (or its clock, wait_until) brings it back. Set wait_until yourself to when you expect the '
+    + 'event, kept short (hours, a day at most unless the user named a later time; 1 day when left out): a new '
+    + 'trigger may be wrong or miss the event, and the clock running out is how you find out. On each fire and '
+    + 'each clock wake, look at the thing itself and at whether the trigger is still right and enough, fix it, '
+    + 'and only then park again with a fresh wait_until. '
     + 'Pass wait:false while you or the user still have '
     + 'work on this task, and park it later with task_update phase=WAITING once only the wait is left. '
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
@@ -107,12 +111,13 @@ defineOp({
     wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default true for your own task, '
       + 'false for another task. Pass false while you or the user still have work on this task'),
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
-      + 'from now ("6h", "2d"). Default 3 days; "" = no clock (only the fire or a message brings it back)'),
+      + 'from now ("2h", "1d"). Set it to when you expect the event, kept short: it is the check that the trigger works. '
+      + 'Default 1 day; "" = no clock (only when the user asked for no time limit)'),
   },
   // The old park receipt's text (removed 2026-10-05), still sent by older sessions.
   retiredInput: ['wait_report'],
   bind: { method: 'POST', path: '/routines/trigger' },
-  mapResult: ({ body }) => {
+  mapResult: ({ body, args }) => {
     const b = (body ?? {}) as {
       job?: { id?: string; name?: string; schedule?: { everyMs?: number } }; host?: string
       wait?: { parked?: boolean; reason?: string; wait_until?: string | null; error?: string }
@@ -125,8 +130,13 @@ defineOp({
     const w = b.wait
     // What the call did to the task is said in the outcome, so the model never
     // tells the user "it is waiting" when it is not, or the reverse.
+    // A park on the default clock is a guess at when to look again; the model
+    // usually knows better (a CI run takes minutes, a review a day).
+    const unnamed = w?.parked && (args as { wait_until?: unknown } | undefined)?.wait_until === undefined
+      ? ' You named no wait_until: when you can tell when it should happen, set one (task_update wait_until), kept short.'
+      : ''
     const parked = w?.parked
-      ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.`
+      ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.${unnamed}`
       : w?.reason === 'wait_false' ? ' The task was left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left.'
       : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
       : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'
@@ -135,7 +145,9 @@ defineOp({
     const next = w?.parked
       ? 'End your turn now with one line saying what you wait on; the fire starts a new one here. When a fire does not '
         + 'need the user, handle it and park again (task_update phase=WAITING) as your last call, with no letter: '
-        + `a fire is not news for the user's inbox. ${off}`
+        + 'a fire is not news for the user\'s inbox. Before each re-park (after a fire or the clock), check that the '
+        + 'trigger fired for the right reason and still covers what comes next, and fix it if not. '
+        + off
       : `Tell the user in one line what is watched and how often. ${off}`
     // The id at the top level too: trigger_pause/resume/delete take it, and a
     // caller reading `.id` should not have to know the job sits under `.job`.

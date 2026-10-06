@@ -127,7 +127,7 @@ afterAll(async () => {
 })
 
 describe('trigger_create parks the caller\'s own task by default', () => {
-  it('Waiting with the 3-day clock, and no letter', async () => {
+  it('Waiting with the 1-day clock, and no letter', async () => {
     const { sid, taskId } = await startSession('fix the menu page and get PR 123 merged')
     const before = Date.now()
     const r = await createTrigger(sid)
@@ -140,8 +140,8 @@ describe('trigger_create parks the caller\'s own task by default', () => {
     expect(t.status).toBe('todo')
     expect(t.unread).toBeFalsy()
     const ahead = Date.parse(t.wait_until) - before
-    expect(ahead).toBeGreaterThanOrEqual(3 * DAY)
-    expect(ahead).toBeLessThan(3 * DAY + 60_000)
+    expect(ahead).toBeGreaterThanOrEqual(DAY)
+    expect(ahead).toBeLessThan(DAY + 60_000)
     expect(r.json.wait.wait_until).toBe(t.wait_until)
     expect(r.json.wait).not.toHaveProperty('letter_id')
     expect(await lettersFor(taskId)).toHaveLength(0)
@@ -354,6 +354,72 @@ describe('the fire brings it back', () => {
     expect(again.status, JSON.stringify(again.json)).toBe(200)
     expect((await task(taskId)).phase).toBe('WAITING')
     expect(await lettersFor(taskId)).toHaveLength(0)
+  })
+})
+
+describe('the clock running out is a check on the trigger', () => {
+  // 2026-10-05, the user: a new trigger may be wrong, so the clock is short and
+  // each time it runs out the session re-checks the thing and the trigger.
+  // One session's notes: a sweep wakes every task whose clock passed.
+  const wakeNotes = (sid: string) => [...daemon.getCommandHistoryFor('send'), ...daemon.getCommandHistoryFor('start')]
+    .filter((c) => c.payload.deferMessage !== true && (c.payload.sid ?? c.payload.sessionId) === sid)
+    .map((c) => String(c.payload.text ?? c.payload.message ?? ''))
+    .filter((t) => t.includes('from="Walnut: wait until"'))
+
+  it('names the task\'s triggers with their state, asks for a re-check, and a short re-park holds', async () => {
+    const { sid, taskId } = await startSession('merge PR 77 once approved')
+    const created = await createTrigger(sid, { name: 'PR 77 review', wait_until: '1h' })
+    expect(created.status, JSON.stringify(created.json)).toBe(201)
+    const ahead = Date.parse((await task(taskId)).wait_until) - Date.now()
+    expect(ahead).toBeGreaterThan(3_500_000)
+    expect(ahead).toBeLessThanOrEqual(3_600_000)
+
+    daemon.clearCommandHistory()
+    const { sweepWaitUntil } = await import('../../src/core/task-wait-until.js')
+    expect(await sweepWaitUntil(Date.now() + 2 * 3_600_000)).toContain(taskId)
+    const [note] = await until('the wake note', async () => wakeNotes(sid), (n) => n.length > 0)
+    expect(note).toContain('The wait on this task ran until')
+    expect(note).toContain(`- "PR 77 review" (${created.json.job.id}): armed, every 5m, fired 0 times; it has not reported a single check yet.`)
+    expect(note).toContain('only a look at the thing itself tells which')
+    expect(note).toMatch(/If it happened and no fire came, the trigger is wrong/)
+    expect(note).toMatch(/park again \(task_update phase=WAITING\) with a wait_until for when you now expect it, kept short/)
+    await until('the wake turn to end', () => task(taskId), (t) => t.phase === 'NEED_ACTION')
+
+    // The session found it still to come: a re-park with a short duration.
+    const h = { 'x-walnut-caller-sid': sid }
+    const again = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '2h' }, h)
+    expect(again.status, JSON.stringify(again.json)).toBe(200)
+    const reparked = await task(taskId)
+    expect(reparked.phase).toBe('WAITING')
+    expect(Math.abs(Date.parse(reparked.wait_until) - (Date.now() + 2 * 3_600_000))).toBeLessThan(60_000)
+    // And a park that named no time can be re-timed alone, as the op outcome says.
+    const retimed = await req('PATCH', `/api/v1/tasks/${taskId}`, { wait_until: '30m' }, h)
+    expect(retimed.status, JSON.stringify(retimed.json)).toBe(200)
+    expect(Math.abs(Date.parse((await task(taskId)).wait_until) - (Date.now() + 1_800_000))).toBeLessThan(60_000)
+    expect(await lettersFor(taskId)).toHaveLength(0)
+  })
+
+  it('says a paused trigger is not checking at all', async () => {
+    const { sid, taskId } = await startSession('wait for the vendor reply')
+    const created = await createTrigger(sid, { name: 'Vendor reply', wait_until: '1h' })
+    const paused = await req('PATCH', `/api/v1/routines/${created.json.job.id}`, { enabled: false })
+    expect(paused.status, JSON.stringify(paused.json)).toBe(200)
+    daemon.clearCommandHistory()
+    const { sweepWaitUntil } = await import('../../src/core/task-wait-until.js')
+    expect(await sweepWaitUntil(Date.now() + 2 * 3_600_000)).toContain(taskId)
+    const [note] = await until('the wake note', async () => wakeNotes(sid), (n) => n.length > 0)
+    expect(note).toContain(`- "Vendor reply" (${created.json.job.id}): PAUSED, so it is not checking at all`)
+  })
+
+  it('a park with no trigger keeps the plain note', async () => {
+    const { sid, taskId } = await startSession('remind me after lunch')
+    await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '1h' }, { 'x-walnut-caller-sid': sid })
+    daemon.clearCommandHistory()
+    const { sweepWaitUntil } = await import('../../src/core/task-wait-until.js')
+    expect(await sweepWaitUntil(Date.now() + 2 * 3_600_000)).toContain(taskId)
+    const [note] = await until('the wake note', async () => wakeNotes(sid), (n) => n.length > 0)
+    expect(note).toContain('No trigger watches it. Take it from here')
+    expect(note).not.toContain('Triggers on this task')
   })
 })
 

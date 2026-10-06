@@ -241,7 +241,7 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect(statusPill(row, 'Waiting')).toHaveAttribute('aria-checked', 'true', { timeout: 10_000 })
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('WAITING')
   // No time named: the server (and the optimistic row) put the default clock on
-  // it, 3 days out, and the until row already shows it with the no-limit button.
+  // it, 1 day out, and the until row already shows it with the no-limit button.
   const until = row.getByTestId('task-status-until')
   await expect(until).toBeVisible()
   await expect(until.getByTestId('task-status-until-toggle')).toHaveText(/^Until: /)
@@ -249,8 +249,8 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeTruthy()
   const parked = await taskOf(task.id)
   const daysAhead = (Date.parse(parked.wait_until) - Date.now()) / 86_400_000
-  expect(daysAhead).toBeGreaterThan(2.99)
-  expect(daysAhead).toBeLessThan(3.01)
+  expect(daysAhead).toBeGreaterThan(0.99)
+  expect(daysAhead).toBeLessThan(1.01)
   await expectInViewport(page, menu)
   await shot(menu, 'menu-waiting-open', browserName)
 
@@ -606,7 +606,7 @@ test('the composer of a Waiting task says so, and a message moves it to In Progr
   expect(after.wait_until).toBeUndefined()
   await shot(panel, 'session-after-message', browserName)
 
-  // Parked again with no time named: the default 3-day clock shows; an explicit
+  // Parked again with no time named: the default 1-day clock shows; an explicit
   // "" (no limit) is the one way to a wait with no time at all, and the line says so.
   await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING' })
   await expect(line).toContainText(/^Waiting until \S/, { timeout: 15_000 })

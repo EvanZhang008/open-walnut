@@ -174,7 +174,7 @@ afterAll(async () => {
 })
 
 describe('task_update phase=WAITING from the session', () => {
-  it('parks the task: Waiting, todo bucket, no red dot, the default 3-day clock, and tells the session to end its turn', async () => {
+  it('parks the task: Waiting, todo bucket, no red dot, the default 1-day clock, and tells the session to end its turn', async () => {
     const before = Date.now()
     const out = await park()
     expect(JSON.stringify(out)).toContain('End your turn now')
@@ -183,8 +183,8 @@ describe('task_update phase=WAITING from the session', () => {
     expect(row).toMatchObject({ phase: 'WAITING', status: 'todo' })
     // No wait_until named: the default clock, so a snooze is never silent forever.
     const ahead = Date.parse(row.wait_until) - before
-    expect(ahead).toBeGreaterThanOrEqual(3 * 86_400_000)
-    expect(ahead).toBeLessThan(3 * 86_400_000 + 60_000)
+    expect(ahead).toBeGreaterThanOrEqual(86_400_000)
+    expect(ahead).toBeLessThan(86_400_000 + 60_000)
     // The outcome names the stored clock, not the request (which named none).
     expect(JSON.stringify(out)).toContain(`or the clock at ${row.wait_until}`)
     expect(trackedWaitUntil().has(taskId)).toBe(true)

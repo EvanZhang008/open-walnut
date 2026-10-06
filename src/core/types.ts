@@ -20,8 +20,10 @@ export type TaskPhase =
  * explicit empty value (wait until something happens) wins. Shared with the
  * web through the `@open-walnut/core` alias so the optimistic row shows the
  * same clock the server stores.
+ * One day, not three (2026-10-05, the user): nobody knows yet whether a new
+ * trigger works, and the clock is what finds out when it does not.
  */
-export const DEFAULT_WAIT_DAYS = 3;
+export const DEFAULT_WAIT_DAYS = 1;
 export function defaultWaitUntil(nowMs: number = Date.now()): string {
   return new Date(nowMs + DEFAULT_WAIT_DAYS * 86_400_000).toISOString();
 }
@@ -758,7 +760,7 @@ export interface Task {
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
    *  with no session the task comes back as NEED_ACTION. A task entering WAITING
-   *  without one gets `defaultWaitUntil()` (3 days out); an explicit empty value
+   *  without one gets `defaultWaitUntil()` (1 day out); an explicit empty value
    *  waits until something else happens. Cleared by every move out of WAITING.
    *  Local-only, payload blob; never pushed to sync backends. */
   wait_until?: string;

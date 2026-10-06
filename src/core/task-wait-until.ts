@@ -20,6 +20,8 @@ import { CLOUD_MODE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import type { Task } from './types.js';
+import type { CronJob } from './cron/types.js';
+import type { WatchingTrigger } from './task-wait-wake.js';
 
 const deadlines = new Map<string, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -73,13 +75,37 @@ export async function sweepWaitUntil(nowMs = Date.now()): Promise<string[]> {
   return woke;
 }
 
-async function wakeMessage(task: Task): Promise<string> {
+/** The triggers that deliver into this task, as the wake note names them. Never throws. */
+async function triggersWatching(taskId: string): Promise<WatchingTrigger[]> {
+  try {
+    const { listRoutines } = await import('./routines/routines-core.js');
+    const { triggerRunState } = await import('./cron/trigger-run-state.js');
+    const { jobs } = await listRoutines(true);
+    return (jobs as CronJob[])
+      .filter((job) => job.check && job.executor?.type === 'session'
+        && (job.executor.config as { target?: unknown } | undefined)?.target === taskId)
+      .map((job) => ({
+        id: job.id,
+        name: job.name,
+        everyMs: job.schedule.kind === 'every' ? job.schedule.everyMs : undefined,
+        state: triggerRunState(job),
+        fires: job.state?.fireCount ?? 0,
+        lastCheck: job.state?.lastCheck,
+      }));
+  } catch (err) {
+    log.task.warn('wait_until: could not list the task\'s triggers for the wake note', { taskId, error: errText(err) });
+    return [];
+  }
+}
+
+async function wakeMessage(task: Task, nowMs: number): Promise<string> {
   const { buildWalnutMessage } = await import('./peers/walnut-message-tag.js');
-  const when = new Date(task.wait_until!).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+  const { buildWaitWakeBody } = await import('./task-wait-wake.js');
+  const until = new Date(task.wait_until!).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
   return buildWalnutMessage({
     kind: 'trigger',
     attrs: { from: 'Walnut: wait until', note: 'the time this task was waiting for has passed' },
-    body: `The wait on this task ran until ${when}. Take it from here: check what it was waiting for, do what is next, and tell the user where things stand.`,
+    body: buildWaitWakeBody({ until, nowMs, triggers: await triggersWatching(task.id) }),
   });
 }
 
@@ -102,7 +128,7 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
       const { sendMessageToSession } = await import('./session-message-queue.js');
       // The send itself moves the task: session:input → IN_PROGRESS, and the
       // turn's end → NEED_ACTION, the same path a trigger fire takes.
-      await sendMessageToSession(target.claudeSessionId, await wakeMessage(task), {
+      await sendMessageToSession(target.claudeSessionId, await wakeMessage(task, nowMs), {
         source: WAIT_UNTIL_SEND_SOURCE, taskId: task.id,
       });
       log.task.info('wait_until passed: session woken', {
