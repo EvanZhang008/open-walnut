@@ -398,12 +398,17 @@ jobs:
         run: WALNUT_REQUIRE_BUN=1 npm run build && (cd web && npx vite build) && node scripts/check-publish.mjs
       - name: Pack this commit as the next patch, and an older build of it
         run: node scripts/release-rehearsal/pack.mjs --out "$RUNNER_TEMP/packs" --rehearsal
+      # The Mac app (desktop/): its tests, and the app the rehearsal's archive-app launches.
+      - name: Build the Mac app
+        if: startsWith(matrix.os, 'macos')
+        run: bash scripts/test-desktop.sh && bash desktop/build.sh
       # What the user runs; the updater inside the installed package calls it too.
       - run: npm install -g npm@12
       - name: Install, serve, talk, restart and update, as a user's machine would
         env:
           # Homebrew comes with both images; on Ubuntu it is off PATH.
           WALNUT_REHEARSAL_BREW: ${{ startsWith(matrix.os, 'macos') && 'brew' || '/home/linuxbrew/.linuxbrew/bin/brew' }}
+          WALNUT_REHEARSAL_APP: ${{ startsWith(matrix.os, 'macos') && format('{0}/desktop/Walnut.app', github.workspace) || '' }}
         run: node scripts/release-rehearsal/run.mjs --packs "$RUNNER_TEMP/packs/packs.json" --field latest --runtime --work "$RUNNER_TEMP/rehearsal" --keep
       - name: Upload rehearsal logs
         if: failure()

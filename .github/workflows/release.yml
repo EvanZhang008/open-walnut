@@ -13,8 +13,8 @@ name: Release
 #            `npm run release -- patch|minor|major` publishes through job `stable`.
 #            Either way the release then gets its self-contained archives, the
 #            Homebrew formula and install.sh (release-archives.yml).
-#   nightly  about every six hours (checked when CI finishes on main and every 30
-#            minutes; and by hand): the newest commit on main that CI passed,
+#   nightly  about every six hours (checked when CI finishes on main and on the
+#            schedule; and by hand): the newest commit on main that CI passed,
 #            when it is not the last nightly. Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`. Nothing is
 #            committed: the version lives in the registry, not in package.json,
@@ -45,7 +45,7 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
-  # The checks only ask, and a gap decides: a nightly when the last one is 5.5h old
+  # The checks only ask, and a gap decides: a nightly when the last one is 4.5h old
   # (scripts/nightly-version.mjs due), a stable when the last one is 23h old
   # (scripts/stable-promote.mjs plan). They ask whenever CI finishes on main,
   # which is when there is something new to ship, and on a schedule for a quiet
@@ -190,7 +190,9 @@ jobs:
             echo "no recent commit on main passed CI; nothing to publish"
           elif ! git cat-file -e "$green:scripts/nightly-version.mjs" 2>/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "$green predates the nightly pipeline; nothing to publish"
+            # Only a lookup that went wrong lands here: every commit since 2026-09-30 has the
+            # pipeline. Loud, so a run that keeps choosing it shows on the run's page.
+            echo "::warning::the newest green commit found is $green, which predates the nightly pipeline; nothing published (last nightly $last)"
           elif [ "$last" = "$green" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "that commit is already the last nightly; nothing to publish"
@@ -199,7 +201,7 @@ jobs:
             # may be an older commit; a nightly must never move installs backwards
             # (`force` overrides, for a last nightly built on a rewritten history).
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "$green is not newer than the last nightly; nothing to publish"
+            echo "::warning::$green is not newer than the last nightly ($last); nothing published"
           else
             git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"
