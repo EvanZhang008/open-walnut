@@ -696,8 +696,8 @@ defineOp({
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 
-/** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped. */
-const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one and is still open, hears about it unless the leader is you.'
+/** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped, the caller's own at its turn end. */
+const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped (yours, if this is your task, when this turn ends); its leader, if it has one and is still open, hears about it unless the leader is you.'
 
 defineOp({
   name: 'task_complete',
@@ -835,7 +835,7 @@ defineOp({
   handler: async (args, call) => {
     const ids = [...new Set((args.ids as string[]).map((s) => s.trim()).filter(Boolean))]
     const rows = await bulkRows(ids, (id) => call('POST', `/tasks/${encodeURIComponent(id)}/complete`))
-    return bulkResult(rows, 'marked complete. Their own live sessions are stopped; an open leader hears about each unless the leader is you',
+    return bulkResult(rows, 'marked complete. Their own live sessions are stopped (yours when this turn ends); an open leader hears about each unless the leader is you',
       'No further action is required.')
   },
   timeoutMs: 120_000,

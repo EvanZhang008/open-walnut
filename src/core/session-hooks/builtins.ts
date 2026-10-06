@@ -1815,13 +1815,13 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
  *  - the task lands COMPLETE. COMPLETE is terminal, so no later NEED_ACTION edge
  *    will ever speak for it (before 2026-09-28 a child that closed its own task
  *    without replying left its parent waiting the full 1h/6h deadline). A child
- *    sets COMPLETE from INSIDE its turn, and completing a task completes its
- *    session, which ends that turn on the spot. So while the target is still
- *    mid-turn the edge only defers: the turn's end (onTurnComplete /
- *    onTurnError, both fire for that cut turn) notifies, quoting the turn's
- *    final text or, when it has none, the transcript's last message and the
- *    calls after it; a reply sent before the turn ends still wins. A turn the
- *    user stops fires neither, and the sweeper remains the guarantee.
+ *    sets COMPLETE from INSIDE its turn, and its session is stopped only when
+ *    that turn ends (sessions/self-complete-stop.ts). So while the target is
+ *    still mid-turn the edge only defers: the turn's end (onTurnComplete /
+ *    onTurnError) notifies, quoting the turn's final text or, when it has
+ *    none, the transcript's last message and the calls after it; a reply sent
+ *    before the turn ends still wins. A turn the user stops fires neither, and
+ *    the sweeper remains the guarantee.
  *
  * Exactly-once lives in the request row's atomic settle (notifyRequesterFallback);
  * a reply racing either edge wins the settle and this hook stays silent.

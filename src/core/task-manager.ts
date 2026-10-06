@@ -25,6 +25,7 @@ import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { folderProjectFor, trimDir } from './sessions/folder-project.js';
+import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
@@ -2409,10 +2410,14 @@ async function persistTaskExt(task: Task): Promise<void> {
  * Fire-and-forget: mark all sessions linked to a completed task as completed.
  * Uses dynamic import to avoid circular dependency with session-tracker.
  */
-function autoCompleteTaskSessions(task: Task): void {
-  if (!task.session_ids?.length) return;
+function autoCompleteTaskSessions(task: Task, actorSid?: string): void {
+  // This runs on EVERY write to a complete task (a title refine, a cwd rename
+  // seen on a tool call): a session whose own completion waits for its turn
+  // end is left to that wait.
+  const sessionIds = (task.session_ids ?? []).filter((sid) => !isAwaitingTurnEnd(sid));
+  if (!sessionIds.length) return;
   import('./session-tracker.js')
-    .then(({ completeTaskSessions }) => completeTaskSessions(task.session_ids))
+    .then(({ completeTaskSessions }) => completeTaskSessions(sessionIds, actorSid ? { actorSid } : undefined))
     .then((count) => {
       if (count > 0) {
         log.task.info('auto-completed sessions for task', { taskId: task.id, count });
@@ -3546,7 +3551,7 @@ export async function completeTask(idPrefix: string, opts?: { actorSid?: string 
   if (!syncResult.success) {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
-  autoCompleteTaskSessions(task);
+  autoCompleteTaskSessions(task, opts?.actorSid);
   emitPhaseChanged(task, oldPhase, 'api', opts?.actorSid);
 
   return { task };
@@ -4356,7 +4361,7 @@ export async function updateTask(
     }
   }
   if (parentChangeAction) parentChangeAction();
-  if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
+  if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task, eventOptions?.actorSid);
 
   // Centralized event emission — every updateTask() call notifies the UI.
   // All other task-mutating functions (addNote, updateDescription, toggleComplete,

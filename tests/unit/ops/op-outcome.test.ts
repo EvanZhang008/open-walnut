@@ -981,7 +981,7 @@ describe('task_complete says what completion does', () => {
   // effects (completeTaskSessions stops the task's own live session; its leader
   // hears unless the leader is the caller): the old one claimed execution was
   // unchanged, which it never was.
-  const OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one and is still open, hears about it unless the leader is you.'
+  const OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped (yours, if this is your task, when this turn ends); its leader, if it has one and is still open, hears about it unless the leader is you.'
   const NEXT = 'No further action is required.'
 
   const cases: Array<{ label: string; task: Record<string, unknown>; state: string }> = [

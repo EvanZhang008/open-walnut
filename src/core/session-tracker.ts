@@ -33,6 +33,7 @@ import {
 // Also a zero-import leaf — see the file header for why classification cannot
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
+import { stopWhenTurnEnds } from './sessions/self-complete-stop.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 
@@ -2474,7 +2475,13 @@ export async function relinkSessionsToTask(fromTaskId: string, toTaskId: string)
  * Also asks the owning daemon to stop each CLI that still had a pid
  * (best-effort, fire-and-forget). Returns the number of sessions actually updated.
  */
-export async function completeTaskSessions(sessionIds: string[]): Promise<number> {
+export async function completeTaskSessions(
+  sessionIds: string[],
+  // The session whose API call completed the task. Mid-turn (its record
+  // 'running'), it is stopped when that turn ends instead
+  // (sessions/self-complete-stop.ts).
+  opts?: { actorSid?: string },
+): Promise<number> {
   if (!sessionIds.length) return 0;
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -2489,6 +2496,7 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
     // toast on every task you mark done, 2026-08-10). host picks the owning daemon.
     const pidsToKill: { sid: string; host?: string }[] = [];
     const toReap: { claudeSessionId: string; host?: string }[] = [];
+    let stopAtTurnEnd: string | undefined;
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
     const insertSql =
@@ -2511,18 +2519,23 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         // rows in one synchronous transaction (~6s event-loop stall right after
         // listen, queueing the browser's first requests behind it).
         if (session.process_status === 'stopped' && session.pid == null) continue;
-        if (session.pid != null && session.provider !== 'embedded' && session.provider !== 'sdk') {
+        const hasCli = session.pid != null && session.provider !== 'embedded' && session.provider !== 'sdk';
+        if (hasCli && sid === opts?.actorSid && session.process_status === 'running') {
+          stopAtTurnEnd = sid;
+          continue;
+        }
+        if (hasCli) {
           pidsToKill.push({ sid: session.claudeSessionId, host: session.host });
         }
         toReap.push({ claudeSessionId: session.claudeSessionId, host: session.host });
         session.process_status = 'stopped';
         // Stamp the INTENT before the stop below lands: the death snapshot the
         // daemon folds after our kill has no clean result tail (the CLI can die
-        // mid-turn — e.g. the session completing its OWN task via the gateway is
-        // killed while its Bash tool is still running) and projects 'error'. The
-        // snapshot applier honors a durable intentional-teardown reason and keeps
-        // the label 'stopped' (2026-08-23: compare-task session showed red Error
-        // after finishing its work and completing its task).
+        // mid-turn, e.g. a task completed from the board while its session works)
+        // and projects 'error'. The snapshot applier honors a durable
+        // intentional-teardown reason and keeps the label 'stopped' (2026-08-23:
+        // compare-task session showed red Error after finishing its work and
+        // completing its task).
         session.status_reason = 'expected_teardown';
         session.status_changed_by = 'system';
         if (session.pid != null) {
@@ -2542,6 +2555,12 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         updated++;
       }
     });
+    // Still under the lock every record write takes: the status write that
+    // ends this turn lands after the wait is registered.
+    if (stopAtTurnEnd) {
+      stopWhenTurnEnds(stopAtTurnEnd);
+      log.session.info('self-completing session stops when its turn ends', { sessionId: stopAtTurnEnd });
+    }
     if (updated > 0) {
       log.session.info('completing task sessions', { sessionIds: sessionIds.join(','), count: updated });
       // Mark BEFORE signalling (see pidsToKill). Dynamic import avoids the

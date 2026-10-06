@@ -78,9 +78,8 @@ export function turnStarterOf(userRow: TranscriptRow | undefined, parentTaskId?:
  * text, plus the tool calls it made AFTER that text, because a turn that opens
  * with "let me look at the folder" and then writes the files has its result in
  * the calls, not the words. The common silent ending is a child that writes its
- * files and closes its own task, which ends the turn on the spot (completing a
- * task completes its session). A turn with neither falls back to the last text
- * of an earlier turn.
+ * files, closes its own task and ends the turn without a word. A turn with
+ * neither falls back to the last text of an earlier turn.
  */
 export function lastWordsOf(messages: ReadonlyArray<TranscriptRow> | undefined): NoticeLastMessage | undefined {
   return lastTurnOf(messages)?.words;
