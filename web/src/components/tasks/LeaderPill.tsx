@@ -5,7 +5,6 @@ import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import { log } from '@/utils/log';
@@ -96,8 +95,6 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
     return () => document.removeEventListener('keydown', onKey, true);
   }, [open, close]);
 
-  useRowPillFold(triggerRef, subtasks.length > 0);
-
   if (subtasks.length === 0) return null;
 
   // The row's unlink icon: the worker leaves this team and keeps running where
@@ -127,8 +124,9 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         aria-expanded={open || adoptOpen}
         data-testid="leader-pill"
         data-subtask-count={subtasks.length}
-        // A narrow session header shows this letter instead of the words (CSS only;
-        // the text stays for readers and tests); the count rides in the hover text.
+        // A narrow session header or task column shows this letter instead of the
+        // words (CSS only; the text stays for readers and tests); the count rides in
+        // the hover text.
         data-short="L"
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the

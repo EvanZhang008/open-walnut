@@ -1,25 +1,21 @@
-/* A crowded task row folds its pills to one letter (W, T, L, C), so the title keeps
-   the room. Two attributes decide it, both plain:
-     - `data-row-fit="tight"` on the list's scroller: the column is narrow
-       (utils/row-fit.ts);
-     - `data-pill-crowd` on the row or card: it has two or more of the pills
-       (TRIGGER, WORKER, LEADER, CRON), or a tag group beside one. A lone pill keeps
-       its word, there is room for it. The pills report this as they come and go
-       (hooks/useRowPillFold.ts).
+/* In a tight task column (`data-row-fit="tight"` on the list's scroller, set by
+   utils/row-fit.ts) every pill after a title reads as one letter: W, T, L, C. The
+   whole column folds at once, never row by row (2026-10-05: a row whose only pill
+   kept "WORKER" or "TRIGGER" cut its title as short as its crowded neighbours, and
+   the column read as a mix of words and letters). A roomy column keeps the words
+   and the Leader count.
 
    The word stays in the DOM, so readers and tests still see "Worker" and the count
    in "Leader · 13"; the letter is drawn from `data-short`, like the session header
-   (session-header-fit.css), and the hover text keeps the rest.
+   (session-header-fit.css), and the hover text keeps the rest. Nothing here may
+   depend on a pill's neighbours (`:has()`, sibling combinators): WebKit, the Mac
+   app's engine, does not restyle those reliably when a pill arrives after the row
+   drew, as the triggers do. */
 
-   Not a `:has()` on the row: WebKit (the Mac app) did not restyle a pill reliably
-   when a pill arrived late or left (the triggers load after the row), in two
-   different shapes depending on where the new pill sat (2026-10-05). An attribute
-   set from script invalidates like any other. */
-
-.home-navigation-scroll[data-row-fit="tight"] :is(.todo-item-title-row, .todo-focus-card, .todo-pinned-card)[data-pill-crowd] > .task-row-pill[data-short] > .task-pill-long {
+.home-navigation-scroll[data-row-fit="tight"] .task-row-pill[data-short] > .task-pill-long {
   display: none;
 }
 
-.home-navigation-scroll[data-row-fit="tight"] :is(.todo-item-title-row, .todo-focus-card, .todo-pinned-card)[data-pill-crowd] > .task-row-pill[data-short]::after {
+.home-navigation-scroll[data-row-fit="tight"] .task-row-pill[data-short]::after {
   content: attr(data-short);
 }

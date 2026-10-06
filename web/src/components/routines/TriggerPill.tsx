@@ -26,7 +26,6 @@ import { useNavigate } from 'react-router-dom';
 import type { Routine, RoutineAuditEntry } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { useRowPillFold } from '@/hooks/useRowPillFold';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
   auditClock, auditHistory, describeAuditEntry, describeCheck, describeFireTally, describeLastCheck,
@@ -273,7 +272,6 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  useRowPillFold(triggerRef, !!taskId && triggers.length > 0);
   const navigate = useNavigate();
   const placement = useMenuPlacement(open, triggerRef, menuRef, {
     align: 'start',
@@ -340,8 +338,8 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
         data-trigger-count={triggers.length}
         data-paused={allOff ? 'true' : undefined}
         data-off={allOff ? offWord(triggers).toLowerCase() : undefined}
-        // A narrow session header or a crowded task row shows this letter instead of
-        // the word (CSS, the text stays for readers and tests).
+        // A narrow session header or task column shows this letter instead of the
+        // word (CSS, the text stays for readers and tests).
         data-short="T"
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the

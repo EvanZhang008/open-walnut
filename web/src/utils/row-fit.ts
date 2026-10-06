@@ -1,8 +1,7 @@
 /**
- * How crowded the task rows are, told to CSS as `data-row-fit` on the list's
- * scroller. One observer for the whole list (never one per row): the rows read it
- * through `.home-navigation-scroll[data-row-fit="tight"]` (row-pill-fit.css) and
- * fold their pills to a letter, so a narrow column keeps room for the title.
+ * How wide the task column is, told to CSS as `data-row-fit` on the list's
+ * scroller. One observer for the whole list (never one per row): in a tight column
+ * every row's pills read as one letter (row-pill-fit.css), so the titles keep room.
  */
 export const ROW_FIT_TIGHT_BELOW_PX = 420;
 
