@@ -31,6 +31,9 @@ interface PermissionAnswerFormProps {
   onSubmit: (answers: Record<string, string>) => void;
   /** Refuse the ask outright ("the user dismissed the questions"), i.e. a deny. */
   onDismissQuestions: () => void;
+  /** The refuse button's word and tooltip (default `Dismiss`; a kanban card says `Skip question`). */
+  dismissLabel?: string;
+  dismissTitle?: string;
   /**
    * Toast placement: cap the height and scroll internally. The toaster column is
    * 380px wide and top-anchored, so a six-question ask would otherwise run off
@@ -40,7 +43,7 @@ interface PermissionAnswerFormProps {
 }
 
 export function PermissionAnswerForm({
-  questions, disabled, resolved, onSubmit, onDismissQuestions, scrollable,
+  questions, disabled, resolved, onSubmit, onDismissQuestions, scrollable, dismissLabel = 'Dismiss', dismissTitle,
 }: PermissionAnswerFormProps) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
   const [otherText, setOtherText] = useState<Record<string, string>>({});
@@ -98,8 +101,8 @@ export function PermissionAnswerForm({
         >
           Submit
         </button>
-        <button className="notification-perm-btn" disabled={disabled} onClick={onDismissQuestions}>
-          Dismiss
+        <button className="notification-perm-btn" disabled={disabled} onClick={onDismissQuestions} title={dismissTitle}>
+          {dismissLabel}
         </button>
       </div>
     </div>

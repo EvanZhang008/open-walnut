@@ -38,19 +38,36 @@ interface BoardBody {
   choices?: Record<string, { option?: string; label?: string; text?: string }>
   reminders?: Record<string, { at?: string; fired_at?: string }>
   refs?: Array<{ id: string; title?: string; phase?: string }>
+  cards?: Record<string, { summary?: string; lane_suggested?: unknown }>
+  team?: Array<{ id: string; phase?: string }>
 }
 
-const TASK_ARG = z.string().min(1).optional().describe(
+/**
+ * "cards: 14 open, 6 with no summary from you, 2 suggestions the user has not
+ * answered" (G19); '' from a server that sends no kanban fields.
+ */
+export function cardsLine(b: BoardBody): string {
+  if (!Array.isArray(b.team)) return '';
+  const cards = b.cards ?? {};
+  const open = (b.team ?? []).filter((t) => t.phase !== 'COMPLETE');
+  const bare = open.filter((t) => !cards[t.id]?.summary).length;
+  const team = new Set((b.team ?? []).map((t) => t.id));
+  const suggested = Object.entries(cards).filter(([id, c]) => team.has(id) && c.lane_suggested).length;
+  return `cards: ${open.length} open, ${bare} with no summary from you, ${plural(suggested, 'suggestion')} the user has not answered`;
+}
+
+export const TASK_ARG = z.string().min(1).optional().describe(
   'Task whose board this is; defaults to your team\'s shared board (yours, else your nearest leader\'s that has one).');
 
-interface BoardTarget {
+export interface BoardTarget {
   taskId: string
   /** The board belongs to a leader above the caller, not to the caller's own task. */
   shared: boolean
 }
 
-async function resolveBoardTask(args: Record<string, unknown>, call: OpCall): Promise<BoardTarget> {
-  const given = typeof args.task === 'string' ? args.task.trim() : '';
+export async function resolveBoardTask(args: Record<string, unknown>, call: OpCall): Promise<BoardTarget> {
+  const raw = args.task ?? args.task_id;
+  const given = typeof raw === 'string' ? raw.trim() : '';
   if (given) return { taskId: given, shared: false };
   const me = await call('GET', '/me').then((b) => b as CallerMe, () => undefined);
   const id = me?.task?.id;
@@ -60,7 +77,7 @@ async function resolveBoardTask(args: Record<string, unknown>, call: OpCall): Pr
   return { taskId: ownerId, shared: ownerId !== id };
 }
 
-function boardPath(taskId: string, tail = ''): string {
+export function boardPath(taskId: string, tail = ''): string {
   return `/tasks/${encodeURIComponent(taskId)}/board${tail}`;
 }
 
@@ -68,7 +85,7 @@ const SHARED = ' (your leader\'s, shared with your team)';
 /** "lead01" or "lead01 (your leader's, shared with your team)" */
 const boardOf = (t: BoardTarget) => `${t.taskId}${t.shared ? SHARED : ''}`;
 /** "lead01's board" or "lead01's board (your leader's, shared with your team)" */
-const boardOfPossessive = (t: BoardTarget) => `${t.taskId}'s board${t.shared ? SHARED : ''}`;
+export const boardOfPossessive = (t: BoardTarget) => `${t.taskId}'s board${t.shared ? SHARED : ''}`;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -166,15 +183,20 @@ defineOp({
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
     const body = await call('GET', boardPath(target.taskId)) as BoardBody;
-    const has = !!body.board && typeof body.board.html === 'string';
+    // A kanban write makes a board file with no page (html ''): its cards are kept, but there is nothing to edit yet.
+    const hasFile = !!body.board && typeof body.board.html === 'string';
+    const has = hasFile && body.board!.html!.trim() !== '';
     const nowMs = Date.now();
     const items = has ? itemsSummary(body, nowMs) : '';
     const due = has ? dueReminders(body, nowMs) : [];
+    const cards = cardsLine(body);
     return withOutcome(
       { task_id: target.taskId, ...body },
       has
-        ? `Board of ${boardOf(target)}: ${boardSummary(body)}, ${body.board!.html!.length} chars of html, last written ${body.board!.updated_at ?? 'unknown'} by ${body.board!.updated_by ?? 'unknown'}.${items ? ` ${items}` : ''}`
-        : `Task ${boardOf(target)} has no board yet.`,
+        ? `Board of ${boardOf(target)}: ${boardSummary(body)}, ${body.board!.html!.length} chars of html, last written ${body.board!.updated_at ?? 'unknown'} by ${body.board!.updated_by ?? 'unknown'}.${items ? ` ${items}` : ''}${cards ? ` ${cards}.` : ''}`
+        : hasFile
+          ? `The board of ${boardOf(target)} has no page yet, only its kanban cards.${cards ? ` ${cards}.` : ''}`
+          : `Task ${boardOf(target)} has no board yet.`,
       has
         ? `${due.length ? `A reminder the user set is due on ${due.join(', ')}: raise it with the user now. ` : ''}${EDIT_NEXT}`
         : NO_BOARD_NEXT,

@@ -28,6 +28,10 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { BoardChangedEvent } from '../event-types.js';
 import { BOARD_ITEM_ID_RE, own } from './board-html.js';
+import {
+  isLaneTemplateId, normalizeCards, normalizeKanbanSeen, normalizeLanes,
+  type BoardCard, type BoardKanbanSeen, type BoardLane, type LaneTemplateId,
+} from './board-lanes.js';
 
 export {
   BOARD_ITEM_ID_RE,
@@ -147,6 +151,15 @@ export interface BoardFile {
   choices: Record<string, BoardChoice>;
   reminders: Record<string, BoardReminder>;
   section_seen: Record<string, BoardSectionSeen>;
+  /** Kanban (board-kanban.ts; never bumps `version`): stored lanes, null = still on the template. */
+  lanes: BoardLane[] | null;
+  lanes_template?: LaneTemplateId;
+  lanes_at?: string;
+  lanes_by?: BoardWriter;
+  /** Key = full task id of a card's (sub)task. */
+  cards: Record<string, BoardCard>;
+  /** The user's "Changed" baseline (board-kanban-seen.ts); null = never looked. */
+  kanban_seen: BoardKanbanSeen | null;
 }
 
 /** Fired, or its time has passed: the user sees it as due until they act on that item. */
@@ -270,6 +283,21 @@ function normalize(raw: BoardFile | null, taskId: string): BoardFile | null {
     choices: map(raw.choices),
     reminders: map(raw.reminders),
     section_seen: map(raw.section_seen),
+    lanes: normalizeLanes(raw.lanes),
+    ...(isLaneTemplateId(raw.lanes_template) ? { lanes_template: raw.lanes_template } : {}),
+    ...(typeof raw.lanes_at === 'string' && raw.lanes_at ? { lanes_at: raw.lanes_at } : {}),
+    ...(raw.lanes_by ? { lanes_by: raw.lanes_by } : {}),
+    cards: normalizeCards(raw.cards),
+    kanban_seen: normalizeKanbanSeen(raw.kanban_seen),
+  };
+}
+
+/** A board with no page yet: what the first lane, card or seen write creates (html '', version 0). */
+export function emptyBoard(taskId: string, by: BoardWriter): BoardFile {
+  return {
+    task_id: taskId, html: '', version: 0, updated_at: new Date().toISOString(), updated_by: by,
+    threads: {}, marks: {}, projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {},
+    lanes: null, cards: {}, kanban_seen: null,
   };
 }
 
@@ -321,6 +349,9 @@ export async function setBoardHtml(
       choices: {},
       reminders: {},
       section_seen: {},
+      lanes: null,
+      cards: {},
+      kanban_seen: null,
       ...current,
       task_id: taskId,
       html,

@@ -1,6 +1,6 @@
 /**
  * The Board's Overview (web/src/components/board/board-overview-model.ts) and
- * its remembered view (board-view-pref.ts): the team walk (cycles, the depth
+ * the team walk (cycles, the depth
  * cap), each task's group / reason / badge / "now" line, the attention order
  * inside a group (a child under its parent, the indent cap), the page's signals
  * and the rollup. The pane itself is proven in a real browser:
@@ -16,9 +16,6 @@ import {
 } from '../../web/src/components/board/board-overview-model';
 import type { BoardProject } from '../../web/src/components/board/board-model';
 import { subtasksOf } from '../../web/src/components/tasks/subtask-index';
-import {
-  BOARD_VIEW_PREFIX, parseBoardView, readBoardView, shownBoardView, writeBoardView,
-} from '../../web/src/components/board/board-view-pref';
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z');
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
@@ -548,45 +545,5 @@ describe('row words', () => {
     expect(rowTooltip(r, { when: 'Oct 2, 11:58' })).toBe([
       'Task a1', 'Waiting · Waiting for approval: Bash', 'Under Area A', 'In project Lighthouse', 'Leads 2 open subtasks', 'Last change Oct 2, 11:58',
     ].join('\n'));
-  });
-});
-
-describe('the remembered view', () => {
-  function memStorage(throwing = false) {
-    const m = new Map<string, string>();
-    return {
-      m,
-      getItem: (k: string) => { if (throwing) throw new Error('blocked'); return m.get(k) ?? null; },
-      setItem: (k: string, v: string) => { if (throwing) throw new Error('blocked'); m.set(k, v); },
-    };
-  }
-
-  it('Overview by default; Custom only when picked and a page exists', () => {
-    expect(shownBoardView(null, true)).toBe('overview');
-    expect(shownBoardView('custom', true)).toBe('custom');
-    expect(shownBoardView('custom', false)).toBe('overview');
-    expect(shownBoardView('overview', true)).toBe('overview');
-  });
-
-  it('is kept per owner, and junk reads as no pick', () => {
-    const s = memStorage();
-    writeBoardView(s, 'lead-a', 'custom');
-    writeBoardView(s, 'lead-b', 'overview');
-    expect(readBoardView(s, 'lead-a')).toBe('custom');
-    expect(readBoardView(s, 'lead-b')).toBe('overview');
-    expect(readBoardView(s, 'lead-c')).toBeNull();
-    expect(s.m.get(`${BOARD_VIEW_PREFIX}lead-a`)).toBe('custom');
-    s.m.set(`${BOARD_VIEW_PREFIX}lead-c`, 'grid');
-    expect(readBoardView(s, 'lead-c')).toBeNull();
-    expect(parseBoardView('custom')).toBe('custom');
-    expect(parseBoardView(undefined)).toBeNull();
-  });
-
-  it('a blocked storage never throws', () => {
-    const s = memStorage(true);
-    expect(() => writeBoardView(s, 'lead', 'custom')).not.toThrow();
-    expect(readBoardView(s, 'lead')).toBeNull();
-    expect(readBoardView(null, 'lead')).toBeNull();
-    expect(readBoardView(s, '')).toBeNull();
   });
 });

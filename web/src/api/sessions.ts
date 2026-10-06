@@ -135,6 +135,15 @@ export function hydrateTaskSessionStatuses(tasks: Iterable<Task>): Promise<void>
   return hydrateSessionStatuses(taskSessionIds(tasks));
 }
 
+// Sessions whose status a hydration batch answered since this page loaded (the kanban lays its
+// cards out only once its team's statuses are this fresh, N5).
+const hydratedSessions = new Set<string>();
+
+/** True once a status hydration answered for this session in this page. */
+export function sessionStatusHydrated(sessionId: string): boolean {
+  return hydratedSessions.has(sessionId);
+}
+
 export async function hydrateSessionStatuses(sessionIds: Iterable<string>): Promise<void> {
   const uniqueIds = [...new Set(sessionIds)]
     .filter((sessionId) => sessionId && !isPlaceholderColumnId(sessionId));
@@ -149,6 +158,7 @@ export async function hydrateSessionStatuses(sessionIds: Iterable<string>): Prom
       );
       const snapshots = Object.values(res.statuses ?? {});
       const accepted = sessionStatusStore.applyVersionedBatch(snapshots, 'rest:session-list');
+      for (const id of ids) hydratedSessions.add(id);
       log.info('session-status', 'status batch hydrated', {
         requested: ids.length,
         received: snapshots.length,

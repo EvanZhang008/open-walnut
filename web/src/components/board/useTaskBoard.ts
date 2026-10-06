@@ -12,6 +12,11 @@
  * delete, note, status pick, tick, answer, reminder or seen section) invalidates reads in
  * flight and schedules a fresh one, so the merged row is never flickered away
  * by a read that started before it existed.
+ *
+ * Kanban writes (`board:changed` kind card or lanes, or a kanban seen write)
+ * re-read only the kanban fields (`fields=kanban`, no html) and merge them in,
+ * one such read in flight at a time (board-kanban-reload.ts). `fetchStartedAt`
+ * is when the read whose kanban part is on screen started (G32 overlays).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, apiGet } from '@/api/client';
@@ -22,6 +27,10 @@ import {
   type BoardProject, type BoardReminder, type BoardSectionSeen,
 } from './board-model';
 import { dropDueReminder, recordOf, setEntry } from './board-items-model';
+import {
+  applyFullPayload, applyKanbanFields, createKanbanReloader, isKanbanReloadEvent, normalizeKanbanFields,
+  type KanbanReloader,
+} from './board-kanban-reload';
 
 const RELOAD_DEBOUNCE_MS = 150;
 
@@ -44,8 +53,9 @@ export function boardErrorMessage(err: unknown): string {
   return err instanceof Error && err.message ? err.message : String(err);
 }
 
-function normalize(data: BoardPayload): BoardPayload {
+export function normalizeBoardPayload(data: BoardPayload): BoardPayload {
   const out: BoardPayload = {
+    ...normalizeKanbanFields(data),
     board: data?.board ?? null,
     threads: recordOf<BoardMessage[]>(data?.threads),
     marks: recordOf<BoardMark>(data?.marks),
@@ -76,6 +86,10 @@ export interface TaskBoardData {
   mergeChoice: (choiceId: string, choice: BoardChoice | null) => void;
   mergeReminder: (target: string, reminder: BoardReminder | null) => void;
   mergeSectionSeen: (sectionId: string, seen: BoardSectionSeen) => void;
+  /** Epoch ms the read whose kanban part is on screen started (0 before the first answer). */
+  fetchStartedAt: number;
+  /** Re-read the kanban fields now (single flight, coalesced). */
+  reloadKanban: () => void;
 }
 
 export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): TaskBoardData {
@@ -83,16 +97,28 @@ export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
+  const [fetchStartedAt, setFetchStartedAt] = useState(0);
+  const payloadRef = useRef<BoardPayload | null>(null);
+  const kanbanAt = useRef(0);
+  const reloader = useRef<KanbanReloader | null>(null);
+  const commit = useCallback((next: BoardPayload | null, startedAt: number) => {
+    payloadRef.current = next;
+    kanbanAt.current = startedAt;
+    setPayload(next);
+    setFetchStartedAt(startedAt);
+  }, []);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const watch = useRef<ReadonlySet<string>>(new Set());
   watch.current = new Set([taskId, ...watchIds, ...(payload?.board_task_id ? [payload.board_task_id] : [])]);
 
   const load = useCallback(async (why: string) => {
     const mine = ++seq.current;
+    const startedAt = Date.now();
     try {
       const data = await apiGet<BoardPayload>(boardPath(taskId), { team: '1' }, { quietStatuses: [404] });
       if (mine !== seq.current) return;
-      setPayload(normalize(data));
+      const r = applyFullPayload(payloadRef.current, normalizeBoardPayload(data), startedAt, kanbanAt.current);
+      commit(r.payload, r.kanbanStartedAt);
       setError(null);
     } catch (err) {
       if (mine !== seq.current) return;
@@ -103,7 +129,7 @@ export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): 
     } finally {
       if (mine === seq.current) setLoading(false);
     }
-  }, [taskId]);
+  }, [taskId, commit]);
 
   const scheduleLoad = useCallback((why: string) => {
     if (timer.current) clearTimeout(timer.current);
@@ -114,27 +140,45 @@ export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): 
   }, [load]);
 
   useEffect(() => {
-    setPayload(null);
+    commit(null, 0);
     setError(null);
     setLoading(true);
     void load('open');
+    const r = createKanbanReloader({
+      fetch: () => apiGet<unknown>(boardPath(taskId), { team: '1', fields: 'kanban' }, { quietStatuses: [404] }),
+      apply: (data, startedAt) => {
+        const next = applyKanbanFields(payloadRef.current, normalizeKanbanFields(data), startedAt, kanbanAt.current);
+        if (next) commit(next.payload, next.kanbanStartedAt);
+      },
+      onError: (err, why) => log.warn('board', 'kanban reload failed', { taskId, why, error: boardErrorMessage(err) }),
+    });
+    reloader.current = r;
     return () => {
       if (timer.current) clearTimeout(timer.current);
       timer.current = null;
       seq.current++; // a read still in flight belongs to the task we left
+      r.dispose();
+      if (reloader.current === r) reloader.current = null;
     };
-  }, [load]);
+  }, [load, commit, taskId]);
 
   useEvent('board:changed', (data) => {
-    const d = data as { taskId?: string; kind?: string } | null;
-    if (d?.taskId && watch.current.has(d.taskId)) scheduleLoad(`ws:${d.kind ?? 'change'}`);
+    const d = data as { taskId?: string; kind?: string; kanban?: boolean } | null;
+    if (!d?.taskId || !watch.current.has(d.taskId)) return;
+    // Before the first answer there is nothing to merge into: a full read is coming anyway.
+    if (isKanbanReloadEvent(d) && payloadRef.current) reloader.current?.request(`ws:${d.kind}`);
+    else scheduleLoad(`ws:${d.kind ?? 'change'}`);
   });
   useEvent('_ws:reconnected', () => scheduleLoad('reconnect'));
 
   /** A local write the route answered: newer than any read in flight, then a fresh read. */
   const merge = useCallback((why: string, next: (p: BoardPayload) => BoardPayload) => {
     seq.current++;
-    setPayload((p) => (p ? next(p) : p));
+    const p = payloadRef.current;
+    if (p) {
+      payloadRef.current = next(p);
+      setPayload(payloadRef.current);
+    }
     scheduleLoad(why);
   }, [scheduleLoad]);
 
@@ -185,9 +229,13 @@ export function useTaskBoard(taskId: string, watchIds: readonly string[] = []): 
   }, [merge]);
 
   const reload = useCallback(() => { void load('manual'); }, [load]);
+  const reloadKanban = useCallback(() => {
+    if (payloadRef.current) reloader.current?.request('manual');
+    else void load('manual');
+  }, [load]);
 
   return {
     payload, loading, error, reload, mergeMessage, dropMessage, mergeMark, mergeProject, mergeCheck, mergeChoice,
-    mergeReminder, mergeSectionSeen,
+    mergeReminder, mergeSectionSeen, fetchStartedAt, reloadKanban,
   };
 }

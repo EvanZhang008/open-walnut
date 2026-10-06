@@ -3,7 +3,10 @@
  *
  *   GET    /tasks/:id/board[?team=1]         → { board_task_id, board_task_title, board | null, threads, marks,
  *                                                projects, checks, choices, reminders, section_seen, refs }
+ *                                                + kanban: lanes, lanes_effective, lanes_template, cards, team,
+ *                                                kanban_seen, board_version (?fields=kanban: only those + ids)
  *   GET    /tasks/:id/board/owner            → { task_id, title, self, has_board } (the team's shared board)
+ *   Kanban lanes, cards, moves, suggestions and the seen baseline: board-kanban-v1.ts
  *   PUT    /tasks/:id/board                  { html, version? }      → { board }
  *   POST   /tasks/:id/board/edits            { edits, version? }     → { board }
  *   POST   /tasks/:id/board/threads/:thread  { text }                → 201 { message, delivery }
@@ -72,7 +75,7 @@ import {
   buildBoardThreadPrompt,
   type BoardDelivery,
 } from '../../core/boards/board-delivery.js'
-import { callerMayWriteBoard, resolveTeamBoardTask, type BoardCaller } from '../../core/boards/board-team.js'
+import { callerMayWriteBoard, kanbanFields, resolveTeamBoardTask, teamSnapshot, type BoardCaller } from '../../core/boards/board-team.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 
 export { buildBoardThreadPrompt }
@@ -98,29 +101,29 @@ export function boardPayloadTooLargeHandler(err: Error, _req: Request, res: Resp
   next(err)
 }
 
-function header(req: Request, name: string): string | undefined {
+export function header(req: Request, name: string): string | undefined {
   const raw = req.headers[name]
   const v = (Array.isArray(raw) ? raw[0] : raw ?? '').trim()
   return v || undefined
 }
 
-function param(v: string | string[] | undefined): string {
+export function param(v: string | string[] | undefined): string {
   return Array.isArray(v) ? v.join('/') : v ?? ''
 }
 
-function body(req: Request): Record<string, unknown> {
+export function body(req: Request): Record<string, unknown> {
   const b = req.body
   return b && typeof b === 'object' && !Array.isArray(b) ? b as Record<string, unknown> : {}
 }
 
-class RouteError extends Error {
+export class RouteError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly extra?: Record<string, unknown>) {
     super(message)
   }
 }
 
 /** A board task by id or unique prefix: 404 unknown, 400 ambiguous. */
-async function resolveTask(rawId: string): Promise<Task> {
+export async function resolveTask(rawId: string): Promise<Task> {
   const { getTask } = await import('../../core/task-manager.js')
   try {
     return await getTask(rawId)
@@ -131,12 +134,12 @@ async function resolveTask(rawId: string): Promise<Task> {
   }
 }
 
-function refuseOnReplica(): void {
+export function refuseOnReplica(): void {
   if (CLOUD_MODE) throw new RouteError(501, 'not_supported_cloud', 'Boards are written on the primary box')
 }
 
 /** Every write: replica refusal, then the task, then the team check. */
-async function prepareWrite(req: Request): Promise<{ task: Task; caller: BoardCaller }> {
+export async function prepareWrite(req: Request): Promise<{ task: Task; caller: BoardCaller }> {
   refuseOnReplica()
   const task = await resolveTask(param(req.params.id))
   const caller = await callerMayWriteBoard(task.id, header(req, 'x-walnut-caller-sid'))
@@ -144,13 +147,13 @@ async function prepareWrite(req: Request): Promise<{ task: Task; caller: BoardCa
 }
 
 /** A write only the user may make (a read tick, a choice): any caller sid is a session. */
-async function prepareHumanWrite(req: Request, what: string): Promise<Task> {
+export async function prepareHumanWrite(req: Request, what: string): Promise<Task> {
   refuseOnReplica()
   if (header(req, 'x-walnut-caller-sid')) throw new BoardError('human_only', 403, undefined, `Only the user ${what}`)
   return resolveTask(param(req.params.id))
 }
 
-const writer = (caller: BoardCaller) => (caller.kind === 'human' ? 'human' as const : `task:${caller.taskId}` as const)
+export const writer = (caller: BoardCaller) => (caller.kind === 'human' ? 'human' as const : `task:${caller.taskId}` as const)
 
 function optionalVersion(v: unknown): number | undefined {
   if (v === undefined || v === null) return undefined
@@ -173,7 +176,7 @@ function publicBoard(b: BoardFile): Pick<BoardFile, 'html' | 'version' | 'update
 type Handler = (req: Request, res: Response) => Promise<void>
 
 /** BoardError / RouteError → their status in the v1 error shape; anything else → the error handler. */
-function route(fn: Handler) {
+export function route(fn: Handler) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await fn(req, res)
@@ -236,6 +239,12 @@ boardV1Router.get('/tasks/:id/board', route(async (req, res) => {
     ? await resolveTeamBoardTask(task.id)
     : { taskId: task.id, title: task.title }
   const board = await getBoard(owner.taskId)
+  // Kanban (board-kanban.ts): always present, a board with no file too; fields=kanban answers only these.
+  const kanban = kanbanFields(board, await teamSnapshot(owner.taskId))
+  if (String(Array.isArray(req.query.fields) ? req.query.fields[0] : req.query.fields ?? '') === 'kanban') {
+    res.json({ board_task_id: owner.taskId, board_task_title: owner.title, board_version: board?.version ?? 0, ...kanban })
+    return
+  }
   res.json({
     board_task_id: owner.taskId,
     board_task_title: owner.title,
@@ -248,6 +257,8 @@ boardV1Router.get('/tasks/:id/board', route(async (req, res) => {
     reminders: board?.reminders ?? {},
     section_seen: board?.section_seen ?? {},
     refs: board ? await resolveRefs(boardRefIds(board)) : [],
+    board_version: board?.version ?? 0,
+    ...kanban,
   })
 }))
 

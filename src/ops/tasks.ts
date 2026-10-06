@@ -9,6 +9,8 @@ import { taskRefTag } from '../utils/entity-refs.js'
 import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
+import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
+import type { OpCall } from './core.js'
 import {
   BULK_GET_FIELDS,
   BULK_GET_FIELD_GROUPS,
@@ -474,6 +476,28 @@ function teamSentence(p: Placement | undefined): string {
     + 'The user follows your workers on your Board (skill walnut-board), not in your chat. '
 }
 
+/**
+ * G19: a new direct subtask of an owner with a Board gets a card there; the
+ * leader hears where, in the outcome it reads anyway. '' otherwise or on any failure.
+ */
+async function boardCardSentence(parent: string | undefined, id: string, started: boolean, call: OpCall): Promise<string> {
+  if (!parent) return ''
+  try {
+    const path = `/tasks/${encodeURIComponent(parent)}/board`
+    const owner = await call('GET', `${path}/owner`) as { task_id?: string; has_board?: boolean } | undefined
+    if (!owner?.has_board || owner.task_id !== parent) return ''
+    const k = await call('GET', `${path}?fields=kanban`) as
+      { lanes_effective?: unknown; cards?: Record<string, never>; team?: Array<{ id: string; phase?: string }> } | undefined
+    const lanes = normalizeLanes(k?.lanes_effective) ?? []
+    const phase = k?.team?.find((t) => t.id === id)?.phase ?? 'TODO'
+    const lane = laneById(lanes, placeCard(k?.cards?.[id], { phase, hasHadSession: started }, lanes).lane)
+    if (!lane) return ''
+    return ` Its card is in ${lane.name} on your Board; keep it current with board_card_set (summary, lane, waiting_on).`
+  } catch {
+    return ''
+  }
+}
+
 defineOp({
   name: 'task_create',
   title: 'Create and start a task (record_only to defer)',
@@ -553,10 +577,13 @@ defineOp({
     const extra = placement ? { placement } : {}
     const where = placementSentence(placement) + titleCutSentence(placement, task, fields.description !== undefined)
       + teamSentence(placement)
+    // Where its card sits depends on whether a session started, so it is read after the start answers.
+    const parentId = placement?.parent_task_id ?? (task.parent_task_id as string | undefined)
+    const cardLine = (started: boolean) => boardCardSentence(parentId, id, started, call)
     if (recordOnly) {
       return withOutcome(
         withRef({ ...view, execution: { state: 'not_started' } }, { ...extra, execution: { state: 'not_started' } }),
-        `${where}Placeholder saved. Work was explicitly not started.`,
+        `${where}Placeholder saved. Work was explicitly not started.${await cardLine(false)}`,
         `Start it when requested: walnut tools call task_start '{"id":"${id}"}'`,
       )
     }
@@ -564,7 +591,7 @@ defineOp({
       const started = await startTask(id, launch, call)
       return withOutcome(
         withRef({ ...view, execution: started.execution }, { ...extra, ...started }),
-        `${where}${String(started.outcome)}`, String(started.next),
+        `${where}${String(started.outcome)}${await cardLine(true)}`, String(started.next),
       )
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -575,7 +602,7 @@ defineOp({
           withRef({ ...view, execution: { state: 'not_started', error } }, {
             ...extra, execution: { state: 'not_started', error }, start_error: error,
           }),
-          `${where}Task ${id} was created but NOT started: ${error}`,
+          `${where}Task ${id} was created but NOT started: ${error}${await cardLine(false)}`,
           `Start it after one of the running subtasks finishes: walnut tools call task_start '{"id":"${id}"}'`,
         )
       }

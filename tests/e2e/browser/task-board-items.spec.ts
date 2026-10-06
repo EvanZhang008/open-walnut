@@ -688,9 +688,9 @@ test('a worker\'s Board tab shows its leader\'s board, and its posts land there'
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
   const { pane, frame } = await openBoardTab(page, worker, sid, false)
 
-  // No board anywhere in the tree yet: the team's Overview, under the owner's name.
+  // No board anywhere in the tree yet: the team's Cards (kanban), under the owner's name.
   const title = pane.getByTestId('board-title')
-  await expect(pane.getByTestId('board-overview')).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 15_000 })
   await expect(title).toHaveText(`Board · ${leaderTitle}`)
   await expect(title).toHaveAttribute('title', `Shared with your team: ${leaderTitle} keeps this board`)
   // The leader writes one: it arrives live in the worker's tab.

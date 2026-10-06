@@ -11,7 +11,9 @@
  * Board, or calling board_* without naming a task, lands on its leader's.
  */
 
-import { BoardError, hasBoard } from './board-store.js';
+import type { Task } from '../types.js';
+import { BoardError, hasBoard, type BoardFile } from './board-store.js';
+import { effectiveLanes, type BoardTeamEntry } from './board-lanes.js';
 
 /** Ancestors walked before giving up; subtasks nest at most a few levels. */
 export const TEAM_WALK_CAP = 32;
@@ -91,4 +93,70 @@ export async function callerMayWriteBoard(boardTaskId: string, callerSid: string
   throw new BoardError('not_in_team', 403, undefined, caller.kind === 'untracked'
     ? 'This session has no task, so it is in no board\'s team'
     : 'Unidentified callers may not write a board');
+}
+
+// ── The team as the kanban sees it ──
+
+/** Direct subtasks GET reports as the team (open first, then completions newest first). */
+export const TEAM_LIST_CAP = 500;
+
+export interface TeamSnapshot {
+  ownerId: string;
+  owner?: Task;
+  /** The owner's direct subtasks, open first, then completions newest first; capped. */
+  children: Task[];
+  /** Every task below the owner (a card may be any of them; never the owner). */
+  members: Set<string>;
+  byId: Map<string, Task>;
+}
+
+/** One read of the store: who is on the owner's team (cycle safe, depth capped). */
+export async function teamSnapshot(ownerId: string): Promise<TeamSnapshot> {
+  const { listTasks } = await import('../task-manager.js');
+  const tasks = await listTasks();
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const below = new Map<string, boolean>();
+  const isBelow = (id: string): boolean => {
+    const path: string[] = [];
+    let cur: string | undefined = id;
+    let result = false;
+    while (cur && path.length <= TEAM_WALK_CAP) {
+      const known = below.get(cur);
+      if (known !== undefined) { result = known; break; }
+      if (path.includes(cur)) break;
+      path.push(cur);
+      const parent: string | undefined = byId.get(cur)?.parent_task_id || undefined;
+      if (parent === ownerId) { result = true; break; }
+      cur = parent;
+    }
+    for (const p of path) below.set(p, result);
+    return result;
+  };
+  const members = new Set(tasks.filter((t) => t.id !== ownerId && isBelow(t.id)).map((t) => t.id));
+  const direct = tasks.filter((t) => t.parent_task_id === ownerId && t.id !== ownerId);
+  const open = direct.filter((t) => t.phase !== 'COMPLETE');
+  const done = direct.filter((t) => t.phase === 'COMPLETE')
+    .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''));
+  return { ownerId, owner: byId.get(ownerId), children: [...open, ...done].slice(0, TEAM_LIST_CAP), members, byId };
+}
+
+/** The tags the lane template is picked from: the owner's and its direct subtasks'. */
+export function teamTags(snap: TeamSnapshot): string[] {
+  return [...(snap.owner?.tags ?? []), ...snap.children.flatMap((t) => t.tags ?? [])];
+}
+
+/** The kanban part of GET /tasks/:id/board (also when there is no board file). */
+export function kanbanFields(board: BoardFile | null, snap: TeamSnapshot) {
+  const eff = effectiveLanes(board?.lanes, teamTags(snap), board?.lanes_template);
+  const team: BoardTeamEntry[] = snap.children.map((t) => ({
+    id: t.id, phase: t.phase, ...(t.completed_at ? { completed_at: t.completed_at } : {}),
+  }));
+  return {
+    lanes: board?.lanes ?? null,
+    lanes_effective: eff.lanes,
+    lanes_template: board?.lanes_template ?? eff.template,
+    cards: board?.cards ?? {},
+    team,
+    kanban_seen: board?.kanban_seen ?? null,
+  };
 }

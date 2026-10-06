@@ -241,15 +241,18 @@ describe('board ops', () => {
     expect(cleared.outcome).toBe('Reminder on "when" of lead01\'s board cleared.')
   })
 
-  it('the board ops are exactly these: none writes the user\'s read ticks, choices or sections seen', () => {
+  it('the board ops are exactly these: none writes the user\'s read ticks, choices, sections or cards seen', () => {
+    // board_lanes_set / board_card_set are the kanban writers (board-kanban-ops.ts); kanban-seen stays human only.
     expect(listOps().map((op) => op.name).filter((n) => n.startsWith('board_')).sort()).toEqual([
-      'board_edit', 'board_get', 'board_post', 'board_post_delete', 'board_project_set', 'board_remind', 'board_set',
+      'board_card_set', 'board_edit', 'board_get', 'board_lanes_set', 'board_post', 'board_post_delete', 'board_project_set',
+      'board_remind', 'board_set',
     ])
   })
 
   it('tags: board_get is read-only, the writers are primary-only and remote-allowed', () => {
     expect(getOp('board_get')!.tags).toMatchObject({ readonly: true, remote: 'allow' })
-    for (const n of ['board_set', 'board_edit', 'board_post', 'board_post_delete', 'board_project_set', 'board_remind']) {
+    for (const n of ['board_set', 'board_edit', 'board_post', 'board_post_delete', 'board_project_set', 'board_remind',
+      'board_lanes_set', 'board_card_set']) {
       expect(getOp(n)!.tags, n).toMatchObject({ readonly: false, remote: 'allow', primaryOnly: true })
     }
   })

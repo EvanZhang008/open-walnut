@@ -1,9 +1,9 @@
 /**
- * The session panel's Board TAB: the task's Board (one HTML page its leader
- * keeps, src/core/boards/board-store.ts) in the split column beside the chat.
- *
- * Peer of Changed / Files / Inbox: same `.session-panel-diff-col` host, same
- * `barRightSlot` contract for the panel's chat toggle.
+ * The session panel's Board TAB beside the chat (peer of Changed / Files / Inbox,
+ * same `barRightSlot` contract): Projects, the board's projects one card each
+ * (BoardOverview.tsx, when the leader defined projects), Cards, the team's kanban
+ * (kanban/BoardKanban.tsx), or Page, the HTML its leader keeps
+ * (src/core/boards/board-store.ts).
  *
  * The html runs in a sandboxed `srcDoc` frame (allow-scripts, NEVER
  * allow-same-origin, its own CSP), with board-runtime.frame.js injected at the
@@ -13,8 +13,7 @@
  * frame itself can reach nothing. A message is accepted only from the frame's
  * own window (`event.source`).
  *
- * Task state is live: chips read the browser's task store first (the one truth
- * for a task row), the payload's refs only as the fallback.
+ * Task state is live: chips read the task store first, the payload's refs only as the fallback.
  *
  * A worker and its leader share ONE board: the payload names its owner
  * (`board_task_id`), and the owner, never the session's own task, is where every
@@ -37,33 +36,37 @@ import runtimeSections from './board-sections.frame.js?raw';
 import { BOARD_RUNTIME_CSS } from './board-runtime.css.ts';
 import {
   BOARD_SEEN_PREFIX, advanceSeen, boardWriterLabel, buildFrameRefs, frameRefsEqual, newBoardNonce, parseSeen,
-  safeExternalHref, threadAuthorIds, wrapBoardHtml,
-  type BoardMessage, type BoardSectionSeen,
+  safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage, type BoardSectionSeen,
   type BoardSeen, type FrameTask, type StoreTaskLike,
 } from './board-model';
-import {
-  boardBarTitle, boardOwnerId, projectTaskIds, taskLineage,
-} from './board-items-model';
+import { boardBarTitle, boardOwnerId, projectTaskIds, taskLineage } from './board-items-model';
 import { BoardReplyDock, type BoardDockAnchor, type BoardReplyTarget } from './BoardReplyDock';
 import { boardView, keepBoardView } from './board-view-memory';
+import { BoardKanban } from './kanban/BoardKanban';
+import type { KanbanRenderSession } from './kanban/KanbanCardDetail';
+import { KanbanSkeleton } from './kanban/KanbanSkeleton';
 import { BoardOverview } from './BoardOverview';
 import type { BoardCardActions } from './BoardProjectCard';
 import { BoardViewToggle } from './BoardViewToggle';
 import { ASK_FOR_BOARD_TEXT, useAskForBoard } from './useAskForBoard';
 import { useBoardItemSaves } from './useBoardItemSaves';
 import { boardErrorMessage, boardPath, useTaskBoard } from './useTaskBoard';
-import { useBoardView, useTeamOverview } from './useTeamOverview';
+import { useBoardView } from './useBoardView';
+import { useTeamOverview } from './useTeamOverview';
+import { keepIfSame, NO_PROJECTS, projectsOfTeam, type ProjectOf } from './board-view-projects';
 import '@/styles/task-board.css';
 
 export interface TaskBoardPaneProps {
   taskId: string;
   sessionId?: string;
-  /** Chat segment of the full-width bar — see SessionFileExplorer.barRightSlot. */
+  /** Chat segment of the full-width bar (see SessionFileExplorer.barRightSlot). */
   barRightSlot?: ReactNode;
   /** A task chip opens its task beside the board (the session panel's peek); first choice. */
   onOpenTask?: (taskId: string) => void;
   onLocateTask?: (taskId: string) => void;
   onSendToSession?: (text: string) => Promise<unknown> | void;
+  /** A narrow kanban's opened card: the host's real session chat (R3-05). */
+  renderSession?: KanbanRenderSession;
 }
 
 export { ASK_FOR_BOARD_TEXT };
@@ -80,7 +83,7 @@ function writeSeen(taskId: string, seen: BoardSeen): void {
 
 type FrameMsg = Record<string, unknown> & { t: string };
 
-export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onLocateTask, onSendToSession }: TaskBoardPaneProps) {
+export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onLocateTask, onSendToSession, renderSession }: TaskBoardPaneProps) {
   const navigate = useNavigate();
   const store = useTasksContextSafe();
   const storeById = useMemo(() => {
@@ -94,7 +97,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const lineage = useMemo(() => lineageKey.split('\n'), [lineageKey]);
   const {
     payload, loading, error, reload, mergeMessage, dropMessage, mergeMark, mergeProject, mergeCheck, mergeChoice,
-    mergeReminder, mergeSectionSeen,
+    mergeReminder, mergeSectionSeen, fetchStartedAt, reloadKanban,
   } = useTaskBoard(taskId, lineage);
   const board = payload?.board ?? null;
   // The board's owner: every write, the seen record, the reply drafts and the frame's "Leader" are its.
@@ -121,15 +124,34 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     setReply(null);
   }, [ownerId]);
 
-  // ── Overview (Walnut's view of the team, the default) | Custom (the leader's page) ──
-  const hasPage = !!board;
+  // ── Projects (the board's projects) | Cards (the team's kanban) | Page (the leader's page) ──
+  // A kanban write creates a board file with no html, so a page is html, not a file.
+  const hasPage = !!board?.html.trim();
   const team = useTeamOverview(ownerId, payload, seen);
-  const { view, pick: pickView } = useBoardView(ownerId, hasPage);
+  const sections = team.overview?.sections ?? null;
+  // Exactly when the Projects view draws a project board (BoardOverview's `cards`).
+  const hasProjects = (team.cards?.length ?? 0) > 0;
+  const { view, pick: pickView } = useBoardView(ownerId, hasPage, hasProjects);
   // No task store (a pop-out window) has no team to show: the page alone, as before.
-  const shownView = team.overview ? view : 'custom';
-  // The frame boots on the first Custom visit, then stays mounted (hidden) so switching back is instant.
+  const shownView = store ? view : 'custom';
+  // Each card's project (the first one naming it, as the Projects view places it), for the kanban's project chip.
+  const projectOfRef = useRef<ProjectOf>(NO_PROJECTS);
+  const projectOf = useMemo(() => (projectOfRef.current = keepIfSame(projectOfRef.current, projectsOfTeam(sections))), [sections]);
+  // The kanban's one attention number (G12); the toggle shows the default view's count while the Page is up.
+  const [attention, setAttention] = useState(0);
+  const toggleAttention = hasProjects ? team.overview?.attention ?? 0 : attention;
+  // The frame boots on the first Page visit, then stays mounted (hidden) so switching back is instant.
   const [frameOwner, setFrameOwner] = useState<string | null>(null);
   useEffect(() => { if (shownView === 'custom') setFrameOwner(ownerId); }, [shownView, ownerId]);
+  // A red board signal on a card: the Page at that choice or thread, through the kept view a frame restores on
+  // boot (board-view-memory.ts); a booted frame boots again for it (key = html version + this epoch, never a reload).
+  const [frameEpoch, setFrameEpoch] = useState(0);
+  const openSignal = useCallback((target: { kind: 'choice' | 'thread'; id: string }) => {
+    log.info('board', 'kanban board signal opened on the page', { taskId: ownerRef.current, kind: target.kind, elementId: target.id });
+    keepBoardView(ownerRef.current, { ...(boardView(ownerRef.current) ?? {}), v: 1, filter: '', anchor: { path: [`#${target.id}`], top: 16 } });
+    if (frameReady.current) setFrameEpoch((n) => n + 1);
+    pickView('custom');
+  }, [pickView]);
 
   // ── Live refs: the store's row wins, the payload's copy is the fallback ──
   const refsNow = useMemo(
@@ -153,7 +175,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const nonce = useMemo(() => (html === null ? '' : newBoardNonce()), [html]);
   const srcDoc = useMemo(() => (html === null ? null : wrapBoardHtml(html, RUNTIME_SRC, BOARD_RUNTIME_CSS, nonce)), [html, nonce]);
   // A new document is not ready until it says so (its listener does not exist yet).
-  useLayoutEffect(() => { frameReady.current = false; }, [srcDoc]);
+  useLayoutEffect(() => { frameReady.current = false; }, [srcDoc, frameEpoch]);
   // The frame's window.name from the last pane (board-view-memory.ts), set once: a changed name attribute renames the frame.
   const frameName = useRef<string | null>(null);
   if (frameName.current === null && srcDoc !== null) frameName.current = boardView(ownerId)?.name ?? '';
@@ -279,7 +301,6 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     });
   }, [toFrame, dropMessage]);
 
-
   /**
    * What the user last saw of a section (the frame hashes it). A first open
    * records every section at once, so the writes go one at a time.
@@ -394,10 +415,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
 
   // ── "updated 3 min ago" stays true while the pane is open ──
   const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 30_000);
-    return () => clearInterval(id);
-  }, []);
+  useEffect(() => { const id = setInterval(() => setTick((n) => n + 1), 30_000); return () => clearInterval(id); }, []);
 
   return (
     <div className="task-board-pane" data-testid="task-board-pane">
@@ -408,8 +426,8 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
           data-testid="board-title"
           data-board-task-id={ownerId}
         >{barTitle.text}</span>
-        {team.overview && payload && (
-          <BoardViewToggle view={shownView} hasPage={hasPage} attention={team.overview.attention} onPick={pickView} />
+        {store && payload && (
+          <BoardViewToggle view={shownView} hasPage={hasPage} hasProjects={hasProjects} attention={toggleAttention} onPick={pickView} />
         )}
         {board && shownView === 'custom' && (
           <span className="task-board-bar-sub" title={new Date(board.updated_at).toLocaleString()} data-testid="board-meta">
@@ -435,8 +453,9 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         </div>
       )}
       <div className={`task-board-body${dockAnchor ? ' has-inline-dock' : ''}`}>
-        {srcDoc !== null && (shownView === 'custom' || frameOwner === ownerId) && (
+        {srcDoc !== null && hasPage && (shownView === 'custom' || frameOwner === ownerId) && (
           <iframe
+            key={`v${board?.version ?? 0}-${frameEpoch}`}
             ref={frameRef}
             className="task-board-frame"
             title="Board"
@@ -446,9 +465,10 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             style={shownView === 'custom' ? undefined : { display: 'none' }}
           />
         )}
-        {shownView === 'overview' && team.overview && payload ? (
+        {shownView === 'projects' && team.overview && payload && (
+          // Keys differ from the kanban's, its sibling: two children with one key get duplicated by React.
           <BoardOverview
-            key={ownerId}
+            key={`projects:${ownerId}`}
             overview={team.overview}
             cards={team.cards}
             cardActions={cardActions}
@@ -460,11 +480,30 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             onOpenTask={openTask}
             onSendToSession={ownerId === taskId ? onSendToSession : undefined}
           />
-        ) : srcDoc === null && payload && !board ? (
-          // No board anywhere in the tree, and no team to show (no task store): ask its owner.
+        )}
+        {store && payload && (
+          <BoardKanban
+            key={`cards:${ownerId}`}
+            ownerId={ownerId}
+            payload={payload}
+            threadSeen={seen}
+            fetchStartedAt={fetchStartedAt}
+            reloadKanban={reloadKanban}
+            visible={shownView === 'cards'}
+            projectOf={projectOf}
+            onOpenTask={openTask}
+            onOpenSignal={openSignal}
+            onAttention={setAttention}
+            renderSession={renderSession}
+            emptyExtra={hasPage ? undefined : <AskLeaderRow taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />}
+          />
+        )}
+        {!store && payload && !hasPage ? (
+          // No page (no board file, or one only kanban writes made), and no team to show (no task store): ask its owner.
           <BoardEmptyState taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />
         ) : loading && !payload ? (
-          <div className="task-board-loading">Loading the board…</div>
+          // R3-06: the Cards view loads as skeleton lanes, never a line of text.
+          store && shownView === 'cards' ? <KanbanSkeleton /> : <div className="task-board-loading">Loading the board…</div>
         ) : null}
         {/* Inside the body: inline over the frame's slot, or (no slot) a bar under the frame. */}
         {reply && board && shownView === 'custom' && (
@@ -485,10 +524,8 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   );
 }
 
-/** No board yet: say what one is, and let the user ask the leader for one. */
-function BoardEmptyState({ taskId, onSendToSession }: Pick<TaskBoardPaneProps, 'taskId' | 'onSendToSession'>) {
-  const { state, askError, ask } = useAskForBoard(taskId, onSendToSession);
-
+/** No board yet and no team to show (a pop-out window): say what one is, and let the user ask the leader for one. */
+function BoardEmptyState(props: Pick<TaskBoardPaneProps, 'taskId' | 'onSendToSession'>) {
   return (
     <div className="task-board-empty" data-testid="board-empty">
       <div className="task-board-empty-card">
@@ -496,15 +533,25 @@ function BoardEmptyState({ taskId, onSendToSession }: Pick<TaskBoardPaneProps, '
         <p className="task-board-empty-text">
           The leader of this task writes one with the walnut-board skill; the user reads it here instead of the chat.
         </p>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          data-testid="board-ask-button"
-          disabled={state === 'sending'}
-          onClick={() => void ask()}
-        >{state === 'asked' ? 'Asked.' : 'Ask for a board'}</button>
-        {askError && <div className="task-board-empty-error" role="alert">Couldn't ask: {askError}</div>}
+        <AskLeaderRow {...props} />
       </div>
+    </div>
+  );
+}
+
+/** Under the empty kanban: no page yet, so the user may ask the leader for one. */
+function AskLeaderRow({ taskId, onSendToSession }: Pick<TaskBoardPaneProps, 'taskId' | 'onSendToSession'>) {
+  const { state, askError, ask } = useAskForBoard(taskId, onSendToSession);
+  return (
+    <div className="kanban-ask-row" data-testid="board-ask-row">
+      <button
+        type="button"
+        className="btn btn-sm"
+        data-testid="board-ask-button"
+        disabled={state === 'sending'}
+        onClick={() => void ask()}
+      >{state === 'asked' ? 'Asked.' : 'Ask the leader for a page'}</button>
+      {askError && <div className="task-board-empty-error" role="alert">Couldn't ask: {askError}</div>}
     </div>
   );
 }

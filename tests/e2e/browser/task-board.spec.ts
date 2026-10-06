@@ -4,7 +4,7 @@
  * the Adopt picker, as a user meets them on Home.
  *
  *   1. A leader's session header has a Board chip; with no board, the tab offers
- *      "Ask for a board", which goes to the session through the composer's send.
+ *      "Ask the leader for a page", which goes to the session through the composer's send.
  *   2. A board written through the API renders in the sandboxed frame: a live
  *      task chip (the store's phase, updated without a reload), the status strip
  *      (counts, filtering), the unread total, an unknown id, external and `#`
@@ -151,25 +151,28 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await api('PATCH', `/api/tasks/${leader}`, { title: leaderTitle })
   const { task: leaderTask } = await api<{ task: { project?: string } }>('GET', `/api/tasks/${leader}`)
   const workerTitle = `${engine}-board-worker ${stamp}`
-  const worker = await createTask(workerTitle, { project: leaderTask.project ?? '', pinned: false, parent_task_id: leader })
 
-  // ── 1. The chip, the empty state, "Ask for a board" ──
+  // ── 1. The chip, the empty kanban, "Ask the leader for a page" ──
   const chip = panel.getByTestId('session-board-chip')
   await expect(chip).toBeVisible()
   await chip.click()
   await expect(chip).toHaveClass(/session-action-chip-active/)
   const pane = page.getByTestId('task-board-pane')
-  // No page yet: the Overview (the default view) lists the team, and the ask is a small link under it.
-  await expect(pane.getByTestId('board-overview')).toBeVisible({ timeout: 15_000 })
-  await expect(pane.getByTestId('board-overview-no-page')).toContainText('No custom page yet.')
+  // No team and no page yet: the Cards view (the default) is the empty kanban, and the ask sits on its empty card.
+  await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('kanban-empty')).toContainText('No tasks on this board yet.')
   await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-disabled', 'true')
   const ask = pane.getByTestId('board-ask-button')
-  await expect(ask).toHaveText('Ask for a board')
+  await expect(ask).toHaveText('Ask the leader for a page')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-1-empty.png` })
   await ask.click()
   await expect(ask).toHaveText('Asked.')
   await expect(panel.getByText(/Please start a Board for this task: read the walnut-board skill/).first()).toBeVisible({ timeout: 15_000 })
-  await expect(ask).toHaveText('Ask for a board', { timeout: 8_000 })
+  await expect(ask).toHaveText('Ask the leader for a page', { timeout: 8_000 })
+  // A worker joins: its card arrives live, the empty card goes.
+  const worker = await createTask(workerTitle, { project: leaderTask.project ?? '', pinned: false, parent_task_id: leader })
+  await expect(pane.locator(`[data-testid="kanban-card"][data-task-id="${worker}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('kanban-empty')).toHaveCount(0)
 
   // ── 2. A board arrives: Custom turns on live, and the frame renders it ──
   await api('PUT', `/api/v1/tasks/${leader}/board`, { html: boardHtml(engine, stamp, worker) })
@@ -493,6 +496,6 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   mode = 'real'
   await error.getByRole('button', { name: 'Retry' }).click()
   await expect(error).toHaveCount(0)
-  await expect(pane.getByTestId('board-overview')).toBeVisible()
-  await expect(pane.getByTestId('board-ask-button')).toHaveText('Ask for a board')
+  await expect(pane.getByTestId('board-kanban')).toBeVisible()
+  await expect(pane.getByTestId('board-ask-button')).toHaveText('Ask the leader for a page')
 })

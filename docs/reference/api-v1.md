@@ -1024,10 +1024,55 @@ itself). The `board_*` ops default to the caller's team board.
   server only stores it (`""` forgets it). At most 500 kept; the oldest goes
   first. Emits kind `seen`.
 - `DELETE /api/v1/tasks/:id/board` → `204` (humans only; `403 human_only`).
+- Kanban (additive, 2026-10-04). Every board GET also carries `lanes` (stored,
+  `null` = still on the template), `lanes_effective` (the lanes to draw: stored,
+  or the template the team's tags pick: `triage` when any task has a `ticket:`
+  or `ticket-id:` tag, else `general`), `lanes_template`, `cards` (`{ [taskId]:
+  Card }`), `team` (`{ id, phase, completed_at? }[]`: the owner's direct
+  subtasks, open first, at most 500, old completions included), `kanban_seen`
+  (the user's baseline or `null`) and `board_version`, also when `board` is
+  `null`. `?fields=kanban` answers only `board_task_id`, `board_task_title`,
+  `board_version` and those kanban keys (no html). `:id` below is the board's
+  OWNER. Lane and card writes never bump `version`; the first one creates the
+  board file (`html: ""`, version 0) and materializes the template. A `:task`
+  outside the owner's tree → `404 not_in_team`; the owner itself → `400
+  owner_is_not_a_card`; an unknown lane → `409 lane_not_found { lane, lanes }`;
+  over a limit → `400 bad_request { max }` (12 lanes, 40-char names, 500 cards,
+  300-char summary, 80-char waiting_on). A session moving a card the user
+  placed → `409 status_set_by_user { task, lane, lane_at }` unless
+  `override_user: true` (its lane is kept as `lane_suggested`); a session
+  rewriting lanes the user set → the same 409. `if_unchanged_since` (the `*_at`
+  the editor saw, `""` = none) on lanes and card writes → `409 changed_since {
+  current, at, by }` when a later write landed.
+  - `PUT /api/v1/tasks/:id/board/lanes { "lanes": [{ id?, name, kind }],
+    "override_user"?, "if_unchanged_since"? }` → `200 { lanes, cards_unplaced }`:
+    the whole table (no id = new `ln-` + 8 hex; an old id left out is deleted
+    and its cards lose their explicit lane); no done lane → `400 needs_done_lane`.
+  - `PUT /api/v1/tasks/:id/board/cards/:task { "lane"?, "summary"?,
+    "waiting_on"?, "override_user"?, "if_unchanged_since"? }` → `200 { card,
+    lane_effective }` (`""` clears a field; lane `""` = automatic placement).
+  - `POST /api/v1/tasks/:id/board/cards/:task/move { "lane", "order": [ids],
+    "rank_only"? }` → `200 { card, order }`: the explicit lane (not with
+    `rank_only`) and the lane's order (ids not shown in that lane are ignored;
+    a done lane keeps none).
+  - `POST /api/v1/tasks/:id/board/cards { "title", "lane"?, "tags"? }` → `201 {
+    task, card }`: a subtask of the owner in its project and folder, no session;
+    a failed placement still answers 201 with `card: null, warning:
+    "placement_failed"`. Humans only (`403 human_only`): a session files work
+    with `task_create`, which places it and applies the subtask limits.
+  - `POST /api/v1/tasks/:id/board/cards/:task/suggestion { "action": "accept" |
+    "dismiss" }` → `200 { card, lane_effective }` (humans only; no suggestion →
+    `404 no_suggestion`).
+  - `PUT /api/v1/tasks/:id/board/kanban-seen { "cards"?: ids | "all",
+    "snapshot"?: { [taskId]: { lane, summaryHash, outputAt?, unread? } },
+    "visit_end"? }` → `200 { kanban_seen }` (humans only): snapshot entries win,
+    listed ids without one are computed by the server; `"all"` or `visit_end`
+    moves `at` to `previous_at`.
 - Live: the console's WebSocket carries `board:changed { taskId, kind: "html" |
   "thread" | "mark" | "project" | "check" | "choice" | "reminder" | "seen" |
-  "deleted", thread?, mark?, project?, check?, choice?, reminder?, section?,
-  version }` with `taskId` at the top level.
+  "deleted" | "lanes" | "card", task?, kanban?, thread?, mark?, project?, check?,
+  choice?, reminder?, section?, version }` with `taskId` at the top level
+  (`task` = the card's task; `kanban: true` on a kanban seen write).
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 

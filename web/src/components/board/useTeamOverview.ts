@@ -1,6 +1,6 @@
 /**
- * The live data behind the Board's Overview (board-overview-model.ts), and the
- * pane's remembered view (board-view-pref.ts).
+ * The live data behind the Board's Projects view (board-overview-model.ts,
+ * board-cards-model.ts); the pane's remembered view is useBoardView.ts.
  *
  * Everything here is already live in the browser, so nothing polls: the team
  * and each task's phase come from the task store, each session's state from the
@@ -21,7 +21,6 @@ import {
   NO_BOARD_ELEMENTS, buildTeamOverview, teamChildren, type BoardElement, type BoardElements, type LiveStatus, type TeamOverview,
 } from './board-overview-model';
 import { buildProjectCards, type ProjectCard } from './board-cards-model';
-import { readBoardView, shownBoardView, writeBoardView, type BoardView } from './board-view-pref';
 
 const MINUTE_MS = 60_000;
 
@@ -160,24 +159,4 @@ export function useTeamOverview(
     completedHidden: store?.completedHidden ?? 0,
     loadArchive,
   };
-}
-
-/** `window.localStorage`, or null where reading it throws (a sandboxed or private context). */
-function viewStorage(): Storage | null {
-  try { return typeof window !== 'undefined' ? window.localStorage : null; } catch { return null; }
-}
-
-/** The view on screen for `ownerId`'s board, and the pick that changes (and remembers) it. */
-export function useBoardView(ownerId: string, hasPage: boolean): { view: BoardView; picked: BoardView | null; pick: (v: BoardView) => void } {
-  const [state, setState] = useState<{ owner: string; view: BoardView | null }>(() => ({
-    owner: ownerId, view: readBoardView(viewStorage(), ownerId),
-  }));
-  // Another owner's pick is not this one's: read it in the same render the owner changes.
-  const picked = state.owner === ownerId ? state.view : readBoardView(viewStorage(), ownerId);
-  const pick = useCallback((view: BoardView) => {
-    writeBoardView(viewStorage(), ownerId, view);
-    setState({ owner: ownerId, view });
-    log.info('board', 'board view picked', { taskId: ownerId, view });
-  }, [ownerId]);
-  return { view: shownBoardView(picked, hasPage), picked, pick };
 }

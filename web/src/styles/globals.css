@@ -17220,6 +17220,16 @@ a.task-kebab-info:hover {
     transition: none;
   }
 
+  /* z-index 41 makes this overlay a stacking context, so a panel promoted to
+     full screen inside it (9001; the Board opens that way when the chat would
+     leave it narrow) stays UNDER the body-level backdrop (9000), which then
+     takes every click meant for the panel (measured at a 520px window:
+     elementFromPoint over a kanban card returned the backdrop). While a panel
+     is full screen the overlay rises above the backdrop. */
+  .main-page.has-mobile-session .main-page-sessions-area:has(.open-walnut-fullscreen) {
+    z-index: 9001;
+  }
+
   .main-page.has-mobile-session .main-page-session-column {
     display: none;
   }

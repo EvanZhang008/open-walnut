@@ -5,6 +5,15 @@
  * record. No React, no DOM: unit-pinned in tests/web/task-board-model.test.ts.
  */
 
+import type {
+  BoardCard, BoardKanbanSeen, BoardLane, BoardTeamEntry, LaneTemplateId,
+} from '../../../../src/core/boards/board-lanes';
+
+export type {
+  BoardCard, BoardCardWriter, BoardKanbanSeen, BoardKanbanSeenCard, BoardLane, BoardLaneKind, BoardTeamEntry,
+  LaneTemplateId,
+} from '../../../../src/core/boards/board-lanes';
+
 export type BoardAuthor = 'user' | `task:${string}`;
 
 export interface BoardMessage {
@@ -111,7 +120,24 @@ export interface BoardPayload {
   /** The team board's owner (`?team=1`): the task itself, the nearest ancestor with a board, or the root. */
   board_task_id?: string;
   board_task_title?: string;
+  /** Kanban (always present after normalizeBoardPayload, board null too). The stored lanes; null = on the template. */
+  lanes: BoardLane[] | null;
+  /** The lanes to draw: stored, or the template the server picked. The web never guesses a template. */
+  lanes_effective: BoardLane[];
+  lanes_template: LaneTemplateId;
+  /** Key = full task id. */
+  cards: Record<string, BoardCard>;
+  /** The owner's direct subtasks (server side walk, so done ones older than the store's window count too). */
+  team: BoardTeamEntry[];
+  /** The user's "Changed" baseline; null = never looked. */
+  kanban_seen: BoardKanbanSeen | null;
+  /** html version, also on a `fields=kanban` answer. */
+  board_version?: number;
 }
+
+/** The kanban part of a payload: what `GET ...board?team=1&fields=kanban` answers. */
+export type BoardKanbanFields = Pick<BoardPayload,
+  'lanes' | 'lanes_effective' | 'lanes_template' | 'cards' | 'team' | 'kanban_seen' | 'board_task_id' | 'board_task_title' | 'board_version'>;
 
 /** What the frame reads for a task chip or a message author. */
 export interface FrameTask {

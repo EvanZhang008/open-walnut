@@ -74,6 +74,40 @@ export interface SubtaskNotice {
   blockedOn?: string;
   waitUntil?: string;
   repliedRecently?: boolean;
+  /** G19: where the child's card sits on its parent's Board (stopped / completed, only when the parent has one). */
+  cardLine?: string;
+}
+
+/** A stopped / completed notice names the child's card when the parent has a Board (plain text, no wakeup). */
+export async function attachCardLine(n: SubtaskNotice): Promise<SubtaskNotice> {
+  if (!CARD_KINDS.has(n.kind) || n.cardLine !== undefined) return n;
+  const cardLine = await boardCardLine(n.parentTaskId, n.child.id);
+  return cardLine ? { ...n, cardLine } : n;
+}
+
+/** The kinds whose notice names the child's kanban card. */
+const CARD_KINDS: ReadonlySet<SubtaskNoticeKind> = new Set<SubtaskNoticeKind>(['stopped', 'completed']);
+
+/**
+ * "Card: Investigating. Update it with board_card_set if the ticket moved or its
+ * summary changed." when the parent has a Board; '' otherwise or on any failure.
+ */
+export async function boardCardLine(parentTaskId: string, childId: string): Promise<string> {
+  try {
+    const { getBoard, hasBoard } = await import('../boards/board-store.js');
+    if (!(await hasBoard(parentTaskId))) return '';
+    const { teamSnapshot, teamTags } = await import('../boards/board-team.js');
+    const { placeTask } = await import('../boards/board-kanban.js');
+    const { effectiveLanes, laneById, placeCard } = await import('../boards/board-lanes.js');
+    const [board, snap] = await Promise.all([getBoard(parentTaskId), teamSnapshot(parentTaskId)]);
+    const child = snap.byId.get(childId);
+    if (!board || !child) return '';
+    const lanes = effectiveLanes(board.lanes, teamTags(snap), board.lanes_template).lanes;
+    const lane = laneById(lanes, placeCard(board.cards[childId], placeTask(child), lanes).lane);
+    return lane ? `Card: ${lane.name}. Update it with board_card_set if the ticket moved or its summary changed.` : '';
+  } catch {
+    return '';
+  }
 }
 
 /** The stable queue id of a replaceable notice: one row per child and kind. */
@@ -83,7 +117,7 @@ export function noticeQueueId(n: Pick<SubtaskNotice, 'child' | 'kind'>): string 
 
 /** The envelope text of one notice. */
 export function buildSubtaskNoticeText(n: SubtaskNotice): string {
-  return kit.buildSubtaskNotification({
+  const text = kit.buildSubtaskNotification({
     child: { title: n.child.title, sessionId: n.child.sessionId, taskId: n.child.id },
     kind: n.kind,
     lastMessage: n.lastWords,
@@ -93,6 +127,10 @@ export function buildSubtaskNoticeText(n: SubtaskNotice): string {
     waitUntil: n.waitUntil,
     repliedRecently: n.repliedRecently,
   });
+  if (!n.cardLine) return text;
+  // Inside the envelope, before its closing "Next:" list (the last one: a quote may hold the word).
+  const at = text.lastIndexOf('\n\nNext:\n');
+  return at === -1 ? text : `${text.slice(0, at)}\n\n${n.cardLine}${text.slice(at)}`;
 }
 
 /**
@@ -256,6 +294,7 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
       });
       return;
     }
+    n = await attachCardLine(n);
     const sid = dest.claudeSessionId;
     const slot = pending.get(sid);
     if (slot) {

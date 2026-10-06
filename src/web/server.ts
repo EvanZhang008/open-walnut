@@ -120,6 +120,7 @@ import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
 import { taskV1Router } from './routes/task-v1.js'
 import { messagesV1Router } from './routes/messages-v1.js'
 import { boardV1Router, BOARD_BODY_PATH, boardJsonParser, boardPayloadTooLargeHandler } from './routes/board-v1.js'
+import { boardKanbanV1Router } from './routes/board-kanban-v1.js'
 import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { asksV1Router } from './routes/asks-v1.js'
@@ -1559,6 +1560,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     initBoardStore()
     const { startBoardReminders } = await import('../core/boards/board-reminders.js')
     startBoardReminders()
+    // The kanban cards' server facts (lane_auto, handed_back_at, output_at): board-kanban-watch.ts.
+    const { startBoardKanbanWatch } = await import('../core/boards/board-kanban-watch.js')
+    startBoardKanbanWatch()
   }
 
   // ── walnut-trigger seams (both directions, registered once) ──
@@ -1837,6 +1841,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task Boards (additive): one html document per task + threads + marks.
   // Reads work on a replica; writes are primary-only (501).
   app.use('/api/v1', boardV1Router)
+  // Kanban lanes, cards and the seen baseline of a board (same prefix and rules).
+  app.use('/api/v1', boardKanbanV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
   // answer — A-class (the replica runs its own Personal AI).
   app.use('/api/v1', personalAiV1Router)
@@ -5679,6 +5685,8 @@ export async function stopServer(): Promise<void> {
   try {
     const { stopBoardReminders } = await import('../core/boards/board-reminders.js')
     stopBoardReminders() // its subscriber and its timer
+    const { stopBoardKanbanWatch } = await import('../core/boards/board-kanban-watch.js')
+    stopBoardKanbanWatch()
   } catch { /* import failed (partial dist): nothing started to stop */ }
   if (routineWakeHandle) {
     routineWakeHandle.stop()

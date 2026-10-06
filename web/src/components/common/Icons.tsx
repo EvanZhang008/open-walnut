@@ -48,6 +48,8 @@ export const ICON_STAR_FILLED = <svg width="14" height="14" viewBox="0 0 16 16" 
 export const ICON_PIN = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="5.5" r="3.5"/><path d="M8 9v5"/></svg>;
 export const ICON_PIN_FILLED = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="0.5" strokeLinecap="round"><circle cx="8" cy="5.5" r="3.5"/><path d="M8 9v5" stroke="currentColor" strokeWidth="1.5"/></svg>;
 export const ICON_CLOSE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>;
+/** Add (a task, a lane): the close glyph's stroke, upright. */
+export const ICON_PLUS = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>;
 export const ICON_EXPAND = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="10 2 14 2 14 6"/><polyline points="6 14 2 14 2 10"/><line x1="14" y1="2" x2="9" y2="7"/><line x1="2" y1="14" x2="7" y2="9"/></svg>;
 // Minimize / "collapse back": two arrows pointing INWARD toward the centre
 // (lucide minimize-2). The old version put the brackets at odd offsets and

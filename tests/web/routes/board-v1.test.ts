@@ -122,7 +122,11 @@ describe('GET /tasks/:id/board', () => {
     expect(res.json).toEqual({
       board_task_id: team.outsider, board_task_title: 'Unrelated work',
       board: null, threads: {}, marks: {}, projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {}, refs: [],
+      // Kanban fields ride every GET, a board with no file too (template lanes, no cards, no team).
+      board_version: 0, lanes: null, lanes_effective: expect.any(Array), lanes_template: expect.any(String),
+      cards: {}, team: [], kanban_seen: null,
     })
+    expect(res.json.lanes_effective.length).toBeGreaterThan(0)
     expect((await call('GET', boardPath('zzzz-no-such-task'))).status).toBe(404)
   })
 })

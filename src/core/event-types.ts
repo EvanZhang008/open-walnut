@@ -1223,7 +1223,11 @@ export interface HealthSleepReadyEvent {
  */
 export interface BoardChangedEvent {
   taskId: string;
-  kind: 'html' | 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'reminder' | 'seen' | 'deleted';
+  kind: 'html' | 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'reminder' | 'seen' | 'deleted' | 'lanes' | 'card';
+  /** Kanban card writes: the card's (sub)task id. */
+  task?: string;
+  /** True on a kanban-seen write (kind 'seen'), so a pane reloads only the kanban fields. */
+  kanban?: boolean;
   thread?: string;
   mark?: string;
   /** A board project: one area of this board, not a Walnut project. */

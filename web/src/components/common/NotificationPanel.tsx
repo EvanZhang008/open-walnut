@@ -24,16 +24,13 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
-  useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
-  toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
+  useNotifications, sectionOf, sectionCounts, effectiveTs,
+  toolNameOf, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
   partitionErrorsByCause, systemIssueCount, errorsBadgeCount, letterIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
-import {
-  isSettledPermission, respondToPermissionRequest, usePermissionRequest,
-} from '@/stores/permission-request-store';
-import { PermissionAnswerForm } from './PermissionAnswerForm';
+import { PermissionAnswerButtons, PermissionAskDetail, usePermissionAnswer } from './PermissionPromptControls';
 import { NotificationActionButtons } from './NotificationActionButtons';
 import { QuietToggle } from './QuietToggle';
 import { displayActionsOf } from '@/contexts/notifications/notification-actions';
@@ -869,35 +866,9 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
   // frame instead of after the round-trip plus its WS echo — and 'stale' stays a
   // third outcome, because claiming 'denied' on a 404 read "Denied" for a request
   // the user had just APPROVED somewhere else.
-  const [detailExpanded, setDetailExpanded] = useState(false);
-  const detail = permissionDetail(n);
-  const requestId = requestIdOf(n);
-  const stored = usePermissionRequest(requestId ?? undefined);
-  const busy = stored?.inFlight ?? false;
-  const sent = stored && isSettledPermission(stored.status) ? stored.status : null;
-  const respondError = stored?.failed ?? false;
-  // The record's own outcome still wins: it survives a reload, and the store's
-  // entry does not.
-  const resolved = n.resolved ?? sent;
+  const answer = usePermissionAnswer(n);
+  const { resolved, failed: respondError } = answer;
   const target = linkTargetOf(n);
-  const acpOptions = validAcpOptions(n);
-  const answerable = !resolved && !!n.sessionId && !!requestId;
-
-  const respond = (
-    allow: boolean,
-    opts?: { optionId?: string; answers?: Record<string, string>; message?: string },
-  ) => {
-    if (!n.sessionId || !requestId) return;
-    void respondToPermissionRequest(n.sessionId, requestId, allow, {
-      ...(opts?.optionId ? { optionId: opts.optionId } : {}),
-      ...(opts?.answers ? { answers: opts.answers } : {}),
-      ...(opts?.message ? { message: opts.message } : {}),
-    });
-  };
-
-  // An AskUserQuestion whose questions we couldn't recover must NOT offer a
-  // blanket Approve — the session view has the live request, send them there.
-  const askWithoutInput = isUnanswerableAsk(n, detail);
 
   return (
     <div className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
@@ -935,52 +906,9 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
 
       <ContextChips n={n} />
 
-      {/* What is being asked. */}
-      {detail.type === 'bash' && (
-        <>
-          {detail.description && <div className="nfc-card-sub">{detail.description}</div>}
-          <code
-            className={`nfc-card-cmd${detailExpanded ? ' nfc-expanded' : ''}`}
-            onClick={() => setDetailExpanded(v => !v)}
-            title={detailExpanded ? 'Collapse' : 'Expand'}
-          >
-            {detail.command}
-          </code>
-        </>
-      )}
-      {detail.type === 'plan' && (
-        <div className="nfc-card-plan">
-          {/* No plan text (dropped over the size ceiling) → no expand toggle: a
-              toggle that reveals nothing is a dead end, so just name the ask. */}
-          {detail.plan ? (
-            <>
-              <button className="nfc-card-toggle" onClick={() => setDetailExpanded(v => !v)}>
-                {detailExpanded ? '▼' : '▶'} Plan ready for review
-              </button>
-              {detailExpanded && <pre className="nfc-card-pre">{detail.plan}</pre>}
-            </>
-          ) : (
-            <div className="nfc-card-sub">Plan ready for review</div>
-          )}
-        </div>
-      )}
-      {detail.type === 'file' && <div className="nfc-card-path">{detail.filePath}</div>}
-      {detail.type === 'generic' && (
-        /* The over-ceiling case: `preview` is the only thing left of the input, so
-           render it — the degraded card otherwise showed nothing about the ask. */
-        detail.preview ? (
-          <code
-            className={`nfc-card-cmd${detailExpanded ? ' nfc-expanded' : ''}`}
-            onClick={() => setDetailExpanded(v => !v)}
-            title={detailExpanded ? 'Collapse' : 'Expand'}
-          >
-            {detail.preview}
-          </code>
-        ) : n.body ? (
-          <div className="notification-feed-item-body">{n.body}</div>
-        ) : null
-      )}
-      {n.reason && <div className="nfc-card-sub">{n.reason}</div>}
+      {/* What is being asked, and the answer: one implementation shared with the
+          kanban card's prompt (PermissionPromptControls.tsx). */}
+      <PermissionAskDetail n={n} detail={answer.detail} />
 
       {resolved && (
         /* Labels live in resolvedLabelOf (kind-aware: 'expired' on a permission
@@ -991,63 +919,16 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
         <div className="notification-feed-item-resolved">{resolvedLabelOf({ kind: n.kind, resolved })}</div>
       )}
 
-      {/* The answer form / buttons. */}
-      {detail.type === 'question' ? (
-        <PermissionAnswerForm
-          questions={detail.questions}
-          disabled={!answerable || busy}
-          resolved={!!resolved}
-          onSubmit={(answers) => respond(true, { answers })}
-          onDismissQuestions={() => respond(false, { message: 'User dismissed the questions' })}
-        />
-      ) : (!answerable || askWithoutInput) ? (
-        /* Two reasons the card can't answer, ONE affordance: nothing to answer
-           WITH (no session/requestId, or already settled), or an AskUserQuestion
-           whose questions we couldn't recover — a blanket Approve there would
-           tell the model the user answered nothing. */
-        (!resolved && target) && (
+      <PermissionAnswerButtons
+        answer={answer}
+        fallback={target && (
           <div className="notification-feed-item-actions">
             <button className="notification-perm-btn" onClick={() => onNavigate(target)}>
               Go to Session
             </button>
           </div>
-        )
-      ) : acpOptions.length > 0 ? (
-        <div className="notification-feed-item-actions">
-          {acpOptions.map((o) => {
-            const isReject = isRejectOption(o);
-            return (
-              <button
-                key={o.optionId}
-                className={`notification-perm-btn${isReject ? '' : ' approve'}`}
-                disabled={busy}
-                onClick={() => respond(!isReject, { optionId: o.optionId })}
-              >
-                {o.name ?? o.optionId}
-              </button>
-            );
-          })}
-          {/* The adapter's own reject option may be absent — keep a plain Deny. */}
-          {!acpOptions.some(isRejectOption) && (
-            <button className="notification-perm-btn" disabled={busy} onClick={() => respond(false)}>
-              Deny
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="notification-feed-item-actions">
-          <button
-            className="notification-perm-btn approve"
-            disabled={busy}
-            onClick={() => respond(true)}
-          >
-            Approve
-          </button>
-          <button className="notification-perm-btn" disabled={busy} onClick={() => respond(false)}>
-            Deny
-          </button>
-        </div>
-      )}
+        )}
+      />
       {/* Gated on !resolved: a request that later settled (the user answered it in
           the session view, and session:permission-resolved stamped this entry) must
           not keep advertising an earlier failed attempt from this card. An incoming

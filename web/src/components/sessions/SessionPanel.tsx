@@ -33,6 +33,7 @@ import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } 
 import { SessionChangedTab } from './SessionChangedTab';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
+import { KANBAN_COLLAPSE_CHAT_BELOW } from '@/components/board/kanban/kanban-contract';
 import { BoardTaskPeek } from '@/components/board/BoardTaskPeek';
 import { PeekTabBar } from '@/components/board/PeekTabBar';
 import { usePeekTabs } from '@/components/board/usePeekTabs';
@@ -117,6 +118,16 @@ import '@/styles/session-header-fit.css';
  * letter is worse than one click on "show chat".
  */
 const SPLIT_MIN_WIDTH = 900;
+
+/**
+ * The Board pane's width once its view opens with the chat beside it: the panel
+ * goes full screen (96vw, `.open-walnut-fullscreen.is-changed-open`) and the chat
+ * column takes `chatPct`% of it, at least 280px, plus the 1px divider.
+ */
+function boardPaneWidthWithChat(windowWidth: number, chatPct: number): number {
+  const panel = windowWidth * 0.96;
+  return panel - Math.max(280, (panel * chatPct) / 100) - 1;
+}
 /** How long a hidden (kept-alive) VS Code view survives before it is unmounted. */
 const CODE_VIEW_HIDDEN_TTL_MS = 10 * 60_000;
 /** Keys that are not typing, so pressing one alone never marks the task read. */
@@ -981,14 +992,29 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // tab opens on the letter alone (the chat column has a 280px floor, and half a
   // letter is worse than one click on "show chat"); any other view clears a
   // collapse that was automatic so a tab hop can't silently lose the chat.
+  // The Board opens on the board alone when the chat would leave it under 480px
+  // (the kanban's floor): the same automatic collapse, undone by the board's own
+  // `Show chat` button, after which this panel never collapses the chat for the
+  // Board again (the user's choice wins).
+  const boardChatRevealed = useRef(false);
   const applyOpenCollapse = useCallback((view: SessionSplitView) => {
     if (view === 'inbox' && window.innerWidth < SPLIT_MIN_WIDTH) {
       autoCollapsed.current = true;
       setChatCollapsed(true);
       return;
     }
+    if (view === 'board' && !boardChatRevealed.current && boardPaneWidthWithChat(window.innerWidth, chatPanel.pct) < KANBAN_COLLAPSE_CHAT_BELOW) {
+      autoCollapsed.current = true;
+      setChatCollapsed(true);
+      log.info('session-panel', 'board opened with the chat collapsed', { sessionId, windowWidth: window.innerWidth });
+      return;
+    }
     if (autoCollapsed.current) { autoCollapsed.current = false; setChatCollapsed(false); }
-  }, []);
+  }, [chatPanel.pct, sessionId]);
+  const revealChatForBoard = useCallback(() => {
+    boardChatRevealed.current = true;
+    collapseChat(false);
+  }, [collapseChat]);
   // File-path click target for the Files split view. When set, the explorer roots
   // at the clicked file (backend lists its parent + preselects it, VS Code style)
   // instead of the session cwd. Cleared when the split closes / view switches.
@@ -2329,7 +2355,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // of the left view's toolbar, so the (now full-width) bar keeps
             // both layout controls at its two corners. While the chat is open
             // the toggle lives in the chat column's own bar segment below.
-            const chatBarSlot = chatCollapsed ? (
+            const chatBarSlot = chatCollapsed && activeView === 'board' ? (
+              <button
+                type="button"
+                className="sfe-btn session-chat-collapse-btn kanban-show-chat"
+                data-testid="kanban-show-chat"
+                onClick={revealChatForBoard}
+                title="Show the chat beside the board"
+                aria-expanded={false}
+              >Show chat</button>
+            ) : chatCollapsed ? (
               <button
                 type="button"
                 className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
@@ -2410,6 +2445,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         onOpenTask={peek.open}
                         onLocateTask={onTaskClick ?? onLocateTask}
                         onSendToSession={handleBoardSend}
+                        renderSession={(cardSessionId, opts) => (
+                          <InsetSessionPanel
+                            key={cardSessionId}
+                            sessionId={cardSessionId}
+                            embedded
+                            inset
+                            onClose={opts.onClose}
+                            onLocateTask={onTaskClick ?? onLocateTask}
+                            onTaskClick={openPeekFromChat}
+                            onSessionClick={onSessionClick}
+                            onOpenTaskDetail={onOpenTaskDetail}
+                            onOpenForkDraft={onOpenForkDraft}
+                          />
+                        )}
                       />
                     )}
                   </div>

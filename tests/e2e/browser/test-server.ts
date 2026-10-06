@@ -18,6 +18,8 @@ import zlib from 'node:zlib'
 import {
   allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
 } from './threads-fixture'
+// Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
+import { kanbanSeedTasks } from './board-kanban-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 
@@ -1271,6 +1273,7 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      ...kanbanSeedTasks(agoIso),
     ],
   }),
 )
