@@ -433,7 +433,7 @@ export function ContextMenu({
       />
       <div
         ref={menuRef}
-        className={`wn-context-menu${className ? ` ${className}` : ''}`}
+        className={`wn-context-menu${rows.some((row) => row.pill) ? ' has-pills' : ''}${className ? ` ${className}` : ''}`}
         style={menuPlacementStyle(placement)}
         role="menu"
         aria-label={ariaLabel}

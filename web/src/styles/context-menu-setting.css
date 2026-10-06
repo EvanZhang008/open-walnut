@@ -50,7 +50,13 @@
 }
 
 /* A PILL row (`ContextMenuItem.pill`): one line holding a pick-one group, drawn like the task menu's
-   Pinned row. The pills wrap rather than widen the menu past its viewport ceiling. */
+   Pinned row. A menu holding one is allowed wider than the shared 340px, so the built-in tiers plus a
+   custom one sit on ONE line as they do in the task menu (at 340px "Virtual Teammate" wrapped under
+   them). The viewport stays the ceiling, and past 560px (many custom tiers) the pills wrap instead. */
+.wn-context-menu.has-pills {
+  max-width: min(560px, 100vw - 16px);
+}
+
 .wn-context-menu-pills {
   display: flex;
   align-items: flex-start;

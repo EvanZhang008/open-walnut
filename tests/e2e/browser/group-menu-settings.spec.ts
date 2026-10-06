@@ -13,8 +13,10 @@
  *   5. A pick that touches 20+ tasks asks first; Cancel writes nothing.
  *   6. Keyboard and geometry: the pills stay inside the menu box, the arrows reach a pill, and
  *      Enter on it pins.
+ *   7. Width: with a custom tier the pills still sit on one line (the menu may grow past the shared
+ *      340px, up to 560px); a narrow window and many custom tiers wrap them inside the box.
  *
- * Every task, folder, pin and project is unique per run and removed in afterEach, also after a
+ * Every task, folder, pin, custom tier and project is unique per run and removed in afterEach, also after a
  * failed assertion: a leaked pin changes the Focus tier other specs measure.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
@@ -24,16 +26,20 @@ const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 test.setTimeout(180_000)
 
-const litter: { tasks: string[]; folders: string[]; projects: string[] } = { tasks: [], folders: [], projects: [] }
+const litter: { tasks: string[]; folders: string[]; projects: string[]; tiers: string[] } = { tasks: [], folders: [], projects: [], tiers: [] }
 
 test.beforeEach(async ({ page }) => {
   litter.tasks = []
   litter.folders = []
   litter.projects = []
+  litter.tiers = []
   await isolateUiPrefs(page)
 })
 
 test.afterEach(async () => {
+  for (const id of litter.tiers) {
+    await fetch(`${API}/api/focus/tiers/${id}`, { method: 'DELETE' }).catch(() => undefined)
+  }
   for (const id of litter.tasks) {
     await fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
     await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
@@ -97,6 +103,32 @@ async function pin(id: string, tier: string): Promise<void> {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tier }),
   })
   expect(res.ok).toBe(true)
+}
+
+async function createTier(label: string): Promise<string> {
+  const res = await fetch(`${API}/api/focus/tiers`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }),
+  })
+  if (!res.ok) throw new Error(`tier create failed: ${res.status} ${await res.text()}`)
+  const id = ((await res.json()) as { tier: { id: string } }).tier.id
+  litter.tiers.push(id)
+  return id
+}
+
+/** The pills' layout inside an open menu: how many lines they take, and whether they stay in the box and the window. */
+function pillFit(menu: Locator) {
+  return menu.evaluate((box) => {
+    const frame = box.getBoundingClientRect()
+    const pills = [...box.querySelectorAll('.wn-context-menu-pill')].map((p) => p.getBoundingClientRect())
+    return {
+      count: pills.length,
+      lines: new Set(pills.map((r) => Math.round(r.top))).size,
+      inside: pills.every((r) => r.left >= frame.left - 0.5 && r.right <= frame.right + 0.5),
+      viewport: frame.left >= 0 && frame.right <= innerWidth && frame.bottom <= innerHeight,
+      width: frame.width,
+      innerWidth,
+    }
+  })
 }
 
 interface Split { pinned_tasks: string[]; focus_tasks: string[]; wait_tasks: string[] }
@@ -330,7 +362,7 @@ test('the pills stay inside the menu box, and the arrows plus Enter reach one', 
   expect(fit.count).toBeGreaterThanOrEqual(3)
   expect(fit.inside).toBe(true)
   expect(fit.viewport).toBe(true)
-  expect(fit.width).toBeLessThanOrEqual(340)
+  expect(fit.width).toBeLessThanOrEqual(560)
 
   const parked = pill(menu, 'Parked')
   for (let i = 0; i < 12 && !(await parked.evaluate((el) => el.classList.contains('focused'))); i += 1) {
@@ -340,4 +372,64 @@ test('the pills stay inside the menu box, and the arrows plus Enter reach one', 
   await page.keyboard.press('Enter')
   await expect(menu).toHaveCount(0)
   await expect.poll(() => tiers([a, b]), { timeout: 15_000 }).toEqual(['wait', 'wait'])
+})
+
+test('a menu with the Pinned pills is wide enough to keep them on one line, and wraps them inside the box when it cannot', async ({ page }) => {
+  const s = stamp()
+  const project = `GroupPinWide${s}`
+  const a = await createTask('wide member a', project)
+  const b = await createTask('wide member b', project)
+  const groupId = await createFolder([a, b], `Wide ${s}`)
+  const custom = `Teammate ${s}`
+  await createTier(custom)
+
+  // The built-in tiers plus one custom tier sit on one line, as they do in the task menu
+  // (the shared 340px ceiling wrapped the custom one under them).
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await boot(page)
+  await openListProject(page, project)
+  const row = folderHeader(page, groupId)
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  let menu = await openMenu(page, row, 'folder-ctx-menu', custom)
+  let fit = await pillFit(menu)
+  expect(fit).toMatchObject({ lines: 1, inside: true, viewport: true })
+  expect(fit.count).toBeGreaterThanOrEqual(4)
+  expect(fit.width).toBeGreaterThan(340)
+  expect(fit.width).toBeLessThanOrEqual(560)
+  await page.screenshot({ path: '/tmp/group-menu-settings/wide-folder-menu.png', clip: (await menu.boundingBox())! })
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  menu = await openMenu(page, projectHeader(page, project), 'project-ctx-menu', custom)
+  fit = await pillFit(menu)
+  expect(fit).toMatchObject({ lines: 1, inside: true, viewport: true })
+  await page.screenshot({ path: '/tmp/group-menu-settings/wide-project-menu.png', clip: (await menu.boundingBox())! })
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  // A narrow window: the menu stays inside it and the pills wrap inside the box.
+  await page.setViewportSize({ width: 420, height: 800 })
+  menu = await openMenu(page, row, 'folder-ctx-menu', custom)
+  fit = await pillFit(menu)
+  expect(fit).toMatchObject({ inside: true, viewport: true })
+  expect(fit.lines).toBeGreaterThan(1)
+  expect(fit.width).toBeLessThanOrEqual(fit.innerWidth - 16)
+  await page.screenshot({ path: '/tmp/group-menu-settings/narrow-folder-menu.png', clip: (await menu.boundingBox())! })
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  // Many custom tiers: the menu stops at its 560px ceiling and the pills wrap inside it.
+  for (let i = 0; i < 5; i += 1) await createTier(`Extra ${i} ${s}`)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  await openListProject(page, project)
+  menu = await openMenu(page, folderHeader(page, groupId), 'folder-ctx-menu', `Extra 4 ${s}`)
+  fit = await pillFit(menu)
+  expect(fit).toMatchObject({ inside: true, viewport: true })
+  expect(fit.count).toBeGreaterThanOrEqual(9)
+  expect(fit.lines).toBeGreaterThan(1)
+  expect(fit.width).toBeLessThanOrEqual(560)
+  await page.screenshot({ path: '/tmp/group-menu-settings/many-tiers-folder-menu.png', clip: (await menu.boundingBox())! })
+  await page.keyboard.press('Escape')
 })

@@ -720,7 +720,8 @@ test('the Project setting row reads the folder\'s project inside the menu box an
     }
   })
   expect(geometry.chipInside).toBe(true)
-  expect(geometry.width).toBeLessThanOrEqual(340)
+  // The folder menu holds the Pinned pills, which lift its ceiling from 340px to 560px.
+  expect(geometry.width).toBeLessThanOrEqual(560)
   expect(geometry.cut).toBe(true)
   await page.screenshot({ path: '/tmp/menu-setting-rows/folder-menu.png', clip: (await menu.boundingBox())! })
 

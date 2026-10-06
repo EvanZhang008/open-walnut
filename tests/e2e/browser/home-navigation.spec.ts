@@ -722,7 +722,8 @@ test('the Sort setting row opens by keyboard on the current option; Escape, a pr
     return { chipInside: chip.left >= frame.left && chip.right <= frame.right, width: frame.width };
   });
   expect(geometry.chipInside).toBe(true);
-  expect(geometry.width).toBeLessThanOrEqual(340);
+  // The project menu holds the Pinned pills, which lift its ceiling from 340px to 560px.
+  expect(geometry.width).toBeLessThanOrEqual(560);
   await page.screenshot({ path: '/tmp/menu-setting-rows/project-menu.png', clip: (await menu.boundingBox())! });
 
   // ArrowDown walks the highlight to the Sort row; Enter opens the picker with the current option focused.
