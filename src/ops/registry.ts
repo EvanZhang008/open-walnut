@@ -103,7 +103,9 @@ export interface WalnutOp {
     /**
      * Remote (gateway/daemon) policy. 'allow' = callable from a remote
      * session through the daemon relay; 'deny' = local HTTP only (destructive
-     * ops). Reads default to allow; writes must choose explicitly.
+     * ops). Reads default to allow; writes must choose explicitly. A PLUGIN op
+     * with 'deny' is still served to the Walnut host's own daemon: a Mac session
+     * has no other way to an op that only the server process holds.
      */
     remote: 'allow' | 'deny'
     /**
@@ -194,6 +196,11 @@ export function listOpEntries(): Array<{ owner: string; op: WalnutOp }> {
 
 export function getOp(name: string): WalnutOp | undefined {
   return ops.get(name)
+}
+
+/** Who declared an op: 'core', a plugin id, or undefined for an unknown name. */
+export function getOpOwner(name: string): string | undefined {
+  return ops.getEntry(name)?.owner
 }
 
 /** Names only — convenience for allowlists and tests. */

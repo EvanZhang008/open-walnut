@@ -428,6 +428,36 @@ function requestOverSocket(
   })
 }
 
+/** How long the installed CLI waits on the hub catalog before listing core ops alone. */
+export const HUB_CATALOG_TIMEOUT_MS = 5_000
+
+/**
+ * The hub's op catalog through this session's host daemon, or null when there is
+ * no injected daemon socket or no answer. Only a managed session asks: its
+ * daemon is the one way the installed CLI sees ops a plugin declared in the
+ * server process. `name` narrows it to one op with its parameter rows.
+ */
+export async function fetchHubOps(
+  env: NodeJS.ProcessEnv = process.env,
+  name?: string,
+): Promise<ToolRow[] | null> {
+  const socket = (env.WALNUT_AGENT_SOCKET ?? '').trim()
+  const sid = (env.WALNUT_SESSION_ID ?? '').trim()
+  if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
+  try {
+    const resp = await requestOverSocket(
+      socket,
+      { v: 1, op: 'tools.list', sid, args: name ? { name } : {} },
+      HUB_CATALOG_TIMEOUT_MS,
+    )
+    if (!resp.ok) return null
+    const ops = resp.result.ops
+    return Array.isArray(ops) ? ops as ToolRow[] : null
+  } catch {
+    return null
+  }
+}
+
 // ── entry point ──
 
 /** Cap on waiting for a stdout flush — a runtime that never calls back must not hang walnut. */

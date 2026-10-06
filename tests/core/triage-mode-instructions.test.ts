@@ -146,6 +146,12 @@ describe('what a run does with each item', () => {
     expect(text).toContain('the user only decides');
   });
 
+  it('works only the inboxes the batch shows, never the state file', () => {
+    // 2026-10-06: two mail-only runs pulled Slack items out of triage-state.json's git history.
+    expect(text).toContain('Work only the inboxes it shows');
+    expect(text).toContain('never dig items out of Walnut\'s own files (triage-state.json, its git history)');
+  });
+
   it('never removes mail, in either mode', () => {
     for (const mode of ['ask', 'assist'] as const) {
       expect(triageInstructionsFor(readTriageConfig({ triage: { ...ASK, mode } }))).toContain(TRIAGE_NO_REMOVAL);

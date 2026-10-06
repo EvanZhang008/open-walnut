@@ -37,10 +37,12 @@
  *   deletes, archives or moves a message, and that is a decision, not a gap: an agent tidying an
  *   inbox may mark the noise read, and nothing it does can make a mail disappear.
  *
- * Known limitation, documented rather than papered over: a standalone `walnut` process and the
- * stdio MCP server cannot see plugin-declared ops until the out-of-process slice lands. That is a
- * reach problem, not a hole, because the approval ledger is server-side and a caller that cannot
- * reach the op cannot reach the ledger either.
+ * Reach: these ops live in the server process. A session's `walnut tools` reaches them through
+ * its host daemon (the installed CLI loads core ops only and hands a name it does not know to the
+ * daemon gateway, which runs it here under the session's id; capability-router.ts serves a `deny`
+ * plugin op to the Mac's own daemon). A standalone `walnut` outside a session and the stdio MCP
+ * server still see core ops only. That is a reach problem, not a hole, because the approval ledger
+ * is server-side and a caller that cannot reach the op cannot reach the ledger either.
  */
 import {
   asText,

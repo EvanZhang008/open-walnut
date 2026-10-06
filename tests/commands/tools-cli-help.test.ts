@@ -7,8 +7,23 @@
  * the same complaint that produced a JSON parse error before (2026-09-01).
  * The command now declares helpOption(false) and runTools answers every form.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { runTools } from '../../src/commands/tools.js'
+
+// `tools list` and `tools help` also ask a session's host daemon for plugin ops.
+// A run from inside a Walnut session inherits the REAL daemon socket, so this
+// file starts outside any session (tools-daemon-fallback.test.ts covers inside).
+const SESSION_ENV = ['WALNUT_AGENT_SOCKET', 'WALNUT_SESSION_ID'] as const
+const savedEnv: Partial<Record<(typeof SESSION_ENV)[number], string>> = {}
+beforeEach(() => {
+  for (const k of SESSION_ENV) {
+    if (process.env[k] !== undefined) savedEnv[k] = process.env[k]
+    delete process.env[k]
+  }
+})
+afterEach(() => {
+  for (const k of SESSION_ENV) if (savedEnv[k] !== undefined) process.env[k] = savedEnv[k]
+})
 
 /** Capture stdout without letting the catalog spill into the test output. */
 async function capture(args: string[]): Promise<string> {

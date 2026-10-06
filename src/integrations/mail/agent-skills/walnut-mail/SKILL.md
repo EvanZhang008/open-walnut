@@ -16,7 +16,7 @@ description: >-
 
 Walnut keeps a local cache of the user's mailboxes and gives you nine tools over it. Four read and five write. None of the writes can put a message on the wire, take the user off a list, or remove a message.
 
-Those tools exist only once a mail account is connected, on the primary Walnut. If you do not see `mail_list` in your tool list there is no account yet: say so and point the user at the Mail app to add one, rather than guessing at their mail from anywhere else.
+Those tools exist only once a mail account is connected, on the primary Walnut. In a Claude Code session they are Walnut ops: `walnut tools list` shows them and `walnut tools call mail_list '{"limit":20}'` runs one. If `mail_list` is in neither your tool list nor `walnut tools list`, there is no account yet: say so and point the user at the Mail app to add one, rather than guessing at their mail from anywhere else.
 
 ## The one rule: you draft, the human sends
 

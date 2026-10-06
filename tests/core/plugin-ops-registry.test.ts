@@ -428,6 +428,21 @@ describe('registry.op through a loaded plugin', () => {
     expect(getOp('ops_demo_ping')).toBeDefined()
   })
 
+  it('serves a deny plugin op to the Mac\'s own daemon, and only there', async () => {
+    // The installed CLI on the Mac loads core ops only, so its session reaches a
+    // plugin op through the local daemon or not at all (2026-10-06: mail_mark_read).
+    const deps = { throttle: new PeerThrottle(), cloudMode: false }
+    const local = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'ops_demo_drop_ping' }, '__local__', deps)
+    expect(local).toEqual({ ok: true, result: { dropped: true } })
+
+    const remote = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'ops_demo_drop_ping' }, 'devbox', deps)
+    expect(remote.ok === false && remote.error.message).toMatch(/local-only/)
+
+    // A core deny op is still refused on the Mac's daemon: that CLI reaches it directly.
+    const core = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'task_delete', args: { id: 'x' } }, '__local__', deps)
+    expect(core.ok === false && core.error.message).toMatch(/local-only/)
+  })
+
   it('forgets the op when the plugin disposes its own handle', async () => {
     expect(await callPluginOp('ops-demo', 'ops_demo_drop_ping', {}, LOCAL_ORIGIN)).toEqual({ ok: true, result: { dropped: true } })
 

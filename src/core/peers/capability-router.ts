@@ -173,12 +173,18 @@ async function handleToolsCall(
       return err('bad_request', pullErr instanceof Error ? pullErr.message : String(pullErr));
     }
   }
-  const { getOp, executeOp } = await import('../../ops/index.js');
+  const { getOp, getOpOwner, executeOp } = await import('../../ops/index.js');
   const op = getOp(name);
   if (!op) {
     return err('bad_request', `unknown op: ${name} — run \`walnut tools list\``);
   }
-  if (op.tags.remote === 'deny' && !(op.tags.localHostGateway && host === '__local__')) {
+  // A PLUGIN op lives only in this server process, so a session on this Mac has
+  // no other way to it: the installed `walnut` it runs knows core ops alone and
+  // hands a plugin op to its host daemon, which lands here as `__local__`. A core
+  // `deny` op stays refused on every host, because that CLI reaches it directly
+  // (2026-10-06: an Inbox Triage run could not call mail_mark_read at all).
+  const localPluginOp = host === '__local__' && (getOpOwner(name) ?? 'core') !== 'core';
+  if (op.tags.remote === 'deny' && !localPluginOp && !(op.tags.localHostGateway && host === '__local__')) {
     // A host-local read (Apple Health) is refused for what it is, not as "destructive",
     // and without pointing at a way around the rule.
     if (op.tags.localHostGateway) {

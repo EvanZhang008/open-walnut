@@ -225,12 +225,27 @@ describe('what the previous run left behind', () => {
 
 describe('sources and the empty batch', () => {
   it('a sources list without slack never mentions Slack', () => {
-    const batch = base({ sources: ['mail'], mail: [mail('work', 3)], slack: slack(5) });
+    const batch = base({
+      sources: ['mail'], mail: [mail('work', 3)], slack: slack(5), droppedSlack: 4,
+    });
     expect(batch.body).toContain('Mail —');
-    expect(batch.body).not.toContain('Slack —');
-    // The counts still describe the buffer, so the note cannot claim 3 rows of a
-    // source the body does not show.
-    expect(batch.counts.slackItems).toBe(5);
+    expect(batch.body).not.toContain('Slack');
+    // The note, the title count and the count hint describe what the body shows,
+    // never the buffer (a mail-only run once read "3 Slack items" and triaged Slack).
+    expect(batch.counts.slackItems).toBe(0);
+    expect(batch.counts.droppedSlack).toBe(0);
+    expect(batch.counts.total).toBe(3);
+    expect(batch.note).toBe('batch · 3 new mails in 1 account');
+    expect(batch.message.split('\n')[0]).toBe('WALNUT_TRIAGE_COUNT: 3');
+    expect(batch.message).not.toContain('Slack');
+  });
+
+  it('a sources list without mail counts no mail', () => {
+    const batch = base({ sources: ['slack'], mail: [mail('work', 3)], slack: slack(2) });
+    expect(batch.body).not.toContain('Mail —');
+    expect(batch.counts.mailMessages).toBe(0);
+    expect(batch.counts.total).toBe(2);
+    expect(batch.note).toBe('batch · 2 Slack items');
   });
 
   it('an empty batch is a readable "nothing new since <T>", not an action stub', () => {

@@ -19,8 +19,12 @@ import {
   formatParamSignature,
   formatToolsTable,
   opParams,
+  type ToolRow,
   type ZodLike,
 } from '../ops/op-help.js'
+
+/** One `tools list` row; core and plugin ops render the same way. */
+type ToolsListRow = Required<Pick<ToolRow, 'name' | 'title' | 'readonly' | 'remote' | 'signature'>>
 
 /**
  * Parse `--flag value` pairs into args, coercing types from the op's zod
@@ -77,7 +81,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
   if (sub === 'list' || sub === undefined) {
     const readonly = args.includes('--readonly')
     const ops = listOps().filter((o) => !readonly || o.tags.readonly)
-    const rows = ops.map((o) => ({
+    const rows: ToolsListRow[] = ops.map((o) => ({
       name: o.name,
       title: o.title,
       readonly: o.tags.readonly,
@@ -86,6 +90,20 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       // it the next step is guessing `q` vs `query`.
       signature: formatParamSignature(opParams(o.input as Record<string, ZodLike>)),
     }))
+    // Plugin ops live in the server process only; a session sees them through
+    // its host daemon. No daemon or no answer: core ops alone, as before.
+    const known = new Set(listOps({ includeDeprecated: true }).map((o) => o.name))
+    const { fetchHubOps } = await import('../providers/wn-cli.js')
+    for (const hub of await fetchHubOps() ?? []) {
+      if (known.has(hub.name) || (readonly && !hub.readonly)) continue
+      rows.push({
+        name: hub.name,
+        title: hub.title ?? hub.name,
+        readonly: hub.readonly === true,
+        remote: hub.remote ?? 'deny',
+        signature: hub.signature ?? '(none)',
+      })
+    }
     if (globals.json) {
       const { outputJson } = await import('../utils/json-output.js')
       outputJson(rows)
@@ -96,9 +114,16 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
   }
 
   // `tools help <op>` and `tools call <op> --help` render the SAME detail.
-  const printOpHelp = (name: string): boolean => {
+  const printOpHelp = async (name: string): Promise<boolean> => {
     const op = getOp(name)
     if (!op) {
+      // A plugin op: the server holds its schema, this session's daemon asks it.
+      const { fetchHubOps } = await import('../providers/wn-cli.js')
+      const hub = (await fetchHubOps(process.env, name))?.find((row) => row.name === name)
+      if (hub) {
+        console.log(formatOpHelp(hub))
+        return true
+      }
       console.error(`Unknown op: ${name}. Run \`walnut tools list\`.`)
       process.exitCode = 1
       return false
@@ -119,7 +144,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       console.log(helpText('tools'))
       return
     }
-    printOpHelp(name)
+    await printOpHelp(name)
     return
   }
 
@@ -138,8 +163,17 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // as JSON". It used to reach the JSON parser and die with "JSON Parse
     // error", which reads as a broken CLI (2026-09-01 session).
     if (rest.includes('--help') || rest.includes('-h')) {
-      printOpHelp(name)
+      await printOpHelp(name)
       return
+    }
+
+    // An op this process does not know may be a plugin's, which only the server
+    // holds: inside a session the host daemon runs it there, with the raw
+    // arguments (JSON, @file or stdin). Outside one, the usual unknown-op error.
+    if (!op && !rest[0]?.startsWith('--')) {
+      const { callServerOpThroughHostDaemon } = await import('./tools-daemon-fallback.js')
+      const code = await callServerOpThroughHostDaemon([name, ...rest])
+      if (code !== null) { process.exitCode = code; return }
     }
 
     if (rest[0]?.startsWith('--')) {
@@ -147,7 +181,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       // coerced from the op's own zod shape, so numbers and booleans arrive
       // typed exactly as the JSON form would deliver them.
       if (!op) {
-        console.error(`Unknown op: ${name}. Run \`walnut tools list\`.`)
+        console.error(`Unknown op: ${name}. Run \`walnut tools list\`. A plugin's op takes its arguments as JSON: walnut tools call ${name} '{...}'`)
         process.exitCode = 1
         return
       }

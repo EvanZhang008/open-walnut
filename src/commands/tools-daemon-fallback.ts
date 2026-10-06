@@ -11,9 +11,24 @@
  *
  * Only on an unreachable server: a server that answered (even with an error) is
  * the authority, and a call from outside a session has no daemon to ask.
+ *
+ * The same socket is also how a Mac session reaches a PLUGIN op at all: this
+ * process loads core ops only, and a plugin declares its ops inside the server.
  */
 
 import fs from 'node:fs'
+
+/** True when this process runs inside a managed session whose host daemon is listening. */
+function hasHostDaemon(env: NodeJS.ProcessEnv): boolean {
+  const socket = (env.WALNUT_AGENT_SOCKET ?? '').trim()
+  const sid = (env.WALNUT_SESSION_ID ?? '').trim()
+  if (!socket || !sid) return false
+  try {
+    return fs.statSync(socket).isSocket()
+  } catch {
+    return false
+  }
+}
 
 /**
  * Hand the call to this session's host daemon. Returns the exit code, or null
@@ -24,15 +39,24 @@ export async function callThroughHostDaemon(
   args: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number | null> {
-  const socket = (env.WALNUT_AGENT_SOCKET ?? '').trim()
-  const sid = (env.WALNUT_SESSION_ID ?? '').trim()
-  if (!socket || !sid) return null
-  try {
-    if (!fs.statSync(socket).isSocket()) return null
-  } catch {
-    return null
-  }
+  if (!hasHostDaemon(env)) return null
   process.stderr.write('walnut: the Walnut server is not reachable; asking this host\'s daemon instead.\n')
   const { runWalnutCli } = await import('../providers/wn-cli.js')
   return runWalnutCli(['tools', 'call', name, JSON.stringify(args ?? {})])
+}
+
+/**
+ * `walnut tools call <op> ...` for an op this process does not know: a plugin
+ * declared it, so it exists only in the server process. The host daemon's
+ * gateway runs it there under this session's id, the same path a remote host
+ * takes. `argv` is everything after `call`, untouched, so @file and stdin
+ * payloads work as they do for the daemon's own shim. Null outside a session.
+ */
+export async function callServerOpThroughHostDaemon(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number | null> {
+  if (!hasHostDaemon(env)) return null
+  const { runWalnutCli } = await import('../providers/wn-cli.js')
+  return runWalnutCli(['tools', 'call', ...argv])
 }

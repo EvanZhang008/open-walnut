@@ -199,7 +199,8 @@ describe('the buffer across two runs', () => {
     await configureTriage({ sources: ['mail'] });
     await recordTriageArrivals({ slack: slackRows(2) });
     const result = await run(ctx);
-    expect(result.content).not.toContain('Slack —');
+    expect(result.content).not.toContain('Slack');
     expect(result.content).toContain('Mail —');
+    expect(result.content.split('\n')[0]).toBe('WALNUT_TRIAGE_COUNT: 0');
   });
 });

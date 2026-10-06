@@ -27,6 +27,7 @@ export {
   listOps,
   listOpEntries,
   getOp,
+  getOpOwner,
   opNames,
   opInputJsonSchema,
   type WalnutOp,

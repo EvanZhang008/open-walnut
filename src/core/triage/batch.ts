@@ -172,18 +172,25 @@ export const TRIAGE_FINISH_CHECKLIST = [
  * reader ends up.
  */
 export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
-  const mailMessages = input.mail.reduce((sum, row) => sum + Math.max(0, row.count), 0);
-  const counts: TriageBatchCounts = {
-    mailAccounts: input.mail.length,
-    mailMessages,
-    slackItems: input.slack.length,
-    droppedMail: Math.max(0, Math.floor(input.droppedMail)),
-    droppedSlack: Math.max(0, Math.floor(input.droppedSlack)),
-    total: mailMessages + input.slack.length,
-  };
-
   const wantsMail = input.sources.includes('mail');
   const wantsSlack = input.sources.includes('slack');
+
+  // A source the config leaves out counts as nothing, everywhere: the note, the
+  // title's {count} and the count hint all describe what the body shows. The
+  // collector still buffers every source, so its rows ride the claim and are
+  // dropped on ack (2026-10-06: a mail-only run read "3 Slack items" in its
+  // note and went to triage Slack anyway).
+  const mail = wantsMail ? input.mail : [];
+  const slack = wantsSlack ? input.slack : [];
+  const mailMessages = mail.reduce((sum, row) => sum + Math.max(0, row.count), 0);
+  const counts: TriageBatchCounts = {
+    mailAccounts: mail.length,
+    mailMessages,
+    slackItems: slack.length,
+    droppedMail: wantsMail ? Math.max(0, Math.floor(input.droppedMail)) : 0,
+    droppedSlack: wantsSlack ? Math.max(0, Math.floor(input.droppedSlack)) : 0,
+    total: mailMessages + slack.length,
+  };
 
   const parts: string[] = [];
 
@@ -261,7 +268,7 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
   parts.push(TRIAGE_FINISH_CHECKLIST);
 
   const body = parts.join('\n\n');
-  const note = triageBatchNote(counts);
+  const note = triageBatchNote(counts, input.sources);
   const message = [
     triageCountHintLine(counts.total),
     buildWalnutMessage({
@@ -281,11 +288,16 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
  * items over a body holding 8 is the audit trail lying, which is worse than no
  * card. `dropped` is how the two are reconciled when the caps bit.
  */
-export function triageBatchNote(counts: TriageBatchCounts): string {
+export function triageBatchNote(
+  counts: TriageBatchCounts,
+  sources: readonly TriageSource[] = ['mail', 'slack'],
+): string {
   const bits: string[] = [];
-  bits.push(`${plural(counts.mailMessages, 'new mail')} in ${plural(counts.mailAccounts, 'account')}`);
-  bits.push(plural(counts.slackItems, 'Slack item'));
+  if (sources.includes('mail')) {
+    bits.push(`${plural(counts.mailMessages, 'new mail')} in ${plural(counts.mailAccounts, 'account')}`);
+  }
+  if (sources.includes('slack')) bits.push(plural(counts.slackItems, 'Slack item'));
   const dropped = counts.droppedMail + counts.droppedSlack;
   if (dropped > 0) bits.push(`${dropped} dropped`);
-  return `batch · ${bits.join(' · ')}`;
+  return bits.length > 0 ? `batch · ${bits.join(' · ')}` : 'batch';
 }

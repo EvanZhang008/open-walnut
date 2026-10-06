@@ -75,6 +75,8 @@ const TRIAGE_ROUTINE_DESCRIPTION =
  */
 export const TRIAGE_RUN_INSTRUCTIONS = [
   'You are running one Inbox Triage batch. Read the batch above.',
+  'Work only the inboxes it shows: when it has no Slack section, Slack is not this run\'s,',
+  'and never dig items out of Walnut\'s own files (triage-state.json, its git history).',
   '',
   'Follow the walnut-inbox-triage skill. In order: read notes/Walnut/Triage/State.md,',
   'read what you need about each item, match items to the projects and tasks that',
