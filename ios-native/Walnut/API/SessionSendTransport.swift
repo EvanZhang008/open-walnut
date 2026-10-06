@@ -29,6 +29,10 @@ protocol SessionSendTransport {
     /// either silently spends ~48 KB/min in the degraded poll or silently drops
     /// the tool-input / reasoning fields the timeline needs.
     func sessionTranscript(id: String, fresh: Bool, rich: Bool) async throws -> SessionTranscript
+    /// A page of the transcript for the first open and for Load earlier (see
+    /// `WalnutAPI.sessionTranscriptPagePath`). Always fresh and rich.
+    func sessionTranscriptPage(id: String, before: String?, since: String?,
+                               visible: Int) async throws -> SessionTranscript
 }
 
 extension WalnutAPI: SessionSendTransport {}

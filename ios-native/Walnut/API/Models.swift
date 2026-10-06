@@ -663,6 +663,16 @@ struct SessionTranscript: Codable {
     let exportedAt: String
     let truncated: Bool
     let messages: [Message]
+    /// The server can answer an older page of this transcript (`before=`):
+    /// only a rich answer built on the primary says so (additive 2026-10), and a
+    /// cloud replica relays rich reads there. nil on an older server and on a
+    /// read served from the exported file or the replica's own bridge tail. A
+    /// `var` with a default so the synthesized decoder still reads it.
+    var pageable: Bool? = nil
+    /// Whether these rows carry the rich fields, on a rich request only. `false`
+    /// is a fallback answer (the replica could not reach the Mac and read its own
+    /// copy), which says nothing about paging either way.
+    var rich: Bool? = nil
 }
 
 /// Coarse session status for the indicator dot + grouping.

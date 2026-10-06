@@ -272,29 +272,55 @@ final class TimelineCollectionController: UIViewController {
 
     // MARK: - Viewport anchoring (unpinned readers)
 
-    /// Identity of the row at the viewport top + how far the offset sits into
-    /// it. Row ids are stable across snapshot generations, so this survives
-    /// structural changes that shift indices (head trim, giant reconcile).
+    /// Identity of the rows on screen, from the viewport top down, each with how
+    /// far the offset sits into it. Row ids are stable across snapshot
+    /// generations, so this survives structural changes that shift indices
+    /// (head trim, giant reconcile). Restore uses the FIRST that still exists:
+    /// a prepended page can renew the top row's id (a folded run whose first
+    /// calls were on that page is keyed by its new first call), and with only
+    /// that row to go by, the reader landed on the start of the page instead.
     struct ViewportAnchor {
-        let rowID: String
-        let offsetDelta: CGFloat
+        struct Candidate {
+            let rowID: String
+            let offsetDelta: CGFloat
+        }
+        let candidates: [Candidate]
     }
+
+    private static let maxAnchorCandidates = 8
 
     private func captureAnchor() -> ViewportAnchor? {
         guard let cv = collectionView, !rows.isEmpty else { return nil }
         let y = cv.contentOffset.y + cv.adjustedContentInset.top
-        guard let i = layout.rowIndex(at: max(0, y)), i < rows.count,
-              let minY = layout.rowMinY(i) else { return nil }
-        return ViewportAnchor(rowID: rows[i].id, offsetDelta: cv.contentOffset.y - minY)
+        guard var i = layout.rowIndex(at: max(0, y)), i < rows.count else { return nil }
+        // Never the Load earlier row: it is at the top before AND after the page
+        // lands, so anchoring on it showed the start of the new page, and the
+        // reader lost the message they were on. The row below it is that message.
+        if case .loadEarlier = rows[i].content, i + 1 < rows.count { i += 1 }
+        let viewportBottom = cv.contentOffset.y + cv.bounds.height
+        var candidates: [ViewportAnchor.Candidate] = []
+        var j = i
+        while j < rows.count, candidates.count < Self.maxAnchorCandidates,
+              let minY = layout.rowMinY(j), j == i || minY < viewportBottom {
+            candidates.append(.init(rowID: rows[j].id, offsetDelta: cv.contentOffset.y - minY))
+            j += 1
+        }
+        return candidates.isEmpty ? nil : ViewportAnchor(candidates: candidates)
     }
 
-    /// Reposition so the anchor row sits where it was. Anchor row gone
-    /// (trimmed / mid-progressive-fill prefix): leave the clamped offset —
-    /// the final slice of a fill restores it once the row lands.
+    /// Reposition so the first anchor row still present sits where it was.
+    /// None present (trimmed / mid-progressive-fill prefix): leave the clamped
+    /// offset; the final slice of a fill restores it once the rows land.
     private func restoreAnchor(_ anchor: ViewportAnchor) {
         guard let cv = collectionView else { return }
-        guard let i = rows.firstIndex(where: { $0.id == anchor.rowID }),
-              let minY = layout.rowMinY(i) else {
+        var found: (index: Int, candidate: ViewportAnchor.Candidate)?
+        for candidate in anchor.candidates {
+            if let i = rows.firstIndex(where: { $0.id == candidate.rowID }) {
+                found = (i, candidate)
+                break
+            }
+        }
+        guard let found, let minY = layout.rowMinY(found.index) else {
             // Anchor row not landed yet (mid-progressive-fill prefix). Kill
             // any in-flight AUTOMATIC animated adjustment anyway: when the
             // first fill slice shrinks contentSize below the reader's offset,
@@ -308,7 +334,7 @@ final class TimelineCollectionController: UIViewController {
         let minOffset = -cv.adjustedContentInset.top
         let maxOffset = max(minOffset, cv.contentSize.height - cv.bounds.height
                             + cv.adjustedContentInset.bottom)
-        let target = min(max(minY + anchor.offsetDelta, minOffset), maxOffset)
+        let target = min(max(minY + found.candidate.offsetDelta, minOffset), maxOffset)
         // ALWAYS set, no epsilon short-circuit: even a no-op-looking set must
         // run to cancel the automatic animated clamp described above (skipping
         // it when cur == target left the animation alive → offset drift).

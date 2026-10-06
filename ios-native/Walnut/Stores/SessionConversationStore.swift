@@ -157,7 +157,13 @@ final class SessionConversationStore {
     /// streaming, keyboard resizing, or canonical history reconciliation.
     /// `@ObservationIgnored` for the same reason as ChatStore's: it is written
     /// from inside the scroll view's layout pass and never read by a view body.
-    @ObservationIgnored var bottomPinned = true
+    @ObservationIgnored var bottomPinned = true {
+        didSet { if bottomPinned { readerLoadedHead = false } }
+    }
+    /// The oldest rows held came from the reader's own Load earlier taps. While
+    /// they read them (unpinned), reconcile keeps them; back at the bottom the
+    /// usual cap applies again.
+    @ObservationIgnored private var readerLoadedHead = false
     /// Bumped when a layout-shifting mutation should restore pinned intent.
     private(set) var scrollToBottomSignal = 0
     /// What the page says about the link to the session's host. Only CONTINUOUS
@@ -201,10 +207,37 @@ final class SessionConversationStore {
     /// new connection resumes with Last-Event-ID (cloud) or asks for the turn's
     /// full replay after its snapshot (primary, unchanged behaviour).
     @ObservationIgnored private(set) var streamKind: SessionStreamKind = .unknown
-    /// Hard cap on rows kept for rendering (see reconcile() — unbounded merge
+    /// Caps on what is kept for rendering (see reconcile(): unbounded merge
     /// growth was the root cause of the watchdog freeze-kills on builds 16-20).
-    private static let maxRenderedRows = 150
-    private static let hardMaxRenderedRows = 400
+    /// Counted in timeline PARTS, what the reader sees: a folded run of 80 tool
+    /// calls is one line, and a cap of 150 raw rows kept a busy session to a few
+    /// lines with the user's own messages cut off above them (2026-10-04). The
+    /// row ceilings bound memory and the per-build fold for the same reason.
+    static let pinnedRenderParts = 150
+    static let unpinnedRenderParts = 400
+    static let pinnedRenderRows = 1_500
+    static let unpinnedRenderRows = 3_000
+    /// Text rows the first open asks the server to reach back to (`visible`):
+    /// enough to read on, small enough to paint at once. A Load earlier page is
+    /// larger, because each one costs the reader a tap (a 2,300-row session took
+    /// 12 taps at 20 lines a page).
+    static let openVisibleRows = 20
+    static let pageVisibleRows = 50
+
+    /// Older pages. `canPage`: the server said it answers `before=` pages (only a
+    /// rich live read on the primary does). `olderExists`: the oldest row held is
+    /// not the conversation's first. The row shows only when both hold.
+    private(set) var canPage = false
+    private(set) var olderExists = false
+    private(set) var loadingEarlier = false
+    private(set) var loadEarlierFailed = false
+    var showsLoadEarlier: Bool { canPage && olderExists && !historyMessages.isEmpty }
+    /// Equality-gated, like `setStreaming`: reconcile runs per poll and turn end.
+    private func setCanPage(_ value: Bool) { if canPage != value { canPage = value } }
+    private func setOlderExists(_ value: Bool) { if olderExists != value { olderExists = value } }
+    var loadEarlierState: TimelineLoadEarlierState {
+        loadingEarlier ? .loading : (loadEarlierFailed ? .failed : .ready)
+    }
 
     /// True from "created with a first message" until the first turn-start or
     /// a terminal status. Keeps the Starting-session live row alive across the
@@ -297,7 +330,7 @@ final class SessionConversationStore {
         connectStream()
         await loadTranscript(fresh: false, rich: false)
         FreezeContext.shared.note("sc-open-cached", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
-        await runFreshLoad(rich: true)
+        await runFreshLoad(rich: true, visible: Self.openVisibleRows)
         FreezeContext.shared.note("sc-open-fresh", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
     }
 
@@ -382,12 +415,29 @@ final class SessionConversationStore {
     /// they cost ~4 KB gzipped per read — fine on open / resume / turn end, ~48
     /// KB/min from the 5s degraded poll, which is the same URL. See
     /// `WalnutAPI.sessionTranscriptPath`.
-    private func loadTranscript(fresh: Bool, rich: Bool) async {
+    ///
+    /// A rich fresh read is a PAGE read (`sessionTranscriptPage`): `visible` on
+    /// the first open, so a busy turn's folded tool calls are not all there is,
+    /// and otherwise `since` = the newest row held, so the answer overlaps what
+    /// is on screen and stitching the two cannot leave a hole (see reconcile).
+    private func loadTranscript(fresh: Bool, rich: Bool, visible: Int? = nil) async {
         guard isActive else { return }
         do {
-            let next = try await api.sessionTranscript(id: sessionId, fresh: fresh, rich: rich)
+            let next: SessionTranscript
+            if fresh && rich {
+                let since = visible == nil
+                    ? historyMessages.last(where: { !Self.isProvisional($0) })?.createdAt : nil
+                next = try await api.sessionTranscriptPage(
+                    id: sessionId, before: nil, since: since, visible: visible ?? 0)
+            } else {
+                next = try await api.sessionTranscript(id: sessionId, fresh: fresh, rich: rich)
+            }
             guard isActive, !Task.isCancelled else { return }
             reconcile(next)
+            // Only a rich answer can say it pages; a slim poll's silence is not a
+            // no, and neither is a replica's fallback (`rich: false`, the Mac was
+            // out of reach for this one read): the row stays as it was.
+            if fresh && rich && next.rich != false { setCanPage(next.pageable == true) }
             transcriptMissing = false
             loadedOnce = true
             // Failure-fallback polling (below) has done its job once a load
@@ -437,38 +487,43 @@ final class SessionConversationStore {
 
     private func reconcileTracked(_ transcript: SessionTranscript) {
         let wasPinned = bottomPinned
-        let incoming = transcript.messages.map { m in
-            ChatMessage(
-                id: "", // positional ids assigned after the merge (must be unique across it)
-                role: m.role,
-                text: m.text,
-                createdAt: m.timestamp,
-                kind: Self.mapKind(m.kind),
-                detail: m.detail,
-                resultPreview: m.resultPreview,
-                agent: m.agent,
-                thinkingText: m.thinkingText,
-                inputPreview: m.inputPreview,
-                isError: m.isError
-            )
-        }
+        let incoming = transcript.messages.map { Self.row(from: $0) }
         var merged: [ChatMessage]
+        // Whether the head of what is held is still the head after the merge:
+        // then `olderExists` keeps describing it. Otherwise the window decides.
+        var keptHead = false
         if incoming.isEmpty && !historyMessages.isEmpty {
             merged = historyMessages // a zero-row tail never beats shown content
+            keptHead = true
         } else if let firstIncoming = transcript.messages.first?.timestamp,
-                  historyMessages.count > incoming.count {
-            // ISO-8601 strings compare lexicographically. Rows strictly before
-            // the incoming window survive; the window itself is authoritative.
-            merged = historyMessages.filter { $0.createdAt < firstIncoming } + incoming
+                  transcript.truncated || historyMessages.count > incoming.count,
+                  historyMessages.contains(where: { !Self.isProvisional($0) && $0.createdAt >= firstIncoming }) {
+            // ISO-8601 strings compare lexicographically. Rows before the
+            // incoming window survive; the window itself is authoritative. Only
+            // when the two OVERLAP: a window that starts after everything held
+            // may have skipped rows in between, and stitching across that would
+            // show the conversation with a hole in it.
+            let older = Self.rowsBefore(firstIncoming, held: historyMessages, incoming: incoming)
+            keptHead = !older.isEmpty
+            merged = older + incoming
         } else {
             merged = incoming
         }
-        // A 150-row head trim is invisible only while pinned at the bottom.
-        // Defer it for a history reader; retain a 400-row hard cap so a page
-        // cannot grow without bound if it remains unpinned for hours.
-        let renderCap = wasPinned ? Self.maxRenderedRows : Self.hardMaxRenderedRows
-        if merged.count > renderCap {
-            merged = Array(merged.suffix(renderCap))
+        if !keptHead { setOlderExists(transcript.truncated) }
+        // A head trim is invisible only while pinned at the bottom. Defer most
+        // of it for a history reader; keep a hard cap so a page cannot grow
+        // without bound if it remains unpinned for hours. What is trimmed is
+        // one Load earlier away. Never while the reader is up in rows they
+        // loaded themselves: the trim would take the very rows on screen.
+        if wasPinned || !readerLoadedHead {
+            let start = Self.renderStart(
+                merged,
+                maxParts: wasPinned ? Self.pinnedRenderParts : Self.unpinnedRenderParts,
+                maxRows: wasPinned ? Self.pinnedRenderRows : Self.unpinnedRenderRows)
+            if start > 0 {
+                merged = Array(merged[start...])
+                setOlderExists(true)
+            }
         }
         // STABLE ids, not positional. A positional "t-<i>" scheme changes every
         // row's identity whenever the list length shifts (turn-end refetch, 5s
@@ -537,6 +592,113 @@ final class SessionConversationStore {
         }
     }
 
+    /// Held rows the incoming window does not cover: every row strictly older
+    /// than its first row, plus the rows AT that timestamp it cut off. A tail can
+    /// start inside a run of messages that share one timestamp (measured: 65 such
+    /// runs in a 16k-line session); its first rows are then the run's later ones,
+    /// and a strict `<` alone dropped the earlier ones from the screen. Matched by
+    /// what a row IS (role, time, kind, text, detail), never by payload: a slim
+    /// poll and a rich read of the same row differ only in payload.
+    static func rowsBefore(_ firstIncoming: String, held: [ChatMessage],
+                           incoming: [ChatMessage]) -> [ChatMessage] {
+        // A provisional reply is stamped by the PHONE's clock and is replaced by
+        // its canonical row in the window, so it is never "older" than it.
+        let settled = held.filter { !isProvisional($0) }
+        var older = settled.filter { $0.createdAt < firstIncoming }
+        let atBoundary = settled.filter { $0.createdAt == firstIncoming }
+        guard !atBoundary.isEmpty else { return older }
+        func identity(_ m: ChatMessage) -> String {
+            "\(m.role)|\(m.kind?.rawValue ?? "")|\(m.text)|\(m.detail ?? "")"
+        }
+        var covered: [String: Int] = [:]
+        for row in incoming where row.createdAt == firstIncoming { covered[identity(row), default: 0] += 1 }
+        for row in atBoundary {
+            let key = identity(row)
+            if let n = covered[key], n > 0 { covered[key] = n - 1 } else { older.append(row) }
+        }
+        return older
+    }
+
+    /// The finished reply finalizeTurn paints until the refetch lands. Its time is
+    /// the phone's, so it says nothing about where the server's rows are.
+    private static func isProvisional(_ m: ChatMessage) -> Bool { m.id.hasPrefix("provisional-") }
+
+    /// Where the kept list starts: the newest `maxParts` timeline parts (a folded
+    /// run of tool and thinking rows is one part, the way the reader sees it),
+    /// within the newest `maxRows` rows. The cut never splits a run, and moves
+    /// forward past a run of rows that share one timestamp, because the next
+    /// Load earlier asks for rows strictly OLDER than the first one kept and
+    /// would never return the rest of that run.
+    static func renderStart(_ rows: [ChatMessage], maxParts: Int, maxRows: Int) -> Int {
+        let floor = max(0, rows.count - maxRows)
+        var start = rows.count
+        var parts = 0
+        while start > floor {
+            var head = start - 1
+            if TimelineToolRunFold.isRunMember(rows[head]) {
+                while head > floor, TimelineToolRunFold.isRunMember(rows[head - 1]) { head -= 1 }
+            }
+            parts += 1
+            if parts > maxParts { break }
+            start = head
+        }
+        guard start > 0, start < rows.count else { return start < rows.count ? start : 0 }
+        var clean = start
+        while clean < rows.count, clean - start < 50, rows[clean].createdAt == rows[clean - 1].createdAt {
+            clean += 1
+        }
+        return clean < rows.count && rows[clean].createdAt != rows[clean - 1].createdAt ? clean : start
+    }
+
+    /// Load earlier: one older page, prepended above what is held. Single
+    /// flight. The viewport stays where it was (the timeline anchors an unpinned
+    /// reader), so the new rows wait above the reader instead of pushing them.
+    /// A failure leaves the row as a retry; a server that says it no longer
+    /// pages (the route moved to a replica) removes it.
+    func loadEarlier() async {
+        guard isActive, showsLoadEarlier, !loadingEarlier,
+              let cursor = historyMessages.first?.createdAt else { return }
+        loadingEarlier = true
+        loadEarlierFailed = false
+        defer { loadingEarlier = false }
+        do {
+            let page = try await api.sessionTranscriptPage(
+                id: sessionId, before: cursor, since: nil, visible: Self.pageVisibleRows)
+            guard isActive, !Task.isCancelled else { return }
+            // The head moved while the page was in flight (a reconcile replaced
+            // or trimmed it): this page belongs to a cursor nobody holds now.
+            guard historyMessages.first?.createdAt == cursor else { return }
+            MainWork.track("sc.loadEarlier", count: page.messages.count) {
+                prependOlder(page, cursor: cursor)
+            }
+        } catch let error as APIError where error.isCancelled {
+            return
+        } catch {
+            guard isActive, !Task.isCancelled else { return }
+            if let api = error as? APIError, case .server(409, "page_unavailable", _, _, _) = api {
+                setCanPage(false)
+            } else {
+                loadEarlierFailed = true
+            }
+            AppLog.info("session-chat", "load earlier failed", [
+                "sessionId": sessionId, "error": String(describing: error),
+            ])
+        }
+    }
+
+    private func prependOlder(_ page: SessionTranscript, cursor: String) {
+        let older = page.messages
+            .filter { $0.timestamp < cursor }
+            .map { Self.row(from: $0) }
+        // An empty page that claims more would leave a row that never loads.
+        setOlderExists(page.truncated && !older.isEmpty)
+        guard !older.isEmpty else { return }
+        readerLoadedHead = true
+        let next = Self.assignStableIDs(older + historyMessages)
+        if next != historyMessages { historyMessages = next }
+        FreezeContext.shared.setHistoryRows(next.count)
+    }
+
     /// Derive a stable id per row from its content so re-fetches don't churn
     /// identities. Same (role, timestamp, kind, text) → same id across loads; a
     /// per-key occurrence suffix disambiguates true duplicates.
@@ -567,6 +729,24 @@ final class SessionConversationStore {
                                agent: m.agent, thinkingText: m.thinkingText,
                                inputPreview: m.inputPreview, isError: m.isError)
         }
+    }
+
+    /// One transcript row as a timeline message. Ids are assigned after a merge
+    /// (`assignStableIDs`), because they must be unique across it.
+    private static func row(from m: SessionTranscript.Message) -> ChatMessage {
+        ChatMessage(
+            id: "",
+            role: m.role,
+            text: m.text,
+            createdAt: m.timestamp,
+            kind: mapKind(m.kind),
+            detail: m.detail,
+            resultPreview: m.resultPreview,
+            agent: m.agent,
+            thinkingText: m.thinkingText,
+            inputPreview: m.inputPreview,
+            isError: m.isError
+        )
     }
 
     /// Mirror of the server transcript clip (session-projection TEXT_MAX):
@@ -1420,7 +1600,7 @@ final class SessionConversationStore {
     /// every trigger that arrived before it, so a rich read also satisfies a
     /// pending debounced one (open() racing the attach frame costs one read, not
     /// two). A non-rich poll does not: the turn-end read must carry the fields.
-    private func runFreshLoad(rich: Bool) async {
+    private func runFreshLoad(rich: Bool, visible: Int? = nil) async {
         guard isActive else { return }
         if refreshInFlight {
             refreshDirty = true
@@ -1432,7 +1612,7 @@ final class SessionConversationStore {
         }
         refreshInFlight = true
         let gen = refreshGen
-        await loadTranscript(fresh: true, rich: rich)
+        await loadTranscript(fresh: true, rich: rich, visible: visible)
         guard gen == refreshGen else { return }
         refreshInFlight = false
         if refreshDirty {

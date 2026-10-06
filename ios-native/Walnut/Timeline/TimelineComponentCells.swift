@@ -264,13 +264,30 @@ enum TimelineHostedCell {
             }
             .padding(.horizontal, TimelineMetrics.hMargin)
             .frame(maxWidth: .infinity, alignment: .trailing)
-        case .loadEarlier:
-            Button("Load earlier messages") {
-                delegate?.timelineCell(didRequest: .loadEarlier)
+        case .loadEarlier(let state):
+            Group {
+                switch state {
+                case .ready:
+                    Button("Load earlier messages") {
+                        delegate?.timelineCell(didRequest: .loadEarlier)
+                    }
+                case .failed:
+                    Button("Couldn't load. Tap to try again") {
+                        delegate?.timelineCell(didRequest: .loadEarlier)
+                    }
+                    .foregroundStyle(Theme.danger)
+                case .loading:
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Loading earlier messages…").foregroundStyle(.secondary)
+                    }
+                }
             }
             .font(.footnote)
+            .lineLimit(1)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
+            .accessibilityIdentifier("timeline.loadEarlier")
         case .text, .userBubble, .code, .richHTML, .richIsland:
             // Dedicated cells own these kinds (TextKit for prose/code, a
             // WKWebView cell for the rich ones); unreachable here.

@@ -36,6 +36,7 @@ struct TimelineHost: UIViewControllerRepresentable {
     /// yet.
     var scope: String
     var showLoadEarlier: Bool = false
+    var loadEarlierState: TimelineLoadEarlierState = .ready
     /// Where each banked message is in its life (see
     /// `TimelineInput.queuedMessageStates`). Defaulted: a surface with no queue
     /// passes nothing and renders exactly as before.
@@ -99,6 +100,7 @@ struct TimelineHost: UIViewControllerRepresentable {
             liveTools: liveTools,
             activity: activity,
             showLoadEarlier: showLoadEarlier,
+            loadEarlierState: loadEarlierState,
             width: 0, // stamped in resubmit()
             expandedRowIDs: coordinator.expandedRowIDs,
             queuedMessageStates: queuedMessageStates,

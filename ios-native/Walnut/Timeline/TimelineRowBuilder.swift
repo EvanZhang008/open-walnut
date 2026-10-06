@@ -1092,9 +1092,10 @@ final class TimelineRowBuilder {
     }
 
     /// Utility row (load-earlier button).
-    func loadEarlierRow(scope: String = TimelineScope.unscoped) -> TimelineRow {
-        TimelineRow(id: TimelineScope.namespace(scope, "load-earlier"), revision: 0,
-                    content: .loadEarlier, height: TimelineMetrics.loadEarlierHeight)
+    func loadEarlierRow(scope: String = TimelineScope.unscoped,
+                        state: TimelineLoadEarlierState = .ready) -> TimelineRow {
+        TimelineRow(id: TimelineScope.namespace(scope, "load-earlier"), revision: state.rawValue,
+                    content: .loadEarlier(state), height: TimelineMetrics.loadEarlierHeight)
     }
 }
 

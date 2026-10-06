@@ -54,6 +54,10 @@ struct SessionTimelineBody: View {
                 // Session transcripts are numbered per session, so a session's
                 // rows must live in that session's id space (see TimelineScope).
                 scope: TimelineScope.sanitize(previewSessionID),
+                // Older pages, when the server pages this transcript: a busy turn
+                // folds into one line, and the conversation above it is one tap away.
+                showLoadEarlier: store.showsLoadEarlier,
+                loadEarlierState: store.loadEarlierState,
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },
@@ -68,6 +72,8 @@ struct SessionTimelineBody: View {
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
                         }
+                    case .loadEarlier:
+                        Task { await store.loadEarlier() }
                     case .openActivity(let detail):
                         activityDetail = detail
                     case .previewFile(let ref):

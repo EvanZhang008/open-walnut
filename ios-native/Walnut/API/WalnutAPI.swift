@@ -325,6 +325,36 @@ struct WalnutAPI {
         return "/sessions/\(id)/transcript?fresh=1" + (rich ? "&rich=1" : "")
     }
 
+    /// One page of a session transcript, always a live rich read. `before` (the
+    /// timestamp of the oldest row the page holds) asks for the rows strictly
+    /// older than it; nil asks for the newest page. `visible` makes the server
+    /// reach back until the page holds that many rows a reader sees as text: a
+    /// ~100-entry tail of a busy turn is almost all tool calls, which the
+    /// timeline folds into one line, so without it a page can be a single row.
+    /// `since` (the newest row the caller holds) makes the answer reach back to
+    /// it, so a refetch stitched onto held rows overlaps them. `visible: 0` and
+    /// nil cursors send nothing, which is the plain rich tail.
+    func sessionTranscriptPage(id: String, before: String?, since: String?,
+                               visible: Int) async throws -> SessionTranscript {
+        try await get(Self.sessionTranscriptPagePath(id: escape(id), before: before,
+                                                     since: since, visible: visible))
+    }
+
+    /// A separate static so a test can pin the query. Timestamps are escaped
+    /// strictly: a `+hh:mm` offset sent raw would read as a space.
+    static func sessionTranscriptPagePath(id: String, before: String?, since: String?,
+                                          visible: Int) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        func time(_ value: String) -> String {
+            value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+        }
+        var path = "/sessions/\(id)/transcript?fresh=1&rich=1"
+        if visible > 0 { path += "&visible=\(visible)" }
+        if let before { path += "&before=" + time(before) }
+        if let since { path += "&since=" + time(since) }
+        return path
+    }
+
     /// Send text INTO a live session; returns the queued messageId (202).
     /// Distinct error codes callers act on: 404 not_found, 503 bridge_offline
     /// (no live bridge to the session's host), 409 session_dead (CLI gone),

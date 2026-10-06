@@ -239,8 +239,15 @@ enum TimelineRowContent {
     case truncationChip
     /// Shimmering activity row while the agent thinks / runs tools.
     case activity(String?)
-    /// "Load earlier messages" button (Personal AI chat only).
-    case loadEarlier
+    /// "Load earlier messages" button above the oldest row held (the Personal
+    /// AI chat, and a session transcript the server pages).
+    case loadEarlier(TimelineLoadEarlierState)
+}
+
+/// What the Load earlier row says. One height for all three, so a tap never
+/// moves the rows below it.
+enum TimelineLoadEarlierState: Int, Hashable {
+    case ready, loading, failed
 }
 
 extension TimelineRowContent {
@@ -355,8 +362,10 @@ extension TimelineRowContent {
         case .richIsland(_, let key, let complete):
             hasher.combine(key)
             hasher.combine(complete)
-        case .truncationChip, .loadEarlier:
+        case .truncationChip:
             break // constant content
+        case .loadEarlier(let state):
+            hasher.combine(state)
         case .activity(let label):
             hasher.combine(label)
         }
@@ -427,6 +436,9 @@ struct TimelineInput {
     var liveTools: [LiveToolCall] = []
     var activity: String?
     var showLoadEarlier: Bool
+    /// What the Load earlier row says while it shows. Defaulted: a surface
+    /// that never pages passes nothing.
+    var loadEarlierState: TimelineLoadEarlierState = .ready
     /// Content width the rows must be measured at.
     var width: CGFloat
     /// Row ids whose expandable content is currently open (tool chips,

@@ -102,7 +102,7 @@ actor TimelineLayoutActor {
         var rows: [TimelineRow] = []
         rows.reserveCapacity(input.messages.count * 2 + 4)
         if input.showLoadEarlier {
-            rows.append(builder.loadEarlierRow(scope: input.scope))
+            rows.append(builder.loadEarlierRow(scope: input.scope, state: input.loadEarlierState))
         }
         func memoizedRows(for message: ChatMessage,
                           queued: QueuedSend.Status?) -> [TimelineRow] {

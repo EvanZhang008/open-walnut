@@ -83,6 +83,42 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
         return transcript
     }
 
+    /// A page read (`sessionTranscriptPage`): recorded in `transcriptReads` as
+    /// the fresh rich read it is, and here with its cursors. `pages` answers it
+    /// when set (nil falls back to `transcript`); `pageError` fails it.
+    struct PageRead: Equatable {
+        let before: String?
+        let since: String?
+        let visible: Int
+    }
+    var pages: ((PageRead) -> SessionTranscript)?
+    var pageError: Error?
+    /// Optional suspension for page reads only (single-flight Load earlier).
+    var pageGate: CheckedContinuationGate?
+
+    func sessionTranscriptPage(id: String, before: String?, since: String?,
+                               visible: Int) async throws -> SessionTranscript {
+        let read = PageRead(before: before, since: since, visible: visible)
+        lock.lock()
+        reads.append(TranscriptRead(fresh: true, rich: true))
+        pageReadLog.append(read)
+        let gate = before == nil ? transcriptGate : pageGate
+        let answer = pages
+        let error = pageError
+        lock.unlock()
+        if let gate { await gate.wait() }
+        if let error { throw error }
+        return answer?(read) ?? transcript
+    }
+
+    var pageReads: [PageRead] {
+        lock.lock()
+        defer { lock.unlock() }
+        return pageReadLog
+    }
+
+    private var pageReadLog: [PageRead] = []
+
     /// One transcript read, as the store asked for it.
     struct TranscriptRead: Equatable {
         let fresh: Bool
