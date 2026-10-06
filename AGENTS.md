@@ -27,7 +27,10 @@ watched it work (the real UI for a UI change, a read-only check for the rest). A
 review, commit and deploy on your own; don't stop and wait to be asked. The shared tree
 almost always holds other agents' uncommitted work, so deploy the commit, not the tree:
 `bash scripts/deploy-committed.sh` builds the committed HEAD in a clean clone and serves
-it as this checkout. Never wait for the tree to be clean, and never stash, revert or commit
+it as this checkout; once it serves, that build is copied into this checkout's `dist/`,
+because the local `walnut` CLI runs the op registry (descriptions, schemas, outcomes) from
+there (`scripts/publish-serve-root-dist.mjs`; 2026-10-05: sessions read op text two deploys
+old). Never wait for the tree to be clean, and never stash, revert or commit
 their files to get there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix
 what it names or report it as the blocker. Never end with "committed, not deployed, say
 deploy". Scope the commit to your own changes only (never sweep up other agents'

@@ -1171,6 +1171,17 @@ if ! snapshot_lkg; then
   echo "Warning: last-known-good snapshot failed; rollback will use the previous one." >&2
 fi
 
+# The `walnut` CLI here runs $SERVE_ROOT/dist and its op registry in process, so
+# op descriptions, schemas and outcomes come from that bundle, not the server. A
+# deploy from a clean clone (deploy-committed.sh) never built there, and the CLI
+# kept the last working-tree build (2026-10-05). Publish the build now serving.
+# Best effort: the server is up either way.
+if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
+  if ! "$NODE_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$STAGE_DIR/dist" "$SERVE_ROOT/dist"; then
+    echo "Warning: could not publish the serving build to $SERVE_ROOT/dist; the walnut CLI there keeps its last build." >&2
+  fi
+fi
+
 pid="$(listener_pids | head -n 1)"
 date +%s > "$SUCCESS_STAMP"
 echo "Server ready (PID: $pid)"
