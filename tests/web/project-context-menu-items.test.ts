@@ -25,7 +25,7 @@ import { normalizeContextMenuItems } from '@/utils/context-menu'
 
 /** No dialog in flight: the common case. */
 function dialogs(over: Partial<ProjectMenuDialogs> = {}): ProjectMenuDialogs {
-  return { busy: false, rename: vi.fn(), remove: vi.fn(), ...over }
+  return { busy: false, rename: vi.fn(), remove: vi.fn(), pickSort: vi.fn(), ...over }
 }
 
 /**
@@ -210,32 +210,41 @@ describe('buildProjectMenuItems: a request in flight', () => {
 })
 
 describe('buildProjectMenuItems: a project orders its own tasks', () => {
-  const sortRows = (target: ProjectMenuTarget, actions: ProjectMenuActions) =>
-    normalizeContextMenuItems(buildProjectMenuItems(target, actions, dialogs()))
-      .filter((i) => i.key?.startsWith('sort-'))
+  const sortRow = (target: ProjectMenuTarget, actions: ProjectMenuActions, d = dialogs()) =>
+    normalizeContextMenuItems(buildProjectMenuItems(target, actions, d)).find((i) => i.key === 'sort')
 
-  it('the main list offers the four orders under one heading, checked on the current one', () => {
+  it('the main list offers ONE Sort setting row that reads the current order on the row itself', () => {
     const onSetSort = vi.fn()
-    const target: ProjectMenuTarget = { project: 'Marina', sort: 'updated' }
-    expect(labels(target, listActions({ onSetSort }))).toContain('Sort tasks by')
-    const rows = sortRows(target, listActions({ onSetSort }))
-    expect(rows.map((i) => [String(i.label), i.checked])).toEqual([
-      ['Last updated', true], ['Priority', false], ['Created', false], ['Manual order', false],
-    ])
-    rows[3].onSelect?.()
-    expect(onSetSort).toHaveBeenCalledWith('Marina', 'manual')
+    const target: ProjectMenuTarget = { project: 'Marina', sort: 'priority' }
+    const r = sortRow(target, listActions({ onSetSort }))
+    expect(r?.label).toBe('Sort')
+    expect(r?.value).toBe('Priority')
+    // No radio block any more: the four orders live in the flyout the row opens.
+    const all = normalizeContextMenuItems(buildProjectMenuItems(target, listActions({ onSetSort }), dialogs()))
+    expect(all.some((i) => i.key?.startsWith('sort-'))).toBe(false)
+    expect(all.some((i) => i.checked !== undefined && i.toggle !== true)).toBe(false)
+  })
+
+  it('a project with no choice of its own reads Last updated', () => {
+    expect(sortRow({ project: 'Marina' }, listActions({ onSetSort: vi.fn() }))?.value).toBe('Last updated')
+  })
+
+  it('running the row opens the picker for THAT project with its current order', () => {
+    const pickSort = vi.fn()
+    sortRow({ project: 'Marina', sort: 'manual' }, listActions({ onSetSort: vi.fn() }), dialogs({ pickSort }))?.onSelect?.()
+    expect(pickSort).toHaveBeenCalledWith('Marina', 'manual')
   })
 
   it('works for the Inbox, which has no registry row but does have tasks', () => {
-    const onSetSort = vi.fn()
-    const rows = sortRows({ project: '', sort: 'priority' }, listActions({ onSetSort }))
-    expect(rows.find((i) => i.checked)?.key).toBe('sort-priority')
-    rows[0].onSelect?.()
-    expect(onSetSort).toHaveBeenCalledWith('', 'updated')
+    const pickSort = vi.fn()
+    const r = sortRow({ project: '', sort: 'priority' }, listActions({ onSetSort: vi.fn() }), dialogs({ pickSort }))
+    expect(r?.value).toBe('Priority')
+    r?.onSelect?.()
+    expect(pickSort).toHaveBeenCalledWith('', 'priority')
   })
 
-  it('a pinned tier label passes no sort handler, so it draws no sort rows', () => {
-    expect(sortRows({ project: 'Marina', sort: 'updated' }, tierActions())).toEqual([])
-    expect(labels({ project: 'Marina' }, tierActions())).not.toContain('Sort tasks by')
+  it('a pinned tier label passes no sort handler, so it draws no Sort row', () => {
+    expect(sortRow({ project: 'Marina', sort: 'updated' }, tierActions())).toBeUndefined()
+    expect(labels({ project: 'Marina' }, tierActions())).not.toContain('Sort')
   })
 })

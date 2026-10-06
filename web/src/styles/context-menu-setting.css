@@ -1,0 +1,50 @@
+/* A SETTING row in the shared context menu (`ContextMenuItem.value`): label on the left, the current
+   value as a bordered chip with a caret on the right. Drawn like the task menu's Project row so the
+   three menus (task, folder, project) read as one family. The row stays one <button>, so hover, the
+   keyboard highlight, Enter and the disabled state are the ordinary item behaviour. */
+.wn-context-menu-item.setting {
+  gap: 10px;
+}
+
+.wn-context-menu-item.setting .wn-context-menu-label {
+  flex: 0 0 auto;
+  min-width: 52px;
+  color: var(--fg-secondary);
+}
+
+.wn-context-menu-value {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.wn-context-menu-item.setting:hover .wn-context-menu-value,
+.wn-context-menu-item.setting.focused .wn-context-menu-value {
+  border-color: var(--accent);
+}
+
+.wn-context-menu-item.setting:disabled .wn-context-menu-value {
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
+
+.wn-context-menu-value-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wn-context-menu-value-caret {
+  flex: none;
+  font-size: 9px;
+  color: var(--fg-muted);
+}

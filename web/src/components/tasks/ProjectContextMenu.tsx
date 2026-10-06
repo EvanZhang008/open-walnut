@@ -28,6 +28,7 @@ import { type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useProjectActions } from '@/hooks/useProjectActions';
 import type { SortBy } from './ViewDropdown';
+import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
 
 /** The task orders a project can have, in menu order. The Projects heading offers the
  *  same list to set every project at once. */
@@ -85,15 +86,21 @@ export interface ProjectContextMenuHandle {
   busy: boolean;
 }
 
-/** What the two dialog-backed rows need, which no surface passes in: they come
- *  from {@link useProjectActions} inside the hook below. Separate from
- *  ProjectMenuActions so the surfaces' contract stays exactly what a surface owns. */
+/** What the dialog- and picker-backed rows need, which no surface passes in: the
+ *  dialogs come from {@link useProjectActions} inside the hook below, the picker
+ *  from its own flyout state. Separate from ProjectMenuActions so the surfaces'
+ *  contract stays exactly what a surface owns. */
 export interface ProjectMenuDialogs {
   /** A rename/delete request is in flight — both dialog rows go dead. */
   busy: boolean;
   rename: (project: string) => void;
   remove: (project: string) => void;
+  /** Open the Sort setting's option list for this project (the row closed the menu). */
+  pickSort: (project: string, current: SortBy) => void;
 }
+
+/** The order a project with no choice of its own uses. */
+const DEFAULT_SORT: SortBy = 'updated';
 
 /**
  * The row list for one right-clicked project — module scope and exported so the
@@ -108,7 +115,7 @@ export function buildProjectMenuItems(
   dialogs: ProjectMenuDialogs,
 ): ContextMenuItem[] {
   const { onToggleCollapse, onNewTask, onNewFolder, onNewSession, onNewSeparator, onToggleFavorite, onViewDetails } = actions;
-  const { busy, rename, remove } = dialogs;
+  const { busy, rename, remove, pickSort } = dialogs;
   // Every row below that acts on the REGISTRY needs a real project name.
   const named = !!target.project;
   return [
@@ -154,11 +161,16 @@ export function buildProjectMenuItems(
       onSelect: () => onNewSeparator?.(target.project),
     },
     { divider: true },
-    { key: 'sort', label: 'Sort tasks by', section: true, when: !!actions.onSetSort },
-    ...PROJECT_SORT_OPTIONS.map(([value, label]) => ({
-      key: `sort-${value}`, label, checked: target.sort === value, when: !!actions.onSetSort,
-      onSelect: () => actions.onSetSort?.(target.project, value),
-    })),
+    {
+      // A SETTING row, not four radio rows: the current order reads on the row itself and the
+      // four options sit in a flyout, so the menu stays short and matches the task menu's rows.
+      key: 'sort',
+      label: 'Sort',
+      value: PROJECT_SORT_OPTIONS.find(([value]) => value === (target.sort ?? DEFAULT_SORT))?.[1],
+      title: "The order of this project's tasks",
+      when: !!actions.onSetSort,
+      onSelect: () => pickSort(target.project, target.sort ?? DEFAULT_SORT),
+    },
     { divider: true },
     {
       key: 'rename',
@@ -199,20 +211,39 @@ export function buildProjectMenuItems(
 export function useProjectContextMenu(actions: ProjectMenuActions): ProjectContextMenuHandle {
   const menu = useContextMenu<ProjectMenuTarget>({ ignorePressSelection: true });
   const { busy, rename, remove } = useProjectActions({ onChanged: actions.onChanged });
+  // The Sort picker outlives the menu that opened it (running a row closes the menu).
+  const sortPicker = useCursorFlyout<{ project: string; current: SortBy }>();
 
-  const node = menu.state && (
-    <ContextMenu
-      point={menu.state.point}
-      items={buildProjectMenuItems(menu.state.payload, actions, {
-        busy,
-        rename: (project) => { void rename(project); },
-        remove: (project) => { void remove(project); },
-      })}
-      onClose={menu.close}
-      returnFocus={menu.state.origin}
-      ariaLabel={`Project actions for ${menu.state.payload.project || 'Inbox'}`}
-      testId="project-ctx-menu"
-    />
+  const open = menu.state;
+  const node = (
+    <>
+      {open && (
+        <ContextMenu
+          point={open.point}
+          items={buildProjectMenuItems(open.payload, actions, {
+            busy,
+            rename: (project) => { void rename(project); },
+            remove: (project) => { void remove(project); },
+            pickSort: (project, current) => sortPicker.open({ project, current }, open.point),
+          })}
+          onClose={menu.close}
+          returnFocus={open.origin}
+          ariaLabel={`Project actions for ${open.payload.project || 'Inbox'}`}
+          testId="project-ctx-menu"
+        />
+      )}
+      {sortPicker.state && (
+        <OptionPickerFlyout
+          anchorPoint={sortPicker.state.point}
+          anchorRef={sortPicker.noTrigger}
+          options={PROJECT_SORT_OPTIONS.map(([value, label]) => ({ value, label }))}
+          current={sortPicker.state.payload.current}
+          ariaLabel={`Sort tasks of ${sortPicker.state.payload.project || 'Inbox'}`}
+          onPick={(sort) => actions.onSetSort?.(sortPicker.state!.payload.project, sort)}
+          onClose={sortPicker.close}
+        />
+      )}
+    </>
   );
 
   return { open: (event, target) => {

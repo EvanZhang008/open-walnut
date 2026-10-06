@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
@@ -643,10 +643,23 @@ test('each project sorts its own tasks from its right-click menu, newest update 
   // No choice made yet: every project reads newest update first.
   await expect.poll(orderA).toEqual([a3, a1, a2]);
   await expect.poll(orderB).toEqual([b2, b1]);
-  let menu = await projectMenu(projectA);
-  await expect(menu.getByText('Sort tasks by', { exact: true })).toBeVisible();
-  await expect(menu.getByRole('menuitemradio', { name: 'Last updated' })).toHaveAttribute('aria-checked', 'true');
-  await menu.getByRole('menuitemradio', { name: 'Priority' }).click();
+  // Sort is ONE setting row that reads the current order; its four options open in a flyout.
+  const sortRow = (menu: Locator) => menu.getByRole('menuitem', { name: /^Sort/ });
+  const expectSort = async (project: string, label: string) => {
+    const menu = await projectMenu(project);
+    await expect(sortRow(menu)).toContainText(label);
+    await page.keyboard.press('Escape');
+  };
+  const menu = await projectMenu(projectA);
+  await expect(menu.getByText('Sort tasks by', { exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('menuitemradio')).toHaveCount(0);
+  await expect(sortRow(menu)).toContainText('Last updated');
+  await sortRow(menu).click();
+  await expect(menu).toHaveCount(0);
+  const flyout = page.getByRole('listbox', { name: `Sort tasks of ${projectA}` });
+  await expect(flyout.getByRole('option', { name: 'Last updated' })).toHaveAttribute('aria-selected', 'true');
+  await flyout.getByRole('option', { name: 'Priority' }).click();
+  await expect(flyout).toHaveCount(0);
   await expect.poll(orderA).toEqual([a1, a3, a2]);
   await expect.poll(orderB).toEqual([b2, b1]);
 
@@ -661,9 +674,7 @@ test('each project sorts its own tasks from its right-click menu, newest update 
   await page.getByRole('menuitemradio', { name: 'Created', exact: true }).click();
   await expect.poll(orderA).toEqual([a3, a2, a1]);
   await expect.poll(orderB).toEqual([b2, b1]);
-  menu = await projectMenu(projectA);
-  await expect(menu.getByRole('menuitemradio', { name: 'Created' })).toHaveAttribute('aria-checked', 'true');
-  await page.keyboard.press('Escape');
+  await expectSort(projectA, 'Created');
 
   // Moving a task by hand switches only its own project to Manual order.
   const rowB1 = bucket(projectB).locator(`.todo-panel-item[data-task-id="${b1}"]`);
@@ -671,13 +682,95 @@ test('each project sorts its own tasks from its right-click menu, newest update 
   await rowB1.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.locator('.task-kebab-item').filter({ hasText: 'Move up' }).click();
   await expect.poll(orderB).toEqual([b1, b2]);
-  menu = await projectMenu(projectB);
-  await expect(menu.getByRole('menuitemradio', { name: 'Manual order' })).toHaveAttribute('aria-checked', 'true');
-  await page.keyboard.press('Escape');
-  menu = await projectMenu(projectA);
-  await expect(menu.getByRole('menuitemradio', { name: 'Created' })).toHaveAttribute('aria-checked', 'true');
-  await page.keyboard.press('Escape');
+  await expectSort(projectB, 'Manual order');
+  await expectSort(projectA, 'Created');
   await expect.poll(orderA).toEqual([a3, a2, a1]);
+});
+
+test('the Sort setting row opens by keyboard on the current option; Escape, a press outside and a re-pick change nothing', async ({ page, baseURL }) => {
+  const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`;
+  const project = `Sort Key ${tag}`;
+  const ids: string[] = [];
+  for (const title of ['k1', 'k2']) {
+    const created = await page.request.post('/api/tasks', { data: { title: `${title} ${tag}`, project, source: 'local' } });
+    const id = (await created.json()).task.id as string;
+    expect((await page.request.delete(`/api/focus/tasks/${id}`)).ok()).toBe(true);
+    ids.push(id);
+  }
+  await boot(page, baseURL!);
+  await openListProject(page, project);
+  // The per-project order is one localStorage record; it must not move unless an option is CHOSEN.
+  const stored = () => page.evaluate(() => localStorage.getItem('walnut-todo-project-sort'));
+  const before = await stored();
+  const header = navigation(page).locator('.todo-group-project')
+    .filter({ has: page.locator('.todo-group-project-name', { hasText: project }) })
+    .locator('.todo-group-project-header');
+  const menu = page.getByTestId('project-ctx-menu');
+  const row = menu.getByRole('menuitem', { name: /^Sort/ });
+  const flyout = page.getByRole('listbox', { name: `Sort tasks of ${project}` });
+  const open = async () => {
+    await header.click({ button: 'right' });
+    await expect(row).toBeVisible();
+  };
+
+  // The chip is inside the menu box and reads the order.
+  await open();
+  const geometry = await menu.evaluate((box) => {
+    const chip = box.querySelector('.wn-context-menu-item.setting .wn-context-menu-value')!.getBoundingClientRect();
+    const frame = box.getBoundingClientRect();
+    return { chipInside: chip.left >= frame.left && chip.right <= frame.right, width: frame.width };
+  });
+  expect(geometry.chipInside).toBe(true);
+  expect(geometry.width).toBeLessThanOrEqual(340);
+  await page.screenshot({ path: '/tmp/menu-setting-rows/project-menu.png', clip: (await menu.boundingBox())! });
+
+  // ArrowDown walks the highlight to the Sort row; Enter opens the picker with the current option focused.
+  for (let i = 0; i < 12 && !(await row.evaluate((el) => el.classList.contains('focused'))); i += 1) {
+    await page.keyboard.press('ArrowDown');
+  }
+  await expect(row).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(menu).toHaveCount(0);
+  await expect(flyout).toBeVisible();
+  const current = flyout.getByRole('option', { name: 'Last updated' });
+  await expect(current).toHaveAttribute('aria-selected', 'true');
+  await expect(current).toBeFocused();
+  await page.screenshot({ path: '/tmp/menu-setting-rows/sort-flyout.png' });
+
+  // The arrows walk the options; the viewport bound holds.
+  await page.keyboard.press('ArrowDown');
+  await expect(flyout.getByRole('option', { name: 'Priority' })).toBeFocused();
+  const fit = await flyout.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth;
+  });
+  expect(fit).toBe(true);
+
+  // Escape, then a press outside: both dismiss, neither writes.
+  await page.keyboard.press('Escape');
+  await expect(flyout).toHaveCount(0);
+  await open();
+  await row.click();
+  await expect(flyout).toBeVisible();
+  await page.mouse.click(5, 5);
+  await expect(flyout).toHaveCount(0);
+
+  // Re-picking the current order is a dismiss, not a write.
+  await open();
+  await row.click();
+  await flyout.getByRole('option', { name: 'Last updated' }).click();
+  await expect(flyout).toHaveCount(0);
+  expect(await stored()).toBe(before);
+  await open();
+  await expect(row).toContainText('Last updated');
+
+  // Control: choosing a DIFFERENT option does write, so the check above can fail.
+  await row.click();
+  await flyout.getByRole('option', { name: 'Priority' }).click();
+  await expect.poll(stored).not.toBe(before);
+  await open();
+  await expect(row).toContainText('Priority');
+  await page.keyboard.press('Escape');
 });
 
 test('the tab bar is one switch, in the Display menu and in every heading menu', async ({ page, baseURL }) => {

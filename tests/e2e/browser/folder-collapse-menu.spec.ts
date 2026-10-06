@@ -15,7 +15,7 @@
  *      list mode reads the list's one fold record, so each has to be wired to it.
  *   4. Right-click on a folder row opens Walnut's own menu with the folder
  *      actions, and Rename / Delete still work when driven from it.
- *   5. "Move to project…" really moves the folder: the header row re-renders
+ *   5. the Project row really moves the folder: the header row re-renders
  *      under the DESTINATION project and its member rows travel with it. Real
  *      round trip, no mocking.
  *   6. An EMPTY folder survives the same move into a project that owns no tasks:
@@ -213,7 +213,7 @@ async function mockFolderPatch(page: Page, groupId: string, project: string): Pr
  * itself on any scroll, and the fixture list settle-scrolls after load, which
  * detaches an item between "visible" and "clicked").
  */
-async function clickFolderMenuItem(page: Page, row: Locator, item: string): Promise<void> {
+async function clickFolderMenuItem(page: Page, row: Locator, item: string | RegExp): Promise<void> {
   const menu = page.locator('[data-testid="folder-ctx-menu"]')
   await expect(async () => {
     await row.click({ button: 'right' })
@@ -233,7 +233,7 @@ function pickerOption(page: Page, flyout: Locator, name: string): Locator {
 }
 
 /**
- * Right-click the folder, open "Move to project…", and pick an option — the WHOLE
+ * Right-click the folder, open the Project row, and pick an option — the WHOLE
  * chain retried as one gesture.
  *
  * Both overlays dismiss themselves on ANY scroll by design (each is anchored to a
@@ -250,7 +250,7 @@ async function pickFolderProject(
 ): Promise<void> {
   const flyout = page.locator('.task-kebab-project-flyout')
   await expect(async () => {
-    await clickFolderMenuItem(page, row, 'Move to project…')
+    await clickFolderMenuItem(page, row, /^Project/)
     await expect(flyout).toBeVisible({ timeout: 3_000 })
     const filter = flyout.locator('.task-kebab-project-filter')
     if (opts.filter && (await filter.count())) await filter.fill(opts.filter)
@@ -436,7 +436,7 @@ test('right-click on a folder chip opens the folder menu; Rename and Delete work
   await expect(chip).toBeVisible({ timeout: 15_000 })
 
   const menu = await openFolderMenu(page, chip, 'Rename folder')
-  for (const item of ['Rename folder', 'Collapse folder', 'Move to project…', 'Hide from Focus', 'Delete folder']) {
+  for (const item of ['Rename folder', 'Collapse folder', /^Project/, 'Hide from Focus', 'Delete folder']) {
     await expect(menu.getByRole('menuitem', { name: item })).toBeVisible()
   }
   await page.screenshot({ path: '/tmp/folder-collapse-menu/folder-context-menu.png' })
@@ -458,7 +458,7 @@ test('right-click on a folder chip opens the folder menu; Rename and Delete work
 
 })
 
-test('"Move to project…" really moves the folder: header + members land under the destination', async ({ page }) => {
+test('the Project row really moves the folder: header + members land under the destination', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const from = `FoldRealFrom${stamp}`
   const target = `FoldRealTo${stamp}`
@@ -528,7 +528,7 @@ test('an EMPTY folder moved to a project with no tasks still renders, in its new
 
 })
 
-test('"Move to project…" sends exactly one PATCH with { project: <target> }', async ({ page }) => {
+test('the Project row sends exactly one PATCH with { project: <target> }', async ({ page }) => {
   const stamp = Date.now().toString(36)
   const project = `FoldMoveFrom${stamp}`
   const target = `FoldMoveTo${stamp}`
@@ -682,11 +682,58 @@ test('the empty-folder row has the same right-click menu (no collapse row)', asy
   const row = page.locator(`.task-group-chip-empty[data-group-id="${groupId}"]`).first()
   await expect(row).toBeVisible({ timeout: 15_000 })
   const menu = await openFolderMenu(page, row, 'Rename folder')
-  await expect(menu.getByRole('menuitem', { name: 'Move to project…' })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: /^Project/ })).toBeVisible()
   await expect(menu.getByRole('menuitem', { name: 'Delete folder' })).toBeVisible()
   // Nothing to fold: an empty folder has no member rows.
   await expect(menu.getByRole('menuitem', { name: /Collapse folder|Expand folder/ })).toHaveCount(0)
   await page.screenshot({ path: '/tmp/folder-collapse-menu/empty-folder-context-menu.png' })
 
   await page.keyboard.press('Escape')
+})
+
+test('the Project setting row reads the folder\'s project inside the menu box and opens by keyboard', async ({ page }) => {
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+  // Long on purpose: the chip must ellipsize, never widen the menu past its ceiling.
+  const project = `FoldSettingProj${stamp} with a deliberately long name that has to be cut by the chip`
+  const a = await createTaskViaApi('Setting row member A', { project })
+  const b = await createTaskViaApi('Setting row member B', { project })
+  const groupId = await createFolderViaApi([a.id, b.id], `Settable ${stamp}`)
+
+  await presetPanelView(page, { section: 'all', project: '' })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  const header = listHeader(page, groupId)
+  await expect(header).toBeVisible({ timeout: 15_000 })
+  const menu = await openFolderMenu(page, header, 'Rename folder')
+  const row = menu.getByRole('menuitem', { name: /^Project/ })
+  await expect(row).toContainText(project)
+
+  const geometry = await menu.evaluate((box) => {
+    const chip = box.querySelector('.wn-context-menu-item.setting .wn-context-menu-value')!.getBoundingClientRect()
+    const text = box.querySelector('.wn-context-menu-value-text') as HTMLElement
+    const frame = box.getBoundingClientRect()
+    return {
+      chipInside: chip.left >= frame.left && chip.right <= frame.right,
+      width: frame.width,
+      cut: text.scrollWidth > text.clientWidth,
+    }
+  })
+  expect(geometry.chipInside).toBe(true)
+  expect(geometry.width).toBeLessThanOrEqual(340)
+  expect(geometry.cut).toBe(true)
+  await page.screenshot({ path: '/tmp/menu-setting-rows/folder-menu.png', clip: (await menu.boundingBox())! })
+
+  // Keyboard: walk the highlight to the Project row and press Enter; the picker opens, Escape closes it.
+  for (let i = 0; i < 12 && !(await row.evaluate((el) => el.classList.contains('focused'))); i += 1) {
+    await page.keyboard.press('ArrowDown')
+  }
+  await expect(row).toHaveClass(/focused/)
+  await page.keyboard.press('Enter')
+  await expect(menu).toHaveCount(0)
+  const flyout = page.locator('.task-kebab-project-flyout')
+  await expect(flyout).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(flyout).toHaveCount(0)
+  expect(await folderProjectViaApi(groupId)).toBe(project)
 })

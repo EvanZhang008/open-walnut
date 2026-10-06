@@ -37,6 +37,7 @@ import {
 import { createPortal } from 'react-dom';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
 import { ICON_CHECK } from './Icons';
+import '@/styles/context-menu-setting.css';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import {
   keepNativeContextMenu,
@@ -499,7 +500,8 @@ export function ContextMenu({
                 // OUT of the tab order: Tab is answered above as a step of the same highlight, and a
                 // tabbable item is what let DOM focus and the highlight point at different rows.
                 tabIndex={-1}
-                className={`wn-context-menu-item${row.danger ? ' danger' : ''}${focusIndex === index ? ' focused' : ''}`}
+                className={`wn-context-menu-item${row.value !== undefined ? ' setting' : ''}${row.danger ? ' danger' : ''}${focusIndex === index ? ' focused' : ''}`}
+                aria-haspopup={row.value !== undefined ? 'true' : undefined}
                 disabled={row.disabled}
                 title={row.title}
                 data-ai={row.ai ? 'true' : undefined}
@@ -516,6 +518,12 @@ export function ContextMenu({
                   ? <span className="wn-context-menu-icon wn-context-menu-check" aria-hidden="true">{row.checked ? ICON_CHECK : null}</span>
                   : row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
                 <span className="wn-context-menu-label">{row.ai && aiMark()}{row.label}</span>
+                {row.value !== undefined && (
+                  <span className="wn-context-menu-value">
+                    <span className="wn-context-menu-value-text">{row.value}</span>
+                    <span className="wn-context-menu-value-caret" aria-hidden="true">▾</span>
+                  </span>
+                )}
               </button>
               {/* WHY the group above is disabled, for anyone not holding a mouse: the reason used to live
                   in `title` alone, so it was a hover tooltip and nothing else. UNDER the group rather than

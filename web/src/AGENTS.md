@@ -533,6 +533,17 @@ show inline after the open ones, other completed hits that show the query fold i
   session-panel kebab share `TaskActionMenuItems` / `MoveToProjectSection`. Add an action in
   one place and every surface gets it; parallel copies drift (the session kebab once grew its
   own "Unpin" and "Mark unread" rows this way).
+- **A menu row that holds a CHOICE is a setting row, not a block of radio rows** (`ContextMenuItem.value`,
+  `styles/context-menu-setting.css`): the label on the left, the current value as a chip with a caret on
+  the right, drawn like the task menu's Project row, so the value reads without opening anything. Running
+  it closes the menu and the host opens its own picker at the cursor (`useCursorFlyout` +
+  `OptionPickerFlyout` in `CursorFlyout.tsx`, or `ProjectPickerFlyout` for the project list): never inline
+  rows, never a native `<select>`. An on/off switch stays `toggle` + `checked`. Today: the folder menu's
+  Project row and the project menu's Sort row. Ratchets: `tests/web/{folder,project}-context-menu-items.test.ts`.
+- **A ContextMenu hook on a row whose text is selectable passes `ignorePressSelection: true`.** WebKit (the
+  Mac app) selects the word under a right-press before `contextmenu` fires, and without the flag that
+  selection hands the gesture to the native menu: the folder menu never opened on a right-click on its name
+  (Chromium does not pre-select, so only the WebKit run of `folder-collapse-menu.spec.ts` caught it).
 - **The kebab is lean by default** (2026-09-10 user feedback: "too noisy"). No session-status row (clicking the task row opens its session), no unread row
   (opening the task marks it read), no Unpin row (the lit tier pill IS the pin; clicking it
   again unpins), Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, the team actions sit behind one collapsed Team row (`TeamMenuItems`: Adopt / Release a worker / Leave leader), and

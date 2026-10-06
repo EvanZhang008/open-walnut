@@ -130,6 +130,12 @@ export interface ContextMenuItem {
   toggle?: boolean;
   /** Running the row leaves the menu open, for a set of switches flipped one after another. */
   keepOpen?: boolean;
+  /**
+   * A SETTING row: the label on the left and the current value as a chip with a caret on the right,
+   * the way the task menu draws Project. Running it opens the host's own picker, so the value is
+   * readable without opening anything. Not for an on/off switch (that is `toggle` + `checked`).
+   */
+  value?: ReactNode;
   /** Convenience for conditional items: `when: false` drops the row. */
   when?: boolean;
 }
