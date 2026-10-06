@@ -167,30 +167,24 @@ enum TimelineToolRunFold {
             keyCounts[base] = n + 1
             parts.append(.run(key: "\(base)#\(n)", members: Array(members)))
         }
-        func flush(ended: Bool) {
+        func flush() {
             guard !run.isEmpty else { return }
-            // Reasoning at the END of a run that a visible message follows led to
-            // THAT message, not to the tools before it: it splits off as the
-            // "Thinking ›" row above the prose (the web's trailingThinkingStart).
-            // At the tail of the list it stays with the run, which the live
-            // stream continues.
-            var split = run.count
-            if ended {
-                while split > 0, run[split - 1].kind == .thinking { split -= 1 }
-            }
-            emit(run[..<split])
-            emit(run[split...])
+            // Reasoning at the end of a run stays in it, even when it led to the
+            // prose that follows: a "Thinking ›" row of its own between the run
+            // and the reply was one more line the reader did not ask for
+            // (2026-10-04: "thinking does not need to be pulled out on its own").
+            emit(run[...])
             run.removeAll()
         }
         for message in messages {
             if isRunMember(message) {
                 run.append(message)
             } else {
-                flush(ended: true)
+                flush()
                 parts.append(.message(message))
             }
         }
-        flush(ended: false)
+        flush()
         return parts
     }
 

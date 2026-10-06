@@ -323,9 +323,9 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         // height model gets wrong most often.
         let reasoning = (0..<20).map { "step \($0): 读取下一个候选路径并核对 mtime" }
             .joined(separator: "\n")
-        // The turn's TOOL CHIPS ride along too: a live turn now keeps a row per
-        // call, running and finished, and a running chip animates its icon — which
-        // must not change the height the row was measured at.
+        // The turn's TOOL CHIPS ride along too: every call, running or finished,
+        // folds into the turn's run row, and a running chip animates its icon,
+        // which must not change the height the row was measured at.
         let tools = [
             LiveToolCall(id: "t1", name: "Read", detail: "src/agent/tools.ts", finished: true),
             LiveToolCall(id: "t2", name: "mcp__walnut__task_create",
@@ -336,23 +336,35 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         ]
         for activity in ["Thinking", "Bash · npm run test:quick in the repo root",
                          "正在读取 /tmp 下的会话流文件并核对时间戳", nil] {
-            // Both shapes of the live turn: the finished calls folded into their run
-            // row, and the run opened onto its chips.
-            for opened in [false, true] {
+            // Every shape of the live turn: reasoning before any call (its own
+            // collapsed row), the calls folded into their run row with the
+            // reasoning inside, and that run opened onto the reasoning and chips.
+            for (calls, opened) in [([LiveToolCall](), false), (tools, false), (tools, true)] {
                 var liveInput = TimelineInput(
                     messages: [], streaming: true,
                     liveText: "第一段结论已经写完,继续第二段。\n\n- 一\n- 二",
                     liveTextTruncated: true, liveThinking: reasoning,
-                    liveTools: tools,
+                    liveTools: calls,
                     activity: activity, showLoadEarlier: true,
                     width: pageWidth, expandedRowIDs: [])
                 if opened { liveInput = liveInput.openingAllRuns() }
                 let snapshot = await actor.buildSnapshot(liveInput)
-                XCTAssertTrue(snapshot.rows.contains { $0.content.reuseKind == "toolRun" },
-                              "the finished live calls must fold into a run row")
+                let kinds = snapshot.rows.map(\.content.reuseKind)
+                if calls.isEmpty {
+                    XCTAssertEqual(kinds.filter { $0 == "thinking" }.count, 1,
+                                   "reasoning before any call is one collapsed row")
+                } else {
+                    XCTAssertEqual(kinds.filter { $0 == "toolRun" }.count, 1,
+                                   "the live calls must fold into one run row")
+                    XCTAssertEqual(kinds.filter { $0 == "thinking" }.count, opened ? 1 : 0,
+                                   "the reasoning rides the run")
+                }
+                let shape = calls.isEmpty ? "reasoning only" : "run \(opened ? "open" : "folded")"
                 let checked = assertFits(snapshot.rows,
-                                         "live turn (\(activity ?? "no activity"), run \(opened ? "open" : "folded"))")
-                XCTAssertGreaterThanOrEqual(checked, 4, "gate checked nothing (n=\(checked))")
+                                         "live turn (\(activity ?? "no activity"), \(shape))")
+                // Load earlier + the reasoning row or the run, and the opened run's
+                // reasoning and three chips.
+                XCTAssertGreaterThanOrEqual(checked, opened ? 6 : 2, "gate checked nothing (n=\(checked))")
             }
         }
     }

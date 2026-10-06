@@ -194,14 +194,13 @@ enum TimelineRowContent {
     /// one you wanted meant opening all five drawers. One vocabulary, one legible
     /// line — the two are not in tension.
     ///
-    ///  - `preview == nil` — history: one line, tap for everything.
-    ///  - `preview != nil` — the LIVE turn: the newest `maxLines` wrapped lines
-    ///    render under the capsule so the reader watches reasoning arrive (see
-    ///    `TimelineLiveThinkingWindow`). It is a PREVIEW, never the whole text:
-    ///    `fullText` is the entire accumulation and the drawer shows that. A live
-    ///    row carries no `line`: the preview card below it already shows the
-    ///    newest reasoning, and printing a line in the capsule too is the same
-    ///    words twice in one row.
+    ///  - `preview == nil`: one line, tap for everything. History rows and the
+    ///    live turn's reasoning both draw this way (the live row closed by
+    ///    default since 2026-10-04, with no `line`).
+    ///  - `preview != nil`: the newest `maxLines` wrapped lines under the capsule
+    ///    (see `TimelineLiveThinkingWindow`). It is a PREVIEW, never the whole
+    ///    text: `fullText` is the entire accumulation and the drawer shows that.
+    ///    No builder emits it now; the cell still draws it.
     ///
     /// `maxLines` bounds the preview only (0 when there is none); the drawer has
     /// no cap because it scrolls.

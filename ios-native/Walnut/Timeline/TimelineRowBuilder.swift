@@ -550,13 +550,16 @@ final class TimelineRowBuilder {
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
-        // Reasoning comes BEFORE the reply in a turn, so its row goes above the
-        // live text. It disappears the moment the store clears its accumulation
-        // (a canonical history load lands), which is the same instant the fetched
-        // `kind:"thinking"` rows appear — so the same reasoning is never on
-        // screen twice.
-        let thinkingRows = liveThinkingRows(liveThinking: liveThinking,
-                                            width: width, scope: scope)
+        // Once the turn has called a tool, its reasoning rides that call's run
+        // (`liveToolRows`), the way the transcript folds it: one collapsed line
+        // for everything the turn did. Before that it is a collapsed "Thinking"
+        // row above the live text. Either way it disappears the moment the store
+        // clears its accumulation (a canonical history load lands), which is the
+        // same instant the fetched `kind:"thinking"` rows appear, so the same
+        // reasoning is never on screen twice.
+        let thinkingRidesRun = liveTools.contains { Self.liveCallFolds($0) }
+        let thinkingRows = thinkingRidesRun ? [] : liveThinkingRows(liveThinking: liveThinking,
+                                                                    width: width, scope: scope)
         rows.append(contentsOf: thinkingRows)
         if !liveText.isEmpty {
             let seg = LiveMarkdownWindow.segments(liveText)
@@ -636,11 +639,11 @@ final class TimelineRowBuilder {
         } else {
             headCache = nil
         }
-        // This turn's tool calls, as REAL tool rows under the reply — running and
-        // finished alike, so none of them vanishes mid-turn (the finished ones
-        // folded into one run row, see `liveToolRows`).
+        // This turn's tool calls under the reply, all of them folded into one run
+        // row with the turn's reasoning (see `liveToolRows`).
         rows.append(contentsOf: liveToolRows(liveTools, width: width, scope: scope,
-                                             expandedRowIDs: expandedRowIDs))
+                                             expandedRowIDs: expandedRowIDs,
+                                             liveThinking: thinkingRidesRun ? liveThinking : ""))
         // The shimmer is the FALLBACK pulse and never a second copy of a row above
         // it. Two ways it used to duplicate one:
         //  - a RUNNING tool chip names the call and breathes, and `activity` is
@@ -788,49 +791,28 @@ final class TimelineRowBuilder {
                         width: width).map { [$0] } ?? []
     }
 
-    /// The IN-FLIGHT turn's reasoning: the same "Thinking" capsule a history row
-    /// shows, with the NEWEST `liveThinkingMaxLines` wrapped lines previewed in
-    /// the card under it, so the reader watches the reasoning arrive instead of
-    /// watching one word blink.
+    /// The IN-FLIGHT turn's reasoning: the same collapsed "Thinking" capsule a
+    /// history row shows, and nothing under it. It used to preview the newest
+    /// wrapped lines in a card below the capsule, which kept the reasoning open on
+    /// screen for the whole turn; the reader wants it closed by default
+    /// (2026-10-04), and the tap still opens all of it.
     ///
-    /// The window is cut in WRAPPED lines, at the same width and font the cell
-    /// renders at, and from the newest end — see `TimelineLiveThinkingWindow`
-    /// for what the newline-counting version this replaces did on the phone.
-    ///
-    /// The row carries the FULL accumulation as `fullText`, never the window: the
-    /// preview is bounded because it is on screen for the whole turn, and the tap
-    /// has to answer "show me all of it" — which is exactly what the windowed
-    /// card could not do when it was the only view of live reasoning (the reader
-    /// saw a middle slice, marked `… `, with no way to reach either end).
+    /// The row carries the FULL accumulation as `fullText`: the tap has to answer
+    /// "show me all of it".
     private func liveThinkingRow(_ text: String, id: String, width: CGFloat) -> TimelineRow? {
-        let font = TimelineTextStyler.captionFont
-        let contentWidth = TimelineMetrics.expandCardContentWidth(width)
-        guard let window = TimelineLiveThinkingWindow.window(
-            of: text, maxLines: TimelineMetrics.liveThinkingMaxLines,
-            wrappedLines: { candidate in
-                self.wrappedLineCount(candidate, font: font, width: contentWidth)
-            }
-        ) else { return nil }
-        let height = Self.capsuleRowHeight(badged: false)
-            + TimelineMetrics.hostedTextHeight(lines: window.lines, font: font)
-            + TimelineMetrics.expandCardPadding * 2 + TimelineMetrics.expandCardGap
+        let full = TimelineLiveThinkingWindow.normalized(text)
+        guard !full.isEmpty else { return nil }
         return TimelineRow(
-            // The row keeps ONE id across the whole turn (so it is reloaded, not
-            // re-created, per tick); the revision is content-derived because the
-            // text changes underneath that stable id. Hashed on the WINDOW, never
-            // on the accumulation, so the per-tick cost is bounded.
-            id: id, revision: window.body.hashValue,
-            // No `line`: the preview card under the capsule already shows the
-            // newest reasoning, so a line in the capsule would be the same
-            // sentence twice in one row. And no `detailRef`: a live turn's
-            // reasoning is not in any transcript the server can be asked for yet —
-            // `fullText` here IS everything there is.
-            content: .thinking(line: nil, preview: window.body,
-                               fullText: TimelineLiveThinkingWindow.normalized(text),
-                               maxLines: TimelineMetrics.liveThinkingMaxLines,
-                               // No line to stack, at any text size.
+            // ONE id across the whole turn (reloaded, not re-created, per tick). The
+            // revision follows the text's length, which grows with every delta and
+            // costs nothing to read: hashing the accumulation per tick would not.
+            id: id, revision: full.utf8.count,
+            // No `line` and no `detailRef`: a live turn's reasoning is not in any
+            // transcript the server can be asked for yet, so `fullText` IS
+            // everything there is.
+            content: .thinking(line: nil, preview: nil, fullText: full, maxLines: 0,
                                detailRef: nil, stacked: false),
-            height: height
+            height: Self.capsuleRowHeight(badged: false)
         )
     }
 
@@ -926,43 +908,54 @@ final class TimelineRowBuilder {
     /// every tick. Since the list only ever grows within a turn (and its head is
     /// dropped only past `maxLiveTools`), position is stable in practice.
     ///
-    /// FOLDED like the transcript (`TimelineToolRunFold`, the web's live rule): the
-    /// calls that have RETURNED collapse into one "Ran 3 commands ›" run row, and a
-    /// call still in flight stays a breathing chip of its own under it, so the
-    /// reader watches the current call and not the pile of finished ones. A call
-    /// folds into the run the moment its result lands (unless it is one the web
-    /// never folds, `TimelineToolRunFold.staysOutOfRuns`); the run keeps ONE id for
-    /// the whole turn, so a reader who opened it keeps it open as calls join.
+    /// FOLDED like the transcript (`TimelineToolRunFold`): EVERY call collapses into
+    /// one "Ran 3 commands ›" run row the moment it starts, the one in flight
+    /// included, and the row breathes while any call is running. A call used to
+    /// stay a chip of its own until its result landed, so each new command showed
+    /// up opened under the run and folded away a few seconds later; the reader
+    /// asked for the run to stay closed whatever arrives (2026-10-04). The turn's
+    /// reasoning rides the same run (`liveThinking`, its first member when open).
+    /// The calls the web never folds (`TimelineToolRunFold.staysOutOfRuns`) stay
+    /// rows of their own. The run keeps ONE id for the whole turn, so a reader who
+    /// opened it keeps it open as calls join.
     ///
     /// The live run never reports failures: the `tool-result` frame carries no
     /// error flag, and a wrong zero is better than a guessed count. The transcript
     /// row that replaces it at turn end has `isError` and counts them.
     func liveToolRows(_ tools: [LiveToolCall], width: CGFloat,
                       scope: String = TimelineScope.unscoped,
-                      expandedRowIDs: Set<String> = []) -> [TimelineRow] {
+                      expandedRowIDs: Set<String> = [],
+                      liveThinking: String = "") -> [TimelineRow] {
         let chips: [(call: LiveToolCall, row: TimelineRow)] = tools.enumerated().compactMap { index, call in
             guard !call.name.isEmpty else { return nil }
             return (call, liveToolChip(call, index: index, scope: scope))
         }
-        func folds(_ call: LiveToolCall) -> Bool {
-            call.finished && !TimelineToolRunFold.staysOutOfRuns(
-                name: call.name, detail: call.detail, inputPreview: call.inputPreview)
-        }
-        let finished = chips.filter { folds($0.call) }
+        let folded = chips.filter { Self.liveCallFolds($0.call) }
         var rows: [TimelineRow] = []
-        if !finished.isEmpty {
+        if !folded.isEmpty {
             let runID = TimelineScope.namespace(scope, Self.liveRunID)
             let expanded = expandedRowIDs.contains(runID)
             rows.append(toolRunRow(
                 id: runID,
-                members: finished.map { TimelineToolRunPhrase.Member(name: $0.call.name,
-                                                                     detail: $0.call.detail) },
-                failCount: 0, running: false, expanded: expanded
+                members: folded.map { TimelineToolRunPhrase.Member(name: $0.call.name,
+                                                                   detail: $0.call.detail) },
+                failCount: 0, running: folded.contains { !$0.call.finished }, expanded: expanded
             ))
-            if expanded { rows.append(contentsOf: finished.map(\.row)) }
+            if expanded {
+                rows.append(contentsOf: liveThinkingRows(liveThinking: liveThinking,
+                                                         width: width, scope: scope))
+                rows.append(contentsOf: folded.map(\.row))
+            }
         }
-        rows.append(contentsOf: chips.filter { !folds($0.call) }.map(\.row))
+        rows.append(contentsOf: chips.filter { !Self.liveCallFolds($0.call) }.map(\.row))
         return rows
+    }
+
+    /// Does this live call ride the turn's run? Every named call does, running or
+    /// not, except the ones the web keeps out of runs.
+    static func liveCallFolds(_ call: LiveToolCall) -> Bool {
+        !call.name.isEmpty && !TimelineToolRunFold.staysOutOfRuns(
+            name: call.name, detail: call.detail, inputPreview: call.inputPreview)
     }
 
     /// Message id of the live turn's folded run (scoped by the caller).

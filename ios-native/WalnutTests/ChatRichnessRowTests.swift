@@ -733,16 +733,11 @@ final class ChatRichnessRowTests: XCTestCase {
 
     // MARK: - The live reasoning region
 
-    /// While a turn runs, the accumulated reasoning gets a row of its own —
-    /// always open, never collapsible (nothing remembers a chevron's state
-    /// across ticks), capped much tighter than a historical row so it cannot
-    /// push the reply off the phone.
-    /// NO NEWLINES in the fixture, on purpose. The version of this test that
-    /// shipped the defect used newline-separated reasoning, which is the one shape
-    /// where a newline-counting trim and a wrapped-line render agree — so it was
-    /// green while the phone showed the OLDEST seven lines under a capsule
-    /// advertising the newest. Real reasoning arrives as sentences.
-    func testLiveReasoningRowShowsTheNewestWrappedLinesWhileStreaming() async throws {
+    /// While a turn runs, its reasoning is ONE closed "Thinking" line, like a
+    /// history row. It used to preview the newest wrapped lines in a card under the
+    /// capsule for the whole turn; the reader asked for it closed by default
+    /// (2026-10-04). The tap still opens everything.
+    func testLiveReasoningIsOneClosedLineWhileStreaming() async throws {
         let reasoning = (1...24)
             .map { "Step \($0): checking hypothesis number \($0) against the evidence. " }
             .joined()
@@ -751,27 +746,13 @@ final class ChatRichnessRowTests: XCTestCase {
             return XCTFail("no live reasoning row in \(built.map(\.content.reuseKind))")
         }
         let payload = try thinkingPayload(row)
-        XCTAssertEqual(payload.maxLines, TimelineMetrics.liveThinkingMaxLines)
-        let shown = try XCTUnwrap(payload.preview, "the live turn must preview its reasoning")
-        XCTAssertTrue(shown.hasSuffix("Step 24: checking hypothesis number 24 against the evidence."),
-                      "the card must END on the newest sentence: …\(shown.suffix(70))")
-        XCTAssertFalse(shown.contains("Step 1:"),
-                       "the OLDEST reasoning must have scrolled off: \(shown.prefix(70))…")
-        XCTAssertFalse(shown.contains(TimelineActivityVocabulary.thinking),
-                       "the capsule's word must not be reprinted inside the card")
-        // …and the WINDOW is a preview only. The drawer gets everything, which is
-        // the "why doesn't the reasoning show in full?" half of the report: the
-        // reader used to see a middle slice marked "… " with no way to either end.
-        XCTAssertTrue(payload.fullText.contains("Step 1:"),
-                      "the drawer's text must still hold the reasoning the window dropped")
+        XCTAssertNil(payload.preview, "closed: no card of reasoning under the capsule")
+        XCTAssertEqual(payload.maxLines, 0)
+        XCTAssertNil(payload.line)
+        XCTAssertEqual(row.height, capsuleHeight, accuracy: 0.5, "one capsule line, nothing under it")
+        // The drawer gets everything, oldest to newest.
+        XCTAssertTrue(payload.fullText.hasPrefix("Step 1:"))
         XCTAssertTrue(payload.fullText.hasSuffix("against the evidence."))
-        XCTAssertGreaterThan(payload.fullText.count, shown.count,
-                             "a preview equal to the accumulation means the window is not bounded")
-        // Measured through the REAL TextKit stack at the card's real width: the
-        // text handed to `Text(...).lineLimit(maxLines)` already fits, so the
-        // render has no truncation decision left to make.
-        XCTAssertLessThanOrEqual(measuredWrappedLines(shown),
-                                 TimelineMetrics.liveThinkingMaxLines)
         // It sits ABOVE the status row, because reasoning precedes the answer in a
         // turn. Asserted on a turn carrying a status NO row duplicates ("Starting
         // session…"): beside a bare shimmer there is no activity row left to order
@@ -786,39 +767,21 @@ final class ChatRichnessRowTests: XCTestCase {
                           try XCTUnwrap(withStatus.firstIndex(of: "activity")))
     }
 
-    /// The row ADVANCES: the t+18s / t+26s screenshots that showed one frozen
-    /// block of the oldest reasoning, as an assertion.
+    /// The closed row still ADVANCES: its revision moves as reasoning arrives, so
+    /// the drawer opened mid-turn serves the newest text, not the first delta's.
     func testLiveReasoningRowAdvancesAsReasoningArrives() async throws {
-        func card(_ steps: Int) async throws -> String {
+        func row(_ steps: Int) async throws -> TimelineRow {
             let text = (1...steps)
                 .map { "Step \($0): checking hypothesis number \($0) against the evidence. " }
                 .joined()
             let built = await rows([], liveThinking: text, streaming: true)
-            return try XCTUnwrap(thinkingPayload(thinkingRow(built)).preview)
+            return try XCTUnwrap(thinkingRow(built))
         }
-        let early = try await card(6)
-        let late = try await card(24)
-        XCTAssertNotEqual(early, late, "the live window is frozen at the oldest reasoning")
-        XCTAssertTrue(late.contains("Step 24"))
-        XCTAssertFalse(late.contains("Step 6:"),
-                       "18 sentences later, step 6 is no longer inside an 8-line window")
-    }
-
-    /// The height the row reserves describes the text it renders. A row measured
-    /// for 8 lines while the cell truncates at some other count is how the card
-    /// ends up with a band of nothing under it (or its last line shaved).
-    func testLiveReasoningRowHeightMatchesTheTextItShows() async throws {
-        let reasoning = (1...30)
-            .map { "Step \($0): a sentence long enough to wrap on a phone screen. " }
-            .joined()
-        let built = await rows([], liveThinking: reasoning, streaming: true)
-        let row = try XCTUnwrap(thinkingRow(built))
-        let lines = measuredWrappedLines(try XCTUnwrap(thinkingPayload(row).preview))
-        let expected = capsuleHeight
-            + TimelineMetrics.hostedTextHeight(lines: lines,
-                                               font: TimelineTextStyler.captionFont)
-            + TimelineMetrics.expandCardPadding * 2 + TimelineMetrics.expandCardGap
-        XCTAssertEqual(row.height, expected, accuracy: 0.5)
+        let early = try await row(6)
+        let late = try await row(24)
+        XCTAssertEqual(early.id, late.id, "one row for the whole turn")
+        XCTAssertNotEqual(early.revision, late.revision, "the row is frozen at the oldest reasoning")
+        XCTAssertTrue(try thinkingPayload(late).fullText.contains("Step 24"))
     }
 
     /// The handoff: the row OUTLIVES `streaming` so the reasoning does not blink

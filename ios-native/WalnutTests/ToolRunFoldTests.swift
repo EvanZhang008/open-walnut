@@ -47,19 +47,19 @@ final class ToolRunFoldTests: XCTestCase {
 
     private func input(_ messages: [ChatMessage], expanded: Set<String> = [],
                        scope: String = TimelineScope.unscoped, streaming: Bool = false,
-                       liveTools: [LiveToolCall] = []) -> TimelineInput {
+                       liveTools: [LiveToolCall] = [], liveThinking: String = "") -> TimelineInput {
         TimelineInput(messages: messages, streaming: streaming, liveText: "",
-                      liveTextTruncated: false, liveTools: liveTools, activity: nil,
-                      showLoadEarlier: false, width: pageWidth, expandedRowIDs: expanded,
-                      scope: scope)
+                      liveTextTruncated: false, liveThinking: liveThinking, liveTools: liveTools,
+                      activity: nil, showLoadEarlier: false, width: pageWidth,
+                      expandedRowIDs: expanded, scope: scope)
     }
 
     private func rows(_ messages: [ChatMessage], expanded: Set<String> = [],
                       scope: String = TimelineScope.unscoped, streaming: Bool = false,
-                      liveTools: [LiveToolCall] = []) async -> [TimelineRow] {
+                      liveTools: [LiveToolCall] = [], liveThinking: String = "") async -> [TimelineRow] {
         await TimelineLayoutActor().buildSnapshot(
             input(messages, expanded: expanded, scope: scope, streaming: streaming,
-                  liveTools: liveTools)
+                  liveTools: liveTools, liveThinking: liveThinking)
         ).rows
     }
 
@@ -174,12 +174,15 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertEqual(built[0].id, runID("thinking"), "a leading thought is the run's first member")
     }
 
-    func testReasoningThatLedToTheReplySplitsOffAboveIt() async throws {
-        // Thinking, tool, thinking, prose: the second thought produced the prose,
-        // so it is the "Thinking ›" row above the reply, not a member of the run.
+    func testReasoningThatLedToTheReplyStaysInTheRun() async throws {
+        // Tool, thinking, prose: the thought produced the prose, and it still
+        // rides the run, not a "Thinking ›" row of its own above the reply
+        // (2026-10-04: "thinking does not need to be pulled out on its own").
         let built = await rows([tool("t1", "Bash", "ls"), thinking("k1"), thinking("k2"), prose("p")])
-        XCTAssertEqual(kinds(built), ["toolRun", "thinking", "thinking", "text"])
-        XCTAssertEqual(built[1].id, "k1#0")
+        XCTAssertEqual(kinds(built), ["toolRun", "text"])
+        let open = await rows([tool("t1", "Bash", "ls"), thinking("k1"), thinking("k2"), prose("p")],
+                              expanded: [runID("tool", "Bash")])
+        XCTAssertEqual(kinds(open), ["toolRun", "toolChip", "thinking", "thinking", "text"])
     }
 
     func testTrailingReasoningAtTheTailStaysWithTheRun() async throws {
@@ -349,38 +352,78 @@ final class ToolRunFoldTests: XCTestCase {
                      resultPreview: finished ? "ok" : nil)
     }
 
-    func testFinishedLiveCallsFoldWhileTheRunningOneStaysVisible() async throws {
+    func testEveryLiveCallFoldsTheRunningOneIncluded() async throws {
         let built = await rows([user("u")], streaming: true,
                                liveTools: [call("a", "Bash", "ls", finished: true),
                                            call("b", "Read", "/r/a.ts", finished: true),
                                            call("c", "Bash", "npm test")])
-        // Bubble, the folded finished calls, the breathing running chip. No shimmer:
-        // a running chip already says the agent is busy.
-        XCTAssertEqual(kinds(built), ["bubble", "toolRun", "toolChip"])
-        XCTAssertEqual(try runPayload(built[1]).phrase, "Ran a command, read a file")
+        // Bubble and ONE closed run that breathes while a call runs. The running
+        // call used to be a chip of its own under the run, so every new command
+        // arrived opened (2026-10-04). No shimmer: the breathing run says it.
+        XCTAssertEqual(kinds(built), ["bubble", "toolRun"])
+        let run = try runPayload(built[1])
+        XCTAssertEqual(run.phrase, "Ran 2 commands, read a file")
+        XCTAssertTrue(run.running)
+        XCTAssertFalse(run.expanded)
         XCTAssertEqual(built[1].id, "live-run")
-        guard case .toolChip(let name, _, _, _, _, let phase, _, _) = built[2].content else {
+        // Opened, the running call is there with its running state.
+        let open = await rows([user("u")], expanded: ["live-run"], streaming: true,
+                              liveTools: [call("a", "Bash", "ls", finished: true),
+                                          call("c", "Bash", "npm test")])
+        XCTAssertEqual(kinds(open), ["bubble", "toolRun", "toolChip", "toolChip"])
+        guard case .toolChip(let name, _, _, _, _, let phase, _, _) = open[3].content else {
             return XCTFail("the running call is not a chip")
         }
         XCTAssertEqual(name, "Bash")
         XCTAssertEqual(phase, .running)
-        XCTAssertEqual(built[2].id, "live-tool-2", "the chip keeps its ordinal id across the fold")
+        XCTAssertEqual(open[3].id, "live-tool-1", "the chip keeps its ordinal id")
     }
 
-    func testACallJoinsTheRunTheMomentItsResultLands() async throws {
+    func testTheRunStopsBreathingWhenItsLastCallReturns() async throws {
         let actor = TimelineLayoutActor()
         let before = await actor.buildSnapshot(input([], streaming: true,
                                                      liveTools: [call("a", "Bash", "ls", finished: true),
                                                                  call("b", "Bash", "pwd")])).rows
-        XCTAssertEqual(kinds(before), ["toolRun", "toolChip"])
-        XCTAssertEqual(try runPayload(before[0]).phrase, "Ran a command")
+        XCTAssertEqual(kinds(before), ["toolRun"])
+        XCTAssertEqual(try runPayload(before[0]).phrase, "Ran 2 commands")
+        XCTAssertTrue(try runPayload(before[0]).running)
         let after = await actor.buildSnapshot(input([], streaming: true,
                                                     liveTools: [call("a", "Bash", "ls", finished: true),
                                                                 call("b", "Bash", "pwd", finished: true)])).rows
-        // Folded, and the shimmer comes back because nothing is running now.
+        // Still one row, now still, and the shimmer comes back because nothing runs.
         XCTAssertEqual(kinds(after), ["toolRun", "activity"])
-        XCTAssertEqual(try runPayload(after[0]).phrase, "Ran 2 commands")
+        XCTAssertFalse(try runPayload(after[0]).running)
         XCTAssertEqual(after[0].id, before[0].id)
+        XCTAssertNotEqual(after[0].revision, before[0].revision)
+    }
+
+    func testLiveReasoningRidesTheRunOnceACallStarts() async throws {
+        let reasoning = "Checking the tests first.\nThen the build."
+        let built = await rows([], streaming: true, liveTools: [call("a", "Bash", "npm test")],
+                               liveThinking: reasoning)
+        XCTAssertEqual(kinds(built), ["toolRun"], "no Thinking row of its own beside the run")
+        let open = await rows([], expanded: ["live-run"], streaming: true,
+                              liveTools: [call("a", "Bash", "npm test")], liveThinking: reasoning)
+        XCTAssertEqual(kinds(open), ["toolRun", "thinking", "toolChip"])
+        guard case .thinking(_, let preview, let fullText, _, _, _) = open[1].content else {
+            return XCTFail("the run's first member is not the reasoning")
+        }
+        XCTAssertNil(preview, "closed: no preview card")
+        XCTAssertEqual(fullText, "Checking the tests first.\nThen the build.")
+    }
+
+    func testLiveReasoningBeforeAnyCallIsOneClosedLine() async throws {
+        let built = await rows([], streaming: true, liveThinking: "Reading the request.")
+        XCTAssertEqual(kinds(built), ["thinking"], "and no second Thinking shimmer")
+        guard case .thinking(let line, let preview, _, let maxLines, _, _) = built[0].content else {
+            return XCTFail("not a thinking row")
+        }
+        XCTAssertNil(line)
+        XCTAssertNil(preview)
+        XCTAssertEqual(maxLines, 0)
+        let capsule = TimelineRowBuilder().toolRunRow(id: "x#run", members: [member("Bash")],
+                                                      failCount: 0, running: false, expanded: false)
+        XCTAssertEqual(built[0].height, capsule.height, "one capsule line, nothing under it")
     }
 
     func testTheLiveRunOpensToItsChips() async throws {
@@ -430,8 +473,10 @@ final class ToolRunFoldTests: XCTestCase {
                        "another conversation's live run is not this one")
     }
 
-    func testNoFinishedCallMeansNoRunRow() async {
+    func testARunningCallAloneIsAClosedRun() async throws {
         let built = await rows([], streaming: true, liveTools: [call("a", "Bash", "ls")])
-        XCTAssertEqual(kinds(built), ["toolChip"])
+        XCTAssertEqual(kinds(built), ["toolRun"])
+        XCTAssertTrue(try runPayload(built[0]).running)
+        XCTAssertEqual(try runPayload(built[0]).phrase, "Ran a command")
     }
 }
