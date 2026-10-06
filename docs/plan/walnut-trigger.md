@@ -98,7 +98,7 @@ The message is one envelope v2 tag, `<walnut-message kind="trigger" from="Trigge
 
 The trigger id rides `triggerId`, never `id`: a daemon frame is `{id, cmd, ...params}` where `id` is the RPC correlation slot, so a trigger id sent as `id` overwrites it and the reply can never be matched.
 
-Daemon state lives in its own directory (`triggers.json` for the set, `trigger-state/<id>.json` for `seen`, `state`, `fires today`, `pendingFires`, `consecutiveErrors`). Loaded at boot so checks keep running while the server is down; the next `triggers.configure` replaces the set. Capability `triggers-v1`; an older daemon makes `trigger_create` for that host answer 400 with "upgrade the daemon on <host> (it auto-deploys on the next send)".
+Daemon state lives in its own directory (`triggers.json` for the set, `trigger-state/<id>.json` for `seen`, `state`, `fires today`, `pendingFires`, `consecutiveErrors`). Loaded at boot so checks keep running while the server is down; the next `triggers.configure` replaces the set. The per-trigger files must outlive a reboot, which the production runtime dir (`/tmp/open-walnut`) does not: the production daemon keeps them in `~/.open-walnut/tmp/trigger-state/`, a service daemon in its state dir, an isolated daemon dir inside itself. A file still in the old dir is moved the first time its trigger is armed. (2026-10-06: a reboot emptied `/tmp`, and a watch re-reported every item it had already reported and restarted the week its script was counting.) Capability `triggers-v1`; an older daemon makes `trigger_create` for that host answer 400 with "upgrade the daemon on <host> (it auto-deploys on the next send)".
 
 ### Who delivers a fire: the daemon decides
 

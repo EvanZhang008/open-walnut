@@ -34,7 +34,8 @@ const TRIGGER = 'mtrig000-c9bb'
 const GRACE_MS = 1_500
 
 const bunPath = (() => {
-  for (const p of [path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) if (fs.existsSync(p)) return p
+  // BUN_INSTALL first: the test setup swaps HOME for a fake one and points this at the real bun.
+  for (const p of [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) if (p && fs.existsSync(p)) return p
   try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
 })()
 

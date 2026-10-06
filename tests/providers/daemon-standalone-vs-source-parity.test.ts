@@ -2985,6 +2985,23 @@ describe('walnut-trigger daemon parity', () => {
     }
   })
 
+  // 2026-10-06: a reboot emptied /tmp, and with it every trigger's memory, so a
+  // watch re-reported everything it had reported. The production daemon keeps it
+  // under HOME, and a file left in the old dir is moved, not forgotten
+  // (tests/providers/daemon-trigger-state-reboot.test.ts runs the standalone twin).
+  it('both keep trigger memory out of /tmp and move a file left in the old dir', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/PROD_TRIGGER_STATE_DIR = path\.join\(HOME_DIR, '\.open-walnut', 'tmp', 'trigger-state'\)/)
+      expect(src).toMatch(/process\.env\.WALNUT_TRIGGER_STATE_DIR \|\| \(IS_PROD_DAEMON_DIR \? PROD_TRIGGER_STATE_DIR : path\.join\(DAEMON_DIR, 'trigger-state'\)\)/)
+      expect(src).toMatch(/path\.join\(DAEMON_STATE_DIR, 'trigger-state'\)/)
+      const start = src.indexOf('function readTriggerState(')
+      const body = src.slice(start, src.indexOf('\nfunction ', start + 1))
+      expect(body).toMatch(/LEGACY_TRIGGER_STATE_DIRS/)
+      expect(body).toMatch(/persistTriggerState\(id, state\)/)
+      expect(body).toMatch(/'trigger state moved to its durable dir'/)
+    }
+  })
+
   // The frame's own `id` is the RPC correlation slot, so a trigger id sent as
   // `id` overwrites it: the caller's pending map (keyed by number) never
   // resolves and the command dies on its timeout with no error anywhere. Every

@@ -175,7 +175,7 @@ export interface TriggerHostState {
   version: 1;
   /**
    * Random id minted with the state file. `seq` restarts at 0 whenever the file
-   * is recreated (disable then enable, a lost DAEMON_DIR after a reboot), and the
+   * is recreated (a pruned or deleted file, an isolated daemon dir thrown away), and the
    * server's high-water mark would then swallow the next `seq` fires as replays.
    * Every fire carries (epoch, seq); a new epoch tells the server to start over.
    */

@@ -4913,7 +4913,21 @@ async function configureDaemonHooks(ws, id, cmd) {
 // Every pure rule comes from the trigger-check-core.cjs sidecar, so a source
 // deploy without it answers "triggers unsupported".
 var TRIGGERS_FILE = path.join(STATE_DIR_OR_RUNTIME, 'triggers.json');
-var TRIGGER_STATE_DIR = path.join(STATE_DIR_OR_RUNTIME, 'trigger-state');
+// Each trigger's memory (the ids it reported, its script's state, its unacked
+// fires) must outlive a reboot, and the production runtime dir does not: /tmp is
+// emptied at boot (2026-10-06: one reboot made a watch re-report every item it had
+// reported and restart the week its script counted). The production daemon keeps
+// it under HOME beside the streams; a service daemon keeps its state dir; an
+// isolated dir keeps it inside itself. WALNUT_TRIGGER_STATE_DIR is for TESTS ONLY.
+// Mirror daemon-standalone.ts.
+var PROD_TRIGGER_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'trigger-state');
+var TRIGGER_STATE_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'trigger-state')
+  : process.env.WALNUT_TRIGGER_STATE_DIR || (IS_PROD_DAEMON_DIR ? PROD_TRIGGER_STATE_DIR : path.join(DAEMON_DIR, 'trigger-state'));
+// Where a trigger's file may sit from before it moved; read once, then moved.
+var LEGACY_TRIGGER_STATE_DIRS = Array.from(new Set(
+  [path.join(DAEMON_DIR, 'trigger-state')].concat(IS_PROD_DAEMON_DIR ? [PROD_TRIGGER_STATE_DIR] : [])
+)).filter(function (dir) { return path.resolve(dir) !== path.resolve(TRIGGER_STATE_DIR); });
 var TRIGGER_TICK_MS = 5000;
 // A newly armed trigger waits before its first run: configure arrives in a burst
 // at connect, and a boot-time stampede would run every check against a host that
@@ -4971,8 +4985,24 @@ function readTriggerState(id, nowMs) {
   try {
     return triggerCheckCore.coerceHostState(JSON.parse(fs.readFileSync(triggerStatePath(id), 'utf-8')), nowMs);
   } catch (err) {
-    return triggerCheckCore.emptyHostState(nowMs);
+    if (!err || err.code !== 'ENOENT') return triggerCheckCore.emptyHostState(nowMs);
   }
+  // Not here yet: a daemon from before the move wrote it to the old dir, and the
+  // upgrade itself must not re-fire everything it had reported.
+  for (var i = 0; i < LEGACY_TRIGGER_STATE_DIRS.length; i++) {
+    var dir = LEGACY_TRIGGER_STATE_DIRS[i];
+    var legacy = path.join(dir, triggerCheckCore.triggerStateFileName(id));
+    var raw;
+    try { raw = JSON.parse(fs.readFileSync(legacy, 'utf-8')); } catch (err) { continue; }
+    var state = triggerCheckCore.coerceHostState(raw, nowMs);
+    persistTriggerState(id, state);
+    if (fs.existsSync(triggerStatePath(id))) {
+      try { fs.unlinkSync(legacy); } catch {}
+      logMsg('info', 'trigger state moved to its durable dir', { id: id, from: dir, to: TRIGGER_STATE_DIR });
+    }
+    return state;
+  }
+  return triggerCheckCore.emptyHostState(nowMs);
 }
 
 function persistTriggerState(id, state) {

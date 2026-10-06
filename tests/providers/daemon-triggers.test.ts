@@ -27,6 +27,9 @@ const TWIN = path.join(ROOT, 'src/providers/daemon-standalone.ts')
 function findBun(): string | null {
   for (const candidate of [
     process.env.BUN_PATH,
+    // The test setup swaps HOME for a fake one and points BUN_INSTALL at the real
+    // bun; without this the whole file skipped from 2026-10-05.
+    process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'),
     path.join(os.homedir(), '.bun/bin/bun'),
     '/opt/homebrew/bin/bun',
     '/usr/local/bin/bun',

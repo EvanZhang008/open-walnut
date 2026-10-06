@@ -3565,7 +3565,24 @@ async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd
 // daemon (deliverUnclaimedFires), then replayed with `host` set so the server
 // only records it. Keep in sync with daemon-source.ts.
 const TRIGGERS_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'triggers.json')
-const TRIGGER_STATE_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'trigger-state')
+// Each trigger's memory (the ids it reported, its script's state, its unacked
+// fires) must outlive a reboot, and the production runtime dir does not: macOS
+// empties /tmp at boot. On 2026-10-06 one reboot made a watch re-report all eight
+// items it had already reported, run ten hours early, and restart the week its
+// script was counting. So the production daemon keeps it under HOME, beside the
+// streams (the set itself, triggers.json, is re-pushed by the server at every
+// connect). A service daemon keeps its state dir; an isolated dir (tests,
+// ephemeral servers) keeps it inside itself, so nothing crosses between Walnuts.
+// WALNUT_TRIGGER_STATE_DIR is for TESTS ONLY. Mirror daemon-source.ts.
+const PROD_TRIGGER_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'trigger-state')
+const TRIGGER_STATE_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'trigger-state')
+  : process.env.WALNUT_TRIGGER_STATE_DIR || (IS_PROD_DAEMON_DIR ? PROD_TRIGGER_STATE_DIR : path.join(DAEMON_DIR, 'trigger-state'))
+/** Where a trigger's file may sit from before it moved; read once, then moved. */
+const LEGACY_TRIGGER_STATE_DIRS = [...new Set([
+  path.join(DAEMON_DIR, 'trigger-state'),
+  ...(IS_PROD_DAEMON_DIR ? [PROD_TRIGGER_STATE_DIR] : []),
+])].filter((dir) => path.resolve(dir) !== path.resolve(TRIGGER_STATE_DIR))
 const TRIGGER_TICK_MS = 5_000
 // A newly armed trigger waits before its first run: configure arrives in a burst
 // at connect, and a boot-time stampede would run every check against a host that
@@ -3640,9 +3657,24 @@ function triggerStatePath(id: string): string {
 function readTriggerState(id: string, nowMs: number): TriggerHostState {
   try {
     return coerceHostState(JSON.parse(fs.readFileSync(triggerStatePath(id), 'utf-8')), nowMs)
-  } catch {
-    return emptyHostState(nowMs)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return emptyHostState(nowMs)
   }
+  // Not here yet: a daemon from before the move wrote it to the old dir, and the
+  // upgrade itself must not re-fire everything it had reported.
+  for (const dir of LEGACY_TRIGGER_STATE_DIRS) {
+    const legacy = path.join(dir, triggerStateFileName(id))
+    let raw: unknown
+    try { raw = JSON.parse(fs.readFileSync(legacy, 'utf-8')) } catch { continue }
+    const state = coerceHostState(raw, nowMs)
+    persistTriggerState(id, state)
+    if (fs.existsSync(triggerStatePath(id))) {
+      try { fs.unlinkSync(legacy) } catch {}
+      logMsg('info', 'trigger state moved to its durable dir', { id, from: dir, to: TRIGGER_STATE_DIR })
+    }
+    return state
+  }
+  return emptyHostState(nowMs)
 }
 
 function persistTriggerState(id: string, state: TriggerHostState): void {
