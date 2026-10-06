@@ -12,6 +12,12 @@
  * no timer. A CLI that has not reported lifecycle keeps the old rule (the write
  * is the last word), see ClaudeCodeSession.writeMessage.
  *
+ * One exception, and it never settles a row by itself: a line the CLI has not
+ * named at all (not even `queued`) is challenged after a grace period
+ * (ClaudeCodeSession.checkLineAck, send-lost-line-v1). The CLI's answer to a
+ * request written after the line proves it read past it; only then do the rows
+ * go back to pending, to be written again under the same uuid.
+ *
  * When the process dies first, its untaken rows go back to pending and are
  * delivered again under the same uuid (QueuedMessage.lineUuid, persisted): the
  * CLI skips a uuid its transcript already holds, and the daemon skips a resend
@@ -104,6 +110,17 @@ export function hasUntakenLines(sessionId: string | null | undefined): boolean {
   return !!sessionId && (bySession.get(sessionId)?.size ?? 0) > 0
 }
 
+/** Is this line still waiting for the CLI's word (registered, never taken, cancelled or dropped)? */
+export function isLineAwaited(sessionId: string | null | undefined, uuid: string): boolean {
+  return !!sessionId && !!bySession.get(sessionId)?.has(uuid)
+}
+
+/** The lines still waiting, oldest first, with the process each went into. Nothing is removed. */
+export function awaitedLines(sessionId: string | null | undefined): Array<{ uuid: string; pid: number | null }> {
+  const lines = sessionId ? bySession.get(sessionId) : undefined
+  return lines ? [...lines].map(([uuid, line]) => ({ uuid, pid: line.pid })) : []
+}
+
 /**
  * Lines still waiting, oldest first, removed from the registry. With `pid`,
  * only the lines written into that process (or before its pid was known): the
@@ -179,8 +196,12 @@ export function heldRows(sessionId: string): ReadonlyMap<string, string> | undef
 //
 // A process that died without a turn event (between turns, or quietly) leaves
 // nothing to drive the queue: the runner listens here to deliver what it held.
+// `lost`: the live process read past a line without taking it (another reader
+// of its stdin took the bytes, send-lost-line-v1); its rows are pending again
+// and go out even while Walnut still counts the turn that line was to open.
 
-type ReclaimListener = (sessionId: string) => void
+export type ReclaimReason = 'death' | 'lost'
+type ReclaimListener = (sessionId: string, why: ReclaimReason) => void
 let reclaimListener: ReclaimListener | null = null
 
 export function onLinesReclaimed(listener: ReclaimListener): () => void {
@@ -188,8 +209,8 @@ export function onLinesReclaimed(listener: ReclaimListener): () => void {
   return () => { if (reclaimListener === listener) reclaimListener = null }
 }
 
-export function announceReclaimed(sessionId: string): void {
-  reclaimListener?.(sessionId)
+export function announceReclaimed(sessionId: string, why: ReclaimReason = 'death'): void {
+  reclaimListener?.(sessionId, why)
 }
 
 /** Test-only reset. */

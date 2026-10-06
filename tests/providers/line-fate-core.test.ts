@@ -74,6 +74,40 @@ describe('lineFate', () => {
   })
 })
 
+// send-lost-line-v1. The write record says the whole line went into the stdin
+// pipe of process `pid`. It cannot say the CLI read it: any other reader of the
+// pipe (an agent's grep that named the FIFO) takes the bytes, and the record
+// then answers "waiting" forever. When the server proves the CLI read past the
+// line without a word on it, it asks again with `lostPid`.
+describe('lineFate with lostPid: the server proved the process read past the line', () => {
+  const lost = { ...q, lostPid: 41 }
+
+  it('the record for that process no longer says the line waits in it, once its marker is in view', () => {
+    // The marker that went with the write is in the scanned tail and no frame follows it.
+    expect(lineFate(lines(marker('qm-1', 41)), lines(rec(41, ['qm-1'])), lost)).toBeNull()
+  })
+
+  it('a marker out of the scanned window leaves the record standing: no frame was looked for', () => {
+    // The CLI printed more than the window since the line, so its `queued` may just be out of view.
+    expect(lineFate('', lines(rec(41, ['qm-1'])), lost)).toEqual({ fate: 'waiting' })
+    expect(lineFate(lines(lc('u-9', 'started')), lines(rec(41, ['qm-1'])), lost)).toEqual({ fate: 'waiting' })
+    // A marker another process stamped is not this process's write.
+    expect(lineFate(lines(marker('qm-1', 40)), lines(rec(41, ['qm-1'])), lost)).toEqual({ fate: 'waiting' })
+  })
+
+  it('the CLI\'s own word still wins: a queued frame means it has the line', () => {
+    expect(lineFate(lines(marker('qm-1', 41), lc('u-1', 'queued')), lines(rec(41, ['qm-1'])), lost))
+      .toEqual({ fate: 'waiting', state: 'queued' })
+    expect(lineFate(lines(lc('u-1', 'started')), lines(rec(41, ['qm-1'])), lost)).toEqual({ fate: 'ran', state: 'started' })
+    expect(lineFate(lines(lc('u-1', 'discarded')), '', lost)).toEqual({ fate: 'dropped', state: 'discarded' })
+  })
+
+  it('a lostPid for another process changes nothing for the one running now', () => {
+    expect(lineFate('', lines(rec(41, ['qm-1'])), { ...q, lostPid: 40 })).toEqual({ fate: 'waiting' })
+    expect(lineFate('', lines(rec(41, ['qm-1'])), { ...q, lostPid: null })).toEqual({ fate: 'waiting' })
+  })
+})
+
 describe('lineFateScan / lineFateVerdict: the daemons scan a long tail piece by piece', () => {
   const stream = lines(
     marker('qm-1', 41), lc('u-2', 'started'), lc('u-1', 'queued'), lc('u-1', 'started'), lc('u-1', 'cancelled'), lc('u-1', 'completed'),

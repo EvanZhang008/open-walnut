@@ -222,6 +222,26 @@ export function lineRecordPath(jsonlPath: string): string {
   return jsonlPath + '.lines'
 }
 
+/**
+ * A live session's stdin FIFO is write-only, for its owner too (mode 0200).
+ * A FIFO has one byte stream and any reader takes from it. On 2026-10-05 an
+ * agent ran `grep … $(ls -t)` in the streams dir: the listing named every
+ * `<sid>.pipe`, grep (Claude Code's grep reads a FIFO named on its command
+ * line) opened them, and the lines Walnut wrote for three sessions went to grep
+ * instead of their CLIs. The CLI never needs the path: it reads the O_RDWR
+ * descriptor the daemon opened before this chmod, and the daemon's own writes
+ * open O_WRONLY. Any other open for reading by a non-root user now fails with
+ * EACCES, whatever names the FIFO (a listing, a glob, a recursive search, the
+ * full path). A FIFO a previous daemon made (0644) is locked when a daemon
+ * adopts its session. Keep in sync with daemon-source.ts.
+ */
+export const LIVE_FIFO_MODE = 0o200
+
+/** Lock a live stdin FIFO against readers (LIVE_FIFO_MODE). False when the chmod failed. */
+export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): boolean {
+  try { fs.chmodSync(pipePath, LIVE_FIFO_MODE); return true } catch { return false }
+}
+
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
 export type SendResult =
   | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string }
@@ -263,13 +283,21 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * cancelled / dropped / waiting. The check runs in the per-session write
    * chain, after any earlier write of the same line settled. Every whole line
    * written with markers is recorded (`<stream>.lines`) after its newline.
+   *
+   * `opts.lostPid` (send-lost-line-v1, with dedupe): the server proved that
+   * this CLI process read past the line without taking it, so the daemon's
+   * records for that process no longer say it waits there (the CLI's frames
+   * still decide). Written again into that same process, the line goes after a
+   * lone newline: a fragment the CLI holds is then ended on its own, never glued
+   * onto the line (a whole body that only lacked its newline parses as the
+   * first copy, and the CLI skips this one by its uuid).
    */
   handleSendCommand: (
     sid: string | undefined,
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean },
+    opts?: { dedupe?: boolean; lostPid?: number | null },
   ) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
@@ -793,6 +821,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         pid,
       })
       logger('info', 'reconcile: adopted orphan session', { sid, pid })
+      // A previous daemon may have left its FIFO readable (LIVE_FIFO_MODE).
+      if (!lockLiveFifo(fs, session.pipePath)) logger('warn', 'reconcile: could not make the stdin FIFO write-only', { sid })
       startOrphanPoll(sid)
       broadcastSessionState(sid, 'running', { pid, adopted: true })
     }
@@ -822,13 +852,14 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean },
+    opts?: { dedupe?: boolean; lostPid?: number | null },
   ): Promise<SendResult> {
     if (!sid || !message) return { error: 'send: missing sid or message' }
     const normalized = normalizeMarkers(markers)
     if ('error' in normalized) return { error: normalized.error }
     const pending = normalized.markers
     const dedupe = opts?.dedupe === true && pending.length > 0
+    const lostPid = dedupe && typeof opts?.lostPid === 'number' ? opts.lostPid : null
 
     const session = sessions.get(sid)
     if (!session) return { ok: false, reason: 'not_found' }
@@ -857,14 +888,17 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         message: { role: 'user', content: message },
         ...(uuid ? { uuid } : {}),
       })
-      const buf = Buffer.from(payload + '\n')
+      // send-lost-line-v1: into the process that read past this line, a lone
+      // newline first, so a fragment it holds is ended on its own.
+      const rewrite = lostPid !== null && lostPid === session.pid
+      const buf = Buffer.from((rewrite ? '\n' : '') + payload + '\n')
       // Newline fence: the markers sit between the body and the final newline.
       const beforeNewline = pending.length > 0
         ? () => { for (const m of pending) appendUserMarkerLine(sid, session, m.message, m.messageId, true) }
         : undefined
       const ids = pending.map((m) => m.messageId)
       const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
-        fate: dedupe ? () => lineFateInProcess(session, uuid, ids) : undefined,
+        fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid) : undefined,
         written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
       })
       if (typeof result === 'object') {
@@ -874,6 +908,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         return { ok: true, duplicate: true, fate: result.fate, ...(result.state ? { state: result.state } : {}) }
       }
       if (result === 'ok') {
+        if (rewrite) {
+          logger('warn', 'send: wrote a line again that the CLI read past without taking', {
+            sid, pid: session.pid, messageIds: ids,
+          })
+        }
         // TTFT anchor: the tailer logs send→first-line / send→first-text
         // latencies against this (CLI-side half of the text-latency attribution).
         session.ttftSendTs = clock()
@@ -1029,8 +1068,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * not proven in the CLI running now, so the caller writes it. Async and read
    * piece by piece: a resend never holds the daemon's loop for the whole window.
    */
-  async function lineFateInProcess(session: S, uuid: string | undefined, messageIds: string[]): Promise<LineFate | null> {
-    const q = { uuid: uuid ?? '', messageIds, pid: session.pid }
+  async function lineFateInProcess(
+    session: S, uuid: string | undefined, messageIds: string[], lostPid: number | null = null,
+  ): Promise<LineFate | null> {
+    const q = { uuid: uuid ?? '', messageIds, pid: session.pid, lostPid }
     let scan: LineFateScan | null = null
     await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan) })
     let records = ''

@@ -141,4 +141,14 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
     // 'discarded' is reported as it is, never as taken.
     expect(fates).toEqual([{ fate: 'dropped', state: 'discarded' }])
   })
+
+  it('a rewrite of a lost line carries lostPid once; asking whether THAT write landed never does', async () => {
+    const caps = ['send-markers-v1', 'send-dedupe-v1', 'send-lost-line-v1']
+    const { conn, sent } = fakeConn([timeout(), { ok: true, duplicate: true, fate: 'waiting' }], caps)
+    await expect(manager(conn).writeMessage('hello', { uuid: 'u-1', markers, dedupe: true, lostPid: 77 })).resolves.toBe(true)
+    expect(sent[0].payload).toMatchObject({ dedupe: true, lostPid: 77 })
+    // A lostPid here would set aside the record of the rewrite just made and write a third copy.
+    expect(sent[1].payload.dedupe).toBe(true)
+    expect(sent[1].payload.lostPid).toBeUndefined()
+  })
 })

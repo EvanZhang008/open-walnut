@@ -1164,6 +1164,8 @@ function ensureOwnerOnlyStorage() {
       for (const name of names) repair(path.join(entryPath, name));
       return;
     }
+    // A FIFO here is a session's stdin: write-only, never readable (lockLiveFifo below).
+    if (stat.isFIFO()) { fs.chmodSync(entryPath, 0o200); return; }
     fs.chmodSync(entryPath, stat.mode & 0o111 ? 0o700 : 0o600);
   }
 
@@ -2315,6 +2317,8 @@ function reconcileRegistry() {
 
     logStateTransition(sid, 'none', 'running', 'reconcile-adopt', 'reconcileRegistry', { pid });
     logMsg('info', 'reconcile: adopted orphan session', { sid, pid });
+    // A previous daemon may have left its FIFO readable (LIVE_FIFO_MODE).
+    if (!lockLiveFifo(session.pipePath)) logMsg('warn', 'reconcile: could not make the stdin FIFO write-only', { sid: sid });
     startOrphanPoll(sid);
     broadcastSessionState(sid, 'running', { pid, adopted: true });
   }
@@ -2330,6 +2334,15 @@ function reconcileRegistry() {
       }
     }
   } catch {}
+}
+
+// A live session's stdin FIFO is write-only (mode 0200), for its owner too: any
+// reader takes the CLI's lines, and on 2026-10-05 an agent's grep over the
+// streams dir did. The CLI reads the O_RDWR descriptor opened before the chmod,
+// the daemon's writes open O_WRONLY. Keep in sync with daemon-core.ts
+// LIVE_FIFO_MODE / lockLiveFifo.
+function lockLiveFifo(pipePath) {
+  try { fs.chmodSync(pipePath, 0o200); return true; } catch { return false; }
 }
 
 // ── Process group helpers ──
@@ -4231,6 +4244,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // turn-start marker lines (appendUserMarker); a positional 'w' fd would
   // overwrite them. Fresh spawns truncate explicitly first.
   const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR);
+  // The CLI reads the descriptor above; nothing else may read the path (a reader
+  // takes the CLI's lines). See LIVE_FIFO_MODE in daemon-core.ts.
+  if (!lockLiveFifo(pipePath)) logMsg('warn', 'spawn: could not make the stdin FIFO write-only', { sid: sid });
   // Fresh spawn: unlink+recreate (NOT truncate) → new inode → new streamEpoch,
   // so consumers know v restarted at 0. Mirror daemon-standalone.ts.
   if (!resume) {
@@ -6473,6 +6489,8 @@ function cmdAttach(ws, id, cmd) {
     // attach (contract §4 boundary rule).
     // Keep in sync with daemon-standalone.ts (CLAUDE.md).
     const discovered = rebuildFoldStateFromJsonl(jsonlPath); // C1
+    // A FIFO an earlier daemon made may still be readable (LIVE_FIFO_MODE).
+    if (alive) lockLiveFifo(pipePath);
 
     session = {
       proc: null,
@@ -6545,7 +6563,8 @@ async function sendSessionMessage(ws, id, cmd) {
   const { sid, message, uuid } = cmd;
   cancelTurnRetry(sid, 'superseded-by-send');
   // dedupe (send-dedupe-v1): a resend after an unanswered send; written only if this CLI lacks it.
-  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true });
+  // lostPid (send-lost-line-v1): the server proved this CLI read past the line; it is written again.
+  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null });
   if (result.error) return sendError(ws, id, result.error);
   return sendOk(ws, id, result);
 }
@@ -6555,6 +6574,7 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
   const markers = normalizeMarkers(inputMarkers);
   if (markers.error) return { error: markers.error };
   const dedupe = !!(opts && opts.dedupe === true) && markers.list.length > 0;
+  const lostPid = dedupe && typeof opts.lostPid === 'number' ? opts.lostPid : null;
   const session = sessions.get(sid);
   if (!session) return { ok: false, reason: 'not_found' };
   if (session.state === 'dead') return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
@@ -6567,13 +6587,16 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
   const envelope = { type: 'user', message: { role: 'user', content: message } };
   if (typeof uuid === 'string' && uuid) envelope.uuid = uuid;
   try {
-    const buf = Buffer.from(JSON.stringify(envelope) + '\\n');
+    // send-lost-line-v1: into the process that read past this line, a lone
+    // newline first, so a fragment it holds is ended on its own (daemon-core.ts).
+    const rewrite = lostPid !== null && lostPid === session.pid;
+    const buf = Buffer.from((rewrite ? '\\n' : '') + JSON.stringify(envelope) + '\\n');
     const beforeNewline = markers.list.length > 0
       ? function () { for (const m of markers.list) appendUserMarkerLine(sid, session, m.message, m.messageId, true); }
       : undefined;
     const ids = markers.list.map(function (m) { return m.messageId; });
     const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
-      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids); } : undefined,
+      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid); } : undefined,
       written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
     });
     if (result && typeof result === 'object') {
@@ -6583,6 +6606,7 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       return out;
     }
     if (result === 'ok') {
+      if (rewrite) logMsg('warn', 'send: wrote a line again that the CLI read past without taking', { sid: sid, pid: session.pid, messageIds: ids });
       session.ttftSendTs = Date.now();
       session.ttftSawFirstLine = false;
       return { ok: true };
@@ -6706,8 +6730,8 @@ async function scanTail(filePath, max, onText) {
     await fh.close().catch(() => {});
   }
 }
-async function lineFateInProcess(session, uuid, messageIds) {
-  const q = { uuid: typeof uuid === 'string' ? uuid : '', messageIds: messageIds, pid: session.pid };
+async function lineFateInProcess(session, uuid, messageIds, lostPid) {
+  const q = { uuid: typeof uuid === 'string' ? uuid : '', messageIds: messageIds, pid: session.pid, lostPid: typeof lostPid === 'number' ? lostPid : null };
   let scan = null;
   await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan); });
   let records = '';
@@ -10050,6 +10074,7 @@ function cleanupOrphanedProcessGroups() {
           // start mid-line (contract §4 boundary rule). Keep in sync with
           // daemon-standalone.ts.
           const legacyFold = rebuildFoldStateFromJsonl(jsonlPath); // C1
+          lockLiveFifo(pipePath); // see LIVE_FIFO_MODE in daemon-core.ts
           sessions.set(sid, {
             proc: null,  // no handle — process was started by old daemon.
             pipePath,

@@ -103,4 +103,13 @@ describe('a CLI that reports its queue is still known as one after a restart', (
     }, { timeout: 2000, interval: 25 })
     session.detach()
   })
+
+  it('the process that names lines `queued` is known again too, so its unnamed lines are watched (send-lost-line-v1)', async () => {
+    const same = await attach(await makeRecord('lq-same', 4242, { lineLifecyclePid: 4242, lineQueuedPid: 4242 }))
+    expect((same as unknown as { _queuedFramesFrom: number | null })._queuedFramesFrom).toBe(4242)
+    same.detach()
+    const moved = await attach(await makeRecord('lq-new', 5151, { lineLifecyclePid: 4242, lineQueuedPid: 4242 }))
+    expect((moved as unknown as { _queuedFramesFrom: number | null })._queuedFramesFrom).toBeNull()
+    moved.detach()
+  })
 })

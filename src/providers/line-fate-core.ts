@@ -10,8 +10,14 @@
  *   process). cancelled: a Stop dropped it. discarded / refused: it never ran
  *   and never will in that session.
  * - The daemon's write record (`<stream>.lines`, appended only AFTER the final
- *   newline went into the pipe): the whole line is in the stdin of process
- *   `pid`, so the CLI holds it or is about to read it.
+ *   newline went into the pipe): the whole line went into the stdin pipe of
+ *   process `pid`, so the CLI holds it or is about to read it. Unless another
+ *   reader of the pipe took the bytes (2026-10-05: an agent's grep named the
+ *   live FIFOs on its command line), and then the record would answer
+ *   "waiting" forever. So the server challenges a line the CLI never names
+ *   (send-lost-line-v1): once the process answers a request written after the
+ *   line without a word on it, the server asks with `lostPid`, and that
+ *   process's records no longer count. The CLI's own frames always do.
  * - A delivery marker stamped with `pid` followed by a `queued` frame for the
  *   uuid: the CLI parsed the whole line (covers a write whose record was lost).
  *
@@ -31,6 +37,13 @@ export interface LineFateQuery {
   messageIds: string[]
   /** The CLI process running now (null: none). */
   pid: number | null
+  /**
+   * send-lost-line-v1: a process the server proved read past this line without
+   * taking it (it answered a request written after the line, and never named
+   * the line). Its write records no longer say the line waits in it, as long
+   * as the scan saw this process's marker for the line (else they still do).
+   */
+  lostPid?: number | null
 }
 
 /** What a scan of stream lines has found so far (lineFateScan folds pieces in order). */
@@ -89,7 +102,12 @@ export function lineFateVerdict(scan: LineFateScan | null, writesText: string, q
   if (best === 'started' || best === 'completed') return { fate: 'ran', state: best }
   if (best === 'cancelled') return { fate: 'cancelled', state: best }
   if (best === 'discarded' || best === 'refused') return { fate: 'dropped', state: best }
-  if (pid && ids.length > 0 && writesText) {
+  // A lostPid sets the records aside only while this process's marker for the
+  // line is inside the scanned window: then "no frame after it" was looked for.
+  // Past the window the CLI has printed megabytes since the line, its frame may
+  // simply be out of view, and the record still answers waiting.
+  const recordsSetAside = q.lostPid === pid && !!scan && scan.markerSeen
+  if (pid && ids.length > 0 && writesText && !recordsSetAside) {
     const records = writesText.split('\n')
     for (let i = records.length - 1; i >= 0; i--) {
       if (!records[i]) continue

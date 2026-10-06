@@ -328,6 +328,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // twins run the same inlined function. Optional: without it the server never
   // resends an unanswered line and reports it unconfirmed instead.
   'send-dedupe-v1',
+  // 'send-lost-line-v1': a dedupe send accepts `lostPid`, the CLI process the
+  // server proved read past the line without taking it (the line's write record
+  // says it went into that pipe, yet the CLI answered a request written after it
+  // and never named it: another reader took the bytes). The daemon ignores its
+  // write records for that pid, still honours the CLI's own lifecycle frames,
+  // and writes the line again under its uuid after a lone newline, so a fragment
+  // the CLI holds is ended on its own (line-fate-core.ts). Optional: without it
+  // the server cannot rewrite such a line and shows it as failed instead.
+  'send-lost-line-v1',
   // 'agent-commands-v1' — unified agent.* command family (engine-routed aliases
   // over the legacy start/send/... and acp* families). Optional: without it the
   // server keeps speaking the legacy families directly.

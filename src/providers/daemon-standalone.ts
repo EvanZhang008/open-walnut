@@ -62,6 +62,8 @@ import {
   type SessionMode,
   type PendingCtrl,
   type UserMarkerInput,
+  lockLiveFifo,
+  LIVE_FIFO_MODE,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
@@ -393,6 +395,8 @@ function ensureOwnerOnlyStorage(): void {
       for (const name of names) repair(path.join(entryPath, name))
       return
     }
+    // A FIFO here is a session's stdin: write-only, never readable (LIVE_FIFO_MODE in daemon-core.ts).
+    if (stat.isFIFO()) { fs.chmodSync(entryPath, LIVE_FIFO_MODE); return }
     fs.chmodSync(entryPath, stat.mode & 0o111 ? 0o700 : 0o600)
   }
 
@@ -3206,6 +3210,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // writers in O_APPEND every write() lands at the true EOF. Fresh spawns
   // truncate explicitly first ('a' alone never truncates).
   const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR)
+  // The CLI reads the descriptor above; nothing else may read the path (a reader
+  // takes the CLI's lines). See LIVE_FIFO_MODE in daemon-core.ts.
+  if (!lockLiveFifo(fs, pipePath)) logMsg('warn', 'spawn: could not make the stdin FIFO write-only', { sid })
   // Fresh spawn: unlink+recreate (NOT truncate-in-place) so the file gets a NEW
   // inode → new streamEpoch. Truncation keeps the inode, and a same-sid relaunch
   // would then reset v to 0 under an UNCHANGED epoch — walnut's stale watermark
@@ -5136,6 +5143,8 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     } catch { pid = null; alive = false }
 
     const discovered = rebuildFoldStateFromJsonl(jsonlPath)
+    // A FIFO an earlier daemon made may still be readable (LIVE_FIFO_MODE).
+    if (alive) lockLiveFifo(fs, pipePath)
     session = {
       proc: null,
       pipePath,
@@ -5231,7 +5240,8 @@ async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: 
   const markers = (cmd as { markers?: UserMarkerInput[] }).markers
   cancelTurnRetry(sid, 'superseded-by-send')
   // dedupe (send-dedupe-v1): a resend after an unanswered send; core writes it only if this CLI lacks it.
-  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true })
+  // lostPid (send-lost-line-v1): the server proved this CLI read past the line; core writes it again.
+  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null })
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
@@ -7860,6 +7870,7 @@ function cleanupOrphanedProcessGroups() {
           const pipePath = path.join(STREAMS_DIR, sid + '.pipe')
           logMsg('info', 'startup: adopting live session from previous daemon (legacy pgid-only)', { sid, pid })
           const legacyFold = rebuildFoldStateFromJsonl(jsonlPath)
+          lockLiveFifo(fs, pipePath) // see LIVE_FIFO_MODE in daemon-core.ts
           sessions.set(sid, {
             proc: null,
             pipePath,

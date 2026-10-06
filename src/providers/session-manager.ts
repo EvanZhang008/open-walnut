@@ -157,6 +157,12 @@ export interface LineWriteOptions {
   onDispatch?: () => void
   /** The line may already be in the CLI: the daemon writes it only if it cannot tell what became of it. */
   dedupe?: boolean
+  /**
+   * With dedupe (send-lost-line-v1): the CLI process that read past this line
+   * without taking it. Its write record no longer counts, and the daemon writes
+   * the line again after a lone newline. Sent only to a daemon with the capability.
+   */
+  lostPid?: number
   /** The daemon answered without writing, with what became of the line (send-dedupe-v1). */
   onFate?: (fate: { fate: string; state?: string }) => void
   /** This line waits behind one whose answer is still being asked for. */
@@ -209,6 +215,12 @@ export interface SessionManager {
    * Used for control_response messages (--permission-prompt-tool stdio protocol).
    */
   writeRaw(json: string): Promise<boolean> | boolean
+
+  /**
+   * send-lost-line-v1: can the daemon write a line again into the process that
+   * read past it (`lostPid`)? Absent or false: such a line is shown as failed.
+   */
+  canRewriteLostLine?(): boolean
 
   /**
    * Write a synthetic user event to the output file (for dedup).

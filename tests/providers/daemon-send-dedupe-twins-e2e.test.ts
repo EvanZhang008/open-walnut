@@ -10,13 +10,18 @@
  * the CLI's own lifecycle word settles it; and the write record survives a
  * daemon restart, so the new daemon still answers for the CLI it adopted.
  *
+ * Also the two halves of the 2026-10-05 fix: send-lost-line-v1 (a line the CLI
+ * read past is written again once, after a lone newline, never glued onto a
+ * fragment) and the write-only stdin FIFO (no other reader can open it, and a
+ * session an older daemon spawned is locked on adoption).
+ *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, the
  * "CLI" is a node script that exits on its own within 40 s, every session is
  * stopped and the daemon SIGKILLed after each test.
  */
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -38,10 +43,19 @@ let ws: WebSocket | null = null
 let rpcId = 1
 const cliPids = new Set<number>()
 
-/** A stand-in CLI: prints init, records each stdin line, optionally reports lifecycle. */
+/**
+ * A stand-in CLI: prints init, records each stdin line, optionally reports lifecycle.
+ * Modes (send-lost-line-v1): --lose-first drops the first user line unseen, as if
+ * another reader of the pipe had taken it; --dedupe-uuid skips a uuid it already
+ * took, silently, as Claude Code does; a line that does not parse is recorded as
+ * such (Claude Code exits on one), and a blank line is skipped (as Claude Code does).
+ */
 const FAKE_CLI = `
 const fs = require('fs')
-const [received, mode] = process.argv.slice(2)
+const [received, ...modes] = process.argv.slice(2)
+const mode = modes[0]
+const seen = new Set()
+let lose = modes.includes('--lose-first')
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake' }) + '\\n')
 setTimeout(() => process.exit(0), 40000).unref()
 let buf = ''
@@ -50,8 +64,14 @@ process.stdin.on('data', (chunk) => {
   let i
   while ((i = buf.indexOf('\\n')) !== -1) {
     const line = buf.slice(0, i); buf = buf.slice(i + 1)
-    let msg; try { msg = JSON.parse(line) } catch { continue }
+    if (!line.trim()) continue
+    let msg; try { msg = JSON.parse(line) } catch {
+      fs.appendFileSync(received, JSON.stringify({ pid: process.pid, parseError: line.slice(0, 200) }) + '\\n')
+      continue
+    }
     if (msg.type !== 'user') continue
+    if (lose) { lose = false; continue }
+    if (modes.includes('--dedupe-uuid') && msg.uuid) { if (seen.has(msg.uuid)) continue; seen.add(msg.uuid) }
     fs.appendFileSync(received, JSON.stringify({ pid: process.pid, uuid: msg.uuid || null, content: msg.message.content }) + '\\n')
     if (mode === '--lifecycle' && msg.uuid) {
       for (const state of ['queued', 'started', 'completed']) {
@@ -137,14 +157,15 @@ async function waitFor(check: () => boolean, ms = 10_000): Promise<boolean> {
   return check()
 }
 
-const received = (dirs: Dirs): Array<{ pid: number; uuid: string | null; content: string }> =>
+const received = (dirs: Dirs): Array<{ pid: number; uuid: string | null; content: string; parseError?: string }> =>
   fs.existsSync(dirs.received) ? fs.readFileSync(dirs.received, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 
 /** The daemon reply minus the envelope id. */
 const body = (r: Record<string, unknown>) => { const { id: _id, ...rest } = r; return rest }
 
-async function start(dirs: Dirs, sid: string, lifecycle: boolean): Promise<{ pid: number; outputFile: string }> {
-  const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(dirs.received)}${lifecycle ? ' --lifecycle' : ''}`
+async function start(dirs: Dirs, sid: string, lifecycle: boolean | string[]): Promise<{ pid: number; outputFile: string }> {
+  const modes = Array.isArray(lifecycle) ? lifecycle : lifecycle ? ['--lifecycle'] : []
+  const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(dirs.received)}${modes.map((m) => ' ' + m).join('')}`
   const r = await rpc({ cmd: 'start', sid, cwd: root, message: '', mode: 'default', args: ['/bin/sh', '-c', sh, 'sh'] })
   const pid = r.pid as number
   expect(typeof pid).toBe('number')
@@ -153,9 +174,28 @@ async function start(dirs: Dirs, sid: string, lifecycle: boolean): Promise<{ pid
   return { pid, outputFile: r.outputFile as string }
 }
 
-const send = (sid: string, message: string, uuid: string, ids: string[], dedupe = false) => rpc({
+const send = (sid: string, message: string, uuid: string, ids: string[], dedupe = false, lostPid?: number) => rpc({
   cmd: 'send', sid, message, uuid, markers: ids.map((messageId) => ({ message, messageId })), ...(dedupe ? { dedupe: true } : {}),
+  ...(lostPid != null ? { lostPid } : {}),
 })
+
+/** Ask until the restarted daemon has adopted the session (its first moments answer not_found). */
+async function sendAfterRestart(sid: string, message: string, uuid: string, ids: string[], dedupe = false): Promise<Record<string, unknown>> {
+  let reply: Record<string, unknown> = {}
+  const until = Date.now() + 15_000
+  do {
+    reply = body(await send(sid, message, uuid, ids, dedupe))
+    if (reply.reason !== 'not_found') break
+    await new Promise((r) => setTimeout(r, 200))
+  } while (Date.now() < until)
+  return reply
+}
+
+/** The stdin FIFO of a session. */
+const fifoOf = (dirs: Dirs, sid: string) => path.join(dirs.streams, `${sid}.pipe`)
+const modeOf = (file: string) => fs.statSync(file).mode & 0o777
+/** Root opens any file whatever its mode, so the EACCES half only holds for a normal user. */
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-dedupe-twins-src-'))
@@ -233,5 +273,71 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     expect(await resend('dd-rec', 'hold me', recUuid, 'qm-5')).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
     await new Promise((r) => setTimeout(r, 300))
     expect(received(dirs).map((r) => r.content).sort()).toEqual(['hold me', 'run me'])
+  }, 90_000)
+
+  // send-lost-line-v1. The write record only says the line went into the pipe.
+  // When another reader took it, the CLI never saw it, and every resend used to
+  // answer "waiting". With lostPid the daemon writes it again, after a lone
+  // newline, so a body the CLI holds without its newline (the other reader took
+  // only the newline) is ended on its own instead of glued onto the rewrite.
+  it('a line the CLI read past is written again once, never glued onto a fragment it holds (send-lost-line-v1)', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const cli = await start(dirs, 'dd-lost', ['--lose-first', '--dedupe-uuid'])
+    const lostUuid = 'aaaaaaaa-0000-4000-8000-000000000006'
+    expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6']))).toMatchObject({ ok: true })
+    // The record says waiting; without lostPid nothing changes.
+    expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6'], true))).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+    expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6'], true, cli.pid))).toEqual({ ok: true })
+    expect(await waitFor(() => received(dirs).length === 1)).toBe(true)
+    expect(received(dirs)).toMatchObject([{ uuid: lostUuid, content: 'lost once', pid: cli.pid }])
+
+    // Second line: the CLI holds the whole body without its newline.
+    const heldUuid = 'aaaaaaaa-0000-4000-8000-000000000007'
+    const fd = fs.openSync(fifoOf(dirs, 'dd-lost'), fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    try { fs.writeSync(fd, JSON.stringify({ type: 'user', message: { role: 'user', content: 'held' }, uuid: heldUuid })) } finally { fs.closeSync(fd) }
+    expect(body(await send('dd-lost', 'held', heldUuid, ['qm-7'], true, cli.pid))).toEqual({ ok: true })
+    expect(await waitFor(() => received(dirs).length >= 2)).toBe(true)
+    await new Promise((r) => setTimeout(r, 300))
+    // Once, and no line that failed to parse (Claude Code would have exited on it).
+    expect(received(dirs).map((r) => r.parseError ?? r.content)).toEqual(['lost once', 'held'])
+  }, 60_000)
+
+  // A FIFO has one byte stream and any reader takes from it. On 2026-10-05 an
+  // agent's grep named every entry of `ls -t` in the streams dir on its command
+  // line; grep opened the live FIFOs and read the lines meant for three CLIs.
+  it('the stdin FIFO is write-only: a reader handed the streams listing cannot open it, the CLI still gets its lines', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    await start(dirs, 'ff-locked', false)
+    const fifo = fifoOf(dirs, 'ff-locked')
+    expect(fs.lstatSync(fifo).isFIFO()).toBe(true)
+    expect(modeOf(fifo)).toBe(0o200)
+    if (!isRoot) expect(() => fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)).toThrow(/EACCES/)
+    // The incident's shape. A readable FIFO among the names holds grep in read() until the timeout kills it.
+    // Root reads it whatever its mode, so this half only holds for a normal user.
+    if (!isRoot) {
+      const grep = spawnSync('/bin/sh', ['-c', 'cd "$1" && exec grep -l never-matches-anything $(ls -t)', 'sh', dirs.streams],
+        { timeout: 5000, env: { PATH: '/usr/bin:/bin' } })
+      expect(grep.error).toBeUndefined()
+      expect(grep.signal).toBeNull()
+    }
+    const uuid = 'aaaaaaaa-0000-4000-8000-000000000008'
+    expect(body(await send('ff-locked', 'still here', uuid, ['qm-8']))).toMatchObject({ ok: true })
+    expect(await waitFor(() => received(dirs).some((r) => r.content === 'still here'))).toBe(true)
+  }, 60_000)
+
+  it('a session whose FIFO an older daemon left readable is locked when a new daemon adopts it, and keeps working', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    await start(dirs, 'ff-adopt', false)
+    await killDaemon()
+    // What an older daemon left: the FIFO as mkfifo made it.
+    const fifo = fifoOf(dirs, 'ff-adopt')
+    fs.chmodSync(fifo, 0o644)
+    await boot(twin, dirs)
+    expect(await sendAfterRestart('ff-adopt', 'after restart', 'aaaaaaaa-0000-4000-8000-000000000009', ['qm-9'])).toMatchObject({ ok: true })
+    expect(modeOf(fifo)).toBe(0o200)
+    expect(await waitFor(() => received(dirs).some((r) => r.content === 'after restart'))).toBe(true)
   }, 90_000)
 })

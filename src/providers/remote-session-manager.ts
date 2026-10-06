@@ -52,6 +52,8 @@ let __rsmIdCounter = 0
 
 /** A `send` carrying `dedupe` writes nothing when the daemon can tell what became of the line. */
 const SEND_DEDUPE_CAPABILITY = 'send-dedupe-v1'
+/** A dedupe `send` carrying `lostPid` writes the line again into the process that read past it. */
+const SEND_LOST_LINE_CAPABILITY = 'send-lost-line-v1'
 
 export class RemoteSessionManager implements SessionManager {
   /**
@@ -588,11 +590,15 @@ export class RemoteSessionManager implements SessionManager {
       // sees exactly the payload it always saw when no uuid was assigned.
       const orderedMarkers = conn.hasCapability('send-markers-v1')
       const confirmable = orderedMarkers && !!opts?.markers?.length && conn.hasCapability(SEND_DEDUPE_CAPABILITY)
-      const payload = (c: DaemonConnection, dedupe: boolean) => ({
+      // `rewrite`: the first send of a line the CLI read past carries lostPid. The
+      // confirmSend resend never does: its question is whether THAT write landed,
+      // and the record it just made answers it (a lostPid would write a third copy).
+      const payload = (c: DaemonConnection, dedupe: boolean, rewrite = true) => ({
         sid, message: prepared, ...(opts?.uuid ? { uuid: opts.uuid } : {}),
         ...(c.hasCapability('cron-supervision-v1') ? { stopFence: opts?.stopFence ?? null } : {}),
         ...(c.hasCapability('send-markers-v1') && opts?.markers?.length ? { markers: opts.markers } : {}),
         ...(dedupe ? { dedupe: true } : {}),
+        ...(rewrite && dedupe && opts?.lostPid != null && c.hasCapability(SEND_LOST_LINE_CAPABILITY) ? { lostPid: opts.lostPid } : {}),
       })
       let result: Record<string, unknown>
       try {
@@ -604,7 +610,7 @@ export class RemoteSessionManager implements SessionManager {
         if (isSessionStopSuperseded(err) || !sendMayHaveLanded(err)) throw err
         try {
           if (!confirmable) throw new SendOutcomeUnknownError(err instanceof Error ? err.message : String(err))
-          result = await this.confirmSend(sid, (c) => payload(c, true), opts, err)
+          result = await this.confirmSend(sid, (c) => payload(c, true, false), opts, err)
         } catch (unknown) {
           if (unknown instanceof SendOutcomeUnknownError) this._heldThrough = this._writeSeq
           throw unknown
@@ -746,6 +752,12 @@ export class RemoteSessionManager implements SessionManager {
     } finally {
       this._confirming = false
     }
+  }
+
+  canRewriteLostLine(): boolean {
+    const conn = this.conn
+    return !!conn?.connected && conn.hasCapability('send-markers-v1')
+      && conn.hasCapability(SEND_DEDUPE_CAPABILITY) && conn.hasCapability(SEND_LOST_LINE_CAPABILITY)
   }
 
   async writeRaw(json: string): Promise<boolean> {

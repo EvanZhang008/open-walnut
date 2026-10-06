@@ -247,6 +247,82 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     } finally { fs.closeSync(s.readerFd) }
   })
 
+  // send-lost-line-v1: the record says the whole line went into the pipe of the
+  // CLI running now, never that the CLI read it. Another reader of the pipe (an
+  // agent's grep that named the FIFO) takes the bytes and the record answers
+  // "waiting" forever. The server proves the CLI read past the line (it answered
+  // a request written after it, with no word on the line) and asks with lostPid.
+  function drainRaw(readerFd: number): string {
+    const chunks: Buffer[] = []
+    for (let i = 0; i < 50; i++) {
+      const buf = Buffer.alloc(64 * 1024)
+      let n = 0
+      try { n = fs.readSync(readerFd, buf, 0, buf.length, null) } catch { break }
+      if (n <= 0) break
+      chunks.push(buf.subarray(0, n))
+    }
+    return Buffer.concat(chunks).toString('utf-8')
+  }
+  const records = (jsonlPath: string) => fs.readFileSync(`${jsonlPath}.lines`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+
+  it('send-lost-line-v1: a line the CLI read past is written again under its uuid, after a lone newline', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const s = session('read-past', 915)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
+      // Something else read the pipe: the CLI never got the line, the record stays.
+      drainRaw(s.readerFd)
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true }))
+        .toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+      expect(drainRaw(s.readerFd)).toBe('')
+
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, lostPid: 915 })).toEqual({ ok: true })
+      const raw = drainRaw(s.readerFd)
+      // The newline first ends any fragment the CLI holds, so the line never glues onto one.
+      expect(raw.startsWith('\n{')).toBe(true)
+      expect(raw.endsWith('}\n')).toBe(true)
+      expect(raw.split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+        .toMatchObject([{ type: 'user', uuid: 'u-1', message: { role: 'user', content: 'hello' } }])
+      expect(records(s.jsonlPath)).toMatchObject([{ pid: 915, uuid: 'u-1' }, { pid: 915, uuid: 'u-1' }])
+    } finally { fs.closeSync(s.readerFd) }
+  })
+
+  it('send-lost-line-v1: the CLI\'s own word still settles it, lostPid or not', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const cases: Array<[string, Record<string, unknown>]> = [
+      [`${marker('qm-1', 916)}\n${lifecycle('u-1', 'queued')}\n`, { ok: true, duplicate: true, fate: 'waiting', state: 'queued' }],
+      [`${lifecycle('u-1', 'started')}\n`, { ok: true, duplicate: true, fate: 'ran', state: 'started' }],
+      [`${lifecycle('u-1', 'cancelled')}\n`, { ok: true, duplicate: true, fate: 'cancelled', state: 'cancelled' }],
+    ]
+    for (const [i, [stream, expected]] of cases.entries()) {
+      const s = session(`word-lost-${i}`, 916, stream)
+      try {
+        expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toMatchObject({ ok: true })
+        drainRaw(s.readerFd)
+        expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, lostPid: 916 })).toEqual(expected)
+        expect(drainRaw(s.readerFd)).toBe('')
+      } finally { fs.closeSync(s.readerFd) }
+    }
+  })
+
+  it('send-lost-line-v1: a lostPid for an earlier process changes nothing for the one running now', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const s = session('lost-other', 917)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
+      drainRaw(s.readerFd)
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, lostPid: 900 }))
+        .toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+      expect(drainRaw(s.readerFd)).toBe('')
+    } finally { fs.closeSync(s.readerFd) }
+    // A first write into a new process carries no leading newline: no fragment can be there.
+    const fresh = session('lost-fresh', 918)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-2', batch, { dedupe: true, lostPid: 900 })).toEqual({ ok: true })
+      expect(drainRaw(fresh.readerFd).startsWith('{')).toBe(true)
+    } finally { fs.closeSync(fresh.readerFd) }
+  })
+
   it('without markers, dedupe changes nothing (there is nothing to recognise the line by)', async () => {
     const core = createDaemonCore(ctx.deps)
     const s = session('bare', 911)
@@ -262,9 +338,10 @@ describe('send-dedupe-v1 twins', () => {
   const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
   const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
-  it('both daemons pass the dedupe flag from the wire into the send', () => {
-    expect(standalone).toMatch(/handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true \}\)/)
-    expect(template).toMatch(/handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true \}\)/)
+  it('both daemons pass the dedupe flag and lostPid from the wire into the send', () => {
+    const wire = /handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null \}\)/
+    expect(standalone).toMatch(wire)
+    expect(template).toMatch(wire)
   })
 
   it('the JS twin runs the very same scan and verdict text (behavior: daemon-send-dedupe-twins-e2e.test.ts)', async () => {
@@ -291,5 +368,6 @@ describe('send-dedupe-v1 twins', () => {
   it('the daemon advertises the capability', async () => {
     const { ADVERTISED_DAEMON_CAPABILITIES } = await import('../../src/providers/daemon-capabilities.js')
     expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('send-dedupe-v1')
+    expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('send-lost-line-v1')
   })
 })

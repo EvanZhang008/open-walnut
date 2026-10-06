@@ -2470,6 +2470,10 @@ export interface SessionRecord {
    *  a server that re-attaches to that same process knows its queued lines wait
    *  for its word before it prints another frame. Spilled into `payload`. */
   lineLifecyclePid?: number;
+  /** The CLI process seen naming a line `queued` as it took it: a restarted
+   *  server re-attached to it watches the lines it has not named
+   *  (send-lost-line-v1). Spilled into `payload`. */
+  lineQueuedPid?: number;
 
   /** Launch-config bundle re-applied on every cold resume. Spawn-time CLI flags
    *  (system prompt / MCP mounts / allowedTools) are in-process only, so a

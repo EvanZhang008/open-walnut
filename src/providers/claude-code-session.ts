@@ -53,8 +53,8 @@ import {
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid } from './batch-uuid.js'
 import {
-  announceReclaimed, awaitLine, dropLine, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld,
-  takeLine, takeUnconfirmed, untakenLines, type LineState,
+  announceReclaimed, awaitLine, awaitedLines, dropLine, isLineAwaited, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld,
+  takeLine, takeUnconfirmed, untakenLines, type LineState, type ReclaimReason,
 } from './line-consumption.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
@@ -732,6 +732,28 @@ export class ClaudeCodeSession {
    *  until the CLI starts them. Ones a Stop drops go back to the composer. */
   private _queuedLines = new Map<string, Array<{ message: string; messageId: string }>>()
   private _cancelledLines: Array<{ message: string; messageId: string }> = []
+
+  // ── Lines the CLI never names (send-lost-line-v1, see checkLineAck) ──
+  /** How long a line written into a CLI that reports its queue may go unnamed before Walnut asks the CLI. */
+  static LINE_ACK_GRACE_MS = 30_000
+  /** How long that question (a get_settings request) waits for the CLI's answer. */
+  static LINE_PROBE_TIMEOUT_MS = 20_000
+  /** The longest pause between two questions about one still-unnamed line. */
+  static LINE_PROBE_MAX_INTERVAL_MS = 5 * 60_000
+  /** How often one line the CLI read past is written again before it is shown as failed. */
+  static MAX_LOST_REWRITES = 2
+  /** The watch on each unnamed line, by uuid: the process it went into and the next question's timer.
+   *  An entry is replaced or deleted whenever the line is named or written again, so a question in
+   *  flight compares identity before it acts. */
+  private _lineAcks = new Map<string, { pid: number; timer: ReturnType<typeof setTimeout> | null }>()
+  /** Lines a process read past without taking them: that pid, and how often each was written again. */
+  private _lostLines = new Map<string, { pid: number; rewrites: number }>()
+  /** The process that named each recent line `queued` (it holds the line). */
+  private _lineQueuedIn = new Map<string, number | null>()
+  /** The CLI process seen naming a line `queued` as it took it. Only for such a process does a
+   *  line with no word at all mean the CLI has not taken it (a CLI that reports started/completed
+   *  but not queued says nothing about a line waiting behind a turn). */
+  private _queuedFramesFrom: number | null = null
   /** The CLI reports each queued line's fate (command_lifecycle, 2.1.25x+). Without
    *  that, the tracked lines may long have run, so none can be said to be dropped.
    *  Survives a server restart: the record keeps the pid that reported it
@@ -2763,6 +2785,9 @@ export class ClaudeCodeSession {
       session._sawCommandLifecycle = true
       session._lifecyclePidSaved = record.pid
     }
+    // ...and it names each line `queued` as it takes it, so a line it has not
+    // named is watched again (send-lost-line-v1) without waiting for a new frame.
+    if (record.pid && record.lineQueuedPid === record.pid) session._queuedFramesFrom = record.pid
 
     // ── resultEmitted recovery after server restart (evidence-based) ──
     // `resultEmitted` is ephemeral — it lives only on the ClaudeCodeSession instance
@@ -3308,6 +3333,7 @@ export class ClaudeCodeSession {
    */
   kill(): void {
     log.session.info('session killed', { taskId: this.taskId, pid: this.pid })
+    this.clearAllLineAcks()
     this.resultEmitted = true
     this.stopMonitoring()
     this._transport?.kill()
@@ -3482,11 +3508,15 @@ export class ClaudeCodeSession {
       undoDispatch?.()
     }
     const { rows: _rows, onFate, ...wireOpts } = opts ?? {}
+    // send-lost-line-v1: a resend of a line this very process read past names that
+    // process, so the daemon writes the line again instead of trusting its record.
+    const lost = uuid && opts?.dedupe ? this._lostLines.get(uuid) : undefined
+    const lostPid = lost && lost.pid === this.pid ? lost.pid : undefined
     let known: { fate: string; state?: string } | undefined
     let ok: boolean
     try {
       ok = await transport.writeMessage(message, {
-        ...wireOpts, ...(uuid ? { uuid } : {}), stopFence, onDispatch,
+        ...wireOpts, ...(uuid ? { uuid } : {}), ...(lostPid != null ? { lostPid } : {}), stopFence, onDispatch,
         onFate: (f) => { known = f },
       })
     }
@@ -3494,6 +3524,25 @@ export class ClaudeCodeSession {
     if (!ok) { forget(); return false }
     // Written, or settled without a write: no longer held behind another line.
     releaseHeld(this.claudeSessionId, rows.map((r) => r.id))
+    // The daemon saw this process name the line `queued` (also from before a server
+    // restart): the CLI holds it, and this process names lines as it takes them.
+    if (lineSid && known?.fate === 'waiting' && known.state === 'queued' && this.pid != null) {
+      this.noteLineQueued(uuid!, this.pid)
+    }
+    // A rewrite was asked for and the daemon still answered "waiting": the line's
+    // marker is out of its view, so nothing can be proven about it. Leave it to the
+    // CLI's word, as before send-lost-line-v1, instead of asking again and again.
+    const unjudged = lostPid != null && known?.fate === 'waiting' && !known.state
+    if (unjudged) {
+      log.session.info('a rewrite of an unnamed line was refused: the daemon cannot see its marker any more', {
+        sessionId: this.claudeSessionId, uuid, pid: this.pid, messageIds: rows.map((r) => r.id),
+      })
+      this._lostLines.delete(uuid!)
+    }
+    // In the CLI's pipe and not yet named by it (a write, or the daemon's record
+    // alone): ask about it if it stays unnamed (send-lost-line-v1).
+    if (lineSid && !unjudged && this._queuedFramesFrom != null && this._queuedFramesFrom === this.pid
+      && (!known || (known.fate === 'waiting' && !known.state))) this.armLineAck(uuid!, this.pid)
     if (known) {
       // The daemon wrote nothing: it told us what became of the line.
       log.session.info('line not written again: the daemon knows its fate', { sessionId: this.claudeSessionId, uuid, ...known, messageIds: rows.map((r) => r.id) })
@@ -3829,6 +3878,163 @@ export class ClaudeCodeSession {
     if (announce) void reverted.then(() => announceReclaimed(sid))
   }
 
+  // ── Lines the CLI never names (send-lost-line-v1) ──
+  //
+  // The daemon's write record says a line went into the CLI's stdin pipe, never
+  // that the CLI read it: any other reader of the pipe takes the bytes (2026-10-05:
+  // an agent's grep named the live FIFOs on its command line). The record then
+  // answered "waiting" forever, the row stayed "Delivered" and nothing asked again.
+  //
+  // So a line written into a CLI that reports its queue, and not named by it (not
+  // even `queued`) within LINE_ACK_GRACE_MS, is challenged: Walnut writes a lone
+  // newline and a get_settings request behind it. Claude Code reads stdin in order
+  // and names a user line as it takes it, so an ANSWER with still no word on the
+  // line proves this process read past it. Only that proof moves the rows: back to
+  // pending, written again under the same uuid with `lostPid`. No answer proves
+  // nothing (a booting or busy CLI reads neither): the line is left alone and asked
+  // about again later. The newline first ends any fragment the CLI holds on its own.
+
+  /**
+   * Process `pid` named this line `queued` (its own frame, or the daemon reading
+   * one back). The first such word from a process means it names every line as it
+   * takes it, so the lines it has not named are watched from now on, also ones
+   * written before a server restart. Saved on the record (lineQueuedPid) so a
+   * restarted server watches that process's lines before it prints another frame.
+   */
+  private noteLineQueued(uuid: string, pid: number): void {
+    this._lineQueuedIn.delete(uuid)
+    this._lineQueuedIn.set(uuid, pid)
+    if (this._lineQueuedIn.size > 256) this._lineQueuedIn.delete(this._lineQueuedIn.keys().next().value!)
+    if (this._queuedFramesFrom === pid) return
+    this._queuedFramesFrom = pid
+    const sid = this.claudeSessionId
+    if (sid) {
+      import('../core/session-tracker.js')
+        .then(({ updateSessionRecord }) => updateSessionRecord(sid, { lineQueuedPid: pid }))
+        .catch(() => {})
+    }
+    this.armUnwatchedLines()
+  }
+
+  /** Watch a line just written (or reported waiting) into process `pid`. */
+  private armLineAck(uuid: string, pid: number | null, attempt = 0): void {
+    if (!uuid || pid == null || !this.claudeSessionId) return
+    this.clearLineAck(uuid)
+    const entry: { pid: number; timer: ReturnType<typeof setTimeout> | null } = { pid, timer: null }
+    const delay = Math.min(ClaudeCodeSession.LINE_ACK_GRACE_MS * 2 ** attempt, Math.max(ClaudeCodeSession.LINE_ACK_GRACE_MS, ClaudeCodeSession.LINE_PROBE_MAX_INTERVAL_MS))
+    entry.timer = setTimeout(() => {
+      entry.timer = null
+      void this.checkLineAck(uuid, entry, attempt)
+    }, delay)
+    entry.timer.unref?.()
+    this._lineAcks.set(uuid, entry)
+  }
+
+  /** Watch every line still waiting in the current process that has no watch and no word yet. */
+  private armUnwatchedLines(): void {
+    const pid = this.pid
+    if (pid == null) return
+    for (const line of awaitedLines(this.claudeSessionId)) {
+      if (line.pid !== pid || this._lineAcks.has(line.uuid) || this._lineQueuedIn.get(line.uuid) === pid) continue
+      this.armLineAck(line.uuid, pid)
+    }
+  }
+
+  /** The CLI named the line (or Walnut stopped caring): no question about it. */
+  private clearLineAck(uuid: string): void {
+    const entry = this._lineAcks.get(uuid)
+    if (!entry) return
+    if (entry.timer) clearTimeout(entry.timer)
+    this._lineAcks.delete(uuid)
+  }
+
+  private clearAllLineAcks(): void {
+    for (const entry of this._lineAcks.values()) if (entry.timer) clearTimeout(entry.timer)
+    this._lineAcks.clear()
+  }
+
+  /** Is the watch still this one, and the line still unnamed in the process it went into? */
+  private lineStillUnnamed(uuid: string, entry: { pid: number }): boolean {
+    return this._lineAcks.get(uuid) === entry && this.pid === entry.pid && !!this._transport
+      && isLineAwaited(this.claudeSessionId, uuid) && this._lineQueuedIn.get(uuid) !== entry.pid
+  }
+
+  private async checkLineAck(uuid: string, entry: { pid: number; timer: ReturnType<typeof setTimeout> | null }, attempt: number): Promise<void> {
+    const sid = this.claudeSessionId
+    if (!sid || !this.lineStillUnnamed(uuid, entry)) {
+      if (this._lineAcks.get(uuid) === entry) this._lineAcks.delete(uuid)
+      return
+    }
+    log.session.info('a line the CLI has not named: asking the CLI whether it read past it', {
+      sessionId: sid, uuid, pid: entry.pid, attempt,
+    })
+    // Every line already written into this process and still unnamed (each has a
+    // watch, armed after its write), oldest first: an answer proves the CLI read
+    // past all of them, so they go out again together and in order.
+    const before = awaitedLines(sid)
+      .filter((line) => line.pid === entry.pid && (line.uuid === uuid || this._lineAcks.has(line.uuid)))
+      .map((line) => line.uuid)
+    const answer = await this.readControlPayloadWithRequest(
+      `line-probe-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { subtype: 'get_settings' }, ClaudeCodeSession.LINE_PROBE_TIMEOUT_MS, false, { leadingNewline: true },
+    ).catch(() => null)
+    if (!this.lineStillUnnamed(uuid, entry)) {
+      if (this._lineAcks.get(uuid) === entry) this._lineAcks.delete(uuid)
+      return
+    }
+    if (!answer) {
+      // Not read yet (or the CLI is stuck): proof of nothing. Ask again later.
+      log.session.info('the CLI did not answer behind an unnamed line: it may not have read it yet', { sessionId: sid, uuid, pid: entry.pid, attempt })
+      this.armLineAck(uuid, entry.pid, attempt + 1)
+      return
+    }
+    this._lineAcks.delete(uuid)
+    for (const lost of before) {
+      if (lost !== uuid && (!isLineAwaited(sid, lost) || this._lineQueuedIn.get(lost) === entry.pid)) continue
+      if (lost !== uuid) this.clearLineAck(lost)
+      this.reclaimLostLine(lost, entry.pid)
+    }
+  }
+
+  /** The CLI read past this line without taking it: write it again, or tell the user. */
+  private reclaimLostLine(uuid: string, pid: number): void {
+    const sid = this.claudeSessionId
+    if (!sid) return
+    const rows = takeLine(sid, uuid)
+    if (rows.length === 0) return
+    if (this._expectedTeardown) {
+      // Walnut is ending this process (as reclaimUntakenLines): never deliver to a new one.
+      this._lostLines.delete(uuid)
+      this._queuedLines.delete(uuid)
+      this.parkLineRows(rows, 'The session ended before Claude Code ran this message')
+      return
+    }
+    const lost = this._lostLines.get(uuid)
+    const rewrites = lost && lost.pid === pid ? lost.rewrites : 0
+    const canRewrite = this._transport?.canRewriteLostLine?.() === true
+    if (!canRewrite || rewrites >= ClaudeCodeSession.MAX_LOST_REWRITES) {
+      log.session.warn('the CLI read past a line without taking it: its rows are parked', {
+        sessionId: sid, uuid, pid, rewrites, canRewrite, messageIds: rows.map((r) => r.id),
+      })
+      this._lostLines.delete(uuid)
+      this._queuedLines.delete(uuid)
+      // A Retry goes out as a new line: this daemon may not be able to write the old one again.
+      this.parkLineRows(rows, 'Claude Code never read this message (something else read its input). Retry to send it again', true)
+      return
+    }
+    log.session.warn('the CLI read past a line without taking it: it goes out again under the same uuid', {
+      sessionId: sid, uuid, pid, rewrite: rewrites + 1, messageIds: rows.map((r) => r.id),
+    })
+    this._lostLines.delete(uuid)
+    this._lostLines.set(uuid, { pid, rewrites: rewrites + 1 })
+    if (this._lostLines.size > 64) this._lostLines.delete(this._lostLines.keys().next().value!)
+    const reverted = revertIfQueued(rows).catch((err) => {
+      log.session.warn('returning a lost line to the queue failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    })
+    this._lineReclaimDone = reverted
+    void reverted.then(() => announceReclaimed(sid, 'lost'))
+  }
+
   /** Queued lines the CLI dropped go back to the composer, like Esc in Claude Code.
    *  One event per burst: a Stop's cancellations arrive as several frames at once. */
   private returnCancelledLines(uuids: unknown[]): void {
@@ -3889,6 +4095,7 @@ export class ClaudeCodeSession {
     // The CLI's queue died with the process: nothing it held will ever run.
     if (this._sawCommandLifecycle) this.returnCancelledLines([...this._queuedLines.keys()])
     this._queuedLines.clear()
+    this.clearAllLineAcks()
     // Lines it held and never started go back to the composer too: a Stop drops
     // queued lines (as Esc does in Claude Code), it never replays them later.
     const untaken = untakenLines(this.claudeSessionId).flatMap((line) => line.rows)
@@ -6758,7 +6965,13 @@ export class ClaudeCodeSession {
         this.saveLifecyclePid()
         if (typeof lc.command_uuid !== 'string' || typeof lc.state !== 'string') break
         noteLineState(this.claudeSessionId, lc.command_uuid, lc.state as LineState)
-        if (lc.state === 'queued') break
+        // The CLI named the line: no question about it is needed (send-lost-line-v1).
+        this.clearLineAck(lc.command_uuid)
+        if (lc.state === 'queued') {
+          if (this.pid != null) this.noteLineQueued(lc.command_uuid, this.pid)
+          break
+        }
+        this._lostLines.delete(lc.command_uuid)
         if (lc.state === 'cancelled') { this.returnCancelledLines([lc.command_uuid]); break }
         if (lc.state === 'started' || lc.state === 'completed') {
           this._queuedLines.delete(lc.command_uuid)
@@ -7752,6 +7965,8 @@ export class ClaudeCodeSession {
     request: Record<string, unknown>,
     timeoutMs: number,
     strict = false,
+    /** Write a lone newline first (the send-lost-line-v1 probe, see checkLineAck). */
+    opts?: { leadingNewline?: boolean },
   ): Promise<Record<string, unknown> | null> {
     if (!this._transport) {
       return strict ? Promise.reject(new Error('session not started')) : Promise.resolve(null)
@@ -7782,7 +7997,7 @@ export class ClaudeCodeSession {
         },
         timer,
       })
-      Promise.resolve(this._transport!.writeRaw(envelope)).then((ok) => {
+      Promise.resolve(this._transport!.writeRaw((opts?.leadingNewline ? '\n' : '') + envelope)).then((ok) => {
         if (!ok) {
           const pending = this._pendingPayloadReads.get(requestId)
           if (pending) {
@@ -8543,12 +8758,7 @@ export class SessionRunner {
     // A CLI that died with lines it never took, and no turn event to follow:
     // deliver them now rather than at some later send.
     this.stopReclaimListener?.()
-    this.stopReclaimListener = onLinesReclaimed((sessionId) => {
-      if (this.activeProcessing.has(sessionId)) return
-      this.processNext(sessionId).catch((err) => {
-        log.session.warn('delivering reclaimed lines failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
-      })
-    })
+    this.stopReclaimListener = onLinesReclaimed((sessionId, why) => this.onLinesReclaimedFor(sessionId, why))
 
     bus.subscribe('session-runner', async (event) => {
       switch (event.name) {
@@ -10871,7 +11081,9 @@ export class SessionRunner {
 
     // If Claude is blocked on a permission prompt, auto-deny it so the user's
     // message can be processed. Without this, messages are silently lost.
-    if (targetSession.hasPendingPermission) {
+    // Not for a line written again (recoveryDeliveries): the user sent nothing new.
+    const recovery = this.recoveryDeliveries.delete(sessionId)
+    if (targetSession.hasPendingPermission && !recovery) {
       const pendingPerms = targetSession.getPendingPermissionRequests()
       log.session.info('injectMidTurn: auto-denying pending permissions to unblock for user message', {
         sessionId,
@@ -11570,6 +11782,32 @@ export class SessionRunner {
 
   private nextRuns = new Map<string, Promise<void>>()
 
+  /** Sessions whose next delivery only writes again lines the CLI read past
+   *  (send-lost-line-v1). The auto-deny of a pending permission is the answer to
+   *  a NEW user message; such a delivery skips it once. */
+  private recoveryDeliveries = new Set<string>()
+
+  /**
+   * Lines handed back to the queue. `death`: the process died without a turn
+   * event, so the next process gets them (a turn still counted here is the dead
+   * one's and its end will drive the queue). `lost`: the live process read past
+   * the line without taking it (send-lost-line-v1), and no turn of its own will
+   * ever end to drive the queue, so it goes out now, mid-turn when one runs.
+   */
+  private onLinesReclaimedFor(sessionId: string, why: ReclaimReason = 'death'): void {
+    if (why === 'lost') {
+      // A line written again is not a new message from the user: a permission the
+      // turn asked for since stays for the user to answer (see recoveryDeliveries).
+      this.recoveryDeliveries.add(sessionId)
+      this.deliverRest(sessionId)
+      return
+    }
+    if (this.activeProcessing.has(sessionId)) return
+    this.processNext(sessionId).catch((err) => {
+      log.session.warn('delivering reclaimed lines failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
   /**
    * Rows a delivery left behind (a line that already went out goes alone, and
    * fresh rows never join it) go out as the next line. A no-op, without a queue
@@ -11795,7 +12033,9 @@ export class SessionRunner {
         // Previously this reverted messages to pending and re-emitted the permission UI,
         // but users often don't see (or ignore) the prompt — causing the session to get
         // permanently stuck with messages bouncing in the queue.
-        if (targetSession.hasPendingPermission) {
+        // Not for a line written again (recoveryDeliveries): the user sent nothing new.
+        const recovery = this.recoveryDeliveries.delete(sessionId)
+        if (targetSession.hasPendingPermission && !recovery) {
           const pendingPerms = targetSession.getPendingPermissionRequests()
           log.session.info('processNext: auto-denying pending permissions to unblock session for user message', {
             sessionId,

@@ -371,6 +371,20 @@ journal names them for), and send no stop at all to a daemon without `owner-home
 
 **Daemon restart:** old `cleanup()` leaves CLI alive. New daemon reconciles sessions.json then scans `.pgid` files — scan MUST skip sids already adopted (`if (sessions.has(sid)) continue`). All death paths funnel into `reapSession()` in `daemon-core.ts`; it calls `isTurnCompleteExit()` to normalize code to 0 when JSONL tail shows clean turn completion (otherwise every turn-end shows "exit -1" in UI).
 
+**A session's stdin FIFO is write-only (mode 0200), and nothing but its CLI may read it.** A FIFO
+has one byte stream and any reader takes from it. On 2026-10-05 an agent ran
+`grep … $(ls -t)` in the streams dir; Claude Code's `grep` is its embedded ugrep, which reads a
+FIFO named on its command line, so for 12 minutes every line written to every live session on
+that host went to grep. The daemon locks each FIFO right after it opens it for the CLI, on every
+adopt path, and in its startup permission repair (`LIVE_FIFO_MODE`, `daemon-core.ts`); the CLI
+keeps its fd 0 and the daemon writes O_WRONLY, so neither notices. Behind it,
+`send-lost-line-v1`: a line the CLI has not named after 30 s is challenged with a `get_settings`
+written after it. Claude Code reads stdin in order, so an ANSWER with still no word on the line
+proves the process read past it, and only then is the line written again under its uuid
+(`lostPid`, after a lone newline that ends any fragment the CLI holds). No answer proves nothing;
+a marker out of the daemon's scan window proves nothing either. Ratchets:
+`tests/providers/daemon-send-dedupe-twins-e2e.test.ts`, `tests/providers/line-read-past-rewrite.test.ts`.
+
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.
 
 **Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `npm run build && bash scripts/build-daemon.sh && npm run dev:prod` — next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
