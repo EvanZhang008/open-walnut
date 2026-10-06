@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
@@ -11,6 +11,7 @@ import {
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
 import { planDeltaMerge, foldFullPayload, prependOlderPage } from './history-merge';
+import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { visibleInterval } from '@/utils/page-visibility';
 
 interface UseSessionHistoryReturn {
@@ -46,7 +47,19 @@ interface UseSessionHistoryReturn {
    *  With lazy tail loading, messages[0] can be mid-conversation — the pinned
    *  "Initial Prompt" bubble must use this, never the loaded window's head. */
   initialUserText?: string;
+  /** Stretches missing from INSIDE `messages` (a turn bigger than one server
+   *  read, history-gap.ts). Each is named by the row after it. */
+  gaps: HistoryGap[];
+  /** How the fill of a gap stands, by the gap's afterKey (absent = idle). */
+  gapStatus: Record<string, GapFillState>;
+  /** Read older pages into a gap (a few at a time). Idempotent while in flight. */
+  fillHistoryGap: (afterKey: string) => void;
 }
+
+export type GapFillState = 'loading' | 'failed' | 'unavailable';
+
+/** Pages read into a gap per round (automatic on arrival, then per click). */
+const GAP_FILL_PAGES = 4;
 
 /** Sessions whose older pages were read back to the first bytes of the transcript:
  *  a windowed tail folded over those pages is not "more above", so no button. */
@@ -116,6 +129,19 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const [olderUnavailable, setOlderUnavailable] = useState(false);
   const [olderPageSeq, setOlderPageSeq] = useState(0);
   const pagedSessionRef = useRef<string | null>(null);
+  // Gaps inside the held rows (history-gap.ts). The ref is what folds read, so a
+  // fold in the same tick as the previous one sees its gaps.
+  const gapsRef = useRef<HistoryGap[]>([]);
+  const [gaps, setGapsState] = useState<HistoryGap[]>([]);
+  const setGaps = (next: HistoryGap[]) => {
+    if (next.length === 0 && gapsRef.current.length === 0) return;
+    gapsRef.current = next;
+    setGapsState(next);
+  };
+  const [gapStatus, setGapStatus] = useState<Record<string, GapFillState>>({});
+  // afterKeys already filled automatically once: a shrunk gap is not new work.
+  const gapAutoFilledRef = useRef(new Set<string>());
+  const gapFillingRef = useRef(new Set<string>());
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
   // True first user message (server-computed). Sticky for the session's life —
@@ -155,6 +181,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     if (windowed && keptOlder === 0 && sid) pagedToStart.delete(sid);
     setOlderWindowed(!!windowed && !(keptOlder > 0 && !!sid && pagedToStart.has(sid)));
   };
+  // What every full-payload fold passes: hold on across a gap, and the gaps held.
+  const foldOpts = () => ({ acrossGap: true, gaps: gapsRef.current });
+  // Before adoptOffset: rows held from the transcript's start that a window was
+  // laid after (a gap fold) still start there, so no "Load earlier" above them.
+  const noteGapFold = (folded: { kept: number; gaps: HistoryGap[] }, heldLen: number) => {
+    const sid = sessionIdRef.current;
+    // kept === heldLen only for a gap fold (a stitch keeps the rows above the head).
+    if (sid && heldLen > 0 && folded.kept === heldLen
+      && baseOffsetRef.current === 0 && !olderWindowedRef.current) pagedToStart.add(sid);
+    setGaps(folded.gaps);
+  };
 
   useEffect(() => {
     if (!sessionId) {
@@ -170,6 +207,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setOlderWindowed(false);
       setOlderUnavailable(false);
       setOlderPageSeq(0);
+      setGaps([]);
+      setGapStatus({});
       initialUserTextRef.current = undefined;
       setInitialUserText(undefined);
       return;
@@ -185,6 +224,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       pagedSessionRef.current = sessionId;
       setOlderUnavailable(false);
       setOlderPageSeq(0);
+      setGaps([]);
+      setGapStatus({});
+      gapAutoFilledRef.current = new Set();
     }
     const sid = sessionId.substring(0, 8);
 
@@ -247,11 +289,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   // healthy turn retries the rebuild.
                   if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
                   setStale(null);
-                  const folded = foldFullPayload(messagesRef.current, full);
+                  const heldLen = messagesRef.current.length;
+                  const folded = foldFullPayload(messagesRef.current, full, foldOpts());
                   setMessages(folded.messages);
                   setForkBoundaryIndex(full.forkBoundaryIndex);
                   adoptInitialUserText(full.initialUserText);
                   cursorRef.current = folded.cursor;
+                  noteGapFold(folded, heldLen);
                   adoptOffset(folded.messages.length, folded.cursor, full.windowed, folded.kept);
                   setHistoryCache(sessionId, {
                     messages: folded.messages,
@@ -259,6 +303,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                     msgCount: folded.cursor,
                     baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                     initialUserText: full.initialUserText ?? initialUserTextRef.current,
+                    gaps: folded.gaps,
                   });
                 })
                 .catch(() => { /* keep current view; next turn retries */ });
@@ -272,6 +317,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 msgCount: plan.cursor,
                 baseOffset: baseOffsetRef.current,
                 initialUserText: initialUserTextRef.current,
+                gaps: liveGaps(plan.messages, gapsRef.current),
               });
             }
             // Advance cursor even on an empty delta (nothing new yet — archive lagging).
@@ -279,11 +325,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           } else {
             // Server rebuilt (since out of range) → full replace (tail-sliced).
             diagnoseOrdering('refetch-full', sid, result.messages);
-            const folded = foldFullPayload(messagesRef.current, result);
+            const heldLen = messagesRef.current.length;
+            const folded = foldFullPayload(messagesRef.current, result, foldOpts());
             setMessages(folded.messages);
             setForkBoundaryIndex(result.forkBoundaryIndex);
             adoptInitialUserText(result.initialUserText);
             cursorRef.current = folded.cursor;
+            noteGapFold(folded, heldLen);
             adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
             setHistoryCache(sessionId, {
               messages: folded.messages,
@@ -291,6 +339,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               msgCount: folded.cursor,
               baseOffset: Math.max(0, folded.cursor - folded.messages.length),
               initialUserText: result.initialUserText ?? initialUserTextRef.current,
+              gaps: folded.gaps,
             });
           }
         })
@@ -319,6 +368,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setMessages(cached.messages);
       setForkBoundaryIndex(cached.forkBoundaryIndex);
       cursorRef.current = cached.msgCount;
+      gapsRef.current = liveGaps(cached.messages, cached.gaps);
+      setGapsState(gapsRef.current);
       baseOffsetRef.current = cached.baseOffset ?? 0;
       setOlderHidden(cached.baseOffset ?? 0);
       // Hard adopt (not sticky): this branch also runs on session SWITCH, where
@@ -347,15 +398,18 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           setStale(null);
           diagnoseOrdering('cache-verify', sid, result.messages);
           adoptInitialUserText(result.initialUserText);
-          const folded = foldFullPayload(messagesRef.current, result);
+          const heldLen = messagesRef.current.length;
+          const folded = foldFullPayload(messagesRef.current, result, foldOpts());
           setHistoryCache(sessionId, {
             messages: folded.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
+            gaps: folded.gaps,
           });
           cursorRef.current = folded.cursor;
+          noteGapFold(folded, heldLen);
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setMessages(folded.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
@@ -438,11 +492,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   return;
                 }
                 setStale(null);
+                // Held here is Phase 1's streams-file parse, not the transcript's:
+                // never lay a window after it across a gap.
                 const folded = foldFullPayload(messagesRef.current, result);
                 setMessages(folded.messages);
                 setForkBoundaryIndex(result.forkBoundaryIndex);
                 adoptInitialUserText(result.initialUserText);
                 cursorRef.current = folded.cursor;
+                setGaps(folded.gaps);
                 adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
                 // Write to cache for next visit
                 setHistoryCache(sessionId, {
@@ -451,6 +508,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   msgCount: folded.cursor,
                   baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                   initialUserText: result.initialUserText ?? initialUserTextRef.current,
+                  gaps: folded.gaps,
                 });
               }
             })
@@ -525,11 +583,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
           // Live read recovered → adopt the fresh parse and drop the banner.
           setStale(null);
-          const folded = foldFullPayload(messagesRef.current, result);
+          const heldLen = messagesRef.current.length;
+          const folded = foldFullPayload(messagesRef.current, result, foldOpts());
           setMessages(folded.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
           adoptInitialUserText(result.initialUserText);
           cursorRef.current = folded.cursor;
+          noteGapFold(folded, heldLen);
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setHistoryCache(sessionId, {
             messages: folded.messages,
@@ -537,6 +597,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
+            gaps: folded.gaps,
           });
         })
         .catch(() => { /* transient — keep the banner, retry next tick */ });
@@ -593,6 +654,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             msgCount: cursor,
             baseOffset: 0,
             initialUserText: initialUserTextRef.current,
+            gaps: liveGaps(merged, gapsRef.current),
           });
           log.info('session-history', `older page +${merged.length - held.length} rows (reachedStart=${page.reachedStart})`, { sessionId });
         })
@@ -607,6 +669,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       .then((result) => {
         if (result.stale) return; // keep the tail view; banner path handles it
         setMessages(result.messages);
+        setGaps([]);
         setForkBoundaryIndex(result.forkBoundaryIndex);
         adoptInitialUserText(result.initialUserText);
         const fullCursor = result.cursor ?? result.messages.length;
@@ -624,5 +687,82 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       .finally(settle);
   }, [sessionId]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, initialUserText };
+  // Fill a gap from the side of the row after it, one older page at a time. Each
+  // page is placed where it provably belongs (fillGap): a row already held, or
+  // one at or before the row before the gap, closes it. A refetch that replaced
+  // the array while a page was in flight leaves the gap gone, and the page unused.
+  const fillHistoryGap = useCallback((afterKey: string) => {
+    const sid0 = sessionId;
+    if (!sid0 || gapFillingRef.current.has(afterKey)) return;
+    if (!gapsRef.current.some((g) => g.afterKey === afterKey)) return;
+    gapFillingRef.current.add(afterKey);
+    const setState = (key: string, state: GapFillState | null) => setGapStatus((prev) => {
+      const next = { ...prev };
+      if (state) next[key] = state; else delete next[key];
+      return next;
+    });
+    setState(afterKey, 'loading');
+    let key = afterKey;
+    const run = async (): Promise<GapFillState | null> => {
+      for (let page = 0; page < GAP_FILL_PAGES; page++) {
+        const gap = gapsRef.current.find((g) => g.afterKey === key);
+        if (!gap?.afterTs) return null;
+        const older = await fetchSessionHistoryBefore(sid0, gap.afterTs);
+        if (sessionIdRef.current !== sid0) return null;
+        if (older.unavailable) return 'unavailable';
+        const held = messagesRef.current;
+        if (gapIndex(held, gap) < 0) return null;
+        const filled = fillGap(held, gap, older.messages, older.reachedStart);
+        const nextGaps = liveGaps(filled.messages, [
+          ...gapsRef.current.filter((g) => g.afterKey !== gap.afterKey),
+          ...(filled.gap ? [filled.gap] : []),
+        ]);
+        cursorRef.current += filled.inserted;
+        messagesRef.current = filled.messages;
+        setMessages(filled.messages);
+        setGaps(nextGaps);
+        setHistoryCache(sid0, {
+          messages: filled.messages,
+          forkBoundaryIndex: undefined,
+          msgCount: cursorRef.current,
+          baseOffset: baseOffsetRef.current,
+          initialUserText: initialUserTextRef.current,
+          gaps: nextGaps,
+        });
+        log.info('session-history', `gap fill +${filled.inserted} rows (closed=${!filled.gap})`, { sessionId: sid0 });
+        if (!filled.gap) return null;
+        // The gap shrank to before the oldest row the page added: that is the same
+        // gap, so the automatic round does not start over for it.
+        gapAutoFilledRef.current.add(filled.gap.afterKey);
+        setState(key, null);
+        gapFillingRef.current.delete(key);
+        key = filled.gap.afterKey;
+        gapFillingRef.current.add(key);
+        setState(key, 'loading');
+      }
+      return null;
+    };
+    run()
+      .then((state) => { if (sessionIdRef.current === sid0) setState(key, state); })
+      .catch((e: Error) => {
+        log.warn('session-history', `gap fill failed: ${e.message}`, { sessionId: sid0 });
+        if (sessionIdRef.current === sid0) setState(key, 'failed');
+      })
+      .finally(() => gapFillingRef.current.delete(key));
+  }, [sessionId]);
+
+  // A new gap fills itself once (GAP_FILL_PAGES pages); the divider offers the rest.
+  useEffect(() => {
+    if (!enabled) return;
+    for (const gap of gaps) {
+      if (gapAutoFilledRef.current.has(gap.afterKey)) continue;
+      gapAutoFilledRef.current.add(gap.afterKey);
+      fillHistoryGap(gap.afterKey);
+    }
+  }, [gaps, enabled, fillHistoryGap]);
+
+  // Only the gaps still inside the rows, with their sides read from them.
+  const shownGaps = useMemo(() => liveGaps(messages, gaps), [messages, gaps]);
+
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap };
 }

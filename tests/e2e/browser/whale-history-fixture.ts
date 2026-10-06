@@ -25,11 +25,16 @@ export const WHALE_TITLE = 'Whale history fixture';
 export const WHALE_ANCHOR_SESSION = 'pw-whale-anchor-session';
 export const WHALE_ANCHOR_TASK = 'pw-task-whale-anchor';
 export const WHALE_ANCHOR_TITLE = 'Whale anchor fixture';
+/** A third copy, which whale-history-gap.spec.ts appends turns past the ceiling to. */
+export const WHALE_GAP_SESSION = 'pw-whale-gap-session';
+export const WHALE_GAP_TASK = 'pw-task-whale-gap';
+export const WHALE_GAP_TITLE = 'Whale gap fixture';
 
-export type WhaleKind = 'history' | 'anchor';
+export type WhaleKind = 'history' | 'anchor' | 'gap';
 const KINDS: Record<WhaleKind, { session: string; task: string; title: string }> = {
   history: { session: WHALE_SESSION, task: WHALE_TASK, title: WHALE_TITLE },
   anchor: { session: WHALE_ANCHOR_SESSION, task: WHALE_ANCHOR_TASK, title: WHALE_ANCHOR_TITLE },
+  gap: { session: WHALE_GAP_SESSION, task: WHALE_GAP_TASK, title: WHALE_GAP_TITLE },
 };
 /** The fixture server's full-read ceiling (WALNUT_MAX_FILE_READ_BYTES). */
 export const WHALE_CEILING_BYTES = 8 * 1024 * 1024;

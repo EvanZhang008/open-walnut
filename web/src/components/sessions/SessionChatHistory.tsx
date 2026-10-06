@@ -13,6 +13,8 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
+import { HistoryGapDivider } from './HistoryGapDivider';
+import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
 import { typedUserText } from './injected-banner';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
@@ -521,7 +523,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  // Where each gap inside the loaded rows sits: the index of the row after it.
+  const gapAt = useMemo(() => {
+    const at = new Map<number, HistoryGap>();
+    for (const gap of gaps) { const i = gapIndex(messages, gap); if (i > 0) at.set(i, gap); }
+    return at;
+  }, [messages, gaps]);
+  const gapDivider = (index: number) => {
+    const gap = gapAt.get(index);
+    return gap ? <HistoryGapDivider state={gapStatus[gap.afterKey]} onLoad={() => fillHistoryGap(gap.afterKey)} /> : null;
+  };
   const historyUnavailableRaw = parseHistoryUnavailable(error);
   const { blocks, isStreaming, completedLen, resetIfAbsorbed } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2265,7 +2277,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // queueIds for the lifetime of this session view (cleared on session switch).
   const visibleOptimistic = allOptimistic.filter(m => !consumedQueueIds.current.has(m.queueId));
   const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, turnWatermark.current,
-    { historyFromStart: olderHidden === 0 && !olderWindowed });
+    { historyFromStart: olderHidden === 0 && !olderWindowed, gaps });
   if (deduped.length !== visibleOptimistic.length) {
     const keptIds = new Set(deduped.map(m => m.queueId));
     for (const m of visibleOptimistic) {
@@ -2410,7 +2422,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (let i = 0; i < visibleMessages.length; i++) {
       const m = visibleMessages[i];
       const globalIndex = visibleStart + i;
-      if (forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) {
+      if ((forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) || gapAt.has(globalIndex)) {
         flushHistoryRun(true);
         flushSystemRun();
       }
@@ -2436,7 +2448,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // divider (it renders inside the second part).
       const prevPart = parts[parts.length - 1];
       const prevIsThinkingOnly = prevPart?.kind === 'msg' && isThinkingOnlyMessage(prevPart.m);
-      const atForkDivider = forkBoundaryIndex != null && globalIndex === forkBoundaryIndex;
+      const atForkDivider = (forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) || gapAt.has(globalIndex);
       let msg = m;
       if (prevIsThinkingOnly && !atForkDivider
         && m.role === 'assistant' && (m.thinking ?? '').trim()) {
@@ -2458,7 +2470,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     flushSystemRun();
     return { historyParts: parts, hiddenCount: visibleStart };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, forkBoundaryIndex, rootPageWindow, windowAnchors]);
+  }, [messages, truncationOffset, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors]);
   // What `Show N earlier` counts: on the root page only root rows (N9), since
   // the rows of questions above it render on their own pages.
   const hiddenOnPage = useMemo(() => {
@@ -3077,6 +3089,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               <span className="session-fork-divider-label">Forked session starts here</span>
             </div>
           )}
+          {!part.seeded && gapDivider(first.globalIndex)}
           <MergedHistoryToolRun
             messages={part.memberMsgs}
             assistantLabel={assistantLabel}
@@ -3123,6 +3136,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <span className="session-fork-divider-label">Forked session starts here</span>
           </div>
         )}
+        {gapDivider(globalIndex)}
         {turnLabelFor(rowId, m.role)}
         <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       </div>
@@ -3607,6 +3621,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 <span className="session-fork-divider-label">Forked session starts here</span>
               </div>
             )}
+            {!boundaryHistoryRun.seeded && gapDivider(boundaryHistoryRun.members[0].globalIndex)}
             <MergedHistoryToolRun
               messages={boundaryHistoryRun.memberMsgs}
               trailingBlocks={runMembersOf(leadingStreamRunIndices)}

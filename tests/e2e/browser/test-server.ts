@@ -19,7 +19,7 @@ import {
   allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
 } from './threads-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
-import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
+import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -688,6 +688,7 @@ await fs.writeFile(
       // Whale transcript fixtures (whale-history.spec.ts, and its own copy for whale-anchor-reach.spec.ts).
       whaleTask(new Date().toISOString()),
       whaleTask(new Date().toISOString(), 'anchor'),
+      whaleTask(new Date().toISOString(), 'gap'),
       {
         // Same-browser task-store fixture (task-store-same-browser-instant.spec).
         // Its OWN task: that spec renames and completes it mid-run, which would
@@ -2228,6 +2229,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
   await fs.writeFile(path.join(jsonlDir, 'pw-outline-window-session.jsonl'), longTranscript('pw-outline-window-session', '0199bd', 230))
   await fs.writeFile(path.join(jsonlDir, `${WHALE_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow))
   await fs.writeFile(path.join(jsonlDir, `${WHALE_ANCHOR_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow, WHALE_ANCHOR_SESSION))
+  await fs.writeFile(path.join(jsonlDir, `${WHALE_GAP_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow, WHALE_GAP_SESSION))
   await fs.writeFile(path.join(jsonlDir, 'pw-pins-session.jsonl'), pinsTranscript('pw-pins-session', '0199aa'))
   await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
@@ -2242,7 +2244,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION}`
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION}`
     await fs.writeFile(
       path.join(tmpBase, 'session-message-queue.json'),
       JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),
@@ -2902,6 +2904,7 @@ await fs.writeFile(
       ...allThreadsFixtures(sessionFixtureNow).map((s) => fixtureRecord(s, sessionFixtureNow, vscodeFixtureRoot)),
       whaleRecord(sessionFixtureNow, vscodeFixtureRoot),
       whaleRecord(sessionFixtureNow, vscodeFixtureRoot, 'anchor'),
+      whaleRecord(sessionFixtureNow, vscodeFixtureRoot, 'gap'),
       {
         claudeSessionId: 'pw-outline-window-session',
         taskId: 'pw-task-outline-window',

@@ -92,17 +92,20 @@ function persistPlainTurn(sid, prompt, assistantEvent) {
   // more than a whale's tail window holds.
   const heavy = /MOCK_HEAVY_RESULTS:(\d+)x(\d+)/.exec(prompt ?? '');
   let parent = userId;
+  // Each line its own time, as the CLI writes them (an older page ends at a timestamp).
+  const t0 = Date.now();
+  const at = (k) => new Date(t0 + k).toISOString();
   for (let i = 0; heavy && i < Number(heavy[1]); i++) {
     const callId = randomUUID();
     const resultId = randomUUID();
     const tu = `toolu_heavy_${process.pid.toString(36)}_${i}`;
     fs.appendFileSync(file, [
-      { ...shared, type: 'assistant', uuid: callId, parentUuid: parent, message: { id: `msg_heavy_${process.pid.toString(36)}_${i}`, role: 'assistant', content: [{ type: 'tool_use', id: tu, name: 'Bash', input: { command: `screenshot ${i}` } }] } },
-      { ...shared, type: 'user', uuid: resultId, parentUuid: callId, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tu, content: 'i'.repeat(Number(heavy[2]) * 1024) }] } },
+      { ...shared, timestamp: at(2 * i + 1), type: 'assistant', uuid: callId, parentUuid: parent, message: { id: `msg_heavy_${process.pid.toString(36)}_${i}`, role: 'assistant', content: [{ type: 'tool_use', id: tu, name: 'Bash', input: { command: `screenshot ${i}` } }] } },
+      { ...shared, timestamp: at(2 * i + 2), type: 'user', uuid: resultId, parentUuid: callId, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tu, content: 'i'.repeat(Number(heavy[2]) * 1024) }] } },
     ].map((row) => JSON.stringify(row)).join('\n') + '\n');
     parent = resultId;
   }
-  fs.appendFileSync(file, JSON.stringify({ ...shared, type: 'assistant', uuid: randomUUID(), parentUuid: parent, message: assistantEvent.message }) + '\n');
+  fs.appendFileSync(file, JSON.stringify({ ...shared, ...(heavy ? { timestamp: at(2 * Number(heavy[1]) + 1) } : {}), type: 'assistant', uuid: randomUUID(), parentUuid: parent, message: assistantEvent.message }) + '\n');
 }
 
 // Parse flags

@@ -25,6 +25,7 @@
 
 import type { SessionHistoryMessage } from '@/types/session';
 import { applyRevisedMessages } from './history-anchor';
+import { appendAcrossGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 
 export interface DeltaResultLike {
   messages: SessionHistoryMessage[];
@@ -140,14 +141,36 @@ export function prependOlderPage<T extends RowIdentity>(held: readonly T[], page
  * pages already loaded stay above it, and the cursor (a count of the array the
  * client holds, which the next anchored delta extends) grows by their length.
  * `kept` is how many older rows stayed above the tail.
+ *
+ * `acrossGap`: a window that shares no row with what is held but is provably
+ * later (one turn outgrew what the server can reach back through) goes AFTER the
+ * held rows with a gap between them, instead of replacing them (history-gap.ts).
+ * Off for a held array that is not the transcript's own parse (the streams file
+ * of Phase 1). `gaps` are the gaps already in `held`; the result says which
+ * survive: none in a complete payload, and none inside the contiguous window.
  */
 export function foldFullPayload<T extends RowIdentity>(
   held: readonly T[],
   result: { messages: T[]; cursor?: number; windowed?: boolean },
-): { messages: T[]; cursor: number; kept: number } {
+  opts?: { acrossGap?: boolean; gaps?: readonly HistoryGap[] },
+): { messages: T[]; cursor: number; kept: number; gaps: HistoryGap[] } {
   const cursor = result.cursor ?? result.messages.length;
-  if (!result.windowed) return { messages: result.messages, cursor, kept: 0 };
+  if (!result.windowed) return { messages: result.messages, cursor, kept: 0, gaps: [] };
   const messages = stitchHeldOlder(held, result.messages);
   const kept = messages.length - result.messages.length;
-  return { messages, cursor: cursor + kept, kept };
+  if (kept > 0) {
+    // A gap at or above the window's head is still open; one inside it is not.
+    const gaps = liveGaps(messages, opts?.gaps).filter((g) => gapIndex(messages, g) <= kept);
+    return { messages, cursor: cursor + kept, kept, gaps };
+  }
+  const across = opts?.acrossGap ? appendAcrossGap(held, result.messages) : null;
+  if (across) {
+    return {
+      messages: across.messages,
+      cursor: cursor + held.length,
+      kept: held.length,
+      gaps: [...liveGaps(held, opts?.gaps), across.gap],
+    };
+  }
+  return { messages, cursor, kept: 0, gaps: [] };
 }

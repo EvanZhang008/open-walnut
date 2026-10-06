@@ -35,6 +35,7 @@ import { promoteCompletedBlocks, buildIdOnlyEvidence, type DeltaEvidence } from 
 import { getFinishedAgentIds } from './finished-agents-store';
 import { computeHistoryAnchor, collectUnsettledIds } from '@/hooks/history-anchor';
 import { planDeltaMerge, foldFullPayload } from '@/hooks/history-merge';
+import type { HistoryGap } from '@/hooks/history-gap';
 import { recordFlight, trimStreamEvent } from '@/stream/flight-recorder';
 import { tracePhase } from '@/utils/main-thread-tracer';
 import { runWhenVisible } from '@/utils/page-visibility';
@@ -57,6 +58,8 @@ export interface CachedHistory {
    *  parse). messages[0] here may be mid-conversation (tail slice) — the pinned
    *  "Initial Prompt" bubble must come from this field, never from the head. */
   initialUserText?: string;
+  /** Stretches missing from inside `messages` (history-gap.ts). */
+  gaps?: HistoryGap[];
 }
 
 const historyCache = new Map<string, CachedHistory>();
@@ -482,13 +485,15 @@ function registerGlobalListeners(): void {
             fetchSessionHistory(sid, { tail: HISTORY_TAIL_LIMIT })
               .then((full) => {
                 // A windowed tail must not drop the older pages the cache already holds.
-                const folded = foldFullPayload(historyCache.get(sid)?.messages ?? cached.messages, full);
+                const now = historyCache.get(sid) ?? cached;
+                const folded = foldFullPayload(now.messages, full, { acrossGap: true, gaps: now.gaps });
                 historyCacheSet(sid, {
                   messages: folded.messages,
                   forkBoundaryIndex: full.forkBoundaryIndex,
                   msgCount: folded.cursor,
                   baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                   initialUserText: full.initialUserText ?? cached?.initialUserText,
+                  gaps: folded.gaps,
                 });
               })
               .catch(() => { /* keep current cache; next turn retries */ });
@@ -499,6 +504,7 @@ function registerGlobalListeners(): void {
               msgCount: plan.cursor,
               baseOffset: cached.baseOffset ?? 0,
               initialUserText: cached.initialUserText,
+              gaps: cached.gaps,
             });
             log.info('session-cache', `bg delta for ${sid.substring(0, 8)}: +${r.messages.length} → ${plan.messages.length}`);
           } else {
@@ -508,13 +514,15 @@ function registerGlobalListeners(): void {
         } else {
           // Full payload (no cache yet, or since out of range → rebuild).
           // May be tail-sliced: cursor counts the messages we did NOT receive.
-          const folded = foldFullPayload(historyCache.get(sid)?.messages ?? cached?.messages ?? [], r);
+          const now = historyCache.get(sid) ?? cached;
+          const folded = foldFullPayload(now?.messages ?? [], r, { acrossGap: true, gaps: now?.gaps });
           historyCacheSet(sid, {
             messages: folded.messages,
             forkBoundaryIndex: r.forkBoundaryIndex,
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: r.initialUserText ?? cached?.initialUserText,
+            gaps: folded.gaps,
           });
           log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, { msgCount: r.messages.length });
         }

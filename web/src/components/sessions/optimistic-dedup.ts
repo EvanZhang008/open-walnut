@@ -35,6 +35,13 @@ interface PersistedLike {
   /** Skill dumps / image metadata the CLI writes next to a prompt: never a prompt. */
   injected?: boolean;
 }
+/** A stretch of the transcript missing from inside the loaded rows: the rows on
+ *  either side of it, by the CLI's timestamps (history-gap.ts). */
+export interface GapSpan {
+  beforeTs?: string;
+  afterTs?: string;
+}
+
 interface OptimisticLike {
   text: string;
   status: string;
@@ -158,8 +165,9 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   messages: readonly PersistedLike[],
   prevMsgLen: number,
   /** false when `messages` is a tail window with older rows unloaded: the
-   *  launch row then sits before it (see launchRowIndex). */
-  { historyFromStart = true }: { historyFromStart?: boolean } = {},
+   *  launch row then sits before it (see launchRowIndex). `gaps`: stretches
+   *  of the transcript missing from INSIDE `messages` (history-gap.ts). */
+  { historyFromStart = true, gaps }: { historyFromStart?: boolean; gaps?: readonly GapSpan[] } = {},
 ): T[] {
   // This runs on every render of the timeline; with nothing to absorb there is
   // nothing to index, and that is the state a whale session sits in most of the time.
@@ -393,6 +401,22 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
       if (state[i] !== 'open' || optimistic[i].status !== 'delivered' || optimistic[i].launch) continue;
       const ms = floorOf(optimistic[i]);
       if (ms !== undefined && ms + BUBBLE_CLOCK_SLACK_MS < headMs) state[i] = 'window';
+    }
+  }
+
+  // Pass 6 — inside a gap. Pass 5's reasoning for a hole in the MIDDLE of the
+  // array: when a turn outgrew what the server can read in one go, the client
+  // keeps what it held and the fresh window after a gap (history-gap.ts). A
+  // delivered bubble enqueued after the row before the gap and well before the
+  // row after it has its row in the gap, where nothing loaded can match it.
+  for (const gap of gaps ?? []) {
+    const beforeMs = tsMs(gap.beforeTs);
+    const afterMs = tsMs(gap.afterTs);
+    if (beforeMs === undefined || afterMs === undefined) continue;
+    for (let i = 0; i < optimistic.length; i++) {
+      if (state[i] !== 'open' || optimistic[i].status !== 'delivered' || optimistic[i].launch) continue;
+      const ms = floorOf(optimistic[i]);
+      if (ms !== undefined && ms + BUBBLE_CLOCK_SLACK_MS >= beforeMs && ms + BUBBLE_CLOCK_SLACK_MS < afterMs) state[i] = 'window';
     }
   }
 

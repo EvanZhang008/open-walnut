@@ -2254,6 +2254,46 @@ select {
   font-weight: 500;
 }
 
+/* A hole inside the loaded history (history-gap.ts): the fork divider's shape,
+   dashed, with the button that fills it. */
+.session-gap-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  margin: 4px 0;
+}
+
+.session-gap-divider::before,
+.session-gap-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
+
+.session-gap-divider-label {
+  font-size: 11px;
+  color: var(--text-quaternary);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.session-gap-divider-btn {
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.session-gap-divider-btn:hover {
+  background: var(--bg-hover);
+}
+
 .session-detail-model-pill {
   font-weight: 600;
   font-size: 11px;
