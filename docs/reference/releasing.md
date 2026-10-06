@@ -137,6 +137,13 @@ tarballs under chosen dist-tags and passes every other package through to npm, w
 `pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
 outside CI), then `node scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
 
+The rehearsal runs on `macos-26` and `ubuntu-24.04`, so it builds the darwin-arm64 and
+linux-x64 archives. CI job `archive-targets` builds the other two a release ships
+(darwin-x64 on `macos-26-intel`, linux-arm64 on `ubuntu-24.04-arm`) from the same packed
+commit and runs each the way `release-archives.yml` does (`run.mjs --archive`: install.sh,
+serve and a session with no Node on PATH). CI OK needs it, so no target is first built at
+release time: 0.6.4's darwin-x64 archive was (2026-10-06), and failed.
+
 ## Self-contained archives, install.sh and Homebrew
 
 Every stable release also ships one archive per platform (`open-walnut-X.Y.Z-<darwin|linux>-<arm64|x64>.tar.gz`):
@@ -144,7 +151,9 @@ the newest Node 22 from nodejs.org, checked against its SHASUMS256.txt, used as 
 with `open-walnut@X.Y.Z` installed into it by that Node's own npm, the other platforms' native
 binaries dropped, and two launchers (`bin/walnut`, `bin/open-walnut`) that run that Node on that
 package. `scripts/runtime-bundle/build.mjs` builds it for the machine it runs on and refuses a
-version whose updater does not know the layout.
+version whose updater does not know the layout. Each native module must load in the archive,
+except one whose package ships no binary for that platform: onnxruntime-node 1.24 has none for
+darwin-x64, so that archive goes without semantic search and Walnut answers with keyword search.
 
 - **Built by** `.github/workflows/release-archives.yml`, which job `promote` (or `stable`)
   starts once the GitHub Release is open: one runner per platform builds from the version npm

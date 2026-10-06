@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
+import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, shipsNativeBinary, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
@@ -100,6 +100,25 @@ describe('build.mjs', () => {
     expect(removed).toContain(path.join('onnxruntime-node/bin/napi-v6', 'win32'))
     // A second pass finds nothing left to drop.
     expect(pruneForeignBinaries(m, { platform: 'linux', arch: 'x64' })).toEqual([])
+  })
+
+  it('requires a native module to load only where its package ships that target\'s binary, judged before pruning', () => {
+    // onnxruntime-node 1.24 ships no darwin/x64 (2026-10-06: 0.6.4's Intel Mac archive failed on it).
+    const m = path.join(tmp, 'modules-ships')
+    for (const p of ['darwin/arm64', 'linux/arm64', 'linux/x64', 'win32/x64']) touch(path.join(m, 'onnxruntime-node/bin/napi-v6', p, 'onnxruntime_binding.node'))
+    expect(shipsNativeBinary(m, 'onnxruntime-node', { platform: 'darwin', arch: 'x64' })).toBe(false)
+    for (const t of [{ platform: 'darwin', arch: 'arm64' }, { platform: 'linux', arch: 'x64' }, { platform: 'linux', arch: 'arm64' }]) {
+      expect(shipsNativeBinary(m, 'onnxruntime-node', t), `${t.platform}-${t.arch}`).toBe(true)
+    }
+    // Pruning removes the other targets' copies; the answer was taken before it.
+    pruneForeignBinaries(m, { platform: 'linux', arch: 'x64' })
+    expect(shipsNativeBinary(m, 'onnxruntime-node', { platform: 'darwin', arch: 'arm64' })).toBe(false)
+    expect(shipsNativeBinary(path.join(tmp, 'no-such-modules'), 'onnxruntime-node', { platform: 'linux', arch: 'x64' })).toBe(false)
+    // better-sqlite3 builds or fetches its own: it must always load.
+    expect(shipsNativeBinary(m, 'better-sqlite3', { platform: 'darwin', arch: 'x64' })).toBe(true)
+    const build = fs.readFileSync(path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), 'utf8')
+    const main = build.slice(build.indexOf('async function main'))
+    expect(main.indexOf('shipsNativeBinary(modules')).toBeLessThan(main.indexOf('pruneForeignBinaries(modules'))
   })
 
   it('the launcher runs the archive\'s own Node on its own package, through any chain of links', () => {
@@ -250,6 +269,25 @@ describe('the archive workflows', () => {
     const step = ci.jobs.rehearsal.steps.find((s) => s.run?.includes('release-rehearsal/run.mjs'))!
     expect(step.run).toContain('--runtime')
     expect(step.env!.WALNUT_REHEARSAL_BREW).toContain('/home/linuxbrew/.linuxbrew/bin/brew')
+  })
+
+  it('every push builds and runs the archive of every target a release ships, on the machine it ships from', () => {
+    // 2026-10-06: the rehearsal covered darwin-arm64 and linux-x64 only, so 0.6.4's
+    // darwin-x64 archive failed for the first time at release.
+    const ci = load('ci.yml')
+    const shipped = archives.jobs.build.strategy!.matrix!.include!
+    const osOf = Object.fromEntries(shipped.map((x) => [x.target, x.os]))
+    const rehearsalOs = ((ci.jobs.rehearsal.strategy!.matrix as { os: string[] }).os)
+    const targets = ci.jobs['archive-targets'].strategy!.matrix!.include!
+    const covered = [...shipped.filter((x) => rehearsalOs.includes(x.os)).map((x) => x.target), ...targets.map((x) => x.target)]
+    expect(covered.sort()).toEqual(shipped.map((x) => x.target).sort())
+    for (const { target, os } of targets) expect(os, target).toBe(osOf[target])
+    const runs = ci.jobs['archive-targets'].steps.map((s) => s.run ?? '').join('\n')
+    expect(runs).toMatch(/release-rehearsal\/pack\.mjs[\s\S]*runtime-bundle\/build\.mjs --spec[\s\S]*release-rehearsal\/run\.mjs --archive/)
+    // It gates: CI OK needs it and fails without it.
+    const gate = ci.jobs['ci-ok']
+    expect(gate.needs).toContain('archive-targets')
+    expect(gate.steps.map((s) => s.run ?? '').join('\n')).toContain('needs.archive-targets.result')
   })
 })
 

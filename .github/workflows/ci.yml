@@ -420,6 +420,51 @@ jobs:
             ${{ runner.temp }}/rehearsal/*.log
           if-no-files-found: ignore
 
+  # ── The archives the rehearsal does not build ───────────────────────────────
+  # A release ships four self-contained archives (release-archives.yml); the
+  # rehearsal above builds the macos-26 and ubuntu-24.04 ones. These legs build
+  # the other two from this commit's package, each on the runner its release leg
+  # uses, and run it with no Node on PATH: install.sh installs it, it serves and
+  # answers a session. 2026-10-06: the first stable with archives (0.6.4) found
+  # at release time that onnxruntime-node ships no macOS x64 binary.
+  archive-targets:
+    name: Archive (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-x64, os: macos-26-intel }
+          - { target: linux-arm64, os: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - name: Build as prepublishOnly does
+        run: WALNUT_REQUIRE_BUN=1 npm run build && (cd web && npx vite build) && node scripts/check-publish.mjs
+      - name: Pack this commit as the next patch
+        run: node scripts/release-rehearsal/pack.mjs --out "$RUNNER_TEMP/packs" --rehearsal
+      - name: Build its archive, install it with install.sh, serve and answer a session with no Node on PATH
+        run: |
+          current="$(node -p "require(process.argv[1]).current" "$RUNNER_TEMP/packs/packs.json")"
+          node scripts/runtime-bundle/build.mjs --spec "$current" --out "$RUNNER_TEMP/archive"
+          node scripts/release-rehearsal/run.mjs --archive "$(ls "$RUNNER_TEMP"/archive/open-walnut-*-${{ matrix.target }}.tar.gz)" --work "$RUNNER_TEMP/rehearsal" --keep
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-logs-${{ matrix.target }}
+          path: ${{ runner.temp }}/rehearsal/*/log.txt
+          if-no-files-found: ignore
+
   # ── Informational: the browser suite ────────────────────────────────────────
   # The Playwright specs drive the real SPA against a fixture server with a mock
   # CLI (tests/e2e/browser/). Four shards, retries on (playwright.config.ts under
@@ -480,7 +525,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal]
+    needs: [build, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, archive-targets]
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -494,6 +539,7 @@ jobs:
           echo "test-heavy: ${{ needs.test-heavy.result }}"
           echo "test-e2e:   ${{ needs.test-e2e.result }}"
           echo "rehearsal:  ${{ needs.rehearsal.result }}"
+          echo "archive-targets: ${{ needs.archive-targets.result }}"
           echo "onboarding: ${{ needs.onboarding.result }}"
           echo "remote-host: ${{ needs.remote-host.result }}"
           # A matrix job's result is 'success' only when EVERY leg succeeded.
@@ -504,6 +550,7 @@ jobs:
           [ "${{ needs.test-heavy.result }}" = "success" ] || { echo "::error::the slow tier failed"; failed=1; }
           [ "${{ needs.test-e2e.result }}" = "success" ] || { echo "::error::the e2e tier failed: a failure not in tests/setup/known-failures-e2e.json, or a run that crashed"; failed=1; }
           [ "${{ needs.rehearsal.result }}" = "success" ] || { echo "::error::the release rehearsal failed: this commit's package does not install, serve or update"; failed=1; }
+          [ "${{ needs.archive-targets.result }}" = "success" ] || { echo "::error::an archive a release ships (darwin-x64 or linux-arm64) did not build or run"; failed=1; }
           [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
           [ "${{ needs.remote-host.result }}" = "success" ] || { echo "::error::Walnut could not onboard a fresh remote host"; failed=1; }
           [ "$failed" = "0" ] || exit 1
