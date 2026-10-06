@@ -129,6 +129,16 @@ const MAX_SESSIONS = 1_500
 const PROJECTION_BYTE_BUDGET = Math.floor(PROJECTION_PUSH_MAX_BYTES * 0.8)
 /** Transcript tail shipped per session (slim rows, not full JSONL). */
 const TRANSCRIPT_TAIL = 100
+/**
+ * Most history messages one `visible` read may span. A coding turn can run a
+ * few hundred tool calls between two lines of prose, so the extension needs
+ * room; it stays bounded because the whole page is one response.
+ */
+const TRANSCRIPT_PAGE_MAX = 600
+/** Upper bound a caller may ask for with `visible` (the route clamps to it). */
+export const TRANSCRIPT_VISIBLE_MAX = 200
+/** How far a page start may move back to keep a same-timestamp run whole. */
+const TIMESTAMP_RUN_MAX = 50
 /** Min gap between transcript export sweeps (remote reads go over SSH). */
 const TRANSCRIPT_THROTTLE_MS = 60_000
 
@@ -481,6 +491,75 @@ export interface BuildTranscriptOptions {
    * the tool row in buildSessionTranscript.
    */
   rich?: boolean
+  /**
+   * Page backwards: only history messages strictly OLDER than this ISO
+   * timestamp (the oldest row the client already holds). Rows of one history
+   * message share its timestamp, so the boundary never splits a message.
+   * Reaching past a whale's bounded read window costs one full read, or, past
+   * the full read's byte ceiling, a few bounded window reads.
+   */
+  before?: string
+  /**
+   * Extend the slice back until it holds at least this many messages a reader
+   * sees as text (the human's, or the assistant's prose), never fewer than
+   * TRANSCRIPT_TAIL and never more than TRANSCRIPT_PAGE_MAX history messages.
+   * A client that folds tool calls into one line sees a 100-message tail of a
+   * busy turn as a few lines with nothing above them.
+   */
+  visible?: number
+  /**
+   * Extend the slice back to the first history message at or after this ISO
+   * timestamp (the newest row the client holds), within the same
+   * TRANSCRIPT_PAGE_MAX bound. A refetch that sends it overlaps what the client
+   * already has, so stitching the two can never leave a hole: a turn of more
+   * than TRANSCRIPT_TAIL messages pushed its own start out of a plain tail, and
+   * the client kept the rows before the tail with the turn's head missing.
+   */
+  since?: string
+}
+
+/** A message a reader sees as text, the unit `visible` counts. */
+function isVisibleHistoryMessage(m: import('./session-history.js').SessionHistoryMessage): boolean {
+  if (m.role === 'user') return !m.injected && m.text.trim() !== ''
+  return m.role === 'assistant' && m.text.trim() !== ''
+}
+
+/**
+ * The [start, end) slice of `history` a read returns. `end` excludes every
+ * message at or after `before`, scanning from the end so a rare out-of-order
+ * timestamp far from the boundary cannot move it.
+ */
+export function transcriptSliceBounds(
+  history: readonly import('./session-history.js').SessionHistoryMessage[],
+  opts: { before?: string; visible?: number; since?: string },
+): { start: number; end: number } {
+  let end = history.length
+  if (opts.before) {
+    while (end > 0 && history[end - 1].timestamp >= opts.before) end--
+  }
+  let start = Math.max(0, end - TRANSCRIPT_TAIL)
+  const want = Math.min(opts.visible ?? 0, TRANSCRIPT_VISIBLE_MAX)
+  if (want > 0) {
+    const floor = Math.max(0, end - TRANSCRIPT_PAGE_MAX)
+    let seen = 0
+    let i = end - 1
+    for (; i >= floor; i--) {
+      if (isVisibleHistoryMessage(history[i])) seen++
+      if (seen >= want) break
+    }
+    start = Math.min(start, Math.max(i, floor))
+  }
+  if (opts.since) {
+    const floor = Math.max(0, end - TRANSCRIPT_PAGE_MAX)
+    while (start > floor && history[start - 1].timestamp >= opts.since) start--
+  }
+  // Never start inside a run of messages that share a timestamp: the client's
+  // next `before` is that timestamp, which excludes the WHOLE run, so the part
+  // this page cut off would never be read. Bounded, so a clock that stood still
+  // (or a fixture) cannot turn one page into the whole history.
+  for (let back = 0; start > 0 && start < end && back < TIMESTAMP_RUN_MAX
+    && history[start - 1].timestamp === history[start].timestamp; back++) start--
+  return { start, end }
 }
 
 /**
@@ -493,7 +572,7 @@ export async function buildSessionTranscript(
   sessionId: string,
   opts?: BuildTranscriptOptions,
 ): Promise<SessionTranscript> {
-  const { readSessionHistoryTail } = await import('./session-history.js')
+  const { readSessionHistoryTail, readSessionHistory, isWindowedHistory } = await import('./session-history.js')
   const { getSessionByClaudeId } = await import('./session-tracker.js')
   const {
     toolDetail, toolResultPreview, toolInputPreview, thinkingLine, thinkingExcerpt,
@@ -517,7 +596,36 @@ export async function buildSessionTranscript(
     // full-read every alive session — dominant share of 167 GB/day of reads).
     history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
   }
-  const tail = opts?.full ? history : history.slice(-TRANSCRIPT_TAIL)
+  const paging = opts?.before !== undefined || opts?.visible !== undefined || opts?.since !== undefined
+  let bounds = paging ? transcriptSliceBounds(history, opts!) : null
+  // A whale's tail read is a bounded window: a page that reaches its start may
+  // still have older messages before it, which only the full read holds.
+  let windowed = isWindowedHistory(history)
+  if (bounds && bounds.start === 0 && windowed && opts?.before) {
+    // Past the full read's byte ceiling the full read only serves the same tail
+    // again, so a file that large is paged in bounded windows instead.
+    const { readSessionHistoryBefore, isPastFullReadCeiling } = await import('./session-history-pages.js')
+    if (!(await isPastFullReadCeiling(sessionId, record?.cwd, record?.host))) {
+      history = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
+      windowed = isWindowedHistory(history)
+      bounds = transcriptSliceBounds(history, opts)
+    }
+    if (bounds.start === 0 && windowed) {
+      const older = await readSessionHistoryBefore(sessionId, record?.cwd, record?.host, opts.before, {
+        minMessages: TRANSCRIPT_TAIL,
+        minText: Math.min(opts.visible ?? 0, TRANSCRIPT_VISIBLE_MAX),
+        isText: isVisibleHistoryMessage,
+      })
+      if (older) {
+        history = older.messages
+        windowed = !older.reachedStart
+        bounds = transcriptSliceBounds(history, opts)
+      }
+    }
+  }
+  const tail = opts?.full
+    ? history
+    : bounds ? history.slice(bounds.start, bounds.end) : history.slice(-TRANSCRIPT_TAIL)
   // `full` implies `rich`: a consumer paging a whole conversation wants the
   // expanded-card fields, and that is the shape the mobile CHAT read has shipped.
   // Computed once, ABOVE the loop, so the two field gates below cannot drift.
@@ -639,7 +747,9 @@ export async function buildSessionTranscript(
     version: 1,
     sessionId,
     exportedAt: new Date().toISOString(),
-    truncated: !opts?.full && history.length > TRANSCRIPT_TAIL,
+    // A whale's bounded window holds older messages before it even when it is
+    // shorter than the tail, so `windowed` alone already means "there is more".
+    truncated: !opts?.full && ((bounds ? bounds.start > 0 : history.length > TRANSCRIPT_TAIL) || windowed),
     messages,
   }
 }

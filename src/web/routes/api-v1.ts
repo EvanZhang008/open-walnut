@@ -3080,12 +3080,40 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
 // bridge builder is a separate slim implementation. Neither may lie about it, so
 // the response carries `rich: true|false` saying whether these rows actually have
 // the fields. A client reads that instead of inferring from cache warmth.
+//
+// PAGING (additive, 2026-10): `before=<ISO timestamp>` answers the page of rows
+// strictly older than the oldest one the client holds, `visible=<n>` extends
+// the slice back until it holds n rows a reader sees as text, and
+// `since=<ISO timestamp>` extends it back to the newest row the client holds so
+// a refetch always overlaps it (see BuildTranscriptOptions). Pages are built on
+// the primary only, and a rich answer built that way says `pageable: true`
+// (beside `rich`, so a default answer stays exactly the builder's output), which
+// is how a client knows it may ask for an older page. A replica relays a rich or
+// `before` read to the primary and answers with its build
+// (session-transcript-relay.ts). A `before` read is NEVER answered from the
+// exported file or a replica's bridge read: both serve the newest tail, and a
+// client prepending that as "older" rows would duplicate the conversation.
 apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript } = await import('../../core/session-projection.js')
+    const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript, TRANSCRIPT_VISIBLE_MAX } = await import('../../core/session-projection.js')
+    const { isTranscriptCursor: isTime } = await import('./session-transcript-relay.js')
     const sessionId = paramStr(req.params.id)
     const wantFresh = req.query.fresh === '1'
     const wantRich = req.query.rich === '1'
+    const rawBefore = typeof req.query.before === 'string' ? req.query.before : undefined
+    if (rawBefore !== undefined && !isTime(rawBefore)) {
+      sendError(res, 400, 'invalid_before', 'before must be an ISO-8601 timestamp')
+      return
+    }
+    const rawSince = typeof req.query.since === 'string' ? req.query.since : undefined
+    if (rawSince !== undefined && !isTime(rawSince)) {
+      sendError(res, 400, 'invalid_since', 'since must be an ISO-8601 timestamp')
+      return
+    }
+    const rawVisible = typeof req.query.visible === 'string' ? Number(req.query.visible) : undefined
+    const visible = rawVisible !== undefined && Number.isInteger(rawVisible) && rawVisible > 0
+      ? Math.min(rawVisible, TRANSCRIPT_VISIBLE_MAX)
+      : undefined
     // Passed to BOTH inline builds below, so a tail is never rich on one path and
     // slim on the other. `{ rich: false }` is byte-for-byte the bare
     // buildSessionTranscript(sessionId) both sites called before: `rich` gates
@@ -3101,7 +3129,12 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     // deliberately writes no cache entry. Those are DAEMON reads, so on a remote
     // whale it shipped the same 4 MB across the tunnel twice per phone refetch.
     // `rich` exists so this route never has to do that; keep it at one build.
-    const buildOpts = { rich: wantRich }
+    const buildOpts = {
+      rich: wantRich,
+      ...(rawBefore ? { before: rawBefore } : {}),
+      ...(visible ? { visible } : {}),
+      ...(rawSince ? { since: rawSince } : {}),
+    }
     // Same safe-id alphabet readSessionTranscript enforces (ids land in filenames).
     const safeId = /^[A-Za-z0-9_-]+$/.test(sessionId)
     /**
@@ -3112,8 +3145,8 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
      * pin, and the thing that makes the sweep, the bridge push and this read one
      * shape). A client that did not ask has nothing to learn from it.
      */
-    const answer = (body: object, rich: boolean): void => {
-      res.json(wantRich ? { ...body, rich } : body)
+    const answer = (body: object, rich: boolean, pageable = false): void => {
+      res.json(wantRich ? { ...body, rich, ...(pageable ? { pageable: true } : {}) } : body)
     }
     // Just-created session (record seeded, CLI not spawned yet — no pid, no
     // outputFile): there is nothing to read, so answer 200-empty immediately.
@@ -3135,6 +3168,46 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         return
       }
     }
+    if (CLOUD_MODE && (wantRich || rawBefore !== undefined)) {
+      if (!safeId) {
+        sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
+        return
+      }
+      // The phone reads the replica, but only the primary can build a page (and the
+      // rich fields): relay, and answer with the primary's own build.
+      const { relayTranscriptToPrimary } = await import('./session-transcript-relay.js')
+      const relayed = await relayTranscriptToPrimary(sessionId, {
+        rich: wantRich,
+        ...(rawBefore ? { before: rawBefore } : {}),
+        ...(rawSince ? { since: rawSince } : {}),
+        ...(visible ? { visible } : {}),
+      })
+      // An empty newest page is not an answer the replica can trust over its own
+      // copies (the primary builds empty for a session whose JSONL is gone, and
+      // the synced file may still hold it), so it falls through below.
+      const rows = relayed.ok ? relayed.body.messages as unknown[] : []
+      if (relayed.ok && (rawBefore !== undefined || rows.length > 0)) {
+        answer(relayed.body, wantRich, true)
+        return
+      }
+      if (rawBefore !== undefined) {
+        sendError(res, 503, 'page_unavailable', 'Older messages are read from the Mac, which cannot be reached right now')
+        return
+      }
+    }
+    if (rawBefore !== undefined) {
+      if (!safeId) {
+        sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
+        return
+      }
+      try {
+        const page = await buildSessionTranscript(sessionId, buildOpts)
+        answer(page, wantRich, true)
+      } catch {
+        sendError(res, 503, 'page_unavailable', 'The session could not be read right now')
+      }
+      return
+    }
     // `fresh=1` ASKS for a live read; `rich=1` NEEDS one, because the exported file
     // is written in the slim shape and can never carry the fields. Answering a rich
     // request from it is what made the response depend on cache warmth.
@@ -3148,7 +3221,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         // the caller asked for live, and empty is live — but the build that `rich=1`
         // implies falls through to the file, which then answers `rich: false`.
         if (wantFresh || built.messages.length > 0) {
-          answer(built, wantRich)
+          answer(built, wantRich, true)
           return
         }
       } catch { /* unreachable session — fall back to the exported file */ }
@@ -3208,7 +3281,8 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
       return
     }
-    answer(transcript, builtRich)
+    // An inline build here is the same primary read the fresh path makes, so it pages too.
+    answer(transcript, builtRich, builtRich)
   } catch (err) {
     next(err)
   }

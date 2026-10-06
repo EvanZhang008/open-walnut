@@ -79,6 +79,24 @@ describe('coalescedSessionRead', () => {
     expect(await coalescedSessionRead('h', 's', async () => 7)).toBe(7)
   })
 
+  it('a key names one question of a session: two keys never share, a change stales both', async () => {
+    // A relayed transcript page per cursor: the newest page and an older one are
+    // different answers about the same session.
+    let calls = 0
+    const read = (label: string) => async (): Promise<string> => `${label}${++calls}`
+    const newest = coalescedSessionRead('h', 's', read('newest'), 's|newest')
+    const older = coalescedSessionRead('h', 's', read('older'), 's|older')
+    expect(await Promise.all([newest, older])).toEqual(['newest1', 'older2'])
+    // Each key reuses its own answer, and the bare session key is a third question.
+    expect(await coalescedSessionRead('h', 's', read('newest'), 's|newest')).toBe('newest1')
+    expect(await coalescedSessionRead('h', 's', read('older'), 's|older')).toBe('older2')
+    expect(await coalescedSessionRead('h', 's', read('tail'))).toBe('tail3')
+    // Freshness is the SESSION's: one change stales every key of it.
+    noteSessionContentChanged('s')
+    expect(await coalescedSessionRead('h', 's', read('newest'), 's|newest')).toBe('newest4')
+    expect(await coalescedSessionRead('h', 's', read('older'), 's|older')).toBe('older5')
+  })
+
   it(`caps one host at ${READ_HISTORY_PER_HOST} reads at a time, without holding up another host`, async () => {
     const g = gate()
     let active = 0

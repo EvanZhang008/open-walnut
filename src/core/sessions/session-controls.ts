@@ -745,6 +745,9 @@ export type SessionControlAction =
   // Wave 1 lifecycle family (2026-08):
   | 'patch' | 'terminate' | 'restart' | 'retry' | 'recheck' | 'permission'
   | 'execute-continue' | 'changes' | 'history' | 'detail'
+  // One transcript page (cursors and all) for a phone on the replica, built here
+  // because only the primary can page a session (web/routes/session-transcript-relay.ts).
+  | 'transcript'
   // Wave 2 session-extras family (2026-08): provider controls, settings
   // snapshot, side questions, workflow/plan reads, subagent lanes,
   // execute-compact, and queued-message management.
@@ -1048,6 +1051,11 @@ export async function handleSessionControlRelay(
       case 'detail': {
         const { getSessionDetail } = await import('./session-lifecycle.js');
         result = await getSessionDetail(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'transcript': {
+        const { handlePrimaryTranscriptRelay } = await import('../../web/routes/session-transcript-relay.js');
+        result = await handlePrimaryTranscriptRelay(sessionId, p);
         break;
       }
       // ── Wave 2 session-extras family — same shared core the web routes use ──

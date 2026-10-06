@@ -101,17 +101,17 @@ function releaseHostPermit(host: string): void {
   else hostActive.set(host, left)
 }
 
-function freshCached(sessionId: string): Cached | null {
-  const hit = cache.get(sessionId)
+function freshCached(key: string, sessionId: string): Cached | null {
+  const hit = cache.get(key)
   if (!hit) return null
   if (hit.gen !== genOf(sessionId) || Date.now() - hit.at > READ_HISTORY_CACHE_MS) {
-    cache.delete(sessionId)
+    cache.delete(key)
     return null
   }
   return hit
 }
 
-function startRead<T>(host: string, sessionId: string, state: SessionState, read: () => Promise<T>): Promise<T> {
+function startRead<T>(host: string, key: string, sessionId: string, state: SessionState, read: () => Promise<T>): Promise<T> {
   const gen = genOf(sessionId)
   stats.reads++
   const promise = withHostPermit(host, read)
@@ -122,11 +122,11 @@ function startRead<T>(host: string, sessionId: string, state: SessionState, read
   // the finished read even after its cache entry had expired.
   const settle = (): void => {
     if (state.running === running) state.running = undefined
-    if (!state.running && !state.waiting) sessions.delete(sessionId)
+    if (!state.running && !state.waiting) sessions.delete(key)
   }
   void promise.then((value) => {
-    cache.delete(sessionId)
-    cache.set(sessionId, { gen, at: Date.now(), value })
+    cache.delete(key)
+    cache.set(key, { gen, at: Date.now(), value })
     bounded(cache, MAX_TRACKED_SESSIONS)
     settle()
   }, () => { settle() /* failures are shared with joiners, never cached */ })
@@ -135,18 +135,20 @@ function startRead<T>(host: string, sessionId: string, state: SessionState, read
 
 /**
  * Run `read` for a session, or reuse a read that answers the same question.
- * `read` must not depend on the caller (same RPC, same parameters).
+ * `read` must not depend on the caller (same RPC, same parameters). `key` names
+ * the question when one session has several (a relayed transcript page per
+ * cursor); the session's content generation still decides freshness.
  */
-export function coalescedSessionRead<T>(host: string, sessionId: string, read: () => Promise<T>): Promise<T> {
+export function coalescedSessionRead<T>(host: string, sessionId: string, read: () => Promise<T>, key: string = sessionId): Promise<T> {
   stats.requests++
-  const hit = freshCached(sessionId)
+  const hit = freshCached(key, sessionId)
   if (hit) { stats.cacheHits++; return Promise.resolve(hit.value as T) }
 
-  let state = sessions.get(sessionId)
-  if (!state) { state = {}; sessions.set(sessionId, state) }
+  let state = sessions.get(key)
+  if (!state) { state = {}; sessions.set(key, state) }
   const gen = genOf(sessionId)
   if (state.running && state.running.gen === gen) { stats.joined++; return state.running.promise as Promise<T> }
-  if (!state.running) return startRead(host, sessionId, state, read)
+  if (!state.running) return startRead(host, key, sessionId, state, read)
   if (state.waiting) { stats.joined++; return state.waiting as Promise<T> }
 
   // A read is running but it predates a change: queue ONE read behind it.
@@ -154,9 +156,9 @@ export function coalescedSessionRead<T>(host: string, sessionId: string, read: (
   const behind = s.running!.promise.catch(() => undefined)
   const waiting = behind.then(() => {
     s.waiting = undefined
-    const again = freshCached(sessionId)
+    const again = freshCached(key, sessionId)
     if (again) return again.value as T
-    return startRead(host, sessionId, s, read)
+    return startRead(host, key, sessionId, s, read)
   })
   s.waiting = waiting
   return waiting

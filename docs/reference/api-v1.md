@@ -1278,6 +1278,45 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
     the daemon bridge, which is a separate parser that emits no `thinking` rows
     at all and no `inputPreview`. `rich=1` is accepted there and answers
     `rich: false`.
+- Paging (additive, 2026-10): `visible=<n>`, `before=<ISO timestamp>` and
+  `since=<ISO timestamp>`. On a busy
+  session the ~100-entry tail is almost all tool rows, so a client that folds a
+  turn's tool calls into one line showed a few lines and nothing above them.
+  - `visible=<n>` extends the slice back until it holds `n` rows a reader sees as
+    text (a user message that is not injected, or assistant prose). It never
+    returns fewer than the default tail and never more than 600 history entries;
+    `n` above 200 counts as 200. Any value that is not a positive integer is
+    ignored, not rejected.
+  - `before=<ISO timestamp>` answers the page of rows strictly OLDER than that
+    time, typically the `timestamp` of the oldest row the client holds. It
+    combines with `visible`. `truncated: false` on that page means it reaches the
+    start of the conversation. A page that begins inside a bounded read window
+    (a transcript over 4 MB) is completed from a full read, and a transcript too
+    large for the full read (over 32 MB) is read in 4 MB windows instead, so a
+    whale pages all the way to its first message; one page reads at most four
+    windows. A value that is not an ISO-8601 timestamp
+    (`YYYY-MM-DDTHH:MM…`), or is longer than 40 characters, answers
+    `400 invalid_before`; a read that fails
+    answers `503 page_unavailable` (retryable).
+  - `since=<ISO timestamp>` extends the slice back to the first entry at or after
+    that time, typically the newest row the client holds, within the same
+    600-entry bound. Send it on a refetch you will stitch onto rows you already
+    have: a turn longer than the default tail pushes its own start out of a
+    plain tail, and keeping "the rows older than the new tail" then leaves that
+    turn's head as a hole. If the answer still does not reach back to your
+    newest row, replace what you hold instead of stitching. A malformed value
+    answers `400 invalid_since`.
+  - A rich answer built live on the primary carries **`pageable: true`**, beside
+    `rich`. That is the signal a client may ask for older pages; without it (an
+    older server, a rich answer served from the exported file or from a cloud
+    companion's own copy) show no "load earlier" control. A `before` read is
+    never answered from the exported file, which holds the newest tail.
+  - A cloud companion relays a rich or `before` read to the primary and answers
+    with the primary's page, `pageable: true` included. When the primary cannot
+    be reached, a newest read falls back to the companion's bridge tail or synced
+    file (`rich: false`, no `pageable`; a client keeps whatever paging state it
+    had), and `before` answers `503 page_unavailable` (retryable). An older
+    companion answers `before` with `409 page_unavailable`.
 
 ### GET /api/v1/activity/detail (additive, 2026-09): the full text behind one row
 

@@ -2100,6 +2100,59 @@ async function readSessionHistoryTailWindow(
 }
 
 /**
+ * Parse the JSONL lines that START inside [start, end) of a session's file, the
+ * unit older pages are read in once a file is past the full read's byte ceiling
+ * (session-history-pages.ts). Which lines a window owns is jsonl-window.ts's
+ * rule: windows laid end to end read every line once, and a call keeps its
+ * result. Same line-based parse as the tail window. Walnut's injected user
+ * lines ride along only when their time falls inside the window, or every page
+ * would carry all of them. null = not readable this way: no resolvable path, or
+ * a session with in-place rewinds (their cut anchors resolve against the whole
+ * file, the same reason readSessionHistoryTail skips its window for them).
+ */
+export async function readSessionHistoryRange(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  start: number,
+  end: number,
+): Promise<{ messages: SessionHistoryMessage[]; fileSize: number; epoch?: string } | null> {
+  if (await getInPlaceRewinds(sessionId)) return null;
+  const daemonHost = host ?? '__local__';
+  const statPath = cwd && isSafeForProjectEncoding(cwd)
+    ? remoteJsonlPath(sessionId, cwd)
+    : getResolvedRemotePath(sessionId, daemonHost);
+  if (!statPath) return null;
+  const { DaemonFileReader } = await import('./daemon-file-reader.js');
+  const reader = new DaemonFileReader(daemonHost);
+  const st = await reader.stat(statPath);
+  if (!st) return null;
+  const stop = Math.min(end, st.size);
+  if (start >= stop) return { messages: [], fileSize: st.size, epoch: st.epoch };
+  const { readJsonlLineWindow } = await import('./jsonl-window.js');
+  const text = await readJsonlLineWindow(reader, statPath, start, stop, DaemonFileReader.maxReadBytes());
+  if (text === null) return null;
+  const stamps = text.match(/"timestamp":"([^"]+)"/g) ?? [];
+  const first = stamps[0]?.slice(13, -1);
+  const last = stamps[stamps.length - 1]?.slice(13, -1);
+  let merged = text;
+  if (first && last) {
+    const injected = (await mergeSyntheticUserEvents(sessionId, '')).split('\n').filter((line) => {
+      const ts = /"timestamp":"([^"]+)"/.exec(line)?.[1];
+      return ts !== undefined && ts >= first && ts <= last;
+    });
+    if (injected.length > 0) merged = text + '\n' + injected.join('\n');
+  }
+  const messages = parseSessionMessages(merged);
+  try {
+    const { bindEchoClaims } = await import('./echo-claims.js');
+    bindEchoClaims(sessionId, messages);
+  } catch { /* best-effort, as on the tail window */ }
+  markWindowedRead(messages);
+  return { messages, fileSize: st.size, epoch: st.epoch };
+}
+
+/**
  * ONE tool's result, read from the JSONL without the retained-row cap.
  *
  * Why this exists: HISTORY_TOOL_RESULT_MAX bounds what a WHOLE-transcript parse
