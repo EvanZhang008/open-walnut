@@ -270,13 +270,23 @@ describe('daemon cloud bridge (real source daemon)', () => {
     // accept-count assertions (see pinning note above).
     const blackHoleSockets: net.Socket[] = []
     let acceptCount = 0
+    // How each socket the daemon gave up on ended: a reset (ECONNRESET), as
+    // the daemon resets a dial it abandons, or a FIN.
+    const ends: string[] = []
     const closeBlackHole = () => new Promise<void>((r) => {
       for (const s of blackHoleSockets) { try { s.destroy() } catch {} }
       if (blackHole) blackHole.close(() => r()); else r()
       blackHole = null
     })
     const blackHolePort = await new Promise<number>((resolve) => {
-      const srv = net.createServer((sock) => { acceptCount++; blackHoleSockets.push(sock) })
+      const srv = net.createServer((sock) => {
+        acceptCount++
+        blackHoleSockets.push(sock)
+        sock.on('error', (err: NodeJS.ErrnoException) => { ends.push(err.code ?? 'error') })
+        sock.on('end', () => { ends.push('FIN') })
+        // Read and drop the upgrade request, so a FIN shows as 'end'.
+        sock.resume()
+      })
       srv.listen(0, '127.0.0.1', () => resolve((srv.address() as net.AddressInfo).port))
       blackHole = srv
     })
@@ -298,6 +308,10 @@ describe('daemon cloud bridge (real source daemon)', () => {
       // 20s is generous under CI load. Pre-fix this waitFor times out at 1.
       await waitFor(() => acceptCount >= 3, 20_000)
       expect(acceptCount).toBeGreaterThanOrEqual(3)
+      // Each dial it gave up on was reset, not ended with a FIN: behind a FIN
+      // the kernel first sends what the socket buffered (gate 2026-10-05).
+      await waitFor(() => ends.length >= 2, 5_000)
+      expect(ends.slice(0, 2)).toEqual(['ECONNRESET', 'ECONNRESET'])
 
       // Now END the wedge (assertions above are done): free the port and
       // stand up a real cloud on it — the next redial must complete a

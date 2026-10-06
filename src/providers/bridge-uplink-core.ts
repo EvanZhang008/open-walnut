@@ -23,13 +23,14 @@
  *
  * On a busy link the marker answers are the only frames the daemon hears, and
  * its silence watchdog tears a link down 45 to 50 s after the last one
- * (BRIDGE_WATCHDOG in daemon-core.ts). So a marker follows every
- * `markerEveryBytes` (64 KB): at least one per chunk, since markers only go
- * between frames. At 256 KB a marker followed every second chunk (an envelope
- * is a little under 256 KB), about 508 KB apart, and a link slower than about
- * 11 KB/s was torn down mid-transfer and never finished one (gate 2026-10-04:
- * a 2 MB reply at 8 KB/s, 8 drops in 420 s). Now a link stays up down to about
- * 6 KB/s, one chunk per watchdog window.
+ * (BRIDGE_WATCHDOG in daemon-core.ts). So no more than `markerEveryBytes`
+ * (64 KB) ever goes out between two markers: a marker goes before a frame that
+ * would carry the run past it and after a frame that reaches it, and chunks are
+ * never larger than it, so only an unchunked frame (a replica that cannot
+ * reassemble) goes past it, alone. A link stays up while it moves 64 KB per
+ * watchdog window, down to about 1.5 KB/s. History (gate 2026-10-04/05): with
+ * 256 KB between markers a 2 MB reply at 8 KB/s never arrived (8 drops in
+ * 420 s); with 256 KB chunks a 60 s dip to 2 KB/s dropped the link twice.
  *
  * Frames larger than the chunk size are split into `{ev:'chunk'}` envelopes,
  * but only after the replica has said it can reassemble them (`bridge.peer`).
@@ -58,9 +59,11 @@ export function createBridgeUplink(deps: BridgeUplinkDeps, opts?: BridgeUplinkOp
   const ACK_TIMEOUT_MS = (opts && opts.ackTimeoutMs) || 15_000
   const MAX_QUEUE = (opts && opts.maxQueueBytes) || 64 * 1024 * 1024
   const CHUNK_MIN = 16 * 1024
-  const CHUNK_MAX = 512 * 1024
-  // Room kept for the marker that follows a frame, so markers never push the
-  // unconfirmed total past the high-water mark either.
+  // A chunk never exceeds the marker spacing, whatever size the replica asks
+  // for (it asked for 256 KB before 2026-10-05): see the header.
+  const CHUNK_MAX = Math.max(CHUNK_MIN, Math.min(512 * 1024, MARKER_EVERY))
+  // Room kept for the markers around a frame (two at most, about 50 bytes
+  // each), so markers never push the unconfirmed total past the high-water mark.
   const MARKER_ROOM = 128
 
   const byteLen = (s: string): number =>
@@ -137,6 +140,19 @@ export function createBridgeUplink(deps: BridgeUplinkDeps, opts?: BridgeUplinkOp
     return seq
   }
 
+  /**
+   * Write one frame between the markers that keep every run of bytes between
+   * two markers within MARKER_EVERY: one before it when it would carry the run
+   * past the mark, one after it when it reaches the mark. Both fit the room
+   * fits() keeps (MARKER_ROOM).
+   */
+  const writeMarked = (frame: string, size: number): boolean => {
+    if (sinceMarker > 0 && sinceMarker + size > MARKER_EVERY) sendMarker()
+    if (!writeFrame(frame, size)) return false
+    if (sinceMarker >= MARKER_EVERY) sendMarker()
+    return true
+  }
+
   const pump = (): void => {
     while (!closed && queue.length > 0) {
       const next = queue[0]
@@ -144,8 +160,7 @@ export function createBridgeUplink(deps: BridgeUplinkDeps, opts?: BridgeUplinkOp
       if (!fits(next.size)) break
       queue.shift()
       queuedBytes -= next.size
-      if (!writeFrame(next.frame, next.size)) { closed = true; queue = []; queuedBytes = 0; return }
-      if (sinceMarker >= MARKER_EVERY) sendMarker()
+      if (!writeMarked(next.frame, next.size)) { closed = true; queue = []; queuedBytes = 0; return }
     }
     // Blocked with unconfirmed bytes nobody asked about: ask, or it never frees.
     if (!closed && queue.length > 0 && sinceMarker > 0) sendMarker()
@@ -190,8 +205,7 @@ export function createBridgeUplink(deps: BridgeUplinkDeps, opts?: BridgeUplinkOp
       for (const part of parts) {
         const partSize = parts.length === 1 ? size : byteLen(part)
         if (direct && wroteAll && fits(partSize)) {
-          if (!writeFrame(part, partSize)) { closed = true; queue = []; queuedBytes = 0; return 'dropped' }
-          if (sinceMarker >= MARKER_EVERY) sendMarker()
+          if (!writeMarked(part, partSize)) { closed = true; queue = []; queuedBytes = 0; return 'dropped' }
           continue
         }
         wroteAll = false

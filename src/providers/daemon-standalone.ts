@@ -8179,10 +8179,13 @@ function scheduleBridgeRedial(gen: number): void {
   }, delay)
 }
 
-// A socket given up on is destroyed, not closed: a close handshake on a slow
+// A socket given up on is terminated, not closed: a close handshake on a slow
 // or dead link keeps the stream draining what it had buffered, and behind one
-// slow bottleneck those streams starve the new link. Keep in sync with
-// daemon-source.ts.
+// slow bottleneck those streams starve the new link. On Bun 1.3.9 close() and
+// terminate() both reset a client socket whose own send buffer is empty
+// (measured 2026-10-05), which drops what the kernel buffered, and neither
+// stops one still sending from that buffer; terminate() is the call whose
+// contract is to end the socket at once. Keep in sync with daemon-source.ts.
 function abandonBridgeSocket(client: WebSocket) {
   try {
     const t = (client as unknown as { terminate?: () => void }).terminate

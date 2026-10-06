@@ -9281,15 +9281,66 @@ function getWsClientCtor() {
   // terminate(), so a link torn down as dead stayed CLOSING and went on
   // draining what it had buffered; behind one slow bottleneck those streams
   // starved the new link (gate 2026-10-04: 8 of them in 420 s).
+  // Both Node clients dial their TCP socket through connectBridgeTcp, so a
+  // socket given up on can be reset (abandonBridgeSocket).
   if (typeof Bun !== 'undefined' && typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
-  try { const m = require('ws'); return m.WebSocket || m; } catch {}
-  return function BridgeWsClient(url) { return createBridgeWsClient(url); };
+  try {
+    const m = require('ws');
+    const WsPackage = m.WebSocket || m;
+    return function BridgeWsPackageClient(url) {
+      const tcp = {};
+      const secure = /^(wss|https):/i.test(url);
+      const client = new WsPackage(url, { createConnection: function(opts, done) { return connectBridgeTcp(opts, secure, tcp, done); } });
+      client.bridgeTcp = tcp;
+      return client;
+    };
+  } catch {}
+  return function BridgeWsBuiltinClient(url) { return createBridgeWsClient(url); };
+}
+
+// A request's createConnection for the bridge (http(s).request, under the ws
+// package too): opens the TCP socket itself and keeps it in holder.tcp, so the
+// socket can be reset when it is given up on. A TLS socket cannot be reset
+// (resetAndDestroy() throws on its handle), so for wss TLS rides this TCP
+// socket, put on only once it has connected: TLS put on a socket still looking
+// up its host name crashed Node 20, 24 and 25 (SIGSEGV, tried 2026-10-05).
+// So for wss the socket comes through done, which request() waits for.
+function connectBridgeTcp(opts, secure, holder, done) {
+  const host = opts.host || opts.hostname;
+  const tcp = net.connect({ host: host, port: Number(opts.port) });
+  holder.tcp = tcp;
+  if (!secure) return tcp;
+  const onError = function(err) { done(err); };
+  tcp.once('error', onError);
+  tcp.once('connect', function() {
+    tcp.removeListener('error', onError);
+    const servername = opts.servername || (net.isIP(host) ? undefined : host);
+    let tlsSocket;
+    try { tlsSocket = require('tls').connect(Object.assign({}, opts, { socket: tcp, path: undefined, servername: servername })); } catch (err) { tcp.destroy(); done(err); return; }
+    done(null, tlsSocket);
+  });
+  return undefined;
+}
+
+// Resets the TCP socket under a bridge socket. destroy() (and the ws
+// package's terminate(), which calls it) ends it with a FIN only after the
+// kernel has sent every byte it buffered, so on a slow link the flow given up
+// on went on draining ahead of the new one, and the new one was torn down in
+// turn (gate 2026-10-05: 8 dials, 7 drops, no reply). A reset (RST) drops
+// what is buffered on both ends. A socket still connecting has sent nothing
+// and is destroyed (resetAndDestroy() would wait for the connect); so is one
+// on a Node without resetAndDestroy.
+function resetBridgeTcp(holder) {
+  const tcp = holder && holder.tcp;
+  if (!tcp || tcp.destroyed) return;
+  try { if (!tcp.connecting && typeof tcp.resetAndDestroy === 'function') { tcp.resetAndDestroy(); return; } } catch {}
+  try { tcp.destroy(); } catch {}
 }
 
 // The bridge's WebSocket client on Node without the ws package: what the
 // bridge needs (text frames, ping and pong, close) on the frame code of the
 // trusted-client server, with the ws package's events (open, message,
-// close(code, reason), error). terminate() destroys the socket at once; close()
+// close(code, reason), error). terminate() resets the socket at once; close()
 // sends a close frame and gives the peer 5 s to answer it.
 function createBridgeWsClient(url) {
   const EventEmitter = require('events');
@@ -9306,6 +9357,8 @@ function createBridgeWsClient(url) {
   let have = 0;
   let need = 0;
   let parts = null;
+  const tcp = {};
+  ws.bridgeTcp = tcp;
   const finish = function(code, reason, gentle) {
     if (ended) return;
     ended = true;
@@ -9370,7 +9423,8 @@ function createBridgeWsClient(url) {
     hostname: host,
     port: u.port || (secure ? 443 : 80),
     path: (u.pathname || '/') + u.search,
-    agent: false,
+    // No agent: with one, request() would dial on its own and ignore this.
+    createConnection: function(opts, done) { return connectBridgeTcp(opts, secure, tcp, done); },
     servername: secure && !net.isIP(host) ? host : undefined,
     headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key },
   });
@@ -9409,16 +9463,20 @@ function createBridgeWsClient(url) {
   };
   ws.terminate = function() {
     if (ended) return;
+    resetBridgeTcp(tcp);
     try { req.destroy(); } catch {}
     finish(1006, '');
   };
   return ws;
 }
 
-// A socket given up on is destroyed, not closed: a close handshake on a slow
-// or dead link keeps the stream draining (see getWsClientCtor). Keep in sync
-// with daemon-standalone.ts.
+// A socket given up on is reset, not closed: a close handshake on a slow or
+// dead link keeps the stream draining (see getWsClientCtor), and so does a
+// FIN (see resetBridgeTcp). Under Bun there is no TCP socket to reach:
+// terminate() is all there is (see daemon-standalone.ts). Keep in sync with
+// daemon-standalone.ts.
 function abandonBridgeSocket(client) {
+  resetBridgeTcp(client.bridgeTcp);
   try { if (typeof client.terminate === 'function') client.terminate(); else client.close(); } catch {}
 }
 
@@ -9585,7 +9643,7 @@ function dialBridge(gen) {
   const cfg = bridgeConfig;
   const WsCtor = getWsClientCtor();
   // Which client dials (the conn-open line names it): Bun's, the ws package's, or createBridgeWsClient.
-  const wsClient = WsCtor === globalThis.WebSocket ? 'bun' : WsCtor.name === 'BridgeWsClient' ? 'builtin' : 'ws';
+  const wsClient = WsCtor === globalThis.WebSocket ? 'bun' : WsCtor.name === 'BridgeWsBuiltinClient' ? 'builtin' : 'ws';
   let dialUrl;
   try {
     // Token rides a query param — browser-style clients can't set headers,

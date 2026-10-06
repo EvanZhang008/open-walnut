@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { createBridgeUplink, createLoopDriftProbe } from '../../src/providers/bridge-uplink-core.js'
+import { REPLICA_CHUNK_BYTES } from '../../src/web/ws/bridge-wire.js'
 
 const HWM = 1024 * 1024
 const MiB = 1024 * 1024
@@ -112,7 +113,7 @@ describe('flow control', () => {
     expect(snap.bufferedAmountPeak).toBeLessThanOrEqual(HWM)
     expect(snap.maxOutFrameKind).toBe('chunk')
     expect(snap.rttMsP50).toBe(40)
-    expect(snap.chunkedFrames).toBe(1) // only the task list is over the chunk size
+    expect(snap.chunkedFrames).toBe(2) // the task list and the sessions list are over the 64 KB chunk cap
   })
 
   it('an old replica (no chunks, plain in-order pings) still paces: an oversized frame goes alone', () => {
@@ -173,17 +174,18 @@ describe('flow control', () => {
     }
     return worst
   }
-  it('a marker follows every chunk of a large reply', () => {
+  // Gate 2026-10-05: with 256 KB chunks a 60 s dip to 2 KB/s left 254 KB
+  // between two answers, over the watchdog's 45 s, and the link dropped twice.
+  // A chunk is now capped at the marker spacing, whatever the replica asks for.
+  it('a large reply never runs past 64 KB between two markers, even when the replica asks for 256 KB chunks', () => {
     const h = harness({ chunkBytes: 256 * 1024 })
+    expect(h.up.chunkBytes).toBe(64 * 1024)
     h.up.send(JSON.stringify({ id: 7, ok: true, data: 'r'.repeat(2 * MiB) }))
     h.run(60_000)
     expect(h.up.queuedBytes).toBe(0)
-    const chunks = h.wire.filter((f) => f.startsWith('{"ev":"chunk"'))
-    expect(chunks.length).toBeGreaterThanOrEqual(8)
-    for (let i = 0; i < h.wire.length - 1; i++) {
-      if (h.wire[i].startsWith('{"ev":"chunk"')) expect(h.wire[i + 1].startsWith('{"ev":"bridge-ping"')).toBe(true)
-    }
-    expect(longestRunWithoutMarker(h.wire)).toBeLessThanOrEqual(256 * 1024)
+    expect(h.wire.filter((f) => f.startsWith('{"ev":"chunk"')).length).toBeGreaterThanOrEqual(32)
+    expect(longestRunWithoutMarker(h.wire)).toBeLessThanOrEqual(64 * 1024)
+    expect(frames(h.wire)).toEqual([JSON.stringify({ id: 7, ok: true, data: 'r'.repeat(2 * MiB) })])
   })
   it('a stream of small frames gets a marker every 64 KB', () => {
     const h = harness()
@@ -191,7 +193,8 @@ describe('flow control', () => {
     for (let i = 0; i < 100; i++) h.up.send(frame)
     h.run(60_000)
     expect(h.up.queuedBytes).toBe(0)
-    expect(longestRunWithoutMarker(h.wire)).toBeLessThan(64 * 1024 + Buffer.byteLength(frame))
+    // The marker goes BEFORE the frame that would carry the run past 64 KB.
+    expect(longestRunWithoutMarker(h.wire)).toBeLessThanOrEqual(64 * 1024)
   })
 
   it('the keepalive ping is a marker, and its echo measures the round trip', () => {
@@ -208,8 +211,16 @@ describe('flow control', () => {
   it('clamps the peer chunk size and turns chunking off for zero', () => {
     const h = harness()
     expect(h.up.setChunkBytes(1)).toBe(16 * 1024)
-    expect(h.up.setChunkBytes(10 * MiB)).toBe(512 * 1024)
+    // Never more than the marker spacing (64 KB), whatever is asked.
+    expect(h.up.setChunkBytes(256 * 1024)).toBe(64 * 1024)
+    expect(h.up.setChunkBytes(10 * MiB)).toBe(64 * 1024)
+    expect(h.up.setChunkBytes(32 * 1024)).toBe(32 * 1024)
     expect(h.up.setChunkBytes('lots')).toBe(0)
+  })
+  it('the replica asks for the chunk size the daemon cuts to (its marker spacing)', () => {
+    const h = harness()
+    expect(h.up.setChunkBytes(REPLICA_CHUNK_BYTES)).toBe(REPLICA_CHUNK_BYTES)
+    expect(h.up.setChunkBytes(REPLICA_CHUNK_BYTES * 4)).toBe(REPLICA_CHUNK_BYTES)
   })
 })
 

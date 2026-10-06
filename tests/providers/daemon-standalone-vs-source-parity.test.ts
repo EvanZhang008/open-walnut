@@ -2226,8 +2226,8 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
   // Gate 2026-10-04: on the JS twin a link given up on was only close()d (Node's
   // global WebSocket has no terminate()), so it stayed CLOSING and went on
   // draining what it had buffered; behind one slow bottleneck those streams
-  // starved every later link. Every site that gives a socket up destroys it.
-  it('both destroy a bridge socket they give up on (dial timeout, overflow, silence)', () => {
+  // starved every later link. Every site that gives a socket up terminates it.
+  it('both terminate a bridge socket they give up on (dial timeout, overflow, silence)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       const helper = src.slice(src.indexOf('function abandonBridgeSocket('), src.indexOf('function abandonBridgeSocket(') + 300)
       expect(helper).toMatch(/terminate/)
@@ -2238,17 +2238,51 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       }
     }
   })
+  // Gate M7 (2026-10-05): the bun twin's terminate branch had no test. On Bun
+  // 1.3.9 close() also resets a client socket, so no run can tell the two
+  // apart (the slow-link e2e pins the reset itself); this pins the call.
+  it('the bun twin terminates a socket it gives up on, closing it only when it cannot terminate', () => {
+    const helper = standaloneSrc.slice(standaloneSrc.indexOf('function abandonBridgeSocket('), standaloneSrc.indexOf('function abandonBridgeSocket(') + 300)
+    expect(helper).toMatch(/const t = \(client as unknown as \{ terminate\?: \(\) => void \}\)\.terminate\s*\n\s*if \(typeof t === 'function'\) t\.call\(client\); else client\.close\(\)/)
+    expect(helper.match(/client\.close\(\)/g)).toHaveLength(1)
+  })
+  // Gate 2026-10-05: destroy() ends a socket with a FIN only after the kernel
+  // has sent every byte it buffered, so behind a slow link the flow given up
+  // on drained ahead of the redial (8 dials, 7 drops, no reply). The JS twin
+  // dials its own TCP socket under both Node clients and resets it.
+  it('the JS twin resets the TCP socket under a bridge socket it gives up on', () => {
+    const abandon = templateSrc.slice(templateSrc.indexOf('function abandonBridgeSocket('), templateSrc.indexOf('function loadBridgeConfig('))
+    expect(abandon).toMatch(/resetBridgeTcp\(client\.bridgeTcp\);\s*\n\s*try \{ if \(typeof client\.terminate === 'function'\) client\.terminate\(\); else client\.close\(\); \} catch \{\}/)
+    const reset = templateSrc.slice(templateSrc.indexOf('function resetBridgeTcp('), templateSrc.indexOf('function createBridgeWsClient('))
+    // A socket still connecting has nothing to drop and is destroyed (resetAndDestroy waits for the connect).
+    expect(reset).toMatch(/if \(!tcp\.connecting && typeof tcp\.resetAndDestroy === 'function'\) \{ tcp\.resetAndDestroy\(\); return; \}/)
+    expect(reset).toMatch(/tcp\.destroy\(\)/)
+    const connect = templateSrc.slice(templateSrc.indexOf('function connectBridgeTcp('), templateSrc.indexOf('function resetBridgeTcp('))
+    expect(connect).toMatch(/holder\.tcp = tcp;/)
+    // TLS goes on only once the TCP socket has connected (TLS on a socket still
+    // looking up its host crashes Node), and the socket comes through done.
+    expect(connect).toMatch(/tcp\.once\('connect', function\(\) \{/)
+    expect(connect).toMatch(/require\('tls'\)\.connect\(Object\.assign\(\{\}, opts, \{ socket: tcp,/)
+    expect(connect).toMatch(/done\(null, tlsSocket\);/)
+  })
   it('the JS twin dials with a client that can terminate, never Node\'s global WebSocket', () => {
-    const ctor = templateSrc.slice(templateSrc.indexOf('function getWsClientCtor()'), templateSrc.indexOf('function createBridgeWsClient('))
+    const ctor = templateSrc.slice(templateSrc.indexOf('function getWsClientCtor()'), templateSrc.indexOf('function connectBridgeTcp('))
     expect(ctor).toMatch(/if \(typeof Bun !== 'undefined' && typeof globalThis\.WebSocket === 'function'\) return globalThis\.WebSocket;/)
     expect(ctor).toMatch(/require\('ws'\)/)
-    expect(ctor).toMatch(/return function BridgeWsClient\(url\) \{ return createBridgeWsClient\(url\); \};/)
+    // The ws package dials through connectBridgeTcp too, and keeps its TCP socket.
+    expect(ctor).toMatch(/new WsPackage\(url, \{ createConnection: function\(opts, done\) \{ return connectBridgeTcp\(opts, secure, tcp, done\); \} \}\);\s*\n\s*client\.bridgeTcp = tcp;/)
+    expect(ctor).toMatch(/return function BridgeWsBuiltinClient\(url\) \{ return createBridgeWsClient\(url\); \};/)
     expect(ctor.match(/return globalThis\.WebSocket/g)).toHaveLength(1)
     const client = templateSrc.slice(templateSrc.indexOf('function createBridgeWsClient('), templateSrc.indexOf('function abandonBridgeSocket('))
-    // A client's frames are masked (RFC 6455 5.3); its terminate() destroys the socket.
+    // A client's frames are masked (RFC 6455 5.3); its terminate() resets the socket.
     expect(client).toMatch(/socket\.write\(encodeFrame\(Buffer\.from\(String\(data\), 'utf-8'\), 0x01, true\)\)/)
-    expect(client).toMatch(/ws\.terminate = function\(\) \{/)
+    expect(client).toMatch(/ws\.terminate = function\(\) \{\s*\n\s*if \(ended\) return;\s*\n\s*resetBridgeTcp\(tcp\);/)
     expect(client).toMatch(/s\.destroy\(\)/)
+    // No agent: request() dials through createConnection only without one.
+    expect(client).toMatch(/createConnection: function\(opts, done\) \{ return connectBridgeTcp\(opts, secure, tcp, done\); \},/)
+    expect(client).not.toMatch(/agent: false/)
+    // The dial line names the client by its constructor.
+    expect(templateSrc).toMatch(/WsCtor\.name === 'BridgeWsBuiltinClient' \? 'builtin' : 'ws'/)
   })
   // Half-open sockets: a client's FIN alone never closes an upgraded socket, so
   // the client stayed in wsClients for good (gate 2026-10-04).

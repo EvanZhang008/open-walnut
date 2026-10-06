@@ -150,14 +150,19 @@ Five rules keep one busy Mac and one busy phone from knocking the link over.
   with a `seq`; the companion answers each with a `ping` RPC carrying
   `ackSeq`, which confirms everything written before that marker. A companion
   that predates `ackSeq` answers each marker in order, which confirms the
-  oldest one. A marker nobody confirms within 15s releases the window. A
-  marker follows every 64KB written, so at least one follows every chunk: on
-  a busy link these answers are all the daemon hears, and its silence
-  watchdog would otherwise tear a slow link down mid-transfer (two chunks per
-  marker lost every link under about 11KB/s; one per chunk holds down to
-  about 6KB/s). Frames over 256KB are cut into `{ev:'chunk', cid, i, n, part}` envelopes once the
-  companion asks for them with `bridge.peer {chunkBytes}` (it does so when
-  the daemon's `hello` says `uplink: 1`). The `mobile-event` ack reports
+  oldest one. A marker nobody confirms within 15s releases the window. No
+  more than 64KB goes out between two markers: a marker goes before a frame
+  that would carry the run past 64KB and after one that reaches it, and no
+  chunk is larger than 64KB. On a busy link these answers are all the daemon
+  hears, and its silence watchdog would otherwise tear a slow link down
+  mid-transfer (two 256KB chunks per marker lost every link under about
+  11KB/s, one 256KB chunk per marker under about 6KB/s; 64KB per marker
+  holds down to about 1.5KB/s). Frames over 64KB are cut into
+  `{ev:'chunk', cid, i, n, part}` envelopes once the companion asks for them
+  with `bridge.peer {chunkBytes}` (it does so when the daemon's `hello` says
+  `uplink: 1`); the companion asks for 64KB, and a daemon cuts a larger ask
+  down to 64KB. Only a frame to a companion that never asks goes out whole,
+  past the 64KB, alone. The `mobile-event` ack reports
   `relayed`, `queued`, `queuedBytes` and `connId`.
 - **The Mac skips what the companion already has.** At write time and in the
   5-minute self-heal (which sends one push after another), a push is skipped

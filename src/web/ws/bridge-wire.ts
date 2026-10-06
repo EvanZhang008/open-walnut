@@ -17,8 +17,13 @@
 
 import { log } from '../../logging/index.js'
 
-/** What this replica asks the daemon to cut frames to (bridge.peer). */
-export const REPLICA_CHUNK_BYTES = 256 * 1024
+/**
+ * What this replica asks the daemon to cut frames to (bridge.peer): the
+ * daemon's marker spacing, so a slow busy link hears an answer every 64 KB
+ * (bridge-uplink-core.ts). A current daemon caps any larger ask at that size;
+ * an older one cuts to what is asked, so asking for less helps it too.
+ */
+export const REPLICA_CHUNK_BYTES = 64 * 1024
 const MAX_ASSEMBLY_BYTES = 64 * 1024 * 1024
 const MAX_OPEN_ASSEMBLIES = 16
 /** One frame at the per-assembly cap plus room for the small ones around it. */

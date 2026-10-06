@@ -7,12 +7,17 @@
  *    one. A marker followed every SECOND 256 KB chunk, so a link slower than
  *    two chunks per watchdog window was torn down mid-transfer, redialed and
  *    torn down again: a 2 MB reply at 8 KB/s never arrived (9 connections in
- *    420 s). Now a marker follows every chunk.
- * 2. A link the daemon gives up on must be destroyed. The JS twin dialed with
+ *    420 s). Then a marker followed every chunk, but a chunk was as large as
+ *    the replica asked (256 KB), so a 60 s dip to 2 KB/s still dropped the
+ *    link twice (gate 2026-10-05). Now no more than 64 KB goes out between two
+ *    markers, whatever chunk size the replica asks for.
+ * 2. A link the daemon gives up on must be reset. The JS twin dialed with
  *    Node's global WebSocket, which has no terminate(): close() waits for a
  *    close handshake that never finishes on a dead path, so the old flow stayed
- *    open, and on a shared slow link it kept draining. Now it dials with the ws
- *    package when that is installed and with its own client otherwise.
+ *    open, and on a shared slow link it kept draining. Then it destroyed the
+ *    socket, and the kernel still sent what it had buffered before the FIN
+ *    (gate 2026-10-05: 8 dials, 7 drops, no reply behind a slow link). Now
+ *    both Node clients reset the TCP socket and Bun's terminate() resets it.
  *
  * Runtimes: the source twin with no ws package (its own client), the source
  * twin with the ws package next to it (as deploySource installs it on a remote
@@ -47,16 +52,19 @@ const TWINS: Twin[] = [
   ...(BUN ? [{ name: 'standalone twin (bun)', wsClient: 'bun', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 
-/** The replica's chunk size (REPLICA_CHUNK_BYTES): an envelope is a little under it. */
-const CHUNK = 256 * 1024
+/** The chunk size this cloud asks for: what replicas asked before 2026-10-05. */
+const ASKED_CHUNK = 256 * 1024
+/** The most the daemon sends between two markers (markerEveryBytes in bridge-uplink-core.ts). */
+const MARKER_RUN = 64 * 1024
 /**
- * The bridge ping interval and the link's rate. One chunk crosses in 2.2 pings:
- * inside the watchdog's 3-ping window with most of a ping to spare, while two
- * chunks (4.4 pings) are past its latest teardown (bridgeSilenceTeardownMs).
- * The gate's link (8 KB/s against a 45 s window) sat at the same ratio.
+ * The bridge ping interval and the link's rate. The bytes between two markers
+ * cross in 2.2 pings: inside the watchdog's 3-ping window with most of a ping
+ * to spare, while one chunk of the size asked for (8.8 pings) is far past its
+ * latest teardown (bridgeSilenceTeardownMs). The gate's dip (2 KB/s against a
+ * 45 s window) sat between the two the same way.
  */
 const PING = 1_200
-const RATE = Math.round(CHUNK / (2.2 * PING / 1000))
+const RATE = Math.round(MARKER_RUN / (2.2 * PING / 1000))
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(pred: () => boolean, timeoutMs: number, what: string): Promise<void> {
@@ -171,16 +179,17 @@ async function configureBridge(daemonPort: number, cloudPort: number): Promise<v
  * (unlimited when 0); the other way is free. A flow reads at most 64 KB ahead
  * of the bottleneck, so the rest waits in the daemon. blackhole() kills every
  * open flow: it takes bytes and never carries or closes anything again, like
- * a path that died. Each flow notes when the daemon ended its side.
+ * a path that died. Each flow notes when the daemon ended its side and how:
+ * with a reset (ECONNRESET) or with a FIN (null).
  */
 async function startLink(targetPort: number, rate: number) {
-  type Flow = { client: net.Socket; up: net.Socket; dead: boolean; queued: number; daemonEndedAt: number | null; carried: number }
+  type Flow = { client: net.Socket; up: net.Socket; dead: boolean; queued: number; daemonEndedAt: number | null; daemonEndedWith: string | null; carried: number }
   const flows: Flow[] = []
   const queue: Array<{ flow: Flow; buf: Buffer }> = []
   const AHEAD = 64 * 1024
   const server = net.createServer((client) => {
     const up = net.connect({ port: targetPort, host: '127.0.0.1' })
-    const flow: Flow = { client, up, dead: false, queued: 0, daemonEndedAt: null, carried: 0 }
+    const flow: Flow = { client, up, dead: false, queued: 0, daemonEndedAt: null, daemonEndedWith: null, carried: 0 }
     flows.push(flow)
     client.on('data', (b) => {
       if (flow.dead) return
@@ -194,7 +203,7 @@ async function startLink(targetPort: number, rate: number) {
     client.on('end', ended)
     client.on('close', () => { ended(); if (!flow.dead) up.destroy() })
     up.on('close', () => { if (!flow.dead) client.destroy() })
-    client.on('error', () => {})
+    client.on('error', (err: NodeJS.ErrnoException) => { if (flow.daemonEndedAt == null) flow.daemonEndedWith = err.code ?? 'error'; ended() })
     up.on('error', () => {})
   })
   let last = Date.now()
@@ -240,6 +249,7 @@ async function startCloud() {
     hellos: [] as number[],
     closes: [] as number[],
     answers: [] as number[],
+    largestChunk: 0,
     mute: false,
     replies: new Map<number, Record<string, unknown>>(),
     conns: [] as WebSocket[],
@@ -257,6 +267,7 @@ async function startCloud() {
       let f: Record<string, unknown>
       try { f = JSON.parse(data.toString()) } catch { return }
       if (f.ev === 'chunk') {
+        cloud.largestChunk = Math.max(cloud.largestChunk, Buffer.byteLength(data as Buffer))
         const got = parts.get(f.cid as string) ?? []
         got[f.i as number] = f.part as string
         parts.set(f.cid as string, got)
@@ -266,7 +277,7 @@ async function startCloud() {
       }
       if (f.ev === 'hello') {
         cloud.hellos.push(Date.now())
-        ws.send(JSON.stringify({ id: nextId++, cmd: 'bridge.peer', chunkBytes: CHUNK }))
+        ws.send(JSON.stringify({ id: nextId++, cmd: 'bridge.peer', chunkBytes: ASKED_CHUNK }))
       } else if (f.ev === 'bridge-ping') {
         if (cloud.mute) return
         try { ws.send(JSON.stringify({ id: nextId++, cmd: 'ping', ackSeq: f.seq })); cloud.answers.push(Date.now()) } catch { /* closed */ }
@@ -282,12 +293,13 @@ async function startCloud() {
 describe.each(TWINS)('bridge on a slow link: $name', (twin) => {
   it('a large reply crosses a busy slow link without a teardown', async () => {
     const bound = bridgeSilenceTeardownMs({ ...BRIDGE_WATCHDOG, pingIntervalMs: PING })
-    // The case sits where it matters: one chunk fits the window, two do not.
-    expect(CHUNK / RATE * 1000).toBeLessThan(bound.minMs - PING / 2)
-    expect(2 * CHUNK / RATE * 1000).toBeGreaterThan(bound.maxMs + PING / 2)
+    // The case sits where it matters: the bytes between two markers fit the
+    // window, one chunk of the size the cloud asks for does not.
+    expect(MARKER_RUN / RATE * 1000).toBeLessThan(bound.minMs - PING / 2)
+    expect(ASKED_CHUNK / RATE * 1000).toBeGreaterThan(bound.maxMs + PING / 2)
 
     const file = path.join(fs.realpathSync(os.tmpdir()), `walnut-slowlink-${process.pid}-${Date.now()}.bin`)
-    fs.writeFileSync(file, crypto.randomBytes(1024 * 1024))
+    fs.writeFileSync(file, crypto.randomBytes(256 * 1024))
     closers.push(() => fs.rmSync(file, { force: true }))
     const cloud = await startCloud()
     const link = await startLink(cloud.port, RATE)
@@ -298,21 +310,23 @@ describe.each(TWINS)('bridge on a slow link: $name', (twin) => {
 
     const t0 = Date.now()
     const id = cloud.request({ cmd: 'fs.readBounded', path: file })
-    // About 1.4 MB of base64 at RATE: some 12 s; the bound leaves room for a loaded machine.
+    // About 350 KB of base64 at RATE: some 15 s; the bound leaves room for a loaded machine.
     await waitFor(() => cloud.replies.has(id) || cloud.closes.length > 0, 60_000, 'the reply')
     const reply = cloud.replies.get(id)
     expect(cloud.closes, 'the link was torn down mid-transfer').toHaveLength(0)
     expect(reply?.ok).toBe(true)
     expect(Buffer.from(String(reply!.data), 'base64').equals(fs.readFileSync(file))).toBe(true)
-    // It really was slow and busy: many chunks, each answered.
-    expect(Date.now() - t0).toBeGreaterThan(4 * CHUNK / RATE * 1000)
+    // It really was slow and busy: many chunks, each answered, none over 64 KB.
+    expect(Date.now() - t0).toBeGreaterThan(4 * MARKER_RUN / RATE * 1000)
     expect(cloud.answers.length).toBeGreaterThanOrEqual(5)
+    expect(cloud.largestChunk).toBeGreaterThan(MARKER_RUN / 2)
+    expect(cloud.largestChunk).toBeLessThanOrEqual(MARKER_RUN)
     expect(cloud.hellos).toHaveLength(1)
     expect(daemonLog(/inbound silence/)).toHaveLength(0)
     expect(daemonLog(/^bridge-conn-open$/).map((r) => r.wsClient)).toEqual([twin.wsClient])
   }, 120_000)
 
-  it('destroys a link it gave up on, so the dead flow does not stay open', async () => {
+  it('resets a link it gave up on, so the dead flow does not stay open or drain', async () => {
     const cloud = await startCloud()
     const link = await startLink(cloud.port, 0)
     await boot(twin, { WALNUT_BRIDGE_PING_MS: '300' })
@@ -327,6 +341,9 @@ describe.each(TWINS)('bridge on a slow link: $name', (twin) => {
     // close() would wait for a close handshake the dead path never carries.
     await waitFor(() => link.flows[0].daemonEndedAt != null, 5_000, 'the daemon to end the flow it gave up on')
     expect(link.flows[0].daemonEndedAt! - gaveUpAt).toBeLessThan(2_000)
+    // With a reset, not a FIN: behind a FIN the kernel first sends everything
+    // the socket buffered, which on a slow shared link starves the redial.
+    expect(link.flows[0].daemonEndedWith, 'the flow given up on ended with a FIN, not a reset').toBe('ECONNRESET')
     // The redial gets a new flow, and the bridge is back.
     await waitFor(() => cloud.hellos.length >= 2, 10_000, 'the redial')
   }, 60_000)

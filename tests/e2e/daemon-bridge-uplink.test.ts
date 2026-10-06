@@ -11,9 +11,11 @@
  * last built, not the code under review). The twins are kept in sync by hand
  * (CLAUDE.md), and a static ratchet cannot tell a live ack from a dead one, so
  * the same behavior is asserted on both. Each dials a fake
- * cloud WebSocket server that behaves like a current replica: it asks for
- * 256KB chunks (`bridge.peer`), reassembles them, and answers every
- * `bridge-ping` marker with a `ping` RPC echoing its `seq` after a short delay.
+ * cloud WebSocket server that behaves like a replica: it asks for 256KB chunks
+ * (`bridge.peer`), as replicas did before 2026-10-05 (a current one asks for
+ * 64KB), and the daemon cuts to 64KB anyway, its marker spacing. The cloud
+ * reassembles the chunks and answers every `bridge-ping` marker with a `ping`
+ * RPC echoing its `seq` after a short delay.
  * The cloud side measures, from its own view, how many bytes it has received
  * beyond its last confirmation.
  */
@@ -28,6 +30,9 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 const HOST_ALIAS = 'uplink-e2e-host'
 const HWM = 1024 * 1024
 const MiB = 1024 * 1024
+/** What the fake cloud asks the daemon to cut frames to, and what the daemon cuts to. */
+const ASKED_CHUNK = 256 * 1024
+const CUT_CHUNK = 64 * 1024
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 
 /** bun, looked up where scripts/build-daemon.sh looks; null when absent. */
@@ -141,7 +146,7 @@ async function startCloud(): Promise<Cloud> {
       const msg = JSON.parse(raw) as Record<string, unknown>
       if (msg.ev === 'hello') {
         cloud.hello = msg
-        if (msg.uplink === 1) ws.send(JSON.stringify({ id: ++nextId, cmd: 'bridge.peer', chunkBytes: 256 * 1024 }))
+        if (msg.uplink === 1) ws.send(JSON.stringify({ id: ++nextId, cmd: 'bridge.peer', chunkBytes: ASKED_CHUNK }))
       } else if (msg.ev === 'bridge-ping') {
         const covered = received
         setTimeout(() => {
@@ -219,7 +224,7 @@ describe.each(twins)('daemon bridge uplink: $name', ({ skip, command }) => {
       await waitFor(() => cloud.hello !== null && cloud.peerReply !== null)
       expect(cloud.hello?.uplink).toBe(1)
       expect(typeof cloud.hello?.connId).toBe('string')
-      expect(cloud.peerReply).toMatchObject({ ok: true, chunkBytes: 256 * 1024 })
+      expect(cloud.peerReply).toMatchObject({ ok: true, chunkBytes: CUT_CHUNK })
 
       const status = await rpc(ctl, 'bridge.status')
       expect(status).toMatchObject({ ok: true, connected: true, connId: cloud.hello?.connId })
@@ -237,8 +242,8 @@ describe.each(twins)('daemon bridge uplink: $name', ({ skip, command }) => {
       await waitFor(() => cloud.events.length === burst.length)
       expect(cloud.events).toEqual(burst)
       expect(cloud.worstUnconfirmed).toBeLessThanOrEqual(HWM)
-      expect(cloud.maxFrameBytes).toBeLessThanOrEqual(256 * 1024)
-      expect(cloud.chunkFrames).toBeGreaterThan(5)
+      expect(cloud.maxFrameBytes).toBeLessThanOrEqual(CUT_CHUNK)
+      expect(cloud.chunkFrames).toBeGreaterThan(20)
 
       // Close from the cloud side: one close line with the documented fields.
       cloud.dropSocket()
@@ -258,7 +263,7 @@ describe.each(twins)('daemon bridge uplink: $name', ({ skip, command }) => {
       expect(close).toHaveProperty('lastError')
       expect(close.bytesOut as number).toBeGreaterThan(1.9 * MiB)
       expect(close.bufferedAmountPeak as number).toBeLessThanOrEqual(HWM)
-      expect(close.maxOutFrameBytes as number).toBeLessThanOrEqual(256 * 1024)
+      expect(close.maxOutFrameBytes as number).toBeLessThanOrEqual(CUT_CHUNK)
       expect(close.rttMsP50 as number).toBeGreaterThanOrEqual(25)
       // Every marker was confirmed by a ping: none had to fail open.
       expect(close.ackTimeouts).toBe(0)
