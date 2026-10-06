@@ -2222,6 +2222,13 @@ select {
   opacity: 0.6;
   font-size: 11px;
 }
+.session-earlier-unavailable {
+  padding: 8px 16px;
+  margin: 4px 0 8px;
+  text-align: center;
+  color: var(--text-tertiary, #888);
+  font-size: 12px;
+}
 
 /* Fork divider in session chat history */
 .session-fork-divider {

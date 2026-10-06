@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchSessionHistory, HISTORY_TAIL_LIMIT } from '@/api/sessions';
+import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -10,7 +10,7 @@ import {
 } from '@/cache/session-cache';
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
-import { planDeltaMerge } from './history-merge';
+import { planDeltaMerge, foldFullPayload, prependOlderPage } from './history-merge';
 import { visibleInterval } from '@/utils/page-visibility';
 
 interface UseSessionHistoryReturn {
@@ -32,14 +32,25 @@ interface UseSessionHistoryReturn {
    *  older messages exist but their COUNT is unknown (`total` is the window
    *  length), so olderHidden stays 0 — show an uncounted "Load earlier". */
   olderWindowed: boolean;
-  /** Fetch the full history (no tail limit) — call when the user wants to read
-   *  past the lazy-loaded tail. Idempotent while in flight. */
+  /** The older part of a windowed transcript cannot be paged (a fork, a journal,
+   *  a rewound transcript): there is nothing to offer past the loaded tail. */
+  olderUnavailable: boolean;
+  /** Counts the older pages added above the tail, so the view can reveal the
+   *  newest one and keep the reader's place. */
+  olderPageSeq: number;
+  /** Load what is older than the rows held: the whole history for a lazy tail, or
+   *  the next page for a transcript past the full read's byte ceiling. Call when
+   *  the user wants to read past what is loaded. Idempotent while in flight. */
   loadFullHistory: () => void;
   /** The session's TRUE first user message (server-computed from the full parse).
    *  With lazy tail loading, messages[0] can be mid-conversation — the pinned
    *  "Initial Prompt" bubble must use this, never the loaded window's head. */
   initialUserText?: string;
 }
+
+/** Sessions whose older pages were read back to the first bytes of the transcript:
+ *  a windowed tail folded over those pages is not "more above", so no button. */
+const pagedToStart = new Set<string>();
 
 /** Diagnostic: count user text messages and check if they're interleaved or bunched */
 function diagnoseOrdering(phase: string, sid: string, msgs: SessionHistoryMessage[]): void {
@@ -102,6 +113,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const baseOffsetRef = useRef(0);
   const [olderHidden, setOlderHidden] = useState(0);
   const [olderWindowed, setOlderWindowed] = useState(false);
+  const [olderUnavailable, setOlderUnavailable] = useState(false);
+  const [olderPageSeq, setOlderPageSeq] = useState(0);
+  const pagedSessionRef = useRef<string | null>(null);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   // True first user message (server-computed). Sticky for the session's life —
   // deltas and degraded payloads don't carry it, so only adopt, never clear
   // (except on session switch). Ref mirror for cache writes inside callbacks.
@@ -129,11 +145,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // `windowed` = bounded window read: cursor === messages.length even though
   // older messages exist, so olderHidden computes to 0 — track the flag
   // separately so the UI still offers "Load earlier".
-  const adoptOffset = (msgCount: number, cursor: number, windowed?: boolean) => {
+  // `keptOlder` = rows of already-loaded older pages that stayed above a windowed
+  // tail (foldFullPayload); if they were dropped the start is no longer in hand.
+  const adoptOffset = (msgCount: number, cursor: number, windowed?: boolean, keptOlder = 0) => {
     const offset = Math.max(0, cursor - msgCount);
     baseOffsetRef.current = offset;
     setOlderHidden(offset);
-    setOlderWindowed(!!windowed);
+    const sid = sessionIdRef.current;
+    if (windowed && keptOlder === 0 && sid) pagedToStart.delete(sid);
+    setOlderWindowed(!!windowed && !(keptOlder > 0 && !!sid && pagedToStart.has(sid)));
   };
 
   useEffect(() => {
@@ -148,6 +168,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       baseOffsetRef.current = 0;
       setOlderHidden(0);
       setOlderWindowed(false);
+      setOlderUnavailable(false);
+      setOlderPageSeq(0);
       initialUserTextRef.current = undefined;
       setInitialUserText(undefined);
       return;
@@ -158,6 +180,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     setError(null);
     setStale(null);
     setForkBoundaryIndex(undefined);
+    // Paging state belongs to one session; a version bump (turn boundary) keeps it.
+    if (pagedSessionRef.current !== sessionId) {
+      pagedSessionRef.current = sessionId;
+      setOlderUnavailable(false);
+      setOlderPageSeq(0);
+    }
     const sid = sessionId.substring(0, 8);
 
     // Track session so global cache accumulates its events in background
@@ -219,17 +247,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   // healthy turn retries the rebuild.
                   if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
                   setStale(null);
-                  setMessages(full.messages);
+                  const folded = foldFullPayload(messagesRef.current, full);
+                  setMessages(folded.messages);
                   setForkBoundaryIndex(full.forkBoundaryIndex);
                   adoptInitialUserText(full.initialUserText);
-                  const fullCursor = full.cursor ?? full.messages.length;
-                  cursorRef.current = fullCursor;
-                  adoptOffset(full.messages.length, fullCursor, full.windowed);
+                  cursorRef.current = folded.cursor;
+                  adoptOffset(folded.messages.length, folded.cursor, full.windowed, folded.kept);
                   setHistoryCache(sessionId, {
-                    messages: full.messages,
+                    messages: folded.messages,
                     forkBoundaryIndex: full.forkBoundaryIndex,
-                    msgCount: fullCursor,
-                    baseOffset: Math.max(0, fullCursor - full.messages.length),
+                    msgCount: folded.cursor,
+                    baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                     initialUserText: full.initialUserText ?? initialUserTextRef.current,
                   });
                 })
@@ -251,17 +279,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           } else {
             // Server rebuilt (since out of range) → full replace (tail-sliced).
             diagnoseOrdering('refetch-full', sid, result.messages);
-            setMessages(result.messages);
+            const folded = foldFullPayload(messagesRef.current, result);
+            setMessages(folded.messages);
             setForkBoundaryIndex(result.forkBoundaryIndex);
             adoptInitialUserText(result.initialUserText);
-            const fullCursor = result.cursor ?? result.messages.length;
-            cursorRef.current = fullCursor;
-            adoptOffset(result.messages.length, fullCursor, result.windowed);
+            cursorRef.current = folded.cursor;
+            adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
             setHistoryCache(sessionId, {
-              messages: result.messages,
+              messages: folded.messages,
               forkBoundaryIndex: result.forkBoundaryIndex,
-              msgCount: fullCursor,
-              baseOffset: Math.max(0, fullCursor - result.messages.length),
+              msgCount: folded.cursor,
+              baseOffset: Math.max(0, folded.cursor - folded.messages.length),
               initialUserText: result.initialUserText ?? initialUserTextRef.current,
             });
           }
@@ -319,17 +347,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           setStale(null);
           diagnoseOrdering('cache-verify', sid, result.messages);
           adoptInitialUserText(result.initialUserText);
-          const fullCursor = result.cursor ?? result.messages.length;
+          const folded = foldFullPayload(messagesRef.current, result);
           setHistoryCache(sessionId, {
-            messages: result.messages,
+            messages: folded.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
-            msgCount: fullCursor,
-            baseOffset: Math.max(0, fullCursor - result.messages.length),
+            msgCount: folded.cursor,
+            baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
           });
-          cursorRef.current = fullCursor;
-          adoptOffset(result.messages.length, fullCursor, result.windowed);
-          setMessages(result.messages);
+          cursorRef.current = folded.cursor;
+          adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
+          setMessages(folded.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
           // path (evidence-based), not here. A plain cache re-verify only refreshes
@@ -400,26 +428,28 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 endP2(`${result.messages.length} msgs`);
                 setError(null); // successful fetch clears a previous failure (see above)
                 diagnoseOrdering('P2:full', sid, result.messages);
-                setMessages(result.messages);
-                setForkBoundaryIndex(result.forkBoundaryIndex);
                 // Degraded payload: render it (beats a blank screen) but do NOT
                 // seed cursor/cache from it — its total is the server's stale
                 // count and would corrupt the next ?since= delta.
                 if (result.stale) {
+                  setMessages(result.messages);
+                  setForkBoundaryIndex(result.forkBoundaryIndex);
                   setStale(result.staleReason ?? 'live read failed');
                   return;
                 }
                 setStale(null);
+                const folded = foldFullPayload(messagesRef.current, result);
+                setMessages(folded.messages);
+                setForkBoundaryIndex(result.forkBoundaryIndex);
                 adoptInitialUserText(result.initialUserText);
-                const fullCursor = result.cursor ?? result.messages.length;
-                cursorRef.current = fullCursor;
-                adoptOffset(result.messages.length, fullCursor, result.windowed);
+                cursorRef.current = folded.cursor;
+                adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
                 // Write to cache for next visit
                 setHistoryCache(sessionId, {
-                  messages: result.messages,
+                  messages: folded.messages,
                   forkBoundaryIndex: result.forkBoundaryIndex,
-                  msgCount: fullCursor,
-                  baseOffset: Math.max(0, fullCursor - result.messages.length),
+                  msgCount: folded.cursor,
+                  baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                   initialUserText: result.initialUserText ?? initialUserTextRef.current,
                 });
               }
@@ -495,17 +525,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
           // Live read recovered → adopt the fresh parse and drop the banner.
           setStale(null);
-          setMessages(result.messages);
+          const folded = foldFullPayload(messagesRef.current, result);
+          setMessages(folded.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
           adoptInitialUserText(result.initialUserText);
-          const fullCursor = result.cursor ?? result.messages.length;
-          cursorRef.current = fullCursor;
-          adoptOffset(result.messages.length, fullCursor, result.windowed);
+          cursorRef.current = folded.cursor;
+          adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setHistoryCache(sessionId, {
-            messages: result.messages,
+            messages: folded.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
-            msgCount: fullCursor,
-            baseOffset: Math.max(0, fullCursor - result.messages.length),
+            msgCount: folded.cursor,
+            baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
           });
         })
@@ -527,6 +557,52 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       || (baseOffsetRef.current === 0 && !olderWindowedRef.current)) return;
     loadingFullRef.current = true;
     setPhase2Pending(true);
+    const settle = () => {
+      loadingFullRef.current = false;
+      if (sessionIdRef.current === sessionId) setPhase2Pending(false);
+    };
+    // A transcript past the full read's byte ceiling has no "whole history" to
+    // fetch: the server only ever serves its tail. Its older part comes a page at
+    // a time, each page starting where the oldest row held ends.
+    if (baseOffsetRef.current === 0 && olderWindowedRef.current) {
+      const head = messagesRef.current.find((m) => m.timestamp)?.timestamp;
+      if (!head) { settle(); return; }
+      fetchSessionHistoryBefore(sessionId, head)
+        .then((page) => {
+          if (sessionIdRef.current !== sessionId) return;
+          if (page.unavailable) {
+            setOlderWindowed(false);
+            setOlderUnavailable(true);
+            log.info('session-history', `older history cannot be paged (${page.unavailable})`, { sessionId });
+            return;
+          }
+          const held = messagesRef.current;
+          // A refetch replaced the array while the page was in flight: the page no
+          // longer touches its head, and placing it anyway would leave a hole.
+          if (held.find((m) => m.timestamp)?.timestamp !== head) return;
+          const merged = prependOlderPage(held, page.messages);
+          const cursor = cursorRef.current + (merged.length - held.length);
+          cursorRef.current = cursor;
+          setMessages(merged);
+          if (page.reachedStart) pagedToStart.add(sessionId); else pagedToStart.delete(sessionId);
+          setOlderWindowed(!page.reachedStart);
+          setOlderPageSeq((n) => n + 1);
+          setHistoryCache(sessionId, {
+            messages: merged,
+            forkBoundaryIndex: undefined,
+            msgCount: cursor,
+            baseOffset: 0,
+            initialUserText: initialUserTextRef.current,
+          });
+          log.info('session-history', `older page +${merged.length - held.length} rows (reachedStart=${page.reachedStart})`, { sessionId });
+        })
+        .catch((e: Error) => {
+          // Keep what is held; the button stays, so the user can retry.
+          log.warn('session-history', `older page failed: ${e.message}`, { sessionId });
+        })
+        .finally(settle);
+      return;
+    }
     fetchSessionHistory(sessionId)
       .then((result) => {
         if (result.stale) return; // keep the tail view; banner path handles it
@@ -545,8 +621,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         });
       })
       .catch(() => { /* keep the tail view; user can retry */ })
-      .finally(() => { loadingFullRef.current = false; setPhase2Pending(false); });
+      .finally(settle);
   }, [sessionId]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory, initialUserText };
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, initialUserText };
 }

@@ -374,6 +374,30 @@ async function fetchSessionHistoryRaw(
   };
 }
 
+export interface SessionHistoryPage {
+  /** Rows strictly older than the `before` row, oldest first. */
+  messages: SessionHistoryMessage[];
+  /** The first bytes of the transcript were read: nothing older exists. */
+  reachedStart: boolean;
+  /** Set when this session's older history cannot be paged (a fork, a journal,
+   *  a rewound transcript): the caller must stop offering "Load earlier". */
+  unavailable?: string;
+}
+
+/** One page of history older than `before` (ISO timestamp of the oldest row held),
+ *  for a transcript past the full read's byte ceiling. User-initiated, so a slow
+ *  remote read is allowed its time; the server bounds it to a few 4 MB windows. */
+export async function fetchSessionHistoryBefore(
+  sessionId: string,
+  before: string,
+  signal?: AbortSignal,
+): Promise<SessionHistoryPage> {
+  const res = await apiGet<SessionHistoryPage>(
+    `/api/sessions/${sessionId}/history`, { before }, { signal, timeoutMs: 90_000 },
+  );
+  return { messages: res.messages ?? [], reachedStart: !!res.reachedStart, unavailable: res.unavailable };
+}
+
 export async function fetchSubagentHistory(
   sessionId: string,
   agentId: string,

@@ -34,7 +34,7 @@ import { fetchSessionHistory, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { promoteCompletedBlocks, buildIdOnlyEvidence, type DeltaEvidence } from './promote-blocks';
 import { getFinishedAgentIds } from './finished-agents-store';
 import { computeHistoryAnchor, collectUnsettledIds } from '@/hooks/history-anchor';
-import { planDeltaMerge } from '@/hooks/history-merge';
+import { planDeltaMerge, foldFullPayload } from '@/hooks/history-merge';
 import { recordFlight, trimStreamEvent } from '@/stream/flight-recorder';
 import { tracePhase } from '@/utils/main-thread-tracer';
 import { runWhenVisible } from '@/utils/page-visibility';
@@ -481,12 +481,13 @@ function registerGlobalListeners(): void {
             log.warn('session-cache', `bg delta inconsistent for ${sid.substring(0, 8)} — rebuilding (${plan.reason})`);
             fetchSessionHistory(sid, { tail: HISTORY_TAIL_LIMIT })
               .then((full) => {
-                const fullCursor = full.cursor ?? full.messages.length;
+                // A windowed tail must not drop the older pages the cache already holds.
+                const folded = foldFullPayload(historyCache.get(sid)?.messages ?? cached.messages, full);
                 historyCacheSet(sid, {
-                  messages: full.messages,
+                  messages: folded.messages,
                   forkBoundaryIndex: full.forkBoundaryIndex,
-                  msgCount: fullCursor,
-                  baseOffset: Math.max(0, fullCursor - full.messages.length),
+                  msgCount: folded.cursor,
+                  baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                   initialUserText: full.initialUserText ?? cached?.initialUserText,
                 });
               })
@@ -507,12 +508,12 @@ function registerGlobalListeners(): void {
         } else {
           // Full payload (no cache yet, or since out of range → rebuild).
           // May be tail-sliced: cursor counts the messages we did NOT receive.
-          const fullCursor = r.cursor ?? r.messages.length;
+          const folded = foldFullPayload(historyCache.get(sid)?.messages ?? cached?.messages ?? [], r);
           historyCacheSet(sid, {
-            messages: r.messages,
+            messages: folded.messages,
             forkBoundaryIndex: r.forkBoundaryIndex,
-            msgCount: fullCursor,
-            baseOffset: Math.max(0, fullCursor - r.messages.length),
+            msgCount: folded.cursor,
+            baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: r.initialUserText ?? cached?.initialUserText,
           });
           log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, { msgCount: r.messages.length });

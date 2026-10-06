@@ -51,28 +51,58 @@ function persistMockTurn(sessionId, prompt, answer) {
  * files it. Lets a browser spec reload and find what it sent (N37).
  */
 let lastInputUserUuid = null;
-function persistPlainTurn(sid, prompt, assistantEvent) {
+function persistFileOf(sid) {
   const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
   const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
-  if (!root || !sid || !allow.includes(sid)) return;
-  let file = null;
+  if (!root || !sid || !allow.includes(sid)) return null;
   try {
     for (const d of fs.readdirSync(root)) {
       const f = path.join(root, d, `${sid}.jsonl`);
-      if (fs.existsSync(f)) { file = f; break; }
+      if (fs.existsSync(f)) return f;
     }
-  } catch { return; }
+  } catch { /* no transcript dir */ }
+  return null;
+}
+// The user line of the turn in flight, once written (persistPlainUser).
+let persistedUser = null;
+/**
+ * The user line on its own, when a slow turn STARTS, the way the real CLI writes
+ * it before answering: a reload while the answer is still coming finds what was
+ * sent (its row, so its question) instead of nothing until the turn ends.
+ */
+function persistPlainUser(sid, prompt) {
+  const file = persistFileOf(sid);
   if (!file) return;
   const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
   let parent = null;
   try { parent = JSON.parse(lines[lines.length - 1]).uuid ?? null; } catch { /* torn tail */ }
   const userId = lastInputUserUuid || randomUUID();
-  const assistantId = randomUUID();
   const shared = { sessionId: sid, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false };
-  fs.appendFileSync(file, [
-    { ...shared, type: 'user', uuid: userId, parentUuid: parent, message: { role: 'user', content: prompt } },
-    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, message: assistantEvent.message },
-  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  fs.appendFileSync(file, JSON.stringify({ ...shared, type: 'user', uuid: userId, parentUuid: parent, message: { role: 'user', content: prompt } }) + '\n');
+  persistedUser = { file, userId };
+}
+function persistPlainTurn(sid, prompt, assistantEvent) {
+  if (!persistedUser) persistPlainUser(sid, prompt);
+  if (!persistedUser) return;
+  const { file, userId } = persistedUser;
+  persistedUser = null;
+  const shared = { sessionId: sid, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false };
+  // `MOCK_HEAVY_RESULTS:<n>x<kb>` in the prompt: the turn first makes n tool calls
+  // whose results weigh kb KB each (a turn of screenshots), so one turn can append
+  // more than a whale's tail window holds.
+  const heavy = /MOCK_HEAVY_RESULTS:(\d+)x(\d+)/.exec(prompt ?? '');
+  let parent = userId;
+  for (let i = 0; heavy && i < Number(heavy[1]); i++) {
+    const callId = randomUUID();
+    const resultId = randomUUID();
+    const tu = `toolu_heavy_${process.pid.toString(36)}_${i}`;
+    fs.appendFileSync(file, [
+      { ...shared, type: 'assistant', uuid: callId, parentUuid: parent, message: { id: `msg_heavy_${process.pid.toString(36)}_${i}`, role: 'assistant', content: [{ type: 'tool_use', id: tu, name: 'Bash', input: { command: `screenshot ${i}` } }] } },
+      { ...shared, type: 'user', uuid: resultId, parentUuid: callId, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tu, content: 'i'.repeat(Number(heavy[2]) * 1024) }] } },
+    ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+    parent = resultId;
+  }
+  fs.appendFileSync(file, JSON.stringify({ ...shared, type: 'assistant', uuid: randomUUID(), parentUuid: parent, message: assistantEvent.message }) + '\n');
 }
 
 // Parse flags

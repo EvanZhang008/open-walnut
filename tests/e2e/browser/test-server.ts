@@ -18,6 +18,8 @@ import zlib from 'node:zlib'
 import {
   allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
 } from './threads-fixture'
+// Transcript past the full read's byte ceiling (whale-history.spec.ts).
+import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -31,6 +33,9 @@ process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
 process.env.WALNUT_SPAWN_JOURNAL = path.join(tmpBase, 'spawn-journal.jsonl')
 process.env.WALNUT_STREAMS_DIR = path.join(tmpBase, 'daemon-streams')
 process.env.WALNUT_DISABLE_SEARCH = '1'
+// A low full-read ceiling so a ~17 MB fixture transcript is a "whale" (served as a
+// 4 MB tail, never read whole) without writing 40 MB on every boot.
+process.env.WALNUT_MAX_FILE_READ_BYTES = String(WHALE_CEILING_BYTES)
 // No unprompted model calls (auto-organize, project summaries) from the
 // fixture — the host's real ~/.aws would make quick-start POSTs hit live
 // Bedrock and move tasks mid-assertion. See backgroundAiDisabled().
@@ -680,6 +685,9 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      // Whale transcript fixtures (whale-history.spec.ts, and its own copy for whale-anchor-reach.spec.ts).
+      whaleTask(new Date().toISOString()),
+      whaleTask(new Date().toISOString(), 'anchor'),
       {
         // Same-browser task-store fixture (task-store-same-browser-instant.spec).
         // Its OWN task: that spec renames and completes it mid-run, which would
@@ -2218,6 +2226,8 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     ].join('\n')
   }
   await fs.writeFile(path.join(jsonlDir, 'pw-outline-window-session.jsonl'), longTranscript('pw-outline-window-session', '0199bd', 230))
+  await fs.writeFile(path.join(jsonlDir, `${WHALE_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow))
+  await fs.writeFile(path.join(jsonlDir, `${WHALE_ANCHOR_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow, WHALE_ANCHOR_SESSION))
   await fs.writeFile(path.join(jsonlDir, 'pw-pins-session.jsonl'), pinsTranscript('pw-pins-session', '0199aa'))
   await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
@@ -2232,7 +2242,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = RELOAD_SESSION
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION}`
     await fs.writeFile(
       path.join(tmpBase, 'session-message-queue.json'),
       JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),
@@ -2890,6 +2900,8 @@ await fs.writeFile(
       // Question stack + tree drawer fixtures (threads-fixture.ts), with their
       // seeded anchors, meta and pins on the record.
       ...allThreadsFixtures(sessionFixtureNow).map((s) => fixtureRecord(s, sessionFixtureNow, vscodeFixtureRoot)),
+      whaleRecord(sessionFixtureNow, vscodeFixtureRoot),
+      whaleRecord(sessionFixtureNow, vscodeFixtureRoot, 'anchor'),
       {
         claudeSessionId: 'pw-outline-window-session',
         taskId: 'pw-task-outline-window',

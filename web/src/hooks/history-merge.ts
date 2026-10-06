@@ -95,3 +95,59 @@ export function planDeltaMerge(
 
   return { kind: 'merged', messages: merged, cursor: result.cursor ?? (merged.length + baseOffset) };
 }
+
+// ── Older pages of a windowed transcript ─────────────────────────────────────
+// A transcript past the full read's byte ceiling is served as a sliding tail
+// (`windowed`), and its older part is paged in on request. Those pages live in
+// the same array as the tail, so two rules keep the array honest: a fresh tail
+// REPLACES the server's window but must not throw away pages the reader already
+// loaded above it, and pages only join the array where the two provably touch.
+
+type RowIdentity = { msgId?: string; timestamp?: string; role?: string };
+
+/** One parsed row's identity. A message split across the seam of two windows
+ *  shares its msgId but not its timestamp, so the pair tells the halves apart. */
+function rowKey(m: RowIdentity): string | undefined {
+  return m.msgId ? `${m.msgId}|${m.timestamp ?? ''}|${m.role ?? ''}` : undefined;
+}
+
+/**
+ * Keep what the reader loaded ABOVE a fresh windowed tail. The incoming head is
+ * looked up in what is held: found means the two touch, so the held rows before
+ * it are the tail's true predecessors and stay; not found (the window slid past
+ * everything held, or history was rewritten) means the gap is unknown and the
+ * tail stands alone, which only costs a click on "Load earlier".
+ */
+export function stitchHeldOlder<T extends RowIdentity>(held: readonly T[], incoming: readonly T[]): T[] {
+  const head = incoming.length > 0 ? rowKey(incoming[0]) : undefined;
+  if (!head) return incoming as T[];
+  const at = held.findIndex((m) => rowKey(m) === head);
+  return at > 0 ? [...held.slice(0, at), ...incoming] : incoming as T[];
+}
+
+/** Add one older page above what is held. Rows already held are skipped, so a
+ *  page fetched twice cannot double a row. */
+export function prependOlderPage<T extends RowIdentity>(held: readonly T[], page: readonly T[]): T[] {
+  const have = new Set<string>();
+  for (const m of held) { const k = rowKey(m); if (k) have.add(k); }
+  const fresh = page.filter((m) => { const k = rowKey(m); return !k || !have.has(k); });
+  return fresh.length === 0 ? held as T[] : [...fresh, ...held];
+}
+
+/**
+ * Fold a FULL payload into the array the client will hold. A non-windowed payload
+ * is the whole answer. A windowed one is only the server's tail, so the older
+ * pages already loaded stay above it, and the cursor (a count of the array the
+ * client holds, which the next anchored delta extends) grows by their length.
+ * `kept` is how many older rows stayed above the tail.
+ */
+export function foldFullPayload<T extends RowIdentity>(
+  held: readonly T[],
+  result: { messages: T[]; cursor?: number; windowed?: boolean },
+): { messages: T[]; cursor: number; kept: number } {
+  const cursor = result.cursor ?? result.messages.length;
+  if (!result.windowed) return { messages: result.messages, cursor, kept: 0 };
+  const messages = stitchHeldOlder(held, result.messages);
+  const kept = messages.length - result.messages.length;
+  return { messages, cursor: cursor + kept, kept };
+}

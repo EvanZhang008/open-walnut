@@ -502,7 +502,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const [canGoBack, setCanGoBack] = useState(false);
   /** A jump whose target row is outside the loaded tail: parked here while the
    *  full history loads, finished by the effect next to jumpToPlace. */
-  const pendingJump = useRef<{ msgId: string; quote?: SessionPinnedQuote; via: string; armBack?: boolean } | null>(null);
+  const pendingJump = useRef<{ msgId: string; quote?: SessionPinnedQuote; via: string; armBack?: boolean; heldAtRequest: number } | null>(null);
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
   // Key: queueId, Value: blocks.length at creation time. Set once, never updated.
@@ -521,7 +521,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory } = useSessionHistory(sessionId, historyVersion);
   const historyUnavailableRaw = parseHistoryUnavailable(error);
   const { blocks, isStreaming, completedLen, resetIfAbsorbed } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1086,6 +1086,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     ignoreScrollUntil.current = Date.now() + 100;
   }, [truncationOffset, messages, jumpForensics]);
 
+  // A page of older history lands ABOVE the rows held, and the render window counts
+  // from the newest row, so the page would sit behind "Show N earlier" and the click
+  // that loaded it would change nothing the reader can see. Open the newest batch of
+  // it right away, holding the reader's place (declared after the restore effect
+  // above so the distance is read from the layout that effect has just settled).
+  const seenOlderPageSeq = useRef(0);
+  useLayoutEffect(() => {
+    if (olderPageSeq === seenOlderPageSeq.current) return;
+    seenOlderPageSeq.current = olderPageSeq;
+    if (olderPageSeq === 0) return;
+    const el = containerRef.current;
+    if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
+    setTruncationOffset(prev => prev + LOAD_MORE_BATCH);
+  }, [olderPageSeq]);
+
   // Listen for expand-to-message events from parent panels (when clicking a truncated message)
   useEffect(() => {
     const el = containerRef.current;
@@ -1421,7 +1436,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         log.info('session', 'pin jump: target is outside the loaded tail — loading the full history first', {
           sessionId, msgId, via,
         });
-        pendingJump.current = { msgId, quote, via, armBack };
+        pendingJump.current = { msgId, quote, via, armBack, heldAtRequest: messages.length };
         loadFullHistory();
         return;
       }
@@ -1490,12 +1505,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       return;
     }
     if (!phase2Pending) {
+      // A transcript past the byte ceiling comes a page at a time: while the last
+      // load added rows and more lie above, keep going. A load that added nothing
+      // (failed, or at the start) ends the jump instead of retrying forever.
+      if (olderWindowed && messages.length > pending.heldAtRequest) {
+        pending.heldAtRequest = messages.length;
+        loadFullHistory();
+        return;
+      }
       pendingJump.current = null;
       log.warn('session', 'pin jump: message not in the transcript even after loading the full history', {
         sessionId, msgId: pending.msgId, via: pending.via,
       });
     }
-  }, [messages, phase2Pending, jumpToPlace, sessionId]);
+  }, [messages, phase2Pending, olderWindowed, loadFullHistory, jumpToPlace, sessionId]);
 
   /** An outline row's jump: the pin's passage. */
   const jumpToPin = useCallback((pinKey: string, opts?: { armBack?: boolean }) => {
@@ -3540,6 +3563,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               ? 'Loading earlier messages…'
               : olderHidden > 0 ? `Load ${olderHidden} earlier messages` : 'Load earlier messages'}
           </button>
+        )}
+        {/* The older part of this transcript cannot be paged (a fork, a journal, a
+            rewound transcript): say so rather than leave a button that does nothing. */}
+        {!onQuestionPage && hiddenOnPage === 0 && olderUnavailable && (
+          <div className="session-earlier-unavailable" data-testid="session-earlier-unavailable">
+            Earlier messages of this session are too large to load here.
+          </div>
         )}
         {/* ── Stack page: the passage it exists for, then its own turns ──
             Everything below the quote head is rendered by the SAME row renderer

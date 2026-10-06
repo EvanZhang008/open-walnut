@@ -796,6 +796,16 @@ async function reachDeltaAnchor(
   }
 }
 
+/** What one older page (`?before=`) holds at least: rows, and rows a reader sees as prose. */
+const HISTORY_PAGE_MIN_MESSAGES = 400
+const HISTORY_PAGE_MIN_TEXT = 40
+
+/** A row a reader sees as prose (the human's words or the assistant's), the unit a page counts. */
+function isProseRow(m: SessionHistoryMessage): boolean {
+  if (m.role === 'user') return !m.injected && m.text.trim() !== ''
+  return m.role === 'assistant' && m.text.trim() !== ''
+}
+
 function unavailableHistoryReason(record: SessionRecord): string {
   const caps = engineCaps(record.engine)
   if (caps.historySource === 'acp-journal') {
@@ -1271,6 +1281,50 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         ...(p1InitialUserText ? { initialUserText: p1InitialUserText } : {}),
         ...(p1FinishedIds && p1FinishedIds.length > 0 ? { finishedAgentIds: p1FinishedIds } : {}),
       })
+      return
+    }
+
+    // ── Older page (?before=<timestamp of the oldest row the client holds>) ──
+    // A transcript past the full read's byte ceiling is only ever served as its 4 MB
+    // tail (`windowed`), so "Load earlier messages" had nothing to fetch: every click
+    // re-served the same tail (a 38 MB session, 2026-10-04). The older part is read
+    // in bounded windows instead. Pages are never stamped `unsettled`: the client
+    // would re-ask for those ids on every delta, and the tail parse cannot answer.
+    const beforeRaw = typeof req.query.before === 'string' ? req.query.before : ''
+    if (beforeRaw) {
+      if (!Number.isFinite(Date.parse(beforeRaw))) {
+        res.status(400).json({ error: 'before must be an ISO timestamp' })
+        return
+      }
+      // A fork prepends its ancestors' transcript and an ACP session reads a journal,
+      // neither of which is a byte range of this one file: say so instead of paging wrong.
+      const unavailable = !record ? 'session-not-found'
+        : record.forkedFromSessionId ? 'fork'
+          : engineCaps(record.engine).historySource === 'acp-journal' ? 'journal' : undefined
+      if (unavailable || !record) {
+        res.json({ messages: [], reachedStart: false, ...(unavailable ? { unavailable } : {}) })
+        return
+      }
+      try {
+        const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
+        const page = await boundHostRead(record.host, () => readSessionHistoryBefore(
+          sessionId, record.cwd, record.host, beforeRaw,
+          { minMessages: HISTORY_PAGE_MIN_MESSAGES, minText: HISTORY_PAGE_MIN_TEXT, isText: isProseRow },
+        ))
+        if (!page) {
+          res.json({ messages: [], reachedStart: false, unavailable: 'unreadable' })
+          return
+        }
+        const rows = record.host
+          ? await rewriteHistoryRemoteImages(page.messages, record.host, sessionId, record.cwd)
+          : page.messages
+        res.json({ messages: rows, reachedStart: page.reachedStart })
+      } catch (err) {
+        if (err instanceof HostReconnectingError) { sendControlError(res, err); return }
+        const msg = err instanceof Error ? err.message : String(err)
+        log.web.warn('session history older page failed', { sessionId, host: record.host, before: beforeRaw, error: msg })
+        res.status(502).json({ error: condenseStaleReason(msg) })
+      }
       return
     }
 
