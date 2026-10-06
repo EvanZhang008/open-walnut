@@ -521,15 +521,13 @@ export function mergeThinkingOnly(messages: readonly SessionHistoryMessage[]): S
   return { ...messages[0], thinking: messages.map(m => m.thinking ?? '').filter(s => s.trim()).join('\n\n') };
 }
 
-/** Where a history run ends when a visible non-run message follows it: past its
- *  last tool-carrying member. Thinking-only rows after that led to the message
- *  that follows (the parser has simply not merged them into it yet) and render
- *  as its "Thinking ›" row, not inside the run — the history twin of
+/** Where a history run's members end when a visible non-run message follows
+ *  it: always the whole run. Thinking-only rows at its end led to the message
+ *  that follows, and they stay inside the run rather than splitting off as a
+ *  "Thinking ›" row of their own (2026-10-04) — the history twin of
  *  trailingThinkingStart (group-blocks.ts). */
 export function trailingThinkingOnlyStart(run: readonly SessionHistoryMessage[]): number {
-  let end = run.length;
-  while (end > 0 && isThinkingOnlyMessage(run[end - 1])) end--;
-  return end;
+  return run.length;
 }
 
 /** Assistant message carrying BOTH prose and (all-generic) tools. The CLI's
@@ -543,10 +541,16 @@ export function isTextPlusMergeableTools(m: SessionHistoryMessage): boolean {
     && m.tools.every(isMergeableHistoryTool);
 }
 
-/** A streaming run member: a finished generic tool, or the reasoning that led
- *  to it. The stream hands the two over as separate blocks; the run keeps them
+/** A streaming run member: a generic tool (running or done), or the reasoning
+ *  around it. The stream hands the two over as separate blocks; the run keeps them
  *  side by side the way the persisted message will (thinking, then its tools). */
 export type StreamRunMember = StreamingBlock & { type: 'tool_call' | 'thinking' };
+
+/** Is any of a run's streaming members a tool still running? The run's row then
+ *  breathes: the call is inside the closed run, not a card of its own. */
+export function streamRunHasCallingTool(members: readonly StreamRunMember[]): boolean {
+  return members.some((b) => b.type === 'tool_call' && b.status === 'calling');
+}
 
 /** The collapsed line and failure count of a run's streaming members. Reasoning
  *  is deliberately not a verb in the phrase: the row says what the turn DID, and
@@ -571,9 +575,10 @@ export function runRowKey(blocks: readonly StreamRunMember[], fallback: number):
 }
 
 /** A merged run's streaming members, in arrival order: each thinking block its
- *  own "Thinking ›" row, each finished tool its card — the same body a persisted
- *  run shows (MergedHistoryToolRun), so the row does not change shape when
- *  history absorbs it. `live` marks the last member as still receiving tokens. */
+ *  own "Thinking ›" row, each tool its card (a running one says so) — the same
+ *  body a persisted run shows (MergedHistoryToolRun), so the row does not change
+ *  shape when history absorbs it. `live` marks the last member as still
+ *  receiving tokens. */
 export function StreamRunMembers({ members, live, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   members: readonly StreamRunMember[];
   live?: boolean;
@@ -592,7 +597,7 @@ export function StreamRunMembers({ members, live, sessionId, sessionCwd, session
         <GenericToolCall
           key={b.toolUseId ?? i}
           tool={{ name: b.name ?? 'unknown', input: b.input ?? {} }}
-          status={b.status === 'error' ? 'error' : 'done'}
+          status={b.status === 'error' ? 'error' : b.status === 'calling' ? 'calling' : 'done'}
           result={b.result}
           sessionCwd={sessionCwd}
           sessionHost={sessionHost}

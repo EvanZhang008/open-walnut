@@ -2,14 +2,14 @@
  * lane-rows — the main chat's merge passes, applied to ONE subagent lane.
  *
  * The Background tasks panel reads a running agent straight out of the streaming
- * buffer, and it must read the way the main conversation reads: finished generic
- * tools AND the thinking that led to them fold into one "Ran 3 commands, read a
- * file ›" run (the reasoning sits next to its call inside the run), thinking that
- * led to prose (or to an Agent, or to nothing yet) is its own "Thinking ›" row,
- * transparent blocks (an empty live tail, a ghost placeholder) neither render nor
- * split a run. Everything else — prose, a tool still executing (the in-flight
- * card), a plan card, a nested Agent — is its own row. Pure, so the projection is
- * unit-testable without a browser.
+ * buffer, and it must read the way the main conversation reads: generic tools
+ * (running or done) AND the thinking around them fold into one "Ran 3 commands,
+ * read a file ›" run (the reasoning sits next to its call inside the run, also
+ * when it led to the prose after it), thinking with no tool around it is its own
+ * "Thinking ›" row, transparent blocks (an empty live tail, a ghost placeholder)
+ * neither render nor split a run. Everything else — prose, a plan card, a nested
+ * Agent — is its own row. Pure, so the projection is unit-testable without a
+ * browser.
  */
 
 import type { StreamingBlock } from './stream-reducer';
@@ -17,7 +17,7 @@ import { isRunMemberBlock, isTransparentBlock, trailingThinkingStart, type Group
 
 export type ToolBlock = StreamingBlock & { type: 'tool_call' };
 export type ThinkingBlock = StreamingBlock & { type: 'thinking' };
-/** A run member, in arrival order: a finished tool or the reasoning before it. */
+/** A run member, in arrival order: a tool or the reasoning around it. */
 export type RunBlock = ToolBlock | ThinkingBlock;
 
 export type LaneRow =

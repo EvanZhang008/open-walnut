@@ -8,7 +8,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from './BackgroundTasksPanel';
 import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
 import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
-import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
+import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
@@ -240,10 +240,10 @@ interface SessionChatHistoryProps {
 // traces through the exact projection the timeline renders.
 
 /** True when a streaming block merges into a muted "Ran N commands ›" run:
- *  a COMPLETED generic tool_call, or the main-lane thinking between two of them
- *  (isRunMemberBlock). A still-calling tool stays a full card so the user
- *  watches it live; it collapses into the run when done. Special blocks
- *  (Task/Agent anchors, plan cards, plan writes, ghosts) never merge. */
+ *  a generic tool_call, still calling or done, or the main-lane thinking around
+ *  them (isRunMemberBlock). A calling tool joins the closed run at once and the
+ *  run breathes until it returns (2026-10-04). Special blocks (Task/Agent
+ *  anchors, plan cards, plan writes, ghosts) never merge. */
 function isMergeableStreamItem(
   item: TimelineItem,
   consumed: Set<number>,
@@ -2454,6 +2454,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         && m.role === 'assistant' && (m.thinking ?? '').trim()) {
         msg = { ...m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
         parts.pop();
+      } else if (prevPart?.kind === 'run' && !atForkDivider
+        && m.role === 'assistant' && (m.thinking ?? '').trim()) {
+        // Reasoning that led to this answer right after a run rides that run,
+        // not a "Thinking ›" row of its own between the run and the answer
+        // (2026-10-04). The stream folds it the same way (trailingThinkingStart).
+        const reasoning = { ...m, text: '', tools: undefined };
+        prevPart.members.push({ m: reasoning, globalIndex });
+        prevPart.memberMsgs.push(reasoning);
+        msg = { ...m, thinking: undefined };
       }
       if (isTextPlusMergeableTools(msg)) {
         // CLI content order is prose first, tool_use after. Render the prose as
@@ -2604,13 +2613,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }
 
-  // One pass folds finished tools AND the thinking that led to them into runs
-  // (the CLI emits reasoning and the call it leads to as separate blocks; a turn
-  // that thinks before every call must not read "Thinking › / Ran a command ›"
-  // per step). A stretch that reached a tool is a tool run (runStart); one that
-  // is only reasoning is a "Thinking ›" row (thinkingRunStart). Reasoning at the
-  // end of a run that led to prose, an Agent or a plan card splits off into its
-  // own row (trailingThinkingStart); at the live tail it stays and pulses.
+  // One pass folds tools AND the thinking around them into runs (the CLI emits
+  // reasoning and the call it leads to as separate blocks; a turn that thinks
+  // before every call must not read "Thinking › / Ran a command ›" per step).
+  // A stretch that reached a tool is a tool run (runStart); one that is only
+  // reasoning is a "Thinking ›" row (thinkingRunStart). Reasoning at the end of
+  // a run stays in it, whatever follows (trailingThinkingStart).
   // DOM-null items between members don't split either; any visible non-member does.
   const runStart = new Map<number, number[]>();
   const runMember = new Set<number>();
@@ -3625,7 +3633,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <MergedHistoryToolRun
               messages={boundaryHistoryRun.memberMsgs}
               trailingBlocks={runMembersOf(leadingStreamRunIndices)}
-              trailingLive={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])}
+              trailingLive={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])
+                || streamRunHasCallingTool(runMembersOf(leadingStreamRunIndices))}
               assistantLabel={assistantLabel}
               sessionId={sessionId}
               sessionCwd={sessionCwd}
@@ -3703,9 +3712,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 const members = runMembersOf(runIdx);
                 const { phrase, failCount } = streamRunSummary(members);
                 const thinkingLive = isThinkingTail(runIdx[runIdx.length - 1]);
+                // A running call is inside the closed run, so the row breathes for it.
+                const running = thinkingLive || streamRunHasCallingTool(members);
                 return (
                   <div key={`run-${item.index}`} className="session-msg-bare">
-                    <ToolRunShell phrase={phrase} failCount={failCount} running={thinkingLive}>
+                    <ToolRunShell phrase={phrase} failCount={failCount} running={running}>
                       <StreamRunMembers
                         members={members}
                         live={thinkingLive}

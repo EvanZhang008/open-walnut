@@ -1,10 +1,11 @@
 /**
  * The Background tasks panel reads a running subagent's lane with the MAIN chat's
- * merge rules (web/src/stream/lane-rows.ts): finished generic tools and the
- * thinking between them fold into one "Ran N commands" run, a tool still
- * executing stays its own in-flight card, thinking with no tool around it is one
- * "Thinking ›" row, transparent blocks neither render nor split a run, and a
- * nested Agent is its own row. Pins the projection the reader draws.
+ * merge rules (web/src/stream/lane-rows.ts): generic tools, running or done, and
+ * the thinking around them fold into one "Ran N commands" run (2026-10-04: the
+ * run stays one closed line whatever arrives, and reasoning is never pulled out
+ * beside it), thinking with no tool around it is one "Thinking ›" row,
+ * transparent blocks neither render nor split a run, and a nested Agent is its
+ * own row. Pins the projection the reader draws.
  */
 import { describe, it, expect } from 'vitest';
 import { laneRows, runToolBlocks } from '../../../web/src/stream/lane-rows';
@@ -33,10 +34,10 @@ describe('block predicates', () => {
     expect(isTransparentBlock(text('hi'))).toBe(false);
   });
 
-  it('only a FINISHED generic tool merges: calling tools, Agent anchors, plan cards and plan writes stay cards', () => {
+  it('a generic tool merges running or done; Agent anchors, plan cards and plan writes stay cards', () => {
     expect(isMergeableToolBlock(tool('a', 'done'))).toBe(true);
     expect(isMergeableToolBlock(tool('a', 'error'))).toBe(true);
-    expect(isMergeableToolBlock(tool('a', 'calling'))).toBe(false);
+    expect(isMergeableToolBlock(tool('a', 'calling'))).toBe(true);
     expect(isMergeableToolBlock(tool('a', 'done', { name: 'Agent' }))).toBe(false);
     expect(isMergeableToolBlock(tool('a', 'done', { name: 'ExitPlanMode', input: { plan: 'x' } }))).toBe(false);
     expect(isMergeableToolBlock(tool('a', 'done', { name: 'Write', input: { file_path: '/h/.claude/plans/p.md' } }))).toBe(false);
@@ -49,26 +50,25 @@ describe('block predicates', () => {
     expect(isMergeableToolBlock(tool('a', 'done', { input: {}, result: 'out' }))).toBe(true);
   });
 
-  it('thinking with words is a run member like a finished tool; blank thinking, prose and calling tools are not', () => {
+  it('thinking with words is a run member like a tool; blank thinking and prose are not', () => {
     expect(isRunThinkingBlock(thinking('why not'))).toBe(true);
     expect(isRunThinkingBlock(thinking('  '))).toBe(false);
     expect(isRunMemberBlock(thinking('why not'))).toBe(true);
     expect(isRunMemberBlock(tool('a', 'done'))).toBe(true);
-    expect(isRunMemberBlock(tool('a', 'calling'))).toBe(false);
+    expect(isRunMemberBlock(tool('a', 'calling'))).toBe(true);
     expect(isRunMemberBlock(text('prose'))).toBe(false);
   });
 });
 
 describe('laneRows', () => {
-  it('folds finished tools into one run and keeps the in-flight tool as its own card', () => {
+  it('folds every tool into one run, the one still executing included', () => {
     const rows = laneRows(groupLaneChildren(P, [
       text('Looking.'),
       tool('a', 'done'), tool('b', 'done'),
       tool('c', 'calling'),
     ]));
-    expect(rows.map(r => r.kind)).toEqual(['block', 'run', 'block']);
-    expect(rows[1].kind === 'run' && rows[1].blocks.map(b => b.toolUseId)).toEqual(['a', 'b']);
-    expect(rows[2].kind === 'block' && rows[2].block.type === 'tool_call' && rows[2].block.status).toBe('calling');
+    expect(rows.map(r => r.kind)).toEqual(['block', 'run']);
+    expect(rows[1].kind === 'run' && rows[1].blocks.map(b => b.toolUseId)).toEqual(['a', 'b', 'c']);
   });
 
   it('a run continues across transparent blocks but breaks on prose', () => {
@@ -108,42 +108,41 @@ describe('laneRows', () => {
     expect(rows[0].kind === 'thinking' && rows[0].blocks.map(b => b.content)).toEqual(['a', 'b']);
   });
 
-  it('reasoning that led to PROSE splits off the run as its own row (the persisted twin puts it above the answer)', () => {
+  it('reasoning that led to PROSE stays in the run, not a Thinking row of its own beside it', () => {
     const rows = laneRows(groupLaneChildren(P, [
       thinking('a'), tool('t1', 'done'), thinking('b'), tool('t2', 'done'),
       thinking('now I can answer'),
       text('Here is the answer.'),
     ]));
-    expect(rows.map(r => r.kind)).toEqual(['run', 'thinking', 'block']);
+    expect(rows.map(r => r.kind)).toEqual(['run', 'block']);
     expect(rows[0].kind === 'run' && rows[0].blocks.map(b => b.type === 'thinking' ? `think:${b.content}` : b.toolUseId))
-      .toEqual(['think:a', 't1', 'think:b', 't2']);
-    expect(rows[1].kind === 'thinking' && rows[1].blocks.map(b => b.content)).toEqual(['now I can answer']);
+      .toEqual(['think:a', 't1', 'think:b', 't2', 'think:now I can answer']);
   });
 
-  it('reasoning that led to a nested Agent or a plan card splits off too; reasoning at the live tail stays in the run', () => {
+  it('reasoning that led to a nested Agent or a plan card stays in the run too, as does reasoning at the live tail', () => {
     const nested = 'toolu_nested';
     const beforeAgent = laneRows(groupLaneChildren(P, [
       tool('t1', 'done'), thinking('spawn a helper'),
       { type: 'tool_call', toolUseId: nested, name: 'Agent', input: { description: 'deeper' }, status: 'calling', parentToolUseId: P },
     ]));
-    expect(beforeAgent.map(r => r.kind)).toEqual(['run', 'thinking', 'agent']);
+    expect(beforeAgent.map(r => r.kind)).toEqual(['run', 'agent']);
     const beforePlan = laneRows(groupLaneChildren(P, [
       tool('t1', 'done'), thinking('write the plan'),
       tool('p', 'done', { name: 'ExitPlanMode', input: { plan: 'x' } }),
     ]));
-    expect(beforePlan.map(r => r.kind)).toEqual(['run', 'thinking', 'block']);
+    expect(beforePlan.map(r => r.kind)).toEqual(['run', 'block']);
     const liveTail = laneRows(groupLaneChildren(P, [tool('t1', 'done'), thinking('still going')]));
     expect(liveTail.map(r => r.kind)).toEqual(['run']);
     expect(liveTail[0].kind === 'run' && liveTail[0].blocks.length).toBe(2);
   });
 
-  it('a tool still executing keeps the reasoning that led to it in the run, and joins it when done', () => {
+  it('a tool still executing is in the run with the reasoning that led to it, and stays there when done', () => {
     const live = laneRows(groupLaneChildren(P, [
       thinking('a'), tool('t1', 'done'), thinking('b'),
       tool('t2', 'calling'),
     ]));
-    expect(live.map(r => r.kind)).toEqual(['run', 'block']);
-    expect(live[0].kind === 'run' && live[0].blocks.length).toBe(3);
+    expect(live.map(r => r.kind)).toEqual(['run']);
+    expect(live[0].kind === 'run' && live[0].blocks.length).toBe(4);
     const done = laneRows(groupLaneChildren(P, [
       thinking('a'), tool('t1', 'done'), thinking('b'),
       tool('t2', 'done'),

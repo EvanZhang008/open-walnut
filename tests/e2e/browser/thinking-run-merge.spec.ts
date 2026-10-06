@@ -8,11 +8,11 @@
  * "Fetched 2 pages ›" row. These specs pin the rule on every surface that folds
  * rows: the live stream, the history/stream boundary run, and persisted history
  * that happens to carry thinking-only messages (a half-written message read
- * mid-turn) — and the rule's edge: reasoning belongs to the run only when a TOOL
- * follows it; reasoning that led to prose is its own row above the answer, the
- * way the persisted message renders it. Boundaries that still split a run
- * (prose, notices, an in-flight card, an Agent chip) are pinned in
- * ghost-run-merge.spec.ts.
+ * mid-turn). Since 2026-10-04 the run also keeps the reasoning that led to the
+ * prose after it, and a call still in flight is inside the closed run (the row
+ * breathes) instead of a full card under it: the reader asked for one closed
+ * line whatever arrives. Boundaries that still split a run (prose, notices, an
+ * Agent chip) are pinned in ghost-run-merge.spec.ts.
  *
  * Events that the CLI writes as ONE assistant line (a step's thinking and its
  * tool_use) are dispatched inside ONE page.evaluate, so they land in the same JS
@@ -214,7 +214,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await page.screenshot({ path: test.info().outputPath('zebra-expanded.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
   })
 
-  test('reasoning streaming into a run pulses the row; reasoning with no tool stays a Thinking row', async ({ page }) => {
+  test('reasoning and a running call pulse the closed run; the reasoning before the answer stays in it', async ({ page }) => {
     await mockSession(page, [{ role: 'assistant', text: 'Parent turn.', timestamp: '2026-01-01T00:00:00.000Z' }])
     const panel = await openSession(page)
     await expect(panel.locator('.session-history')).toContainText('Parent turn.')
@@ -226,12 +226,20 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Thinking')
     await expect(streamRows.locator('.tool-run-live-dot')).toHaveCount(1)
 
-    // The call it leads to is in flight: a full card under the thinking row.
+    // The call it leads to is in flight: it joins the closed run at once (no
+    // card opens under it) and the row breathes while it runs.
     await startTool(page, 'WebFetch', 'fetch_1')
-    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(1)
-    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Thinking')
+    await expect(streamRows).toHaveCount(1)
+    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
+    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
+    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-live-dot')).toHaveCount(1)
+    await page.screenshot({ path: test.info().outputPath('running-call-closed.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
+    // Opened, the running call is there and says so.
+    await streamRows.locator(':scope > .tool-run-toggle').click()
+    await expect(streamRows.locator('.chat-tool-block-calling')).toHaveCount(1)
+    await streamRows.locator(':scope > .tool-run-toggle').click()
 
-    // Finished: the two become ONE run and the row reads as what it did.
+    // Finished: the same row, now still, reads as what it did.
     await finishTool(page, 'fetch_1')
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
@@ -245,19 +253,17 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-live-dot')).toHaveCount(1)
     await expect(panel.locator('.session-streaming-panel .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
 
-    // The answer arrives: that reasoning led to PROSE, not to a tool, so it
-    // leaves the run and stands above the answer — where the persisted message
-    // will render it — and nothing pulses any more.
+    // The answer arrives: that reasoning led to PROSE, and it stays in the run
+    // rather than splitting off as a "Thinking ›" row of its own; nothing pulses.
     await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'Both sources agree.', msgId: 'answer' })
     await expect(panel.locator('.session-streaming-panel')).toContainText('Both sources agree.')
-    await expect(streamRows).toHaveCount(2)
-    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Fetched a page', 'Thinking'])
+    await expect(streamRows).toHaveCount(1)
+    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
+    await expect(panel.locator('.session-streaming-panel .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
     await expect(streamRows.locator('.tool-run-live-dot')).toHaveCount(0)
-    await streamRows.first().locator(':scope > .tool-run-toggle').click()
-    expect(await bodyOrder(streamRows.first())).toEqual(['thinking', 'tool:WebFetch'])
-    await streamRows.nth(1).locator(':scope > .tool-run-toggle').click()
-    await expect(streamRows.nth(1).locator('.chat-thinking-content')).toHaveText('Now compare with the second source.')
-    await page.screenshot({ path: test.info().outputPath('prose-splits-trailing-thinking.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
+    await streamRows.locator(':scope > .tool-run-toggle').click()
+    expect(await bodyOrder(streamRows)).toEqual(['thinking', 'tool:WebFetch', 'thinking'])
+    await page.screenshot({ path: test.info().outputPath('prose-keeps-trailing-thinking.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
   })
 
   test('a reader who opened live reasoning keeps it open when its tool folds it into a run', async ({ page }) => {
@@ -278,7 +284,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     expect(await bodyOrder(streamRows)).toEqual(['thinking', 'tool:Bash'])
   })
 
-  test('reasoning that led to the answer renders above it live AND after absorption', async ({ page }) => {
+  test('reasoning that led to the answer rides the run live AND after absorption', async ({ page }) => {
     const messages: Record<string, unknown>[] = [
       { role: 'assistant', text: 'Parent turn.', timestamp: '2026-01-01T00:00:00.000Z' },
     ]
@@ -293,7 +299,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     ])
     const streamRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
     await expect(panel.locator('.session-streaming-panel')).toContainText('The file has it.')
-    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file', 'Thinking'])
+    await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
 
     // The parser attaches each step's reasoning to the message of its block.
     messages.push(
@@ -307,9 +313,15 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false })
 
     await expect(panel.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0)
+    // The answer's own reasoning (msg_b) rides the run before it, as it did live.
     const historyRows = panel.locator('.session-history .tool-run-row')
-    await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file', 'Thinking'])
+    await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
     await expect(panel.locator('.session-history')).toContainText('The file has it.')
+    await historyRows.locator(':scope > .tool-run-toggle').click()
+    const innerThinking = historyRows.locator('.tool-run-body .tool-run-row')
+    await expect(innerThinking).toHaveCount(2)
+    await innerThinking.nth(1).locator('.tool-run-toggle').click()
+    await expect(innerThinking.nth(1).locator('.chat-thinking-content')).toHaveText('Now I can answer.')
     await page.screenshot({ path: test.info().outputPath('absorbed-same-shape.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
   })
 

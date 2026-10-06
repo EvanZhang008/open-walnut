@@ -129,6 +129,21 @@ function focusTaskCard(page: Page, id: string): Locator {
   return page.locator(`.todo-focus-card[data-task-id="${id}"]`)
 }
 
+/** The running call sits inside the closed run, which breathes while it runs
+ *  (2026-10-04: a running call folds like a finished one). Open the run when
+ *  it is closed; the in-flight card is inside. */
+async function expectRunningTool(panel: Locator, timeout = 10_000): Promise<void> {
+  const run = panel.locator('.session-streaming-panel .tool-run-row')
+    .filter({ has: panel.page().locator('.tool-run-toggle > .tool-run-live-dot') })
+    .first()
+  await expect(run).toBeVisible({ timeout })
+  if (await run.locator(':scope > .tool-run-body').count() === 0) {
+    await run.locator(':scope > .tool-run-toggle').click()
+  }
+  await expect(panel.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
+    .toBeVisible()
+}
+
 async function expectNoTaskPill(container: Locator): Promise<void> {
   await expect(container.locator('.task-session-pill')).toHaveCount(0)
 }
@@ -267,8 +282,7 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   const running = await statusFor(page, sessionId)
   expect(running.statusRevision).toBeGreaterThan(baseline.statusRevision)
   await expect(panel.locator('.session-panel-badge', { hasText: 'Running' })).toHaveCount(1)
-  await expect(panel.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible({ timeout: 10_000 })
+  await expectRunningTool(panel)
 
   releaseStale()
   await expectHydrationDone(page)
@@ -280,8 +294,7 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   await expect(panel.locator('.session-panel-badge', { hasText: 'Running' })).toHaveCount(1)
   await expect(dock.locator('.dock-task-phase-badge'))
     .toHaveClass(/dock-task-phase-streaming/)
-  await expect(panel.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible()
+  await expectRunningTool(panel)
 
   const currentTask = await findHomeTask(page, taskId)
   await expectNoTaskPill(currentTask)
@@ -321,8 +334,7 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
     processStatus: 'running',
     revision: running.statusRevision,
   })
-  await expect(reloadedPanel.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible()
+  await expectRunningTool(reloadedPanel)
   const reloadedTask = await findHomeTask(page, taskId)
   await expectNoTaskPill(reloadedTask)
   await expectTaskMenuStatus(page, reloadedTask, 'AI is working...')
@@ -407,8 +419,7 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   const running = await statusFor(page, sessionId)
   expect(running.statusRevision).toBeGreaterThan(before.statusRevision)
   await expect(panel.locator('.session-panel-badge', { hasText: 'Running' })).toHaveCount(1)
-  await expect(panel.locator('.chat-tool-block-calling').filter({ hasText: TOOL_NAME }))
-    .toBeVisible({ timeout: 10_000 })
+  await expectRunningTool(panel)
 
   await page.reload()
   const reloadedPanel = page.locator(

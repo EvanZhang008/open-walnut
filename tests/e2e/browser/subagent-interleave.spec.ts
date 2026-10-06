@@ -17,9 +17,9 @@
  * reads `3 agents … 2 running · 1 done`), never a card per agent, never an in-place
  * dropdown; the chip and the pinned Background bar both open the two-column
  * Background tasks panel (agents on the left, the selected agent's transcript on
- * the right). The reader draws the transcript with the MAIN chat's rows: finished
- * tools fold into one "Ran N commands ›" run, a tool still executing is the
- * in-flight card, and a running lane ends in the "… is working…" indicator.
+ * the right). The reader draws the transcript with the MAIN chat's rows: tools,
+ * running or finished, fold into one closed "Ran N commands ›" run that breathes
+ * while a call runs, and a running lane ends in the "… is working…" indicator.
  *
  * Asserts (real React components in a real browser):
  *   1. main text interrupted by a subagent text line stays ONE contiguous block
@@ -202,17 +202,17 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(panel.locator('.bg-tasks-detail-title')).toHaveText('explore pricing');
     const detail = panel.locator('.bg-tasks-detail');
     await expect(detail).toContainText('Now I have the two distinct enums.');
-    await expect(detail).toContainText('grep enum');
-    // The reader uses the main chat's rows: the still-running Bash is the
-    // in-flight card (never folded into a run), and the live lane ends in the
-    // working indicator, named after the agent.
-    await expect(detail.locator('.chat-tool-block-calling')).toHaveCount(1);
-    await expect(detail.locator('.chat-tool-block-calling .chat-tool-block-calling-dot')).toHaveCount(1);
-    await expect(detail.locator('.tool-run-row')).toHaveCount(0);
+    // The reader uses the main chat's rows: the still-running Bash folds into a
+    // closed run that breathes while it runs (no card opens for it), and the
+    // live lane ends in the working indicator, named after the agent.
+    await expect(detail.locator('.tool-run-row .tool-run-label')).toHaveText(['Ran a command']);
+    await expect(detail.locator('.tool-run-row .tool-run-live-dot')).toHaveCount(1);
+    await expect(detail.locator('.chat-tool-block-calling')).toHaveCount(0);
+    await expect(detail).not.toContainText('grep enum');
     await expect(detail.locator('.session-working-indicator')).toHaveCount(1);
     await expect(detail.locator('.session-working-label')).toHaveText('explore agent is working…');
-    // Two more commands finish: the reader folds them into ONE "Ran 2 commands ›"
-    // run (same merge the main chat applies), the in-flight one stays a card.
+    // Two more commands finish and a read starts: all of it joins the SAME
+    // closed run (the merge the main chat applies), running calls included.
     await injectEvent(page, 'session:tool-use', {
       sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'toolu_sub_bash_2', input: { command: 'ls src' }, parentToolUseId: PARENT,
     });
@@ -224,11 +224,13 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await injectEvent(page, 'session:tool-use', {
       sessionId: SESSION_ID, toolName: 'Read', toolUseId: 'toolu_sub_read', input: { file_path: '/tmp/x.md' }, parentToolUseId: PARENT,
     });
-    await expect(detail.locator('.tool-run-row .tool-run-label')).toHaveText(['Ran 2 commands']);
+    await expect(detail.locator('.tool-run-row .tool-run-label')).toHaveText(['Ran 3 commands, read a file']);
     await expect(detail).not.toContainText('ls src');
     await detail.locator('.tool-run-toggle').click();
+    await expect(detail).toContainText('grep enum');
     await expect(detail).toContainText('ls src');
     await expect(detail).toContainText('cat a.ts');
+    await expect(detail.locator('.chat-tool-block-calling')).toHaveCount(2);
     await expect(history).not.toContainText('Now I have the two distinct enums.');
     await page.keyboard.press('Escape');
     await expect(panel).toHaveCount(0);
@@ -375,13 +377,19 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     // While the agent runs, the reader IS the live lane from the stream buffer (no
     // fetch, no poll): the 60 probes and the narration the chat refused to show.
     await expect(panel.locator('.bg-tasks-live-lane')).toHaveCount(1);
-    await expect(panel.locator('.bg-tasks-detail')).toContainText('probe 12');
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Lane narration that must stay off the main conversation.');
     await expect(panel.locator('.bg-tasks-detail')).not.toContainText('Transcript line from the running agent.');
     await expect(panel.locator('.bg-tasks-detail-head .wf-modal-live')).toHaveCount(1);
-    // 60 still-calling probes are 60 in-flight cards (a calling tool never folds),
-    // and the lane ends in the working indicator clocked from the ledger's start.
-    await expect(panel.locator('.bg-tasks-detail .tool-run-row')).toHaveCount(0);
+    // 60 still-calling probes are ONE closed run that breathes (2026-10-04: a
+    // running call folds too); opened, they are 60 in-flight cards. The lane
+    // ends in the working indicator clocked from the ledger's start.
+    const laneRun = panel.locator('.bg-tasks-detail .tool-run-row');
+    await expect(laneRun).toHaveCount(1);
+    await expect(laneRun.locator('.tool-run-label')).toHaveText('Ran 60 commands');
+    await expect(laneRun.locator('.tool-run-live-dot')).toHaveCount(1);
+    await expect(panel.locator('.bg-tasks-detail .chat-tool-block-calling')).toHaveCount(0);
+    await laneRun.locator('.tool-run-toggle').click();
+    await expect(panel.locator('.bg-tasks-detail')).toContainText('probe 12');
     await expect(panel.locator('.bg-tasks-detail .chat-tool-block-calling')).toHaveCount(60);
     await expect(panel.locator('.bg-tasks-detail .session-working-label')).toHaveText('explore agent is working…');
     await expect(panel.locator('.bg-tasks-detail .session-working-meta')).toContainText(/9[4-9]s|1m 3[0-9]s/);
@@ -391,6 +399,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await chip.click();
     await expect(panel).toHaveCount(1);
     await expect(panel.locator('.bg-tasks-detail-title')).toHaveText('Find other insights needing audit log');
+    await panel.locator('.bg-tasks-detail .tool-run-toggle').click();
     await expect(panel.locator('.bg-tasks-detail')).toContainText('probe 59');
     await expect(history).not.toContainText('probe 59');
     await page.keyboard.press('Escape');

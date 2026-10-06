@@ -1403,6 +1403,8 @@ if (outputFormat === 'stream-json') {
     //     "stream-partial-signature"      → signature_delta (must NOT reach UI)
     //     "stream-partial-speed"          → two messages with per-message usage and a
     //                                       tool gap between them (speed readout)
+    //     "stream-partial-work"           → reasoning + a Bash call that runs, reasoning
+    //                                       + a Read that runs, reasoning + the answer
     //
     //   The full text streamed is 'Hello, world!' split into small deltas.
     if (effectiveMessage.startsWith('stream-partial-')) {
@@ -1427,6 +1429,77 @@ if (outputFormat === 'stream-json') {
       // message, result.usage for the turn). Drives the speed readout: the gap
       // must not count as generation time, the tokens must be the CLI's counts.
       // Honours chunk-delay: (default 150ms) so the windows have real width.
+      // A working turn the way a real one streams: three API messages, each
+      // opening with reasoning; the first two end in a call that RUNS for
+      // chunk-delay x 20 (default 3s) before its result lands, the last one in
+      // the answer. Lets a client be looked at while a call is in flight and
+      // while reasoning streams between calls (the closed-run check, 2026-10-04).
+      if (mode === 'work') {
+        (async () => {
+          const gap = chunkDelayMs > 0 ? chunkDelayMs : 150;
+          const pause = (ms = gap) => new Promise((r) => setTimeout(r, ms));
+          const model = modelFlag || 'mock-model';
+          const steps = [
+            { think: ['Checking ', 'what the ', 'folder holds.'], tool: { id: 'toolu_mock_work_1', name: 'Bash', input: { command: 'ls -la' } }, result: 'README.md\nsrc' },
+            { think: ['Now the ', 'readme.'], tool: { id: 'toolu_mock_work_2', name: 'Read', input: { file_path: '/tmp/mock-work/README.md' } }, result: '# Mock' },
+            { think: ['That is ', 'enough to ', 'answer.'], text: ['The folder ', 'has a readme ', 'and a src folder.'] },
+          ];
+          for (let s = 0; s < steps.length; s++) {
+            const step = steps[s];
+            const id = `${msgId}_w${s + 1}`;
+            emitStream(wrap({ type: 'message_start', message: { id, role: 'assistant', content: [], model, usage: { input_tokens: 10, output_tokens: 1 } } }));
+            emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }));
+            for (const t of step.think) {
+              emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } }));
+              await pause();
+            }
+            emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+            // The CLI writes each finished block as its own assistant line under
+            // the message's id, reasoning included.
+            emitStream({
+              type: 'assistant',
+              message: { id, role: 'assistant', model, content: [{ type: 'thinking', thinking: step.think.join(''), signature: 'mock-signature' }], stop_reason: null, usage: { input_tokens: 10, output_tokens: 5 } },
+              session_id: outputSessionId,
+            });
+            if (step.tool) {
+              emitStream(wrap({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: step.tool.id, name: step.tool.name, input: {} } }));
+              emitStream(wrap({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify(step.tool.input) } }));
+              emitStream(wrap({ type: 'content_block_stop', index: 1 }));
+              emitStream({
+                type: 'assistant',
+                message: { id, role: 'assistant', model, content: [{ type: 'tool_use', ...step.tool }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 20 } },
+                session_id: outputSessionId,
+              });
+              emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } }));
+              emitStream(wrap({ type: 'message_stop' }));
+              await pause(gap * 20);
+              emitStream({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: step.tool.id, content: step.result }] }, session_id: outputSessionId });
+              continue;
+            }
+            emitStream(wrap({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }));
+            for (const t of step.text) {
+              emitStream(wrap({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: t } }));
+              await pause();
+            }
+            emitStream(wrap({ type: 'content_block_stop', index: 1 }));
+            const answer = step.text.join('');
+            emitStream({
+              type: 'assistant',
+              message: { id, role: 'assistant', model, content: [{ type: 'text', text: answer }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 20 } },
+              session_id: outputSessionId,
+            });
+            emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20 } }));
+            emitStream(wrap({ type: 'message_stop' }));
+            process.stdout.write(JSON.stringify({
+              type: 'result', subtype: 'success', is_error: false,
+              duration_ms: gap * 50, num_turns: 3, result: answer, session_id: outputSessionId,
+              total_cost_usd: 0.002, usage: { input_tokens: 30, output_tokens: 60 },
+            }) + '\n', () => process.exit(0));
+          }
+        })();
+        return;
+      }
+
       if (mode === 'speed') {
         (async () => {
           const gap = chunkDelayMs > 0 ? chunkDelayMs : 150;

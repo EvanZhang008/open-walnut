@@ -98,6 +98,12 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
     .toBe('running')
   await expect(homePanel.locator('.session-panel-badge', { hasText: 'Running' }))
     .toHaveCount(1, { timeout: 2_000 })
+  // The running call sits inside the closed run, which breathes while it runs
+  // (2026-10-04); opened, the call is there and not done yet.
+  const liveRun = homePanel.locator('.session-streaming-panel .tool-run-row')
+    .filter({ has: page.locator('.tool-run-live-dot') })
+  await expect(liveRun).toHaveCount(1, { timeout: 10_000 })
+  await liveRun.locator(':scope > .tool-run-toggle').click()
   const activeTool = homePanel.locator('.chat-tool-block').filter({ hasText: TOOL_NAME })
   await expect(activeTool).toBeVisible({ timeout: 10_000 })
   await expect(activeTool).not.toHaveClass(/chat-tool-block-done/)

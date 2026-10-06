@@ -2,8 +2,8 @@
  * StreamingBlockView — one streaming block as a chat row, plus the live-turn
  * WorkingIndicator. Shared by the main conversation (SessionChatHistory) and a
  * subagent's lane (LaneTimeline), so a subagent's transcript reads with exactly
- * the rows the main chat draws: the same tool cards, the same in-flight card
- * while a tool runs, the same "Thinking ›" row and the same working indicator.
+ * the rows the main chat draws: the same tool cards (a running one inside its
+ * closed run), the same "Thinking ›" row and the same working indicator.
  *
  * Permission cards live here too (they are a block type): one shared store per
  * request id, see web/src/stores/permission-request-store.ts.

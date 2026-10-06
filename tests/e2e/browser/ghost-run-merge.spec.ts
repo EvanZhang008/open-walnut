@@ -252,7 +252,7 @@ test.describe('Session timeline collapsed rows', () => {
     await expect(panel).not.toContainText('child_boundary')
   })
 
-  test('keeps visible prose, system notices, agents and running tools as boundaries; thinking rides the run', async ({ page }) => {
+  test('keeps visible prose, system notices and agents as boundaries; thinking and a running tool ride the run', async ({ page }) => {
     await mockSession(page, [{ role: 'assistant', text: 'Parent turn.', timestamp: '2026-01-01T00:00:00.000Z' }])
     await openSession(page)
     const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
@@ -277,17 +277,21 @@ test.describe('Session timeline collapsed rows', () => {
       sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'running_command', input: { command: 'printf running' },
     })
     await completedTool(page, 'Bash', 'after_running')
-    await expect(toolRows).toHaveCount(5)
+    // A running call is no boundary (2026-10-04): it is inside the closed run,
+    // which breathes until it returns, and no card opens for it.
+    await expect(toolRows).toHaveCount(4)
     await expect(toolRows.locator('.tool-run-label')).toHaveText([
-      'Ran a command', 'Ran 2 commands', 'Ran a command', 'Ran a command', 'Ran a command',
+      'Ran a command', 'Ran 2 commands', 'Ran a command', 'Ran 3 commands',
     ])
-    await expect(panel.locator('.session-streaming-panel .tool-run-live-dot')).toHaveCount(0)
+    await expect(panel.locator('.session-streaming-panel .tool-run-live-dot')).toHaveCount(1)
+    await expect(toolRows.last().locator('.tool-run-live-dot')).toHaveCount(1)
     await expect(panel.locator('.bg-tasks-chip')).toHaveCount(1)
-    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(1)
+    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
     await expect(panel).toContainText('Visible notice.')
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'running_command', result: 'done' })
     await expect(toolRows).toHaveCount(4)
     await expect(toolRows.last().locator('.tool-run-label')).toHaveText('Ran 3 commands')
+    await expect(panel.locator('.session-streaming-panel .tool-run-live-dot')).toHaveCount(0)
   })
 
   test('keeps failures and retries through duplicate results and history absorption', async ({ page }) => {
