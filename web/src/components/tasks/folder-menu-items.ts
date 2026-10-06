@@ -26,15 +26,23 @@ export interface FolderMenuActions {
   onDelete?: (groupId: string) => void;
 }
 
+/** The setting rows a folder shares with the task menu, built from its open tasks (`useBulkTaskSettings`). */
+export interface FolderSettingRows {
+  pinned: ContextMenuItem[];
+  fields: ContextMenuItem[];
+}
+
 /**
  * The row list for one right-clicked folder — module scope and exported so the gating
  * (which handlers a surface passes, project known or still loading) is testable as a plain
- * function. `openProjectPicker` is the one side effect a row can have.
+ * function. `openProjectPicker` is the one side effect a row can have. The settings group reads
+ * like the task menu's: Pinned, Project, then each plugin field (Sprint).
  */
 export function buildFolderMenuItems(
   target: FolderMenuTarget,
   actions: FolderMenuActions,
   openProjectPicker: (target: FolderMenuTarget) => void,
+  settings: FolderSettingRows = { pinned: [], fields: [] },
 ): ContextMenuItem[] {
   const { onRename, onToggleCollapse, onMoveToProject, onHide, onDelete } = actions;
   return [
@@ -51,6 +59,7 @@ export function buildFolderMenuItems(
       onSelect: () => onToggleCollapse?.(target.groupId),
     },
     { divider: true },
+    ...settings.pinned,
     {
       // A row that VANISHES is indistinguishable from "this surface doesn't
       // support moving", so an unknown project shows the row DISABLED with the
@@ -63,6 +72,8 @@ export function buildFolderMenuItems(
       title: target.project === undefined ? 'Folder project still loading' : undefined,
       onSelect: () => { if (target.project !== undefined) openProjectPicker(target); },
     },
+    ...settings.fields,
+    { divider: true },
     {
       key: 'hide',
       label: 'Hide from Focus',

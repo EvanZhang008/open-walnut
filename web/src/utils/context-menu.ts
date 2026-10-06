@@ -136,6 +136,13 @@ export interface ContextMenuItem {
    * readable without opening anything. Not for an on/off switch (that is `toggle` + `checked`).
    */
   value?: ReactNode;
+  /**
+   * One pill of a pick-one row drawn on ONE line, the way the task menu draws Pinned: consecutive
+   * items with the same `pill.group` share a row headed by `pill.label`. `checked` lights the pill
+   * (the row is `menuitemradio`), `pill.color` tints it. Each pill is its own item, so the arrows and
+   * Enter reach it like any row.
+   */
+  pill?: { group: string; label: string; color?: string };
   /** Convenience for conditional items: `when: false` drops the row. */
   when?: boolean;
 }

@@ -376,6 +376,8 @@ interface UseTasksReturn {
     value: string | null,
     donor?: { sprint?: string; ext?: Record<string, unknown> },
   ) => void;
+  /** setPluginField on many tasks (a folder's or project's Sprint row): one optimistic pass, one request, partial success. */
+  batchSetPluginField: (ids: string[], field: tasksApi.PluginFieldRef, value: string | null) => Promise<tasksApi.BatchTaskOutcome[]>;
   /**
    * Multi-select batch ops — ONE API round-trip + one optimistic setTasks pass for
    * the whole selection (a per-task fan-out would rewrite the store N times and
@@ -1214,6 +1216,31 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     withRetry(() => tasksApi.setPluginFieldValue(id, field, value)).catch((err: Error) => onOpError(err, [id]));
   }, [onOpError]);
 
+  /** One plugin field on many tasks (a folder's or project's Sprint row): one optimistic pass, one request. */
+  const batchSetPluginField = useCallback(async (
+    ids: string[],
+    field: tasksApi.PluginFieldRef,
+    value: string | null,
+  ): Promise<tasksApi.BatchTaskOutcome[]> => {
+    if (ids.length === 0) return [];
+    const idSet = new Set(ids);
+    const now = new Date().toISOString();
+    setTasks((prev) => prev.map((t) => (idSet.has(t.id)
+      ? { ...t, ...applyPluginFieldPatch({ sprint: t.sprint, ext: { ...t.ext } }, field, value), updated_at: now }
+      : t)));
+    try {
+      const { failed } = await withRetry(() => tasksApi.batchSetPluginFieldValue(ids, field, value));
+      if (failed.length > 0) {
+        resyncTasks(failed.map((f) => f.id));
+        showOperationError(`${failed.length} of ${ids.length} tasks could not be updated.`);
+      }
+      return failed;
+    } catch (err) {
+      onOpError(err as Error, ids);
+      return [{ id: ids.join(','), ok: false, error: (err as Error).message }];
+    }
+  }, [onOpError, resyncTasks, showOperationError]);
+
   // ── Multi-select batch ops ──
   // One round-trip + one optimistic pass for the whole selection. Partial success:
   // the server applies what it can and reports the rest in `failed`, so we roll the
@@ -1490,5 +1517,5 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     refetch();
   }, [refetch]);
 
-  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, completedHidden, ensureAllTasks, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, setPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
+  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, completedHidden, ensureAllTasks, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, setPluginField, batchSetPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
 }

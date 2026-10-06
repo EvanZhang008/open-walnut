@@ -652,7 +652,8 @@ test('each project sorts its own tasks from its right-click menu, newest update 
   };
   const menu = await projectMenu(projectA);
   await expect(menu.getByText('Sort tasks by', { exact: true })).toHaveCount(0);
-  await expect(menu.getByRole('menuitemradio')).toHaveCount(0);
+  // The Pinned pills are radios too; no ROW of the menu is one any more.
+  await expect(menu.locator('.wn-context-menu-item[role="menuitemradio"]')).toHaveCount(0);
   await expect(sortRow(menu)).toContainText('Last updated');
   await sortRow(menu).click();
   await expect(menu).toHaveCount(0);

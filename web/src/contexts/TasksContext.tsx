@@ -37,6 +37,8 @@ export interface TasksContextValue {
     value: string | null,
     donor?: { sprint?: string; ext?: Record<string, unknown> },
   ) => void;
+  /** One plugin field on many tasks in one request; resolves with what did not apply. */
+  batchSetPluginField: (ids: string[], field: PluginFieldRef, value: string | null) => Promise<BatchTaskOutcome[]>;
   /** Multi-select batch ops — one round-trip; resolve with the per-task `failed` list. */
   batchSetPhase: (ids: string[], phase: string) => Promise<BatchTaskOutcome[]>;
   batchDelete: (ids: string[], opts?: { force?: boolean }) => Promise<BatchTaskOutcome[]>;

@@ -28,6 +28,12 @@ export interface UseFocusBarReturn {
   reorder: (newIds: string[]) => Promise<void>;
   setTier: (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => Promise<void>;
   /**
+   * Many tasks at once (a folder's or a project's Pinned row): every task lands in
+   * `tier`, the unpinned ones pinned at the bottom in the order given; `null`
+   * unpins them all. One request; a completed task is never newly pinned.
+   */
+  setTierBulk: (taskIds: string[], tier: FocusTier | null) => Promise<void>;
+  /**
    * Local-only optimistic pin into a tier (no server call). Used by quick-add so a
    * newly-created task shows up in its Focus tier the instant the user hits Enter,
    * before the create round-trip returns the real id. Pair with replaceLocalPinId
@@ -313,6 +319,43 @@ export function useFocusBar(): UseFocusBarReturn {
     }
   }, [patchTasksLocal, applyFocusData, showOperationError]);
 
+  const setTierBulk = useCallback(async (taskIds: string[], tier: FocusTier | null) => {
+    if (taskIds.length === 0) return;
+    lastWriteRef.current = Date.now();
+    const byId = new Map(tasksRef.current.map((t) => [t.id, t]));
+    const orders = tasksRef.current.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
+    let nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
+    const patches: Record<string, Partial<Task>> = {};
+    for (const id of taskIds) {
+      const task = byId.get(id);
+      if (!task) continue;
+      if (tier === null) {
+        if (task.pinned) patches[id] = { pinned: false, focus_tier: undefined, pin_order: undefined };
+        continue;
+      }
+      // Same rule as the server: an existing pin survives completion, a new one is refused.
+      if (!task.pinned && (task.status === 'done' || task.phase === 'COMPLETE')) continue;
+      patches[id] = task.pinned
+        ? { focus_tier: tierField(tier) }
+        : { pinned: true, pin_order: nextOrder++, focus_tier: tierField(tier) };
+    }
+    const ids = Object.keys(patches);
+    if (ids.length === 0) return;
+    // The server echoes one task:updated per changed task; the response below is the truth.
+    for (const id of ids) guardEcho(`update:${id}`);
+    patchTasksLocal(patches);
+    try {
+      const result = await focusApi.setTierBulk(ids, tier);
+      applyFocusData(result);
+      if (result.failed.length > 0) {
+        showOperationError(`${result.failed.length} of ${ids.length} tasks could not be ${tier === null ? 'unpinned' : 'pinned'}.`);
+      }
+    } catch {
+      showOperationError(tier === null ? 'Could not unpin those tasks. Please try again.' : 'Could not pin those tasks. Please try again.');
+      focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
+    }
+  }, [guardEcho, patchTasksLocal, applyFocusData, showOperationError]);
+
   // ── Optimistic local pin helpers (quick-add: show in tier before the create
   // round-trip returns a real id). Pure task patches + a separate persist call so
   // the editor can pipeline temp-id → real-id without a perceptible gap. ──
@@ -386,7 +429,7 @@ export function useFocusBar(): UseFocusBarReturn {
     focusIds, satelliteIds, waitIds,
     focusTasks, satelliteTasks, waitTasks,
     customTiers, customTiersLoaded, customTierIds,
-    pin, unpin, reorder, setTier,
+    pin, unpin, reorder, setTier, setTierBulk,
     addLocalPin, replaceLocalPinId, removeLocalPin, commitPin,
     isPinned, tierOf,
     visible, setVisible,

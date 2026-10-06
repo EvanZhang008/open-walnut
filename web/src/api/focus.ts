@@ -59,6 +59,21 @@ export async function setTaskTier(taskId: string, tier: FocusTier): Promise<Focu
   );
 }
 
+/** One task's batch outcome when it could not be applied ('not_found', 'complete', …). */
+export interface PinBatchFailure { id: string; ok: false; error: string }
+
+/**
+ * Pin many tasks into ONE tier (pinning the unpinned ones at the bottom), or unpin
+ * them all with `tier: null`, in one request and one store write. The response
+ * carries the full tier split, like every other focus write.
+ */
+export async function setTierBulk(
+  taskIds: string[],
+  tier: FocusTier | null,
+): Promise<FocusBarData & { changed: string[]; failed: PinBatchFailure[] }> {
+  return apiPost('/api/focus/batch', { task_ids: taskIds, tier });
+}
+
 // ── Custom tier registry ──
 
 export async function fetchCustomTiers(): Promise<{ tiers: CustomTierDef[] }> {

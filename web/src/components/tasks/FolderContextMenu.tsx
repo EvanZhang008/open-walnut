@@ -26,6 +26,7 @@ import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { ProjectPickerFlyout } from './TaskKebabMenu';
 import { useCursorFlyout } from './CursorFlyout';
 import { buildFolderMenuItems, type FolderMenuActions, type FolderMenuTarget } from './folder-menu-items';
+import { useBulkTaskSettings } from './BulkTaskSettings';
 
 export type { FolderMenuActions, FolderMenuTarget };
 
@@ -46,6 +47,7 @@ export function useFolderContextMenu(actions: FolderMenuActions): FolderContextM
   // The picker keeps its own copy of the target + the cursor point (in state, so it stays
   // referentially stable for `useMenuPlacement`) because the menu has closed by the time it opens.
   const picker = useCursorFlyout<FolderMenuTarget>();
+  const settings = useBulkTaskSettings();
   const { onMoveToProject } = actions;
 
   const open = menu.state;
@@ -54,7 +56,12 @@ export function useFolderContextMenu(actions: FolderMenuActions): FolderContextM
       {open && (
         <ContextMenu
           point={open.point}
-          items={buildFolderMenuItems(open.payload, actions, (target) => picker.open(target, open.point))}
+          items={buildFolderMenuItems(
+            open.payload,
+            actions,
+            (target) => picker.open(target, open.point),
+            settings.rows({ kind: 'folder', groupId: open.payload.groupId }, open.point),
+          )}
           onClose={menu.close}
           ariaLabel={`Folder actions for ${open.payload.label || 'folder'}`}
           testId="folder-ctx-menu"
@@ -75,6 +82,7 @@ export function useFolderContextMenu(actions: FolderMenuActions): FolderContextM
           onClose={picker.close}
         />
       )}
+      {settings.node}
     </>
   );
 

@@ -491,6 +491,20 @@ export interface PluginFieldRef {
   coreField?: 'sprint';
 }
 
+/** Write one field value on many tasks in one request. Partial success: `failed` lists what did not apply. */
+export function batchSetPluginFieldValue(
+  taskIds: string[],
+  field: PluginFieldRef,
+  value: string | null,
+): Promise<{ changed: Task[]; failed: BatchTaskOutcome[] }> {
+  return apiPost('/api/tasks/batch/plugin-field', {
+    task_ids: taskIds,
+    pluginId: field.pluginId,
+    key: field.key,
+    value,
+  });
+}
+
 /** Write a field value ('' or null clears) through the generic endpoint. */
 export async function setPluginFieldValue(
   taskId: string,

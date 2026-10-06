@@ -56,4 +56,20 @@ describe('buildFolderMenuItems', () => {
     const rows = items({ groupId: 'g1', label: 'Triage', project: 'Marina', collapsed: true }, actions).filter((i) => !i.divider)
     expect(rows.map((i) => String(i.label))).toEqual(['Rename folder', 'Expand folder', 'Delete folder'])
   })
+
+  it('the settings group reads like the task menu: Pinned pills, Project, then each plugin field', () => {
+    const pill = (tier: string) => ({ key: `pin-${tier}`, label: tier, pill: { group: 'pinned', label: 'Pin to' } })
+    const rows = items({ groupId: 'g1', label: 'Triage', project: 'Marina' }, full(), vi.fn())
+    const withSettings = normalizeContextMenuItems(buildFolderMenuItems(
+      { groupId: 'g1', label: 'Triage', project: 'Marina' }, full(), vi.fn(),
+      { pinned: [pill('Focus'), pill('Satellite')], fields: [{ key: 'field-p.sprint', label: 'Sprint', value: 'Set…' }] },
+    ))
+    expect(withSettings.map((i) => (i.divider ? '|' : String(i.label)))).toEqual([
+      'Rename folder', 'Collapse folder', '|', 'Focus', 'Satellite', 'Project', 'Sprint', '|', 'Hide from Focus', '|', 'Delete folder',
+    ])
+    // Without settings (a surface outside the stores), nothing else moves.
+    expect(rows.filter((i) => !i.divider).map((i) => String(i.label))).toEqual([
+      'Rename folder', 'Collapse folder', 'Project', 'Hide from Focus', 'Delete folder',
+    ])
+  })
 })

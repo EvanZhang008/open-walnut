@@ -110,12 +110,16 @@ function usePluginField(
 
 // ── Option flyout — portalled, useMenuPlacement, lazy options fetch ──
 
-export function PluginFieldFlyout({ open, anchorRef, field, current, onPick, onClose }: {
+export function PluginFieldFlyout({ open, anchorRef, anchorPoint, field, current, mixed, onPick, onClose }: {
   open: boolean;
   anchorRef: RefObject<HTMLElement | null>;
+  /** Anchor at a viewport point instead (a context menu row that has already closed). Keep it in state. */
+  anchorPoint?: { x: number; y: number } | null;
   field: PluginTaskField;
   /** Current stored value. undefined = unset. */
   current: string | undefined;
+  /** Many tasks with different values: no option is the current one, so none carries the check. */
+  mixed?: boolean;
   /** null = clear. */
   onPick: (value: string | null) => void;
   onClose: () => void;
@@ -125,6 +129,8 @@ export function PluginFieldFlyout({ open, anchorRef, field, current, onPick, onC
   const listRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, anchorRef, listRef, {
     minHeight: 120,
+    anchorPoint,
+    ...(anchorPoint ? { align: 'left' as const } : {}),
     onAnchorLost: onClose,
   });
 
@@ -146,20 +152,23 @@ export function PluginFieldFlyout({ open, anchorRef, field, current, onPick, onC
 
   if (!open) return null;
 
-  const row = (value: string | null, label: string, hint?: string, isSuggested?: boolean) => (
+  const row = (value: string | null, label: string, hint?: string, isSuggested?: boolean) => {
+    const isCurrent = !mixed && (current ?? null) === value;
+    return (
     <button
       key={value ?? '·none·'}
-      className={`task-kebab-project-opt${(current ?? null) === value ? ' active' : ''}`}
+      className={`task-kebab-project-opt${isCurrent ? ' active' : ''}`}
       onClick={(e) => { e.stopPropagation(); onPick(value); onClose(); }}
     >
-      <span className="task-kebab-project-check">{(current ?? null) === value ? '✓' : ''}</span>
+      <span className="task-kebab-project-check">{isCurrent ? '✓' : ''}</span>
       <span className="task-kebab-project-opt-name">
         {label}
         {isSuggested && <span className="plugin-field-current-mark"> · current</span>}
       </span>
       {hint && <span className="plugin-field-opt-hint">{hint}</span>}
     </button>
-  );
+    );
+  };
 
   return createPortal(
     <div

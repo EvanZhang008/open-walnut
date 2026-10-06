@@ -538,8 +538,18 @@ show inline after the open ones, other completed hits that show the query fold i
   the right, drawn like the task menu's Project row, so the value reads without opening anything. Running
   it closes the menu and the host opens its own picker at the cursor (`useCursorFlyout` +
   `OptionPickerFlyout` in `CursorFlyout.tsx`, or `ProjectPickerFlyout` for the project list): never inline
-  rows, never a native `<select>`. An on/off switch stays `toggle` + `checked`. Today: the folder menu's
-  Project row and the project menu's Sort row. Ratchets: `tests/web/{folder,project}-context-menu-items.test.ts`.
+  rows, never a native `<select>`. An on/off switch stays `toggle` + `checked`. A pick-one group drawn on
+  one line (the task menu's Pinned pills) is a run of `ContextMenuItem.pill` items sharing a `group`; each
+  pill is its own item, so the arrows and Enter reach it. Ratchets: `tests/web/{folder,project}-context-menu-items.test.ts`.
+- **A folder's and a project's menus carry the task menu's settings group: Pinned, Project, Sprint**
+  (and every other plugin field). A group has no pin or sprint of its own, so the rows read what its OPEN
+  tasks share (a tier lit only when every one is there, "Mixed" when a field differs) and a pick writes
+  every open task, the folder's subfolders included, in ONE request (`POST /api/focus/batch`,
+  `POST /api/tasks/batch/plugin-field`; 100 per-task requests would starve the browser's connection
+  pool). From 20 tasks a pick asks first. The rows come from `useBulkTaskSettings` inside the menu hooks,
+  so no surface threads handlers. A project's Project row moves it into another project, which is the
+  server's rename-onto-an-existing-name merge, after a confirm; the Inbox has no such row. Ratchets:
+  `tests/web/bulk-task-settings.test.ts`, `tests/e2e/browser/group-menu-settings.spec.ts`.
 - **A ContextMenu hook on a row whose text is selectable passes `ignorePressSelection: true`.** WebKit (the
   Mac app) selects the word under a right-press before `contextmenu` fires, and without the flag that
   selection hands the gesture to the native menu: the folder menu never opened on a right-click on its name

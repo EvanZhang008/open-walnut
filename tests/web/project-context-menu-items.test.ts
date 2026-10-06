@@ -20,7 +20,7 @@ import {
   type ProjectMenuActions,
   type ProjectMenuDialogs,
   type ProjectMenuTarget,
-} from '@/components/tasks/ProjectContextMenu'
+} from '@/components/tasks/project-menu-items'
 import { normalizeContextMenuItems } from '@/utils/context-menu'
 
 /** No dialog in flight: the common case. */
@@ -248,3 +248,42 @@ describe('buildProjectMenuItems: a project orders its own tasks', () => {
     expect(labels({ project: 'Marina' }, tierActions())).not.toContain('Sort')
   })
 })
+
+describe('buildProjectMenuItems: the settings group', () => {
+  const settings = {
+    pinned: [{ key: 'pin-focus', label: 'Focus', pill: { group: 'pinned', label: 'Pin to' } }],
+    fields: [{ key: 'field-p.sprint', label: 'Sprint', value: 'S7' }],
+  }
+
+  it('reads Pinned, Project, Sprint, then Sort, in one group', () => {
+    const rows = normalizeContextMenuItems(buildProjectMenuItems(
+      { project: 'Marina', sort: 'updated' }, listActions({ onSetSort: vi.fn() }), dialogs({ pickProject: vi.fn() }), settings,
+    )).map((i) => (i.divider ? '|' : String(i.label)))
+    const start = rows.indexOf('Focus')
+    expect(rows.slice(start - 1, start + 5)).toEqual(['|', 'Focus', 'Project', 'Sprint', 'Sort', '|'])
+  })
+
+  it('the Project row shows the project and opens the picker for it', () => {
+    const pickProject = vi.fn()
+    const projectRow = buildProjectMenuItems({ project: 'Marina' }, tierActions(), dialogs({ pickProject }), settings)
+      .find((i) => i.key === 'move-project')
+    expect(projectRow?.value).toBe('Marina')
+    projectRow?.onSelect?.()
+    expect(pickProject).toHaveBeenCalledWith('Marina')
+  })
+
+  it('the Inbox has no Project row (nothing to move), but keeps Pinned and Sprint', () => {
+    const labelsInbox = normalizeContextMenuItems(buildProjectMenuItems(
+      { project: '' }, tierActions(), dialogs({ pickProject: vi.fn() }), settings,
+    )).map((i) => String(i.label ?? ''))
+    expect(labelsInbox).not.toContain('Project')
+    expect(labelsInbox).toEqual(expect.arrayContaining(['Focus', 'Sprint']))
+  })
+
+  it('the Project row goes dead while a rename or delete is in flight', () => {
+    const projectRow = buildProjectMenuItems({ project: 'Marina' }, tierActions(), dialogs({ busy: true, pickProject: vi.fn() }))
+      .find((i) => i.key === 'move-project')
+    expect(projectRow?.disabled).toBe(true)
+  })
+})
+

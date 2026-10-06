@@ -73,7 +73,7 @@ interface TaskKebabMenuProps {
   onSetPhase?: (id: string, phase: string) => void;
 }
 
-const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
+export const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
   { value: 'focus', label: 'Focus', icon: ICONS.ICON_TIER_FOCUS },
   { value: 'satellite', label: 'Satellite', icon: ICONS.ICON_TIER_SATELLITE },
   { value: 'wait', label: 'Parked', icon: ICONS.ICON_TIER_WAIT },
@@ -81,7 +81,7 @@ const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
 
 // Parked (id `wait`) is amber (set aside): the old grey half-circle was
 // indistinguishable from Satellite's grey outline at a glance.
-const TIER_COLORS: Record<FocusTier, string> = {
+export const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--tier-satellite, #5856d6)',
   wait: 'var(--tier-wait, #ff9f0a)',

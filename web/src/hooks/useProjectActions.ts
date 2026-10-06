@@ -62,6 +62,8 @@ export interface ProjectActionsHandle {
   /** A dialog/request is in flight — hosts that own a trigger button disable it. */
   busy: boolean;
   rename: (project: string) => Promise<void>;
+  /** Move everything in `project` into `target` (the Project row on a project): asks, then merges. */
+  mergeInto: (project: string, target: string) => Promise<void>;
   remove: (project: string) => Promise<void>;
 }
 
@@ -72,15 +74,7 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
   const tasksStore = useTasksContextSafe();
   const [busy, setBusy] = useState(false);
 
-  const rename = useCallback(async (project: string) => {
-    const next = await prompt({
-      title: `Rename project “${project}”`,
-      message: 'Renaming onto an existing project merges them (case-insensitive).',
-      defaultValue: project,
-      confirmLabel: 'Rename',
-    });
-    const target = next?.trim();
-    if (!target || target === project) return;
+  const applyRename = useCallback(async (project: string, target: string, failTitle: string) => {
     setBusy(true);
     // Optimistic, in this order: registry row (pickers, badges, the detail pane's
     // title) then the loaded task rows (board group header). Both settle on the
@@ -96,11 +90,37 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     } catch (err) {
       settleRegistry(false);
       undoTasks();
-      await alert({ title: 'Rename failed', message: err instanceof Error ? err.message : String(err) });
+      await alert({ title: failTitle, message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [prompt, alert, onChanged, tasksStore]);
+  }, [alert, onChanged, tasksStore]);
+
+  const rename = useCallback(async (project: string) => {
+    const next = await prompt({
+      title: `Rename project “${project}”`,
+      message: 'Renaming onto an existing project merges them (case-insensitive).',
+      defaultValue: project,
+      confirmLabel: 'Rename',
+    });
+    const target = next?.trim();
+    if (!target || target === project) return;
+    await applyRename(project, target, 'Rename failed');
+  }, [prompt, applyRename]);
+
+  // A project cannot sit inside another one, so "Project: <other>" on a project means
+  // what renaming onto an existing name already means: one project, the other's
+  // tasks and folders inside it. The server's rename is that merge.
+  const mergeInto = useCallback(async (project: string, target: string) => {
+    if (!project || !target || target.toLowerCase() === project.toLowerCase()) return;
+    const ok = await confirm({
+      title: `Move “${project}” into “${target}”?`,
+      message: `Every task and folder in “${project}” moves to “${target}”, and “${project}” goes away.`,
+      confirmLabel: 'Move',
+    });
+    if (!ok) return;
+    await applyRename(project, target, 'Move failed');
+  }, [confirm, applyRename]);
 
   // Same semantics + copy as ProjectDetailPane.handleDelete: local claim = row
   // drop (tasks → Inbox); provider claim = ?remote=1 CASCADE, which deletes the
@@ -152,5 +172,5 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     }
   }, [confirm, alert, onChanged, tasksStore]);
 
-  return { busy, rename, remove };
+  return { busy, rename, mergeInto, remove };
 }

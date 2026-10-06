@@ -466,6 +466,51 @@ export function ContextMenu({
         onPointerDown={(e) => e.stopPropagation()}
       >
         {rows.map((row, index) => {
+          if (row.pill) {
+            // The run's FIRST pill draws the whole line; the rest of the run is already inside it.
+            const group = row.pill.group;
+            if (index > 0 && rows[index - 1].pill?.group === group) return null;
+            let end = index;
+            while (end + 1 < rows.length && rows[end + 1].pill?.group === group) end += 1;
+            const why = reasonRows.get(end);
+            return (
+              <Fragment key={`pills-${group}`}>
+                <div className="wn-context-menu-pills" role="group" aria-label={row.pill.label}>
+                  <span className="wn-context-menu-pills-label">{row.pill.label}</span>
+                  <span className="wn-context-menu-pills-options">
+                    {rows.slice(index, end + 1).map((pill, offset) => {
+                      const at = index + offset;
+                      return (
+                        <button
+                          key={pill.key ?? `pill-${at}`}
+                          id={itemId(at)}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={!!pill.checked}
+                          tabIndex={-1}
+                          className={`wn-context-menu-pill${pill.checked ? ' active' : ''}${focusIndex === at ? ' focused' : ''}`}
+                          style={pill.pill?.color ? { color: pill.pill.color } : undefined}
+                          disabled={pill.disabled}
+                          title={pill.title}
+                          data-menu-key={pill.key}
+                          onMouseEnter={() => setFocusIndex(at)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            pill.onSelect?.();
+                            if (!pill.keepOpen) onClose();
+                          }}
+                        >
+                          {pill.icon && <span className="wn-context-menu-pill-icon" aria-hidden="true">{pill.icon}</span>}
+                          {pill.label}
+                        </button>
+                      );
+                    })}
+                  </span>
+                </div>
+                {why && <div className="wn-context-menu-reason" data-testid="wn-context-menu-reason">{why}</div>}
+              </Fragment>
+            );
+          }
           if (row.divider) return <div key={row.key ?? `div-${index}`} className="wn-context-menu-divider" />;
           if (row.section) {
             return (

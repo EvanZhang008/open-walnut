@@ -7035,6 +7035,117 @@ export async function setFocusTier(taskId: string, requestedTier: string): Promi
   });
 }
 
+export interface PinTierBulkFailure {
+  id: string;
+  ok: false;
+  /** 'not_found' (no task with that exact id) | 'complete' (a NEW pin on a done task). */
+  error: string;
+}
+
+export interface PinTierBulkResult {
+  /** Tasks whose pin state or tier actually changed (input order, deduped). */
+  changed: Task[];
+  failed: PinTierBulkFailure[];
+  /** The full tier snapshot after the batch, same shape every focus route returns. */
+  split: TierResult;
+}
+
+/**
+ * Pin, retier or unpin many tasks in ONE store write: the folder/project menu's
+ * "Pinned" row acts on every open task inside it (50+ is normal), and the
+ * per-task routes would cost two requests each and starve the browser's
+ * connection pool.
+ *
+ * `tier === null` unpins (togglePin's unpin branch per task, then one
+ * compaction of the remaining pin_orders). A tier string pins the unpinned ones
+ * at the bottom (nextPinOrder per task, so they keep the caller's order) and
+ * retiers the pinned ones, with setFocusTier's storage rule (satellite = no
+ * stored focus_tier). Unlike setFocusTier, an unknown tier THROWS before
+ * anything is touched: this is a human request, not an internal copy path.
+ *
+ * Partial success by design: a missing id or a new pin on a completed task is
+ * reported in `failed` and the rest still apply. A task already in the target
+ * state is neither changed nor failed. Emits one TASK_UPDATED per changed task
+ * (the replica outbox relays each as a pin-scoped op); CONFIG_CHANGED
+ * 'focus_bar' is the route's job, once per batch.
+ */
+export async function setPinTierBulk(
+  taskIds: string[],
+  tier: string | null,
+): Promise<PinTierBulkResult> {
+  const ids = [...new Set(taskIds)];
+  const result = await withWriteLock(async () => {
+    const store = await readStore();
+    const customIds = new Set((store.custom_tiers ?? []).map((t) => t.id));
+
+    // Resolve the stored value first: undefined = satellite (the default).
+    let target: string | undefined;
+    if (tier !== null) {
+      const resolved = customIds.has(tier) ? tier : migrateFocusTier(tier);
+      const known = customIds.has(resolved) || PIN_TIER_POLICY.some((entry) => entry.tier === resolved);
+      if (!known) throw new Error(`Unknown tier "${tier}"`);
+      target = BUILTIN_TIER_VALUES.includes(resolved) || customIds.has(resolved) ? resolved : undefined;
+    }
+    // What a pinned task's tier reads as today, by splitTiers' rule.
+    const effectiveTier = (t: Task): string | undefined => {
+      const stored = migrateFocusTier(t.focus_tier);
+      return stored && (BUILTIN_TIER_VALUES.includes(stored) || customIds.has(stored)) ? stored : undefined;
+    };
+
+    const byId = new Map(store.tasks.map((t) => [t.id, t]));
+    const changed: Task[] = [];
+    const failed: PinTierBulkFailure[] = [];
+    const now = new Date().toISOString();
+
+    for (const id of ids) {
+      const task = byId.get(id);
+      if (!task) {
+        failed.push({ id, ok: false, error: 'not_found' });
+        continue;
+      }
+      if (tier === null) {
+        if (!task.pinned) continue;
+        task.pinned = false;
+        delete task.pin_order;
+        delete task.focus_tier;
+        task.updated_at = now;
+        changed.push(task);
+        continue;
+      }
+      if (task.pinned) {
+        if (effectiveTier(task) === target) continue;
+      } else {
+        // Same rule as togglePin: no NEW pin on a completed task.
+        if (task.phase === 'COMPLETE' || task.status === 'done') {
+          failed.push({ id, ok: false, error: 'complete' });
+          continue;
+        }
+        task.pinned = true;
+        task.pin_order = nextPinOrder(store.tasks);
+      }
+      if (target === undefined) delete task.focus_tier;
+      else task.focus_tier = target;
+      task.updated_at = now;
+      changed.push(task);
+    }
+
+    if (tier === null && changed.length > 0) {
+      // Compact remaining pin orders, as togglePin's unpin does.
+      const pinned = store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+      pinned.forEach((t, i) => { t.pin_order = i; });
+    }
+    if (changed.length > 0) await writeStore(store);
+    return { changed, failed, split: splitTiers(store) };
+  });
+
+  // fields: scopes the replica→primary op to the pin state, so a deleted
+  // pin_order/focus_tier travels as an explicit clear (see togglePin).
+  for (const task of result.changed) {
+    bus.emit(EventNames.TASK_UPDATED, { task, fields: ['pinned', 'pin_order', 'focus_tier'] }, ['web-ui'], { source: 'internal' });
+  }
+  return result;
+}
+
 // ── Tag helpers ──
 
 /**
@@ -7588,6 +7699,27 @@ export async function updateTaskRaw(
 // ── Plugin-declared task fields (manifest taskFields) ──────────────────────
 
 /**
+ * The registry check setPluginTaskField runs before any write: the plugin must
+ * declare the field, and a non-clearable field refuses an empty value. Exported
+ * so the batch route can reject a whole request up front with the same rule.
+ */
+export function assertPluginTaskFieldWritable(
+  pluginId: string,
+  fieldKey: string,
+  value: string | null,
+): import('./integration-types.js').TaskFieldSpec {
+  const plugin = registry.get(pluginId);
+  const spec = plugin?.taskFields?.find(f => f.key === fieldKey);
+  if (!plugin || !spec) {
+    throw new Error(`Plugin "${pluginId}" does not declare task field "${fieldKey}"`);
+  }
+  if (spec.clearable === false && (value === null || value === '')) {
+    throw new Error(`Field "${fieldKey}" of plugin "${pluginId}" is not clearable`);
+  }
+  return spec;
+}
+
+/**
  * Set a plugin-declared per-task field (see TaskFieldSpec). The value lands on
  * the core column when the spec binds one (`coreField: 'sprint'`), otherwise in
  * ext.<pluginId>.<key>. `value: null` clears. Emits TASK_UPDATED and triggers
@@ -7601,14 +7733,7 @@ export async function setPluginTaskField(
   fieldKey: string,
   value: string | null,
 ): Promise<{ task: Task }> {
-  const plugin = registry.get(pluginId);
-  const spec = plugin?.taskFields?.find(f => f.key === fieldKey);
-  if (!plugin || !spec) {
-    throw new Error(`Plugin "${pluginId}" does not declare task field "${fieldKey}"`);
-  }
-  if (spec.clearable === false && (value === null || value === '')) {
-    throw new Error(`Field "${fieldKey}" of plugin "${pluginId}" is not clearable`);
-  }
+  const spec = assertPluginTaskFieldWritable(pluginId, fieldKey, value);
 
   if (spec.coreField === 'sprint') {
     // Reuse the full updateTask path — sprint has existing semantics (tag

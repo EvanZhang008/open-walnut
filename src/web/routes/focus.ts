@@ -10,13 +10,17 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import {
-  togglePin, reorderPins, getPinnedTasks, setFocusTier, getTierSplit,
+  togglePin, reorderPins, getPinnedTasks, setFocusTier, getTierSplit, setPinTierBulk,
   getCustomTiers, createCustomTier, renameCustomTier, deleteCustomTier,
 } from '../../core/task-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { PIN_TIER_POLICY, migrateFocusTier } from '../../core/types.js'
+import { log } from '../../logging/index.js'
 
 export const focusRouter = Router()
+
+/** Most ids one POST /api/focus/batch may carry. */
+export const MAX_FOCUS_BATCH = 500
 
 // GET /api/focus/tasks — list pinned task IDs with tier split (built-ins + customs).
 // Single source of the three-bucket split: task-manager's splitTiers via getTierSplit.
@@ -24,6 +28,39 @@ focusRouter.get('/tasks', async (_req: Request, res: Response, next: NextFunctio
   try {
     res.json(await getTierSplit())
   } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/focus/batch — pin/retier (tier string) or unpin (tier null) many
+// tasks in ONE store write. Body: { task_ids: string[], tier: string | null }.
+// The folder/project menu's "Pinned" row acts on every open task inside, which
+// would otherwise be two requests per task. Partial success: always 200 with
+// { changed: ids, failed, ...tier split } once the request itself is valid.
+focusRouter.post('/batch', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { task_ids: taskIds, tier } = (req.body ?? {}) as { task_ids?: unknown; tier?: unknown }
+    if (!Array.isArray(taskIds) || taskIds.length === 0 || !taskIds.every((id) => typeof id === 'string')) {
+      res.status(400).json({ error: 'task_ids must be a non-empty array of strings' })
+      return
+    }
+    if (taskIds.length > MAX_FOCUS_BATCH) {
+      res.status(400).json({ error: `task_ids may hold at most ${MAX_FOCUS_BATCH} ids` })
+      return
+    }
+    if (tier !== null && typeof tier !== 'string') {
+      res.status(400).json({ error: 'tier must be a tier id string, or null to unpin' })
+      return
+    }
+    const { changed, failed, split } = await setPinTierBulk(taskIds as string[], tier)
+    if (changed.length > 0) bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
+    log.web.info('focus batch via REST', { count: taskIds.length, changed: changed.length, failed: failed.length, tier })
+    res.json({ changed: changed.map((t) => t.id), failed, ...split })
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Unknown tier')) {
+      res.status(400).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

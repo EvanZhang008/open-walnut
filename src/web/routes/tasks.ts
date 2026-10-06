@@ -43,7 +43,9 @@ import {
   getCustomTiers,
   getBoardCounts,
   setPluginTaskField,
+  assertPluginTaskFieldWritable,
   newTaskPinDefault,
+  type BatchTaskOutcome,
   type SlimTask,
 } from '../../core/task-manager.js'
 import {
@@ -1044,6 +1046,59 @@ tasksRouter.post('/batch/delete', async (req: Request, res: Response, next: Next
       bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'api' })
     }
     res.json({ deleted, failed })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** Most ids one POST /api/tasks/batch/plugin-field may carry. */
+const MAX_PLUGIN_FIELD_BATCH = 500
+
+// POST /api/tasks/batch/plugin-field — set one plugin-declared task field
+// (manifest taskFields, e.g. a sprint) on many tasks. Body: { task_ids,
+// pluginId, key, value } — value null/'' clears. The folder/project menu sends
+// this once instead of one PUT /:id/plugin-field per task. The field is checked
+// against the registry BEFORE the loop, so an undeclared field is a 400 for the
+// whole request; per-task failures land in `failed`. Each task goes through the
+// same setPluginTaskField as the single route (events + async plugin push).
+tasksRouter.post('/batch/plugin-field', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const taskIds = batchIds(req, res)
+    if (!taskIds) return
+    if (taskIds.length > MAX_PLUGIN_FIELD_BATCH) {
+      res.status(400).json({ error: `task_ids may hold at most ${MAX_PLUGIN_FIELD_BATCH} ids` })
+      return
+    }
+    const { pluginId, key, value } = (req.body ?? {}) as { pluginId?: unknown; key?: unknown; value?: unknown }
+    if (typeof pluginId !== 'string' || !pluginId || typeof key !== 'string' || !key) {
+      res.status(400).json({ error: 'pluginId and key are required strings' })
+      return
+    }
+    if (value !== null && value !== undefined && typeof value !== 'string') {
+      res.status(400).json({ error: 'value must be a string or null' })
+      return
+    }
+    const fieldValue = (value as string | null | undefined) ?? null
+    try {
+      assertPluginTaskFieldWritable(pluginId, key, fieldValue)
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) })
+      return
+    }
+
+    const changed: Task[] = []
+    const failed: BatchTaskOutcome[] = []
+    for (const id of [...new Set(taskIds)]) {
+      try {
+        const { task } = await setPluginTaskField(id, pluginId, key, fieldValue)
+        changed.push(task)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        failed.push({ id, ok: false, error: /No task found/.test(message) ? 'not_found' : message })
+      }
+    }
+    log.web.info('tasks batch plugin field via REST', { count: taskIds.length, changed: changed.length, failed: failed.length, pluginId, key, cleared: !fieldValue })
+    res.json({ changed, failed })
   } catch (err) {
     next(err)
   }
