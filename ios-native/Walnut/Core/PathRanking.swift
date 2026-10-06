@@ -468,31 +468,59 @@ enum PathRanking {
     static let quickTopByRecent = 4
 
     /// The quick-folder row: the most-used directories, then the most recent of
-    /// the rest. One chip per directory (the wire can carry two rows for one
-    /// `host::cwd`), ties on count break on recency so the order never depends on
-    /// the server's array order, and the row is a pure function of the listing:
-    /// picking a chip never reshuffles it.
+    /// the rest. One chip per folder NAME on a host, because the chip shows the
+    /// basename: three worktrees of one repo drew three identical chips
+    /// (2026-10-06). The name ranks by the use of all its paths and the chip is the
+    /// path the picker's frecency ranks first (neither the most-used, often a stale
+    /// worktree, nor the newest, often a one-off), or `current` when it shares the
+    /// name, so the lit chip is the folder in use. Ties on count break on recency so
+    /// the order never depends on the server's array order, and picking a chip
+    /// never reshuffles the row.
     static func quickDirs(_ dirs: [SessionLaunchOptions.Dir],
+                          current: (cwd: String, host: String)? = nil,
+                          now: Date = Date(),
                           topByCount: Int = quickTopByCount,
                           topByRecent: Int = quickTopByRecent) -> [SessionLaunchOptions.Dir] {
-        var seen = Set<String>()
-        var candidates: [SessionLaunchOptions.Dir] = []
+        var order: [String] = []
+        var groups: [String: (dir: SessionLaunchOptions.Dir, count: Int, score: Double)] = [:]
         for d in dirs {
-            let key = pathChipKey(dir: d)
-            if seen.contains(key) { continue }
-            seen.insert(key)
-            candidates.append(d)
+            let name = quickChipNameKey(cwd: d.cwd, host: d.host)
+            let score = frecencyScore(count: d.count, lastUsedISO: d.lastUsed, now: now)
+            if let g = groups[name] {
+                let wins = score > g.score || (score == g.score && lastUsedMs(d) > lastUsedMs(g.dir))
+                groups[name] = wins ? (d, g.count + d.count, score) : (g.dir, g.count + d.count, g.score)
+            } else {
+                groups[name] = (d, d.count, score)
+                order.append(name)
+            }
         }
+        let candidates = order.compactMap { groups[$0] }
         let byCount = Array(candidates.sorted { a, b in
             if a.count != b.count { return a.count > b.count }
-            return lastUsedMs(a) > lastUsedMs(b)
+            return lastUsedMs(a.dir) > lastUsedMs(b.dir)
         }.prefix(max(0, topByCount)))
-        let picked = Set(byCount.map(pathChipKey(dir:)))
+        let picked = Set(byCount.map { pathChipKey(dir: $0.dir) })
         let byRecent = Array(candidates
-            .filter { !picked.contains(pathChipKey(dir: $0)) }
-            .sorted { lastUsedMs($0) > lastUsedMs($1) }
+            .filter { !picked.contains(pathChipKey(dir: $0.dir)) }
+            .sorted { lastUsedMs($0.dir) > lastUsedMs($1.dir) }
             .prefix(max(0, topByRecent)))
-        return byCount + byRecent
+        var row = (byCount + byRecent).map(\.dir)
+
+        guard let current, !current.cwd.isEmpty else { return row }
+        let here = quickChipNameKey(cwd: current.cwd, host: current.host)
+        guard let slot = row.firstIndex(where: { quickChipNameKey(cwd: $0.cwd, host: $0.host) == here })
+        else { return row }
+        let key = pathChipKey(cwd: current.cwd, host: current.host)
+        if pathChipKey(dir: row[slot]) == key { return row }
+        row[slot] = dirs.first { pathChipKey(dir: $0) == key }
+            ?? SessionLaunchOptions.Dir(cwd: current.cwd, host: current.host, hostLabel: nil, lastUsed: "", count: 0)
+        return row
+    }
+
+    /// What a quick chip shows on its host: the folder name, case-folded like
+    /// `quickChipLabel`'s collision check.
+    static func quickChipNameKey(cwd: String, host: String?) -> String {
+        "\(normalizedHost(host) ?? localHostKey)::\(pathBasename(cwd).lowercased())"
     }
 
     /// The chip's text: the folder basename, plus " · host" ONLY when another chip

@@ -214,7 +214,8 @@ export function DraftLaunchBar({
   // Same for Ask Walnut.
   const chipDot = useQuickChipHostDots();
   // A host that is off (a test server) never runs a session: its chips would only be refused.
-  const chips = (isFork || isWalnut ? [] : quickDirsFor()).filter((d) => !d.host || chipDot(d.host)?.kind !== 'off');
+  const chips = (isFork || isWalnut ? [] : quickDirsFor({ cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
+    .filter((d) => !d.host || chipDot(d.host)?.kind !== 'off');
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const chipHostLabel = useQuickChipHostLabels(chips);
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);

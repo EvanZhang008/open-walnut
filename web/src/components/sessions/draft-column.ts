@@ -14,6 +14,7 @@
  */
 
 import { peekWorkingDirs, type WorkingDirEntry } from '@/api/sessions';
+import { frecencyScore } from './path-selector/ranking';
 import type { LaunchMemory } from '@/utils/engines';
 import type { SuggestField } from '@/api/tasks';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
@@ -283,7 +284,11 @@ const QUICK_TOP_BY_RECENT = 4;
 /**
  * The launch bar's quick-access folder chips: **top 4 by absolute `count`** (the
  * folders this user works in most, ever) followed by the **4 most recent by
- * `lastUsed`** that aren't already in those four.
+ * `lastUsed`** that aren't already in those four. One chip per folder NAME on a
+ * host: the label is the basename, so three worktrees of one repo used to draw
+ * three identical chips (2026-10-06). The name ranks by the use of all its paths
+ * and the chip opens the one the folder picker ranks first, or the draft's own
+ * folder when it shares the name.
  *
  * Why not the server's own ranking: `/api/sessions/working-dirs` returns a single
  * frecency order, in which a folder used twice this morning outranks the one used
@@ -299,31 +304,57 @@ const QUICK_TOP_BY_RECENT = 4;
  * escaped. Stable membership means no click can move a chip. A cold cache yields
  * NO chips — every read here is the synchronous module cache, never a fetch.
  */
-export function quickDirsFor(): WorkingDirEntry[] {
+export function quickDirsFor(current?: { cwd: string; host: string | null; hostLabel?: string }): WorkingDirEntry[] {
   const cached = peekWorkingDirs();
   if (!cached) return [];
-  const seen = new Set<string>();
-  const candidates: WorkingDirEntry[] = [];
+  // One group per visible name: its total use ranks it, and its chip is the path
+  // the folder picker ranks first (recency-decayed count). Neither the most-used
+  // path (sibling worktrees come and go, so that is often a stale one) nor the
+  // newest (a generic name like `web` would hand a one-off folder the chip).
+  const now = Date.now();
+  const groups = new Map<string, { dir: WorkingDirEntry; count: number; score: number }>();
   for (const d of cached.dirs) {
-    const key = dirKey({ cwd: d.cwd, host: d.host ?? null });
-    if (seen.has(key)) continue;   // a duplicate row for the same dir
-    seen.add(key);
-    candidates.push(d);
+    const name = chipNameKey(d);
+    const score = frecencyScore(d.count, d.lastUsed ?? '', now) || 0;
+    const g = groups.get(name);
+    if (!g) groups.set(name, { dir: d, count: d.count, score });
+    else {
+      g.count += d.count;
+      if (score > g.score || (score === g.score && lastUsedMs(d) > lastUsedMs(g.dir))) {
+        g.dir = d;
+        g.score = score;
+      }
+    }
   }
+  const candidates = [...groups.values()];
 
   // Most-used ever. Ties break on recency so the order is deterministic rather
   // than dependent on the server's array order.
-  const byCount = [...candidates].sort(
-    (a, b) => (b.count - a.count) || cmpLastUsed(a, b),
-  ).slice(0, QUICK_TOP_BY_COUNT);
-
-  const picked = new Set(byCount.map(d => dirKey({ cwd: d.cwd, host: d.host ?? null })));
-  const byRecent = [...candidates]
-    .filter(d => !picked.has(dirKey({ cwd: d.cwd, host: d.host ?? null })))
-    .sort(cmpLastUsed)
+  const byCount = [...candidates]
+    .sort((a, b) => (b.count - a.count) || cmpLastUsed(a.dir, b.dir))
+    .slice(0, QUICK_TOP_BY_COUNT);
+  const picked = new Set(byCount);
+  const byRecent = candidates
+    .filter((g) => !picked.has(g))
+    .sort((a, b) => cmpLastUsed(a.dir, b.dir))
     .slice(0, QUICK_TOP_BY_RECENT);
+  const row = [...byCount, ...byRecent].map((g) => g.dir);
 
-  return [...byCount, ...byRecent];
+  // The draft's own folder takes its name's slot: an inactive chip that reads like
+  // the folder pill would move the draft into another checkout on a click.
+  if (!current?.cwd) return row;
+  const slot = row.findIndex((d) => chipNameKey(d) === chipNameKey(current));
+  if (slot < 0 || dirKey(row[slot]) === dirKey(current)) return row;
+  row[slot] = cached.dirs.find((d) => dirKey(d) === dirKey(current))
+    ?? { cwd: current.cwd, host: current.host, hostLabel: current.hostLabel, project: '', count: 0, lastUsed: '' };
+  return row;
+}
+
+/** What a chip shows on its host: the folder name. Two paths that share it would
+ *  draw identical chips (sibling checkouts of one repo), so the row keeps one. */
+function chipNameKey(d: { cwd: string; host: string | null }): string {
+  const name = d.cwd.replace(/\/+$/, '').split('/').pop() || '/';
+  return `${d.host || '__local__'}::${name.toLowerCase()}`;
 }
 
 /** Freshest first. A missing/unparseable `lastUsed` sorts last rather than

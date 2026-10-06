@@ -434,19 +434,20 @@ struct NewSessionChatView: View {
     }
 
     /// The web's quick-folder membership (`quickDirsFor`): most-used, then most
-    /// recent of the rest, one chip per directory. Not the server list's head: that
-    /// carried the same folder twice when the wire had two rows for it.
+    /// recent of the rest, one chip per folder name. Not the server list's head:
+    /// that carried the same folder twice when the wire had two rows for it.
     private var quickDirs: [SessionLaunchOptions.Dir] {
-        PathRanking.quickDirs(options?.dirs ?? [])
+        PathRanking.quickDirs(options?.dirs ?? [], current: (cwd, host))
     }
 
     private func isCurrent(_ dir: SessionLaunchOptions.Dir) -> Bool {
         PathRanking.pathChipKey(dir: dir) == PathRanking.pathChipKey(cwd: cwd, host: host.isEmpty ? nil : host)
     }
 
-    /// Spell the full path out only when no chip is lit for it.
+    /// Spell the full path out when no chip is lit for it, or when the lit chip's
+    /// name is shared by another known folder.
     private var showsPathSummary: Bool {
-        Self.showsPathSummary(cwd: cwd, host: host, quickDirs: quickDirs)
+        Self.showsPathSummary(cwd: cwd, host: host, quickDirs: quickDirs, allDirs: options?.dirs ?? [])
     }
 
     /// The quiet empty state: only while nothing else has a claim on the page.
@@ -454,10 +455,24 @@ struct NewSessionChatView: View {
         !showsPathSummary && !creating && loadFailed == nil && (taskId ?? "").isEmpty
     }
 
-    static func showsPathSummary(cwd: String, host: String, quickDirs: [SessionLaunchOptions.Dir]) -> Bool {
+    static func showsPathSummary(cwd: String, host: String, quickDirs: [SessionLaunchOptions.Dir],
+                                 allDirs: [SessionLaunchOptions.Dir] = []) -> Bool {
         guard !cwd.isEmpty else { return false }
         let key = PathRanking.pathChipKey(cwd: cwd, host: host.isEmpty ? nil : host)
-        return !quickDirs.contains { PathRanking.pathChipKey(dir: $0) == key }
+        if !quickDirs.contains(where: { PathRanking.pathChipKey(dir: $0) == key }) { return true }
+        // The lit chip says only the folder name: spell the path out when another
+        // checkout shares it, or the phone cannot tell which one this is.
+        let name = PathRanking.quickChipNameKey(cwd: cwd, host: host)
+        let here = trimmedPath(cwd)
+        return allDirs.contains {
+            PathRanking.quickChipNameKey(cwd: $0.cwd, host: $0.host) == name && trimmedPath($0.cwd) != here
+        }
+    }
+
+    private static func trimmedPath(_ cwd: String) -> String {
+        var p = Substring(cwd)
+        while p.count > 1 && p.hasSuffix("/") { p = p.dropLast() }
+        return String(p)
     }
 
     // MARK: - Load

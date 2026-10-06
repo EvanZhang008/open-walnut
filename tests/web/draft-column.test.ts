@@ -117,6 +117,86 @@ describe('quickDirsFor — chip selection (R6)', () => {
     expect(names(quickDirsFor())).toEqual(['/a']);
   });
 
+  it('shows one quick chip per folder name on a host, opening the path the picker ranks first', () => {
+    // Three worktrees of one repo, each ending in "review": three identical chips
+    // before (2026-10-06). alpha is the most used but stale, gamma the newest but
+    // barely used; recency-decayed count picks beta. The same name on ANOTHER host
+    // is still its own chip.
+    seedDirs([
+      dir('/runs/alpha/review', 100, '2026-08-01T00:00:00Z', 'remote'),
+      dir('/runs/beta/review', 90, '2026-08-10T00:00:00Z', 'remote'),
+      dir('/runs/gamma/review', 1, '2026-08-11T00:00:00Z', 'remote'),
+      dir('/runs/delta/review', 80, '2026-08-09T00:00:00Z', 'other'),
+      dir('/runs/alpha/notes', 50, '2026-08-08T00:00:00Z', 'remote'),
+    ]);
+    expect(names(quickDirsFor())).toEqual([
+      '/runs/beta/review', '/runs/delta/review', '/runs/alpha/notes',
+    ]);
+  });
+
+  it('a generic name keeps the folder used every day, not a one-off sharing it', () => {
+    seedDirs([
+      dir('/repo/web', 300, '2026-08-04T00:00:00Z'),
+      dir('/scratch/web', 1, '2026-08-11T00:00:00Z'),
+    ]);
+    expect(names(quickDirsFor())).toEqual(['/repo/web']);
+  });
+
+  it('ranks a shared name by the use of all its paths', () => {
+    seedDirs([
+      dir('/w/one', 40, '2026-08-01T00:00:00Z'),
+      dir('/w/two', 39, '2026-08-01T00:00:00Z'),
+      dir('/w/three', 38, '2026-08-01T00:00:00Z'),
+      dir('/w/four', 37, '2026-08-01T00:00:00Z'),
+      dir('/a/tool', 30, '2026-07-01T00:00:00Z'),
+      dir('/b/tool', 30, '2026-07-02T00:00:00Z'),
+    ]);
+    expect(names(quickDirsFor()).slice(0, 4)).toEqual(['/b/tool', '/w/one', '/w/two', '/w/three']);
+  });
+
+  it('a recent slot shows the path touched most recently, and its name only once', () => {
+    seedDirs([
+      dir('/work/main', 100, '2026-08-01T00:00:00Z'),
+      dir('/work/other', 90, '2026-08-01T00:00:00Z'),
+      dir('/work/third', 80, '2026-08-01T00:00:00Z'),
+      dir('/work/fourth', 70, '2026-08-01T00:00:00Z'),
+      dir('/old/build', 15, '2026-08-02T00:00:00Z'),
+      dir('/new/build', 14, '2026-08-11T00:00:00Z'),
+      dir('/work/fifth', 1, '2026-08-10T00:00:00Z'),
+    ]);
+    expect(names(quickDirsFor())).toEqual([
+      '/work/main', '/work/other', '/work/third', '/work/fourth',
+      '/new/build', '/work/fifth',
+    ]);
+  });
+
+  it('folds a trailing slash and letter case into the same visible name', () => {
+    seedDirs([dir('/a/Repo/', 9, '2026-08-01T00:00:00Z'), dir('/b/repo', 3, '2026-08-05T00:00:00Z')]);
+    expect(names(quickDirsFor())).toEqual(['/a/Repo/']);
+  });
+
+  it("puts the draft's own folder in its name's slot, so the active chip is the folder in use", () => {
+    seedDirs([
+      dir('/runs/alpha/review', 100, '2026-08-01T00:00:00Z', 'remote'),
+      dir('/runs/beta/review', 90, '2026-08-10T00:00:00Z', 'remote'),
+      dir('/x/notes', 50, '2026-08-08T00:00:00Z', 'remote'),
+    ]);
+    expect(names(quickDirsFor())).toEqual(['/runs/beta/review', '/x/notes']);
+    const row = quickDirsFor({ cwd: '/runs/alpha/review', host: 'remote' });
+    expect(names(row)).toEqual(['/runs/alpha/review', '/x/notes']);
+    expect(row[0].count).toBe(100);
+  });
+
+  it('a draft folder the store has never seen still claims its name, and leaves other names alone', () => {
+    seedDirs([dir('/a/review', 9, '2026-08-01T00:00:00Z'), dir('/a/notes', 3, '2026-08-05T00:00:00Z')]);
+    expect(names(quickDirsFor({ cwd: '/fresh/review', host: '' }))).toEqual(['/fresh/review', '/a/notes']);
+    expect(names(quickDirsFor({ cwd: '/fresh/other', host: null }))).toEqual(['/a/review', '/a/notes']);
+    const otherHost = quickDirsFor({ cwd: '/a/review', host: 'devbox' });
+    expect(names(otherHost)).toEqual(['/a/review', '/a/notes']);
+    expect(otherHost[0]).toMatchObject({ host: null, count: 9 });
+    expect(names(quickDirsFor({ cwd: '', host: null }))).toEqual(['/a/review', '/a/notes']);
+  });
+
   it('is EMPTY on a cold cache — never a fetch', () => {
     peek.mockReturnValue(null);
     expect(quickDirsFor()).toEqual([]);

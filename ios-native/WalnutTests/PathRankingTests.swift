@@ -403,19 +403,70 @@ final class PathRankingTests: XCTestCase {
         ]
         let quick = PathRanking.quickDirs(dirs)
         XCTAssertEqual(quick.map(\.cwd), ["/Users/me/walnut", "/Users/me/other"])
-        XCTAssertEqual(quick.first?.count, 1105, "the first wire row for a directory is the one kept")
+    }
+
+    /// Three worktrees of one repo end in the same folder name: one chip, the
+    /// checkout used last, ranked by the use of all three (2026-10-06). The same
+    /// name on another host is still its own chip.
+    func testQuickDirsShowOneChipPerFolderNameOnAHost() {
+        let dirs = [
+            dir("/w/alpha/review", host: "box", count: 100, daysAgo: 10),
+            dir("/w/beta/review", host: "box", count: 90, daysAgo: 1),
+            dir("/w/gamma/review/", host: "box", count: 1, daysAgo: 0.5),
+            dir("/w/delta/Review", host: "other", count: 80, daysAgo: 2),
+            dir("/w/alpha/notes", host: "box", count: 150, daysAgo: 3),
+        ]
+        XCTAssertEqual(PathRanking.quickDirs(dirs).map(\.cwd),
+                       ["/w/beta/review", "/w/alpha/notes", "/w/delta/Review"],
+                       "alpha is most used but stale, gamma newest but a one-off: frecency picks beta")
+    }
+
+    /// A generic name keeps the folder used every day, not a one-off sharing it.
+    func testQuickDirsGenericNameKeepsTheEverydayFolder() {
+        let dirs = [dir("/repo/web", count: 300, daysAgo: 7), dir("/scratch/web", count: 1, daysAgo: 0)]
+        XCTAssertEqual(PathRanking.quickDirs(dirs).map(\.cwd), ["/repo/web"])
+    }
+
+    /// The draft's own folder owns its name's slot, so the lit chip is the folder
+    /// in use; a folder the listing never saw still claims the slot.
+    func testQuickDirsCurrentFolderTakesItsNamesSlot() {
+        let dirs = [
+            dir("/w/alpha/review", count: 100, daysAgo: 10),
+            dir("/w/beta/review", count: 90, daysAgo: 1),
+            dir("/w/notes", count: 50, daysAgo: 3),
+        ]
+        XCTAssertEqual(PathRanking.quickDirs(dirs, current: ("/w/alpha/review", "")).map(\.cwd),
+                       ["/w/alpha/review", "/w/notes"])
+        XCTAssertEqual(PathRanking.quickDirs(dirs, current: ("/fresh/review", "")).map(\.cwd),
+                       ["/fresh/review", "/w/notes"])
+        XCTAssertEqual(PathRanking.quickDirs(dirs, current: ("/w/alpha/review", "box")).map(\.cwd),
+                       ["/w/beta/review", "/w/notes"], "same path on another host is another folder")
+        XCTAssertEqual(PathRanking.quickDirs(dirs, current: ("", "")).map(\.cwd), ["/w/beta/review", "/w/notes"])
+    }
+
+    /// A lit chip that several checkouts share still spells out the path.
+    func testPathSummaryShowsWhenTheLitChipNameIsShared() {
+        let dirs = [dir("/w/alpha/review", count: 100, daysAgo: 10), dir("/w/beta/review", count: 90, daysAgo: 1),
+                    dir("/w/notes", count: 5, daysAgo: 1)]
+        let chips = PathRanking.quickDirs(dirs, current: ("/w/alpha/review", ""))
+        XCTAssertTrue(NewSessionChatView.showsPathSummary(cwd: "/w/alpha/review", host: "", quickDirs: chips, allDirs: dirs))
+        XCTAssertFalse(NewSessionChatView.showsPathSummary(cwd: "/w/notes", host: "", quickDirs: chips, allDirs: dirs))
+        let slash = [dir("/w/notes", count: 5, daysAgo: 1), dir("/w/notes/", count: 1, daysAgo: 2)]
+        XCTAssertFalse(NewSessionChatView.showsPathSummary(
+            cwd: "/w/notes", host: "", quickDirs: PathRanking.quickDirs(slash), allDirs: slash),
+            "one folder spelled with and without a trailing slash is not a shared name")
     }
 
     /// Most-used first (ties broken by recency, never by array order), then the
     /// most recent of the rest, with the web's 4+4 cap.
     func testQuickDirsAreTopByCountThenTopByRecencyCappedAtFourPlusFour() {
         var dirs: [SessionLaunchOptions.Dir] = []
-        for i in 0..<6 { dirs.append(dir("/used/\(i)", count: 100 - i, daysAgo: 30 + Double(i))) }
-        for i in 0..<6 { dirs.append(dir("/recent/\(i)", count: 1, daysAgo: Double(i))) }
+        for i in 0..<6 { dirs.append(dir("/used/u\(i)", count: 100 - i, daysAgo: 30 + Double(i))) }
+        for i in 0..<6 { dirs.append(dir("/recent/r\(i)", count: 1, daysAgo: Double(i))) }
         let quick = PathRanking.quickDirs(dirs)
         XCTAssertEqual(quick.map(\.cwd), [
-            "/used/0", "/used/1", "/used/2", "/used/3",
-            "/recent/0", "/recent/1", "/recent/2", "/recent/3",
+            "/used/u0", "/used/u1", "/used/u2", "/used/u3",
+            "/recent/r0", "/recent/r1", "/recent/r2", "/recent/r3",
         ])
     }
 
@@ -498,10 +549,10 @@ final class PathRankingTests: XCTestCase {
     /// outside the row would light no chip and bring the full path back on open.
     func testPreselectIsTheFirstQuickChip() {
         var dirs = [dir("/server-head", count: 5, daysAgo: 10)]
-        for i in 0..<4 { dirs.append(dir("/used/\(i)", count: 100 - i, daysAgo: 30)) }
-        for i in 0..<4 { dirs.append(dir("/recent/\(i)", count: 1, daysAgo: Double(i))) }
+        for i in 0..<4 { dirs.append(dir("/used/u\(i)", count: 100 - i, daysAgo: 30)) }
+        for i in 0..<4 { dirs.append(dir("/recent/r\(i)", count: 1, daysAgo: Double(i))) }
         let picked = NewSessionChatView.preselectedDir(dirs)
-        XCTAssertEqual(picked?.cwd, "/used/0")
+        XCTAssertEqual(picked?.cwd, "/used/u0")
         XCTAssertEqual(picked?.id, PathRanking.quickDirs(dirs).first?.id)
         XCTAssertFalse(NewSessionChatView.showsPathSummary(cwd: picked!.cwd, host: picked!.host,
                                                            quickDirs: PathRanking.quickDirs(dirs)))

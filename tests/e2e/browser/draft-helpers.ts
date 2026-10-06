@@ -225,23 +225,31 @@ const chipTitle = (d: WorkingDir): string =>
  * second GET that could race a concurrent launch.
  */
 export function expectedChips(dirs: readonly WorkingDir[]): string[] {
-  const key = (d: WorkingDir) => `${d.host ?? '__local__'}::${d.cwd}`
-  const seen = new Set<string>()
-  const candidates: WorkingDir[] = []
-  for (const d of dirs) {
-    if (seen.has(key(d))) continue
-    seen.add(key(d))
-    candidates.push(d)
-  }
+  // One chip per visible name on a host: the label is the folder basename.
+  const name = (d: WorkingDir) =>
+    `${d.host || '__local__'}::${(d.cwd.replace(/\/+$/, '').split('/').pop() || '/').toLowerCase()}`
   const ms = (d: WorkingDir) => {
     const t = Date.parse(d.lastUsed ?? '')
     return Number.isNaN(t) ? -Infinity : t
   }
   const byRecent = (a: WorkingDir, b: WorkingDir) => ms(b) - ms(a)
-  const top = [...candidates].sort((a, b) => (b.count - a.count) || byRecent(a, b)).slice(0, 4)
-  const taken = new Set(top.map(key))
-  const recent = [...candidates].filter((d) => !taken.has(key(d))).sort(byRecent).slice(0, 4)
-  return [...top, ...recent].map(chipTitle)
+  // The name ranks by the use of all its paths; the chip is its path with the
+  // highest count decayed by a 7-day half-life (the folder picker's frecency).
+  const now = Date.now()
+  const score = (d: WorkingDir) => d.count * Math.exp(-(Math.max(0, now - ms(d)) * Math.LN2) / (7 * 86_400_000)) || 0
+  const groups = new Map<string, { dir: WorkingDir; count: number }>()
+  for (const d of dirs) {
+    const g = groups.get(name(d))
+    if (!g) groups.set(name(d), { dir: d, count: d.count })
+    else {
+      g.count += d.count
+      if (score(d) > score(g.dir) || (score(d) === score(g.dir) && ms(d) > ms(g.dir))) g.dir = d
+    }
+  }
+  const candidates = [...groups.values()]
+  const top = [...candidates].sort((a, b) => (b.count - a.count) || byRecent(a.dir, b.dir)).slice(0, 4)
+  const recent = candidates.filter((g) => !top.includes(g)).sort((a, b) => byRecent(a.dir, b.dir)).slice(0, 4)
+  return [...top, ...recent].map((g) => chipTitle(g.dir))
 }
 
 // NOTE for spec authors: there is no sticky pin-tier pref to preset any more (the

@@ -141,11 +141,18 @@ test('the chip row is top-2-by-use then 2-most-recent — a different answer fro
   // independently of `expectedChips`, so a bug shared by helper and product still
   // trips something. Sliced to what the payload can actually supply: a store with
   // fewer than four dirs would otherwise fail on the fixture's size, not on order.
+  // Only while every folder name is unique per host: sibling paths sharing a name
+  // fold into one chip, which this per-path check deliberately does not model.
   const byCount = [...dirs].sort((a, b) => b.count - a.count)
   const title = (d: WorkingDir) => (d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd)
   const leadCount = Math.min(4, dirs.length)
-  expect(paths.slice(0, leadCount), 'the count group leads the row')
-    .toEqual(byCount.slice(0, leadCount).map(title))
+  const visibleName = (d: WorkingDir) => `${d.host || ''}::${(d.cwd.split('/').pop() ?? '').toLowerCase()}`
+  if (new Set(dirs.map(visibleName)).size === dirs.length) {
+    expect(paths.slice(0, leadCount), 'the count group leads the row')
+      .toEqual(byCount.slice(0, leadCount).map(title))
+  } else {
+    test.info().annotations.push({ type: 'chip-order', description: 'a folder name repeats; per-path count check skipped' })
+  }
 
   // The TEETH: with the freshly-launched folder in the store the two orders must
   // disagree, so "the UI echoed the server" is now a failing hypothesis. Conditional
