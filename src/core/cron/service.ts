@@ -18,6 +18,7 @@ import * as ops from './ops.js';
 import {
   applyTriggerChecked,
   applyTriggerFired,
+  type DeliverResult,
   type TriggerCheckedApplied,
   type TriggerFiredApplied,
 } from './trigger-apply.js';
@@ -109,7 +110,7 @@ export class CronService {
 
   async applyTriggerFired(
     events: TriggerFiredEvent | readonly TriggerFiredEvent[],
-    deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<{ status: 'ok' | 'error'; summary?: string; error?: string }>,
+    deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<DeliverResult>,
   ): Promise<TriggerFiredApplied> {
     return await applyTriggerFired(this.state, events, deliver);
   }

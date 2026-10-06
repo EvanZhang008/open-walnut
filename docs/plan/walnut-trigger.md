@@ -88,16 +88,29 @@ The message is one envelope v2 tag, `<walnut-message kind="trigger" from="Trigge
 
 | Direction | Message | Purpose |
 |---|---|---|
-| server → daemon | `triggers.configure {config: {version: 1, triggers: [{id, name, everyMs, check: {run, cwd, timeoutSeconds}, limits: {maxFiresPerDay}}]}}` | The authoritative set for that host. Sent on daemon connect and after every routine mutation that touches a check job on that host; hash-skipped when nothing changed (the `hooks.configure` precedent). A trigger missing from the set is disarmed but its state file is kept (pruned by age after 30 days), so disable then enable, or a foreign empty push, does not lose `seen`, the cursor, or unacked fires. |
+| server → daemon | `triggers.configure {config: {version: 1, triggers: [{id, name, everyMs, check: {run, cwd, timeoutSeconds}, limits: {maxFiresPerDay}, deliver?: {home, taskId, prompt}}]}}` | The authoritative set for that host. Sent on daemon connect and after every routine mutation that touches a check job on that host; hash-skipped when nothing changed (the `hooks.configure` precedent). A trigger missing from the set is disarmed but its state file is kept (pruned by age after 30 days), so disable then enable, or a foreign empty push, does not lose `seen`, the cursor, or unacked fires. |
 | server → daemon | `triggers.test {check, triggerId?}` | Run once with no state read or write; returns `{ok, exitCode, durationMs, stdoutTail, stderrTail, parsed, wouldFire, newItemCount}`. Backs `trigger_test` and the form's Test button. |
 | server → daemon | `triggers.run {triggerId}` | Start one armed trigger's check now, through the normal path (state, dedup, events); answers `{ran, started}` at once and the outcome arrives as an event. Backs "Run now". |
 | server → daemon | `triggers.ack {triggerId, seq}` | The fire was processed; the daemon drops it from `pendingFires`. Withheld for a fire whose delivery failed transiently (the daemon then replays it) and for a fire whose routine this server never pushed (it may be another server's). |
+| server → daemon | `triggers.claim {triggerId, epoch?, seqs}` | Sent the moment a fire arrives (capability `trigger-claim-v1`). Answers `{claimed, unknown, host, busy, foreign?}`: a claimed or unknown seq is this server's to deliver; a `host` seq was already delivered by the host (record it); `busy` is being written by the host right now and `foreign` means another Walnut's socket asked, so the server neither delivers nor acks and the replay asks again. A claim that gets no answer is treated the same way, never as permission. |
 | daemon → server | `trigger.checked {id, atMs, outcome: "quiet" \| "error", reason?, error?, durationMs, nextRunAtMs, consecutiveErrors}` | History, the card's "checked 3m ago, quiet", consecutive-error counting. `reason` is `fire-false`, `all-seen`, or `rate-limited`. |
-| daemon → server | `trigger.fired {id, epoch, seq, atMs, items, input?, itemsTruncated?, durationMs, nextRunAtMs, replay?}` | The fire, sent to every trusted client. At-least-once: persisted in the daemon's `pendingFires` until acked, replayed after `triggers.configure` and about once a minute while unacked. The server dedups on `(id, epoch, seq)`; `epoch` is minted with the state file, so a daemon whose counter restarted (the file was recreated) does not have its next fires swallowed as replays. |
+| daemon → server | `trigger.fired {id, epoch, seq, atMs, items, input?, itemsTruncated?, durationMs, nextRunAtMs, host?, replay?}` | The fire, sent to every trusted client. `host: {atMs, sessionId, messageId, seqs}` marks a fire the host delivered itself (below). At-least-once: persisted in the daemon's `pendingFires` until acked, replayed after `triggers.configure` and about once a minute while unacked. The server dedups on `(id, epoch, seq)`; `epoch` is minted with the state file, so a daemon whose counter restarted (the file was recreated) does not have its next fires swallowed as replays. |
 
 The trigger id rides `triggerId`, never `id`: a daemon frame is `{id, cmd, ...params}` where `id` is the RPC correlation slot, so a trigger id sent as `id` overwrites it and the reply can never be matched.
 
 Daemon state lives in its own directory (`triggers.json` for the set, `trigger-state/<id>.json` for `seen`, `state`, `fires today`, `pendingFires`, `consecutiveErrors`). Loaded at boot so checks keep running while the server is down; the next `triggers.configure` replaces the set. Capability `triggers-v1`; an older daemon makes `trigger_create` for that host answer 400 with "upgrade the daemon on <host> (it auto-deploys on the next send)".
+
+### Who delivers a fire: the daemon decides
+
+Delivery used to need the server, so a fire waited in `pendingFires` while the Mac slept, even when the target session ran on the same host. On 2026-10-05 a one-minute chat monitor fired five times between 20:59Z and 21:33Z while the Mac was in clamshell sleep; its target session sat idle on that host the whole time, and the fires arrived together at 21:40 during one dark wake, up to 42 minutes late.
+
+Now every fire has one owner, chosen by the daemon (`trigger-claim-v1`):
+
+1. The server claims each fire as it arrives (`triggers.claim`, batched per trigger). A claimed fire is the server's for good; the host never delivers it, however late the ack.
+2. A fire no server claimed within `HOST_DELIVERY_GRACE_MS` (30s from the fire, or from when this daemon armed the trigger after a restart) is delivered by the host when the def carries `deliver` and the target task has a live session of that Walnut on this host (the offline host's copy, `deliverTrigger`). Every due fire of one trigger goes as one envelope, built by the same `buildTriggerMessage` the server uses (`src/providers/trigger-envelope-core.ts`, shipped to the source twin in the `trigger-check-core.cjs` sidecar). The fire stays in `pendingFires` with `host` set.
+3. The replay carries `host`, so the server records the fire (history row "<host> sent it to session …", the host's time, a WAITING target woken unless it was parked again after that delivery) and acks it. Nothing is delivered twice.
+
+What stays with the server: a target with no live session here (resuming or starting one needs the launch recipe), a COMPLETE target (the server refuses and tells the user), and any fire made while the def had no `deliver` (`arbitrated` is unset on it: an older server may have delivered it without claiming). A failed host write is retried after `HOST_DELIVERY_RETRY_MS`. Covered by `tests/integration/trigger-host-delivery-daemon.test.ts` (both twins), `tests/e2e/trigger-host-delivery.test.ts` and `tests/providers/trigger-host-delivery.test.ts`.
 
 Server side, a check job is never ticked by the cron timer (`findMissedJobs` skips jobs with `check`); its `nextRunAtMs` is whatever the daemon last reported. Fires and check errors go through the existing `applyJobResult`, so run history, `consecutiveErrors` and the events feed are the same as every other routine. Quiet checks update `state.lastCheck` only. Five consecutive check errors disable the routine and notify; the next push removes it from the daemon.
 
@@ -113,7 +126,7 @@ Server side, a check job is never ticked by the cron timer (`findMissedJobs` ski
 | overlapping runs | never | a check still running when the next tick lands is skipped |
 | delivery attempts per fire | 3 | a transient delivery failure (throw, timeout, host unreachable) leaves the fire unacked so the daemon replays it; after three the fire is recorded as failed, acked, and the user notified |
 | `seen` set | 2000 ids, 30 days | oldest evicted |
-| `pendingFires` | 50 | oldest dropped, logged |
+| `pendingFires` | 50 | the oldest fire the host already delivered is dropped first, then the oldest |
 
 The fire budget used to be a counter per calendar day on the host, and a held fire still saved the script's new cursor. On 2026-10-01 a chat monitor checked every 5 minutes spent its 24 fires by mid-afternoon; its host runs on UTC, so it went dark from 17:00 Pacific until midnight UTC, and every message in that window was lost, because the cursor had already moved past them. The budget (`budget: {used, atMs}` in the state file, `fireBudgetNextAtMs` in `trigger-check-core.ts`) now drains continuously, the spend is clamped to the cap so a lowered cap holds a trigger for one refill rather than days, and a held run keeps the old cursor. Holding makes backlogs longer, so the per-fire item cap (200) now applies to NEW items after dedup, and a fire that could not carry them all keeps the old cursor as well: the next check reports the rest. A stored `0` ("no limit") is sent to the daemon as `FIRE_BUDGET_UNLIMITED` (`wireFireCap` in `trigger-push.ts`), since every daemon refuses a cap below 1; a cap sized to the cadence would hold a once-a-day trigger after a Run now.
 
@@ -139,7 +152,7 @@ UI: the task keeps showing a paused or stopped trigger. The TRIGGER pill always 
 
 ## Boundaries (not in this slice)
 
-Long-running scripts; webhook or event sources; an MCP client; `cron` schedules on check triggers; direct daemon-to-FIFO delivery when the server is down (the daemon queues the fire instead).
+Long-running scripts; webhook or event sources; an MCP client; `cron` schedules on check triggers; resuming or starting a session from the host when the server is down (a fire for a task with no live session on its host waits for the server).
 
 ## Phases
 

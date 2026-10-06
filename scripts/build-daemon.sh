@@ -75,6 +75,9 @@ SOURCES=(
   src/providers/vscode-server-core.ts
   src/providers/transcript-rewind-core.ts
   src/providers/trigger-check-core.ts
+  src/providers/trigger-envelope-core.ts
+  src/providers/trigger-check-sidecar.ts
+  src/core/cron/trigger-timing.ts
   src/core/transcript-chain.ts
   src/core/transcript-chain-leaf.ts
   src/core/transcript-chain-prefilter.ts
@@ -221,10 +224,11 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 
 # walnut-trigger check-contract sidecar — same rationale: the stdout parse, the
 # dedup rules and the process-group runner can't live in the source template;
-# 'triggers-v1' is advertised only when the sidecar loads.
+# 'triggers-v1' is advertised only when the sidecar loads. The entry adds the fire
+# envelope, which the daemon builds for a fire no server claimed.
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/trigger-check-core.cjs" \
-  src/providers/trigger-check-core.ts
+  src/providers/trigger-check-sidecar.ts
 
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/daemon-cron-runtime.cjs" \

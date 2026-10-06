@@ -241,6 +241,15 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * the sidecar answers the four commands with "triggers unsupported" and never
  * advertises this.
  *
+ * 'trigger-claim-v1' — the daemon arbitrates who delivers each fire. A server
+ * claims a fire the moment it receives it (`triggers.claim`); a fire no server
+ * claimed within HOST_DELIVERY_GRACE_MS, whose def names a task (`deliver`) with
+ * a live session of the same Walnut on this host, is written into that session
+ * by the daemon itself and replayed with `host` set, so the server records it and
+ * never delivers it again. That keeps triggers working while the Mac sleeps or a
+ * socket is dead. Optional: without it the server delivers every fire unclaimed,
+ * as before. Sidecar-gated in the source twin like triggers-v1.
+ *
  * 'git-file-history-v1' — host-local git history for ONE file (git.fileLog /
  * git.fileShow), backing the History panel of the Files viewer. Same rule as
  * git.diff: git and the file must live on the same host, so the daemon runs the
@@ -289,6 +298,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'vscode-v1',
   'grep-v1',
   'triggers-v1',
+  'trigger-claim-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',

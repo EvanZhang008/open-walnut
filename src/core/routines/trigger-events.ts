@@ -23,14 +23,32 @@
  * A TRANSIENT delivery failure is not acked either (cron/trigger-apply.ts
  * decides which failures those are): the daemon replays the fire about once a
  * minute and the next attempt goes through the same path.
+ *
+ * Who delivers is the daemon's call (trigger-claim-v1): this server claims each
+ * fire the moment it arrives, and a fire nobody claimed in time is delivered by
+ * the host itself into the target task's live session there (the Mac asleep, a
+ * dead socket). Such a fire comes back with `host` set, and is only recorded.
+ * A claim that gets no answer is not a verdict: the fire is neither delivered nor
+ * acked, and its replay asks again.
  */
 
-import { FIRE_BUDGET_WINDOW_MS, MAX_CONSECUTIVE_CHECK_ERRORS, MAX_FIRES_PER_DAY_DEFAULT } from '../../providers/trigger-check-core.js';
-import type { TriggerCheckedEvent, TriggerEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
+import {
+  FIRE_BUDGET_WINDOW_MS, MAX_CONSECUTIVE_CHECK_ERRORS, MAX_FIRES_PER_DAY_DEFAULT, isHostDelivery,
+} from '../../providers/trigger-check-core.js';
+import type {
+  HostDelivery, TriggerCheckedEvent, TriggerClaimReply, TriggerEvent, TriggerFiredEvent,
+} from '../../providers/trigger-check-core.js';
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
 import { buildTriggerMessage } from './trigger-envelope.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
+import { promptOf } from './trigger-push.js';
+
+export { promptOf };
+
+/** The daemon arbitrates delivery (claims, host delivery). */
+export const TRIGGER_CLAIM_CAPABILITY = 'trigger-claim-v1';
+const CLAIM_TIMEOUT_MS = 15_000;
 
 async function notifyTrigger(input: {
   title: string;
@@ -67,15 +85,6 @@ async function ackFire(host: string, id: string, seq: number): Promise<void> {
   } catch (err) {
     log.cron.warn('trigger ack failed', { host, jobId: id, seq, error: err instanceof Error ? err.message : String(err) });
   }
-}
-
-/** The routine's own instruction text, whichever executor holds it. */
-export function promptOf(job: CronJob): string {
-  const config = job.executor?.config ?? {};
-  const prompt = (config as { prompt?: unknown }).prompt;
-  if (typeof prompt === 'string' && prompt.trim()) return prompt;
-  const instructions = (config as { instructions?: unknown }).instructions;
-  return typeof instructions === 'string' ? instructions : '';
 }
 
 /** "every hour", "every 5 minutes", "every 2.4 hours": how often a spent budget gives back one fire. */
@@ -154,9 +163,102 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
 /**
  * Deliver one fire, or one trigger's batch of fires (same id, same epoch) as ONE
  * envelope. Every seq is acked on its own, since the daemon's ack removes one.
+ * Fires the host already delivered are recorded instead, one row per message.
  */
 export async function handleTriggerFired(host: string, fires: TriggerFiredEvent | readonly TriggerFiredEvent[]): Promise<void> {
   const batch = Array.isArray(fires) ? [...fires] : [fires as TriggerFiredEvent];
+  const onHost = batch.filter((e) => isHostDelivery(e.host));
+  const owed = batch.filter((e) => !isHostDelivery(e.host));
+  for (const group of groupByMessage(onHost)) await recordHostDelivery(host, group);
+  if (owed.length > 0) await deliverFires(host, owed);
+}
+
+function groupByMessage(events: TriggerFiredEvent[]): TriggerFiredEvent[][] {
+  const groups = new Map<string, TriggerFiredEvent[]>();
+  for (const e of events) {
+    const k = e.host?.messageId ?? '';
+    groups.set(k, [...(groups.get(k) ?? []), e]);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * A fire the host delivered while no server claimed it: the history row says
+ * so, the task leaves WAITING as an online fire would have made it, and the seqs
+ * are acked. Nothing is delivered: the session already has the message.
+ */
+async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Promise<void> {
+  const head = group[0];
+  const h = head?.host;
+  if (!head || !h) return;
+  const seqs = group.map((e) => e.seq);
+  const service = await resolveService();
+  if (!service) {
+    log.cron.warn('trigger.fired (delivered on host) dropped: routines engine not running', { host, jobId: head.id });
+    return;
+  }
+  const applied = await service.applyTriggerFired(group, async (job, fresh) => {
+    const text = buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: h.atMs });
+    await wakeParkedTarget(job, h);
+    return {
+      status: 'ok' as const,
+      // Short, and ending in the session handle: the history row clamps this clause
+      // and keeps only the handle's id once it runs long.
+      summary: `${host === '__local__' ? 'the local host' : host} sent it to session ${await sessionLabel(h.sessionId)}`,
+      delivered: { sessionId: h.sessionId, text },
+      deliveredAtMs: h.atMs,
+    };
+  });
+  log.cron.info('trigger fire recorded: delivered on host', {
+    host, jobId: head.id, epoch: head.epoch, seqs, sessionId: h.sessionId, messageId: h.messageId,
+    deliveredAt: new Date(h.atMs).toISOString(), found: applied.found, duplicate: applied.duplicate,
+  });
+  if (!applied.found && !(await hasPushedTriggersTo(host))) {
+    log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: head.id, seqs });
+    return;
+  }
+  await ackFires(host, head.id, seqs);
+}
+
+async function sessionLabel(sessionId: string): Promise<string> {
+  try {
+    const [{ getSessionByClaudeId }, { sessionHandle }] = await Promise.all([
+      import('../session-tracker.js'),
+      import('../peers/walnut-message-tag.js'),
+    ]);
+    const session = await getSessionByClaudeId(sessionId);
+    return sessionHandle(session?.title, sessionId);
+  } catch {
+    return sessionId.slice(0, 8);
+  }
+}
+
+/**
+ * A fire wakes a WAITING task: it is a new turn. Delivered on the host, it did
+ * so while this server was away, so the move is made now, unless the task was
+ * parked again after that delivery (its own turn may have done that).
+ */
+async function wakeParkedTarget(job: CronJob, h: HostDelivery): Promise<void> {
+  const taskId = (job.executor?.config as { target?: unknown } | undefined)?.target;
+  if (typeof taskId !== 'string' || !taskId) return;
+  try {
+    const [{ getTask }, { HELD_PHASES, applySessionPhase }] = await Promise.all([
+      import('../task-manager.js'),
+      import('../phase.js'),
+    ]);
+    const task = await getTask(taskId).catch(() => null);
+    if (!task || !HELD_PHASES.has(task.phase)) return;
+    const parkedAt = Date.parse(task.phase_changed_at ?? '');
+    if (Number.isFinite(parkedAt) && parkedAt >= h.atMs) return;
+    await applySessionPhase(taskId, 'session:input', 'trigger-host-delivery', { sessionId: h.sessionId });
+  } catch (err) {
+    log.cron.warn('trigger host delivery: could not wake the parked task', {
+      jobId: job.id, taskId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<void> {
   const head = batch[0];
   if (!head) return;
   const seqs = batch.map((e) => e.seq);
@@ -260,6 +362,78 @@ interface FireLane {
   queue: TriggerFiredEvent[];
   keys: Set<string>;
   draining: boolean;
+  /** The daemon's answer to this server's claim, asked the moment each fire arrived. */
+  verdicts: Map<string, Promise<FireVerdict>>;
+}
+
+/**
+ * Who delivers a fire. `server`: this server (claimed, or a daemon that does not
+ * arbitrate). `host`: the daemon already did; record it. `wait`: no verdict (the
+ * claim got no answer, the host is writing it right now, or another Walnut owns
+ * the trigger); neither deliver nor ack, the replay asks again.
+ */
+export type FireVerdict =
+  | { kind: 'server' }
+  | { kind: 'host'; host: HostDelivery }
+  | { kind: 'wait'; reason: string };
+
+/** One claim RPC per trigger per burst: a reconnect replays up to 50 fires at once. */
+const claimBatches = new Map<string, { host: string; id: string; epoch?: string; waiters: Array<{ seq: number; resolve: (v: FireVerdict) => void }> }>();
+
+function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict> {
+  if (isHostDelivery(event.host)) return Promise.resolve({ kind: 'host', host: event.host });
+  const key = `${host}|${event.id}|${event.epoch ?? ''}`;
+  return new Promise((resolve) => {
+    let batch = claimBatches.get(key);
+    if (!batch) {
+      const created = { host, id: event.id, ...(event.epoch ? { epoch: event.epoch } : {}), waiters: [] as Array<{ seq: number; resolve: (v: FireVerdict) => void }> };
+      claimBatches.set(key, created);
+      batch = created;
+      setTimeout(() => {
+        claimBatches.delete(key);
+        // Every waiter is resolved, whatever happens: a lane awaits these verdicts.
+        void claimSeqs(created.host, created.id, created.epoch, created.waiters.map((w) => w.seq))
+          .catch(() => new Map<number, FireVerdict>())
+          .then((verdicts) => {
+            for (const w of created.waiters) w.resolve(verdicts.get(w.seq) ?? { kind: 'wait', reason: 'no verdict for this seq' });
+          });
+      }, 0);
+    }
+    batch.waiters.push({ seq: event.seq, resolve });
+  });
+}
+
+/** Ask the daemon for these fires. Never throws; no answer is `wait`, never `server`. */
+export async function claimSeqs(host: string, id: string, epoch: string | undefined, seqs: readonly number[]): Promise<Map<number, FireVerdict>> {
+  const out = new Map<number, FireVerdict>();
+  const all = (v: FireVerdict) => { for (const seq of seqs) out.set(seq, v); return out; };
+  let conn: Awaited<ReturnType<typeof findTriggerDaemon>> = null;
+  try { conn = await findTriggerDaemon(host); } catch { conn = null; }
+  // With no connection there is nobody to ask, and nobody to ack to either.
+  if (!conn) return all({ kind: 'wait', reason: 'daemon not connected' });
+  // A daemon that says it does not arbitrate never delivers on its own. One whose
+  // hello never answered is ASKED: assuming "old" there would let both deliver.
+  if (conn.capabilitiesKnown !== false && !conn.hasCapability(TRIGGER_CLAIM_CAPABILITY)) return all({ kind: 'server' });
+  let reply: Record<string, unknown>;
+  try {
+    reply = await conn.send('triggers.claim', { triggerId: id, ...(epoch ? { epoch } : {}), seqs: [...seqs] }, CLAIM_TIMEOUT_MS);
+  } catch (err) {
+    return all({ kind: 'wait', reason: `claim got no answer: ${err instanceof Error ? err.message : String(err)}` });
+  }
+  if (reply.ok === false) {
+    const error = String(reply.error ?? 'unknown error');
+    // Only a daemon too old to know the command is sure to deliver nothing itself.
+    if (error.startsWith('unknown command')) return all({ kind: 'server' });
+    return all({ kind: 'wait', reason: `claim refused: ${error}` });
+  }
+  const r = reply as unknown as Partial<TriggerClaimReply>;
+  if (r.foreign) return all({ kind: 'wait', reason: 'the trigger belongs to another Walnut' });
+  for (const seq of [...(r.claimed ?? []), ...(r.unknown ?? [])]) out.set(seq, { kind: 'server' });
+  for (const seq of r.busy ?? []) out.set(seq, { kind: 'wait', reason: 'the host is delivering it right now' });
+  for (const entry of r.host ?? []) {
+    if (entry && isHostDelivery(entry.host)) out.set(entry.seq, { kind: 'host', host: entry.host });
+  }
+  return out;
 }
 
 const lanes = new Map<string, FireLane>();
@@ -277,7 +451,7 @@ function enqueueFire(host: string, event: TriggerFiredEvent): void {
   const laneKey = `${host}|${event.id}`;
   let lane = lanes.get(laneKey);
   if (!lane) {
-    lane = { queue: [], keys: new Set(), draining: false };
+    lane = { queue: [], keys: new Set(), draining: false, verdicts: new Map() };
     lanes.set(laneKey, lane);
   }
   const key = fireKey(host, event);
@@ -287,6 +461,9 @@ function enqueueFire(host: string, event: TriggerFiredEvent): void {
   }
   lane.keys.add(key);
   lane.queue.push(event);
+  // Claimed at ARRIVAL, not when the lane reaches it: a fire queued behind a slow
+  // delivery would otherwise look unclaimed to the host and be delivered twice.
+  lane.verdicts.set(key, claimFire(host, event));
   if (!lane.draining) void drainLane(host, laneKey, lane);
 }
 
@@ -298,7 +475,21 @@ async function drainLane(host: string, laneKey: string, lane: FireLane): Promise
     }
     while (lane.queue.length > 0) {
       const taken = lane.queue.splice(0);
-      for (const group of groupByEpoch(taken)) {
+      const judged = await Promise.all(taken.map(async (event) => ({
+        event,
+        verdict: await (lane.verdicts.get(fireKey(host, event)) ?? Promise.resolve<FireVerdict>({ kind: 'server' })),
+      })));
+      const ready: TriggerFiredEvent[] = [];
+      for (const { event, verdict } of judged) {
+        if (verdict.kind === 'wait') {
+          log.cron.info('trigger fire left to the daemon: no claim verdict', { host, jobId: event.id, seq: event.seq, reason: verdict.reason });
+          lane.keys.delete(fireKey(host, event));
+          lane.verdicts.delete(fireKey(host, event));
+        } else {
+          ready.push(verdict.kind === 'host' ? { ...event, host: verdict.host } : event);
+        }
+      }
+      for (const group of groupByEpoch(ready)) {
         try {
           await handleTriggerFired(host, group);
         } catch (err) {
@@ -307,7 +498,10 @@ async function drainLane(host: string, laneKey: string, lane: FireLane): Promise
             error: err instanceof Error ? err.message : String(err),
           });
         } finally {
-          for (const e of group) lane.keys.delete(fireKey(host, e));
+          for (const e of group) {
+            lane.keys.delete(fireKey(host, e));
+            lane.verdicts.delete(fireKey(host, e));
+          }
         }
       }
     }

@@ -153,7 +153,7 @@ settles anything, so an offline reply is never followed by a "no reply" notice.
 | Phase | Scope |
 |---|---|
 | 1 (this change) | read copy, home-aware routing, offline reads, same-host messaging with request rows and turn-end notices, queued `task_update` / `task_complete`, handover |
-| 2 | same-host messaging owned by the daemon even while the server is connected (one path, no mode that only runs when the Mac is away); trigger fires delivered to same-host sessions by the daemon |
+| 2 | same-host messaging owned by the daemon even while the server is connected (one path, no mode that only runs when the Mac is away); trigger fires delivered to same-host sessions by the daemon (done: the daemon arbitrates every fire, `trigger-claim-v1`, see docs/plan/walnut-trigger.md "Who delivers a fire") |
 | 3 | the cloud companion as the fallback hub for cross-host and global ops while the Mac is away |
 | later | offline session start, once the launch recipe can be cached per project |
 

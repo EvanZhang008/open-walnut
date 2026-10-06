@@ -16,6 +16,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-trigger-check'));
 
+import { WALNUT_HOME } from '../../../src/constants.js';
+import { DELIVER_PROMPT_MAX } from '../../../src/providers/trigger-check-core.js';
 import { normalizeCronJobCreate, normalizeCronJobPatch } from '../../../src/core/cron/normalize.js';
 import { applyJobPatch, computeJobNextRunAtMs, createJob, nextWakeAtMs } from '../../../src/core/cron/jobs.js';
 import { findDueJobs, findMissedJobs } from '../../../src/core/cron/timer.js';
@@ -212,7 +214,19 @@ describe('compileTriggerDefs', () => {
       everyMs: 300_000,
       check: { run: 'x', timeoutSeconds: CHECK_TIMEOUT_MAX_S },
       limits: { maxFiresPerDay: 7 },
+      // Where the host delivers a fire no server claimed (trigger-claim-v1).
+      deliver: { home: WALNUT_HOME, taskId: 't-1', prompt: 'read the comments' },
     });
+  });
+
+  it('carries a deliver spec only for a session routine with a prompt it can carry', () => {
+    expect(triggerDefOf(triggerJob({ executor: { type: 'notify', config: { prompt: 'x' } } } as Partial<CronJob>), '__local__')!.deliver).toBeUndefined();
+    expect(triggerDefOf(triggerJob({ executor: { type: 'session', config: { target: '', prompt: 'x' } } }), '__local__')!.deliver).toBeUndefined();
+    const huge = 'x'.repeat(DELIVER_PROMPT_MAX + 1);
+    expect(triggerDefOf(triggerJob({ executor: { type: 'session', config: { target: 't-1', prompt: huge } } }), '__local__')!.deliver).toBeUndefined();
+    // The legacy name is read too, as the envelope does.
+    expect(triggerDefOf(triggerJob({ executor: { type: 'session', config: { target: 't-1', instructions: 'legacy text' } } }), '__local__')!.deliver)
+      .toEqual({ home: WALNUT_HOME, taskId: 't-1', prompt: 'legacy text' });
   });
 
   it('sends a stored 0 ("no limit") as a cap nothing reaches, which every daemon accepts', () => {

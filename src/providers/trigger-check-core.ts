@@ -71,6 +71,17 @@ export const CHECK_ERROR_BACKOFF_MS = 5 * 60 * 1000;
 export const CHECK_SETTLE_GRACE_MS = 5_000;
 /** Unacked fires are re-sent this often until the server acks them. */
 export const PENDING_FIRE_REPLAY_MS = 60_000;
+/**
+ * A fire no server claimed (`triggers.claim`) this long after it was made, or
+ * after this daemon armed its trigger, is delivered by the host itself when the
+ * target task has a live session here. A connected server claims within a second;
+ * one that is asleep, gone, or behind a dead socket never does.
+ */
+export const HOST_DELIVERY_GRACE_MS = 30_000;
+/** A host delivery that failed (or found no live session) is tried again this often. */
+export const HOST_DELIVERY_RETRY_MS = 60_000;
+/** Longest routine prompt a def carries for host delivery; a longer one stays server-only. */
+export const DELIVER_PROMPT_MAX = 32 * 1024;
 /** A state file untouched this long belongs to a trigger nobody re-armed; prune it. */
 export const TRIGGER_STATE_TTL_MS = SEEN_TTL_MS;
 
@@ -86,6 +97,20 @@ export interface TriggerLimits {
   maxFiresPerDay?: number;
 }
 
+/**
+ * Where a fire goes when no server claims it: a live session of the task on this
+ * host, which the daemon finds in that Walnut's host copy (offline-host-core.ts).
+ * Only a server that claims its fires sends this, so a def without it is never
+ * delivered by the host (a daemon cannot tell an older server's delivery apart).
+ */
+export interface TriggerDeliverSpec {
+  /** The owning Walnut's data dir: the tenant key of its host copy. */
+  home: string;
+  taskId: string;
+  /** The routine's instruction text, the first part of the envelope. */
+  prompt: string;
+}
+
 /** One armed trigger as the server pushes it (`triggers.configure`). */
 export interface TriggerDef {
   id: string;
@@ -93,6 +118,16 @@ export interface TriggerDef {
   everyMs: number;
   check: TriggerCheckSpec;
   limits?: TriggerLimits;
+  deliver?: TriggerDeliverSpec;
+}
+
+/** The host delivered a fire itself; the server records it and never delivers it again. */
+export interface HostDelivery {
+  atMs: number;
+  sessionId: string;
+  messageId: string;
+  /** Every seq that rode the same message (a backlog is one envelope). */
+  seqs: number[];
 }
 
 export interface TriggerItem {
@@ -121,6 +156,18 @@ export interface PendingFire {
   durationMs: number;
   /** There were more new items than CHECK_ITEMS_CAP; the rest come on a later check. */
   itemsTruncated?: boolean;
+  /**
+   * Made while the def carried `deliver`, so its server claims what it takes.
+   * Only such a fire may be delivered by the host: an older fire may already
+   * have reached a server that never claimed anything.
+   */
+  arbitrated?: true;
+  /** A server claimed it: from then on only a server delivers it (replays go on until the ack). */
+  claimedAt?: number;
+  /** The host delivered it; replays carry this so the server only records it. */
+  host?: HostDelivery;
+  /** The last host delivery attempt that did not land (no live session, a failed write). */
+  hostTriedAt?: number;
 }
 
 /** Per-trigger state the daemon persists at `trigger-state/<id>.json`. */
@@ -219,9 +266,25 @@ export interface TriggerFiredEvent {
   itemsTruncated?: boolean;
   durationMs: number;
   nextRunAtMs: number;
+  /** Set when the host already delivered this fire: record it, deliver nothing. */
+  host?: HostDelivery;
 }
 
 export type TriggerEvent = TriggerCheckedEvent | TriggerFiredEvent;
+
+/**
+ * `triggers.claim` reply. A claimed (or unknown) seq is the server's to deliver;
+ * a `host` seq was delivered here already; a `busy` one is being delivered here
+ * right now, so the server neither delivers nor acks it and waits for the replay.
+ * `foreign`: the claiming socket belongs to another Walnut than the trigger's.
+ */
+export interface TriggerClaimReply {
+  claimed: number[];
+  unknown: number[];
+  host: Array<{ seq: number; host: HostDelivery }>;
+  busy: number[];
+  foreign?: boolean;
+}
 
 export interface CheckProcessResult {
   exitCode: number | null;
@@ -507,7 +570,7 @@ export function applyCheckOutcome(
   decision: CheckDecision,
   nowMs: number,
   durationMs: number,
-  flags: { itemsTruncated?: boolean } = {},
+  flags: { itemsTruncated?: boolean; arbitrated?: boolean } = {},
 ): PendingFire | null {
   state.lastRunAtMs = nowMs;
   state.consecutiveErrors = 0;
@@ -532,12 +595,87 @@ export function applyCheckOutcome(
     ...(decision.input !== undefined ? { input: decision.input } : {}),
     ...(flags.itemsTruncated || decision.truncated ? { itemsTruncated: true } : {}),
     durationMs,
+    ...(flags.arbitrated ? { arbitrated: true as const } : {}),
   };
   state.pendingFires.push(fire);
-  if (state.pendingFires.length > PENDING_FIRES_MAX) {
-    state.pendingFires.splice(0, state.pendingFires.length - PENDING_FIRES_MAX);
-  }
+  trimPendingFires(state);
   return fire;
+}
+
+/**
+ * Keep at most PENDING_FIRES_MAX. A fire the host already delivered goes first:
+ * only its history line is lost, while an undelivered one would lose its items.
+ */
+export function trimPendingFires(state: TriggerHostState): void {
+  while (state.pendingFires.length > PENDING_FIRES_MAX) {
+    const delivered = state.pendingFires.findIndex((f) => !!f.host);
+    state.pendingFires.splice(delivered >= 0 ? delivered : 0, 1);
+  }
+}
+
+// ── Who delivers a fire: the daemon arbitrates (docs/plan/walnut-trigger.md) ──
+
+export function isHostDelivery(v: unknown): v is HostDelivery {
+  if (!v || typeof v !== 'object') return false;
+  const h = v as Record<string, unknown>;
+  return typeof h.atMs === 'number' && Number.isFinite(h.atMs)
+    && typeof h.sessionId === 'string' && h.sessionId.length > 0
+    && typeof h.messageId === 'string' && h.messageId.length > 0
+    && Array.isArray(h.seqs) && h.seqs.every((s) => typeof s === 'number');
+}
+
+/**
+ * A server claims the fires it received. `inFlight`: seqs the host is writing
+ * right now, which nobody may claim until that write ends. Returns the verdict
+ * per seq and whether the state changed (a new claim must be persisted, or a
+ * restart would let the host deliver a fire the server already owns).
+ */
+export function claimFires(
+  state: TriggerHostState,
+  seqs: readonly number[],
+  nowMs: number,
+  inFlight: ReadonlySet<number> = new Set(),
+): { reply: TriggerClaimReply; changed: boolean } {
+  const reply: TriggerClaimReply = { claimed: [], unknown: [], host: [], busy: [] };
+  let changed = false;
+  for (const seq of seqs) {
+    const fire = state.pendingFires.find((f) => f.seq === seq);
+    if (!fire) reply.unknown.push(seq);
+    else if (fire.host) reply.host.push({ seq, host: fire.host });
+    else if (inFlight.has(seq)) reply.busy.push(seq);
+    else {
+      if (fire.claimedAt === undefined) { fire.claimedAt = nowMs; changed = true; }
+      reply.claimed.push(seq);
+    }
+  }
+  return { reply, changed };
+}
+
+/**
+ * Whether the host should deliver this fire now. `armedAtMs` is when this daemon
+ * armed the trigger: a fire left over from before a restart gives the returning
+ * server the same grace a new fire does.
+ */
+export function fireDueOnHost(
+  fire: PendingFire,
+  nowMs: number,
+  armedAtMs: number,
+  graceMs: number = HOST_DELIVERY_GRACE_MS,
+  retryMs: number = HOST_DELIVERY_RETRY_MS,
+): boolean {
+  if (!fire.arbitrated || fire.claimedAt !== undefined || fire.host) return false;
+  if (nowMs - Math.max(fire.atMs, armedAtMs) < graceMs) return false;
+  if (fire.hostTriedAt !== undefined && nowMs - fire.hostTriedAt < retryMs) return false;
+  return true;
+}
+
+/** Record a host delivery on every fire it carried. */
+export function markHostDelivered(state: TriggerHostState, delivery: HostDelivery): void {
+  for (const fire of state.pendingFires) {
+    if (!delivery.seqs.includes(fire.seq)) continue;
+    fire.host = delivery;
+    delete fire.hostTriedAt;
+  }
 }
 
 export function applyCheckError(state: TriggerHostState, nowMs: number): void {
@@ -705,6 +843,9 @@ export function triggersSetHash(defs: TriggerDef[]): string {
   const canonical = sorted.map((d) => [
     d.id, d.name, d.everyMs, d.check.run, d.check.cwd ?? '', d.check.timeoutSeconds ?? 0,
     d.limits?.maxFiresPerDay ?? -1,
+    // Appended only when present, so a set without host delivery keeps the hash
+    // it always had and an upgrade does not rewrite every triggers.json.
+    ...(d.deliver ? [d.deliver.home, d.deliver.taskId, d.deliver.prompt] : []),
   ]);
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 12);
 }
@@ -763,6 +904,9 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
   if (typeof limits.maxFiresPerDay === 'number' && Math.floor(limits.maxFiresPerDay) < 1) {
     return { ok: false, error: `trigger ${r.id}: limits.maxFiresPerDay must be at least 1 (omit it for the default of ${MAX_FIRES_PER_DAY_DEFAULT})` };
   }
+  // A malformed `deliver` only costs host delivery for this trigger, never the
+  // whole push: polling and server delivery work without it.
+  const deliver = deliverSpecOf(r.deliver);
   return {
     ok: true,
     def: {
@@ -777,6 +921,15 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
       ...(typeof limits.maxFiresPerDay === 'number'
         ? { limits: { maxFiresPerDay: Math.floor(limits.maxFiresPerDay) } }
         : {}),
+      ...(deliver ? { deliver } : {}),
     },
   };
+}
+
+function deliverSpecOf(raw: unknown): TriggerDeliverSpec | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const d = raw as Record<string, unknown>;
+  if (typeof d.home !== 'string' || !d.home || typeof d.taskId !== 'string' || !d.taskId.trim()) return undefined;
+  if (typeof d.prompt !== 'string' || !d.prompt.trim() || d.prompt.length > DELIVER_PROMPT_MAX) return undefined;
+  return { home: d.home, taskId: d.taskId.trim(), prompt: d.prompt };
 }

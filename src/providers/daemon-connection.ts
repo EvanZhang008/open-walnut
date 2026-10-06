@@ -301,7 +301,7 @@ function isServiceDecisionError(err: unknown): boolean {
 const UPGRADE_HOLD_COMMANDS = new Set([
   'send', 'sendRaw', 'start', 'attach', 'stop', 'rename', 'setMode',
   'acpSend', 'acpStop', 'acpCancel', 'acpSetConfigOption',
-  'fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir', 'host.fix', 'triggers.run', 'triggers.ack', 'offline.ack',
+  'fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir', 'host.fix', 'triggers.run', 'triggers.ack', 'triggers.claim', 'offline.ack',
 ])
 
 /** A re-check's connection is gone: its decision is dropped, the reconnect makes a fresh one. */

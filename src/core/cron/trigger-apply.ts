@@ -233,13 +233,15 @@ export async function applyTriggerChecked(
   });
 }
 
-type DeliverResult = {
+export type DeliverResult = {
   status: 'ok' | 'error';
   summary?: string;
   error?: string;
   retryable?: boolean;
   /** For the audit trail: where it landed and the text that landed there. */
   delivered?: { sessionId?: string; text?: string };
+  /** When it actually landed, when that was not now (a host delivered it while this server was away). */
+  deliveredAtMs?: number;
 };
 
 /**
@@ -374,7 +376,7 @@ export async function applyTriggerFired(
       attempts,
       coalesced: fresh.length,
       firstAtMs,
-      deliveredAtMs: deliveryStartedAt,
+      deliveredAtMs: Number.isFinite(result.deliveredAtMs) ? result.deliveredAtMs! : deliveryStartedAt,
       ...(Number.isFinite(newestEvent.durationMs) ? { durationMs: newestEvent.durationMs } : {}),
       ...(error ? { error } : {}),
       delivery: auditDelivery({

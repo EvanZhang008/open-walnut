@@ -188,7 +188,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -2980,6 +2980,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'triggers.test': return cmdTriggersTest(ws, id, cmd);
     case 'triggers.run': return daemonCommands.run(function () { return cmdTriggersRun(ws, id, cmd); });
     case 'triggers.ack': return daemonCommands.run(function () { return cmdTriggersAck(ws, id, cmd); });
+    case 'triggers.claim': return daemonCommands.run(function () { return cmdTriggersClaim(ws, id, cmd); });
     case 'skills.sync': return cmdSkillsSync(ws, id, cmd);
     case 'bridgeResume': return daemonCommands.run(function () { return cmdBridgeResume(ws, id, cmd); });
     case 'stt': return cmdSttRelay(ws, id, cmd);
@@ -4905,6 +4906,10 @@ async function configureDaemonHooks(ws, id, cmd) {
 // until triggers.ack, replayed after a successful configure AND on a slow clock),
 // and each carries (epoch, seq) so the server can tell a state file that started
 // its numbering over from a replay. Trigger events NEVER reach a bridge client.
+// Who delivers a fire is decided here: a server claims each fire it receives
+// (triggers.claim), and a fire no server claimed within the grace whose def names
+// a task with a live session of the same Walnut on this host is written into that
+// session by this daemon (deliverUnclaimedFires), then replayed with host set.
 // Every pure rule comes from the trigger-check-core.cjs sidecar, so a source
 // deploy without it answers "triggers unsupported".
 var TRIGGERS_FILE = path.join(STATE_DIR_OR_RUNTIME, 'triggers.json');
@@ -4920,6 +4925,10 @@ var TRIGGER_STDOUT_TAIL = 2000;
 // this ceiling is the only thing between an impatient form and a fork bomb.
 var TRIGGER_TEST_MAX_CONCURRENT = 4;
 var armedTriggers = new Map();
+// Seqs this host is writing into a session right now, by trigger id (claims
+// answer busy). Keyed by id, not held on the entry: a configure that re-arms the
+// trigger mid-write must not make its fires claimable.
+var hostDeliveriesInFlight = new Map();
 var armedTriggersHash = null;
 var triggerTickTimer = null;
 var triggerTestsRunning = 0;
@@ -4929,6 +4938,21 @@ function triggerReplayMs() {
   var raw = Math.floor(Number(process.env.WALNUT_TRIGGER_REPLAY_MS));
   if (Number.isFinite(raw) && raw > 0) return Math.max(1000, raw);
   return triggerCheckCore.PENDING_FIRE_REPLAY_MS;
+}
+
+// How long a fire waits for a server's claim before this host delivers it; tests shorten it.
+function hostDeliveryGraceMs() {
+  var raw = Math.floor(Number(process.env.WALNUT_TRIGGER_HOST_GRACE_MS));
+  if (Number.isFinite(raw) && raw > 0) return Math.max(500, raw);
+  return triggerCheckCore.HOST_DELIVERY_GRACE_MS;
+}
+
+// fireSentAt: when each pending fire was last sent, by seq. In-memory only: a
+// restarted daemon has no marks and re-sends every pending fire once, which is
+// exactly what at-least-once wants. armedAtMs: fires left from before this daemon
+// armed the trigger give the server a fresh grace before the host delivers them.
+function newArmedTrigger(def, state, nextRunAtMs, now) {
+  return { def: def, state: state, nextRunAtMs: nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now };
 }
 
 // Which trigger a command is about. The trigger id rides triggerId, never id:
@@ -5020,14 +5044,7 @@ function loadTriggersAtBoot() {
     defs.push(parsed.def);
   }
   for (var d = 0; d < defs.length; d++) {
-    armedTriggers.set(defs[d].id, {
-      def: defs[d], state: readTriggerState(defs[d].id, now),
-      nextRunAtMs: now + TRIGGER_BOOT_RUN_DELAY_MS, running: false,
-      // When each pending fire was last sent, by seq. In-memory only: a restarted
-      // daemon has no marks and re-sends every pending fire once, which is exactly
-      // what at-least-once wants.
-      fireSentAt: new Map(),
-    });
+    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
   }
   armedTriggersHash = triggerCheckCore.triggersSetHash(defs);
   try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }); } catch {}
@@ -5069,6 +5086,7 @@ function sendTriggerFire(entry, fire, replay) {
   };
   if (fire.input !== undefined) payload.input = fire.input;
   if (fire.itemsTruncated) payload.itemsTruncated = true;
+  if (fire.host) payload.host = fire.host;
   if (replay) payload.replay = true;
   var delivered = sendTriggerEvent('trigger.fired', payload);
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now());
@@ -5114,6 +5132,7 @@ async function runTrigger(entry) {
     var decision = triggerCheckCore.decideCheck(entry.def, output, entry.state, now);
     var fire = triggerCheckCore.applyCheckOutcome(entry.state, output, decision, now, proc.durationMs, {
       itemsTruncated: parsed.itemsTruncated,
+      arbitrated: !!entry.def.deliver,
     });
     entry.nextRunAtMs = now + triggerCadenceMs(entry);
     persistTriggerState(entry.def.id, entry.state);
@@ -5165,6 +5184,60 @@ function replayPendingFires(now) {
   }
 }
 
+// Deliver, on this host, the fires no server claimed in time (trigger-claim-v1).
+// The due fires of one trigger go as ONE envelope (the one the server builds for a
+// backlog) into the target task's live session, as the offline host's copy names
+// it. No live session, a complete task, or a failed write: the fire stays for the
+// server and is tried here again after a minute. Twin of daemon-standalone.ts.
+function deliverUnclaimedFires(now) {
+  if (!triggerCheckCore || typeof triggerCheckCore.buildTriggerMessage !== 'function') return;
+  var grace = hostDeliveryGraceMs();
+  for (const entry of armedTriggers.values()) {
+    const spec = entry.def.deliver;
+    const id = entry.def.id;
+    if (!spec || hostDeliveriesInFlight.has(id)) continue;
+    const due = entry.state.pendingFires.filter(function (f) {
+      return triggerCheckCore.fireDueOnHost(f, now, entry.armedAtMs, grace, triggerCheckCore.HOST_DELIVERY_RETRY_MS);
+    });
+    if (due.length === 0) continue;
+    const seqs = due.map(function (f) { return f.seq; });
+    const epoch = entry.state.epoch;
+    const messageId = 'qm-trigger-' + crypto.randomBytes(6).toString('hex');
+    const text = triggerCheckCore.buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now });
+    hostDeliveriesInFlight.set(id, new Set(seqs));
+    offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then(function (r) {
+      // Recorded on whatever holds this trigger's state NOW: a configure may have
+      // re-armed it (a fresh state object read from disk) or disarmed it.
+      var current = armedTriggers.get(id);
+      var state = current ? current.state : readTriggerState(id, Date.now());
+      if (state.epoch !== epoch) {
+        logMsg('warn', 'trigger host delivery outcome dropped: state file started over', { id: id, seqs: seqs, delivered: r.ok });
+        return;
+      }
+      if (r.ok) {
+        triggerCheckCore.markHostDelivered(state, { atMs: now, sessionId: r.sid, messageId: messageId, seqs: seqs });
+        logMsg('info', 'trigger delivered on host', { id: id, seqs: seqs, sessionId: r.sid, messageId: messageId, taskId: spec.taskId });
+      } else {
+        for (var i = 0; i < state.pendingFires.length; i++) {
+          if (seqs.indexOf(state.pendingFires[i].seq) !== -1) state.pendingFires[i].hostTriedAt = now;
+        }
+        logMsg('info', 'trigger host delivery skipped', { id: id, seqs: seqs, taskId: spec.taskId, reason: r.reason });
+      }
+      persistTriggerState(id, state);
+      // A server that is connected but slow records it now instead of a minute later.
+      if (r.ok && current) {
+        for (var f = 0; f < current.state.pendingFires.length; f++) {
+          if (seqs.indexOf(current.state.pendingFires[f].seq) !== -1) sendTriggerFire(current, current.state.pendingFires[f], true);
+        }
+      }
+    }).catch(function (err) {
+      logMsg('error', 'trigger host delivery threw', { id: id, seqs: seqs, error: err && err.message });
+    }).finally(function () {
+      hostDeliveriesInFlight.delete(id);
+    });
+  }
+}
+
 // Overlap is SKIPPED, never queued: a slow check must not build a backlog.
 function tickTriggers() {
   var now = Date.now();
@@ -5174,6 +5247,7 @@ function tickTriggers() {
       logMsg('error', 'trigger run threw', { id: entry.def.id, error: err && err.message });
     });
   }
+  deliverUnclaimedFires(now);
   replayPendingFires(now);
 }
 
@@ -5214,11 +5288,7 @@ async function configureTriggers(ws, id, cmd) {
     // A trigger that stays keeps its state file, its cursor and its schedule;
     // only the definition is refreshed.
     if (existing) { existing.def = defs[d]; continue; }
-    armedTriggers.set(defs[d].id, {
-      def: defs[d], state: readTriggerState(defs[d].id, now),
-      nextRunAtMs: now + TRIGGER_FIRST_RUN_DELAY_MS, running: false,
-      fireSentAt: new Map(),
-    });
+    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now));
   }
   if (changed) persistTriggersFile(defs);
   armedTriggersHash = hash;
@@ -5305,6 +5375,38 @@ function cmdTriggersRun(ws, id, cmd) {
     logMsg('error', 'trigger run threw', { id: entry.def.id, error: err && err.message });
   });
   return sendOk(ws, id, { ran: true, started: true });
+}
+
+// A server takes the fires it just received (trigger-claim-v1). From then on only
+// a server delivers them; this host never does. A fire the host already delivered
+// is answered with that delivery, one it is writing right now with busy (the
+// server waits for the replay), and one this daemon does not hold with unknown.
+// A socket of another Walnut cannot take a fire of this one's trigger.
+function cmdTriggersClaim(ws, id, cmd) {
+  // Worded as an unknown command on purpose: without the sidecar this daemon
+  // never delivers a fire itself, so the server may deliver every one.
+  if (!triggerCheckCore || typeof triggerCheckCore.claimFires !== 'function' || typeof triggerCheckCore.buildTriggerMessage !== 'function') {
+    return sendError(ws, id, 'unknown command: triggers.claim (trigger-check-core sidecar missing or too old)');
+  }
+  var tid = triggerIdOf(cmd);
+  var seqs = Array.isArray(cmd.seqs) ? cmd.seqs.filter(function (s) { return typeof s === 'number' && Number.isFinite(s); }) : [];
+  var entry = tid ? armedTriggers.get(tid) : undefined;
+  var inFlight = hostDeliveriesInFlight.get(tid) || new Set();
+  if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
+    return sendOk(ws, id, {
+      claimed: [], host: [],
+      busy: seqs.filter(function (s) { return inFlight.has(s); }),
+      unknown: seqs.filter(function (s) { return !inFlight.has(s); }),
+    });
+  }
+  var home = gatewayClientHomes.get(ws);
+  if (entry.def.deliver && home && home !== entry.def.deliver.home) {
+    logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs: seqs });
+    return sendOk(ws, id, { claimed: [], unknown: [], host: [], busy: [], foreign: true });
+  }
+  var claim = triggerCheckCore.claimFires(entry.state, seqs, Date.now(), inFlight);
+  if (claim.changed) persistTriggerState(tid, entry.state);
+  return sendOk(ws, id, claim.reply);
 }
 
 function cmdTriggersAck(ws, id, cmd) {
@@ -8541,6 +8643,8 @@ function daemonCapabilities() {
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
+  // Host delivery needs the envelope builder the newer sidecar carries.
+  if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');
   if (cronRuntimeCore && typeof cronRuntimeCore.prepareDaemonServiceHandover === 'function') caps.push('service-handover-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only

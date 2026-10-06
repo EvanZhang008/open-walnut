@@ -24,6 +24,8 @@ export const TRIGGERS_CAPABILITY = 'triggers-v1';
 export interface TriggerDaemon {
   host: string;
   hasCapability(cap: string): boolean;
+  /** False while no `hello` answered on this connection, so hasCapability knows nothing yet. */
+  readonly capabilitiesKnown?: boolean;
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<{ ok: boolean; error?: string;[key: string]: unknown }>;
   /**
    * True once this server's `triggers.configure` was accepted on the live

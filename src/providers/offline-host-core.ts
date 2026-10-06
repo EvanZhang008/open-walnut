@@ -11,7 +11,9 @@
  *     into the target's FIFO with the envelope the server would build (the
  *     shared envelope kit), and a reply request it opens is OWNED here: a reply
  *     settles it, the target's turn end without one sends the usual notice;
- *   - task_update / task_complete are journaled and replayed by the server.
+ *   - task_update / task_complete are journaled and replayed by the server;
+ *   - a trigger fire no server claimed reaches the target task's live session
+ *     here (deliverTrigger; the trigger's own fire queue reports it).
  * Everything the server must learn goes into a per-Walnut journal it drains on
  * reconnect (`offline.drain` / `offline.ack`); until the journal is empty the
  * gateway keeps answering here, so no id the server has not seen yet reaches it.
@@ -688,6 +690,36 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     }
   }
 
+  /**
+   * A trigger fire no server claimed, written into the target task's live
+   * session on this host (the walnut-trigger daemon builds the envelope). The
+   * same session pick the server makes for a live one: the newest live session
+   * of the task, as this copy lists them. A COMPLETE task is the server's call
+   * (it refuses and tells the user), so it is left to the server, as is a task
+   * with no live session here (the server resumes or starts one). Nothing is
+   * journaled: the fire's own queue tells the server, on its replay.
+   */
+  async function deliverTrigger(
+    home: string,
+    taskId: string,
+    text: string,
+    messageId: string,
+  ): Promise<{ ok: true; sid: string } | { ok: false; reason: string }> {
+    const slice = slices.get(home)
+    if (!slice) return { ok: false, reason: 'no host copy for this Walnut' }
+    const task = tasksWithOverlay(home).find((t) => t.id === taskId)
+    if (task?.phase === 'COMPLETE') return { ok: false, reason: 'target task is complete' }
+    const live = slice.sessions.filter((s) => s.taskId === taskId && deps.isLive(s.sid))
+    if (live.length === 0) return { ok: false, reason: 'no live session of the target task on this host' }
+    const sid = live[0].sid
+    try {
+      const delivered = await deps.deliver(sid, text, messageId)
+      return delivered.ok ? { ok: true, sid } : { ok: false, reason: delivered.reason }
+    } catch (err) {
+      return { ok: false, reason: (err as Error).message }
+    }
+  }
+
   async function sweep(): Promise<number> {
     let n = 0
     const now = deps.now()
@@ -701,7 +733,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
 
   load()
 
-  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, homes: () => [...slices.keys()] }
+  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, deliverTrigger, homes: () => [...slices.keys()] }
 }
 
 export type OfflineHost = ReturnType<typeof createOfflineHost>

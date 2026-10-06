@@ -106,6 +106,11 @@ const DAEMON_SOURCE_FILES = [
   // Same lockstep rule as the two above: a rule edit here that leaves the version
   // unchanged means no host self-upgrades and the old dedup rules keep running.
   'src/providers/trigger-check-core.ts',
+  // The fire envelope a host builds for a fire no server claimed, and the sidecar
+  // entry that ships it to the source twin: same lockstep rule.
+  'src/providers/trigger-envelope-core.ts',
+  'src/providers/trigger-check-sidecar.ts',
+  'src/core/cron/trigger-timing.ts',
   'src/core/transcript-chain.ts',
   'src/core/transcript-chain-leaf.ts',
   'src/core/transcript-chain-prefilter.ts',

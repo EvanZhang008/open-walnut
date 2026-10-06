@@ -16,10 +16,34 @@
  */
 
 import { createHash } from 'node:crypto';
-import { FIRE_BUDGET_UNLIMITED, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
-import type { TriggerDef, TriggersConfigurePayload } from '../../providers/trigger-check-core.js';
+import { WALNUT_HOME } from '../../constants.js';
+import { DELIVER_PROMPT_MAX, FIRE_BUDGET_UNLIMITED, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
+import type { TriggerDef, TriggerDeliverSpec, TriggersConfigurePayload } from '../../providers/trigger-check-core.js';
 import { cloudModeSkipsJob } from '../cron/jobs.js';
 import type { CronJob } from '../cron/types.js';
+
+/** The routine's own instruction text, whichever executor holds it. */
+export function promptOf(job: CronJob): string {
+  const config = job.executor?.config ?? {};
+  const prompt = (config as { prompt?: unknown }).prompt;
+  if (typeof prompt === 'string' && prompt.trim()) return prompt;
+  const instructions = (config as { instructions?: unknown }).instructions;
+  return typeof instructions === 'string' ? instructions : '';
+}
+
+/**
+ * What the daemon needs to deliver a fire no server claimed: a `session`
+ * routine's target task and prompt, under this Walnut's data dir (the tenant key
+ * of the host copy). Any other executor is the server's alone, and so is a
+ * prompt too long to carry.
+ */
+export function deliverSpecOf(job: CronJob, home: string = WALNUT_HOME): TriggerDeliverSpec | undefined {
+  if (job.executor?.type !== 'session') return undefined;
+  const target = (job.executor.config as { target?: unknown } | undefined)?.target;
+  const prompt = promptOf(job);
+  if (typeof target !== 'string' || !target.trim() || !prompt.trim() || prompt.length > DELIVER_PROMPT_MAX) return undefined;
+  return { home, taskId: target.trim(), prompt };
+}
 
 export interface CompiledTriggers {
   payload: TriggersConfigurePayload;
@@ -32,6 +56,8 @@ export function triggerDefOf(job: CronJob, host: string): TriggerDef | null {
   if ((job.check.host || '__local__') !== host) return null;
   if (job.schedule.kind !== 'every') return null;
   if (cloudModeSkipsJob(job)) return null;
+  // An older daemon drops the field (validateTriggerDef keeps known keys only).
+  const deliver = deliverSpecOf(job);
   const def: TriggerDef = {
     id: job.id,
     name: job.name,
@@ -44,6 +70,7 @@ export function triggerDefOf(job: CronJob, host: string): TriggerDef | null {
     ...(typeof job.check.maxFiresPerDay === 'number'
       ? { limits: { maxFiresPerDay: wireFireCap(job.check.maxFiresPerDay) } }
       : {}),
+    ...(deliver ? { deliver } : {}),
   };
   return def;
 }

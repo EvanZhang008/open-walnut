@@ -103,10 +103,13 @@ import {
   applyCheckOutcome,
   buildCheckStdin,
   checkErrorOf,
+  claimFires,
   clampTimeoutSeconds,
   coerceHostState,
   decideCheck,
   emptyHostState,
+  fireDueOnHost,
+  markHostDelivered,
   newItemsOf,
   parseCheckStdout,
   runCheckProcess,
@@ -114,6 +117,8 @@ import {
   triggersSetHash,
   validateTriggerDef,
   CHECK_ERROR_BACKOFF_MS,
+  HOST_DELIVERY_GRACE_MS,
+  HOST_DELIVERY_RETRY_MS,
   MAX_CONSECUTIVE_CHECK_ERRORS,
   MIN_EVERY_MS,
   PENDING_FIRE_REPLAY_MS,
@@ -124,6 +129,7 @@ import {
   type TriggerHostState,
   type TriggersTestResult,
 } from './trigger-check-core.js'
+import { buildTriggerMessage } from './trigger-envelope-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
@@ -1895,6 +1901,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'triggers.test': return cmdTriggersTest(ws, id as number, cmd)
     case 'triggers.run': return daemonCommands.run(() => cmdTriggersRun(ws, id as number, cmd))
     case 'triggers.ack': return daemonCommands.run(() => cmdTriggersAck(ws, id as number, cmd))
+    case 'triggers.claim': return daemonCommands.run(() => cmdTriggersClaim(ws, id as number, cmd))
     case 'skills.sync': return cmdSkillsSync(ws, id as number, cmd)
     case 'bridgeResume': return daemonCommands.run(() => cmdBridgeResume(ws, id as number, cmd))
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
@@ -3551,8 +3558,12 @@ async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd
 // is acked. Every fire carries (epoch, seq) — the epoch is minted with the state
 // file, so the server can tell a genuinely new numbering from a replay. Trigger
 // events NEVER go to a bridge client — a fire carries host data and only the
-// trusted SSH-tunneled walnut server may receive it. Keep in sync with
-// daemon-source.ts.
+// trusted SSH-tunneled walnut server may receive it. Who delivers a fire is
+// decided HERE: a server claims each fire it receives (triggers.claim), and a
+// fire no server claimed within the grace whose def names a task with a live
+// session of the same Walnut on this host is written into that session by this
+// daemon (deliverUnclaimedFires), then replayed with `host` set so the server
+// only records it. Keep in sync with daemon-source.ts.
 const TRIGGERS_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'triggers.json')
 const TRIGGER_STATE_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'trigger-state')
 const TRIGGER_TICK_MS = 5_000
@@ -3580,9 +3591,17 @@ interface ArmedTrigger {
    * exactly what at-least-once wants.
    */
   fireSentAt: Map<number, number>
+  /** When this daemon armed it: fires left from before give the server a fresh grace. */
+  armedAtMs: number
 }
 
 const armedTriggers = new Map<string, ArmedTrigger>()
+/**
+ * Seqs this host is writing into a session right now, by trigger id (claims
+ * answer `busy`). Keyed by id, not held on the entry: a configure that re-arms
+ * the trigger mid-write must not make its fires claimable.
+ */
+const hostDeliveriesInFlight = new Map<string, Set<number>>()
 let armedTriggersHash: string | null = null
 let triggerTickTimer: ReturnType<typeof setInterval> | null = null
 let triggerTestsRunning = 0
@@ -3592,6 +3611,16 @@ const triggersConfigureGate = new DaemonSessionGate()
 function triggerReplayMs(): number {
   const raw = Math.floor(Number(process.env.WALNUT_TRIGGER_REPLAY_MS))
   return Number.isFinite(raw) && raw > 0 ? Math.max(1_000, raw) : PENDING_FIRE_REPLAY_MS
+}
+
+/** How long a fire waits for a server's claim before this host delivers it; tests shorten it. */
+function hostDeliveryGraceMs(): number {
+  const raw = Math.floor(Number(process.env.WALNUT_TRIGGER_HOST_GRACE_MS))
+  return Number.isFinite(raw) && raw > 0 ? Math.max(500, raw) : HOST_DELIVERY_GRACE_MS
+}
+
+function newArmedTrigger(def: TriggerDef, state: TriggerHostState, nextRunAtMs: number, now: number): ArmedTrigger {
+  return { def, state, nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now }
 }
 
 /**
@@ -3685,10 +3714,7 @@ function loadTriggersAtBoot(): void {
     defs.push(parsed.def)
   }
   for (const def of defs) {
-    armedTriggers.set(def.id, {
-      def, state: readTriggerState(def.id, now), nextRunAtMs: now + TRIGGER_BOOT_RUN_DELAY_MS, running: false,
-      fireSentAt: new Map(),
-    })
+    armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now))
   }
   armedTriggersHash = triggersSetHash(defs)
   try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }) } catch {}
@@ -3725,6 +3751,7 @@ function sendTriggerFire(entry: ArmedTrigger, fire: PendingFire, replay: boolean
     ...(fire.input !== undefined ? { input: fire.input } : {}),
     ...(fire.itemsTruncated ? { itemsTruncated: true } : {}),
     durationMs: fire.durationMs, nextRunAtMs: entry.nextRunAtMs,
+    ...(fire.host ? { host: fire.host } : {}),
     ...(replay ? { replay: true } : {}),
   })
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now())
@@ -3778,6 +3805,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     const decision = decideCheck(entry.def, output, entry.state, now)
     const fire = applyCheckOutcome(entry.state, output, decision, now, proc.durationMs, {
       itemsTruncated: parsed.itemsTruncated,
+      arbitrated: !!entry.def.deliver,
     })
     entry.nextRunAtMs = now + triggerCadenceMs(entry)
     persistTriggerState(entry.def.id, entry.state)
@@ -3825,6 +3853,55 @@ function replayPendingFires(now: number): void {
   }
 }
 
+/**
+ * Deliver, on this host, the fires no server claimed in time (trigger-claim-v1).
+ * The fires of one trigger that are due go as ONE envelope, the same one the
+ * server builds for a backlog, into the target task's live session (the offline
+ * host's copy says which). No live session, a complete task, or a failed write:
+ * the fire stays for the server and is tried here again after a minute.
+ */
+function deliverUnclaimedFires(now: number): void {
+  const grace = hostDeliveryGraceMs()
+  for (const entry of armedTriggers.values()) {
+    const spec = entry.def.deliver
+    const id = entry.def.id
+    if (!spec || hostDeliveriesInFlight.has(id)) continue
+    const due = entry.state.pendingFires.filter((f) => fireDueOnHost(f, now, entry.armedAtMs, grace, HOST_DELIVERY_RETRY_MS))
+    if (due.length === 0) continue
+    const seqs = due.map((f) => f.seq)
+    const epoch = entry.state.epoch
+    const messageId = `qm-trigger-${crypto.randomBytes(6).toString('hex')}`
+    const text = buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now })
+    hostDeliveriesInFlight.set(id, new Set(seqs))
+    void offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then((r) => {
+      // Recorded on whatever holds this trigger's state NOW: a configure may have
+      // re-armed it (a fresh state object read from disk) or disarmed it.
+      const current = armedTriggers.get(id)
+      const state = current ? current.state : readTriggerState(id, Date.now())
+      if (state.epoch !== epoch) {
+        logMsg('warn', 'trigger host delivery outcome dropped: state file started over', { id, seqs, delivered: r.ok })
+        return
+      }
+      if (r.ok) {
+        markHostDelivered(state, { atMs: now, sessionId: r.sid, messageId, seqs })
+        logMsg('info', 'trigger delivered on host', { id, seqs, sessionId: r.sid, messageId, taskId: spec.taskId })
+      } else {
+        for (const fire of state.pendingFires) if (seqs.includes(fire.seq)) fire.hostTriedAt = now
+        logMsg('info', 'trigger host delivery skipped', { id, seqs, taskId: spec.taskId, reason: r.reason })
+      }
+      persistTriggerState(id, state)
+      // A server that is connected but slow records it now instead of a minute later.
+      if (r.ok && current) {
+        for (const fire of current.state.pendingFires) if (seqs.includes(fire.seq)) sendTriggerFire(current, fire, true)
+      }
+    }).catch((err) => {
+      logMsg('error', 'trigger host delivery threw', { id, seqs, error: (err as Error).message })
+    }).finally(() => {
+      hostDeliveriesInFlight.delete(id)
+    })
+  }
+}
+
 /** Overlap is SKIPPED, never queued: a slow check must not build a backlog. */
 function tickTriggers(): void {
   const now = Date.now()
@@ -3834,6 +3911,7 @@ function tickTriggers(): void {
       logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
     })
   }
+  deliverUnclaimedFires(now)
   replayPendingFires(now)
 }
 
@@ -3873,10 +3951,7 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
     // A trigger that stays keeps its state file, its cursor and its schedule;
     // only the definition is refreshed.
     if (existing) { existing.def = def; continue }
-    armedTriggers.set(def.id, {
-      def, state: readTriggerState(def.id, now), nextRunAtMs: now + TRIGGER_FIRST_RUN_DELAY_MS, running: false,
-      fireSentAt: new Map(),
-    })
+    armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now))
   }
   if (changed) persistTriggersFile(defs)
   armedTriggersHash = hash
@@ -3962,6 +4037,33 @@ function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
   })
   return sendOk(ws, id, { ran: true, started: true })
+}
+
+/**
+ * A server takes the fires it just received (trigger-claim-v1). From then on
+ * only a server delivers them; this host never does. A fire the host already
+ * delivered is answered with that delivery, one it is writing right now with
+ * `busy` (the server waits for the replay), and a fire this daemon does not hold
+ * with `unknown` (acked, trimmed or disarmed: the server's own dedup decides).
+ * A socket of another Walnut cannot take a fire of this one's trigger.
+ */
+function cmdTriggersClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const tid = triggerIdOf(cmd)
+  const seqs = Array.isArray(cmd.seqs) ? (cmd.seqs as unknown[]).filter((s): s is number => typeof s === 'number' && Number.isFinite(s)) : []
+  const entry = tid ? armedTriggers.get(tid) : undefined
+  const inFlight = hostDeliveriesInFlight.get(tid) ?? new Set<number>()
+  const empty = { claimed: [] as number[], unknown: [] as number[], host: [], busy: [] as number[] }
+  if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
+    return sendOk(ws, id, { ...empty, busy: seqs.filter((s) => inFlight.has(s)), unknown: seqs.filter((s) => !inFlight.has(s)) })
+  }
+  const home = gatewayClientHomes.get(ws)
+  if (entry.def.deliver && home && home !== entry.def.deliver.home) {
+    logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs })
+    return sendOk(ws, id, { ...empty, foreign: true })
+  }
+  const { reply, changed } = claimFires(entry.state, seqs, Date.now(), inFlight)
+  if (changed) persistTriggerState(tid, entry.state)
+  return sendOk(ws, id, reply as unknown as Record<string, unknown>)
 }
 
 function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
