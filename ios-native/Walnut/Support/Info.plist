@@ -23,7 +23,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>98</string>
+	<string>100</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -41,6 +41,10 @@
 	<string>Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Walnut connects straight to your Walnut on this Wi-Fi network when it can, which is faster than going through the cloud.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>With Places on, Walnut records the places you visit, even while it is closed, and keeps them only on your own Mac, so your AI can answer where you were. iOS records visits only with Always.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Walnut uses your location only for Places, after you turn it on. It records the places you visit and keeps them on your own Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Walnut uses the microphone for voice input. Your speech is turned into text by your own Walnut server.</string>
 	<key>UIApplicationShortcutItems</key>
