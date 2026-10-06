@@ -27,7 +27,10 @@ One batch, worked once, then stop.
 
 ## Letters (`human_inbox_send`)
 
-- **One** summary: `review`, with `task_refs` for every task you touched.
+- **At most one** summary, and only when the run has something for the user (a
+  decision, or an item they need to know about): `review`, with `task_refs` for
+  every task you touched. A run that only handed items over, updated notes or
+  marked mail read sends no letter.
 - **Three** decisions at most: `action_required`, each with buttons —
   `Make a task` / `Reply for me` / `Unsubscribe` / `Ignore`. No buttons is
   refused, and so is a 4th: fold the rest into the summary, and do not retry.

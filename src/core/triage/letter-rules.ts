@@ -38,6 +38,9 @@ export function triageLetterBudgetText(): string {
   return [
     `Letters, per run: at most ${TRIAGE_SUMMARY_LETTERS_PER_RUN} summary letter`,
     '(type=review or info, with task_refs for every task you touched)',
+    'Send the summary only when this run has something for the user: a decision, or an item',
+    'they need to know about. A run that only handed items to their tasks, updated notes or',
+    'marked mail read sends no letter; State.md and the run journal record it.',
     `and at most ${TRIAGE_DECISION_LETTERS_PER_RUN} decision letters`,
     '(type=action_required, each with buttons the human can tap).',
     'The server refuses a fourth decision letter and tells you to fold the rest',

@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { getOp } from '../../../src/ops/index.js'
+import { triageLetterBudgetText } from '../../../src/core/triage/letter-rules.js'
 
 describe('human_inbox_send says when NOT to send', () => {
   it('keeps the inbox for what needs the user or what they asked for', () => {
@@ -36,5 +37,15 @@ describe('a park writes no letter', () => {
     expect(op.description).not.toMatch(/receipt/)
     // A "tell me when" is the user asking for a letter, so the fire's prompt carries that ask.
     expect(op.input.prompt.description).toContain('When the user asked to be told ("tell me when X"), say so here')
+  })
+})
+
+describe('an Inbox Triage run with nothing for the user sends no summary', () => {
+  it('says the summary is conditional, in the budget every run is launched with', () => {
+    const budget = triageLetterBudgetText()
+    expect(budget).toContain('at most 1 summary letter')
+    expect(budget).toContain('Send the summary only when this run has something for the user')
+    expect(budget).toContain('A run that only handed items to their tasks, updated notes or')
+    expect(budget).toContain('marked mail read sends no letter')
   })
 })
