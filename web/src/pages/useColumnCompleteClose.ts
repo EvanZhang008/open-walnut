@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { SessionSlot } from './sessionColumns';
-import { realColumnCount, restoreSessionColumn } from './sessionColumns';
+import { realColumnCount, restoreSessionColumn, toggleLockSlot } from './sessionColumns';
 
 /** The ring's tick is read before the column goes (also the window in which a refused
  *  completion rolls back, so a quick refusal never costs the person a column). */
@@ -22,6 +22,8 @@ const REFUSAL_WATCH_MS = 8000;
 interface Entry {
   taskId: string;
   from: string;
+  /** Where the column sat and whether it was pinned, read when it closed (a pin or an unpin
+   *  during the tick moves it). */
   slot: SessionSlot;
   index: number;
   toastId: string;
@@ -82,16 +84,24 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
     const u = latest.current;
     if (u.sessionColumns.some((c) => c.id === entry.slot.id)) return;
     const count = u.triageOpenRef.current ? u.maxPanelsRef.current - 1 : u.maxPanelsRef.current;
-    if (realColumnCount(u.sessionColumns) >= count) { u.openSession(entry.slot.id); return; }
+    if (realColumnCount(u.sessionColumns) >= count) {
+      u.openSession(entry.slot.id);
+      // A pin comes back with its column (the open lands unpinned; a refused open leaves nothing to pin).
+      if (entry.slot.locked) {
+        u.setSessionColumns((prev) => (prev.some((c) => c.id === entry.slot.id && !c.locked) ? toggleLockSlot(prev, entry.slot.id) : prev));
+      }
+      return;
+    }
     u.setSessionColumns((prev) => restoreSessionColumn(prev, entry.slot, entry.index, u.triageOpenRef.current, u.maxPanelsRef.current));
   }, []);
 
   const onTaskCompleted = useCallback((sessionId: string, info: { taskId: string; from: string }) => {
     const d = latest.current;
+    // A pinned column closes too: completing the task from its own header is the person
+    // saying they are done with it, and the Undo brings it back pinned.
     const index = d.sessionColumns.findIndex((c) => c.id === sessionId);
     if (index < 0 || pending.current.has(sessionId)) return;
     const slot = d.sessionColumns[index];
-    if (slot.locked) return; // a pin means "keep this panel"
     const entry: Entry = {
       taskId: info.taskId,
       from: info.from,
@@ -122,9 +132,13 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
       entry.timer = undefined;
       if (pending.current.get(sessionId) !== entry) return;
       pending.current.delete(sessionId);
-      // Refused or reopened during the tick, or pinned in the meantime: the column stays.
-      const pinned = latest.current.sessionColumns.find((c) => c.id === sessionId)?.locked;
-      if (pinned || reopened(entry.taskId)) return;
+      // Refused or reopened during the tick: the column stays.
+      if (reopened(entry.taskId)) return;
+      const cols = latest.current.sessionColumns;
+      const at = cols.findIndex((c) => c.id === sessionId);
+      if (at < 0) return;
+      entry.slot = cols[at];
+      entry.index = at;
       const title = latest.current.tasks.find((t) => t.id === entry.taskId)?.title;
       watchAfterClose();
       latest.current.notify({
@@ -144,13 +158,13 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
     entry.timer = setTimeout(begin, CLOSE_TICK_MS);
   }, [restoreColumn]);
 
-  // A pending close outlives neither a reopened task, a pin, nor a column that something else
-  // closed; and a refusal that lands after the column went gives the column back.
+  // A pending close outlives neither a reopened task nor a column that something else closed;
+  // and a refusal that lands after the column went gives the column back.
   useEffect(() => {
     if (pending.current.size === 0 && closed.current.size === 0) return;
     for (const [sessionId, entry] of [...pending.current]) {
       const slot = sessionColumns.find((c) => c.id === sessionId);
-      if (!slot || slot.locked || reopened(entry.taskId)) release(sessionId);
+      if (!slot || reopened(entry.taskId)) release(sessionId);
     }
     for (const [sessionId, watch] of [...closed.current]) {
       if (!reopened(watch.entry.taskId)) continue;

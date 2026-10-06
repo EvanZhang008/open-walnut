@@ -601,8 +601,29 @@ describe('sessionColumns: restoreSessionColumn (Undo of a completed task\'s colu
     expect(restore(cols, slot('b'), 0, false, 3).map(s => s.id)).toEqual(['draft:1', 'b', 'a']);
   });
 
-  it('comes back unlocked (a locked column never rolls up, so there is no pin to restore)', () => {
-    expect(restore([slot('a')], slot('b', true), 1).find(s => s.id === 'b')?.locked).toBe(false);
+  it('a pinned column comes back pinned, in its place among the pins', () => {
+    // [a c* b*] -> c* closed -> [a b*] -> Undo
+    expect(restore([slot('a'), slot('b', true)], slot('c', true), 1)).toEqual([slot('a'), slot('c', true), slot('b', true)]);
+    // the anchor (rightmost pin) goes back to the far right
+    expect(restore([slot('a'), slot('c', true)], slot('b', true), 2)).toEqual([slot('a'), slot('c', true), slot('b', true)]);
+  });
+
+  it('a pinned column never lands among the unlocked ones, an unlocked one never among the pins', () => {
+    // the strip changed while the Undo was up: the saved index now points into the other region
+    expect(restore([slot('a'), slot('x'), slot('p', true)], slot('b', true), 0, false, 5).map(s => s.id)).toEqual(['a', 'x', 'b', 'p']);
+    expect(restore([slot('a'), slot('p', true), slot('q', true)], slot('b'), 3, false, 5).map(s => s.id)).toEqual(['a', 'b', 'p', 'q']);
+  });
+
+  it('a pinned column with no room left is opened like any column, then pinned again', () => {
+    const out = restore([slot('x'), slot('y'), slot('z')], slot('b', true), 2, false, 3);
+    expect(out).toHaveLength(3);
+    expect(out.find(s => s.id === 'b')?.locked).toBe(true);
+    expect(out[out.length - 1]).toEqual(slot('b', true));  // the left edge of the pins, which here is the end
+    expect(out.map(s => s.id)).not.toContain('z');
+  });
+
+  it('an unlocked column comes back unlocked', () => {
+    expect(restore([slot('a')], slot('b'), 1).find(s => s.id === 'b')?.locked).toBe(false);
   });
 
   it('with no room left it is a normal open: the budget evicts the rightmost unlocked column', () => {
@@ -630,5 +651,6 @@ describe('sessionColumns: restoreSessionColumn (Undo of a completed task\'s colu
   it('is unchanged (same reference) at the hard ceiling of pinned panels', () => {
     const cols = Array.from({ length: MAX_PANELS }, (_, i) => slot(`p${i}`, true));
     expect(restore(cols, slot('b'), 0, false, MAX_PANELS)).toBe(cols);
+    expect(restore(cols, slot('b', true), 2, false, MAX_PANELS)).toBe(cols);
   });
 });

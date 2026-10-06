@@ -79,15 +79,17 @@ show inline after the open ones, other completed hits that show the query fold i
   gives (the sessions area's own removal, the neighbours take the width) and a toast (`hint`, 8s)
   says "Task completed" + the task title + Undo. There is deliberately NO custom close animation:
   a clip-path roll-up into the header strip shipped first (2026-10-04) and the person asked for the
-  ordinary fade back. A locked column is never closed (a pin means keep it, also one pinned during
-  the tick), and a task that is no longer COMPLETE (refused, or the ring clicked again) cancels the
-  close. A refusal that lands AFTER the close (a failed write is retried with backoff before the
+  ordinary fade back. A locked column closes too (2026-10-05 user call: completing it from its own
+  header means done with it), and its Undo brings it back locked, in its place among the pins (the
+  slot and index are read when it closes, so a pin or unpin during the tick is what comes back). A
+  task that is no longer COMPLETE (refused, or the ring clicked again) cancels the close. A refusal that lands AFTER the close (a failed write is retried with backoff before the
   list is re-read) is still answered: for the toast's life the hook watches the task, and a phase
   that is no longer COMPLETE gives the column back and dismisses the toast. A completion through
   the REST fallback (task not in the store) is reported only after the write succeeded. Undo sets
   the phase back to the one it left and puts the column back at its index (`restoreSessionColumn`);
   with no room left under the panel count it goes through the ordinary open (`openSessionOrToast`),
-  so the lock grant and the panel count follow like any open. Undo restores the PHASE only: what the
+  so the lock grant and the panel count follow like any open, and a pinned one is pinned again on
+  arrival. Undo restores the PHASE only: what the
   server clears on completion (a plan/exec slot, a WAITING clock) is not brought back. The column
   node carries `data-column-id` (the session id). Ratchets:
   `tests/e2e/browser/column-complete-close.spec.ts` (holds the tick to act inside it),

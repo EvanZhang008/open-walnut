@@ -66,6 +66,29 @@ const releaseTick = (page: Page) => page.evaluate(() => {
   w.__tickHeld.splice(0).forEach((run) => run())
 })
 
+/** Keep the 8s toasts (and the hook's 8s refusal watch) up for two minutes, for a test that
+ *  must do a slow UI step (open another session) while the Undo is still on screen. */
+async function stretchToasts(page: Page) {
+  await page.addInitScript(() => {
+    const original = window.setTimeout.bind(window)
+    window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) =>
+      original(fn, delay === 8000 ? 120_000 : delay, ...args)) as typeof window.setTimeout
+  })
+}
+
+/** Open a session as a home column through the finder (⌘⇧O → type → click). */
+async function openViaFinder(page: Page, query: string, sid: string): Promise<void> {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('ControlOrMeta+Shift+O')
+  const finder = page.locator('.session-search-panel')
+  await expect(finder).toBeVisible()
+  await finder.locator('.session-search-input').fill(query)
+  const result = finder.locator('.session-search-result').filter({ has: page.locator('.session-search-title', { hasText: query }) })
+  await expect(result).toHaveCount(1, { timeout: 10_000 })
+  await result.click()
+  await expect(page.locator(`.main-page-session-column[data-column-id="${sid}"]`)).toBeVisible({ timeout: 20_000 })
+}
+
 /** Record every animation that is a clip-path on a column (there must be none: the close is the
  *  ordinary fade), and with `hold` pause the removal's own fade so the test can look at it. */
 async function watchAnimations(page: Page, hold = false) {
@@ -182,19 +205,22 @@ test('clicking the ring again before the column goes reopens the task and the co
   await expect(undoToast(page)).toHaveCount(0)              // nothing left to undo
 })
 
-test('pinning the column before it goes keeps it', async ({ page }) => {
+test('pinning the column before it goes still closes it, and the Undo brings it back pinned', async ({ page }) => {
   await holdTick(page)
   await openThree(page)
   await ring(page, 'a').click()
   await waitTickHeld(page)
   await col(page, 'a').locator('.session-panel-lock').click()
   await expect(col(page, 'a').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  const pinnedOrder = await order(page)                      // the pin moved it to the right
   await releaseTick(page)
 
-  await page.waitForTimeout(2_500)
-  await expect(homeColumns(page)).toHaveCount(3)
-  await expect(undoToast(page)).toHaveCount(0)
-  expect(await phase(page, 'a')).toBe('COMPLETE')
+  await expect(col(page, 'a')).toHaveCount(0, { timeout: 15_000 })
+  await undoButton(page).click()
+  await expect(col(page, 'a')).toHaveCount(1, { timeout: 15_000 })
+  await expect(col(page, 'a').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  await expect.poll(async () => (await order(page)).join()).toBe(pinnedOrder.join())
+  await expect.poll(() => phase(page, 'a'), { timeout: 15_000 }).toBe('IN_PROGRESS')
 })
 
 test('closing the column with × before the tick ends closes it once and announces nothing', async ({ page }) => {
@@ -254,6 +280,7 @@ test('a refusal that lands after the column has gone gives the column back and t
 })
 
 test('two columns completed back to back each keep their own Undo and their own place', async ({ page }) => {
+  await stretchToasts(page)       // the second Undo comes after several slow steps
   await openThree(page)
   await ring(page, 'a').click()
   await ring(page, 'c').click()
@@ -277,17 +304,60 @@ test('two columns completed back to back each keep their own Undo and their own 
   await expect.poll(() => phase(page, 'a'), { timeout: 15_000 }).toBe('IN_PROGRESS')
 })
 
-test('a pinned column is completed but not closed: a pin means keep this panel', async ({ page }) => {
+test('a pinned column closes too, and the Undo puts it back pinned, in its place among the pins', async ({ page }) => {
   await openThree(page)
+  // Pin b, then c: the first pin is the anchor on the far right, the next slides in left of it.
   await col(page, 'b').locator('.session-panel-lock').click()
   await expect(col(page, 'b').locator('.session-panel-lock')).toHaveClass(/is-locked/)
-  await ring(page, 'b').click()
+  await col(page, 'c').locator('.session-panel-lock').click()
+  await expect(col(page, 'c').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c'), SID('b')].join())
 
-  await expect.poll(() => phase(page, 'b'), { timeout: 15_000 }).toBe('COMPLETE')
-  await page.waitForTimeout(2_500)
-  await expect(col(page, 'b')).toHaveCount(1)
-  await expect(undoToast(page)).toHaveCount(0)
+  // The middle one, a pin between the unlocked column and the anchor.
+  await ring(page, 'c').click()
+  await expect.poll(() => phase(page, 'c'), { timeout: 15_000 }).toBe('COMPLETE')
+  await expect(col(page, 'c')).toHaveCount(0, { timeout: 20_000 })
+  await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('b')].join())
+  await expect(undoToast(page)).toContainText('Close fixture C')
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-3-pinned-closed.png` })
+
+  await undoButton(page).click()
+  await expect(col(page, 'c')).toHaveCount(1, { timeout: 15_000 })
+  await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c'), SID('b')].join())
+  await expect(col(page, 'c').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  await expect(col(page, 'b').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  await expect.poll(() => phase(page, 'c'), { timeout: 15_000 }).toBe('IN_PROGRESS')
+
+  // And the anchor itself, round two: it goes and comes back on the far right.
+  await ring(page, 'b').click()
+  await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
+  await undoButton(page).click()
+  await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
+  await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c'), SID('b')].join())
+  await expect(col(page, 'b').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-4-pinned-undone.png` })
+})
+
+test('Undo of a pinned column after the strip refilled opens it like any column and pins it again', async ({ page }) => {
+  await stretchToasts(page)
+  await openThree(page)
+  await col(page, 'b').locator('.session-panel-lock').click()
+  await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c'), SID('b')].join())
+  await ring(page, 'b').click()
+  await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
+
+  // Another session takes the free slot while the Undo is still up: the strip is full again.
+  const other = 'pw-service-session'
+  await openViaFinder(page, 'Service preview', other)
   await expect(homeColumns(page)).toHaveCount(3)
+
+  await undoButton(page).click()
+  await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
+  await expect(col(page, 'b').locator('.session-panel-lock')).toHaveClass(/is-locked/)
+  await expect.poll(async () => (await order(page)).at(-1)).toBe(SID('b'))      // back among the pins, on the right
+  await expect(homeColumns(page)).toHaveCount(3)                                 // the count held: an unlocked column yielded
+  expect(await order(page)).toContain(other)
+  await expect.poll(() => phase(page, 'b'), { timeout: 15_000 }).toBe('IN_PROGRESS')
 })
 
 test('with reduced motion the column still closes and still has its Undo', async ({ page }) => {

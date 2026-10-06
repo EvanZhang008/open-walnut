@@ -221,13 +221,15 @@ export function removeSessionColumn(cols: SessionSlot[], id: string): SessionSlo
 
 /**
  * Put back a column the person just watched leave (the Undo of a completed task's
- * column), in the place it had: `index` is where it sat in the strip, clamped into the
- * unlocked region so the drafts-first / pins-last layout still holds.
+ * column), in the place it had and with the pin it had: `index` is where it sat in the
+ * strip, clamped into its own region (unlocked after the drafts, or the pins on the
+ * right) so the drafts-first / pins-last layout still holds.
  *
  * Already open: unchanged. No room left under the person's panel COUNT (another open took
  * the slot while the Undo was on screen, or every panel is pinned): it comes back as a
  * normal open, so the budget rules decide who yields or whether the lock grant applies,
- * never a strip past the panel count without the count following (the caller does that).
+ * never a strip past the panel count without the count following (the caller does that),
+ * and a pinned one is pinned again on arrival.
  */
 export function restoreSessionColumn(
   cols: SessionSlot[],
@@ -238,11 +240,16 @@ export function restoreSessionColumn(
 ): SessionSlot[] {
   if (cols.some(c => c.id === slot.id)) return cols;
   const count = triageOpen ? maxColumns - 1 : maxColumns;
-  if (realColumns(cols).length >= count) return addSessionColumn(cols, slot.id, triageOpen, maxColumns);
+  if (realColumns(cols).length >= count) {
+    const opened = addSessionColumn(cols, slot.id, triageOpen, maxColumns);
+    return slot.locked && opened.some(c => c.id === slot.id && !c.locked) ? toggleLockSlot(opened, slot.id) : opened;
+  }
   const { unlocked } = splitByLock(cols);
-  const draftPrefix = splitDrafts(unlocked).drafts.length;
-  const at = Math.min(Math.max(index, draftPrefix), unlocked.length);
-  return [...cols.slice(0, at), { id: slot.id, locked: false }, ...cols.slice(at)];
+  const [lo, hi] = slot.locked
+    ? [unlocked.length, cols.length]
+    : [splitDrafts(unlocked).drafts.length, unlocked.length];
+  const at = Math.min(Math.max(index, lo), hi);
+  return [...cols.slice(0, at), { id: slot.id, locked: slot.locked }, ...cols.slice(at)];
 }
 
 export function replaceSessionColumn(cols: SessionSlot[], oldId: string, newId: string): SessionSlot[] {
