@@ -2277,8 +2277,26 @@ export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
   }
 }
 
+/** How long a push waits for a boot walk or a plugin reload before it reports the plugin missing. */
+const PLUGIN_CHANGE_WAIT_MS = 30_000;
+
 async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
-  const plugin = registry.get(task.source);
+  let plugin = registry.get(task.source);
+  // The plugins are loading or reloading: wait for that, then push the task as
+  // it is by then, instead of refusing a plugin that is seconds away.
+  if (!plugin && !registry.isClosing() && await registry.waitForPlugins(PLUGIN_CHANGE_WAIT_MS)) {
+    plugin = registry.get(task.source);
+    if (plugin) task = (await getTask(task.id).catch(() => null)) ?? task;
+  }
+  if (!plugin && registry.isClosing()) {
+    // This server is stopping and has already let its plugins go. The stamp is the
+    // hand-off: the next server's sync retries every task carrying a sync_error.
+    const message = `Walnut stopped before this change reached "${task.source}"; it is sent after the restart`;
+    log.task.warn('sync deferred: server stopping', { task: task.id, source: task.source });
+    const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
+    if (changed && stamped) bus.emit(EventNames.TASK_UPDATED, { task: stamped }, ['web-ui'], { source: 'sync' });
+    return { success: false, error: message };
+  }
   if (!plugin) {
     // Plugin not loaded — set sync_error so the user sees something went wrong
     const message = `Plugin "${task.source}" not loaded — task not synced`;

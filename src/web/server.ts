@@ -917,6 +917,9 @@ async function isWalnutAnsweringOn(port: number): Promise<boolean> {
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
   bootCompleted = false // boot in progress → unhandled rejections are fatal again
+  // Until the plugin walk below ends, a task push that finds no plugin waits for
+  // it: sessions reattach (and move their tasks' phases) before the plugins load.
+  registry.beginLoading()
 
   // FIRST, before any await: install exit diagnostics + always-fatal SIGTERM/
   // SIGHUP handlers. A `kill -15` during the multi-second boot below must kill
@@ -4625,6 +4628,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
   } catch (err) {
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })
+  } finally {
+    registry.endLoading()
   }
   // Every window that connected while the walk ran read a partial list (marked `loading`).
   // This is what tells them the list is whole now, instead of waiting on their own retry.
@@ -5586,6 +5591,10 @@ export async function stopServer(): Promise<void> {
   unsubscribeLocalDaemonReady?.()
   unsubscribeLocalDaemonReady = null
   localDaemonTracker.reset()
+  // Before the plugins are disposed below: sessions and routes keep moving tasks
+  // until much later, and a push that then finds no plugin is the next server's
+  // to send, not an error. Also ends a boot stopped before its plugin walk did.
+  registry.beginClosing()
   try { (await import('../core/turn-snapshots/settings-push.js')).stopTurnSnapshotSettingsSync() } catch { /* never started */ }
   if (notificationReconcileTimer) {
     clearInterval(notificationReconcileTimer)

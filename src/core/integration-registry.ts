@@ -39,6 +39,64 @@ const noopLocalSync: IntegrationSync = {
 class IntegrationRegistry {
   private plugins = new Map<string, RegisteredPlugin>();
   private tombstones = new Map<string, PluginTombstone>();
+  /**
+   * What is changing the plugin set right now: a server boot until its plugin walk
+   * ends (sessions reattach, and move their tasks' phases, before the walk), and
+   * every lifecycle operation (load, reload, enable, dispose). A push that finds no
+   * plugin waits for these instead of refusing a plugin that is seconds away.
+   */
+  private changes = new Set<Promise<unknown>>();
+  private finishBoot: (() => void) | null = null;
+  /**
+   * Set when a server starts shutting down. Its plugins go away before its
+   * sessions and routes stop (2026-10-06: a deploy's SIGTERM, then a session's
+   * phase move pushed into an empty registry and carded "plugin not loaded"),
+   * so a push then is handed to the next server, not reported as a failure.
+   */
+  private closing = false;
+
+  /** A server is about to load its plugins: pushes that find none wait (waitForPlugins). */
+  beginLoading(): void {
+    this.closing = false;
+    if (this.finishBoot) return;
+    let finish!: () => void;
+    this.track(new Promise<void>((resolve) => { finish = resolve; }));
+    this.finishBoot = finish;
+  }
+
+  /** The boot's plugin walk ended, whatever it loaded. */
+  endLoading(): void {
+    const finish = this.finishBoot;
+    this.finishBoot = null;
+    finish?.();
+  }
+
+  /** A plugin lifecycle operation runs until `done` settles. */
+  track(done: Promise<unknown>): void {
+    this.changes.add(done);
+    const drop = () => { this.changes.delete(done); };
+    done.then(drop, drop);
+  }
+
+  /** The server is stopping: its plugins will not come back in this process. */
+  beginClosing(): void {
+    this.closing = true;
+    this.endLoading();
+  }
+
+  isClosing(): boolean {
+    return this.closing;
+  }
+
+  /** Wait at most `timeoutMs` while the plugin set is changing. False when it was not. */
+  async waitForPlugins(timeoutMs: number): Promise<boolean> {
+    if (this.changes.size === 0) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
+    await Promise.race([Promise.allSettled([...this.changes]), timeout]);
+    clearTimeout(timer);
+    return true;
+  }
 
   /** Register a plugin. Throws if duplicate ID. */
   register(id: string, plugin: RegisteredPlugin): void {
@@ -154,6 +212,7 @@ class IntegrationRegistry {
   clear(): void {
     this.plugins.clear();
     this.tombstones.clear();
+    this.endLoading();
     this.ensureLocalFallback();
   }
 

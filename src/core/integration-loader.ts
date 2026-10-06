@@ -222,6 +222,8 @@ function runPluginOperation<T>(
   const previous = pluginOperationTails.get(registry) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(operation);
   pluginOperationTails.set(registry, current);
+  // A push that finds its plugin missing mid-reload waits for this, not refuses it.
+  registry.track(current);
   void current.finally(() => {
     if (pluginOperationTails.get(registry) === current) pluginOperationTails.delete(registry);
   }).catch(() => undefined);
