@@ -48,6 +48,7 @@
 
 import { log } from '../../logging/index.js';
 import { MAX_SAMPLES_PER_REQUEST, normalizeSource, sanitizeSample } from './rollup.js';
+import { deadline } from './deadline.js';
 import { appendRecords, hydrate, recordTime } from './store.js';
 import { emitTimeBanked } from './presence-events.js';
 import type { TimeRecord, TimeSource } from './types.js';
@@ -84,13 +85,6 @@ const MAX_ID_LEN = 128;
 /** `<installId>-<seq>`: printable, no separators that could confuse a log or a key. */
 const MAX_SAMPLE_ID_LEN = 64;
 const SAMPLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-
-/** A cancellable timeout — Promise.race never cancels its loser on its own. */
-function deadline(ms: number): { promise: Promise<void>; cancel: () => void } {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const promise = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
-  return { promise, cancel: () => { if (timer) clearTimeout(timer); } };
-}
 
 /** Race a promise against a deadline; `onTimeout` is the answer if it wins. */
 async function within<T>(work: Promise<T>, ms: number, onTimeout: T): Promise<T> {

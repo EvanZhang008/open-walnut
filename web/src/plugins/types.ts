@@ -100,6 +100,35 @@ export interface PluginSettingsContribution {
   component: ComponentType<Record<string, never>>
 }
 
+/** Mirrors `@open-walnut/plugin-api`'s SlotTarget: the host surfaces a plugin can draw inside. */
+export type PluginSlotTarget = 'task.detail' | 'session.header'
+export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.detail', 'session.header']
+
+export interface PluginTaskDetailSlotProps {
+  taskId: string
+  navigate(path: string): void
+}
+
+export interface PluginSessionHeaderSlotProps {
+  sessionId: string
+  taskId?: string
+  navigate(path: string): void
+}
+
+export interface PluginSlotPropsByTarget {
+  'task.detail': PluginTaskDetailSlotProps
+  'session.header': PluginSessionHeaderSlotProps
+}
+
+/** Mirrors `@open-walnut/plugin-api`'s SlotContribution (see ChatViewProps for why it must). */
+export interface PluginSlotContribution<T extends PluginSlotTarget = PluginSlotTarget> {
+  id: string
+  target: T
+  title: string
+  component: ComponentType<PluginSlotPropsByTarget[T]>
+  order?: number
+}
+
 export interface RegisteredUiContribution<T> {
   key: string
   pluginId: string
@@ -112,6 +141,7 @@ export interface PluginUiSnapshot {
   version: number
   pages: Array<RegisteredUiContribution<PluginPageContribution>>
   settings: Array<RegisteredUiContribution<PluginSettingsContribution>>
+  slots: Array<RegisteredUiContribution<PluginSlotContribution>>
 }
 
 export interface FileViewProps {
@@ -251,6 +281,7 @@ export interface WalnutWebApiHost {
     app(contribution: PluginAppContribution): PluginAppHandle
     page(contribution: PluginPageContribution): Disposable
     settings(contribution: PluginSettingsContribution): Disposable
+    slot<T extends PluginSlotTarget>(contribution: PluginSlotContribution<T>): Disposable
     injectCss(css: string): Disposable
     readonly views: PluginViews
   }

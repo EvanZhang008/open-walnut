@@ -2,19 +2,21 @@ import type {
   Disposable,
   PluginPageContribution,
   PluginSettingsContribution,
+  PluginSlotContribution,
   PluginUiSnapshot,
   RegisteredUiContribution,
 } from './types'
 import { disposable } from './disposable'
 
-type Contribution = PluginPageContribution | PluginSettingsContribution
-type Kind = 'pages' | 'settings'
+type Contribution = PluginPageContribution | PluginSettingsContribution | PluginSlotContribution
+type Kind = 'pages' | 'settings' | 'slots'
 type Entry<T extends Contribution> = RegisteredUiContribution<T> & { token: symbol }
 
 class PluginUiRegistry {
   private readonly maps = {
     pages: new Map<string, Entry<PluginPageContribution>>(),
     settings: new Map<string, Entry<PluginSettingsContribution>>(),
+    slots: new Map<string, Entry<PluginSlotContribution>>(),
   }
   private readonly listeners = new Set<() => void>()
   private generation = 0
@@ -22,6 +24,7 @@ class PluginUiRegistry {
     version: 0,
     pages: [],
     settings: [],
+    slots: [],
   }
 
   registerPage(pluginId: string, pluginName: string, value: PluginPageContribution): Disposable {
@@ -34,6 +37,10 @@ class PluginUiRegistry {
 
   registerSettings(pluginId: string, pluginName: string, value: PluginSettingsContribution): Disposable {
     return this.register('settings', pluginId, pluginName, value)
+  }
+
+  registerSlot(pluginId: string, pluginName: string, value: PluginSlotContribution): Disposable {
+    return this.register('slots', pluginId, pluginName, value)
   }
 
   removeOwner(pluginId: string): number {
@@ -99,6 +106,7 @@ class PluginUiRegistry {
       version: this.snapshot.version + 1,
       pages: [...this.maps.pages.values()].map(clean),
       settings: [...this.maps.settings.values()].map(clean),
+      slots: [...this.maps.slots.values()].map(clean),
     }
     for (const listener of this.listeners) listener()
   }

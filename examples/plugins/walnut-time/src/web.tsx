@@ -2,9 +2,13 @@ import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { createTimeApi } from './web/api'
 import { TimeApp } from './web/app'
 import { TIME_CSS } from './web/styles'
+import { TaskTimePage } from './web/task-page'
+import { rawSubpath, timePageFromRoute, timePaths } from './web/task-routes'
+import { createTimeSlots } from './web/task-slots'
+import { createTaskTimeStore } from './web/task-time-store'
 
 /**
- * Time — one native App with three tabs, and nothing else.
+ * Time: one native App, plus two slots inside the console.
  *
  * The plugin contributes NO server entry on purpose: time collection, storage and
  * the /api/time endpoints are Walnut's, and this app is only a reader of them. That
@@ -18,6 +22,10 @@ import { TIME_CSS } from './web/styles'
  * The App declares `placement: 'settings'`, so its row is in the Settings Plugins
  * group rather than in the Sidebar. A day report is something you open now and then; the
  * Sidebar is for the surfaces you live in.
+ *
+ * The slots (`walnut.ui.slot`) are where a task's own time shows: a compact table on
+ * the task's detail, and a chip on each session's header. Both lead to the App's task
+ * page (`/task/<id>`), which is not a tab: it is a page about one task.
  */
 
 /** The documented default weight for a plugin App (core screens use 10 to 1000). */
@@ -26,6 +34,7 @@ const APP_ORDER = 500
 export async function activate(walnut: WalnutWebApi) {
   const api = createTimeApi(walnut)
   const log = walnut.log
+  const store = createTaskTimeStore(walnut, api, log)
 
   function TimeIcon({ size = 18 }: { size?: number }) {
     return (
@@ -44,6 +53,12 @@ export async function activate(walnut: WalnutWebApi) {
   }
 
   function TimeAppRoot(props: AppProps) {
+    const page = timePageFromRoute(rawSubpath(props), props.search)
+    if (page) {
+      return (
+        <TaskTimePage page={page} store={store} paths={timePaths(props.basePath)} basePath={props.basePath} navigate={props.navigate} />
+      )
+    }
     return (
       <TimeApp
         api={api}
@@ -71,6 +86,11 @@ export async function activate(walnut: WalnutWebApi) {
     placement: 'settings',
   })
 
+  // A host older than slots has no `slot`: the App still works, the two slots just are not drawn.
+  const { TaskTimeSlot, SessionTimeChip } = createTimeSlots(store, timePaths(app.path))
+  walnut.ui.slot?.({ id: 'task-time', target: 'task.detail', title: 'Time', component: TaskTimeSlot })
+  walnut.ui.slot?.({ id: 'session-time', target: 'session.header', title: 'Time', component: SessionTimeChip })
+
   walnut.ui.injectCss(TIME_CSS)
-  log.info('Time app activated', { appPath: app.path })
+  log.info('Time app activated', { appPath: app.path, slots: typeof walnut.ui.slot === 'function' })
 }

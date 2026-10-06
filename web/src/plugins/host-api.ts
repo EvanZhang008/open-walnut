@@ -14,8 +14,11 @@ import type {
   PluginLogger,
   PluginPageContribution,
   PluginSettingsContribution,
+  PluginSlotContribution,
+  PluginSlotTarget,
   WalnutWebApiHost,
 } from './types'
+import { PLUGIN_SLOT_TARGETS } from './types'
 
 const LOCAL_EVENT = 'walnut:plugin-web-event'
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -242,6 +245,19 @@ export function createWebPluginApi(
         validateLocalId(contribution.id)
         validateComponent(contribution.component)
         return own(pluginUiRegistry.registerSettings(pluginId, pluginName, contribution))
+      },
+      slot<T extends PluginSlotTarget>(contribution: PluginSlotContribution<T>) {
+        validateLocalId(contribution.id)
+        // An unknown target would register fine and then render nowhere: refuse it here.
+        if (!PLUGIN_SLOT_TARGETS.includes(contribution.target)) {
+          throw new Error(`Plugin slot target must be one of ${PLUGIN_SLOT_TARGETS.join(', ')}`)
+        }
+        if (!contribution.title?.trim()) throw new Error('Plugin slot title is required')
+        validateComponent(contribution.component)
+        if (contribution.order !== undefined && !Number.isFinite(contribution.order)) {
+          throw new Error('Plugin slot order must be finite')
+        }
+        return own(pluginUiRegistry.registerSlot(pluginId, pluginName, contribution as unknown as PluginSlotContribution))
       },
       injectCss(css: string) {
         if (typeof css !== 'string') throw new Error('Plugin CSS must be a string')

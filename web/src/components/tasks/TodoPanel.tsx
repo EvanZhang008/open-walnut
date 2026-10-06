@@ -7,6 +7,7 @@ import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
 import { fetchTask, updateTask as apiUpdateTask, type BatchTaskOutcome } from '@/api/tasks';
 import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
+import { PluginSlots } from '@/plugins/PluginSlots';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
@@ -2104,6 +2105,9 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           )}
         </div>
       </div>
+
+      {/* Plugin slots (walnut.ui.slot 'task.detail'), e.g. the time this task took. */}
+      <PluginSlots target="task.detail" props={{ taskId: task.id }} className="todo-detail-plugin-slots" onNavigate={onClose} />
 
       {parentTask && (
         <div className="todo-detail-section">

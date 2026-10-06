@@ -43,9 +43,18 @@ export {
   lastSnapshotOutcome, resetScreenTimeSnapshotState, snapshotScreenTime,
   startScreenTimeSnapshots, stopScreenTimeSnapshots,
 } from './screentime-snapshot.js';
-export { getIndex, hydrate, readDayRecords, recordTime, resetTimeStore } from './store.js';
+export {
+  getIndex, getTaskIndex, hydrate, isHistoryRead, readDayRecords, recordTime, resetTimeStore, whenHistoryRead,
+} from './store.js';
+// The per-task view of the same records: a task's (and a session's) days and totals.
+export { sessionTimeView, taskTimeView, WEEK_DAYS } from './task-index.js';
+export type {
+  SessionTimeDay, SessionTimeView, TaskOverlay, TaskTimeDay, TaskTimeSession, TaskTimeView, TimePair, TimeTotals,
+} from './task-index.js';
+export { ledgerTaskOverlay, resetLedgerTaskOverlay } from './task-backfill.js';
+export { deadline } from './deadline.js';
 export { dayBoundsMs, foldDayBlocks, foldDaySlices } from './blocks.js';
-export { localDateKey, recentDateKeys, sanitizeSamples, summarize } from './rollup.js';
+export { cleanId, localDateKey, recentDateKeys, sanitizeSamples, summarize } from './rollup.js';
 // Ingest: the phone/relay path (bank + dedupe + durability) and the one piece the
 // browser's fire-and-forget route shares. See the header of ingest.ts for the split.
 export {

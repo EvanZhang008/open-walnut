@@ -28,7 +28,7 @@ import { Router, type Request, type Response } from 'express';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
-  attachTaskIdsBounded, emitTimeBanked,
+  attachTaskIdsBounded, deadline, emitTimeBanked,
   dayBoundsMs, foldDayBlocks, foldDaySlices, foldOutsideApps, foldOutsideTimeline, getIndex, hydrate,
   isOutsideCollectorRunning,
   localDateKey, outsideDayRecords, outsideDayRows, readDayRecords, recentDateKeys,
@@ -43,8 +43,11 @@ import {
   type TimeKind, type TimeRecord,
   type TimeSummary,
 } from '../../core/time-tracking/index.js';
+import { taskTimeRouter } from './time-task.js';
 
 export const timeRouter = Router();
+// GET /task/:taskId and /session/:sessionId: one task's (one session's) days and totals.
+timeRouter.use(taskTimeRouter);
 
 const DEFAULT_DAYS = 7;
 const MAX_DAYS = 90;
@@ -122,13 +125,6 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
     res.status(204).end();
   }
 });
-
-/** A cancellable timeout — Promise.race never cancels its loser on its own. */
-function deadline(ms: number): { promise: Promise<void>; cancel: () => void } {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const promise = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
-  return { promise, cancel: () => { if (timer) clearTimeout(timer); } };
-}
 
 // GET /api/time/summary?days=N — the whole panel in one round trip.
 timeRouter.get('/summary', async (req: Request, res: Response) => {

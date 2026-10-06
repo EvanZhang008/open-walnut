@@ -61,6 +61,52 @@ export interface SettingsContribution {
   component: PluginComponent
 }
 
+/**
+ * Where a slot renders. A slot is a small piece of UI the host draws INSIDE one of
+ * its own surfaces, next to the host's own content, for every object it shows there.
+ *
+ * - `'task.detail'`: one row in a task's details, below its title and dates (the
+ *   task details popup and the `/tasks/:id` page).
+ * - `'session.header'`: one chip on a session panel's tool row, beside Changed, Files
+ *   and Board. When the column is narrow it leaves the row before any of the host's
+ *   own chips (only the last-activity time goes sooner), into the row's "..." menu,
+ *   where a click on its row clicks your chip's first button.
+ */
+export type SlotTarget = 'task.detail' | 'session.header'
+
+export interface TaskDetailSlotProps {
+  taskId: string
+  /** Navigate within the console (an App path, `/tasks/<id>`, ...). */
+  navigate(path: string): void
+}
+
+export interface SessionHeaderSlotProps {
+  sessionId: string
+  /** The session's task, when it has one. */
+  taskId?: string
+  navigate(path: string): void
+}
+
+export interface SlotPropsByTarget {
+  'task.detail': TaskDetailSlotProps
+  'session.header': SessionHeaderSlotProps
+}
+
+export interface SlotContribution<T extends SlotTarget = SlotTarget> {
+  /** Local id, unique within the plugin. */
+  id: string
+  target: T
+  /** A word or two naming the slot (the session header's "..." menu lists it by this). */
+  title: string
+  /**
+   * Rendered once per object the surface shows, inside its own error boundary. Render
+   * nothing (`null`) when there is nothing worth showing: the host leaves no gap.
+   */
+  component: PluginComponent<SlotPropsByTarget[T]>
+  /** Sort weight among the plugins in the same slot. Default 500. */
+  order?: number
+}
+
 export interface FileViewProps {
   cwd?: string
   host?: string
@@ -165,6 +211,11 @@ export interface WebUiService {
   app(contribution: AppContribution): AppHandle
   page(contribution: PageContribution): Disposable
   settings(contribution: SettingsContribution): Disposable
+  /**
+   * Draw a small piece of UI inside a host surface (see SlotTarget). Optional: a host
+   * older than slots does not have it, so call it as `walnut.ui.slot?.(...)`.
+   */
+  slot?<T extends SlotTarget>(contribution: SlotContribution<T>): Disposable
   injectCss(css: string): Disposable
   readonly views: {
     CalendarView: PluginComponent

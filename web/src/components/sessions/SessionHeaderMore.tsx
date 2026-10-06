@@ -18,10 +18,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
-import { TOOL_ITEMS } from './useSessionHeaderFit';
+import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from './useSessionHeaderFit';
 import { TITLE_PILL_SELECTOR } from './session-header-fit';
 
 const itemOf = (row: HTMLElement | null, id: string) => row?.querySelector<HTMLElement>(`[data-header-id="${id}"]`) ?? null;
+
+/** The row's name for an item: its own, or a plugin slot's title. */
+const nameOf = (row: HTMLElement | null, id: string) => toolItemSpec(id, itemOf(row, id))?.name ?? id;
 
 /** Click the hidden item's own button (a wrapper's child, or the item itself). */
 function activate(row: HTMLElement | null, id: string) {
@@ -50,6 +53,8 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   const label = button.getAttribute('aria-label') ?? '';
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
+  // A plugin slot's row shows what the chip says ("25m · 1h 12m"), so hiding it costs nothing.
+  else if (id.startsWith(SLOT_ID_PREFIX)) value = (button.textContent ?? '').replace(/\s+/g, ' ').trim();
   return { value, label, disabled };
 }
 
@@ -131,7 +136,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`More (${ids.length})`}
-        title={`More: ${ids.map((id) => TOOL_ITEMS[id]?.name ?? id).join(', ')}`}
+        title={`More: ${ids.map((id) => nameOf(rowRef.current, id)).join(', ')}`}
       >
         <span aria-hidden="true">···</span>
       </button>
@@ -158,7 +163,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
 
 function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
   const { value, disabled } = useItemState(rowRef, id);
-  const name = TOOL_ITEMS[id]?.name ?? id;
+  const name = nameOf(rowRef.current, id);
   return (
     <button
       type="button"

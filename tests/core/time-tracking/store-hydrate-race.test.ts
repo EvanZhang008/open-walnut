@@ -59,7 +59,8 @@ vi.mock('node:fs/promises', async () => {
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { getIndex, hydrate, recordTime, resetTimeStore } from '../../../src/core/time-tracking/store.js';
+import { getIndex, getTaskIndex, hydrate, recordTime, resetTimeStore } from '../../../src/core/time-tracking/store.js';
+import { taskTimeView } from '../../../src/core/time-tracking/task-index.js';
 import { bucketKey, localDateKey } from '../../../src/core/time-tracking/rollup.js';
 import type { TimeRecord } from '../../../src/core/time-tracking/types.js';
 
@@ -118,6 +119,8 @@ describe('hydrate / recordTime overlap', () => {
     await Promise.all([hydrating, recording]);
 
     expect(getIndex().get(KEY())).toBe(5000);
+    // The per-task index rides the same two fold points, so it is exact too.
+    expect(taskTimeView(getTaskIndex(), 't_alpha', TODAY).totals.all.humanMs).toBe(5000);
     expect(await dayLines()).toHaveLength(2);
   });
 

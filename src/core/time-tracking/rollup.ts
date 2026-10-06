@@ -106,7 +106,7 @@ export function recentDateKeys(today: string, days: number): string[] {
  */
 const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
 
-function cleanId(raw: unknown): string | undefined {
+export function cleanId(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;
   const t = raw.trim();
   if (t.length === 0 || t.length > MAX_ID_LEN) return undefined;
@@ -119,7 +119,7 @@ function isHumanKind(raw: unknown): raw is HumanKind {
 }
 
 /** A key whose kind is not one of the four lanes is malformed data. */
-function isTimeKind(raw: unknown): raw is TimeKind {
+export function isTimeKind(raw: unknown): raw is TimeKind {
   return typeof raw === 'string' && (TIME_KINDS as readonly string[]).includes(raw);
 }
 

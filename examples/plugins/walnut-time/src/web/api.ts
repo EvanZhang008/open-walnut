@@ -257,6 +257,71 @@ export interface ScreenTimeRefresh {
   devices: number
 }
 
+/** The two clocks side by side. Never added together. */
+export interface TimePair {
+  humanMs: number
+  agentMs: number
+}
+
+/** All recorded time, today, and the 7 days ending today (the Overview's week). */
+export interface TimeTotals {
+  all: TimePair
+  today: TimePair
+  week: TimePair
+}
+
+export interface TaskTimeDay extends TimePair {
+  date: string
+  /** Each session's share of the day, your time first. */
+  sessions: Array<TimePair & { sessionId: string }>
+  /** The part of the day outside any session: the task's row, its detail, its page. */
+  other: TimePair
+}
+
+export interface TaskTimeSession {
+  sessionId: string
+  totals: TimeTotals
+  lastDate: string
+}
+
+/** GET /api/time/task/:taskId (src/web/routes/time-task.ts). */
+export interface TaskTime {
+  taskId: string
+  title?: string
+  today: string
+  weekStart: string
+  totals: TimeTotals
+  /** Days with any time, newest first. */
+  days: TaskTimeDay[]
+  sessions: TaskTimeSession[]
+  sessionTitles: Record<string, string>
+  /** False while days older than ~90 days are still being read: totals may still grow. */
+  historyComplete: boolean
+  degraded?: boolean
+}
+
+/** GET /api/time/session/:sessionId. */
+export interface SessionTime {
+  sessionId: string
+  title?: string
+  taskIds: string[]
+  taskTitles: Record<string, string>
+  today: string
+  weekStart: string
+  totals: TimeTotals
+  days: Array<TimePair & { date: string }>
+  historyComplete: boolean
+  degraded?: boolean
+}
+
+/** A failed host request. `status` 501 (a cloud replica has no store) means "this will not work here". */
+export class TimeHttpError extends Error {
+  constructor(readonly status: number, path: string) {
+    super(`HTTP ${status} from ${path}`)
+    this.name = 'TimeHttpError'
+  }
+}
+
 /** Only the three fields the reports need out of the console's task list. */
 export interface TaskRef {
   id: string
@@ -288,6 +353,10 @@ export interface TimeApi {
   openScreenTimeSettings(): Promise<{ ok: boolean; copiedPath?: string }>
   /** The task list, for titles and the project filter. */
   tasks(): Promise<TaskRef[]>
+  /** One task's time: totals, every day, every session. */
+  taskTime(taskId: string): Promise<TaskTime>
+  /** One session's time, across the tasks it was filed under. */
+  sessionTime(sessionId: string): Promise<SessionTime>
 }
 
 const TIMEOUT_MS = 10_000
@@ -295,7 +364,7 @@ const TIMEOUT_MS = 10_000
 export function createTimeApi(walnut: WalnutWebApi): TimeApi {
   async function getJson<T>(path: string): Promise<T> {
     const response = await walnut.http.fetch(path, { timeoutMs: TIMEOUT_MS })
-    if (!response.ok) throw new Error(`HTTP ${response.status} from ${path}`)
+    if (!response.ok) throw new TimeHttpError(response.status, path)
     return response.json<T>()
   }
 
@@ -363,6 +432,14 @@ export function createTimeApi(walnut: WalnutWebApi): TimeApi {
       // conversation log, no description. Titles and projects are all this app wants.
       const body = await getJson<{ tasks?: TaskRef[] }>('/api/tasks?fields=list')
       return Array.isArray(body.tasks) ? body.tasks : []
+    },
+
+    taskTime(taskId) {
+      return getJson<TaskTime>(`/api/time/task/${encodeURIComponent(taskId)}`)
+    },
+
+    sessionTime(sessionId) {
+      return getJson<SessionTime>(`/api/time/session/${encodeURIComponent(sessionId)}`)
     },
   }
 }

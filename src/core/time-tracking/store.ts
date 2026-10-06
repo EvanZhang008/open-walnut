@@ -33,15 +33,15 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import { addRecord, localDateKey, normalizeSource, parseBucketKey, recentDateKeys } from './rollup.js';
+import { addRecord, localDateKey, recentDateKeys } from './rollup.js';
+import { listDayDates, parseLine, readDayFileText } from './store-read.js';
+import { addToTaskIndex, createTaskIndex, type TaskIndex } from './task-index.js';
+
+export { MAX_DAY_FILE_BYTES } from './store-read.js';
 import type { RollupIndex, TimeRecord } from './types.js';
 
 /** How many days back the lazy rehydrate reads. Bounds boot cost forever. */
 const HYDRATE_DAYS = 90;
-/** A day file this large is never parsed whole — only its tail is read. */
-export const MAX_DAY_FILE_BYTES = 8 * 1024 * 1024;
-/** How much of an over-cap day file to read, from the END (newest records). */
-const TAIL_READ_BYTES = 2 * 1024 * 1024;
 /**
  * Once an append pushes a day past this, the file is folded into one line per
  * (task, kind) bucket. This is what makes the day file bounded: the old code
@@ -70,6 +70,16 @@ function dayFile(date: string): string {
 interface StoreState {
   dir: string;
   index: RollupIndex;
+  /**
+   * The per-task view (task-index.ts). Fed at the SAME two points as `index`, in
+   * the same tick, so it is counted exactly once for the same reason the rollup
+   * is. Unlike `index` it also holds the days before the hydrate window (see
+   * readHistory), because a task's total is "since tracking began".
+   */
+  tasks: TaskIndex;
+  /** True once every day older than the hydrate window has been read into `tasks`. */
+  historyRead: boolean;
+  history: Promise<void> | null;
   hydrated: Promise<void> | null;
   /**
    * Records handed to recordTime while hydration is still reading. Non-null ONLY
@@ -101,8 +111,8 @@ function current(): StoreState {
   const dir = storeDir();
   if (!state || state.dir !== dir) {
     state = {
-      dir, index: new Map(), hydrated: null, pending: null,
-      tail: Promise.resolve(), drainAppended: true,
+      dir, index: new Map(), tasks: createTaskIndex(), historyRead: false, history: null,
+      hydrated: null, pending: null, tail: Promise.resolve(), drainAppended: true,
     };
   }
   return state;
@@ -123,86 +133,20 @@ function warnOnce(key: string, message: string, data: Record<string, unknown>): 
   log.web.warn(message, data);
 }
 
-/** Parse one JSONL line into a record, or null when it is not one. */
-function parseLine(line: string, fallbackDate: string): TimeRecord | null {
-  if (!line.trim()) return null;
-  try {
-    const obj = JSON.parse(line) as Partial<TimeRecord>;
-    if (typeof obj.durationMs !== 'number' || !Number.isFinite(obj.durationMs) || obj.durationMs <= 0) return null;
-    if (typeof obj.kind !== 'string') return null;
-    // Absent source (every line written before the field existed) = web. An
-    // unknown value is dropped rather than trusted, so a hand-edited line cannot
-    // mint a lane; the record itself still counts.
-    const source = normalizeSource(obj.source);
-    return {
-      date: typeof obj.date === 'string' && obj.date ? obj.date : fallbackDate,
-      ts: typeof obj.ts === 'string' ? obj.ts : '',
-      durationMs: obj.durationMs,
-      kind: obj.kind,
-      ...(obj.taskId ? { taskId: obj.taskId } : {}),
-      ...(obj.sessionId ? { sessionId: obj.sessionId } : {}),
-      ...(source ? { source } : {}),
-    };
-  } catch {
-    return null; // a torn tail line is expected; skip it
-  }
+/** One day file's text (store-read.ts), with an oversize warning logged once. */
+function readDayText(date: string): Promise<string> {
+  return readDayFileText(dayFile(date), (data) => warnOnce(
+    `oversize:${data.file}`, 'time-tracking day file over the read cap — reading its tail only', data,
+  ));
 }
 
-/**
- * The last TAIL_READ_BYTES of a file, with the (probably torn) first line
- * dropped. Used instead of giving up on an over-cap day: a partial day is a
- * smaller lie than a day that silently reads as zero.
- */
-async function readTail(file: string, size: number): Promise<string> {
-  let handle: Awaited<ReturnType<typeof fsp.open>> | undefined;
-  try {
-    handle = await fsp.open(file, 'r');
-    const start = Math.max(0, size - TAIL_READ_BYTES);
-    const buf = Buffer.alloc(Math.min(TAIL_READ_BYTES, size));
-    await handle.read(buf, 0, buf.length, start);
-    const text = buf.toString('utf-8');
-    if (start === 0) return text;
-    const nl = text.indexOf('\n');
-    return nl >= 0 ? text.slice(nl + 1) : '';
-  } catch {
-    return '';
-  } finally {
-    await handle?.close().catch(() => {});
-  }
-}
-
-/** One day file's text, or '' when there is none. Applies the read cap. */
-async function readDayText(date: string): Promise<string> {
-  const file = dayFile(date);
-  let stat;
-  try {
-    stat = await fsp.stat(file);
-  } catch {
-    return ''; // no data that day
-  }
-  if (!stat.isFile()) return '';
-  if (stat.size > MAX_DAY_FILE_BYTES) {
-    // Compaction keeps this from happening going forward; a file written by an
-    // older build can still land here.
-    warnOnce(
-      `oversize:${file}`,
-      'time-tracking day file over the read cap — reading its tail only',
-      { file, size: stat.size, tailBytes: TAIL_READ_BYTES },
-    );
-    return readTail(file, stat.size);
-  }
-  try {
-    return await fsp.readFile(file, 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
-async function readDay(date: string, index: RollupIndex): Promise<void> {
+async function readDay(date: string, st: StoreState): Promise<void> {
   const text = await readDayText(date);
   for (const line of text.split('\n')) {
     const rec = parseLine(line, date);
-    if (rec) addRecord(index, rec);
+    if (!rec) continue;
+    addRecord(st.index, rec);
+    addToTaskIndex(st.tasks, rec);
   }
 }
 
@@ -256,14 +200,44 @@ export function hydrate(now = new Date()): Promise<void> {
     // Read behind any write already queued: compaction renames the very file
     // this loop opens, and a half-renamed read would lose a whole day.
     await prior.catch(() => undefined);
-    for (const date of dates) await readDay(date, st.index);
+    for (const date of dates) await readDay(date, st);
   })().catch((err) => {
     log.web.warn('time-tracking hydrate failed', { error: err instanceof Error ? err.message : String(err) });
   });
   // Appends queue behind the read for the same reason, mirrored.
   st.tail = read;
   st.hydrated = read.then(() => drainPending(st));
+  st.history = st.hydrated.then(() => readHistory(st, dates[0]!));
   return st.hydrated;
+}
+
+/**
+ * Read every day OLDER than the hydrate window into the per-task index only.
+ *
+ * Runs after hydration settled, off every request path, one file per await (a
+ * real day parses in ~7ms). It cannot double count: no record can be appended to
+ * a day this old (a heartbeat older than 7 days is refused, and an agent turn is
+ * filed under the day it arrived), and compaction only rewrites a day right after
+ * an append to it. The rollup is left alone, so every summary answer is unchanged.
+ */
+async function readHistory(st: StoreState, oldestHydrated: string): Promise<void> {
+  try {
+    const dates = (await listDayDates(st.dir)).filter((date) => date < oldestHydrated).reverse();
+    for (const date of dates) {
+      if (state !== st) return; // the store was reset under us
+      const text = await readDayText(date);
+      for (const line of text.split('\n')) {
+        const rec = parseLine(line, date);
+        if (rec) addToTaskIndex(st.tasks, rec);
+      }
+    }
+  } catch (err) {
+    warnOnce('history', 'time-tracking history read failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    st.historyRead = true;
+  }
 }
 
 /**
@@ -289,6 +263,21 @@ async function drainPending(st: StoreState): Promise<void> {
 /** The live rollup. Call hydrate() first if disk history matters. */
 export function getIndex(): RollupIndex {
   return current().index;
+}
+
+/** The live per-task index (task-index.ts). Call hydrate() first if disk history matters. */
+export function getTaskIndex(): TaskIndex {
+  return current().tasks;
+}
+
+/** Whether days older than the hydrate window are in the per-task index yet. */
+export function isHistoryRead(): boolean {
+  return current().historyRead;
+}
+
+/** Settles once the history read is done (or immediately when it never started). */
+export function whenHistoryRead(): Promise<void> {
+  return current().history ?? Promise.resolve();
 }
 
 /** What a write reports back. `appended` false = the rollup has it, the disk does not. */
@@ -374,6 +363,7 @@ function foldAndAppend(st: StoreState, records: readonly TimeRecord[]): Promise<
   const byDate = new Map<string, string[]>();
   for (const rec of records) {
     addRecord(st.index, rec);
+    addToTaskIndex(st.tasks, rec);
     const lines = byDate.get(rec.date) ?? [];
     lines.push(JSON.stringify(rec));
     byDate.set(rec.date, lines);
@@ -415,9 +405,10 @@ async function appendDays(byDate: Map<string, string[]>): Promise<boolean> {
 }
 
 /**
- * Fold a day file down to one line per (task, kind, source) bucket. Totals are preserved
- * exactly — only the per-record detail (each window's `ts` / `sessionId`) is lost,
- * which nothing reads: the panel only ever asks for sums.
+ * Fold a day file down to one line per (task, session, kind, source) bucket. Totals are
+ * preserved exactly; only each window's `ts` is lost (the timeline reports a folded
+ * day's time as unplaced). The session is KEPT: a task's page splits its time by
+ * session, and compaction is irreversible.
  *
  * The fold reads the FILE rather than the in-memory rollup on purpose. The rollup
  * only contains what this process hydrated plus what it wrote, so rewriting from
@@ -439,27 +430,34 @@ async function compactDay(date: string, sizeBefore: number): Promise<void> {
   } catch {
     return;
   }
-  const folded: RollupIndex = new Map();
+  // Keyed by a JSON tuple rather than bucketKey: the fold needs the session too,
+  // and a tuple can never be confused by a separator inside an id.
+  const folded = new Map<string, TimeRecord>();
   for (const line of text.split('\n')) {
     const rec = parseLine(line, date);
-    if (rec) addRecord(folded, rec);
-  }
-  const lines: string[] = [];
-  for (const [key, durationMs] of folded) {
-    if (durationMs <= 0) continue;
+    if (!rec) continue;
     // The source is part of the bucket, so it must be written back: a folded
     // line that dropped it would silently re-attribute the phone's time to the
-    // browser, and compaction is irreversible.
-    const { taskId, kind, source } = parseBucketKey(key);
-    const rec: TimeRecord = {
+    // browser, and compaction is irreversible. Same for the session.
+    const key = JSON.stringify([rec.taskId ?? '', rec.kind, rec.source ?? '', rec.sessionId ?? '']);
+    const bucket = folded.get(key);
+    if (bucket) {
+      bucket.durationMs += rec.durationMs;
+      continue;
+    }
+    folded.set(key, {
       date,
       ts: `${date}T00:00:00.000Z`,
-      durationMs,
-      kind,
-      ...(taskId ? { taskId } : {}),
-      ...(source ? { source } : {}),
-    };
-    lines.push(JSON.stringify(rec));
+      durationMs: rec.durationMs,
+      kind: rec.kind,
+      ...(rec.taskId ? { taskId: rec.taskId } : {}),
+      ...(rec.sessionId ? { sessionId: rec.sessionId } : {}),
+      ...(rec.source ? { source: rec.source } : {}),
+    });
+  }
+  const lines: string[] = [];
+  for (const rec of folded.values()) {
+    if (rec.durationMs > 0) lines.push(JSON.stringify(rec));
   }
   // Same directory, so the rename is atomic and never crosses a device (EXDEV).
   const tmp = `${file}.compact-${process.pid}.tmp`;

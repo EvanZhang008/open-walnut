@@ -1,0 +1,12 @@
+/* Where plugin slots sit inside host surfaces (web/src/plugins/PluginSlots.tsx).
+   The wrappers exist only while at least one plugin draws in that slot. */
+.todo-detail-plugin-slots,
+.tdv2-plugin-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.todo-detail-plugin-slots { margin-bottom: 12px; }
+.todo-detail-plugin-slots:empty,
+.tdv2-plugin-slots:empty { display: none; }

@@ -32,7 +32,7 @@ The complete executable example is [examples/plugins/walnut-demo](../../examples
 
 ## What a plugin can add
 
-One plugin can contribute any mix of: a native React App in the console, Settings sections, owner-scoped CSS, Ops that sessions and the CLI call, Tools for routine watchers, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
+One plugin can contribute any mix of: a native React App in the console, small Slots inside the task details and the session header, Settings sections, owner-scoped CSS, Ops that sessions and the CLI call, Tools for routine watchers, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
 
 There is no fixed dashboard, no dashboard page, and no panel grid. The unit of plugin UI is an App.
 
@@ -783,6 +783,50 @@ export function activate(walnut: WalnutWebApi) {
 ```
 
 `walnut.ui.page` still exists for a standalone console route that is not an App, for example a detail page a link points at. It takes an explicit `path`, refuses paths that collide with a Walnut route, and does not appear in the Sidebar or the Command Palette. Prefer an App and its subpaths.
+
+### Slots: a small piece inside a Walnut screen
+
+`walnut.ui.slot` puts one small component inside a screen Walnut owns. There are two places:
+
+| `target` | Where it renders | Props |
+|---|---|---|
+| `task.detail` | Under the task's title and dates, in the task details popup and on the `/tasks/:id` page | `taskId`, `navigate` |
+| `session.header` | On the tool row of a session's header, beside Files and Board | `sessionId`, `taskId` (when the session has one), `navigate` |
+
+A slot is a summary that leads somewhere, not a screen of its own: keep it to a line, and send the click to a subpath of your App with `navigate`. On the session header the slot is one chip of the row. When the column narrows, it moves into the row's "..." menu before any of the host's own chips, which names it by the slot's `title` and opens it by clicking your component's button, so make the component a single `<button>`. Return `null` while there is nothing to show; an empty slot takes no room.
+
+```tsx compile=web-slots
+import type { AppProps, SessionHeaderSlotProps, TaskDetailSlotProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
+
+export function activate(walnut: WalnutWebApi) {
+  function NotesApp(_props: AppProps) {
+    return <p>Notes for one task</p>
+  }
+  const app = walnut.ui.app({ id: 'main', title: 'Task Notes', component: NotesApp })
+
+  function TaskNotes({ taskId, navigate }: TaskDetailSlotProps) {
+    return (
+      <button type="button" onClick={() => navigate(`${app.path}/task/${encodeURIComponent(taskId)}`)}>
+        Notes on this task
+      </button>
+    )
+  }
+  function SessionNotes({ taskId, navigate }: SessionHeaderSlotProps) {
+    if (!taskId) return null
+    return (
+      <button type="button" onClick={() => navigate(`${app.path}/task/${encodeURIComponent(taskId)}`)}>
+        Notes
+      </button>
+    )
+  }
+
+  // Optional: a host older than slots has no `slot`, and the plugin still loads.
+  walnut.ui.slot?.({ id: 'task-notes', target: 'task.detail', title: 'Notes', component: TaskNotes })
+  walnut.ui.slot?.({ id: 'session-notes', target: 'session.header', title: 'Notes', component: SessionNotes })
+}
+```
+
+Several plugins can fill the same place; `order` (default 500, lower first) sorts them. Every slot renders inside its own error boundary, so a slot that throws shows nothing instead of taking the task popup or the session column down with it. A slot belongs to your plugin like a page does: it is gone the moment the plugin is disabled, and an unknown `target` or an empty `title` is refused at the call. The walnut-time plugin's Time summary and session chip are a complete example.
 
 ### One App Registry for everything
 

@@ -108,6 +108,7 @@ import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskSta
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
+import { PluginSlots, slotHeaderId } from '@/plugins/PluginSlots';
 import '@/styles/session-header-fit.css';
 
 /**
@@ -1950,6 +1951,22 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 )}
               </>
             )}
+            {/* Plugin slots (walnut.ui.slot 'session.header'): chips like the ones above,
+                measured by the same fit, and the first chip to move into "...". */}
+            <PluginSlots
+              target="session.header"
+              props={{ sessionId, ...(session?.taskId ? { taskId: session.taskId } : {}) }}
+              wrap={(entry, node) => (
+                <span
+                  className="session-header-item"
+                  data-header-id={slotHeaderId(entry)}
+                  data-header-name={entry.value.title}
+                  data-hidden={hid(slotHeaderId(entry))}
+                >
+                  {node}
+                </span>
+              )}
+            />
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
             <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} />
             {activityAge && (

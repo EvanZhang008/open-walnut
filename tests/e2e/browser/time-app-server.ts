@@ -116,9 +116,48 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
 }, null, 2))
 
 const taskIds = DENSE_TASKS.map((_, i) => `t-time-${String(i + 1).padStart(2, '0')}`)
+
+/**
+ * PW_TIME_APP_SLOTS=1 adds one task with three sessions and time spread over four
+ * days (today, 3 days ago, 10 days ago, and one far past the 90-day hydrate window),
+ * for the task detail slot, the session header chip and the task page
+ * (time-task-slots.spec.ts). Off by default, so the App spec's dense day keeps
+ * exactly its own tasks.
+ */
+const SLOTS = process.env.PW_TIME_APP_SLOTS === '1'
+const SLOT_TASK = 't-time-slots'
+const SLOT_SESSIONS = [
+  { id: 'sess-time-slots-a', title: 'Rename the time grid \u91cd\u547d\u540d' },
+  { id: 'sess-time-slots-b', title: 'Review the day-by-day list and the session chip in a narrow column, a title long enough to truncate' },
+  // Untitled: the page names it by the last day it ran, never by its id.
+  { id: 'sess-time-slots-c', title: undefined },
+] as const
+const slotTask = {
+  id: SLOT_TASK,
+  title: 'Time slots fixture task',
+  status: 'in_progress',
+  phase: 'IN_PROGRESS',
+  priority: 'none',
+  project: 'Console',
+  source: 'local',
+  pinned: true,
+  focus_tier: 'focus',
+  pin_order: -1,
+  session_ids: SLOT_SESSIONS.map((s) => s.id),
+  active_session_ids: [],
+  session_id: SLOT_SESSIONS[0].id,
+  session_status: { process_status: 'stopped', mode: 'bypass' },
+  created_at: now,
+  updated_at: now,
+  description: '',
+  summary: '',
+  note: '',
+  subtasks: [],
+}
+
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({
   version: 1,
-  tasks: DENSE_TASKS.map((spec, i) => ({
+  tasks: [...(SLOTS ? [slotTask] : []), ...DENSE_TASKS.map((spec, i) => ({
     id: taskIds[i],
     title: spec.title,
     status: 'in_progress',
@@ -135,7 +174,7 @@ await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({
     summary: '',
     note: '',
     subtasks: [],
-  })),
+  }))],
 }, null, 2))
 
 /**
@@ -208,6 +247,73 @@ for (let i = 0; i < 4; i += 1) {
     kind: 'session',
     taskId: taskIds[i],
   })
+}
+
+// The slot task's days. Minutes per (day offset, kind, session); see time-task-slots.spec.ts
+// for the totals they add up to.
+const slotToday = localDate(Date.now())
+if (SLOTS) {
+  const [a, b, c] = SLOT_SESSIONS.map((s) => s.id)
+  const SLOT_TIME: Array<[dayOffset: number, kind: string, sessionId: string | undefined, minutes: number]> = [
+    [0, 'session', a, 20], [0, 'agent', a, 62], [0, 'session', b, 5], [0, 'agent', b, 10], [0, 'triage', undefined, 4],
+    [-3, 'session', a, 30], [-3, 'agent', a, 120],
+    [-10, 'session', b, 15], [-10, 'agent', c, 7],
+    [-200, 'triage', undefined, 20],
+  ]
+  for (const [offset, kind, sessionId, minutes] of SLOT_TIME) {
+    const date = shiftDay(slotToday, offset)
+    records.push({
+      date,
+      ts: offset === 0 ? new Date(Date.now() - 60_000).toISOString() : new Date(`${date}T12:00:00`).toISOString(),
+      durationMs: minutes * 60_000,
+      kind,
+      taskId: SLOT_TASK,
+      ...(sessionId ? { sessionId } : {}),
+    })
+  }
+
+  // The three sessions, stopped, each with a short transcript so its column reads
+  // like a real one rather than an empty panel.
+  const sessionCwd = path.join(tmpBase, 'project')
+  await fs.mkdir(sessionCwd, { recursive: true })
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', sessionCwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  await fs.mkdir(jsonlDir, { recursive: true })
+  const startedAt = Date.now() - 2 * 60 * 60_000
+  await fs.writeFile(path.join(tmpBase, 'sessions.json'), JSON.stringify({
+    version: 2,
+    sessions: SLOT_SESSIONS.map((s, i) => ({
+      claudeSessionId: s.id,
+      taskId: SLOT_TASK,
+      project: 'Console',
+      process_status: 'stopped',
+      mode: 'bypass',
+      last_status_change: new Date(startedAt + i * 60_000).toISOString(),
+      startedAt: new Date(startedAt + i * 60_000).toISOString(),
+      lastActiveAt: new Date(startedAt + (i + 1) * 10 * 60_000).toISOString(),
+      messageCount: 24,
+      cwd: sessionCwd,
+      ...(s.title ? { title: s.title } : {}),
+    })),
+  }, null, 2))
+  for (const s of SLOT_SESSIONS) {
+    await fs.writeFile(
+      path.join(jsonlDir, `${s.id}.jsonl`),
+      Array.from({ length: 12 }, (_, i) => [
+        JSON.stringify({
+          type: 'user',
+          sessionId: s.id,
+          timestamp: new Date(startedAt + i * 60_000).toISOString(),
+          message: { role: 'user', content: `slots question ${i + 1}` },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: s.id,
+          timestamp: new Date(startedAt + i * 60_000 + 30_000).toISOString(),
+          message: { role: 'assistant', content: [{ type: 'text', text: `slots answer ${i + 1}: enough rows that the chat scrolls under the header.` }] },
+        }),
+      ]).flat().concat('').join('\n'),
+    )
+  }
 }
 
 const byDate = new Map<string, string[]>()
@@ -332,6 +438,11 @@ if (!apiAddress || typeof apiAddress === 'string') throw new Error('Time App fix
 const apiTarget = `http://127.0.0.1:${apiAddress.port}`
 
 const { createServer: createViteServer } = await import('vite')
+// The server trusts a page without a credential only when its Origin is the server's
+// own, so the proxy restates its own pages' origin as the API target. Without it the
+// proxy keeps web/vite.config.ts's rewrite (to :3456), and the server refuses the live
+// event socket and every write the page makes.
+const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
 const viteServer = await createViteServer({
   root: path.join(repoRoot, 'web'),
   server: {
@@ -339,13 +450,32 @@ const viteServer = await createViteServer({
     port,
     strictPort: true,
     proxy: {
-      '/api': { target: apiTarget, changeOrigin: true },
-      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+      '/api': { target: apiTarget, changeOrigin: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
     },
   },
   logLevel: 'warn',
 })
 await viteServer.listen()
+
+/**
+ * A turn's end, on request (slots mode): the spec writes `end-turn.json` into the data
+ * home, and the fixture emits the session:result a finished CLI turn emits. That one
+ * event is what banks agent time (agent-time.ts) AND what the server forwards to the
+ * browser, so the spec sees the whole chain the slots refresh on, with no CLI.
+ */
+if (SLOTS) {
+  const { bus, EventNames } = await import('../../../src/core/event-bus.js')
+  const request = path.join(tmpBase, 'end-turn.json')
+  setInterval(() => {
+    void fs.readFile(request, 'utf8').then(async (text) => {
+      await fs.rm(request, { force: true })
+      const turn = JSON.parse(text) as { sessionId: string; taskId: string; turnGen: number; duration: number }
+      bus.emit(EventNames.SESSION_RESULT, { ...turn, result: 'Done.', isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' })
+    }, () => { /* no request */ })
+  }, 200).unref()
+}
 
 const fixture = {
   port,
@@ -355,6 +485,7 @@ const fixture = {
   previousDate: previous,
   outsideEmptyDate,
   outsideHintDate,
+  ...(SLOTS ? { slots: { taskId: SLOT_TASK, sessionIds: SLOT_SESSIONS.map((s) => s.id), today: slotToday } } : {}),
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`TIME_APP_READY ${JSON.stringify(fixture)}`)

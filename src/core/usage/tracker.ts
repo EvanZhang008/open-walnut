@@ -232,6 +232,22 @@ export class UsageTracker {
   }
 
   /**
+   * Turn wall-time per (date, task, session) BEFORE `beforeDate`: the per-task
+   * twin of getTurnDurationsByDay, for the days before the live collector ran.
+   * Bounded by date because it is a synchronous scan; callers cache the answer.
+   */
+  getTurnDurationsBySession(beforeDate: string): { date: string; taskId: string; sessionId: string; durationMs: number }[] {
+    const db = this.getDb();
+    return db.prepare(`
+      SELECT date, COALESCE(task_id, '') AS taskId, COALESCE(session_id, '') AS sessionId,
+             COALESCE(SUM(duration_ms), 0) AS durationMs
+      FROM usage
+      WHERE date < ? AND duration_ms IS NOT NULL AND source IN ('session', 'chat')
+      GROUP BY date, taskId, sessionId
+    `).all(beforeDate) as { date: string; taskId: string; sessionId: string; durationMs: number }[];
+  }
+
+  /**
    * Get daily cost aggregations for the chart. Walnut spend only — Claude Code
    * CLI sessions (source='session') are excluded.
    */

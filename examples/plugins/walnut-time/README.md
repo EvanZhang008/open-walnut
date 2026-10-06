@@ -2,7 +2,7 @@
 
 A first-party plugin App that answers two questions about a day, and keeps them apart: where your attention went, and what your agents ran.
 
-It contributes ONE App with four tabs and no server entry. Time collection, storage, and the `/api/time/*` endpoints all stay in Walnut; this plugin is only a reader of them (the exceptions are the Apps tab's two on/off switches, which write settings, never records), so uninstalling it cannot affect a single recorded minute.
+It contributes ONE App with four tabs, two small slots that put a task's and a session's time where you already look, and no server entry. Time collection, storage, and the `/api/time/*` endpoints all stay in Walnut; this plugin is only a reader of them (the exceptions are the Apps tab's two on/off switches, which write settings, never records), so uninstalling it cannot affect a single recorded minute.
 
 **This is the whole Time UI.** Walnut used to carry a second copy as a Settings section; that section is gone, so this App is where a recorded minute becomes something you can look at. Because time is captured for every install whether or not anything renders it, the plugin **ships as a builtin**: it is present and enabled on a stock install with no install step. Turn it off with `plugins.walnut-time.enabled: false` in `config.yaml`, or from the Plugin Store section of Settings.
 
@@ -16,6 +16,25 @@ Each tab is a real URL, so any of them can be bookmarked or linked:
 | Agents | `/apps/walnut-time~main/agents` | What did my agents run? Agent runtime only, never mixed into the human numbers. |
 | Apps | `/apps/walnut-time~main/apps` | Where did the rest of the screen time go? Per Mac app, per site for a browser, and per device once a phone's numbers are here. |
 | Timeline | `/apps/walnut-time~main/timeline` | How did this one day actually go? |
+
+## Time on a task and on a session
+
+Two slots (`walnut.ui.slot`) bring the numbers to the work itself, so nobody has to open the App to ask "how long did this take":
+
+- **Task details** (`task.detail`): under the details of a task, in the Home task popup and on the task page, one compact table: You and Agent, each for Total, Today and the last 7 days.
+- **Session header** (`session.header`): one chip on the session's tool row, `25m · 1h 12m` (your time · agent time on the session). Hover it for all six numbers. When the column is narrow it is the first chip to move into the row's "..." menu, and it still opens from there.
+
+Both are links into one more page of the App, which can be bookmarked like the tabs:
+
+| Page | Path | What it shows |
+|---|---|---|
+| Task | `/apps/walnut-time~main/task/<taskId>` | The task's totals, then every day it has time on, newest first. Open a day for each session's share and the time spent on the task outside any session. |
+| Task, one session | `/apps/walnut-time~main/task/<taskId>?session=<sessionId>` | The same page narrowed to one session; the session chip lands here. |
+| Session | `/apps/walnut-time~main/session/<sessionId>` | A session with no task. |
+
+The two clocks stay apart on all three, as everywhere else in the App: you and an agent often work at the same moment and sessions run side by side, so a sum would be more time than passed. Sessions are named by their titles, never by their ids. A task's time is its own: a subtask's time stays on the subtask. "Total" is everything recorded; days older than the summary's 90-day window are read in the background after a restart, and the page says "Still reading older days" until they are in. Agent time on days before the agent clock existed comes from the usage ledger, exactly as the Overview fills those days, so the two never disagree. A task with nothing recorded shows no Time row at all.
+
+The numbers refresh a few seconds after a session's turn ends (that is when agent time is banked), every minute while the page is visible, and from one shared cache, so a task shown in three places costs one request.
 
 The Apps tab is the only one that looks outside Walnut, and it is **off until you turn it on**: while disabled it just says what it would collect (the frontmost app every few seconds; browser hosts, never full addresses; no idle or locked time; nothing leaves the Mac) and offers one button. Once enabled it leads with the split that the other three tabs cannot answer, `Outside` / `In Walnut` / `Total`, then ranks apps with a browser's sites nested underneath. Site names need a one-time macOS Automation grant per browser; when a browser was used and no site came back, the tab says so instead of pretending the browser was one opaque block. Both the Apps and Timeline tabs own their own day switcher, so the shared scope bar is hidden on them.
 
@@ -36,6 +55,7 @@ The view choice and the agents toggle persist in `localStorage` under `open-waln
 Everything comes from host endpoints through `walnut.http.fetch`, which is same-origin and carries the device credential, so the plugin never handles a token:
 
 - `GET /api/time/summary?days=7` for both report tabs.
+- `GET /api/time/task/<taskId>` and `GET /api/time/session/<sessionId>` for the two slots and the task page: totals, days and each session's share, with the task's and the sessions' titles joined in. A cloud companion answers 501, which hides both slots.
 - `GET /api/time/blocks?date=…` twice per day view: once with `raw=1` (the serial ribbon the tape and the chapters draw) and once merged per task (what the swimlanes draw).
 - `GET /api/time/apps?date=…` for the Apps tab, plus `GET /api/time/apps/blocks?date=…` for the outside-app rows in the swimlanes.
 - `GET /api/time/screentime?date=…` for the Apple Screen Time section and the device rows. It reads Walnut's own permanent copy and never touches Apple's store, so it is cheap and cannot hang on a file behind a permission. `POST /api/time/screentime/refresh` is the one call that does read Apple, for the moment right after someone grants the permission.
