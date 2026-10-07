@@ -364,6 +364,20 @@ describe('the Mac app', () => {
     expect(job.steps[0].with).toEqual({ ref: 'v${{ inputs.version }}' })
   })
 
+  it('judges a release with the checks of the workflow\'s own commit, never the tag\'s', () => {
+    // 2026-10-07: two fixes to scripts/desktop-smoke.mjs landed on main, and the
+    // 0.6.5 job kept failing the old way: it ran the smoke from the v0.6.5 checkout.
+    const job = load('mac-app.yml').jobs.app as Job
+    const harness = job.steps.find((s) => s.uses?.startsWith('actions/checkout') && (s.with as Record<string, string> | undefined)?.path === 'harness')
+    expect(harness?.with).toEqual({ ref: '${{ github.sha }}', path: 'harness' })
+    const smoke = job.steps.find((s) => /node \S*desktop-smoke\.mjs/.test(s.run ?? ''))!
+    expect(smoke.run).toMatch(/node harness\/scripts\/desktop-smoke\.mjs /)
+    // Any node script a step runs from the tag's tree is the release's own code, not a check.
+    for (const s of job.steps) {
+      for (const m of (s.run ?? '').matchAll(/\bnode (\S+\.mjs)/g)) expect(m[1], s.name).toMatch(/^harness\//)
+    }
+  })
+
   it('CI launches the app on every push, on the archive the rehearsal builds', () => {
     const ci = load('ci.yml')
     const steps = ci.jobs.rehearsal.steps

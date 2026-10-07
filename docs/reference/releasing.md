@@ -180,7 +180,9 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   `desktop/Walnut.entitlements`), notarizes and staples the app and then its DMG, has Gatekeeper
   assess the DMG with a browser's quarantine mark on it, launches the mounted app on a fresh
   `HOME` (it installs the release's own archive and serves the console), and only then attaches
-  `Walnut.dmg`. The identity (`MACOS_CERT_P12_BASE64`, `MACOS_CERT_P12_PASSWORD`) and the
+  `Walnut.dmg`. The app comes from the tag; the smoke that launches it comes from the workflow's
+  own commit (a second checkout in `harness/`), so a fix to the check reaches every release it
+  judges. The identity (`MACOS_CERT_P12_BASE64`, `MACOS_CERT_P12_PASSWORD`) and the
   notary key (`APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, an App Store
   Connect API key with the Developer role) are secrets of the `release` environment, which only
   `main` may deploy to; the identity goes into a keychain made for the job and deleted after it.
