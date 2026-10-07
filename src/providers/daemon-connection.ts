@@ -1650,12 +1650,53 @@ export class DaemonConnection {
    * errorCode (not thrown) so the daemon can fail the unix-socket request
    * with a precise typed error.
    */
+  /** Longest a relayed call waits on the host's journal before it is answered anyway. */
+  private static readonly DRAIN_BEFORE_ANSWER_MS = 5_000
+
+  /**
+   * Wait until the host's journal is taken: join a running drain (one that began
+   * before the nudge may finish without the new record, so check again after
+   * it), or run the due one. Bounded; a failed drain stays due for the next push.
+   */
+  private async drainBeforeAnswering(): Promise<void> {
+    // Only a daemon that keeps a journal (the same gate as pushHostSlice).
+    if (this.isReadOnlyRemote || !this.hasCapability('offline-host-v1')) return
+    const { runOfflineHandover, runningHandover } = await import('../core/offline-handover.js')
+    const deadline = Date.now() + DaemonConnection.DRAIN_BEFORE_ANSWER_MS
+    while (Date.now() < deadline) {
+      let job = runningHandover(this.hostKey)
+      if (!job && !this.offlineDrainDue) return
+      let failed = false
+      if (!job) {
+        this.offlineDrainDue = false
+        job = runOfflineHandover({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })
+        job.then(() => this.pushHostSlice(), (err) => {
+          failed = true
+          this.offlineDrainDue = true
+          log.session.warn('DaemonConnection: journal drain before a relayed call failed', {
+            host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        job.then(() => undefined, () => undefined),
+        new Promise<void>((r) => { timer = setTimeout(r, Math.max(0, deadline - Date.now())); timer.unref?.() }),
+      ]).finally(() => clearTimeout(timer))
+      if (failed) return
+    }
+  }
+
   private async handleGatewayRequest(event: DaemonEvent): Promise<void> {
     const relayId = (event as unknown as { relayId?: unknown }).relayId
     const capability = (event as unknown as { capability?: unknown }).capability
     const callerSid = (event as unknown as { callerSid?: unknown }).callerSid
     const payload = (event as unknown as { payload?: unknown }).payload
     if (typeof relayId !== 'number' || typeof capability !== 'string' || typeof callerSid !== 'string') return
+    // The host delivers messages between its own sessions itself and journals
+    // them; its nudge reaches us before this request (one socket, in order).
+    // Take the journal first, so a request id it names is already ours.
+    if (this.offlineDrainDue || (await import('../core/offline-handover.js')).runningHandover(this.hostKey)) await this.drainBeforeAnswering()
     let reply: Record<string, unknown>
     try {
       const { handleGatewayCapability } = await import('../core/peers/capability-router.js')
@@ -3771,7 +3812,12 @@ export class DaemonConnection {
       // away or still taking the handover) and asks us to drain its journal.
       if (event.ev === 'offline-journal') {
         this.offlineDrainDue = true
-        this.pushHostSlice()
+        // Marked due BEFORE the drain starts: only a drain that began after the
+        // nudge clears it, and a turn-end hook waits on it meanwhile.
+        void import('../core/offline-handover.js')
+          .then(({ noteHandoverDue }) => noteHandoverDue(this.hostKey))
+          .catch(() => {})
+          .finally(() => this.pushHostSlice())
         return
       }
       // The cloud companion led this host while we were silent (a sleep the

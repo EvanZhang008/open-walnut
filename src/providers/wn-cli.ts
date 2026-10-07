@@ -458,6 +458,28 @@ export async function fetchHubOps(
   }
 }
 
+/**
+ * One `tools.call` through this session's host daemon, or null when there is no
+ * injected socket or no answer came back (nothing was delivered: the caller may
+ * take another path). A daemon ANSWER, error or not, is returned as it is.
+ */
+export async function callHostDaemonTool(
+  name: string,
+  args: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GatewayResponse | null> {
+  const socket = (env.WALNUT_AGENT_SOCKET ?? '').trim()
+  const sid = (env.WALNUT_SESSION_ID ?? '').trim()
+  if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
+  try {
+    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args } })
+  } catch (err) {
+    // A timeout is no proof nothing was delivered: it is the answer, not a miss.
+    if (err instanceof WalnutCliTimeoutError) return { ok: false, error: { code: 'hub_timeout', message: err.message } }
+    return null
+  }
+}
+
 // ── entry point ──
 
 /** Cap on waiting for a stdout flush — a runtime that never calls back must not hang walnut. */

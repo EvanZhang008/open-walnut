@@ -21,6 +21,8 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 export interface DaemonTwin {
   port: number
   url: string
+  /** The daemon's own dir (WALNUT_DAEMON_DIR): its gateway socket and offline-host copy live here. */
+  dir: string
   proc: ChildProcess
   stop(): Promise<void>
 }
@@ -69,6 +71,7 @@ export async function startDaemonTwin(opts: {
   return {
     port,
     url: `ws://127.0.0.1:${port}`,
+    dir: runDir,
     proc,
     async stop() {
       if (proc.exitCode === null && proc.signalCode === null) {

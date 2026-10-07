@@ -110,7 +110,7 @@ async function childTasks(parentIds: string[]): Promise<Task[]> {
 
 export async function buildHostSlice(hostKey: string, now = Date.now()): Promise<HostSlice> {
   const key = normalizeHostKey(hostKey);
-  const [{ listSessions }, { listTasksByIds }, requests] = await Promise.all([
+  const [{ listSessions, isListableSession }, { listTasksByIds }, requests] = await Promise.all([
     import('./session-tracker.js'),
     import('./task-manager.js'),
     import('./session-requests.js'),
@@ -187,6 +187,9 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       sid: s.claudeSessionId,
       ...(s.taskId ? { taskId: s.taskId } : {}),
       ...(s.title ? { title: s.title } : {}),
+      // An environment or lane session: never a message's address by name, nor a
+      // reply's (session-send-core.ts, reply-routing.ts), so the host leaves those to us.
+      ...(isListableSession(s) ? {} : { aside: true }),
     })),
     tasks: [...picked.values()],
     requests: pending,

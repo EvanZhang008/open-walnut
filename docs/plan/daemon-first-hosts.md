@@ -82,6 +82,8 @@ home = spawn journal home of the calling session
 client = the connected server whose home matches, else an untagged server (old build)
 client missed 3 keepalive beats?     → no client (a Mac asleep with its socket open is away)
 journal pending for home?           → answer offline (the server is still taking the handover)
+client found, a message between two
+  sessions here the host can take    → deliver here, journal it `online`, nudge the server
 client found                         → relay (a read that times out is answered from the copy)
 read copy for home exists            → answer offline
 otherwise                            → hub_unreachable (unchanged)
@@ -164,24 +166,43 @@ settles anything, so an offline reply is never followed by a "no reply" notice.
 | Phase | Scope |
 |---|---|
 | 1 (this change) | read copy, home-aware routing, offline reads, same-host messaging with request rows and turn-end notices, queued `task_update` / `task_complete`, handover |
-| 2 | trigger fires delivered to same-host sessions by the daemon (done: the daemon arbitrates every fire, `trigger-claim-v1`, see docs/plan/walnut-trigger.md "Who delivers a fire"); a server that stopped answering pings is away for every call at once (done); same-host messaging owned by the daemon even while the server answers (open, see "Same-host messages while the server answers") |
+| 2 | trigger fires delivered to same-host sessions by the daemon (done: the daemon arbitrates every fire, `trigger-claim-v1`, see docs/plan/walnut-trigger.md "Who delivers a fire"); a server that stopped answering pings is away for every call at once (done); same-host messages delivered by the daemon even while the server answers (done, see "Same-host messages while the server answers") |
 | 3 | the cloud companion as the fallback hub for cross-host and global ops while the Mac is away (done: the companion is the backup leader, see docs/plan/walnut-control-plane.md); the team Board kept on the host (done: `board_*` answered from the copy and journaled); notes, memory and skills read from the host's own copy, with a per-host list of what it keeps (done: `host-replica-v1`) |
 | later | offline session start, once the launch recipe can be cached per project |
 
 ## Same-host messages while the server answers
 
-Not done, on purpose for now. The daemon's delivery is the simple one a host
-can do alone; the server's send does more, and a message between two sessions
-on one host would lose all of it if the daemon took it while the server answers:
+A message between two sessions of one Walnut on one host is delivered by that
+host's daemon whether or not the server answers: the server's own send ends in
+that daemon's FIFO write anyway, after a round trip to wherever the server runs.
+`handleLocal` (`offline-host-core.ts`) takes it when the host can be sure of it:
 
-- a target waiting on a tool permission prompt gets the message parked until
-  the prompt is answered, not written into the middle of it;
-- a peer's queue is capped, and the throttle is shared with every other path;
-- an answer goes to the session the asker continues in (a fork), not the row's;
-- the server's message queue drives what the web and phone show for the send.
+- the target is an exact task id with exactly one live session here, an exact
+  session id or one of 8+ characters, or a printed `Title [8hex]` handle;
+- the target is not the caller, not an environment or lane session, not waiting
+  on a tool permission prompt (the server parks the text until the human
+  answers), and not the caller's COMPLETE parent;
+- a reply goes to an asker that runs here and is not on a prompt (the server's
+  first routing rung: a live asker is its own address).
 
-Moving them means a second message queue in the daemon. Until then a host
-delivers itself only while the server is away or silent, which is when it matters.
+Anything else (a task prefix or a title, which only the server resolves with
+every task in view; a target or asker that is not running here) is relayed as
+before, carrying the message id the host picked, so a delivery is written once.
+The host applies the server's peer throttle rules (10 a minute per sender, the
+same text to the same session within 5 minutes refused) with its own counters.
+
+What it delivers is journaled with `online: true` and the server is nudged
+(`offline-journal`). Online records hold nothing back: other calls keep going to
+the server, which drains the journal before it answers a relayed call and before
+its turn-end hook asks "what is owed, and who answered?" (`noteHandoverDue`,
+`waitForOfflineHandovers`, bounded at 5 s). One voice for a request: while the
+server answers this host, it reports a turn that ended without a reply and the
+deadline, from its own copy of the row, drained or not; the host reports an
+online row only once the server no longer answers it and has not taken it.
+
+On the Mac, the installed `walnut` sends `task_send` / `session_send` through
+the session's host daemon first, as the daemon's own shim does on other hosts;
+only when no daemon could route it at all does the call fall back to HTTP.
 
 ## Known limits of phase 1
 

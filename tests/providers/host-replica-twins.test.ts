@@ -58,8 +58,11 @@ describe('host copy: both twins', () => {
       // Not only for reads: the silence check comes first and asks nothing about the op.
       expect(gw).toMatch(/if \(target && \(target\.(data\?\.)?missedBeats( \?\? 0| \|\| 0)\) >= GATEWAY_SILENT_BEATS\) \{/)
       expect(gw.indexOf('>= GATEWAY_SILENT_BEATS')).toBeLessThan(gw.indexOf('const readable') === -1 ? gw.indexOf('var readable') : gw.indexOf('const readable'))
-      // Only reads: a write is never answered twice.
-      const timeout = gw.slice(gw.indexOf('setTimeout('))
+      // Only reads: a write is never answered twice. The relay itself (and its
+      // timer) is relayToPrimary, which every relaying branch of the gateway calls.
+      expect(gw).toMatch(/relayToPrimary\(/)
+      const relay = fnBody(src, 'relayToPrimary')
+      const timeout = relay.slice(relay.indexOf('setTimeout('))
       expect(timeout.indexOf('if (readable && home)')).toBeGreaterThan(-1)
       expect(timeout.indexOf('if (readable && home)')).toBeLessThan(timeout.indexOf("'hub_timeout'"))
       expect(src).toMatch(/GATEWAY_SILENT_BEATS = 3/)

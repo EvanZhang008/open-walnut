@@ -2536,6 +2536,7 @@ const offlineHost = createOfflineHost({
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
+  pendingPrompt: (sid) => sessions.get(sid)?.pendingCtrl?.toolName ?? null,
   // The same gate and turn-retry reset a server send goes through (cmdSend).
   deliver: (sid, text, messageId) => sessionStartGate.run(sid, async () => {
     cancelTurnRetry(sid, 'superseded-by-send')
@@ -2550,6 +2551,15 @@ const offlineHost = createOfflineHost({
     for (const client of wsClients) {
       if (client.data?.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home })
     }
+  },
+  // The gateway's own test for "the server answers this Walnut" (sendGatewayRequest).
+  serverAnswers: (home) => {
+    if (leaderBook.backupLead(home)) return false
+    for (const client of wsClients) {
+      if (client.data?.origin === 'bridge' || gatewayClientHomes.get(client) !== home) continue
+      if ((client.data?.missedBeats ?? 0) < GATEWAY_SILENT_BEATS) return true
+    }
+    return false
   },
   // A reply or notice for a session on another host: only the companion, while
   // it leads, can carry it there.
@@ -2673,7 +2683,7 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
     const slice = cmd.slice as HostSlice
     const r = offlineHost.configure(slice)
     gatewayClientHomes.set(ws, slice.home)
-    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.pendingHandover(slice.home) })
+    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) })
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + (err as Error).message)
   }
@@ -2758,6 +2768,35 @@ function sendGatewayRequest(
     logMsg('info', 'gateway: no server connected', { capability, callerSid })
     return respond(gatewayError('hub_unreachable', 'no primary server connected'))
   }
+  // A message between two of this Walnut's sessions on this host is delivered
+  // here even while the server answers: the server would only send it back to
+  // this daemon. What this host cannot take for sure goes to the server as before.
+  if (home && offlineHost.hasHome(home)) {
+    const primary = target
+    void offlineHost.handleLocal(home, callerSid, capability, payload).then((r) => {
+      if (r) {
+        logMsg('info', 'gateway: delivered on this host', { capability, callerSid, op: payload.name, ok: r.ok })
+        return respond(r as GatewayResponse)
+      }
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable)
+    }, () => {
+      // Nothing was delivered here (a delivery failure is caught inside): the server's.
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable)
+    })
+    return
+  }
+  relayToPrimary(target, home, capability, callerSid, payload, respond, readable)
+}
+
+function relayToPrimary(
+  target: ServerWebSocket<WsData>,
+  home: string | undefined,
+  capability: string,
+  callerSid: string,
+  payload: Record<string, unknown>,
+  respond: (resp: GatewayResponse) => void,
+  readable: boolean,
+) {
   const relayId = ++gatewayRelayCounter
   const timer = setTimeout(() => {
     gatewayRelayPending.delete(relayId)

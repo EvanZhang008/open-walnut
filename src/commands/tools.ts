@@ -230,6 +230,24 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       }
       parsed = args.args
     }
+    // A message from a session goes through its host daemon first, on the Mac as
+    // on any host: a message between two sessions on one host is that host's to
+    // deliver, and the daemon hands everything else to the server itself. Only
+    // a daemon that could not route it at all (no daemon, no server it could
+    // reach) leaves the call to the HTTP path below; nothing was delivered then.
+    if (name === 'task_send' || name === 'session_send') {
+      const { callHostDaemonTool, formatErrorLines, errorToExitCode } = await import('../providers/wn-cli.js')
+      const resp = await callHostDaemonTool(name, parsed)
+      if (resp && !(resp.ok === false && (resp.error.code === 'hub_unreachable' || resp.error.code === 'unknown_caller'))) {
+        if (resp.ok) {
+          console.log(JSON.stringify(resp.result, null, 2))
+          return
+        }
+        console.error(formatErrorLines(resp.error).join('\n'))
+        process.exitCode = errorToExitCode(resp.error.code)
+        return
+      }
+    }
     // A separate process: the server re-judges its socket, and can only lower this.
     const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
     const r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN })

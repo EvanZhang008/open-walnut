@@ -2025,6 +2025,11 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // session acted. 2026-10-02: a leader completed 16 workers and was woken 16
     // times to read the summaries it had just read.
     const actorSid = isPhaseEdge ? ctx.actorSid?.trim() || undefined : undefined;
+    // A message between two sessions of one host is delivered by that host's
+    // daemon, which journals the request it opened and any reply it carried:
+    // take that journal in before asking what is owed and who answered. Free
+    // when no host has said it journaled anything.
+    await (await import('../offline-handover.js')).waitForOfflineHandovers();
     const allPending = await pendingRequestsForTarget({ sessionId, taskId });
     const pending = actorSid ? allPending.filter((r) => r.fromSessionId !== actorSid) : allPending;
     const parentTaskId = task?.parent_task_id ?? undefined;

@@ -3653,6 +3653,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
+  pendingPrompt: function (sid) { var s = sessions.get(sid); return (s && s.pendingCtrl && s.pendingCtrl.toolName) || null; },
   // The same gate and turn-retry reset a server send goes through (cmdSend).
   deliver: function (sid, text, messageId) {
     return sessionStartGate.run(sid, async function () {
@@ -3670,6 +3671,15 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
     for (const client of wsClients) {
       if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home: home });
     }
+  },
+  // The gateway's own test for "the server answers this Walnut" (sendGatewayRequest).
+  serverAnswers: function (home) {
+    if (leaderBook.backupLead(home)) return false;
+    for (const client of wsClients) {
+      if (client.origin === 'bridge' || gatewayClientHomes.get(client) !== home) continue;
+      if ((client.missedBeats || 0) < GATEWAY_SILENT_BEATS) return true;
+    }
+    return false;
   },
   // A reply or notice for a session on another host: only the companion, while
   // it leads, can carry it there (twin of daemon-standalone.ts).
@@ -3772,7 +3782,7 @@ function cmdHostSlice(ws, id, cmd) {
   try {
     var r = offlineHost.configure(cmd.slice);
     gatewayClientHomes.set(ws, cmd.slice.home);
-    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.pendingHandover(cmd.slice.home) });
+    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(cmd.slice.home) });
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + err.message);
   }
@@ -3844,6 +3854,26 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
     logMsg('info', 'gateway: no server connected', { capability: capability, callerSid: callerSid });
     return respond(gatewayError('hub_unreachable', 'no primary server connected'));
   }
+  // A message between two of this Walnut's sessions on this host is delivered
+  // here even while the server answers (twin of daemon-standalone.ts).
+  if (home && offlineHost.hasHome(home)) {
+    var primary = target;
+    offlineHost.handleLocal(home, callerSid, capability, payload).then(function (r) {
+      if (r) {
+        logMsg('info', 'gateway: delivered on this host', { capability: capability, callerSid: callerSid, op: payload.name, ok: r.ok });
+        return respond(r);
+      }
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable);
+    }, function () {
+      // Nothing was delivered here (a delivery failure is caught inside): the server's.
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable);
+    });
+    return;
+  }
+  relayToPrimary(target, home, capability, callerSid, payload, respond, readable);
+}
+
+function relayToPrimary(target, home, capability, callerSid, payload, respond, readable) {
   gatewayRelayCounter += 1;
   var relayId = gatewayRelayCounter;
   var timer = setTimeout(function () {

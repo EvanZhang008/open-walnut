@@ -29,7 +29,8 @@ import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 import type { HostReplica } from './host-replica-core.js'
 import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
 
-export interface OfflineSliceSession { sid: string; taskId?: string; title?: string }
+/** `aside`: an environment or lane session, which the server never picks as a message's address by name. */
+export interface OfflineSliceSession { sid: string; taskId?: string; title?: string; aside?: boolean }
 
 export interface OfflineSliceTask {
   id: string
@@ -100,14 +101,25 @@ export interface OfflineRequestRow {
   lastResultV?: number
   /** The asker runs on another host (named as this Walnut names it): its answer goes through the leader. */
   fromHost?: string
+  /**
+   * Opened while the server answered (handleLocal): the server speaks for it
+   * ("finished without replying", the deadline) while it still answers this
+   * host, whether or not it has taken the row yet; this host only when it does not.
+   */
+  online?: true
 }
 
+/**
+ * `online`: written while the server answered (a same-host message this host
+ * delivered itself, handleLocal). The server takes it within moments, and a
+ * relayed call never has to wait for it: the server drains before it answers.
+ */
 export type OfflineRecord =
-  | { seq: number; at: number; kind: 'row'; row: OfflineRequestRow }
-  | { seq: number; at: number; kind: 'settle'; requestId: string; status: 'replied' }
-  | { seq: number; at: number; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean }
+  | { seq: number; at: number; online?: true; kind: 'row'; row: OfflineRequestRow }
+  | { seq: number; at: number; online?: true; kind: 'settle'; requestId: string; status: 'replied' }
+  | { seq: number; at: number; online?: true; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean }
   /** `base`: the copy's updated_at for that task when the write was queued (the server's clock). */
-  | { seq: number; at: number; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string }
+  | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string }
 
 interface Journal { nextSeq: number; records: OfflineRecord[]; rows: Record<string, OfflineRequestRow>; settledCopies: string[] }
 
@@ -130,12 +142,20 @@ export interface OfflineHostDeps {
   isLive: (sid: string) => boolean
   /** The sid is mid-turn right now (its fold says a turn is open). */
   turnActive: (sid: string) => boolean
+  /**
+   * The tool the session's CLI waits on the human for (a permission prompt), or
+   * null. A message to it is the server's to park until the prompt is answered.
+   * Absent: this host never delivers a message itself while the server answers.
+   */
+  pendingPrompt?: (sid: string) => string | null
   /** The session's stream size now (the byte offset result lines carry as `v`). */
   streamOffset: (sid: string) => number | undefined
   /** Write one user message into the session's FIFO, with a turn-opening marker (send-markers-v1). */
   deliver: (sid: string, text: string, messageId: string) => Promise<DeliverResult>
   /** A journal grew while a server of that home is connected: ask it to drain. */
   onJournal?: (home: string) => void
+  /** A server of that home is connected and answering (not silent, not replaced by the companion). */
+  serverAnswers?: (home: string) => boolean
   /**
    * Hand text for a session on ANOTHER host to the server leading this Walnut
    * while its primary is away (the cloud companion, docs/plan/walnut-control-plane.md).
@@ -280,11 +300,11 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   // Distributive over the union: an `Omit` of the whole union would collapse it.
-  type NewRecord = OfflineRecord extends infer R ? R extends OfflineRecord ? Omit<R, 'seq' | 'at'> : never : never
+  type NewRecord = OfflineRecord extends infer R ? R extends OfflineRecord ? Omit<R, 'seq' | 'at' | 'online'> : never : never
 
-  function append(home: string, record: NewRecord): void {
+  function append(home: string, record: NewRecord, online = false): void {
     const j = journalOf(home)
-    j.records.push({ ...record, seq: j.nextSeq++, at: deps.now() } as OfflineRecord)
+    j.records.push({ ...record, seq: j.nextSeq++, at: deps.now(), ...(online ? { online: true } : {}) } as OfflineRecord)
     persistJournal(home)
     try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ }
   }
@@ -316,9 +336,13 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     return undefined
   }
 
-  /** Records the server has not taken yet: while any exist the gateway answers here. */
+  /**
+   * Records made while the server was away that it has not taken yet: while any
+   * exist the gateway answers here. A record made while it answered (`online`)
+   * holds nothing back: the server drains it before it answers a relayed call.
+   */
   function pendingHandover(home: string | undefined): boolean {
-    return !!home && (journals.get(home)?.records.length ?? 0) > 0
+    return !!home && (journals.get(home)?.records ?? []).some((r) => !r.online)
   }
 
   function drain(home: string): { records: OfflineRecord[]; more: boolean } {
@@ -713,6 +737,210 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     })
   }
 
+  // ── same-host messages while the server answers (handleLocal) ──
+  //
+  // A message between two sessions of this Walnut on this host is this host's
+  // to deliver, whether or not the server answers: the server's send ends in
+  // this daemon's FIFO write anyway, after a round trip to wherever the server
+  // runs. Delivered here, journaled (`online`), and the server is nudged; it
+  // drains within moments and owns the request row from then on, as it does
+  // after any handover. Only the plain case is taken here, judged on facts this
+  // host has: anything it cannot be sure of (a name it resolves differently from
+  // the server, a target or asker that is not running here, a target waiting on
+  // a permission prompt, a completed parent) is left to the server, unchanged.
+
+  const LOCAL_SEND_OPS = ['task_send', 'session_send']
+  const PEER_SEND_WINDOW_MS = 60_000
+  const PEER_SEND_MAX = 10
+  const PEER_DUP_WINDOW_MS = 300_000
+  /** Per-sender send times, and (sender, target, text) → last send: the server's own peer throttle rules. */
+  const peerSends = new Map<string, number[]>()
+  const peerDups = new Map<string, number>()
+
+  function admitPeerSend(sender: string, target: string, text: string): GatewayResult | null {
+    const now = deps.now()
+    const recent = (peerSends.get(sender) ?? []).filter((t) => now - t < PEER_SEND_WINDOW_MS)
+    if (recent.length >= PEER_SEND_MAX) {
+      peerSends.set(sender, recent)
+      return fail('throttled', 'peer send throttled: do not retry in a loop', { retryAfterMs: Math.max(1, recent[0] + PEER_SEND_WINDOW_MS - now) })
+    }
+    const dupKey = `${sender}|${target}|${deps.keyOf(text)}`
+    const last = peerDups.get(dupKey)
+    if (last !== undefined && now - last < PEER_DUP_WINDOW_MS) {
+      return fail('throttled', 'the same message was just sent to this session: do not resend', { retryAfterMs: Math.max(1, last + PEER_DUP_WINDOW_MS - now) })
+    }
+    recent.push(now)
+    peerSends.set(sender, recent)
+    peerDups.set(dupKey, now)
+    for (const [k, at] of peerDups) if (now - at >= PEER_DUP_WINDOW_MS) peerDups.delete(k)
+    return null
+  }
+
+  /**
+   * `to` as this host can name it without doubt: an exact task id, an exact
+   * session id, a session id prefix of 8 or more, or a printed `Title [8hex]`
+   * handle. A task prefix or a title is the server's to resolve: it sees every
+   * task, this copy only some, and a prefix unique here may not be unique there.
+   */
+  function localTarget(home: string, to: string): { sid: string; taskId?: string; title?: string } | null {
+    const slice = slices.get(home)!
+    const ref = to.trim()
+    const task = tasksWithOverlay(home).find((t) => t.id === ref)
+    if (task) {
+      const live = slice.sessions.filter((s) => s.taskId === task.id && deps.isLive(s.sid))
+      // The server picks the task's current session; with two live, leave it the choice.
+      if (live.length !== 1 || live[0].aside) return null
+      return { sid: live[0].sid, taskId: task.id, title: live[0].title ?? task.title }
+    }
+    const printed = /\[([0-9a-f][0-9a-f-]{7,})\]\s*$/i.exec(ref)?.[1]
+    const key = (printed ?? ref).toLowerCase()
+    if (key.length < 8 || !/^[0-9a-f-]+$/.test(key)) return null
+    const hits = slice.sessions.filter((s) => s.sid.toLowerCase() === key || s.sid.toLowerCase().startsWith(key))
+    if (hits.length !== 1 || hits[0].aside || !deps.isLive(hits[0].sid)) return null
+    // An older session of a task that runs another one here too: the server
+    // knows which one the task continues in.
+    const taskId = hits[0].taskId
+    if (taskId && slice.sessions.filter((s) => s.taskId === taskId && deps.isLive(s.sid)).length !== 1) return null
+    return { sid: hits[0].sid, taskId, title: hits[0].title }
+  }
+
+  /** The server's answer shape (session-send-core.ts SessionSendResult), with the op's outcome lines. */
+  function sentResult(
+    home: string,
+    to: { sid: string; taskId?: string; title?: string },
+    extra: { requestId?: string; repliedTo?: string; messageId: string },
+  ): GatewayResult {
+    const replyHint = 'Its reply arrives in your session on its own; do not poll. '
+      + 'Only if you cannot continue without it: walnut wait <task-id | rq-id>.'
+    return ok({
+      delivery: 'queued', via: 'host', host: slices.get(home)?.host ?? null,
+      targetSessionId: to.sid, targetTitle: to.title ?? null,
+      ...(to.taskId ? { targetTaskId: to.taskId } : {}),
+      target: { handle: kit.sessionHandle(to.title, to.sid), sessionId: to.sid, ...(to.taskId ? { taskId: to.taskId } : {}) },
+      ...(extra.requestId ? { requestId: extra.requestId } : {}),
+      ...(extra.repliedTo ? { repliedTo: extra.repliedTo } : {}),
+      messageId: extra.messageId,
+      outcome: extra.repliedTo
+        ? `Reply delivered on this host to the asking session (${to.taskId ?? to.sid}). Do NOT resend.`
+        : `Message delivered on this host to ${to.taskId ?? to.sid}. Accepted for delivery, not a completed reply. Do NOT resend.`,
+      next: extra.repliedTo ? 'Nothing else is required.'
+        : extra.requestId ? `You asked for a reply (${extra.requestId}). ${replyHint}` : replyHint,
+    })
+  }
+
+  async function localSend(home: string, callerSid: string, args: Record<string, unknown>, text: string, mid: string): Promise<GatewayResult | null> {
+    if (typeof args.to !== 'string' || !args.to.trim()) return null
+    const target = localTarget(home, args.to)
+    if (!target || target.sid === callerSid) return null
+    if (deps.pendingPrompt!(target.sid)) return null
+    if (parentCompleteRefusal(home, callerSid, target.taskId)) return null
+    const denied = admitPeerSend(callerSid, target.sid, text) ?? roomFor(home)
+    if (denied) return denied
+    const slice = slices.get(home)!
+    const me = callerIdentity(home, callerSid)
+    let row: OfflineRequestRow | undefined
+    if (args.expect_reply !== false) {
+      const implicit = args.expect_reply === undefined
+      row = {
+        id: `rq-${deps.randomHex(6)}`,
+        fromSessionId: callerSid,
+        toSessionId: target.sid,
+        ...(target.taskId ? { toTaskId: target.taskId } : {}),
+        preview: kit.requestPreview(text),
+        status: 'pending',
+        createdAt: new Date(deps.now()).toISOString(),
+        deadlineAt: deps.now() + clampSecs(args.reply_timeout, implicit) * 1000,
+        ...(deps.turnActive(target.sid) ? { skipTurnEnds: 1 } : {}),
+        online: true,
+      }
+      const offset = deps.streamOffset(target.sid)
+      if (typeof offset === 'number') row.afterV = offset
+    }
+    let envelope = kit.buildPeerWrapper(text, {
+      title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
+      host: slice.host, ...(row ? { requestId: row.id } : {}),
+    }, { title: typeof args.title === 'string' ? args.title : undefined })
+    if (row) envelope = `${envelope}\n${kit.buildReplyTrailer(row)}`
+    if (row) journalOf(home).rows[row.id] = row
+    const delivered = await deps.deliver(target.sid, envelope, mid)
+    if (!delivered.ok) {
+      // Nothing was written: the server may still reach it (it resumes a stopped CLI).
+      if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
+      return null
+    }
+    if (row) append(home, { kind: 'row', row: { ...row } }, true)
+    append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: target.sid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) }, true)
+    deps.log('info', 'host: message delivered on this host', { home, from: callerSid, to: target.sid, requestId: row?.id, messageId: mid })
+    return sentResult(home, target, { requestId: row?.id, messageId: mid })
+  }
+
+  async function localReply(home: string, callerSid: string, args: Record<string, unknown>, text: string, mid: string): Promise<GatewayResult | null> {
+    const id = typeof args.in_reply_to === 'string' ? args.in_reply_to : ''
+    if (!/^rq-[a-f0-9]{6,}$/.test(id)) return null
+    const { own, copy } = findRequest(home, id)
+    const row = own ?? copy
+    // A copy this host already answered once: a second answer is the server's (it says "late").
+    if (!row || (!own && journalOf(home).settledCopies.includes(id))) return null
+    const me = callerIdentity(home, callerSid)
+    const isTarget = row.toSessionId === callerSid || (!!row.toTaskId && row.toTaskId === me.taskId)
+    if (!isTarget) return null
+    const asker = row.fromSessionId
+    // The server's first rung (reply-routing.ts): a live asker is its own address.
+    if (asker === callerSid || !deps.isLive(asker) || deps.pendingPrompt!(asker)) return null
+    const askerRow = sessionOf(home, asker)
+    if (!askerRow || askerRow.aside) return null
+    if (parentCompleteRefusal(home, callerSid, askerRow?.taskId)) return null
+    const denied = roomFor(home)
+    if (denied) return denied
+    const slice = slices.get(home)!
+    const wrapped = kit.buildReplyDeliveryText(row, {
+      title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
+    }, text, { title: typeof args.title === 'string' ? args.title : undefined })
+    const delivered = await deps.deliver(asker, wrapped, mid)
+    if (!delivered.ok) return null
+    if (own) {
+      if (own.status === 'pending') {
+        own.status = 'replied'
+        own.settledAt = new Date(deps.now()).toISOString()
+        append(home, { kind: 'row', row: { ...own } }, true)
+      }
+    } else {
+      journalOf(home).settledCopies.push(id)
+      append(home, { kind: 'settle', requestId: id, status: 'replied' }, true)
+    }
+    append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: asker, messageId: mid, requestId: id, reply: true }, true)
+    deps.log('info', 'host: reply delivered on this host', { home, requestId: id, from: callerSid, to: asker, messageId: mid })
+    return sentResult(home, { sid: asker, taskId: askerRow?.taskId, title: askerRow?.title }, { repliedTo: id, messageId: mid })
+  }
+
+  /**
+   * A call the server would answer, that this host answers itself: a message
+   * between two of this Walnut's sessions running here. Null = not this host's
+   * to take; the caller relays the payload, which then carries the message id
+   * this host picked, so a delivery the server makes again is written once.
+   */
+  async function handleLocal(home: string, callerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult | null> {
+    if (!deps.pendingPrompt || capability !== 'tools.call') return null
+    const name = typeof payload.name === 'string' ? payload.name : ''
+    if (LOCAL_SEND_OPS.indexOf(name) === -1 || typeof payload.argsFile === 'string') return null
+    if (!slices.has(home) || !sessionOf(home, callerSid)) return null
+    const args = (payload.args && typeof payload.args === 'object' && !Array.isArray(payload.args) ? payload.args : {}) as Record<string, unknown>
+    const text = typeof args.text === 'string' ? args.text.trim() : ''
+    if (!text) return null
+    if (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId)) {
+      payload.args = { ...args, messageId: `qm-host-${deps.randomHex(8)}` }
+    }
+    const mid = String((payload.args as Record<string, unknown>).messageId)
+    try {
+      return args.in_reply_to !== undefined
+        ? await localReply(home, callerSid, args, text, mid)
+        : await localSend(home, callerSid, args, text, mid)
+    } catch (err) {
+      deps.log('warn', 'host: same-host delivery failed, leaving it to the server', { home, error: (err as Error).message })
+      return null
+    }
+  }
+
   function opQueued(home: string, callerSid: string, name: string, args: Record<string, unknown>): GatewayResult {
     const ref = typeof args.id === 'string' ? args.id : ''
     if (!ref) return fail('bad_request', `${name} needs "id"`)
@@ -907,6 +1135,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
           persistJournal(home)
           continue
         }
+        // One voice: the server that answers says it, from its own copy of the row.
+        if (row.online && deps.serverAnswers?.(home)) continue
         let parsed: { result?: unknown; is_error?: unknown } = {}
         try { parsed = JSON.parse(line) } catch { /* the outcome still stands */ }
         await notify(home, row, parsed.is_error === true ? 'error' : 'completed', typeof parsed.result === 'string' ? parsed.result : undefined)
@@ -1037,7 +1267,9 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     const now = deps.now()
     for (const [home, j] of journals) {
       for (const row of Object.values(j.rows)) {
-        if (row.status === 'pending' && row.deadlineAt <= now && !isHandingOver(row.id)) { await notify(home, row, 'timeout'); n++ }
+        if (row.status !== 'pending' || row.deadlineAt > now || isHandingOver(row.id)) continue
+        if (row.online && deps.serverAnswers?.(home)) continue
+        await notify(home, row, 'timeout'); n++
       }
     }
     return n
@@ -1062,7 +1294,12 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     return !!deps.replica && deps.replica.keeps(home, name)
   }
 
-  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, answersRead, homes: () => [...slices.keys()] }
+  /** Any record the server has not taken yet, made while it was away or not. */
+  function hasRecords(home: string | undefined): boolean {
+    return !!home && (journals.get(home)?.records.length ?? 0) > 0
+  }
+
+  return { configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, handle, handleLocal, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, answersRead, homes: () => [...slices.keys()] }
 }
 
 export type OfflineHost = ReturnType<typeof createOfflineHost>

@@ -242,7 +242,7 @@ is away. A change reaches every host and the companion at once.
 - The companion's copy of the other stores (sessions, reply requests, inbox,
   routines), retiring the task projection push once every companion takes the
   copy, and retiring the companion's special-purpose queues.
-- Writes to a host's own work, and messages between its sessions, made on the
-  host even while the Mac answers (docs/plan/daemon-first-hosts.md "Same-host
-  messages while the server answers" says what that would lose today).
+- Writes to a host's own work made on the host even while the Mac answers.
+  Messages between a host's sessions already are (docs/plan/daemon-first-hosts.md
+  "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).

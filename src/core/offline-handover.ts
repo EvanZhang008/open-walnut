@@ -54,12 +54,44 @@ const HANDOVER_WAIT_MS = 5_000;
 
 const running = new Map<string, Promise<HandoverResult>>();
 
-/** Resolves when every running handover has finished (or after HANDOVER_WAIT_MS). */
+/**
+ * Hosts that said they journaled something we have not drained yet (the
+ * offline-journal nudge). A host delivers messages between its own sessions
+ * itself even while we answer, so its reply to a request can be in its journal
+ * when the asker's turn-end hook asks "did anyone answer?": that hook waits for
+ * the drain, as it waits for a running one.
+ */
+const due = new Map<string, { at: number; done: Promise<void>; resolve: () => void }>();
+
+export function noteHandoverDue(hostKey: string): void {
+  if (due.has(hostKey)) return;
+  let resolve!: () => void;
+  const done = new Promise<void>((r) => { resolve = r; });
+  due.set(hostKey, { at: Date.now(), done, resolve });
+}
+
+/** A nudge nobody drained this long ago (the host went away first) is dropped: its records wait for the next connect. */
+const DUE_TTL_MS = 60_000;
+
+function pruneDue(): void {
+  const now = Date.now();
+  for (const [host, d] of due) {
+    if (now - d.at > DUE_TTL_MS) { due.delete(host); d.resolve(); }
+  }
+}
+
+/** The handover of this host that is running now, if any. */
+export function runningHandover(hostKey: string): Promise<HandoverResult> | undefined {
+  return running.get(hostKey);
+}
+
+/** Resolves when every running or due handover has finished (or after HANDOVER_WAIT_MS). */
 export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise<void> {
-  if (running.size === 0) return;
+  pruneDue();
+  if (running.size === 0 && due.size === 0) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
-    Promise.allSettled([...running.values()]),
+    Promise.allSettled([...running.values(), ...[...due.values()].map((d) => d.done)]),
     new Promise<void>((resolve) => { timer = setTimeout(resolve, maxMs); timer.unref?.(); }),
   ]).finally(() => clearTimeout(timer));
 }
@@ -68,9 +100,22 @@ export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise
 export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverResult> {
   const existing = running.get(conn.hostKey);
   if (existing) return existing;
-  const job = handover(conn).finally(() => running.delete(conn.hostKey));
+  const startedAt = Date.now();
+  const job = handover(conn).finally(() => {
+    running.delete(conn.hostKey);
+    // Only a drain that began after the nudge has seen what the nudge was about.
+    const d = due.get(conn.hostKey);
+    if (d && d.at <= startedAt) { due.delete(conn.hostKey); d.resolve(); }
+  });
   running.set(conn.hostKey, job);
   return job;
+}
+
+/** Tests only. */
+export function _resetOfflineHandoverForTesting(): void {
+  running.clear();
+  for (const d of due.values()) d.resolve();
+  due.clear();
 }
 
 async function handover(conn: HandoverConnection): Promise<HandoverResult> {
