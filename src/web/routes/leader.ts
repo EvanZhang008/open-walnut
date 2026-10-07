@@ -17,7 +17,8 @@ leaderRouter.get('/leader', async (_req: Request, res: Response, next: NextFunct
     if (CLOUD_MODE) {
       const { getBackupLeader } = await import('../../core/leader/backup-leader.js')
       const leader = await getBackupLeader()
-      res.json({ role: 'backup', ...(leader ? leader.status() : {}) })
+      const { getV1Forward } = await import('../v1-forward/proxy.js')
+      res.json({ role: 'backup', ...(leader ? leader.status() : {}), forward: getV1Forward().status() })
       return
     }
     const { backupLeaderAllowed, hostLeaderStates } = await import('../../core/leader/primary-leader.js')

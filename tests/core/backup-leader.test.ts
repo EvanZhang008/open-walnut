@@ -223,3 +223,17 @@ describe('backup leader: a companion restart', () => {
     expect(again.leader.isLeading()).toBe(true)
   })
 })
+
+describe('backup leader: what the heartbeat says of the user\'s setting', () => {
+  it('records whether the user lets the companion stand in, from the last heartbeat', () => {
+    const c = cluster(['devbox'])
+    expect(c.leader.status().backupAllowed).toBeNull()
+    c.leader.noteHeartbeat({ walnutId: WALNUT, backup: true })
+    expect(c.leader.status().backupAllowed).toBe(true)
+    c.leader.noteHeartbeat({ walnutId: WALNUT, backup: false })
+    expect(c.leader.status().backupAllowed).toBe(false)
+    // Anything but true is a no: an older Mac's heartbeat that says nothing.
+    c.leader.noteHeartbeat({ walnutId: WALNUT })
+    expect(c.leader.status().backupAllowed).toBe(false)
+  })
+})

@@ -176,11 +176,93 @@ instead of asking the Mac (which waited 5 s and gave up while the Mac slept). Th
 Mac's clock), so a companion restart asks for nothing again. A companion
 without the route answers 404, and the Mac rests the lane for 10 minutes.
 
+## One request path on the companion
+
+The companion is the same Walnut server with a public address. While the Mac
+answers, a phone's `/api/v1` call to the companion is carried to the Mac and
+answered there; while it does not, the companion's own route answers it. The
+phone keeps one address, and no route needs its own relay to reach the Mac.
+
+```
+phone ──HTTPS──► companion  /api/v1 forward (src/web/v1-forward/proxy.ts)
+                   │ the Mac answers?  yes: session.control "server.http" over /bridge
+                   │                   no:  the companion's own route
+                   ▼
+                 Mac's daemon ──► Mac server: runForwardedCall (target.ts)
+                                  loopback call to its own /api/v1, as a paired client
+```
+
+**When the Mac answers** (all of them, from the companion's view):
+
+- the Mac's bridge is connected and its heartbeat is fresh (less than
+  min(three beats, the takeover window) old);
+- the companion leads no host;
+- the user allows the companion to stand in (`cloud_bridge.backup_leader`,
+  carried on every heartbeat as `backup`). Off: the companion answers every call
+  itself, as it did before;
+- the Mac knows `server.http` (an older Mac answers "unknown control action",
+  and it is not asked again for 10 minutes);
+- no forward since the Mac was last heard went out and got no answer.
+
+**Routes the companion keeps**, whatever the Mac does (`policy.ts`, one table
+both boxes read): event and session streams; message sends (they have their own
+lane); the Personal AI chat (its own relay to the Mac carries the turns the
+companion answered alone, so the Mac adopts them); identity (`devices`, `setup`, `status`, `canary`, `me`, `instance`,
+`routes`); bytes (media, voice, file content, images, note attachments, a
+letter's document); the phone's own health and places data; the task copy
+(`tasks`, `focus`, except a task's Board); paged session lists and
+transcripts; session launch. A call to
+any of these is answered there and never sent. The companion's own op calls (its
+Personal AI, its gateway) keep their own path too: they are the companion
+answering itself, never a phone on the Mac.
+
+**What crosses**: the method, the path under `/api/v1` with its query, a JSON
+body of at most 1 MB, and the content and cache headers. No credential, no
+cookie, no Walnut caller header. The Mac refuses a path outside `/api/v1`, a dot
+segment (encoded or not), a doubled slash, a line break, a body whose size does
+not match, and any route the companion keeps, before any route runs. It runs the
+call against its own server over loopback with `x-walnut-origin: remote-http`,
+so the call has exactly the rights of a paired phone: an op only this Mac may
+run (`health_status`, a `remote: 'deny'` op) is refused as it is for any phone.
+A reply of at most 256 KB comes back with its status and headers (content,
+cache, `x-walnut-*`); the companion marks every reply `X-Walnut-Answered-By:
+primary` or `companion`.
+
+**When a forward fails**:
+
+| What happened | Read | Write |
+|---|---|---|
+| Never sent (no bridge lane) | answered here | answered here |
+| The Mac refused it before the route ran | answered here | answered here |
+| The Mac is too old | answered here, 10 minutes rest | answered here, 10 minutes rest |
+| Sent, no answer in time (8 s read, 25 s write) | answered here; the Mac is not asked again until it is heard | 504 `primary_timeout`: it may have been applied, check before trying again |
+| The reply is over 256 KB | answered here | the Mac's status, and a note that it was applied |
+
+A write is never run on both boxes: once it was sent, only the Mac's answer or
+"it may have been applied" comes back. At most 16 reads are in flight; more are
+answered here.
+
+**What it costs**: while the Mac answers, a read takes one bridge round trip
+more than before. A Mac that falls asleep makes the first call wait out its
+budget (8 s for a read); every later call is answered at once, and after
+min(three beats, the takeover window) of silence nothing waits at all.
+
+**Trust**: the forward gives the companion the rights of a paired phone on the
+Mac, never more (a Mac-only op stays refused). Every phone call already passes
+through the companion, so a companion that is broken into already sees what the
+phone sends. The forward is gated on the user's backup leader setting all the
+same.
+
+`GET /api/leader` on the companion shows `forward`: how many calls went to the
+Mac, how many were answered here and why, writes left unanswered, and the last
+decision. `WALNUT_COMPANION_FORWARD=0` turns the forward off.
+
 ## Settings
 
 `cloud_bridge.backup_leader` (Settings, Phones & Cloud, "Cloud companion takes
 over"), default on. Off: every host keeps to what it can do alone while the Mac
-is away. A change reaches every host and the companion at once.
+is away, and the companion answers every phone call itself. A change reaches
+every host and the companion at once.
 
 ## Scenarios
 
@@ -205,6 +287,13 @@ is away. A change reaches every host and the companion at once.
 | Mac asleep, the companion writes a task | written there and queued; the Mac's next manifest does not undo it; the Mac's row comes back once the Mac applied it |
 | The companion lost its copy | the 5-minute round finds it and sends every row again |
 | An older companion (no `/bridge/replica`) | the Mac rests the lane; the companion keeps importing the projection |
+| Mac up, the phone asks the companion for usage | the Mac answers (the companion alone has no usage data) |
+| Mac up, the phone writes the heartbeat checklist | written once, on the Mac; the companion's file is not touched |
+| Mac up, the phone runs an op only the Mac may run | refused by the Mac, as for any phone |
+| Mac asleep, the phone reads | the first read waits up to 8 s, then the companion answers; later ones at once |
+| Mac asleep mid-write | 504 that says it may have been applied; never run a second time on the companion |
+| "Cloud companion takes over" off | the companion answers every call itself |
+| An older Mac (no `server.http`) | the companion answers, and asks again 10 minutes later |
 
 ## Tests
 
@@ -236,6 +325,14 @@ is away. A change reaches every host and the companion at once.
   on the companion, a new one within seconds, task detail from the copy while
   the Mac sleeps, the companion's own write delivered and its row the Mac's
   again after the wake).
+- One request path: `tests/web/routes/v1-forward-policy.test.ts` (the route
+  table, paths, headers), `tests/web/routes/v1-forward-target.test.ts` (the
+  Mac's half against a real HTTP server and through the relay entry),
+  `tests/web/routes/v1-forward-proxy.test.ts` (every decision of the
+  companion's half), and `tests/e2e/companion-forward-live-e2e.test.ts` (a real
+  Mac server and daemon, a real cloud-mode companion: usage, a read and a write
+  answered by the Mac, a Mac-only op refused, the setting off and on, the Mac
+  asleep and awake).
 
 ## Not yet
 
@@ -246,3 +343,12 @@ is away. A change reaches every host and the companion at once.
   Messages between a host's sessions already are (docs/plan/daemon-first-hosts.md
   "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).
+- Answers the companion gives alone while the Mac is away for what only the Mac
+  holds today (model options, usage, search): copies of those stores, and
+  session controls sent straight to the host's daemon while the companion leads.
+- Search on a host while the Mac is away, over its own copy (keyword first; the
+  Mac's vectors and a query embedder for meaning). While the Mac answers, search
+  stays on the Mac.
+- Calls the forward cannot carry yet: a device's own identity (`devices/self`,
+  `instance`, `routes` stay the companion's), replies over 256 KB, and non-JSON
+  bodies.

@@ -24,6 +24,8 @@ const PRIMARY_ALIAS = '__local__'
 
 export interface LeaderHeartbeat {
   walnutId?: unknown
+  /** The user lets the companion lead while the primary is away. */
+  backup?: unknown
   /** The primary is going down for a restart and expects to be back within this. */
   restartingMs?: unknown
 }
@@ -43,6 +45,8 @@ export interface BackupLeaderStatus {
   leading: Array<{ host: string; epoch: number; since: number }>
   primaryLastSeenAt: number
   primaryHeard: boolean
+  /** What the primary's last heartbeat said of `cloud_bridge.backup_leader`; null before one. */
+  backupAllowed: boolean | null
   restartingUntil: number | null
   lastDecision: string | null
   takeoverMs: number
@@ -57,6 +61,7 @@ export function createBackupLeader(deps: BackupLeaderDeps) {
   const bootAt = deps.now()
   let walnutId: string | undefined
   let lastHeartbeatAt: number | null = null
+  let backupAllowed: boolean | null = null
   let restartingUntil: number | null = null
   let lastDecision: string | null = null
   const leading = new Map<string, { epoch: number; since: number }>()
@@ -85,6 +90,7 @@ export function createBackupLeader(deps: BackupLeaderDeps) {
   /** A heartbeat from the primary's own bridge (events-v1 trusts only that one). */
   function noteHeartbeat(hb: LeaderHeartbeat): void {
     lastHeartbeatAt = deps.now()
+    backupAllowed = hb.backup === true
     const ms = typeof hb.restartingMs === 'number' && hb.restartingMs > 0 ? Math.min(hb.restartingMs, MAX_RESTART_MS) : 0
     restartingUntil = ms > 0 ? lastHeartbeatAt + ms : null
     if (typeof hb.walnutId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(hb.walnutId) && hb.walnutId !== walnutId) {
@@ -178,6 +184,7 @@ export function createBackupLeader(deps: BackupLeaderDeps) {
       leading: [...leading].map(([host, l]) => ({ host, epoch: l.epoch, since: l.since })),
       primaryLastSeenAt: lastHeartbeatAt ?? bootAt,
       primaryHeard: lastHeartbeatAt !== null,
+      backupAllowed,
       restartingUntil,
       lastDecision,
       takeoverMs: deps.takeoverMs,

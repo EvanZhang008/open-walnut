@@ -1824,6 +1824,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // First-boot claim flow (cloud mode) — publicly reachable by design; the
   // auth middleware exempts /api/v1/setup/* (see CLOUD_EXEMPT_PREFIXES).
   app.use('/api/v1/setup', setupRouter)
+  // The companion is this server plus a public address: while the Mac answers,
+  // a phone's call is carried to it and answered there (web/v1-forward/).
+  if (CLOUD_MODE) {
+    const { getV1Forward } = await import('./v1-forward/proxy.js')
+    app.use('/api/v1', getV1Forward().middleware)
+  }
   // Frozen REST+SSE facade for mobile clients (see docs/reference/api-v1.md).
   app.use('/api/v1', apiV1Router)
   // Session talk endpoints (additive): send into + stream out of CC sessions.

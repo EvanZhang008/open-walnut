@@ -817,6 +817,10 @@ export type SessionControlAction =
   // A cloud replica relays the catalogue, module bytes, ops, HTTP, and lifecycle.
   | 'server.plugin-runtime' | 'server.plugin-web-module'
   | 'server.plugin-ops' | 'server.plugin-op' | 'server.plugin-http' | 'server.plugin-manage'
+  // Any /api/v1 call a phone made to the cloud companion, run here as that
+  // paired client while this box answers (web/v1-forward/: the companion is
+  // this server plus a public address).
+  | 'server.http'
   // Run ONE Personal AI chat turn on the answering box's OWN engine, so a
   // phone talking to a cloud replica gets the Mac's configured engine
   // (claude-code) instead of the replica's in-process fallback loop.
@@ -1343,6 +1347,16 @@ export async function handleSessionControlRelay(
         const outcome = await handlePluginControlRelay(action, p, origin);
         if (!outcome.ok) throw new SessionControlError(outcome.error, outcome.status);
         result = outcome.result;
+        break;
+      }
+      case 'server.http': {
+        const { runForwardedCall, ForwardError } = await import('../../web/v1-forward/target.js');
+        try {
+          result = await runForwardedCall(p, origin) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof ForwardError) throw new SessionControlError(err.message, err.status, { code: err.code });
+          throw err;
+        }
         break;
       }
       // ── Phase 4 box-level family: one cloud task op, applied synchronously ──

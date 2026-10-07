@@ -77,7 +77,18 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `primary_unreachable` | 503 | `POST /time/heartbeats` did not persist the batch: the primary could not be reached, or it was reached and its day-file write did not land. Keep the batch queued and retry; sample `id`s make the retry a no-op for anything that did land |
 | `primary_unreachable` (health) | 503 | Any `/health/*` call that could not be served by the primary (bridge down, its server down, a primary that predates the action, or a sync whose SQLite transaction did not commit). Nothing was stored; keep the batch and retry |
 | `store_mismatch` | 409 | `POST /health/sync` named a `storeId` the primary no longer has (the health data was deleted). Extra `storeId` is the new id: clear every sync anchor and resync from scratch under it |
+| `primary_timeout` | 504 | Cloud companion only: a write it carried to the primary got no answer in time. It may have been applied there; read before trying again |
 | `internal` | 500 | Unhandled server error |
+
+**On the cloud companion**, a call is answered by the primary while the primary
+answers (its bridge is up, its heartbeat is fresh, and "Cloud companion takes
+over" is on), so a route marked "501 on REPLICA" below answers as it does on the
+primary. Otherwise the companion answers it as described. Every reply from the
+companion says which box answered in `X-Walnut-Answered-By` (`primary` or
+`companion`). Streams, message sends, conversations, device identity, byte
+routes, health and places data, tasks and focus, session lists and transcripts,
+and session launch are always the companion's. See `docs/plan/walnut-control-plane.md`, "One request
+path on the companion".
 
 ## Endpoints
 
