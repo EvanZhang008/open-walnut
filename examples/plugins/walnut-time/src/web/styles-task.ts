@@ -6,7 +6,7 @@
  * from the page. Every class is `wt-` prefixed, every colour a theme token.
  */
 export const TASK_CSS = `
-.wt-fact {
+.wt-fact, .wt-chip {
   --wt-human: var(--accent);
   --wt-agent: #af52de;
 }
@@ -34,6 +34,30 @@ export const TASK_CSS = `
 .wt-fact-v.is-human { color: var(--wt-human); }
 .wt-fact-v.is-agent { color: var(--wt-agent); }
 .wt-fact-sep { opacity: 0.6; }
+
+/* ── session.meta pinned to the header: a chip sized like the row's own ── */
+
+.wt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.wt-chip:hover { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); }
+.wt-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wt-chip-clock { flex-shrink: 0; opacity: 0.85; }
+.wt-chip .wt-fact-v { font-weight: 500; }
 
 /* ── The task page ── */
 

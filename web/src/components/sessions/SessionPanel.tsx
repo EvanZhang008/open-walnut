@@ -73,7 +73,8 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
-import { PanelCountRow, SessionKebabSection, SessionMetaFacts } from './SessionKebabSection';
+import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
+import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -1979,8 +1980,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             {/* This row's width is very precious: it holds only the host's own tools, and
                 every new chip pushes them into "...". Do not add more here. Plugins
                 (walnut.ui.slot 'session.meta') and any other fact about the session go
-                in the ⋮ menu (SessionMetaFacts in SessionKebabSection.tsx). 2026-10-06: a time chip
-                put here was taken out at the user's request. */}
+                in the ⋮ menu (SessionMetaFacts.tsx). The one exception is a fact the USER
+                pinned from its row in that menu ("Header", off by default): it shows here
+                as a chip and is the first to move into "...". 2026-10-06: a time chip put
+                here by default was taken out at the user's request, then came back as this
+                opt-in. */}
+            <PinnedSessionFacts sessionId={sessionId} taskId={session?.taskId} hid={hid} />
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
             <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} />
             {activityAge && (

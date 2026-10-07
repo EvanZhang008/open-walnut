@@ -69,10 +69,11 @@ export interface SettingsContribution {
  * - `'task.meta'`: with a task's id, created and updated time, in the task details popup
  *   and on the `/tasks/:id` page.
  * - `'session.meta'`: at the top of a session's ⋮ menu, under the Panels row. The
- *   menu closes when your value navigates.
+ *   menu closes when your value navigates. The user may pin the fact from that row to
+ *   the session's header (off by default); there it renders with `placement: 'header'`.
  *
- * There is deliberately no slot on a session's header row: its width belongs to the
- * host's own tools.
+ * There is no slot a plugin puts on a session's header row by itself: its width belongs
+ * to the host's own tools, and only the user decides to spend it.
  */
 export type SlotTarget = 'task.meta' | 'session.meta'
 
@@ -86,6 +87,13 @@ export interface SessionMetaSlotProps {
   sessionId: string
   /** The session's task, when it has one. */
   taskId?: string
+  /**
+   * Where the value is drawn. `'menu'` (and absent, on an older host): beside its label
+   * in the ⋮ menu. `'header'`: the user pinned it to the session's header row, where the
+   * host prints NO label, so render the shortest form that still says what it is (an
+   * icon and a number) and name it in the hover text.
+   */
+  placement?: 'menu' | 'header'
   navigate(path: string): void
 }
 

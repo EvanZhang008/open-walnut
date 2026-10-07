@@ -24,7 +24,8 @@ import { createTaskTimeStore } from './web/task-time-store'
  * Sidebar is for the surfaces you live in.
  *
  * The slots (`walnut.ui.slot`) are where a task's own time shows: one "Time" fact with
- * the task's other facts in its details, and one at the top of each session's menu. Both
+ * the task's other facts in its details, and one at the top of each session's menu (a
+ * chip on the session header too, when the user pins it there from that row). All
  * lead to the App's task page (`/task/<id>`), which is not a tab: it is a page about
  * one task.
  */

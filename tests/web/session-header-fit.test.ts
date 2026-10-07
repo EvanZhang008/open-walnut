@@ -11,7 +11,7 @@
  * down full → dot → letters before it hides anything.
  */
 import { describe, it, expect } from 'vitest';
-import { TOOL_ITEMS } from '../../web/src/components/sessions/useSessionHeaderFit';
+import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from '../../web/src/components/sessions/useSessionHeaderFit';
 import {
   fitToolRow, toolRowWidth, fitTitleMeta, classifyTitleMetaChild,
   ASSUMED_TOOL_WIDTH, ASSUMED_WINDOW_WIDTH, ASSUMED_LETTER_WIDTH, ASSUMED_DOT_WIDTH,
@@ -222,6 +222,28 @@ describe('fitToolRow', () => {
       }
       previous = now;
     }
+  });
+});
+
+describe('a session fact the user pinned to the tool row', () => {
+  it('is a chip named by its title that leaves before every chip of the host\'s own', () => {
+    const el = { dataset: { headerName: 'Time' } } as unknown as HTMLElement;
+    expect(toolItemSpec(`${SLOT_ID_PREFIX}walnut-time:session-time`, el)).toEqual({ kind: 'chip', priority: 6.5, name: 'Time' });
+    expect(toolItemSpec(`${SLOT_ID_PREFIX}x:y`)).toMatchObject({ name: 'Plugin' });
+    expect(toolItemSpec('terminal')).toBe(TOOL_ITEMS.terminal);
+    // An id the row does not know is not an item at all, so a stray attribute measures nothing.
+    expect(toolItemSpec('mystery')).toBeUndefined();
+
+    const slot = { id: `${SLOT_ID_PREFIX}walnut-time:session-time`, kind: 'chip' as const, priority: 6.5, width: 70 };
+    const row = [...ROW, slot];
+    // Everything fits at the full width plus the slot's 70 and a gap.
+    expect(fitToolRow(row, ROW_WIDTH + 76, OPTS).inMore).toEqual([]);
+    // The first chip to go is the slot, ahead of Terminal; Terminal follows only after it.
+    const order: string[] = [];
+    for (let w = ROW_WIDTH + 76; w >= 100; w--) {
+      for (const id of fitToolRow(row, w, OPTS).inMore) if (!order.includes(id) && id !== 'locate' && id !== 'popout') order.push(id);
+    }
+    expect(order.slice(0, 2)).toEqual([slot.id, 'terminal']);
   });
 });
 

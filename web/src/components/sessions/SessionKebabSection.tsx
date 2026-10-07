@@ -14,7 +14,6 @@ import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { inboxChipTitle } from '@/components/inbox/session-letters';
 import type { SessionSplitView } from './sessionSplitView';
 import { sessionKebabMetaRows } from './session-kebab-meta';
-import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import {
   useSessionPanelMode,
   MIN_PANELS,
@@ -70,32 +69,6 @@ export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void })
         ))}
       </div>
     </div>
-  );
-}
-
-/**
- * Plugin facts about the session (walnut.ui.slot 'session.meta'), e.g. the time it
- * took: one labelled row each, at the TOP of the ⋮ menu so they are seen without
- * scrolling a tall menu. They live in this menu and never on the header row, whose
- * width belongs to the host's own tools. A plugin that navigates closes the menu.
- */
-export function SessionMetaFacts({ sessionId, taskId, onAfterAction }: { sessionId: string; taskId?: string; onAfterAction?: () => void }) {
-  return (
-    <PluginSlots
-      target="session.meta"
-      props={{ sessionId, ...(taskId ? { taskId } : {}) }}
-      onNavigate={onAfterAction}
-      wrap={(entry, node) => (
-        <PluginSlotFact
-          entry={entry}
-          className="task-kebab-tier task-kebab-fact"
-          labelClassName="task-kebab-tier-label task-kebab-fact-label"
-          valueClassName="task-kebab-fact-value"
-        >
-          {node}
-        </PluginSlotFact>
-      )}
-    />
   );
 }
 

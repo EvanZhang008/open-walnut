@@ -9,6 +9,8 @@
  * Every target is a labelled fact (the task's metadata, the top of the session menu), so a
  * surface wraps each slot in <PluginSlotFact>, which prints the slot's title in the
  * surface's own label style and hides the whole fact while the plugin renders nothing.
+ * The one unlabelled place is the session header, and only for the session facts the
+ * user pinned there (web/src/components/sessions/SessionMetaFacts.tsx).
  */
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -29,6 +31,8 @@ interface PluginSlotsProps<T extends PluginSlotTarget> {
   props: Omit<PluginSlotPropsByTarget[T], 'navigate'>
   /** Wrap each rendered slot. Default: rendered as is. */
   wrap?: (entry: SlotEntry, node: ReactNode) => ReactNode
+  /** Only these slots (the ones the user pinned to a session header). Default: all. */
+  include?: (entry: SlotEntry) => boolean
   /** A wrapper element around all of them, rendered only when there is at least one. */
   className?: string
   /**
@@ -39,7 +43,7 @@ interface PluginSlotsProps<T extends PluginSlotTarget> {
   onNavigate?: () => void
 }
 
-export function PluginSlots<T extends PluginSlotTarget>({ target, props, wrap, className, onNavigate }: PluginSlotsProps<T>) {
+export function PluginSlots<T extends PluginSlotTarget>({ target, props, wrap, include, className, onNavigate }: PluginSlotsProps<T>) {
   const ui = usePluginUi()
   const routerNavigate = useNavigate()
   const navigate = useCallback((path: string) => {
@@ -54,9 +58,9 @@ export function PluginSlots<T extends PluginSlotTarget>({ target, props, wrap, c
   }, [routerNavigate, onNavigate])
   const entries = useMemo(
     () => ui.slots
-      .filter((entry) => entry.value.target === target)
+      .filter((entry) => entry.value.target === target && (!include || include(entry)))
       .sort((a, b) => ((a.value.order ?? DEFAULT_ORDER) - (b.value.order ?? DEFAULT_ORDER)) || a.key.localeCompare(b.key)),
-    [ui.slots, target],
+    [ui.slots, target, include],
   )
   if (entries.length === 0) return null
   const nodes = entries.map((entry) => {
@@ -88,6 +92,8 @@ interface PluginSlotFactProps {
   valueClassName?: string
   /** Text before the label, for a fact inside a run of text (" · "). */
   separator?: string
+  /** After the value, shown with it (the menu's pin-to-header toggle). */
+  trailing?: ReactNode
 }
 
 /**
@@ -95,7 +101,7 @@ interface PluginSlotFactProps {
  * hidden while the value is empty (the plugin rendered null: no data, not loaded yet, a
  * replica without the store), so a label never stands alone.
  */
-export function PluginSlotFact({ entry, children, className, labelClassName, valueClassName, separator }: PluginSlotFactProps) {
+export function PluginSlotFact({ entry, children, className, labelClassName, valueClassName, separator, trailing }: PluginSlotFactProps) {
   const valueRef = useRef<HTMLSpanElement>(null)
   const [empty, setEmpty] = useState(true)
   useLayoutEffect(() => {
@@ -117,6 +123,7 @@ export function PluginSlotFact({ entry, children, className, labelClassName, val
       {/* No label while empty: a hidden fact must not even count as a label. */}
       {!empty && <>{separator}<span className={labelClassName}>{entry.value.title}</span>{' '}</>}
       <span ref={valueRef} className={valueClassName}>{children}</span>
+      {!empty && trailing}
     </span>
   )
 }

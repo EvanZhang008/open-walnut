@@ -22,7 +22,7 @@ Each tab is a real URL, so any of them can be bookmarked or linked:
 Two slots (`walnut.ui.slot`) bring the numbers to the work itself, so nobody has to open the App to ask "how long did this take". Each is one short "Time" fact, `You 25m · Agent 1h 12m` (all time); hover it for Total, Today and the last 7 days of both clocks:
 
 - **Task** (`task.meta`): with the task's id and dates, in the Home task details popup, and in the side rail of the task page.
-- **Session** (`session.meta`): at the top of the session's ⋮ menu, under Panels. The session header's tool row stays the host's own.
+- **Session** (`session.meta`): at the top of the session's ⋮ menu (right-click the header for the same menu), under Panels. Its "Header" toggle, off by default, also shows it on every session's header as a chip, a clock then `25m · 1h 12m`; a narrow header moves the chip into its "..." menu first.
 
 Both are links into one more page of the App, which can be bookmarked like the tabs:
 

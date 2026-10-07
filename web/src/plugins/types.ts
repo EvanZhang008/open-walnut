@@ -112,6 +112,8 @@ export interface PluginTaskMetaSlotProps {
 export interface PluginSessionMetaSlotProps {
   sessionId: string
   taskId?: string
+  /** 'header' when the user pinned the fact to the session header (no label there). */
+  placement?: 'menu' | 'header'
   navigate(path: string): void
 }
 

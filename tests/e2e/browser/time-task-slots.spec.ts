@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { clampColumn } from './composer-controls-overflow-helpers'
 
 /**
  * How long a task took, where the task is: the walnut-time plugin's two Time facts
@@ -23,8 +24,10 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
  * a second task have nothing recorded.
  *
  * What it pins: each fact is ONE short value with its surface's own facts (the task
- * details' metadata line, the top of the session menu), never a block and never a chip
- * on the session header's row; the hover text carries all six numbers; each leads to
+ * details' metadata line, the top of the session menu), never a block, and no chip on
+ * the session header's row until the user pins one there from its menu row (then on
+ * every session's header, kept across a reload, the first chip to move into "..."
+ * when the column is narrow); the hover text carries all six numbers; each leads to
  * the task page, the session's with that session chosen; the page lists the days newest
  * first with each session's share and the time outside any session, names sessions by
  * title and never by id; nothing recorded means no fact and no stray label; the end of
@@ -35,6 +38,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 const SHOTS = '/tmp/time-task-slots'
 const TASK = 't-time-slots'
 const SID_A = 'sess-time-slots-a'
+const PINS_KEY = 'open-walnut-session-header-pins'
+const SLOT_KEY = 'walnut-time:session-time'
 
 interface Fixture {
   port: number
@@ -113,13 +118,19 @@ function watchErrors(page: Page): string[] {
   return errors
 }
 
-async function loadHome(page: Page): Promise<void> {
-  await page.addInitScript(() => {
+async function loadHome(page: Page, pins?: string[]): Promise<void> {
+  // Every test states the header pins it starts from (none unless it says so), so no
+  // test inherits another's choice through the shared fixture's synced preferences.
+  await page.addInitScript(({ key, value }) => {
     try {
       localStorage.setItem('open-walnut-home-chat-visible', '0')
       sessionStorage.removeItem('open-walnut-home-session-columns')
+      if (!sessionStorage.getItem('pw-pins-set')) {
+        localStorage.setItem(key, value)
+        sessionStorage.setItem('pw-pins-set', '1')
+      }
     } catch { /* storage off */ }
-  })
+  }, { key: PINS_KEY, value: JSON.stringify(pins ?? []) })
   await page.goto(`${base()}/`)
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 60_000 })
 }
@@ -234,21 +245,25 @@ test('the task details carry the time as one fact, and lead to the task\'s days'
   expect(errors).toEqual([])
 })
 
-test('a session\'s time is a fact in its menu, never a chip on the header row', async ({ page }) => {
+test('a session\'s time is a fact in its menu, and no chip on the header row by default', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
   const col = await openColumnFromDetails(page, SID_A)
-  // The header row is the host's own tools, and nothing else.
+  // The header row is the host's own tools, and nothing else, until the user pins a fact.
   await expect(col.locator('.session-panel-header').getByTestId('time-session-fact')).toHaveCount(0)
-  await expect(col.locator('[data-header-id^="slot:"], .wt-slot-chip')).toHaveCount(0)
+  await expect(col.locator('[data-header-id^="slot:"], .wt-chip')).toHaveCount(0)
 
   const menu = await openMenu(page, col)
   const fact = menu.getByTestId('time-session-fact')
   await expect(cell(fact, 'you-total')).toHaveText('50m', { timeout: 30_000 })
   await expect(cell(fact, 'agent-total')).toHaveText('3h 02m')
-  // A labelled row at the top of the menu, right under Panels, seen without scrolling.
+  // A labelled row at the top of the menu, right under Panels, seen without scrolling;
+  // its "Header" toggle at the end, off.
   const row = menu.locator('.task-kebab-fact')
-  await expect(row).toHaveText('Time You 50m \u00b7 Agent 3h 02m')
+  await expect(row.locator('.task-kebab-fact-label')).toHaveText('Time')
+  await expect(row.locator('.task-kebab-fact-value')).toHaveText('You 50m \u00b7 Agent 3h 02m')
+  await expect(row.getByTestId('session-fact-pin')).toHaveText('Header')
+  await expect(row.getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
   await expect(fact).toHaveAttribute('title', /You: 50m total, 20m today, 50m in 7 days/)
   await expect(fact).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
   const [rowBox, menuBox, panelsBox] = await Promise.all([
@@ -270,9 +285,81 @@ test('a session\'s time is a fact in its menu, never a chip on the header row', 
   expect(errors).toEqual([])
 })
 
-test('nothing recorded means no Time fact and no stray label', async ({ page }) => {
+test('the menu row pins the time to every session header, kept across a reload', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
+  const col = await openColumnFromDetails(page, SID_A)
+  const header = col.locator('.session-panel-header')
+  const item = header.locator(`[data-header-id="slot:${SLOT_KEY}"]`)
+  await expect(item).toHaveCount(0)
+
+  // The same menu a right-click on the header opens: turn the row's "Header" on.
+  await header.click({ button: 'right', position: { x: 6, y: 6 } })
+  const menu = page.locator('.task-kebab-menu:visible').first()
+  await expect(menu).toBeVisible()
+  const pin = menu.getByTestId('session-fact-pin')
+  await expect(pin).toHaveAttribute('aria-pressed', 'false', { timeout: 30_000 })
+  await pin.click()
+  await expect(pin).toHaveAttribute('aria-pressed', 'true')
+  // The toggle is a setting, not an action: the menu stays open.
+  await expect(menu).toBeVisible()
+  const chip = item.getByTestId('time-session-chip')
+  await expect(chip).toBeVisible()
+  await expect(chip).toHaveText('50m \u00b7 3h 02m')
+  await expect(chip).toHaveAttribute('title', /Time on this session\nYou: 50m total/)
+  expect(await page.evaluate((key) => localStorage.getItem(key), PINS_KEY)).toBe(JSON.stringify([SLOT_KEY]))
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
+  // One line, the host's own chips still on it: every item's middle within a few px.
+  const middles = await col.locator('.session-meta-row-2').evaluate((row) =>
+    [...row.querySelectorAll<HTMLElement>('[data-header-id]')]
+      .filter((el) => el.dataset.hidden !== 'true' && el.getBoundingClientRect().width > 0)
+      .map((el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2 }))
+  expect(Math.max(...middles) - Math.min(...middles)).toBeLessThan(4)
+  await expect(header.locator('[data-header-id="files"]')).toBeVisible()
+  const headerBox = await header.boundingBox()
+  await page.screenshot({ path: `${SHOTS}/session-header-pinned.png`, clip: { x: headerBox!.x, y: headerBox!.y, width: headerBox!.width, height: headerBox!.height } })
+
+  // The chip leads where the menu row does.
+  await chip.click()
+  await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
+  await page.getByTestId('time-task-back').click()
+  await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
+
+  // Kept across a reload (the init script only seeds the first load of this tab).
+  await page.reload()
+  await expect(column(page, SID_A).locator(`[data-header-id="slot:${SLOT_KEY}"]`).getByTestId('time-session-chip'))
+    .toHaveText('50m \u00b7 3h 02m', { timeout: 30_000 })
+
+  // A narrow column: the pinned chip is the first to move into "...", where its row
+  // is named by the slot's title and says what the chip said.
+  await clampColumn(page, 300)
+  const narrow = column(page, SID_A)
+  await expect(narrow.locator(`[data-header-id="slot:${SLOT_KEY}"]`)).toHaveAttribute('data-hidden', 'true', { timeout: 15_000 })
+  await narrow.locator('.session-panel-header').getByRole('button', { name: /^More \(/ }).click()
+  const more = page.locator('.session-header-more-menu:visible').first()
+  const moreRow = more.getByRole('menuitem').filter({ hasText: 'Time' })
+  await expect(moreRow).toContainText('50m \u00b7 3h 02m')
+  const moreBox = await more.boundingBox()
+  await page.screenshot({ path: `${SHOTS}/session-header-more.png`, clip: { x: moreBox!.x - 4, y: moreBox!.y - 4, width: moreBox!.width + 8, height: moreBox!.height + 8 } })
+  await moreRow.click()
+  await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
+  await page.getByTestId('time-task-back').click()
+  await clampColumn(page, null)
+
+  // Off again from the same row: the chip leaves every header.
+  const again = await openMenu(page, column(page, SID_A))
+  await again.getByTestId('session-fact-pin').click()
+  await expect(again.getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
+  await expect(column(page, SID_A).locator(`[data-header-id="slot:${SLOT_KEY}"]`)).toHaveCount(0)
+  expect(await page.evaluate((key) => localStorage.getItem(key), PINS_KEY)).toBe('[]')
+  expect(errors).toEqual([])
+})
+
+test('nothing recorded means no Time fact and no stray label', async ({ page }) => {
+  const errors = watchErrors(page)
+  // Pinned, too: an empty value is no header item either.
+  await loadHome(page, [SLOT_KEY])
   const emptyTask = fixture!.slots.emptyTaskId
   const taskAnswer = answered(page, `/api/time/task/${emptyTask}`)
   const modal = await openDetails(page, emptyTask, 'Time empty fixture')
@@ -283,14 +370,19 @@ test('nothing recorded means no Time fact and no stray label', async ({ page }) 
   await page.keyboard.press('Escape')
 
   const SID_D = fixture!.slots.sessionIds[3]!
-  const col = await openColumnFromDetails(page, SID_D)
   const sessionAnswer = answered(page, `/api/time/session/${SID_D}`)
-  const menu = await openMenu(page, col)
+  const col = await openColumnFromDetails(page, SID_D)
   await sessionAnswer
+  const menu = await openMenu(page, col)
   await page.waitForTimeout(300)
+  const slotItem = col.locator(`[data-header-id="slot:${SLOT_KEY}"]`)
+  await expect(slotItem).toBeHidden()
+  await expect(col.getByTestId('time-session-chip')).toHaveCount(0)
+  await expect(col.locator('.session-panel-header').getByRole('button', { name: /^More \(/ })).toHaveCount(0)
   await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
   await expect(menu.locator('.task-kebab-fact')).toBeHidden()
   expect(await menu.locator('.task-kebab-tier-label').allTextContents()).not.toContain('Time')
+  await expect(menu.getByTestId('session-fact-pin')).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
@@ -316,8 +408,9 @@ test('the end of a turn refreshes the open menu', async ({ page }) => {
 /* LAST: it disables the plugin, and the fixture is shared by the whole file. */
 test('disabling the plugin takes both facts away without a reload', async ({ page }) => {
   const errors = watchErrors(page)
-  await loadHome(page)
+  await loadHome(page, [SLOT_KEY])
   const col = await openColumnFromDetails(page, SID_A)
+  await expect(col.getByTestId('time-session-chip')).toBeVisible({ timeout: 30_000 })
   const modal = await openDetails(page)
   await expect(modal.getByTestId('time-task-fact')).toBeVisible({ timeout: 30_000 })
 
@@ -332,5 +425,7 @@ test('disabling the plugin takes both facts away without a reload', async ({ pag
   await expect(menu.locator('.task-kebab-tier').filter({ hasText: 'Panels' })).toBeVisible()
   await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
   await expect(menu.locator('.task-kebab-fact')).toHaveCount(0)
+  // The pin outlives the plugin (it is the user's choice), but there is nothing to draw.
+  await expect(col.locator('[data-header-id^="slot:"]')).toHaveCount(0)
   expect(errors).toEqual([])
 })

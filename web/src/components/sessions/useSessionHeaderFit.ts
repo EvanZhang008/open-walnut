@@ -58,6 +58,21 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   close: { kind: 'fixed', priority: 0, name: 'Close' },
 };
 
+/** The prefix of a pinned plugin fact's id on the row (PinnedSessionFacts in SessionMetaFacts.tsx). */
+export const SLOT_ID_PREFIX = 'slot:';
+
+/**
+ * Kind, priority and name of a row item. A plugin fact the user pinned to the header
+ * is a chip that leaves before every chip of the host's own (priority past Terminal),
+ * and is named by the slot's title, which the row carries as `data-header-name`.
+ */
+export function toolItemSpec(id: string, el?: HTMLElement | null): { kind: ToolItemKind; priority: number; name: string } | undefined {
+  const own = TOOL_ITEMS[id];
+  if (own) return own;
+  if (!id.startsWith(SLOT_ID_PREFIX)) return undefined;
+  return { kind: 'chip', priority: 6.5, name: el?.dataset.headerName || 'Plugin' };
+}
+
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((id, i) => id === b[i]);
 
 /**
@@ -78,7 +93,7 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
       const id = el.dataset.headerId!;
       // A wrapper whose component rendered nothing (Fork without a task) is not an item.
       if (el.childElementCount === 0 && !el.textContent?.trim()) continue;
-      const spec = TOOL_ITEMS[id];
+      const spec = toolItemSpec(id, el);
       if (!spec) continue;
       if (el.dataset.hidden !== 'true') {
         const w = el.getBoundingClientRect().width;

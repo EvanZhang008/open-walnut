@@ -791,9 +791,11 @@ export function activate(walnut: WalnutWebApi) {
 | `target` | Where it renders | Props |
 |---|---|---|
 | `task.meta` | With the task's id, created and updated time, in the task details popup and in the side rail of the `/tasks/:id` page | `taskId`, `navigate` |
-| `session.meta` | At the top of a session's ⋮ menu, under the Panels row | `sessionId`, `taskId` (when the session has one), `navigate` |
+| `session.meta` | At the top of a session's ⋮ menu, under the Panels row | `sessionId`, `taskId` (when the session has one), `placement`, `navigate` |
 
-A slot is a fact that leads somewhere, not a screen of its own: keep the value to a few words on one line, and send a click to a subpath of your App with `navigate` (the session menu closes when you do). Return `null` while there is nothing to show; Walnut then hides the label too. There is deliberately no slot on a session's header row: its width belongs to Walnut's own tools.
+A slot is a fact that leads somewhere, not a screen of its own: keep the value to a few words on one line, and send a click to a subpath of your App with `navigate` (the session menu closes when you do). Return `null` while there is nothing to show; Walnut then hides the label too.
+
+A plugin cannot put anything on a session's header row by itself: its width belongs to Walnut's own tools. The user can: each `session.meta` row in the menu has a "Header" toggle (off by default), and a fact turned on there shows on every session's header as well, rendered with `placement: 'header'`. The header prints no label, so draw the shortest form that still says what it is (an icon and a number) and name it in the hover text. A narrow header moves it into its "..." menu first.
 
 ```tsx compile=web-slots
 import type { AppProps, SessionMetaSlotProps, TaskMetaSlotProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
@@ -811,11 +813,11 @@ export function activate(walnut: WalnutWebApi) {
       </button>
     )
   }
-  function SessionNotes({ taskId, navigate }: SessionMetaSlotProps) {
+  function SessionNotes({ taskId, placement, navigate }: SessionMetaSlotProps) {
     if (!taskId) return null
     return (
-      <button type="button" onClick={() => navigate(`${app.path}/task/${encodeURIComponent(taskId)}`)}>
-        On the task
+      <button type="button" title="Notes on this task" onClick={() => navigate(`${app.path}/task/${encodeURIComponent(taskId)}`)}>
+        {placement === 'header' ? '3' : 'On the task'}
       </button>
     )
   }
