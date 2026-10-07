@@ -149,6 +149,57 @@ const emptyTask = {
   pin_order: -2,
   created_at: now,
 }
+/**
+ * PW_TIME_APP_DETAIL=1 (with SLOTS) gives the slot task the rest of a busy task's details,
+ * for the task details popup (task-detail-popup.spec.ts): a parent, three subtasks (one
+ * done), a priority, tags, both dates, and a long Markdown description and note.
+ */
+const DETAIL = SLOTS && process.env.PW_TIME_APP_DETAIL === '1'
+const PARENT_TASK = 't-time-parent'
+const inDays = (days: number) => localDate(Date.now() + days * 86_400_000)
+const detailFields = DETAIL ? {
+  priority: 'immediate',
+  tags: ['area:console', 'review'],
+  start_date: inDays(0),
+  due_date: inDays(3),
+  parent_task_id: PARENT_TASK,
+  description: [
+    '## What this is',
+    'Show how long a task took, **you** and the **agent** apart, where the task is: its details and each session\'s menu.',
+    '',
+    '- Total, today and the last 7 days in the hover text',
+    '- A click opens the day by day page',
+    '- Never summed: the two clocks run at the same time',
+    '',
+    'Names stay names: \u91cd\u547d\u540d \u2014 a session is its title, never its id.',
+  ].join('\n'),
+  note: [
+    '## Status',
+    'The facts moved out of the header row; the menu row can pin one back, off by default.',
+    '',
+    '### Next',
+    '1. Redesign the details popup',
+    '2. Check it in the Mac app (WebKit)',
+    '',
+    '`/apps/walnut-time~main/task/<id>` is the page a click opens. ' + 'A long line that wraps, so the reading width shows. '.repeat(4),
+  ].join('\n'),
+} : {}
+const detailTasks = DETAIL ? [
+  { id: PARENT_TASK, title: 'Time tracking epic', status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none', project: 'Console', source: 'local', created_at: now, updated_at: now },
+  ...['Collect the agent clock from turn ends', 'Draw the day by day page', 'Retire the header chip'].map((title, i) => ({
+    id: `t-time-sub-${i + 1}`,
+    title,
+    status: i === 0 ? 'done' : 'todo',
+    phase: i === 0 ? 'COMPLETE' : i === 1 ? 'IN_PROGRESS' : 'TODO',
+    priority: 'none',
+    project: 'Console',
+    source: 'local',
+    parent_task_id: SLOT_TASK,
+    created_at: now,
+    updated_at: now,
+    ...(i === 0 ? { completed_at: now } : {}),
+  })),
+] : []
 const slotTask = {
   id: SLOT_TASK,
   title: 'Time slots fixture task',
@@ -170,11 +221,12 @@ const slotTask = {
   summary: '',
   note: '',
   subtasks: [],
+  ...detailFields,
 }
 
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({
   version: 1,
-  tasks: [...(SLOTS ? [slotTask, emptyTask] : []), ...DENSE_TASKS.map((spec, i) => ({
+  tasks: [...(SLOTS ? [slotTask, emptyTask] : []), ...detailTasks, ...DENSE_TASKS.map((spec, i) => ({
     id: taskIds[i],
     title: spec.title,
     status: 'in_progress',

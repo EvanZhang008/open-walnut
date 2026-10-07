@@ -135,7 +135,7 @@ export function SessionRecapLine({ sessionId, session, className, style }: {
   if (!recap) return null;
   return (
     <div className={className} style={style} title={recap} data-testid="session-recap-line">
-      💬 {recap}
+      {recap}
     </div>
   );
 }

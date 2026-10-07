@@ -1,23 +1,15 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { SESSION_MODE_LABELS } from '@open-walnut/core';
-import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
-import { renderNoteMarkdown } from '@/utils/markdown';
-import { fetchSessionsForTask } from '@/api/sessions';
-import { fetchTask, updateTask as apiUpdateTask, type BatchTaskOutcome } from '@/api/tasks';
-import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
-import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
-import { fetchTriageHistory } from '@/api/chat';
+import type { Task as CoreTask } from '@open-walnut/core';
+import type { BatchTaskOutcome } from '@/api/tasks';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
-import type { ProcessStatus } from '@open-walnut/core';
-import type { TaskPhase } from '@/types/session';
-import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, phasePickerChoices, taskNeedsAction } from '@/utils/session-status';
+import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
@@ -54,8 +46,6 @@ import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
-import { TagEditor } from '@/components/tasks/TagEditor';
-import { dateTags } from '../../../../src/core/tag-model';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
 import { countSubtasksByParent, resolveParentRef, withSubtaskContext } from './task-tree-index';
@@ -76,7 +66,6 @@ import '@/styles/todo-search.css';
 import '@/styles/todo-empty-board.css';
 import '@/styles/row-pill-fit.css';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
-import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import {
   DndContext,
   DragOverlay,
@@ -109,7 +98,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { dragBus } from '@/utils/drag-bus';
 import { observeRowFit } from '@/utils/row-fit';
 import { TaskKebabMenu } from './TaskKebabMenu';
-import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
+import { formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { type SortBy, type GroupBy } from './ViewDropdown';
 import {
@@ -130,12 +119,10 @@ import { staleDonePinIds } from './pin-search-fold';
 import { orderPinnedTier } from '@/utils/pinned-tier-order';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
 import { ancestorHeadings, buildFolderParents, folderAncestors, folderDepth, nestFolderUnits } from './folder-tree';
-import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
-import { CopyableId } from '../common/CopyableId';
+import { formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useFoldAnchor } from '@/hooks/useFoldAnchor';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
-import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
 import { SortableTierCard, TierDropZone, GroupChip } from './FocusSatelliteCards';
 import { useFolderContextMenu } from './FolderContextMenu';
@@ -152,11 +139,7 @@ import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionT
 import { DEFAULT_HIDDEN_TABS, allViews } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
-import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
-import {
-  resolveSessionRecordStatus,
-  sessionStatusStore,
-} from '@/stores/session-status-store';
+import { useTaskCircle } from '@/hooks/useSessionStatus';
 
 type Task = CoreTask & {
   has_description?: boolean;
@@ -315,28 +298,6 @@ function useFrozenWhile<T>(value: T, frozen: boolean): T {
   if (!frozen) ref.current = value;
   return ref.current;
 }
-
-const PHASE_LABEL: Record<string, string> = {
-  TODO: 'To Do',
-  WAITING: 'Waiting',
-  IN_PROGRESS: 'In Progress',
-  NEED_ACTION: 'Need Action',
-  COMPLETE: 'Complete',
-};
-
-const PRIORITY_ICON: Record<string, string> = {
-  immediate: '!!',
-  important: '!',
-  backlog: '~',
-  none: '--',
-};
-
-const PRIORITY_LABEL: Record<string, string> = {
-  immediate: 'Immediate',
-  important: 'Important',
-  backlog: 'Backlog',
-  none: 'None',
-};
 
 // One glyph for every collapse-chevron button (CSS rotation handles the expanded
 // state). It lives in Icons.tsx so the pinned tier's folder chip can share it:
@@ -1881,476 +1842,6 @@ function classifyDropOnCard(cardEl: Element | null): 'group' | 'subtask' {
   const r = cardEl.getBoundingClientRect();
   if (r.width <= 0) return 'group';
   return classifyDropFraction((livePointer.x - r.left) / r.width);
-}
-
-// Session info colors — imported from single source of truth.
-// Re-exported as local aliases for backwards compat with type signature.
-const processDotColors = PROCESS_COLORS as Record<ProcessStatus, string>;
-const phaseColors = PHASE_COLORS as Record<TaskPhase, string>;
-
-
-function truncateCwd(p: string): string {
-  const segments = p.split('/').filter(Boolean);
-  return segments.length > 0 ? segments.slice(-2).join('/') : p;
-}
-
-// ── TaskDetailPane ──
-// Exported so it can be hosted in a full-screen modal (TaskDetailModal) rather than
-// only the cramped inline split-pane. The home page renders it via the modal; the
-// dedicated /tasks page still embeds it inline.
-
-export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: { task: Task; allTasks?: Task[]; onClose?: () => void; onOpenSession?: (sessionId: string) => void; onOpenTriageForTask?: (taskId: string) => void; onFocusChild?: (task: Task) => void; style?: CSSProperties }) {
-  const navigate = useNavigate();
-  const integrations = useIntegrations();
-  const statusEpoch = useSessionStatusEpoch();
-  const showPriority = useShowPriority();
-  // Support slim/minimal mode: has_* flags are set when content was stripped
-  // server-side. The minimal home-list payload drops summary/description/ext
-  // too, so derive presence from the flag OR the inlined value.
-  const hasDescription = !!task.description || !!task.has_description;
-  const hasSummary = !!task.summary || !!task.has_summary;
-  const hasExt = !!(task.ext && Object.keys(task.ext).length > 0) || !!task.has_ext;
-  const hasNote = !!task.note || !!task.has_note;
-
-  // Lazy-load full task when any stripped field's content is needed (slim or
-  // minimal mode). One fetchTask(id) call rehydrates summary/description/ext/note
-  // together.
-  const [fullTask, setFullTask] = useState<Task | null>(null);
-  useEffect(() => { setFullTask(null); }, [task.id]); // Reset on task change
-  const needsFullLoad =
-    (hasNote && !task.note) ||
-    (hasSummary && !task.summary) ||
-    (hasDescription && !task.description) ||
-    (hasExt && !task.ext);
-  useEffect(() => {
-    if (!needsFullLoad || fullTask) return;
-    let cancelled = false;
-    fetchTask(task.id).then((t) => { if (!cancelled) setFullTask(t); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [needsFullLoad, fullTask, task.id]);
-  // Use full task data when available for stripped-field rendering
-  const noteContent = task.note ?? fullTask?.note;
-  const descriptionContent = task.description ?? fullTask?.description;
-  // Dates write through the shared task store when it has this row, so the
-  // board row's due pill moves in the same frame; the direct REST call is the
-  // fallback for the pop-out window, which mounts no store.
-  const store = useTasksContextSafe();
-  const handleDateChange = async (date: string | null) => {
-    if (store?.tasks.some((t) => t.id === task.id)) { store.update(task.id, { due_date: date ?? '' }); return; }
-    await apiUpdateTask(task.id, { due_date: date ?? '' });
-  };
-
-  const handleStartDateChange = async (date: string | null) => {
-    if (store?.tasks.some((t) => t.id === task.id)) { store.update(task.id, { start_date: date ?? '' }); return; }
-    await apiUpdateTask(task.id, { start_date: date ?? '' });
-  };
-
-  // Tags edit in place, the same way: through the store when it has the row.
-  const handleTags = (change: { add_tags?: string[]; remove_tags?: string[] }) => {
-    if (store?.tasks.some((t) => t.id === task.id)) { store.update(task.id, change); return; }
-    void apiUpdateTask(task.id, change).catch(() => { /* the row keeps its tags; the pane re-reads on the next event */ });
-  };
-
-  // Child tasks — tasks whose parent_task_id matches this task (handles prefix parent IDs)
-  const childTasks = useMemo(() => {
-    if (!allTasks) return [];
-    return allTasks.filter((t) => t.parent_task_id && task.id.startsWith(t.parent_task_id));
-  }, [allTasks, task.id]);
-
-  // Parent task — resolve parent_task_id (may be a prefix) to the actual parent
-  const parentTask = useMemo(() => {
-    if (!allTasks || !task.parent_task_id) return null;
-    return allTasks.find((t) => t.id.startsWith(task.parent_task_id!)) ?? null;
-  }, [allTasks, task.parent_task_id]);
-
-  // Build a comprehensive set of all session IDs from both session_ids array and slot fields.
-  // This prevents the Sessions section from disappearing when session_ids is stale but slots are set.
-  const allSessionIds = useMemo(() => {
-    const ids = new Set<string>(task.session_ids ?? []);
-    if (task.session_id) ids.add(task.session_id);
-    if (task.plan_session_id) ids.add(task.plan_session_id);
-    if (task.exec_session_id) ids.add(task.exec_session_id);
-    return Array.from(ids);
-  }, [task.session_ids, task.session_id, task.plan_session_id, task.exec_session_id]);
-
-  // Fetch session records for title resolution (API filters out embedded agent runs)
-  const [sessionRecords, setSessionRecords] = useState<Map<string, SessionRecord>>(new Map());
-  const [sessionsLoading, setSessionsLoading] = useState(false);
-  // Separate archived from visible sessions once records are loaded.
-  // Before records load, we can't know which are archived — show all as placeholder.
-  const { visibleSessionIds, archivedCount } = useMemo(() => {
-    if (sessionRecords.size === 0) return { visibleSessionIds: allSessionIds, archivedCount: 0 };
-    const visible: string[] = [];
-    let archived = 0;
-    for (const sid of allSessionIds) {
-      const baseRecord = sessionRecords.get(sid);
-      const rec = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
-      if (rec?.archived) { archived++; continue; }
-      // Keep IDs that either have a non-archived record or haven't been fetched yet
-      if (rec || !sessionRecords.size) visible.push(sid);
-    }
-    // Also include API-returned non-archived sessions not in allSessionIds (e.g. embedded)
-    for (const [sid, baseRecord] of sessionRecords) {
-      const rec = resolveSessionRecordStatus(baseRecord);
-      if (rec.archived) continue;
-      if (!allSessionIds.includes(sid)) visible.push(sid);
-    }
-    return { visibleSessionIds: visible, archivedCount: archived };
-  }, [allSessionIds, sessionRecords, statusEpoch]);
-
-  // Show sessions section based on task data (allSessionIds) — not on the async API result.
-  // This prevents the section from disappearing/flickering when the fetch is in progress or fails.
-  // After fetch completes, refine to only show if API returned actual records (filters embedded runs).
-  const hasSessions = sessionsLoading ? allSessionIds.length > 0 : (visibleSessionIds.length > 0 || allSessionIds.length > 0);
-  useEffect(() => {
-    if (!allSessionIds.length) { setSessionRecords(new Map()); setSessionsLoading(false); return; }
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    setSessionsLoading(true);
-
-    const applyResults = (sessions: SessionRecord[]) => {
-      if (cancelled) return;
-      const map = new Map<string, SessionRecord>();
-      for (const s of sessions) map.set(s.claudeSessionId, s);
-      setSessionRecords(map);
-      setSessionsLoading(false);
-    };
-
-    fetchSessionsForTask(task.id).then(applyResults).catch(() => {
-      // Retry once after 1s — transient errors shouldn't hide sessions
-      if (cancelled) return;
-      retryTimer = setTimeout(() => {
-        if (cancelled) return;
-        fetchSessionsForTask(task.id).then(applyResults).catch(() => {
-          if (!cancelled) setSessionsLoading(false);
-        });
-      }, 1000);
-    });
-    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, [task.id, allSessionIds.join(',')]);
-
-  // Fetch triage count for this task
-  const [triageTotal, setTriageTotal] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    fetchTriageHistory(1, task.id).then((resp) => {
-      if (cancelled) return;
-      setTriageTotal(resp.total);
-    }).catch(() => { /* non-critical */ });
-    return () => { cancelled = true; };
-  }, [task.id]);
-
-  return (
-    <div className="todo-detail-pane" style={style}>
-      <div className="todo-detail-header">
-        <span className="todo-detail-project">
-          {task.project || 'Inbox'}
-        </span>
-        <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
-        {/* Calendar semantics: start is the primary date, the end/due is
-            usually empty — collapse it to a "+ Due" ghost until set. */}
-        <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" ghostWhenEmpty />
-        {task.external_url && (
-          <a
-            className="todo-detail-external-link"
-            href={task.external_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={`Open in ${getIntegrationMeta(integrations, task.source)?.externalLinkLabel ?? getIntegrationMeta(integrations, task.source)?.name ?? 'external'}`}
-          >
-            {getIntegrationMeta(integrations, task.source)?.name ?? 'Link'} &#x2197;
-          </a>
-        )}
-        {onClose && (
-          <button className="todo-detail-close" onClick={onClose} aria-label="Close detail panel" title="Close">&times;</button>
-        )}
-      </div>
-
-      {/* Task metadata — always visible */}
-      <div className="todo-detail-meta">
-        <div className="todo-detail-title">{task.title}</div>
-        <div className="todo-detail-badges">
-          <TaskStatusBadge task={task} />
-          {showPriority && task.priority && task.priority !== 'none' && (
-            <span className={`todo-detail-priority-pill priority-${task.priority}`}>
-              {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
-            </span>
-          )}
-          <PluginFieldPills task={task} />
-          <TagEditor
-            tags={task.tags ?? []}
-            derived={dateTags(task)}
-            placeholder="+ Tag"
-            onAdd={(tag) => handleTags({ add_tags: [tag] })}
-            onRemove={(tag) => handleTags({ remove_tags: [tag] })}
-          />
-        </div>
-        <div className="todo-detail-dates text-xs text-muted">
-          {/* The id is a reference, so it rides the metadata line rather than
-              the title: an agent or a log line names a task by id, and without
-              this there was no way to tell which card that is. */}
-          <CopyableId id={task.id} label="ID" />
-          {task.created_at && <span> · Created {timeAgo(task.created_at)}</span>}
-          {task.updated_at && <span> · Updated {timeAgo(task.updated_at)}</span>}
-          {task.start_date && (
-            <span> · Starts {formatDateTimeDisplay(task.start_date)}</span>
-          )}
-          {task.due_date && (
-            <span style={isOverdue(task.due_date) ? { color: 'var(--error)' } : undefined}>
-              {' '}· Due {formatDateTimeDisplay(task.due_date)}
-            </span>
-          )}
-          {task.phase === 'WAITING' && task.wait_until && (
-            <span data-testid="task-detail-wait-until"> · Waiting until {formatWaitUntil(task.wait_until)}</span>
-          )}
-          {/* Plugin facts (walnut.ui.slot 'task.meta'), e.g. the time this task took:
-              one short value on this line, never a block of its own. */}
-          <PluginSlots
-            target="task.meta"
-            props={{ taskId: task.id }}
-            onNavigate={onClose}
-            wrap={(entry, node) => (
-              <PluginSlotFact entry={entry} className="todo-detail-meta-fact" labelClassName="todo-detail-meta-fact-label" separator=" · ">
-                {node}
-              </PluginSlotFact>
-            )}
-          />
-        </div>
-      </div>
-
-      {parentTask && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Parent Task</div>
-          <div
-            className="todo-detail-child-item"
-            role="button"
-            tabIndex={0}
-            onClick={() => onFocusChild ? onFocusChild(parentTask) : navigate(`/tasks/${parentTask.id}`)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusChild ? onFocusChild(parentTask) : navigate(`/tasks/${parentTask.id}`); } }}
-          >
-            <span
-              className="todo-detail-child-dot"
-              style={{
-                background: parentTask.status === 'done' ? '#34c759'
-                  : parentTask.phase === 'IN_PROGRESS' ? '#007aff'
-                  : parentTask.phase === 'NEED_ACTION' ? 'var(--error)'
-                  : 'var(--fg-muted)',
-              }}
-            />
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {parentTask.title}
-            </span>
-            <span className="text-xs text-muted">{PHASE_LABEL[parentTask.phase] ?? parentTask.phase}</span>
-          </div>
-        </div>
-      )}
-
-      {hasSessions && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Sessions ({sessionsLoading && !sessionRecords.size ? allSessionIds.length : visibleSessionIds.length})</div>
-          <div className="todo-detail-sessions">
-            {sessionsLoading && sessionRecords.size === 0 ? (
-              // While loading, show a placeholder using task-level session status (available immediately)
-              allSessionIds.map((sid) => {
-                const taskStatus = sessionStatusStore.getStatus(sid) ?? task.session_status;
-                const processStatus = taskStatus?.process_status || 'stopped';
-                const taskPhase = (task.phase || 'TODO') as TaskPhase;
-                const isPlan = taskStatus?.mode === 'plan' || !!taskStatus?.planCompleted;
-                const statusLabel = PHASE_LABELS[taskPhase] ?? taskPhase;
-                return (
-                  <div
-                    key={sid}
-                    className="todo-detail-session-item"
-                    title={sid}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); } }}
-                  >
-                    <div className="todo-detail-session-row1">
-                      <span className="todo-detail-session-dot" style={{ background: processDotColors[processStatus] ?? 'var(--fg-muted)' }} />
-                      {isPlan && <span className="todo-detail-plan-badge">Plan</span>}
-                      <span className="todo-detail-session-title text-muted">Loading…</span>
-                      <span className="session-id-mono text-xs" title={`Session ID: ${sid}`}>{sid.slice(0, 8)} &#x2197;</span>
-                    </div>
-                    <div className="todo-detail-session-meta">
-                      <span className="todo-detail-ws-pill" style={{ color: phaseColors[taskPhase] ?? 'var(--fg-muted)', borderColor: phaseColors[taskPhase] ?? 'var(--fg-muted)' }}>
-                        {statusLabel}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              visibleSessionIds.filter((sid) => sessionRecords.has(sid)).map((sid) => {
-                const baseRecord = sessionRecords.get(sid);
-                const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
-                const processStatus = record?.process_status || 'stopped';
-                const sessionPhase = (task.phase || 'TODO') as TaskPhase;
-                const label = record?.title || 'Untitled session';
-                const ago = timeAgo(record?.lastActiveAt || record?.startedAt || '');
-                const isPlan = record?.mode === 'plan' || !!record?.planCompleted;
-                // Registry label, not the raw id — otherwise 'dontAsk' leaks
-                // its camelCase id into the UI.
-                const modeLabel = record?.mode && record.mode !== 'default' && record.mode !== 'plan' && !record?.planCompleted
-                  ? (SESSION_MODE_LABELS[record.mode] ?? record.mode)
-                  : null;
-                const statusLabel = (PHASE_LABELS[sessionPhase] ?? sessionPhase) + (modeLabel ? ` · ${modeLabel}` : '');
-                return (
-                  <div
-                    key={sid}
-                    className="todo-detail-session-item"
-                    title={sid}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => {
-                      if (onOpenSession) {
-                        onOpenSession(sid);
-                      } else {
-                        navigate(`/sessions?id=${sid}`);
-                      }
-                    }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); } }}
-                  >
-                    {/* Row 1: process dot + title + time + open-tab */}
-                    <div className="todo-detail-session-row1">
-                      <span
-                        className="todo-detail-session-dot"
-                        style={{ background: processDotColors[processStatus] ?? 'var(--fg-muted)' }}
-                      />
-                      {isPlan && (
-                        <span className="todo-detail-plan-badge">Plan</span>
-                      )}
-                      <span className="todo-detail-session-title">{label}</span>
-                      {ago && <span className="todo-detail-session-time">{ago}</span>}
-                      <span
-                        className="session-id-mono text-xs"
-                        role="button"
-                        title={`Session ID: ${sid}\nClick to open in Sessions page`}
-                        onClick={(e) => { e.stopPropagation(); onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`); }}
-                      >
-                        {sid.slice(0, 8)} &#x2197;
-                      </span>
-                    </div>
-                    {/* Row 2: phase pill + activity */}
-                    <div className="todo-detail-session-meta">
-                      <span
-                        className="todo-detail-ws-pill"
-                        style={{
-                          color: phaseColors[sessionPhase] ?? 'var(--fg-muted)',
-                          borderColor: phaseColors[sessionPhase] ?? 'var(--fg-muted)',
-                        }}
-                      >
-                        {statusLabel}
-                      </span>
-                      {record?.activity && processStatus === 'running' && (
-                        <span className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
-                          — {record.activity}
-                        </span>
-                      )}
-                    </div>
-                    {/* Recap line — one line "what just happened" (self-report), read
-                        through the same store as the session column's tip; hidden
-                        while running (live activity above covers that state). */}
-                    {processStatus !== 'running' && (
-                      <SessionRecapLine
-                        sessionId={sid}
-                        session={record}
-                        className="text-xs truncate"
-                        style={{ color: 'var(--fg-muted)', marginTop: '2px' }}
-                      />
-                    )}
-                    {/* Row 3: cwd (conditional) */}
-                    {record?.cwd && (
-                      <div className="todo-detail-session-cwd">
-                        &#x1F4C1; {truncateCwd(record.cwd)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {childTasks.length > 0 && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Child Tasks ({childTasks.length})</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            {childTasks.map((child) => (
-              <div
-                key={child.id}
-                className="todo-detail-child-item"
-                role="button"
-                tabIndex={0}
-                onClick={() => onFocusChild ? onFocusChild(child) : navigate(`/tasks/${child.id}`)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFocusChild ? onFocusChild(child) : navigate(`/tasks/${child.id}`); } }}
-              >
-                <span
-                  className="todo-detail-child-dot"
-                  style={{
-                    background: child.status === 'done' ? '#34c759'
-                      : child.phase === 'IN_PROGRESS' ? '#007aff'
-                      : child.phase === 'NEED_ACTION' ? 'var(--error)'
-                      : 'var(--fg-muted)',
-                    opacity: child.status === 'done' ? 0.5 : 1,
-                  }}
-                />
-                <span style={{
-                  flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  textDecoration: child.status === 'done' ? 'line-through' : 'none',
-                  opacity: child.status === 'done' ? 0.5 : 1,
-                }}>
-                  {child.title}
-                </span>
-                <span className="text-xs text-muted">{PHASE_LABEL[child.phase] ?? child.phase}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Summary (AI) + Milestones sections retired 2026-07-18 — the Note below is
-          the single AI-maintained living document; task.summary is derived from
-          its Executive Summary (list views only). */}
-
-      {triageTotal > 0 && onOpenTriageForTask && (
-        <div className="todo-detail-section">
-          <button
-            className="todo-detail-triage-btn"
-            onClick={() => onOpenTriageForTask(task.id)}
-          >
-            View Triage History ({triageTotal}) &#x2192;
-          </button>
-        </div>
-      )}
-
-      {hasDescription && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Description</div>
-          {descriptionContent
-            ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(descriptionContent) }} />
-            : <div className="text-sm text-muted">Loading...</div>
-          }
-        </div>
-      )}
-
-      {hasNote && (
-        <div className="todo-detail-section">
-          <div className="todo-detail-section-label">Note</div>
-          {noteContent
-            ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(noteContent) }} />
-            : <div className="text-sm text-muted">Loading...</div>
-          }
-        </div>
-      )}
-
-      {!hasDescription && !hasSummary && !hasNote && childTasks.length === 0 && !hasSessions && triageTotal === 0 && (
-        <div className="todo-detail-empty text-sm text-muted">No details</div>
-      )}
-    </div>
-  );
 }
 
 const RECENT_VISIBLE_MAX = 3;

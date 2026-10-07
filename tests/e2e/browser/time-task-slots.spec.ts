@@ -1,8 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { clampColumn } from './composer-controls-overflow-helpers'
+import { startTimeFixture, type TimeFixture } from './time-app-fixture'
 
 /**
  * How long a task took, where the task is: the walnut-time plugin's two Time facts
@@ -24,7 +23,7 @@ import { clampColumn } from './composer-controls-overflow-helpers'
  * a second task have nothing recorded.
  *
  * What it pins: each fact is ONE short value with its surface's own facts (the task
- * details' metadata line, the top of the session menu), never a block, and no chip on
+ * details' rail of facts, the top of the session menu), never a block, and no chip on
  * the session header's row until the user pins one there from its menu row (then on
  * every session's header, kept across a reload, the first chip to move into "..."
  * when the column is narrow); the hover text carries all six numbers; each leads to
@@ -41,15 +40,8 @@ const SID_A = 'sess-time-slots-a'
 const PINS_KEY = 'open-walnut-session-header-pins'
 const SLOT_KEY = 'walnut-time:session-time'
 
-interface Fixture {
-  port: number
-  home: string
-  slots: { taskId: string; emptyTaskId: string; sessionIds: string[]; today: string }
-}
-
-let child: ChildProcessWithoutNullStreams | null = null
-let fixture: Fixture | null = null
-let output = ''
+let fixture: TimeFixture | null = null
+let stopFixture: (() => Promise<void>) | null = null
 
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
@@ -57,60 +49,13 @@ test.use({ viewport: { width: 1280, height: 860 } })
 
 const base = () => `http://127.0.0.1:${fixture!.port}`
 
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
-
-function waitForReady(): Promise<Fixture> {
-  return new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error(`Time fixture did not start\n${output.slice(-8000)}`)), 180_000)
-    const timer = setInterval(() => {
-      const match = /TIME_APP_READY (\{.*\})/.exec(output)
-      if (match) {
-        clearInterval(timer)
-        clearTimeout(deadline)
-        resolve(JSON.parse(match[1]!) as Fixture)
-      } else if (child?.exitCode !== null && child?.exitCode !== undefined) {
-        clearInterval(timer)
-        clearTimeout(deadline)
-        reject(new Error(`Time fixture exited early (${child.exitCode})\n${output.slice(-8000)}`))
-      }
-    }, 250)
-  })
-}
-
 test.beforeAll(async () => {
   test.setTimeout(240_000)
   await fs.mkdir(SHOTS, { recursive: true })
-  const port = await reservePort()
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/time-app-server.ts'], {
-    cwd: process.cwd(),
-    env: { ...process.env, PW_TIME_APP_PORT: String(port), PW_TIME_APP_SLOTS: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  child.stdout.on('data', (chunk) => { output = `${output}${String(chunk)}`.slice(-20_000) })
-  child.stderr.on('data', (chunk) => { output = `${output}${String(chunk)}`.slice(-20_000) })
-  fixture = await waitForReady()
+  ;({ fixture, stop: stopFixture } = await startTimeFixture({ PW_TIME_APP_SLOTS: '1' }))
 })
 
-test.afterAll(async () => {
-  if (!child || child.exitCode !== null) return
-  const stopped = new Promise<void>((resolve) => child?.once('exit', () => resolve()))
-  child.kill('SIGTERM')
-  const graceful = await Promise.race([
-    stopped.then(() => true),
-    new Promise<false>((resolve) => setTimeout(() => resolve(false), 20_000)),
-  ])
-  if (!graceful) child.kill('SIGKILL')
-})
+test.afterAll(async () => { await stopFixture?.() })
 
 function watchErrors(page: Page): string[] {
   const errors: string[] = []
@@ -136,9 +81,12 @@ async function loadHome(page: Page, pins?: string[]): Promise<void> {
 }
 
 async function openDetails(page: Page, taskId = TASK, search = 'Time slots fixture'): Promise<Locator> {
-  await page.locator('.todo-search-input').fill(search)
+  // Typed again until the row shows: a list that hydrates late can reset the box.
   const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]:visible`).first()
-  await expect(row).toBeVisible({ timeout: 20_000 })
+  await expect(async () => {
+    await page.locator('.todo-search-input').fill(search)
+    await expect(row).toBeVisible({ timeout: 5_000 })
+  }).toPass({ timeout: 40_000 })
   await row.getByRole('button', { name: 'More actions' }).click()
   await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
@@ -162,7 +110,7 @@ const answered = (page: Page, path: string) =>
 
 async function openColumnFromDetails(page: Page, sid: string): Promise<Locator> {
   const modal = await openDetails(page)
-  await modal.locator(`.todo-detail-session-item[title="${sid}"]`).click()
+  await modal.locator(`.todo-detail-session-item[data-session-id="${sid}"]`).click()
   const col = column(page, sid)
   await expect(col).toBeVisible({ timeout: 30_000 })
   // Opening a session from the details leaves them open over its column; put them away.
@@ -176,23 +124,28 @@ test('the task details carry the time as one fact, and lead to the task\'s days'
   const errors = watchErrors(page)
   await loadHome(page)
   const modal = await openDetails(page)
-  const dates = modal.locator('.todo-detail-dates')
-  const fact = dates.getByTestId('time-task-fact')
+  const rail = modal.locator('.tdp-rail')
+  const fact = rail.getByTestId('time-task-fact')
 
   // The 200-day-old 20 minutes arrive with the history read, a moment after boot; the
   // fact asks again until the server says it has every day.
   await expect(cell(fact, 'you-total')).toHaveText('1h 34m', { timeout: 60_000 })
   await expect(cell(fact, 'agent-total')).toHaveText('3h 19m')
   await expect(fact).toHaveText('You 1h 34m \u00b7 Agent 3h 19m')
-  // One labelled fact on the metadata line, and the hover text holds all six numbers.
-  await expect(dates).toContainText('Time You 1h 34m \u00b7 Agent 3h 19m')
+  // One labelled fact among the task's facts, and the hover text holds all six numbers.
+  const row = rail.locator('.tdp-fact').filter({ has: page.getByTestId('time-task-fact') })
+  await expect(row.locator('.tdp-fact-k')).toHaveText('Time')
+  await expect(row).toContainText('Time You 1h 34m \u00b7 Agent 3h 19m')
   await expect(fact).toHaveAttribute('title', /You: 1h 34m total, 29m today, 59m in 7 days/)
   await expect(fact).toHaveAttribute('title', /Agent: 3h 19m total, 1h 12m today, 3h 12m in 7 days/)
   // Never a block of its own: the old table and its wrapper are gone.
   await expect(modal.locator('.wt-slot-task, .todo-detail-plugin-slots')).toHaveCount(0)
-  const [factBox, idBox] = await Promise.all([fact.boundingBox(), dates.boundingBox()])
-  expect(factBox!.height).toBeLessThanOrEqual(idBox!.height + 0.5)
-  await dates.screenshot({ path: `${SHOTS}/task-detail-fact.png` })
+  // A row as tall as the rail's other facts (the ID row), not a block.
+  const [rowBox, idBox] = await Promise.all([
+    row.boundingBox(), rail.locator('.tdp-fact').filter({ hasText: 'ID' }).boundingBox(),
+  ])
+  expect(rowBox!.height).toBeLessThanOrEqual(idBox!.height + 1)
+  await rail.screenshot({ path: `${SHOTS}/task-detail-fact.png` })
   // The open details are part of Home's address (written a moment after they open).
   await expect(page).toHaveURL(new RegExp(`/\\?task=${TASK}$`))
 
@@ -366,7 +319,7 @@ test('nothing recorded means no Time fact and no stray label', async ({ page }) 
   await taskAnswer
   await page.waitForTimeout(300)
   await expect(modal.getByTestId('time-task-fact')).toHaveCount(0)
-  await expect(modal.locator('.todo-detail-dates')).not.toContainText('Time')
+  expect(await modal.locator('.tdp-fact-k').allTextContents()).not.toContain('Time')
   await page.keyboard.press('Escape')
 
   const SID_D = fixture!.slots.sessionIds[3]!
@@ -418,7 +371,7 @@ test('disabling the plugin takes both facts away without a reload', async ({ pag
   expect(disabled.ok(), await disabled.text()).toBe(true)
 
   await expect(modal.getByTestId('time-task-fact')).toHaveCount(0, { timeout: 60_000 })
-  await expect(modal.locator('.todo-detail-dates')).not.toContainText('Time')
+  expect(await modal.locator('.tdp-fact-k').allTextContents()).not.toContain('Time')
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   const menu = await openMenu(page, col)

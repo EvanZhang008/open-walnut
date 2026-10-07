@@ -15,7 +15,7 @@
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
-import { TaskDetailPane } from './TodoPanel';
+import { TaskDetailPane } from './TaskDetailPane';
 
 export function TaskDetailModal({
   task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild,

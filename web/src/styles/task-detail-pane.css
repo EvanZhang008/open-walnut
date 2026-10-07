@@ -1,0 +1,224 @@
+/* The task details popup (web/src/components/tasks/TaskDetailPane.tsx).
+   A header, then the main column beside a rail of facts, like /tasks/:id. Every part
+   is plain rows under a small label: no box per part. Scoped under .tdp, so the older
+   .todo-detail-* rules the project pane still uses are left alone. */
+
+.tdp {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The popup is as tall as what the task has (up to the shell's 90vh), not a 90vh
+   sheet with one line on it. The pane scrolls inside once it is taller. */
+.wf-modal.task-detail-modal {
+  height: auto;
+  min-height: min(360px, 90vh);
+  max-height: 90vh;
+}
+
+/* ── Header ── */
+
+.tdp-head {
+  margin-bottom: 18px;
+}
+.tdp-head-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.tdp .todo-detail-title {
+  margin: 4px 0 10px;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.3;
+  color: var(--fg-primary, var(--fg));
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.tdp .todo-detail-badges {
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0;
+}
+
+/* ── Body: main column + rail ── */
+
+.tdp-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 248px;
+  gap: 28px;
+  align-items: start;
+}
+.tdp-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.tdp-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.tdp-label-count {
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Rows (sessions, parent, subtasks) ── */
+
+/* Under .tdp, so a session row's legacy .todo-detail-session-item rules lose. */
+.tdp .tdp-row {
+  display: block;
+  margin: 0 -8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.tdp .tdp-row:hover { background: var(--bg-tertiary, rgba(0, 0, 0, 0.04)); }
+.tdp .tdp-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tdp-row-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+.tdp-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.tdp-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-primary, var(--fg));
+}
+.tdp-row-title.is-loading { color: var(--fg-muted); }
+.tdp-row-end {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tdp-row-sub {
+  margin-left: 15px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tdp-task-row.is-done .tdp-row-title {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+.tdp .todo-detail-plan-badge { flex: none; }
+
+.tdp-link {
+  align-self: flex-start;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.tdp-link:hover { text-decoration: underline; }
+
+/* ── Documents (Note, Description): text, not a card ── */
+
+.tdp-doc .todo-detail-note {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+.tdp-doc .todo-detail-note.markdown-body {
+  max-width: 760px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fg-secondary);
+}
+.tdp-doc + .tdp-doc {
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.tdp-muted { font-size: 12.5px; color: var(--fg-muted); }
+
+/* ── Rail: one fact per row ── */
+
+.tdp-rail {
+  position: sticky;
+  top: 0;
+  padding: 4px 14px;
+  font-size: 12.5px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.tdp-fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.tdp-rail > .tdp-fact:last-child { border-bottom: none; }
+.tdp-fact-k { flex: none; color: var(--fg-muted); }
+.tdp-fact-v {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.tdp-fact .copyable-id { margin-right: 0; }
+.tdp-fact .dp-trigger { font-size: 12px; }
+.tdp-fact .dp-trigger-bare:not(.dp-trigger-has-date):not(:hover) { padding-right: 0; }
+.tdp-source { color: var(--accent); text-decoration: none; white-space: nowrap; }
+.tdp-source:hover { text-decoration: underline; }
+
+/* A narrow popup: the rail's facts first, two to a row so they stay short, then the
+   main column. */
+@container (max-width: 720px) {
+  .tdp-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .tdp-rail {
+    position: static;
+    order: -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 24px;
+  }
+  /* A line above each fact but the first row's (Start, Due, always first). */
+  .tdp-rail > .tdp-fact { border-bottom: none; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+  .tdp-rail > .tdp-fact:nth-child(-n + 2) { border-top: none; }
+}
+@container (max-width: 420px) {
+  .tdp-rail { grid-template-columns: minmax(0, 1fr); }
+  .tdp-rail > .tdp-fact:nth-child(2) { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+}

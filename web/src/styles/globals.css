@@ -4484,7 +4484,7 @@ select {
 /* The live lane is the stream itself; its blocks wear the chat's normal spacing. */
 .bg-tasks-live-lane { display: flex; flex-direction: column; gap: 4px; }
 
-/* ── Full-screen task detail (TaskDetailModal hosts TodoPanel's TaskDetailPane) ── */
+/* ── Full-screen task detail (TaskDetailModal hosts TaskDetailPane) ── */
 /* The pane is its own scroll container; inside the flex wf-modal shell it must flex
    to fill and allow its own overflow (min-height:0 lets the scroll region shrink). */
 .task-detail-modal .todo-detail-pane {
@@ -12312,12 +12312,10 @@ body.walnut-dragging {
 }
 
 /* Detail pane is a content panel, not a list item — no hover highlight */
-.todo-detail-pane .todo-detail-section,
 .todo-detail-pane .todo-detail-meta,
 .todo-detail-pane .todo-detail-note {
   transition: none;
 }
-.todo-detail-pane .todo-detail-section:hover,
 .todo-detail-pane .todo-detail-meta:hover {
   background: transparent;
 }
@@ -12492,13 +12490,6 @@ body.walnut-dragging {
   text-align: center;
 }
 
-.todo-detail-dates {
-  display: flex;
-  gap: 0;
-  flex-wrap: wrap;
-  align-items: baseline;
-}
-
 /* ── CopyableId: an id as a quiet reference (theme vars only, no pinned pair) ── */
 .copyable-id {
   display: inline-flex;
@@ -12543,19 +12534,6 @@ body.walnut-dragging {
 }
 .copyable-id-status:empty { display: none; }
 
-.todo-detail-section {
-  margin-bottom: 10px;
-}
-
-.todo-detail-section-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  margin-bottom: 4px;
-}
-
 .todo-detail-subtasks {
   list-style: none;
   margin: 0;
@@ -12578,30 +12556,6 @@ body.walnut-dragging {
 
 .todo-detail-subtask-check {
   font-size: 11px;
-  flex-shrink: 0;
-}
-
-/* Child task items in detail pane. Secondary surface so the chips stay
-   distinct now that the detail pane itself sits on var(--bg). */
-.todo-detail-child-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 5px;
-  font-size: 12px;
-  cursor: pointer;
-  background: var(--bg-secondary);
-  transition: background 0.15s;
-}
-.todo-detail-child-item:hover {
-  /* One step darker than the chip's bg-secondary base so hover stays visible. */
-  background: var(--bg-tertiary);
-}
-.todo-detail-child-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
   flex-shrink: 0;
 }
 
@@ -12791,67 +12745,6 @@ body.walnut-dragging {
   margin-top: 0;
 }
 
-.todo-detail-external-link {
-  font-size: 11px;
-  color: var(--accent);
-  text-decoration: none;
-  margin-left: auto;
-}
-
-.todo-detail-external-link:hover {
-  text-decoration: underline;
-}
-
-.todo-detail-sessions {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.todo-detail-session-item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.todo-detail-session-item:hover {
-  background: var(--hover-bg, rgba(0,0,0,0.04));
-}
-
-.todo-detail-session-row1 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.todo-detail-session-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.todo-detail-session-title {
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-
-.todo-detail-session-time {
-  font-size: 10px;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
 .todo-detail-plan-badge {
   background: var(--accent);
   color: #fff;
@@ -12861,33 +12754,6 @@ body.walnut-dragging {
   font-weight: 600;
   flex-shrink: 0;
   line-height: 1.4;
-}
-
-.todo-detail-session-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 13px; /* dot-width(7) + row1-gap(6) */
-}
-
-.todo-detail-ws-pill {
-  font-size: 10px;
-  font-weight: 600;
-  border-radius: 4px;
-  border: 1px solid;
-  padding: 0 4px;
-  line-height: 1.6;
-  white-space: nowrap;
-}
-
-.todo-detail-session-cwd {
-  font-family: monospace;
-  font-size: 10px;
-  color: var(--fg-muted);
-  padding-left: 13px; /* dot-width(7) + row1-gap(6) */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .session-id-mono {
@@ -21569,28 +21435,6 @@ a.tag-chip:focus-visible,
   color: #fff;
   background: var(--accent);
   border-color: var(--accent);
-}
-
-/* ===== Task Detail — Triage Button ===== */
-
-.todo-detail-triage-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 8px 10px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.todo-detail-triage-btn:hover {
-  background: var(--hover);
 }
 
 /* ===== Focus Dock ===== */

@@ -134,6 +134,10 @@ interface DatePickerProps {
    *  pill. The picker stays one click away; once a date is set the pill renders
    *  normally. */
   ghostWhenEmpty?: boolean;
+  /** For a row that already says what the date is ("Start", "Due" in a facts rail):
+   *  the trigger shows the date alone, or a muted "Set date" while empty. `label`
+   *  still decides the semantics (a passed Start reads "Started", never overdue). */
+  bare?: boolean;
 }
 
 /** Inner content shared by popover and inline modes. */
@@ -218,7 +222,7 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
   );
 }
 
-export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty }: DatePickerProps) {
+export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -238,7 +242,16 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty }: Da
       if (menuRef.current?.contains(e.target as Node)) return;
       close();
     };
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    // Escape closes the picker alone. On window in the capture phase it runs before
+    // the bubble-phase listener of a popup under the picker (useModalOverlay, the task
+    // details), which would otherwise close the whole popup on the same key.
+    // preventDefault first: the beep guard reads the stop (see useModalOverlay).
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      close();
+    };
     // A scroll inside the popover (the calendar can scroll when capped) must not
     // dismiss it; outside, useMenuPlacement keeps it glued to the trigger until
     // the trigger itself leaves the viewport.
@@ -248,11 +261,11 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty }: Da
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) close();
     };
     document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', handleKey);
+    window.addEventListener('keydown', handleKey, true);
     window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('keydown', handleKey, true);
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open, close]);
@@ -282,13 +295,15 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty }: Da
     <div className="dp-wrapper" ref={wrapperRef}>
       <button
         ref={btnRef}
-        className={`dp-trigger${overdue ? ' dp-trigger-overdue' : ''}${display ? ' dp-trigger-has-date' : ''}${!display && ghostWhenEmpty ? ' dp-trigger-ghost' : ''}`}
+        className={`dp-trigger${overdue ? ' dp-trigger-overdue' : ''}${display ? ' dp-trigger-has-date' : ''}${!display && (ghostWhenEmpty || bare) ? ' dp-trigger-ghost' : ''}${bare ? ' dp-trigger-bare' : ''}`}
         onClick={handleToggle}
         title={date ? `${label ?? 'Date'}: ${date}` : `Set ${(label ?? 'date').toLowerCase()}`}
       >
-        {display
-          ? (label ? `${label} ${display}` : display)
-          : (ghostWhenEmpty ? `+ ${label ?? 'Date'}` : (label ?? 'Date'))}
+        {bare
+          ? (display || 'Set date')
+          : display
+            ? (label ? `${label} ${display}` : display)
+            : (ghostWhenEmpty ? `+ ${label ?? 'Date'}` : (label ?? 'Date'))}
       </button>
       {/* Portalled for the same reason as the kebab menus: `position: fixed`
           escapes clipping ancestors but not stacking contexts, and this pill can

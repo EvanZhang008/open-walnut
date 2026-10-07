@@ -100,7 +100,7 @@ async function openSessionColumn(page: Page): Promise<Locator> {
 
   const detail = page.locator('.task-detail-modal')
   await expect(detail).toBeVisible()
-  await detail.locator(`.todo-detail-session-item[title="${SESSION_ID}"]`).click()
+  await detail.locator(`.todo-detail-session-item[data-session-id="${SESSION_ID}"]`).click()
   await detail.getByRole('button', { name: 'Close detail panel' }).click()
 
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)

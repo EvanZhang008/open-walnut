@@ -1,9 +1,6 @@
 /* Where plugin slots sit inside host surfaces (web/src/plugins/PluginSlots.tsx).
-   Every slot is one labelled fact; on the task details' metadata line the label
-   reads like the line's other words ("Created", "Updated"). */
-.todo-detail-meta-fact-label {
-  color: var(--fg-muted);
-}
+   Every slot is one labelled fact. The task details' rail styles its own facts
+   (task-detail-pane.css); the session menu's rows are here. */
 
 /* At the top of the session ⋮ menu (SessionMetaFacts.tsx), shaped like the Panels row
    above it: the label, the plugin's value, then the "Header" toggle at the row's end. */

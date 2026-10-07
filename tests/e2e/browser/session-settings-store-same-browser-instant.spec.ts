@@ -72,7 +72,7 @@ async function closeTaskDetail(page: Page): Promise<void> {
 }
 
 function detailSessionRow(modal: Locator): Locator {
-  return modal.locator(`.todo-detail-session-item[title="${SESSION_ID}"]`)
+  return modal.locator(`.todo-detail-session-item[data-session-id="${SESSION_ID}"]`)
 }
 
 /**
@@ -140,11 +140,11 @@ test('the mode pill flips itself and the task detail rows before the PATCH is an
   expect(patchesAnswered).toBe(0)
 
   // 2. The task detail session rows read the SAME store, with the request still
-  //    held: the Plan badge is there and the mode suffix is gone.
+  //    held: the Plan badge is there and no Bypass mode is shown.
   const heldModal = await openTaskDetail(page, row)
   const heldRow = detailSessionRow(heldModal)
   await expect(heldRow.locator('.todo-detail-plan-badge')).toHaveCount(1, { timeout: INSTANT_MS })
-  await expect(heldRow.locator('.todo-detail-ws-pill')).not.toHaveText(/Bypass/, { timeout: INSTANT_MS })
+  await expect(heldRow).not.toContainText('Bypass', { timeout: INSTANT_MS })
   expect(patchesAnswered).toBe(0)
 
   // 3. Let the held PATCH land. The server's own snapshot must confirm the pick,
