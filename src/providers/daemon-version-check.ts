@@ -158,6 +158,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/leader-core.ts',
   'src/providers/offline-board-core.ts',
   'src/providers/host-replica-core.ts',
+  'src/core/sessions/open-items-text.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
   // The paced bridge uplink and loop-drift probe: same import-or-inline rule.

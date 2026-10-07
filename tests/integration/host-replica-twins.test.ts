@@ -33,7 +33,7 @@ import { NOTES_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { syncHostReplica, forgetHostReplica, sha12 } from '../../src/core/host-replica.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
-import type { HostSlice } from '../../src/providers/offline-host-core.js'
+import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 /** The daemon's keepalive beat: 3 missed = silent (reads skip it), 8 = the socket is closed. */
@@ -94,7 +94,18 @@ class Primary {
   private pending = new Map<number, (m: Record<string, unknown>) => void>()
   answerRelays = true
   relays: string[] = []
+  /** What the host journaled while this primary did not answer, taken when it says so (`offline-journal`). */
+  drained: OfflineRecord[] = []
   constructor(readonly port: number, readonly hostKey: string) {}
+  private async drain(): Promise<void> {
+    for (;;) {
+      const r = await this.send('offline.drain', { home: WALNUT_HOME })
+      const records = (Array.isArray(r.records) ? r.records : []) as OfflineRecord[]
+      if (records.length === 0) return
+      this.drained.push(...records)
+      await this.send('offline.ack', { home: WALNUT_HOME, upTo: Math.max(...records.map((x) => x.seq)) })
+    }
+  }
   async connect(): Promise<void> {
     this.ws = new WebSocket(`ws://127.0.0.1:${this.port}`)
     await new Promise<void>((resolve, reject) => { this.ws.once('open', () => resolve()); this.ws.once('error', reject) })
@@ -102,6 +113,7 @@ class Primary {
       let m: Record<string, unknown>
       try { m = JSON.parse(String(d)) } catch { return }
       if (typeof m.id === 'number' && this.pending.has(m.id)) { const f = this.pending.get(m.id)!; this.pending.delete(m.id); f(m); return }
+      if (m.ev === 'offline-journal') { void this.drain(); return }
       if (m.ev === 'gateway-request') {
         const payload = m.payload as { name?: string }
         this.relays.push(String(payload?.name))
@@ -273,11 +285,11 @@ for (const twin of twinsToRun) {
       }
     }, 60_000)
 
-    it('the Mac falls asleep with its socket open: after 3 missed beats reads come from the copy at once', async () => {
+    it('the Mac falls asleep with its socket open: after 3 missed beats the host answers what it can at once', async () => {
       proxy.freeze()
       try {
-        // 3 missed beats take up to 5 ticks after the last pong; 8 close the socket.
-        await sleep(BEAT * 5.5)
+        // 3 missed beats land 3 to 4 beats after the freeze; 8 (8 to 9 beats) close the socket.
+        await sleep(BEAT * 4.6)
         const r = await gatewayCall(d, 'note_read', { id: 'n_rel01' })
         expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { path: 'Projects/Release plan', id: 'n_rel01', offline: true } })
         expect(r.ms).toBeLessThan(GATEWAY_TIMEOUT)
@@ -290,11 +302,27 @@ for (const twin of twinsToRun) {
         expect(await gatewayCall(d, 'task_get', { id: 'mtask000-0001' })).toMatchObject({ ok: true, result: { offline: true } })
         // A left-out folder is not in the copy.
         expect(await gatewayCall(d, 'note_read', { path: 'health/Checkup' })).toMatchObject({ ok: false, error: { code: 'not_found' } })
+        // Its own task: written here at once, journaled for the server.
+        const own = await gatewayCall(d, 'task_update', { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' })
+        expect(own, JSON.stringify(own)).toMatchObject({ ok: true, result: { queued: true, offline: true } })
+        expect(own.ms).toBeLessThan(GATEWAY_TIMEOUT)
+        // What only the server can do is refused at once, not after a timeout.
+        const global = await gatewayCall(d, 'note_write', { path: 'Projects/New', content: 'x' })
+        expect(global).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+        expect(global.ms).toBeLessThan(GATEWAY_TIMEOUT)
+        // After a compaction the session still gets back what is open.
+        expect(await gatewayCall(d, 'open_items', { hook: 'compact' })).toMatchObject({ ok: true })
       } finally {
         proxy.thaw()
       }
-      // Awake again: reads go back to the server.
-      await sleep(BEAT * 2)
+      // Awake again on the same socket: the host's nudge, buffered while it slept,
+      // has the server take the write; then calls go to the server again.
+      await waitFor(() => primary.drained.some((r) => r.kind === 'op' && r.op === 'task_update'), 15_000, 'the server to take the queued write')
+      const op = primary.drained.find((r) => r.kind === 'op') as Extract<OfflineRecord, { kind: 'op' }>
+      expect(op).toMatchObject({ op: 'task_update', args: { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' } })
+      expect(primary.drained.filter((r) => r.kind === 'op')).toHaveLength(1)
+      primary.relays = []
+      await waitFor(async () => (await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).ok === true && primary.relays.includes('note_read'), 15_000, 'reads to go back to the server')
       primary.relays = []
       expect(await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
     }, 60_000)

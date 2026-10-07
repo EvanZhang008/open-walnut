@@ -27,6 +27,7 @@
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
 import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 import type { HostReplica } from './host-replica-core.js'
+import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
 
 export interface OfflineSliceSession { sid: string; taskId?: string; title?: string }
 
@@ -146,6 +147,8 @@ export interface OfflineHostDeps {
   boards?: BoardOffline
   /** This host's copy of the notes, memory and skills (host-replica-core.ts); absent: those reads need the server. */
   replica?: HostReplica
+  /** The post-compaction block's wording (open-items-text.ts); absent: open_items needs the server. */
+  openItems?: OpenItemsText
 }
 
 /** A message the leader routes to a session of this host (`leader.deliver`). */
@@ -201,6 +204,9 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       { name: 'board_post', title: 'Post in a Board thread (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] thread text' },
       { name: 'board_project_set', title: 'Set a Board project (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] id ...fields' },
     )
+  }
+  if (deps.openItems) {
+    OFFLINE_OPS.push({ name: 'open_items', title: 'What is still open for your task (copy on this host)', description: 'Unfinished subtasks and pending reply requests, as this host\'s copy has them; also what Walnut puts into your context after a compaction.', readonly: true, signature: '[hook]' })
   }
   const OFFLINE_NAMES = OFFLINE_OPS.map((o) => o.name).join(', ')
   /** Reads this host answers from its slice: safe to answer here when the server does not (nothing to apply twice). */
@@ -403,7 +409,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   function needsServer(what: string): GatewayResult {
-    return fail('hub_unreachable', `${what} needs the Walnut server, which is not connected to this host. Offline, this host still answers: ${OFFLINE_NAMES}.`)
+    return fail('hub_unreachable', `${what} needs the Walnut server, which is not answering this host right now. Meanwhile this host still answers: ${OFFLINE_NAMES}.`)
   }
 
   function admitWrite(callerSid: string): GatewayResult | null {
@@ -489,6 +495,59 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       request, offline: true,
       outcome: pending ? 'Still pending: the other session has not answered yet.' : `This request is ${request.status}.`,
       next: pending ? 'Do not poll this; the answer arrives in your session on its own.' : 'Nothing else is required.',
+    })
+  }
+
+  /**
+   * What is still open for the caller's task (core/sessions/open-items.ts), from
+   * the copy: its unfinished subtasks, the requests it waits on and the ones it
+   * owes, its Board. The compact hook (`hook: 'compact'`) gets the SessionStart
+   * hook's JSON, as from the server, so a compaction while the server is away
+   * still puts the list back into the session's context.
+   */
+  function opOpenItems(home: string, callerSid: string, args: Record<string, unknown>): GatewayResult {
+    const MAX_SUBTASKS = 20
+    const MAX_REQUESTS = 10
+    const now = deps.now()
+    const ownId = callerIdentity(home, callerSid).taskId
+    const tasks = tasksWithOverlay(home)
+    const task = ownId ? tasks.find((t) => t.id === ownId) : undefined
+    const items: OpenItemsInput = { subtasks: [], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }
+    if (task) {
+      items.task = { id: task.id, title: task.title }
+      // A stored parent id may be a legacy short prefix of the parent's id.
+      const children = tasks
+        .filter((t) => t.id !== task.id && !!t.parent_task_id && task.id.startsWith(t.parent_task_id) && t.phase !== 'COMPLETE')
+        .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
+      items.subtasks = children.slice(0, MAX_SUBTASKS).map((t) => ({ id: t.id, title: t.title, phase: t.phase ?? 'TODO' }))
+      items.moreSubtasks = children.length - items.subtasks.length
+      const j = journalOf(home)
+      const pending: Array<{ id: string; fromSessionId: string; toSessionId?: string; toTaskId?: string; preview: string; createdAt: string }> = [
+        ...Object.values(j.rows).filter((r) => r.status === 'pending'),
+        ...(slices.get(home)?.requests ?? []).filter((r) => !j.rows[r.id] && j.settledCopies.indexOf(r.id) === -1),
+      ]
+      const newest = (a: { createdAt: string }, b: { createdAt: string }) => b.createdAt.localeCompare(a.createdAt)
+      items.waitingOn = pending.filter((r) => r.fromSessionId === callerSid).sort(newest).slice(0, MAX_REQUESTS)
+        .map((r): OpenWait => ({ id: r.id, to: r.toTaskId ?? (r.toSessionId ? `session ${r.toSessionId.slice(0, 8)}` : 'unknown'), preview: r.preview, createdAt: r.createdAt }))
+      items.askedOfYou = pending.filter((r) => r.toSessionId === callerSid || (!!r.toTaskId && r.toTaskId === task.id)).sort(newest).slice(0, MAX_REQUESTS)
+        .map((r): OpenAsk => ({ id: r.id, from: sessionOf(home, r.fromSessionId)?.taskId ?? `session ${r.fromSessionId.slice(0, 8)}`, preview: r.preview, createdAt: r.createdAt }))
+      const board = deps.boards ? boardWithOverlay(home, task.id) : undefined
+      if (board) {
+        const msgs = Object.values(board.threads ?? {}).reduce<Array<{ author: string }>>((all, list) => all.concat(list), [])
+        items.board = {
+          version: board.version, updatedAt: board.updated_at ?? '', threads: Object.keys(board.threads ?? {}).length,
+          userMessages: msgs.filter((m) => m.author === 'user').length, marks: Object.keys(board.marks ?? {}).length,
+        }
+      }
+    }
+    const text = deps.openItems!.format(items, now)
+    if (args.hook === 'compact') {
+      return ok(text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : {})
+    }
+    return ok({
+      ...items, text, offline: true, as_of: asOf(home),
+      outcome: `${text ? 'These are still open for your task' : 'Nothing is open for your task'} (this host's copy). ${offlineNote(home)}`,
+      next: 'Read one with task_get; answer a request with task_send in_reply_to.',
     })
   }
 
@@ -775,6 +834,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
         case 'session_list': return opSessionList(home)
         case 'request_get': return opRequestGet(home, args)
         case 'task_send': case 'session_send': return await opTaskSend(home, callerSid, args)
+        case 'open_items': if (deps.openItems) return opOpenItems(home, callerSid, args); return needsServer('"open_items"')
         default: {
           const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
           if (fromCopy) return fromCopy

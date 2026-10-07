@@ -117,10 +117,15 @@ round that finds nothing changed sends nothing.
 When the copy answers: the host has no server, or the server has missed 3
 keepalive beats (a Mac asleep with its sockets still open), or a relayed read
 timed out. Beats are counted, not wall time, so a daemon that was itself
-suspended does not judge the server by the time it slept. Writes never come
-from the copy: a write still goes to the leader, or queues or fails as before.
-Every answer says it came from the copy and how old it is (`offline: true`,
-`as_of`); note search from the copy says `degraded: 'offline-keyword'`.
+suspended does not judge the server by the time it slept. A server that missed
+3 beats is away for every call, not only reads: the host's own task and Board
+writes are made on the host and journaled at once, messages between its
+sessions are delivered by the host, and what needs the leader goes to the
+companion while it leads or is refused at once instead of after a 20 s
+timeout. A relayed write that times out is never answered from the host: the
+server may have applied it. Every answer says it came from the copy and how
+old it is (`offline: true`, `as_of`); note search from the copy says
+`degraded: 'offline-keyword'`.
 
 `hosts.<alias>.keep` (Settings, Remote Hosts, Edit): `notes`, `memory`,
 `skills` switches and `notes_exclude` folders. A kind turned off is removed from
@@ -148,6 +153,9 @@ is away. A change reaches every host and the companion at once.
 | No companion | no takeover; every host keeps working alone, global writes wait |
 | Mac asleep, a session reads a note | answered from the host's copy after 3 missed beats, with its age |
 | Mac up but stuck, a session reads a note | the relay times out, then the copy answers; a write still times out |
+| Mac asleep, a session updates its own task | written on the host at once and journaled; the Mac takes it when it wakes, on the same socket or a new one |
+| Mac asleep, a session writes a note | refused at once (the note is the leader's), or done by the companion while it leads |
+| Mac asleep, a session's context is compacted | `open_items` is answered from the copy, so the list of what is open comes back |
 | Notes turned off for a host | its copy of the notes is removed; `note_read` there needs the server |
 
 ## Tests
@@ -167,13 +175,17 @@ is away. A change reaches every host and the companion at once.
   core), `tests/core/host-replica.test.ts` (the Mac's rounds against the real
   core), `tests/providers/host-replica-twins.test.ts` (both twins),
   `tests/integration/host-replica-twins.test.ts` (real daemon processes behind
-  a freezable link: asleep, stuck, gone, restarted, notes turned off), and the
+  a freezable link: asleep, stuck, gone, restarted, notes turned off; asleep
+  also covers an own write journaled and taken on wake, and a write only the
+  leader can make refused at once), `tests/providers/offline-open-items.test.ts`
+  (`open_items` from the copy, worded as the server words it), and the
   per-host list, both engines: `tests/e2e/browser/remote-hosts-keep.spec.ts`.
 
 ## Not yet
 
 - The companion's full replica (a change stream of every store instead of the
   slim projections) and retiring its special-purpose queues.
-- Writes to a host's own work made locally first and always journaled, even
-  while the Mac is up.
+- Writes to a host's own work, and messages between its sessions, made on the
+  host even while the Mac answers (docs/plan/daemon-first-hosts.md "Same-host
+  messages while the server answers" says what that would lose today).
 - A daemon as a leader (a host that reaches every other host).

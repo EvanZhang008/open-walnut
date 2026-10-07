@@ -52,10 +52,12 @@ describe('host copy: both twins', () => {
       expect(src).toMatch(/hash: (\(body\) => |function \(body\) \{ return )crypto\.createHash\('sha256'\)\.update\(body\)\.digest\('hex'\)\.slice\(0, 12\)/)
     })
 
-    it(`${name}: a read skips a primary that missed 3 beats, and a relay that timed out`, () => {
+    it(`${name}: a primary that missed 3 beats is away for every call; a relayed read that timed out reads the copy`, () => {
       const gw = fnBody(src, 'sendGatewayRequest')
       expect(gw).toMatch(/offlineHost\.answersRead\(payload\.name, home\)/)
-      expect(gw).toMatch(/>= GATEWAY_SILENT_BEATS/)
+      // Not only for reads: the silence check comes first and asks nothing about the op.
+      expect(gw).toMatch(/if \(target && \(target\.(data\?\.)?missedBeats( \?\? 0| \|\| 0)\) >= GATEWAY_SILENT_BEATS\) \{/)
+      expect(gw.indexOf('>= GATEWAY_SILENT_BEATS')).toBeLessThan(gw.indexOf('const readable') === -1 ? gw.indexOf('var readable') : gw.indexOf('const readable'))
       // Only reads: a write is never answered twice.
       const timeout = gw.slice(gw.indexOf('setTimeout('))
       expect(timeout.indexOf('if (readable && home)')).toBeGreaterThan(-1)

@@ -76,6 +76,7 @@ import { createOfflineHost, type HostSlice, type LeaderDelivery } from './offlin
 import { createLeaderBook } from './leader-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
@@ -2531,6 +2532,7 @@ const offlineHost = createOfflineHost({
   kit: createEnvelopeKit(),
   boards: createBoardOffline(),
   replica: hostReplica,
+  openItems: createOpenItemsText(),
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
@@ -2726,14 +2728,19 @@ function sendGatewayRequest(
   // While the companion leads this Walnut its primary's sockets are silent
   // (that is how the lead was won): no target until the primary takes it back.
   if (home && leaderBook.backupLead(home)) target = null
-  // A read this host can answer from its copy does not wait on a primary that
-  // has missed beats (a Mac asleep with its socket open), and does not end in a
-  // timeout: nothing is applied twice by reading.
-  const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
-  if (target && readable && (target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS) {
-    logMsg('info', 'gateway: primary silent, reading from the copy', { callerSid, op: payload.name, missedBeats: target.data?.missedBeats })
+  // A primary that has missed beats (a Mac asleep with its socket open) is away
+  // for every call, as it is once the socket closes: what this host does itself
+  // (reads, its own task and Board writes, messages between its sessions) is done
+  // here at once and journaled, the rest goes to the companion while it leads or
+  // is refused at once, never after a timeout. Nothing was sent to it, so nothing
+  // is applied twice; its first pong makes it the target again.
+  if (target && (target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS) {
+    logMsg('info', 'gateway: primary silent, answering here', { callerSid, op: payload.name, missedBeats: target.data?.missedBeats })
     target = null
   }
+  // A relayed read this host can answer from its copy does not end in a timeout:
+  // nothing is applied twice by reading.
+  const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
   // Answer here while the Walnut is away, and while its server is still taking
   // the handover: an id it has not imported yet must never reach it.
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {

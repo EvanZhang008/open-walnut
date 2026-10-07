@@ -51,6 +51,7 @@ import { createOfflineHost } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
@@ -234,6 +235,7 @@ export function getDaemonSource(): string {
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
+    ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -373,6 +375,17 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const noDir = { readFileSync: () => { throw new Error('none') } } as unknown as typeof fs
       const replica = createReplica({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', hash: () => '000000000000', log: () => {} })
       if (replica.answer('/x', 'note_read', { path: 'a' }, '') !== null || replica.READ_OPS.indexOf('note_read') === -1) throw new Error('host copy did not build')
+    }
+    // Open items smoke: a reconstructed formatter must say nothing for nothing
+    // open, and name an open subtask.
+    const createOpenItems = reconstructed['__CREATE_OPEN_ITEMS_TEXT__'] as typeof createOpenItemsText | undefined
+    if (createOpenItems) {
+      const fmt = createOpenItems()
+      const task = { id: 'mtask', title: 't' }
+      if (fmt.format({ task, subtasks: [], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }, 0) !== ''
+        || !fmt.format({ task, subtasks: [{ id: 'msub', title: 's', phase: 'TODO' }], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }, 0).includes('- msub [TODO] s')) {
+        throw new Error('open items text did not build')
+      }
     }
     // Leader book smoke: a reconstructed book must refuse a companion claim for
     // a Walnut it does not know, without touching disk.
@@ -3635,6 +3648,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
   kit: (__CREATE_ENVELOPE_KIT__)(),
   boards: (__CREATE_BOARD_OFFLINE__)(),
+  openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
   replica: hostReplica,
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
@@ -3808,13 +3822,14 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   // While the companion leads this Walnut its primary's sockets are silent: no
   // target until the primary takes the lead back.
   if (home && leaderBook.backupLead(home)) target = null;
-  // A read this host can answer from its copy does not wait on a primary that
-  // has missed beats, and does not end in a timeout (twin of daemon-standalone.ts).
-  var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
-  if (target && readable && (target.missedBeats || 0) >= GATEWAY_SILENT_BEATS) {
-    logMsg('info', 'gateway: primary silent, reading from the copy', { callerSid: callerSid, op: payload.name, missedBeats: target.missedBeats });
+  // A primary that has missed beats is away for every call (what this host does
+  // itself is done here at once, the rest is not left to time out), and a relayed
+  // read the copy answers does not end in a timeout (twin of daemon-standalone.ts).
+  if (target && (target.missedBeats || 0) >= GATEWAY_SILENT_BEATS) {
+    logMsg('info', 'gateway: primary silent, answering here', { callerSid: callerSid, op: payload.name, missedBeats: target.missedBeats });
     target = null;
   }
+  var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
     logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target });
     offlineHost.handle(home, callerSid, capability, payload).then(function (r) {

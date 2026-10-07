@@ -80,11 +80,20 @@ persists it, so a daemon restart while the Mac sleeps keeps it.
 ```
 home = spawn journal home of the calling session
 client = the connected server whose home matches, else an untagged server (old build)
+client missed 3 keepalive beats?     → no client (a Mac asleep with its socket open is away)
 journal pending for home?           → answer offline (the server is still taking the handover)
-client found                         → relay (unchanged)
+client found                         → relay (a read that times out is answered from the copy)
 read copy for home exists            → answer offline
 otherwise                            → hub_unreachable (unchanged)
 ```
+
+A server that has stopped answering pings is treated as gone at once, for every
+call, not after the socket is closed (8 beats) or a relay times out (20 s):
+what the host does itself (reads, its own task and Board writes, messages
+between its sessions) is done and journaled, the rest is refused at once or
+goes to the companion while it leads. Nothing was relayed to it, so nothing is
+applied twice. Its first pong makes it the client again, and the journal nudge
+it finds waiting on the socket has it take the handover.
 
 Matching by home also fixes a quiet bug: the relay used to pick "any connected
 server", so on a shared host a test server could answer the real Walnut's calls.
@@ -100,6 +109,7 @@ server", so on a shared host a test server could answer the real Walnut's calls.
 | `request_get` | rows the daemon owns or holds a copy of |
 | `task_update`, `task_complete` | journaled with the caller and time, applied to the read copy so later reads agree, replayed through the op registry on reconnect |
 | `note_read`, `note_search`, `memory_read`, `skill_read` | from the host's copy of notes, memory and skills, when the host keeps that kind (docs/plan/walnut-control-plane.md "What a host keeps"); also while the server is silent or a relayed read timed out |
+| `open_items` (and the compact hook) | from the copy: the caller's unfinished subtasks, the requests it waits on and owes (with what this host settled or opened since), its Board; worded by the server's own formatter (`open-items-text.ts`) |
 | anything else | `hub_unreachable`, with a message listing what works offline |
 
 On the Mac, a session's `walnut` is the installed Walnut CLI, which talks to the
@@ -154,9 +164,24 @@ settles anything, so an offline reply is never followed by a "no reply" notice.
 | Phase | Scope |
 |---|---|
 | 1 (this change) | read copy, home-aware routing, offline reads, same-host messaging with request rows and turn-end notices, queued `task_update` / `task_complete`, handover |
-| 2 | same-host messaging owned by the daemon even while the server is connected (one path, no mode that only runs when the Mac is away); trigger fires delivered to same-host sessions by the daemon (done: the daemon arbitrates every fire, `trigger-claim-v1`, see docs/plan/walnut-trigger.md "Who delivers a fire") |
+| 2 | trigger fires delivered to same-host sessions by the daemon (done: the daemon arbitrates every fire, `trigger-claim-v1`, see docs/plan/walnut-trigger.md "Who delivers a fire"); a server that stopped answering pings is away for every call at once (done); same-host messaging owned by the daemon even while the server answers (open, see "Same-host messages while the server answers") |
 | 3 | the cloud companion as the fallback hub for cross-host and global ops while the Mac is away (done: the companion is the backup leader, see docs/plan/walnut-control-plane.md); the team Board kept on the host (done: `board_*` answered from the copy and journaled); notes, memory and skills read from the host's own copy, with a per-host list of what it keeps (done: `host-replica-v1`) |
 | later | offline session start, once the launch recipe can be cached per project |
+
+## Same-host messages while the server answers
+
+Not done, on purpose for now. The daemon's delivery is the simple one a host
+can do alone; the server's send does more, and a message between two sessions
+on one host would lose all of it if the daemon took it while the server answers:
+
+- a target waiting on a tool permission prompt gets the message parked until
+  the prompt is answered, not written into the middle of it;
+- a peer's queue is capped, and the throttle is shared with every other path;
+- an answer goes to the session the asker continues in (a fork), not the row's;
+- the server's message queue drives what the web and phone show for the send.
+
+Moving them means a second message queue in the daemon. Until then a host
+delivers itself only while the server is away or silent, which is when it matters.
 
 ## Known limits of phase 1
 
