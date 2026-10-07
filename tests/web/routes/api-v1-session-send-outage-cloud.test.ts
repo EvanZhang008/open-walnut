@@ -46,6 +46,8 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeDetachSession: () => {},
   attachBridge: () => {},
   closeAllBridges: () => {},
+  // The backup leader's gateway (server.ts, cloud mode).
+  setGatewayRequestHandler: () => {},
   setMobileEventHandler: () => {},
   setPrimaryBridgeConnectedHandler: () => {},
   addPrimaryBridgeConnectedHandler: (h: () => void) => {

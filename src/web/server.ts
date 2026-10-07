@@ -1876,9 +1876,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     leaderLoopHandle = await startBackupLeader()
   } else {
     const { startLeaderHeartbeat, watchBackupLeaderSetting } = await import('../core/leader/primary-leader.js')
+    const { startHostReplicaSync } = await import('../core/host-replica-sync.js')
     const heartbeat = startLeaderHeartbeat()
     const unwatch = watchBackupLeaderSetting()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch() } }
+    // Each host's read copy of the notes, memory and skills (core/host-replica.ts).
+    const replicas = startHostReplicaSync()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop() } }
   }
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)

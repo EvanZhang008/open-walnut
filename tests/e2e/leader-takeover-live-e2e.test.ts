@@ -227,6 +227,11 @@ async function startPrimary(dev: Daemon, old: Daemon): Promise<void> {
   await fsp.mkdir(path.join(primary.data, 'sync'), { recursive: true })
   await fsp.writeFile(path.join(primary.data, 'sync', 'bridge-tokens.json'), JSON.stringify({ 'bridge-local': tokens.local, 'bridge-devbox': tokens.devbox, 'bridge-oldbox': tokens.oldbox }), { mode: 0o600 })
   await fsp.writeFile(path.join(primary.data, 'config.yaml'), 'version: 1\nuser:\n  name: Tester\ndefaults:\n  priority: none\n  platform: local\nprovider:\n  type: claude-code\n')
+  // What the hosts keep a copy of (docs/plan/walnut-control-plane.md "What a host keeps").
+  await fsp.mkdir(path.join(primary.data, 'notes', 'Projects'), { recursive: true })
+  await fsp.writeFile(path.join(primary.data, 'notes', 'Projects', 'Release.md'), '# Release\nShip on Friday after the rollback drill.\n')
+  await fsp.mkdir(path.join(primary.data, 'memory'), { recursive: true })
+  await fsp.writeFile(path.join(primary.data, 'memory', 'MEMORY.md'), '# Memory\n- deploy with the script\n')
   const src = (f: string) => JSON.stringify(path.join(REPO_ROOT, f))
   await bootServer(primary, `
 const c = await import(${src('src/constants.ts')})
@@ -303,6 +308,23 @@ function macPids(): number[] {
 
 const companionLeads = async () => ((await api(companion, '/api/leader')).json.leading ?? []) as Array<{ host: string; epoch: number }>
 
+/** What a host's copy of the primary's notes, memory and skills holds (replica.status). */
+async function replicaStatus(d: Daemon): Promise<Record<string, { entries: number; pending: number }>> {
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const s = new WebSocket(`ws://127.0.0.1:${d.port}`)
+    s.once('open', () => resolve(s))
+    s.once('error', reject)
+  })
+  try {
+    const reply = await new Promise<Record<string, any>>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('replica.status timed out')), 10_000)
+      ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
+      ws.send(JSON.stringify({ id: 1, cmd: 'replica.status', home: primary.data }))
+    })
+    return (reply.kinds ?? {}) as Record<string, { entries: number; pending: number }>
+  } finally { ws.close() }
+}
+
 describe('the Mac is gone and the cloud companion takes over (real servers, real daemons)', () => {
   let devbox: Daemon
   let oldbox: Daemon
@@ -367,6 +389,25 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     expect(await companionLeads()).toEqual([])
   }, 400_000)
 
+  it('the Mac gives every host a copy of the notes, memory and skills, and a note written there reaches it', async () => {
+    for (const d of [devbox, oldbox]) {
+      await waitFor(async () => {
+        const k = await replicaStatus(d)
+        return k.notes?.entries >= 1 && k.notes.pending === 0 && k.memory?.entries >= 1 && k.skills?.entries >= 1 ? k : null
+      }, 120_000, `${d.name}'s copy`)
+    }
+    // While the Mac is up a read is the Mac's, and so is a write.
+    const read = await gatewayCall(devbox, A, 'note_read', { path: 'Projects/Release' })
+    expect(read.ok, JSON.stringify(read)).toBe(true)
+    if (read.ok) expect(read.result.offline).toBeUndefined()
+    const wrote = await gatewayCall(devbox, A, 'note_write', { path: 'Projects/Standup', content: '# Standup\nThe drill passed; the build is green.\n' })
+    expect(wrote.ok, JSON.stringify(wrote)).toBe(true)
+    // The write's own event brings both copies up to date, with no sweep.
+    for (const d of [devbox, oldbox]) {
+      await waitFor(async () => ((await replicaStatus(d)).notes?.entries ?? 0) >= 2, 30_000, `the new note on ${d.name}`)
+    }
+  }, 300_000)
+
   it('the Mac sleeps (server and local daemon frozen): the companion leads both hosts', async () => {
     for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
     const leads = await waitFor(async () => {
@@ -374,6 +415,20 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
       return l.length === 2 ? l : null
     }, 6 * T, 'the companion to lead both hosts')
     expect(leads.map((l) => l.host).sort()).toEqual(['devbox', 'oldbox'])
+  }, 120_000)
+
+  it('while the Mac sleeps, sessions on both hosts read notes, memory and skills from their own copy', async () => {
+    for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
+      const note = await gatewayCall(d, sid, 'note_read', { path: 'Projects/Standup' })
+      expect(note, JSON.stringify(note)).toMatchObject({ ok: true, result: { path: 'Projects/Standup', offline: true } })
+      if (note.ok) expect(String(note.result.content)).toContain('the build is green')
+      const found = await gatewayCall(d, sid, 'note_search', { q: 'rollback drill' })
+      expect(found.ok && (found.result.results as Array<{ path: string }>).map((r) => r.path)).toEqual(['Projects/Release'])
+      const memory = await gatewayCall(d, sid, 'memory_read', { doc: 'global' })
+      expect(memory.ok && String((memory.result.memory as { content: string }).content)).toContain('deploy with the script')
+      const skill = await gatewayCall(d, sid, 'skill_read', { dirName: 'walnut-board' })
+      expect(skill, JSON.stringify(skill).slice(0, 400)).toMatchObject({ ok: true, result: { skill: { dirName: 'walnut-board' }, offline: true } })
+    }
   }, 120_000)
 
   it('A on devbox asks B on oldbox, and B answers, through the companion', async () => {

@@ -34,6 +34,80 @@ interface HostEntry {
   discovered: boolean;
   /** Only `false` is ever written (config-only switch, no control here yet). */
   autofix?: boolean;
+  /** What the host keeps a read copy of (core/host-replica.ts); undefined = everything. */
+  keep?: HostKeep;
+  /** The "Leave out folders" text as typed (a trailing comma survives a save). */
+  excludeText?: string;
+}
+
+type HostKeep = NonNullable<NonNullable<Config['hosts']>[string]['keep']>;
+
+/** Only what differs from "keep everything" is written, so a saved host round-trips unchanged. */
+function normalizeKeep(keep: HostKeep | undefined): HostKeep | undefined {
+  if (!keep) return undefined;
+  const exclude = (keep.notes_exclude ?? []).map((f) => f.trim()).filter(Boolean);
+  const out: HostKeep = {
+    ...(keep.notes === false ? { notes: false } : {}),
+    ...(exclude.length > 0 ? { notes_exclude: exclude } : {}),
+    ...(keep.memory === false ? { memory: false } : {}),
+    ...(keep.skills === false ? { skills: false } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function splitFolders(text: string): string[] {
+  return text.split(',').map((f) => f.trim()).filter(Boolean);
+}
+
+/**
+ * The persisted `hosts` map from local entries, dropping incomplete rows (no
+ * alias/hostname). Used both by the save call and the auto-save fingerprint so
+ * half-typed hosts never get written.
+ */
+function entriesToHosts(hosts: HostEntry[]): NonNullable<Config['hosts']> {
+  const hostsConfig: NonNullable<Config['hosts']> = {};
+  for (const h of hosts) {
+    if (!h.alias || !h.hostname) continue;
+    const keep = normalizeKeep(h.excludeText === undefined ? h.keep : { ...(h.keep ?? {}), notes_exclude: splitFolders(h.excludeText) });
+    hostsConfig[h.alias] = {
+      hostname: h.hostname,
+      user: h.user || undefined,
+      port: h.port,
+      label: h.label || undefined,
+      shell_setup: h.shell_setup || undefined,
+      enabled: h.enabled,
+      discovered: h.discovered,
+      // Kept through a save: the editor has no control for it, and dropping it
+      // would silently turn a host's automatic fixes back on.
+      ...(h.autofix === false ? { autofix: false } : {}),
+      ...(keep ? { keep } : {}),
+    };
+  }
+  return hostsConfig;
+}
+
+/**
+ * The persisted hosts through the SAME field order entriesToHosts produces, so
+ * the baseline can't differ from `current` purely by YAML key ordering (which
+ * would otherwise loop: save, refresh, reorder mismatch, save again).
+ */
+function normalizeHosts(h: Config['hosts']): NonNullable<Config['hosts']> {
+  const out: NonNullable<Config['hosts']> = {};
+  for (const [alias, v] of Object.entries(h ?? {})) {
+    const keep = normalizeKeep(v.keep);
+    out[alias] = {
+      hostname: v.hostname,
+      user: v.user || undefined,
+      port: v.port,
+      label: v.label || undefined,
+      shell_setup: v.shell_setup || undefined,
+      enabled: v.enabled ?? true,
+      discovered: v.discovered ?? false,
+      ...(v.autofix === false ? { autofix: false } : {}),
+      ...(keep ? { keep } : {}),
+    };
+  }
+  return out;
 }
 
 let nextHostKey = 0;
@@ -54,6 +128,7 @@ function hostsFromConfig(config: Config): HostEntry[] {
     enabled: h.enabled ?? true,
     discovered: h.discovered ?? false,
     ...(h.autofix === false ? { autofix: false } : {}),
+    ...(h.keep ? { keep: h.keep } : {}),
   }));
 }
 
@@ -75,8 +150,11 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // Cold-read the connect status once; every change after this is a WS push.
   useEffect(() => { void hydrateHostStatus(); }, []);
 
+  // A config that already says what the rows say (this editor's own save coming
+  // back) keeps the rows as typed: rebuilding them would drop a comma typed in
+  // "Leave out folders" before the save, and any draft row.
   useEffect(() => {
-    setHosts(hostsFromConfig(config));
+    setHosts((prev) => (JSON.stringify(entriesToHosts(prev)) === JSON.stringify(normalizeHosts(config.hosts)) ? prev : hostsFromConfig(config)));
     setSessionLimits(config.session_limits ?? {});
   }, [config]);
 
@@ -94,27 +172,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     setExpanded(null);
   };
 
-  // Build the persisted `hosts` map from local entries, dropping incomplete rows (no alias/hostname).
-  // Used both by the save call and the auto-save fingerprint so half-typed hosts never get written.
-  const buildHostsConfig = (): NonNullable<Config['hosts']> => {
-    const hostsConfig: NonNullable<Config['hosts']> = {};
-    for (const h of hosts) {
-      if (!h.alias || !h.hostname) continue;
-      hostsConfig[h.alias] = {
-        hostname: h.hostname,
-        user: h.user || undefined,
-        port: h.port,
-        label: h.label || undefined,
-        shell_setup: h.shell_setup || undefined,
-        enabled: h.enabled,
-        discovered: h.discovered,
-        // Kept through a save: the editor has no control for it, and dropping it
-        // would silently turn a host's automatic fixes back on.
-        ...(h.autofix === false ? { autofix: false } : {}),
-      };
-    }
-    return hostsConfig;
-  };
+  const buildHostsConfig = (): NonNullable<Config['hosts']> => entriesToHosts(hosts);
 
   // Normalize the per-host limits to numbers. The KeyValueEditor yields strings while a
   // post-save config round-trip yields numbers; normalizing keeps the auto-save fingerprint
@@ -129,26 +187,6 @@ export function RemoteHostsSection({ config, onSave }: Props) {
 
   const handleSave = async () => {
     await onSave({ hosts: buildHostsConfig(), session_limits: normalizeLimits(sessionLimits) });
-  };
-
-  // Re-normalize the persisted hosts through the SAME field order buildHostsConfig produces,
-  // so the baseline can't differ from `current` purely by YAML key ordering (which would
-  // otherwise loop: save, refresh, reorder mismatch, save again).
-  const normalizeHosts = (h: Config['hosts']): NonNullable<Config['hosts']> => {
-    const out: NonNullable<Config['hosts']> = {};
-    for (const [alias, v] of Object.entries(h ?? {})) {
-      out[alias] = {
-        hostname: v.hostname,
-        user: v.user || undefined,
-        port: v.port,
-        label: v.label || undefined,
-        shell_setup: v.shell_setup || undefined,
-        enabled: v.enabled ?? true,
-        discovered: v.discovered ?? false,
-        ...(v.autofix === false ? { autofix: false } : {}),
-      };
-    }
-    return out;
   };
 
   // Fingerprint the VALIDATED hosts map (not raw entries) so typing a partial host, or a row
@@ -243,6 +281,68 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     />
   );
 
+  const updateKeep = (idx: number, patch: Partial<HostKeep>) => {
+    setHosts((prev) => prev.map((h, i) => (i === idx ? { ...h, keep: { ...(h.keep ?? {}), ...patch } } : h)));
+  };
+
+  // What the host keeps a read copy of, for its sessions while this Mac cannot
+  // answer. Its own work is always kept; the rest is the user's choice.
+  const keepRows = (idx: number) => {
+    const keep = hosts[idx].keep ?? {};
+    const name = hostName(hosts[idx], idx);
+    return (
+      <>
+        <SettingsRow
+          label="Its own work"
+          help="Its sessions, their tasks, triggers, the team Board and replies are always kept."
+          indent
+          control={<SettingsTag>Always kept</SettingsTag>}
+        />
+        <SettingsRow
+          label="Notes"
+          htmlFor={`rh-keep-notes-${idx}`}
+          help="A copy of the note text (no attachments), so its sessions read notes while this Mac is away."
+          indent
+          control={<ToggleSwitch id={`rh-keep-notes-${idx}`} checked={keep.notes !== false} onChange={(v) => updateKeep(idx, { notes: v })} aria-label={`Keep notes on ${name}`} />}
+        />
+        {keep.notes !== false && (
+          <SettingsRow
+            label="Leave out folders"
+            htmlFor={`rh-keep-exclude-${idx}`}
+            help="Folders of the vault never copied to this host, separated by commas."
+            indent
+            wide
+            control={
+              <input
+                id={`rh-keep-exclude-${idx}`}
+                type="text"
+                className="settings-input settings-input--long"
+                value={hosts[idx].excludeText ?? (keep.notes_exclude ?? []).join(', ')}
+                onChange={(e) => updateHost(idx, 'excludeText', e.target.value)}
+                placeholder="health, finance"
+                spellCheck={false}
+              />
+            }
+          />
+        )}
+        <SettingsRow
+          label="Memory"
+          htmlFor={`rh-keep-memory-${idx}`}
+          help="MEMORY.md and USER.md."
+          indent
+          control={<ToggleSwitch id={`rh-keep-memory-${idx}`} checked={keep.memory !== false} onChange={(v) => updateKeep(idx, { memory: v })} aria-label={`Keep memory on ${name}`} />}
+        />
+        <SettingsRow
+          label="Skills"
+          htmlFor={`rh-keep-skills-${idx}`}
+          help="The skills sessions read with skill_read."
+          indent
+          control={<ToggleSwitch id={`rh-keep-skills-${idx}`} checked={keep.skills !== false} onChange={(v) => updateKeep(idx, { skills: v })} aria-label={`Keep skills on ${name}`} />}
+        />
+      </>
+    );
+  };
+
   const addButton = (
     <SettingsButton onClick={addHost} data-testid="remote-hosts-add">Add host</SettingsButton>
   );
@@ -334,6 +434,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
                       />
                     }
                   />
+                  {keepRows(idx)}
                 </>
               )}
             </Fragment>

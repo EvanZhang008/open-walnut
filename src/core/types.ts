@@ -1124,6 +1124,17 @@ export interface Config {
     /** Set only on the row config-manager injects for the paired cloud box
      *  (core/hosts/cloud-box-host.ts). Never written to config.yaml. */
     cloud_box?: boolean;
+    /** What this host keeps a read copy of, for its sessions to read while this
+     *  Mac cannot answer (core/host-replica.ts). Each is on unless set false; a
+     *  kind turned off is removed from the host. Its own work (sessions, their
+     *  tasks, triggers, the team Board, replies) is always kept. */
+    keep?: {
+      notes?: boolean;
+      /** Vault folders never copied to this host. */
+      notes_exclude?: string[];
+      memory?: boolean;
+      skills?: boolean;
+    };
   }>;
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the

@@ -50,6 +50,7 @@ import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHost } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createBoardOffline } from './offline-board-core.js'
+import { createHostReplica } from './host-replica-core.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
@@ -232,6 +233,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_HOST__', createOfflineHost.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
+    ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -363,6 +365,14 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const kit = createBoards()
       const one = kit.applyEdits('<p>a</p>', [{ old: 'a', new: 'b' }])
       if (!one.ok || one.html !== '<p>b</p>' || kit.applyEdits('aa', [{ old: 'a', new: 'b' }]).ok) throw new Error('board copy kit did not build')
+    }
+    // Host copy smoke: a reconstructed replica must refuse a body the manifest
+    // did not ask for, without touching disk.
+    const createReplica = reconstructed['__CREATE_HOST_REPLICA__'] as typeof createHostReplica | undefined
+    if (createReplica) {
+      const noDir = { readFileSync: () => { throw new Error('none') } } as unknown as typeof fs
+      const replica = createReplica({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', hash: () => '000000000000', log: () => {} })
+      if (replica.answer('/x', 'note_read', { path: 'a' }, '') !== null || replica.READ_OPS.indexOf('note_read') === -1) throw new Error('host copy did not build')
     }
     // Leader book smoke: a reconstructed book must refuse a companion claim for
     // a Walnut it does not know, without touching disk.
@@ -2496,6 +2506,7 @@ const wsClients = new Set();
 var TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15000, 100);
 function heardFrom(client) {
   client.lastHeardAt = Date.now();
+  client.missedBeats = 0;
   if (client.origin === 'bridge') return;
   // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
   // host is a witness of whether it is still there (leader-core.ts).
@@ -2637,6 +2648,7 @@ function clientKeepaliveExpired(ws) {
   const heardAt = ws.lastHeardAt;
   const prev = clientKeepalive.get(ws);
   const missed = prev && prev.heardAt === heardAt ? prev.missed + 1 : 0;
+  ws.missedBeats = missed;
   if (missed < CLIENT_KEEPALIVE_MISSED) {
     clientKeepalive.set(ws, { heardAt: heardAt, missed: missed });
     return false;
@@ -3055,6 +3067,11 @@ function dispatchCommand(ws, id, cmd) {
     case 'host.slice': return cmdHostSlice(ws, id, cmd);
     case 'offline.drain': return cmdOfflineDrain(ws, id, cmd);
     case 'offline.ack': return cmdOfflineAck(ws, id, cmd);
+    // The host's copy (host-replica-v1): NOT in BRIDGE_ALLOWED_COMMANDS either.
+    case 'replica.sync': return cmdReplica(ws, id, 'sync', cmd);
+    case 'replica.put': return cmdReplica(ws, id, 'put', cmd);
+    case 'replica.drop': return cmdReplica(ws, id, 'drop', cmd);
+    case 'replica.status': return cmdReplica(ws, id, 'status', cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
@@ -3595,6 +3612,21 @@ function resolveCallerSid(sid) {
 // journal is drained with offline.drain / offline.ack.
 var gatewayClientHomes = new WeakMap();
 
+// This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts,
+// inlined), kept across reboots in the trigger state's home. WALNUT_REPLICA_DIR is
+// for TESTS ONLY. Twin of the daemon-standalone.ts block.
+var REPLICA_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'host-replica')
+  : process.env.WALNUT_REPLICA_DIR || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-replica') : path.join(DAEMON_DIR, 'host-replica'));
+var hostReplica = (__CREATE_HOST_REPLICA__)({
+  fs: fs, path: path,
+  dir: REPLICA_DIR,
+  now: function () { return Date.now(); },
+  keyOf: function (value) { return crypto.createHash('sha1').update(value).digest('hex').slice(0, 16); },
+  hash: function (body) { return crypto.createHash('sha256').update(body).digest('hex').slice(0, 12); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
 var offlineHost = (__CREATE_OFFLINE_HOST__)({
   fs: fs, path: path,
   dir: path.join(DAEMON_DIR, 'offline-host'),
@@ -3603,6 +3635,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
   kit: (__CREATE_ENVELOPE_KIT__)(),
   boards: (__CREATE_BOARD_OFFLINE__)(),
+  replica: hostReplica,
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
@@ -3644,6 +3677,8 @@ if (offlineSweepTimer.unref) offlineSweepTimer.unref();
 var LEADER_TAKEOVER_MS = envTimerMs(process.env.WALNUT_LEADER_TAKEOVER_MS, 60000, 500);
 // At most one leader-lost event per primary socket in this window.
 var LEADER_NUDGE_MS = 10000;
+// Missed keepalive beats after which a primary is skipped for reads the copy answers.
+var GATEWAY_SILENT_BEATS = 3;
 var leaderBook = (__CREATE_LEADER_BOOK__)({
   fs: fs, path: path,
   dir: path.join(DAEMON_DIR, 'leader'),
@@ -3739,6 +3774,22 @@ function cmdOfflineAck(ws, id, cmd) {
   sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo));
 }
 
+// The host's copy (host-replica-v1): trusted sockets only, like host.slice
+// (twin of daemon-standalone.ts).
+function cmdReplica(ws, id, op, cmd) {
+  if (ws.origin === 'bridge') return sendError(ws, id, 'replica.' + op + ': trusted clients only');
+  try {
+    var home = cmd.home;
+    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts));
+    if (op === 'put') return sendOk(ws, id, hostReplica.put(home, cmd.kind, cmd.files));
+    if (op === 'drop') return sendOk(ws, id, hostReplica.drop(home, cmd.kind));
+    if (typeof home !== 'string' || !home) return sendError(ws, id, 'replica.status: missing home');
+    return sendOk(ws, id, { kinds: hostReplica.status(home) });
+  } catch (err) {
+    sendError(ws, id, err.message);
+  }
+}
+
 function sendGatewayRequest(capability, callerSid, payload, respond) {
   // The server of the caller's Walnut when one pushed a copy; else any trusted
   // client that never identified itself (an older server), never the bridge
@@ -3757,6 +3808,13 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   // While the companion leads this Walnut its primary's sockets are silent: no
   // target until the primary takes the lead back.
   if (home && leaderBook.backupLead(home)) target = null;
+  // A read this host can answer from its copy does not wait on a primary that
+  // has missed beats, and does not end in a timeout (twin of daemon-standalone.ts).
+  var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
+  if (target && readable && (target.missedBeats || 0) >= GATEWAY_SILENT_BEATS) {
+    logMsg('info', 'gateway: primary silent, reading from the copy', { callerSid: callerSid, op: payload.name, missedBeats: target.missedBeats });
+    target = null;
+  }
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
     logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target });
     offlineHost.handle(home, callerSid, capability, payload).then(function (r) {
@@ -3775,6 +3833,11 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   var relayId = gatewayRelayCounter;
   var timer = setTimeout(function () {
     gatewayRelayPending.delete(relayId);
+    if (readable && home) {
+      logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId: relayId, callerSid: callerSid, op: payload.name });
+      offlineHost.handle(home, callerSid, capability, payload).then(function (r) { respond(r); });
+      return;
+    }
     respond(gatewayError('hub_timeout', 'primary server timed out'));
   }, GATEWAY_HUB_TIMEOUT_MS);
   gatewayRelayPending.set(relayId, { respond: respond, timer: timer });

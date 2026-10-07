@@ -75,6 +75,7 @@ import { createClaudeCheck } from './claude-check-core.js'
 import { createOfflineHost, type HostSlice, type LeaderDelivery } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createBoardOffline } from './offline-board-core.js'
+import { createHostReplica } from './host-replica-core.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
@@ -691,6 +692,8 @@ interface WsData {
   lastHeardAt?: number
   /** When this socket was last told the companion leads its Walnut (see heardFrom). */
   leaderNudgedAt?: number
+  /** Keepalive beats in a row this trusted socket stayed silent (0 once heard again). */
+  missedBeats?: number
 }
 
 /**
@@ -1116,7 +1119,7 @@ const wsClients = new Set<ServerWebSocket<WsData>>()
 // floor every daemon timer knob has (envTimerMs).
 const TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15_000, 100)
 function heardFrom(ws: ServerWebSocket<WsData>): void {
-  if (ws.data) ws.data.lastHeardAt = Date.now()
+  if (ws.data) { ws.data.lastHeardAt = Date.now(); ws.data.missedBeats = 0 }
   if (ws.data?.origin === 'bridge') return
   // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
   // host is a witness of whether it is still there (leader-core.ts).
@@ -1959,6 +1962,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'host.slice': return cmdHostSlice(ws, id as number, cmd)
     case 'offline.drain': return cmdOfflineDrain(ws, id as number, cmd)
     case 'offline.ack': return cmdOfflineAck(ws, id as number, cmd)
+    // The host's copy ('host-replica-v1'): NOT in BRIDGE_ALLOWED_COMMANDS either.
+    case 'replica.sync': return cmdReplica(ws, id as number, 'sync', cmd)
+    case 'replica.put': return cmdReplica(ws, id as number, 'put', cmd)
+    case 'replica.drop': return cmdReplica(ws, id as number, 'drop', cmd)
+    case 'replica.status': return cmdReplica(ws, id as number, 'status', cmd)
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpSteer': return cmdAcpOp(ws, id as number, cmd, 'steer')
@@ -2498,6 +2506,22 @@ function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse 
 /** Trusted socket → the Walnut data dir it pushed a copy for. */
 const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
 
+// This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts),
+// pushed by the primary with replica.sync / replica.put, removed with replica.drop.
+// Kept across reboots (unlike /tmp), in the trigger state's home. WALNUT_REPLICA_DIR
+// is for TESTS ONLY. Mirror daemon-source.ts.
+const REPLICA_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'host-replica')
+  : process.env.WALNUT_REPLICA_DIR || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-replica') : path.join(DAEMON_DIR, 'host-replica'))
+const hostReplica = createHostReplica({
+  fs, path,
+  dir: REPLICA_DIR,
+  now: () => Date.now(),
+  keyOf: (value) => crypto.createHash('sha1').update(value).digest('hex').slice(0, 16),
+  hash: (body) => crypto.createHash('sha256').update(body).digest('hex').slice(0, 12),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
 const offlineHost = createOfflineHost({
   fs, path,
   dir: path.join(DAEMON_DIR, 'offline-host'),
@@ -2506,6 +2530,7 @@ const offlineHost = createOfflineHost({
   keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
   kit: createEnvelopeKit(),
   boards: createBoardOffline(),
+  replica: hostReplica,
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
@@ -2546,6 +2571,8 @@ setInterval(() => { void offlineHost.sweep() }, 60_000).unref?.()
 const LEADER_TAKEOVER_MS = envTimerMs(process.env.WALNUT_LEADER_TAKEOVER_MS, 60_000, 500)
 /** At most one leader-lost event per primary socket in this window. */
 const LEADER_NUDGE_MS = 10_000
+/** Missed keepalive beats after which a primary is skipped for reads the copy answers. */
+const GATEWAY_SILENT_BEATS = 3
 const leaderBook = createLeaderBook({
   fs, path,
   dir: path.join(DAEMON_DIR, 'leader'),
@@ -2660,6 +2687,21 @@ function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo))
 }
 
+// The host's copy ('host-replica-v1'): trusted sockets only, like host.slice.
+function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' | 'drop' | 'status', cmd: Record<string, unknown>) {
+  if (ws.data?.origin === 'bridge') return sendError(ws, id, `replica.${op}: trusted clients only`)
+  try {
+    const home = cmd.home as string
+    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts as Record<string, unknown> | undefined))
+    if (op === 'put') return sendOk(ws, id, hostReplica.put(home, cmd.kind, cmd.files))
+    if (op === 'drop') return sendOk(ws, id, hostReplica.drop(home, cmd.kind))
+    if (typeof home !== 'string' || !home) return sendError(ws, id, 'replica.status: missing home')
+    return sendOk(ws, id, { kinds: hostReplica.status(home) })
+  } catch (err) {
+    sendError(ws, id, (err as Error).message)
+  }
+}
+
 function sendGatewayRequest(
   capability: string,
   callerSid: string,
@@ -2684,6 +2726,14 @@ function sendGatewayRequest(
   // While the companion leads this Walnut its primary's sockets are silent
   // (that is how the lead was won): no target until the primary takes it back.
   if (home && leaderBook.backupLead(home)) target = null
+  // A read this host can answer from its copy does not wait on a primary that
+  // has missed beats (a Mac asleep with its socket open), and does not end in a
+  // timeout: nothing is applied twice by reading.
+  const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
+  if (target && readable && (target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS) {
+    logMsg('info', 'gateway: primary silent, reading from the copy', { callerSid, op: payload.name, missedBeats: target.data?.missedBeats })
+    target = null
+  }
   // Answer here while the Walnut is away, and while its server is still taking
   // the handover: an id it has not imported yet must never reach it.
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
@@ -2704,6 +2754,11 @@ function sendGatewayRequest(
   const relayId = ++gatewayRelayCounter
   const timer = setTimeout(() => {
     gatewayRelayPending.delete(relayId)
+    if (readable && home) {
+      logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId, callerSid, op: payload.name })
+      void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse))
+      return
+    }
     respond(gatewayError('hub_timeout', 'primary server timed out'))
   }, gatewayHubTimeoutMs())
   gatewayRelayPending.set(relayId, { respond, timer })
@@ -8836,6 +8891,7 @@ if (action === '--start' || SERVICE_MODE) {
     const heardAt = ws.data?.lastHeardAt
     const prev = clientKeepalive.get(ws)
     const missed = prev && prev.heardAt === heardAt ? prev.missed + 1 : 0
+    if (ws.data) ws.data.missedBeats = missed
     if (missed < CLIENT_KEEPALIVE_MISSED) {
       clientKeepalive.set(ws, { heardAt, missed })
       return false

@@ -26,6 +26,7 @@
 
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
 import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
+import type { HostReplica } from './host-replica-core.js'
 
 export interface OfflineSliceSession { sid: string; taskId?: string; title?: string }
 
@@ -143,6 +144,8 @@ export interface OfflineHostDeps {
   relay?: (home: string, req: { toHost: string; toSid: string; text: string; messageId: string; requestId?: string; reply?: boolean; fromSessionId?: string }) => Promise<DeliverResult>
   /** Board checks and the copy's overlay; absent: board ops need the server. */
   boards?: BoardOffline
+  /** This host's copy of the notes, memory and skills (host-replica-core.ts); absent: those reads need the server. */
+  replica?: HostReplica
 }
 
 /** A message the leader routes to a session of this host (`leader.deliver`). */
@@ -200,6 +203,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     )
   }
   const OFFLINE_NAMES = OFFLINE_OPS.map((o) => o.name).join(', ')
+  /** Reads this host answers from its slice: safe to answer here when the server does not (nothing to apply twice). */
+  const READ_OPS = OFFLINE_OPS.filter((o) => o.readonly).map((o) => o.name)
 
   /** How long a drained-but-unacked row is left to the server before this host acts on it again. */
   const HANDOVER_GRACE_MS = 60_000
@@ -394,7 +399,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   function offlineNote(home: string): string {
-    return `The Walnut server is not connected; this host answered from its copy as of ${asOf(home)}.`
+    return `The Walnut server is not reachable from this host right now; this host answered from its copy as of ${asOf(home)}.`
   }
 
   function needsServer(what: string): GatewayResult {
@@ -757,7 +762,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     try {
       if (capability === 'tools.list') {
         const wanted = typeof payload.name === 'string' ? payload.name : ''
-        const ops = OFFLINE_OPS.filter((o) => !wanted || o.name === wanted)
+        const ops = OFFLINE_OPS.concat(deps.replica ? deps.replica.ops(home) : []).filter((o) => !wanted || o.name === wanted)
         return ok({ ops: ops.map((o) => ({ ...o, remote: 'allow' })), offline: true, hint: offlineNote(home) })
       }
       if (capability !== 'tools.call') return needsServer(`"${capability}"`)
@@ -770,10 +775,13 @@ export function createOfflineHost(deps: OfflineHostDeps) {
         case 'session_list': return opSessionList(home)
         case 'request_get': return opRequestGet(home, args)
         case 'task_send': case 'session_send': return await opTaskSend(home, callerSid, args)
-        default:
+        default: {
+          const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
+          if (fromCopy) return fromCopy
           if (deps.boards && deps.boards.BOARD_OPS.indexOf(name) !== -1) return opBoard(home, callerSid, name, args)
           if (QUEUED_OPS.includes(name)) return opQueued(home, callerSid, name, args)
           return needsServer(name ? `"${name}"` : 'That call')
+        }
       }
     } catch (err) {
       deps.log('error', 'offline host: request failed', { home, capability, error: (err as Error).message })
@@ -983,7 +991,18 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     return { ...(me.taskId ? { taskId: me.taskId } : {}), title: me.title, host: slices.get(home)?.host ?? '' }
   }
 
-  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, homes: () => [...slices.keys()] }
+  /**
+   * A read this host can answer for `home` from what it keeps, so a server that
+   * does not answer can be skipped for it: a slice read, or a copy read of a kind
+   * kept here (a note read on a host that keeps no notes still needs the server).
+   */
+  function answersRead(name: unknown, home: string): boolean {
+    if (typeof name !== 'string') return false
+    if (READ_OPS.indexOf(name) !== -1) return true
+    return !!deps.replica && deps.replica.keeps(home, name)
+  }
+
+  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, answersRead, homes: () => [...slices.keys()] }
 }
 
 export type OfflineHost = ReturnType<typeof createOfflineHost>

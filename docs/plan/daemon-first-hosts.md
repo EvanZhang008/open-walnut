@@ -99,6 +99,7 @@ server", so on a shared host a test server could answer the real Walnut's calls.
 | `task_send` with `in_reply_to` | settles a row the daemon owns, or delivers the reply for a server-owned row from the read copy and journals the settle |
 | `request_get` | rows the daemon owns or holds a copy of |
 | `task_update`, `task_complete` | journaled with the caller and time, applied to the read copy so later reads agree, replayed through the op registry on reconnect |
+| `note_read`, `note_search`, `memory_read`, `skill_read` | from the host's copy of notes, memory and skills, when the host keeps that kind (docs/plan/walnut-control-plane.md "What a host keeps"); also while the server is silent or a relayed read timed out |
 | anything else | `hub_unreachable`, with a message listing what works offline |
 
 On the Mac, a session's `walnut` is the installed Walnut CLI, which talks to the
@@ -110,7 +111,7 @@ restarts.
 
 What deliberately stays on the server: starting sessions (the launch recipe:
 model, prompt, environment), creating tasks (placement rules), cross-host
-messages, notes, memory, the human inbox.
+messages, writing notes and memory, the human inbox.
 
 ### Handover
 
@@ -154,7 +155,7 @@ settles anything, so an offline reply is never followed by a "no reply" notice.
 |---|---|
 | 1 (this change) | read copy, home-aware routing, offline reads, same-host messaging with request rows and turn-end notices, queued `task_update` / `task_complete`, handover |
 | 2 | same-host messaging owned by the daemon even while the server is connected (one path, no mode that only runs when the Mac is away); trigger fires delivered to same-host sessions by the daemon (done: the daemon arbitrates every fire, `trigger-claim-v1`, see docs/plan/walnut-trigger.md "Who delivers a fire") |
-| 3 | the cloud companion as the fallback hub for cross-host and global ops while the Mac is away (done: the companion is the backup leader, see docs/plan/walnut-control-plane.md); the team Board kept on the host (done: `board_*` answered from the copy and journaled) |
+| 3 | the cloud companion as the fallback hub for cross-host and global ops while the Mac is away (done: the companion is the backup leader, see docs/plan/walnut-control-plane.md); the team Board kept on the host (done: `board_*` answered from the copy and journaled); notes, memory and skills read from the host's own copy, with a per-host list of what it keeps (done: `host-replica-v1`) |
 | later | offline session start, once the launch recipe can be cached per project |
 
 ## Known limits of phase 1

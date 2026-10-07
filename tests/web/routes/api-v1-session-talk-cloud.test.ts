@@ -35,6 +35,8 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeDetachSession: () => {},
   attachBridge: () => {},
   closeAllBridges: () => {},
+  // The backup leader's gateway (server.ts, cloud mode).
+  setGatewayRequestHandler: () => {},
 }))
 
 import { WALNUT_HOME } from '../../../src/constants.js'

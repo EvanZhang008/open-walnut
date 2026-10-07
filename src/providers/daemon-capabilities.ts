@@ -295,6 +295,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // so it is NOT sidecar-gated. Optional: without it the primary pushes nothing
   // and the companion never leads that host.
   'leader-epoch-v1',
+  // 'host-replica-v1' (host-replica-core.ts, docs/plan/walnut-control-plane.md):
+  // the primary keeps a read copy of its notes, memory and skills on this host
+  // with `replica.sync` (a manifest of key + hash; the daemon answers which keys
+  // it lacks), `replica.put` (those bodies, each checked against its hash) and
+  // `replica.drop` (a kind the user stopped keeping here). While the leader
+  // cannot answer, note_read / note_search / memory_read / skill_read are read
+  // from it. Trusted socket only, never bridge-reachable. Both twins implement
+  // it (the core is text-injected into the source twin), so it is NOT
+  // sidecar-gated. Optional: without it the primary pushes nothing.
+  'host-replica-v1',
   'session.message',
   'hooks-v1',
   'changes-v1',

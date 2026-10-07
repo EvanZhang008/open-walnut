@@ -421,6 +421,8 @@ export class DaemonConnection {
   private hostSliceRetryTimer: ReturnType<typeof setTimeout> | null = null
   /** The Walnut was described to this daemon (leader.configure) on this connection. */
   private leaderConfigured = false
+  /** This connection's first host-replica round was started. */
+  private replicaPushed = false
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -455,9 +457,10 @@ export class DaemonConnection {
    * Commands whose responses can be MB-scale frames (1MB JSONL chunks,
    * base64 images, git diffs up to 64MB) — routed to the bulk channel when
    * it's open. Everything else (fs.ls, status, sends, events) stays on the
-   * main WS. Membership is by response size, not command family.
+   * main WS. Membership is by frame size, not command family: replica.put
+   * is the one whose REQUEST is big (a batch of note bodies, host-replica.ts).
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
@@ -754,7 +757,10 @@ export class DaemonConnection {
     if (changed && value) this.pushTriggers()
     // And for the offline host: first take back what the daemon did while we
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
-    if (changed) { this.lastHostSlicePushHash = null; this.offlineDrainDue = true; this.leaderConfigured = false }
+    if (changed) {
+      this.lastHostSlicePushHash = null; this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
+      void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
+    }
     if (changed && value) this.pushHostSlice()
     // Distribute the walnut skill to this host's engine-native discovery
     // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
@@ -1070,6 +1076,9 @@ export class DaemonConnection {
             this.leaderConfigured = true
           }
         }
+        // Then, once per connection, the host's read copy of the notes, memory and
+        // skills (their own changes push it from then on: core/host-replica-sync.ts).
+        if (!this.replicaPushed) { this.replicaPushed = true; this.pushHostReplica() }
       } catch (err) {
         log.session.warn('DaemonConnection: host slice push failed', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
@@ -1087,6 +1096,18 @@ export class DaemonConnection {
         this.hostSlicePushInFlight = false
       }
     })()
+  }
+
+  /**
+   * Bring this host's read copy of the notes, memory and skills up to date
+   * (core/host-replica.ts). Rounds are serialized per host there; a round with
+   * nothing changed sends nothing.
+   */
+  pushHostReplica(): void {
+    if (this.isReadOnlyRemote || !this._connected || !this.hasCapability('host-replica-v1')) return
+    void import('../core/host-replica.js')
+      .then((m) => m.syncHostReplica({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) }))
+      .catch((err) => log.session.warn('DaemonConnection: host replica round failed', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) }))
   }
 
   /** Describe the Walnut to this daemon again on the next host-slice round. */
@@ -4957,6 +4978,13 @@ export function pushTriggersToHost(hostKey: string): void {
 export function pushHostSliceToAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.pushHostSlice()
+  }
+}
+
+/** Bring every connected host's read copy up to date (notes, memory, skills or a host's keep list changed). */
+export function pushHostReplicaToAllHosts(): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected) conn.pushHostReplica()
   }
 }
 
