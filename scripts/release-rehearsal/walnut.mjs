@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stopOwnDaemon } from './own-daemon.mjs'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const MOCK_CLAUDE = path.join(repo, 'tests/providers/mock-claude.mjs')
@@ -151,11 +152,7 @@ export class IsolatedWalnut {
     // Once: a second pass could signal a pid the system has since handed to someone else.
     if (this.shutDown) return
     this.shutDown = true
-    const pidFile = path.join(this.daemonDir, 'daemon.pid')
-    const pid = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8').trim() : NaN)
-    if (Number.isInteger(pid) && pid > 1) {
-      try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
-    }
+    await stopOwnDaemon(this.daemonDir)
     // Mock CLIs the daemon spawned: process groups recorded in our own streams dir,
     // never this process's own group.
     const streams = `${this.daemonDir}-streams`

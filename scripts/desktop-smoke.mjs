@@ -21,6 +21,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stopOwnDaemon } from './release-rehearsal/own-daemon.mjs'
 import { archiveVersion, publishLocally, serveReleases } from './release-rehearsal/runtime.mjs'
 
 function parseArgs(argv) {
@@ -149,12 +150,9 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
       app.kill('SIGKILL')
       await until(`port ${port} to close`, 60_000, async () => !listener(port)).catch(() => {})
     }
-    // The session daemon outlives its server on purpose; this one is ours, in our own dir.
-    const pidFile = path.join(env.WALNUT_DAEMON_DIR, 'daemon.pid')
-    const daemonPid = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8').trim() : NaN)
-    if (Number.isInteger(daemonPid) && daemonPid > 1) {
-      try { process.kill(daemonPid, 'SIGTERM') } catch { /* already gone */ }
-    }
+    // The session daemon outlives its server on purpose; this one is ours, in our
+    // own dir, and the work dir can go only once it has exited.
+    await stopOwnDaemon(env.WALNUT_DAEMON_DIR)
     const table = ['| Step | Result | Time | Detail |', '|---|---|---|---|',
       ...results.map((r) => `| ${r.name} | ${r.ok ? 'pass' : '**FAIL**'} | ${Math.round(r.secs)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 200)} |`)]
     process.stdout.write(`\n${table.join('\n')}\n`)
