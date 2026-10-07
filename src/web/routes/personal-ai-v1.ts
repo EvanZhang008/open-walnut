@@ -22,7 +22,9 @@
  * are the exception: a chat turn is relayed to the primary, so the lane session
  * behind a conversation is a fact about the primary. Those relay, and when the
  * primary cannot be reached they answer 503 `primary_unreachable` — never this
- * box's own state, which would describe a box that will not answer.
+ * box's own state, which would describe a box that will not answer. Except when
+ * this box WILL answer: the primary provably did not get the question and the
+ * companion answers turns itself, so the engine routes describe its own lane.
  *
  * Stop semantics: a turn is answered by a `claude` CLI session bound to the
  * conversation (its lane), so stopping it means interrupting that session — the
@@ -159,6 +161,13 @@ async function resolveChatTarget(req: Request, res: Response): Promise<{ agentId
  * A genuine DOMAIN failure from the primary (it ran the action and refused) is
  * passed through with its own status and code — that is a real answer about the
  * answering box, not a reachability problem.
+ *
+ * `whenPrimaryAway` is the one exception to "never this box": it runs only when
+ * the request provably never reached the primary (no bridge after the blip
+ * grace, or a daemon with no server behind it), which is exactly when a turn is
+ * answered on this box instead (chat-turn-relay.ts relayFailureProvablyUnsent).
+ * An old primary (needs_upgrade) does not count: it proves only that THIS action
+ * is unknown there, and the turn may still go to it.
  */
 async function relayChatToPrimary(
   res: Response,
@@ -166,6 +175,7 @@ async function relayChatToPrimary(
   ids: { agentId: string; conversationId: string },
   params: Record<string, unknown>,
   isValidResult: (result: Record<string, unknown>) => boolean,
+  whenPrimaryAway?: () => Promise<{ status: number; body: Record<string, unknown> } | null>,
 ): Promise<boolean> {
   if (!CLOUD_MODE) return false
   const unreachable = (reason: string): void => {
@@ -194,6 +204,13 @@ async function relayChatToPrimary(
         sendError(res, outcome.failure.status, outcome.failure.code, outcome.failure.message)
         return true
       }
+      if (whenPrimaryAway && outcome.failure.kind === 'bridge_offline' && outcome.failure.notSent === true) {
+        const local = await whenPrimaryAway()
+        if (local) {
+          res.status(local.status).json(local.body)
+          return true
+        }
+      }
       unreachable(`${outcome.failure.kind}: ${outcome.failure.message}`)
       return true
     }
@@ -211,7 +228,9 @@ async function relayChatToPrimary(
   }
 }
 
-/** The engine question, relayed. `ensure: true` asks the primary to mint the lane. */
+/** The engine question, relayed. `ensure: true` asks the primary to mint the lane.
+ *  With the primary provably away, the companion's own lane answers when this box
+ *  can answer turns itself (cloud-chat-fallback.ts cloudLaneEngineAnswer). */
 function relayChatEngine(
   res: Response,
   ids: { agentId: string; conversationId: string },
@@ -221,6 +240,10 @@ function relayChatEngine(
     res, 'server.chat.engine', ids,
     ensure ? { ensure: true } : {},
     (result) => typeof result.engine === 'string',
+    async () => {
+      const { cloudLaneEngineAnswer } = await import('./cloud-chat-fallback.js')
+      return cloudLaneEngineAnswer(ids, ensure)
+    },
   )
 }
 

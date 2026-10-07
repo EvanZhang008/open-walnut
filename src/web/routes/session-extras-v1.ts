@@ -30,7 +30,8 @@
  * actions opaquely — no daemon protocol change; an old PRIMARY answers
  * "Unknown control action" → 400 session_control_needs_upgrade). list-dirs
  * rides the box-level `server.list-dirs` action ('__server__' placeholder).
- * Failure ladder identical to session-lifecycle-v1.ts.
+ * Failure ladder identical to session-lifecycle-v1.ts. The companion's own chat
+ * lane (core/sessions/cloud-chat-lane.ts) answers /controls here: one fixed mode.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -154,6 +155,13 @@ sessionExtrasV1Router.get('/sessions/:id/controls', async (req: Request, res: Re
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (CLOUD_MODE) {
+      // The companion's own chat lane runs here, on a mode it cannot leave.
+      const { cloudChatLaneControls } = await import('../../core/sessions/cloud-chat-lane.js')
+      const fixed = await cloudChatLaneControls(sessionId)
+      if (fixed) {
+        res.json(fixed)
+        return
+      }
       await relayControlAction(res, 'controls', sessionId, undefined, 200)
       return
     }
@@ -171,6 +179,20 @@ sessionExtrasV1Router.post('/sessions/:id/controls', async (req: Request, res: R
     if (!sessionId) return
     const body = (req.body ?? {}) as Record<string, unknown>
     if (CLOUD_MODE) {
+      const { cloudChatLaneControls, CLOUD_CHAT_MODE } = await import('../../core/sessions/cloud-chat-lane.js')
+      const fixed = await cloudChatLaneControls(sessionId)
+      if (fixed) {
+        // Its mode is its tool posture (cloud-chat-lane.ts): nobody can answer a
+        // prompt here, so a switch is refused rather than relayed to a primary
+        // that has no such session.
+        if (body.id === 'mode' && body.value === CLOUD_CHAT_MODE) {
+          res.json(fixed)
+          return
+        }
+        sendError(res, 409, 'conflict',
+          'The cloud companion answers in a fixed mode, so this chat\'s mode cannot be changed while it answers')
+        return
+      }
       await relayControlAction(res, 'controls.apply', sessionId, { id: body.id, value: body.value }, 200)
       return
     }

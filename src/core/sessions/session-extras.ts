@@ -33,7 +33,9 @@ export interface SessionControlsPayload {
   controls: unknown[];
 }
 
-function claudeModeControls(currentValue: string): unknown[] {
+/** The Claude mode select. `modes` narrows the options (a session whose mode is
+ *  fixed offers only its own). */
+export function claudeModeControls(currentValue: string, modes: readonly SessionMode[] = CLAUDE_SESSION_MODES): unknown[] {
   return [{
     id: 'mode',
     name: 'Mode',
@@ -41,7 +43,7 @@ function claudeModeControls(currentValue: string): unknown[] {
     currentValue,
     // Labels come from the registry, not from capitalizing the id — 'dontAsk'
     // would otherwise render as "DontAsk" on the phone and in the pill.
-    options: CLAUDE_SESSION_MODES.map((value) => ({
+    options: modes.map((value) => ({
       value,
       name: SESSION_MODE_LABELS[value] ?? value,
     })),

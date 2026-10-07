@@ -18,7 +18,9 @@
  * ladder mirrors session-launch-v1.ts: pre-session.control daemon → 400
  * session_control_needs_upgrade (self-heals on the next primary reconnect);
  * no live bridge / primary down → 503 bridge_offline; validation errors from
- * the primary surface verbatim with their original 4xx code.
+ * the primary surface verbatim with their original 4xx code. The one exception
+ * is a session the companion runs itself (cloud exec, its own chat lane):
+ * model-options, model and effort answer here, from this box's own registry.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -122,6 +124,18 @@ async function relayControlAction(
   sendError(res, relayErrorStatus(errorKind), errorKind, reason)
 }
 
+/**
+ * On a REPLICA, should this request cross the bridge? Not for a session THIS box
+ * runs (cloud exec, or the companion's own chat lane): the primary has no such
+ * record or process, and the request is most often made exactly while it is out
+ * of reach. Own registry first, the ordering rule in core/cloud-owned-session.ts.
+ */
+async function relaysToPrimary(sessionId: string): Promise<boolean> {
+  if (!CLOUD_MODE) return false
+  const { cloudOwnedSession } = await import('../../core/cloud-owned-session.js')
+  return (await cloudOwnedSession(sessionId)) === null
+}
+
 /** Shared shape gate: bad sid → 400 without touching the store/bridge. */
 function validSid(req: Request, res: Response): string | null {
   const sessionId = String(req.params.id ?? '')
@@ -139,7 +153,7 @@ sessionControlV1Router.get('/sessions/:id/model-options', async (req: Request, r
   try {
     const sessionId = validSid(req, res)
     if (!sessionId) return
-    if (CLOUD_MODE) {
+    if (await relaysToPrimary(sessionId)) {
       await relayControlAction(res, 'model-options', sessionId, undefined, 200)
       return
     }
@@ -164,7 +178,7 @@ sessionControlV1Router.post('/sessions/:id/model', async (req: Request, res: Res
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const rawModel = (req.body ?? {}).model
-    if (CLOUD_MODE) {
+    if (await relaysToPrimary(sessionId)) {
       await relayControlAction(res, 'model', sessionId, { model: rawModel }, 200)
       return
     }
@@ -189,7 +203,7 @@ sessionControlV1Router.post('/sessions/:id/effort', async (req: Request, res: Re
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const rawEffort = (req.body ?? {}).effort
-    if (CLOUD_MODE) {
+    if (await relaysToPrimary(sessionId)) {
       await relayControlAction(res, 'effort', sessionId, { effort: rawEffort }, 200)
       return
     }

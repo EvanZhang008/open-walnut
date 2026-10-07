@@ -76,9 +76,60 @@ export const CLOUD_CHAT_NOTE = `## Answering from the cloud companion
 
 The user's primary Walnut box (their Mac) is unreachable right now, so Walnut's cloud companion is answering this turn instead. Walnut's own tools (tasks, notes, memory, sessions, the walnut CLI) are NOT available here, and neither is a shell or file editing: you can read files in your working directory and search or fetch the web. When a request needs the user's Walnut data or their Mac, say briefly that it has to wait until the Mac is back, and help with everything else. This turn is saved and handed to the Mac when it reconnects.`;
 
+/**
+ * The lane's permission mode. Part of the tool posture above, not a preference:
+ * with no one to answer a prompt, `dontAsk` is what keeps everything outside the
+ * allow list from running. So it is never switchable (see cloudChatLaneControls).
+ */
+export const CLOUD_CHAT_MODE = 'dontAsk' as const;
+
+const CLOUD_CHAT_LANE_PREFIX = 'cloud-chat:';
+
 /** The lane key a companion-answered conversation is bound to. */
 export function cloudChatLaneKey(agentId: string, conversationId: string): string {
-  return `cloud-chat:${encodeURIComponent(validateAgentId(agentId))}:${conversationId}`;
+  return `${CLOUD_CHAT_LANE_PREFIX}${encodeURIComponent(validateAgentId(agentId))}:${conversationId}`;
+}
+
+/** True for a record bound to a companion chat lane. */
+export function isCloudChatLaneKey(lane: string | undefined | null): boolean {
+  return typeof lane === 'string' && lane.startsWith(CLOUD_CHAT_LANE_PREFIX);
+}
+
+/**
+ * How many companion chat lanes hold a CLI on this box right now (spawning or
+ * alive). Lanes skip the session-limit check (session-tracker.ts), so the model
+ * pill's mint, which spawns one just because a conversation was opened, is held
+ * to `cloud.exec.max_sessions` with this count instead.
+ */
+export async function liveCloudChatLaneCount(): Promise<number> {
+  const { listSessions } = await import('../session-tracker.js');
+  const { isSessionProcessAlive } = await import('../../utils/session-liveness.js');
+  let count = 0;
+  for (const s of await listSessions()) {
+    if (s.archived || s.host || !isCloudChatLaneKey(s.lane)) continue;
+    if (s.process_status === 'stopped' || s.process_status === 'error') continue;
+    if (s.status_reason === 'awaiting_spawn' || await isSessionProcessAlive(s)) count++;
+  }
+  return count;
+}
+
+/**
+ * The controls answer for a companion chat lane THIS box runs, or null when the
+ * session is anything else (then the caller relays as before). One mode option,
+ * the lane's own: the phone's mode pill shows the truth and offers no switch the
+ * box would refuse.
+ */
+export async function cloudChatLaneControls(
+  sessionId: string,
+): Promise<{ engine: 'claude'; controls: unknown[] } | null> {
+  const { cloudExecActive } = await import('../cloud-owned-session.js');
+  if (!(await cloudExecActive())) return null;
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId).catch(() => null);
+  if (!record || record.host || !isCloudChatLaneKey(record.lane)) return null;
+  const { claudeModeControls } = await import('./session-extras.js');
+  const mode = record.mode || CLOUD_CHAT_MODE;
+  return { engine: 'claude', controls: claudeModeControls(mode, [mode]) };
 }
 
 /** True when `child` is `parent` or lies inside it (normalized, segment-anchored). */
@@ -176,7 +227,9 @@ export function getOrCreateCloudChatLane(
 ): Promise<LaneSession> {
   const lane = cloudChatLaneKey(agentId, conversationId);
   const pending = inFlight.get(lane);
-  if (pending) return pending;
+  // A joiner's message did not ride the spawn (personal-ai-lane.ts asJoiner): the
+  // pill's message-less mint can be in flight when the first turn arrives.
+  if (pending) return pending.then((l) => (l.created ? { ...l, created: false } : l));
   const promise = resolveCloudChatLane(lane, agentId, conversationId, cwd, firstMessage)
     .finally(() => { inFlight.delete(lane); });
   inFlight.set(lane, promise);
@@ -229,7 +282,7 @@ async function resolveCloudChatLane(
     profile,
     lane,
     effort,
-    mode: 'dontAsk',
+    mode: CLOUD_CHAT_MODE,
     initialProcessStatus: 'idle',
     initialStatusReason: 'awaiting_spawn',
   });
@@ -251,7 +304,7 @@ async function resolveCloudChatLane(
     profile,
     lane,
     effort,
-    mode: 'dontAsk',
+    mode: CLOUD_CHAT_MODE,
     preassignedSessionId: sessionId,
   }, ['session-runner'], { source: 'cloud-chat-lane' });
   log.session.info('cloud chat lane: session created', {

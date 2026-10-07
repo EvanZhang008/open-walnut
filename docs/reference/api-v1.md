@@ -93,9 +93,9 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (cloud relays to the primary) |
 | POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (cloud relays to the primary) |
 | PATCH | `/api/v1/tasks/:id` | Update task fields (status/priority/due_date/start_date/end_date/project/title/description) |
-| GET | `/api/v1/sessions/:id/model-options` | Selectable models + current model/effort for the picker (cloud relays to the primary) |
-| POST | `/api/v1/sessions/:id/model` | Switch the session's model (cloud relays to the primary) |
-| POST | `/api/v1/sessions/:id/effort` | Switch the session's reasoning effort (cloud relays to the primary) |
+| GET | `/api/v1/sessions/:id/model-options` | Selectable models + current model/effort for the picker (cloud relays to the primary, except a session the cloud runs itself) |
+| POST | `/api/v1/sessions/:id/model` | Switch the session's model (cloud relays to the primary, except a session the cloud runs itself) |
+| POST | `/api/v1/sessions/:id/effort` | Switch the session's reasoning effort (cloud relays to the primary, except a session the cloud runs itself) |
 | POST | `/api/v1/sessions/:id/fork` | Fork a session to another/new task (cloud relays to the primary) |
 | POST | `/api/v1/sessions/:id/background-tasks/:taskId/stop` | Stop one background agent / command / workflow; the turn keeps running (cloud relays to the primary) |
 | GET | `/api/v1/events` | SSE live feed of slim task + session updates (snapshot frame on connect) |
@@ -1770,7 +1770,10 @@ BOTH boxes:
   primary, so every endpoint relays over the `/bridge` WS via the narrow
   `session.control` daemon command (allowlisted alongside `session.launch`).
   The primary's daemon forwards the request up to its connected walnut server,
-  which runs the same core and replies. Failure ladder mirrors session launch:
+  which runs the same core and replies. The exception is model-options, model
+  and effort for a session the companion runs itself (a cloud-exec session or
+  its own chat lane): those are answered from the companion's own registry.
+  Failure ladder mirrors session launch:
   `400 session_control_needs_upgrade` — the primary's daemon predates the
   relay (self-heals on the next primary reconnect via auto-deploy);
   `503 bridge_offline` — no live bridge, or the primary's server is
@@ -2425,6 +2428,22 @@ usual (absent → `general`).
     `POST /api/v1/chat/engine/session`.
   - `host` is `""` for the primary box, matching `ProjectedSession.host`
     semantics. No `conversationId` = the active conversation.
+  - On a cloud REPLICA this is the primary's answer, relayed; with the primary
+    out of reach it is `503 primary_unreachable` (`retry: true`). One exception:
+    when the request provably never reached the primary (no bridge after the
+    reconnect grace, or a daemon with no server behind it) AND the replica answers
+    chat turns itself (`cloudChat: "available"` on `GET /status`), the answer is
+    the replica's OWN lane, the one the next text turn runs on (a picture turn is
+    still refused while the primary is away): `host: "__cloud__"`
+    and the additive `answeredBy: "cloud"`. Its `sessionId` works on
+    `/sessions/:id/model-options`, `/model` and `/effort` on the replica itself,
+    and `/sessions/:id/controls` reports its one fixed mode (`dontAsk`; any other
+    value is `409 conflict`). `POST /api/v1/chat/engine/session` mints that lane
+    under the same condition, up to `cloud.exec.max_sessions` live lanes; past
+    that it answers `409 cloud_lane_capacity` (the conversation's first message
+    still gets its lane). An old primary that does not know the engine action
+    keeps the 503: that proves nothing about where a turn goes. The next re-ask
+    after the primary is back returns the primary's lane again.
 - `PUT /api/v1/chat/model?agentId=&conversationId=` →
   `409 { "error": { "code": "lane_engine", "sessionId" }, "sessionId" }` — the lane
   session owns model and effort, so switch them through

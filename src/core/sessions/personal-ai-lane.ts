@@ -204,6 +204,17 @@ export interface LaneSession {
 const inFlight = new Map<string, Promise<LaneSession>>();
 
 /**
+ * What a caller that JOINED an in-flight resolve gets. Only the caller that
+ * started it had its `firstMessage` ride the spawn, so a joiner always sends its
+ * own message: `created: true` here would tell it the message was delivered when
+ * it never was (a phone's message-less mint and its first send racing, or a cron
+ * turn and a chat turn, lost the second message).
+ */
+function asJoiner(lane: LaneSession): LaneSession {
+  return lane.created ? { ...lane, created: false } : lane;
+}
+
+/**
  * Resolve (or create) the session bound to this conversation's lane.
  *
  * `firstMessage` is only used when a session has to be created; pass the user's
@@ -217,7 +228,7 @@ export function getOrCreateLaneSession(
 ): Promise<LaneSession> {
   const lane = personalAiLaneKey(agentId, conversationId);
   const pending = inFlight.get(lane);
-  if (pending) return pending;
+  if (pending) return pending.then(asJoiner);
   const promise = resolveLane(lane, agentId, conversationId, opts?.firstMessage ?? '', opts?.engine)
     .finally(() => { inFlight.delete(lane); });
   inFlight.set(lane, promise);

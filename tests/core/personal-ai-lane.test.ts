@@ -244,6 +244,24 @@ describe('getOrCreateLaneSession', () => {
     ])
     expect(b.sessionId).toBe(a.sessionId)
     expect(started).toHaveLength(1)
+    // Only the caller that started the mint had its message ride the spawn; the
+    // one that joined must send its own, or 'b' is never delivered.
+    expect(started[0].message).toBe('a')
+    expect(a.created).toBe(true)
+    expect(b.created).toBe(false)
+  })
+
+  it('a send that joins a message-less mint (the model pill opening the chat) still sends its message', async () => {
+    const [mint, turn] = await Promise.all([
+      getOrCreateLaneSession('general', 'conv-mint-race'),
+      getOrCreateLaneSession('general', 'conv-mint-race', { firstMessage: 'hello' }),
+    ])
+    expect(turn.sessionId).toBe(mint.sessionId)
+    expect(started).toHaveLength(1)
+    expect(started[0].message).toBe('')
+    expect(mint.created).toBe(true)
+    // created=true here was the lost-message bug: the turn skipped its own send.
+    expect(turn.created).toBe(false)
   })
 })
 

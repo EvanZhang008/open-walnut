@@ -113,6 +113,74 @@ export async function cloudChatCapability(): Promise<CloudFallbackDecision> {
   return { kind: 'run', cwd: cwd.cwd }
 }
 
+/**
+ * GET/POST /chat/engine for a conversation this box would answer itself right
+ * now. The caller has already proved the primary did not get the engine question
+ * (the same `notSent` proof a turn needs), so the next turn comes here too, and
+ * the phone's model pill must describe and switch THIS box's lane: the session
+ * that will answer it. Null when this box could not answer a turn
+ * (cloudChatCapability), and the caller keeps its 503.
+ *
+ * `ensure` mints the lane, as the primary mints its own for the same request; a
+ * GET never spawns anything. The lane is the one runCloudFallbackTurn resolves,
+ * so the first turn after a mint reuses it. A mint spawns a CLI only because a
+ * conversation was opened, so it is held to `cloud.exec.max_sessions` live lanes:
+ * past that it answers 409, which the phone shows as "send a message first" (the
+ * turn itself still gets its lane).
+ */
+export async function cloudLaneEngineAnswer(
+  ids: { agentId: string; conversationId: string },
+  ensure: boolean,
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const capability = await cloudChatCapability()
+  if (capability.kind !== 'run') return null
+  const [lane, { getSessionByLane }, { CLOUD_HOST_ALIAS, readCloudExecConfig }, { getConfig }] = await Promise.all([
+    import('../../core/sessions/cloud-chat-lane.js'),
+    import('../../core/session-tracker.js'),
+    import('../../core/cloud-exec.js'),
+    import('../../core/config-manager.js'),
+  ])
+  const record = await getSessionByLane(lane.cloudChatLaneKey(ids.agentId, ids.conversationId))
+  let sessionId = record?.claudeSessionId ?? null
+  let created: boolean | undefined
+  if (ensure) {
+    created = false
+    if (!record) {
+      const max = readCloudExecConfig(await getConfig(), true).maxSessions
+      const live = await lane.liveCloudChatLaneCount()
+      if (live >= max) {
+        log.web.info('chat engine: cloud lane mint refused, the companion is at its CLI cap', { ...ids, live, max })
+        return {
+          status: 409,
+          body: { error: {
+            code: 'cloud_lane_capacity',
+            message: 'The cloud companion is running as many chats as it can hold; send a message first',
+          } },
+        }
+      }
+      const minted = await lane.getOrCreateCloudChatLane(ids.agentId, ids.conversationId, capability.cwd, '')
+      created = minted.created
+      sessionId = minted.sessionId
+    }
+  }
+  log.web.info('chat engine answered from the cloud companion lane', {
+    ...ids, sessionId: sessionId ?? undefined, ensure, created,
+  })
+  return {
+    status: 200,
+    body: {
+      engine: 'lane',
+      sessionId,
+      ...(sessionId ? { switchable: true } : {}),
+      cwd: record?.cwd ?? capability.cwd,
+      // Never '' (the primary): the lane's CLI runs on this box.
+      host: CLOUD_HOST_ALIAS,
+      answeredBy: 'cloud',
+      ...(created !== undefined ? { created } : {}),
+    },
+  }
+}
+
 /** The terminal error a fallback turn ends with when its lane gave no answer. */
 const NO_ANSWER_MESSAGE =
   'The cloud companion did not answer this turn (timed out or errored). Try again, or wait for the primary.'
