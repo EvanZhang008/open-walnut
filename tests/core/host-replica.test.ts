@@ -13,10 +13,12 @@ import crypto from 'node:crypto'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-replica'))
+/** Where the shipped skills are served from: a deploy's stage dir, new with every deploy. */
+let stageDir = '/stage/one'
 vi.mock('../../src/core/skill-store.js', () => ({
   listAllSkills: async () => [
-    { dirName: 'walnut-board', name: 'walnut-board', description: 'Keep a Board', content: '---\nname: walnut-board\n---\nboard body' },
-    { dirName: 'deploy', name: 'deploy', description: 'Ship it', content: '---\nname: deploy\n---\ndeploy body' },
+    { dirName: 'walnut-board', name: 'walnut-board', description: 'Keep a Board', location: `${stageDir}/dist/data/skills/walnut-board/SKILL.md`, content: '---\nname: walnut-board\n---\nboard body' },
+    { dirName: 'deploy', name: 'deploy', description: 'Ship it', location: '/home/me/.claude/skills/deploy/SKILL.md', content: '---\nname: deploy\n---\ndeploy body' },
   ],
 }))
 
@@ -83,6 +85,7 @@ beforeEach(() => {
   calls = []
   config = {} as Config
   afterSync = null
+  stageDir = '/stage/one'
   forgetHostReplica('devbox')
 })
 afterEach(() => { fs.rmSync(daemonDir, { recursive: true, force: true }) })
@@ -163,6 +166,18 @@ describe('a round', () => {
     calls = []
     await syncHostReplica(target)
     expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nEdited mid-round.' } })
+  })
+
+  it('a skill keeps no path of this machine, so a deploy (a new stage dir) resends no skill', async () => {
+    await syncHostReplica(target)
+    const skill = read('skill_read', { dirName: 'walnut-board' }) as { ok: true; result: { skill: Record<string, unknown> } }
+    expect(skill.result.skill).toMatchObject({ name: 'walnut-board', content: '---\nname: walnut-board\n---\nboard body' })
+    expect(skill.result.skill).not.toHaveProperty('location')
+    stageDir = '/stage/two'
+    forgetHostReplica('devbox') // the deploy restarted the server: a new connection
+    calls = []
+    await syncHostReplica(target)
+    expect(cmds()).toEqual(['replica.sync:notes', 'replica.sync:memory', 'replica.sync:skills'])
   })
 
   it('a new connection sends every manifest again; a failing host does not stop the other kinds', async () => {

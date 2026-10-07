@@ -149,7 +149,10 @@ async function jsonBodies(kind: 'memory' | 'skills'): Promise<Map<string, string
     return out
   }
   const { listAllSkills } = await import('./skill-store.js')
-  for (const skill of await listAllSkills()) out.set(skill.dirName, JSON.stringify(skill))
+  // `location` is this machine's file path, which means nothing on the host, and
+  // the shipped skills' changes with every deploy (they are served from its
+  // stage dir): kept, it resent those skills to every host after each deploy.
+  for (const { location: _here, ...skill } of await listAllSkills()) out.set(skill.dirName, JSON.stringify(skill))
   return out
 }
 
