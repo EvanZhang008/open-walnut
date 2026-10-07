@@ -44,11 +44,11 @@ import { ThreadCommentCard } from './ThreadCommentCard';
 import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
 import { allPassageMarks, cardTurnsOf, questionBodyOf } from '@/utils/thread-card';
-import { headsBySeq, keysBySeq, questionNumbers, tagKeyOfBlocks, withTagAnchors } from '@/utils/question-tag';
+import { blockTagKeys, headsBySeq, keysBySeq, questionNumbers, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
 import { useThreadLanding } from '@/hooks/useThreadLanding';
-import { useThreadMarks } from '@/hooks/useThreadMarks';
+import { useAnsweringKeys, useThreadMarks } from '@/hooks/useThreadMarks';
 import { useThreadMapLayout } from '@/hooks/useThreadMapLayout';
 import { counts as threadCounts } from '@/utils/thread-meta-counts';
 import type { TreeRow } from '@/utils/thread-tree-rows';
@@ -2743,10 +2743,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * three Asks sent during one answer would otherwise pull that answer onto the
    * last one's page (C49). With nothing running, the oldest queued row is next.
    */
-  // The turn's own tag wins over every guess below: the first text block of the
-  // live turn (blocks after the last finished turn) opening with `[Q<n>]`.
+  // The turn's own tag wins over every guess below: the NEWEST text block of the
+  // live turn (blocks after the last finished turn) opening with `[Q<n>]`. A turn
+  // that answers one question and moves on to the next (a question line the CLI
+  // took mid-turn) is answering the newer one; the first tag kept the older card
+  // on "Answering" while the newer never showed in progress (2026-10-06).
   const liveTurnStart = turnSegmentsRef.current.length > 0 ? turnSegmentsRef.current[turnSegmentsRef.current.length - 1].end : 0;
-  const liveTagKey = hasQuestions ? tagKeyOfBlocks(blocks, liveTurnStart, blocks.length, keyBySeq) : null;
+  const liveTagKey = hasQuestions && blocks.length > liveTurnStart
+    ? tagKeyAtBlock(blocks, liveTurnStart, blocks.length, blocks.length - 1, keyBySeq) : null;
+  // The questions this live turn already answered and left (every tag but the newest).
+  const liveLeftKeys = hasQuestions ? tagKeysOfBlocks(blocks, liveTurnStart, blocks.length, keyBySeq).filter((k) => k !== liveTagKey) : [];
   const liveStreamKey = (() => {
     if (!hasQuestions) return ROOT_THREAD_KEY;
     if (liveTagKey !== null) return liveTagKey;
@@ -2819,19 +2825,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     turnBook.current = newTurnBook();
   }, [sessionId]);
 
-  /** The page a live block renders on: its finished turn's tag, else that turn's
-   *  recorded owner, else the live turn's key (tag first, see liveStreamKey). */
+  /** The page a live block renders on: the newest tag at or before it in its
+   *  turn, else that turn's recorded owner, else the live turn's key (tag first,
+   *  see liveStreamKey). */
+  let blockTags: { segs: readonly StreamTurnSegment[]; keys: Array<string | null> } | null = null;
   const pageKeyOfBlock = (index: number): string => {
     const segs = turnSegments.current;
-    let from = 0;
+    if (blockTags?.segs !== segs) blockTags = { segs, keys: blockTagKeys(blocks, segs.map((seg) => seg.end), keyBySeq) };
+    const tagged = blockTags.keys[index] ?? null;
     for (const seg of segs) {
-      if (index < seg.end) {
-        const tagged = tagKeyOfBlocks(blocks, from, seg.end, keyBySeq);
-        return tagged ?? blockPageKey(segs, index, streamThreadKey);
-      }
-      from = seg.end;
+      if (index < seg.end) return tagged ?? blockPageKey(segs, index, streamThreadKey);
     }
-    return streamThreadKey;
+    return trackTurns ? tagged ?? streamThreadKey : streamThreadKey;
   };
 
   // The page's own rows: the SAME parts, filtered by row identity.
@@ -2854,8 +2859,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const streamKeyRef = useRef(liveStreamKey);
   const wasStreaming = useRef(isStreaming);
   useEffect(() => {
-    if (isStreaming) streamKeyRef.current = liveStreamKey;
-    else if (wasStreaming.current && hasQuestions && streamKeyRef.current !== ROOT_THREAD_KEY) {
+    if (isStreaming) {
+      // The turn moved on to another question: the one it left (and tagged, so
+      // not a guess) is answered now.
+      const left = streamKeyRef.current;
+      if (left !== liveStreamKey && wasStreaming.current && liveLeftKeys.includes(left)) {
+        setStreamEnds((m) => new Map(m).set(left, Date.now()));
+      }
+      streamKeyRef.current = liveStreamKey;
+    } else if (wasStreaming.current && hasQuestions && streamKeyRef.current !== ROOT_THREAD_KEY) {
       const key = streamKeyRef.current;
       setStreamEnds((m) => new Map(m).set(key, Date.now()));
     }
@@ -2870,9 +2882,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       .map((m) => `${m.userUuid}:${m.status === 'failed' ? (m.parked ? 'parked' : 'failed') : m.status === 'delivered' ? 'processing' : 'pending'}`)
       .join('|')
     : '';
+  const liveLeftSig = JSON.stringify(liveLeftKeys);
   const threadDerived = useMemo(() => {
     if (!threadStats) return EMPTY_DERIVED;
     const queued: Array<{ rowId: string; status: 'pending' | 'processing' }> = [];
+    const leftKeys = new Set<string>(JSON.parse(liveLeftSig));
     const turnEnds = new Map<string, 'ok' | 'error' | 'interrupted' | 'parked'>(threadStats.turnEnds);
     for (const entry of queuedSig ? queuedSig.split('|') : []) {
       const at = entry.lastIndexOf(':');
@@ -2880,8 +2894,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const status = entry.slice(at + 1);
       if (status === 'parked') turnEnds.set(rowId, 'parked');
       else if (status === 'pending') queued.push({ rowId, status });
-      // Delivered: answering while a turn runs; once it ended, no longer live.
-      else if (status === 'processing' && isStreaming) queued.push({ rowId, status });
+      // Delivered: answering while a turn runs, unless the turn already moved on
+      // from its question; once it ended, no longer live.
+      else if (status === 'processing' && isStreaming && !leftKeys.has(threadTree.byRow.get(rowId)?.key ?? '')) queued.push({ rowId, status });
     }
     const answeredAt = new Map(threadStats.answeredAt);
     for (const [key, at] of streamEnds) if (at > (answeredAt.get(key) ?? 0)) answeredAt.set(key, at);
@@ -2895,7 +2910,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       lastQuestion: threadStats.lastQuestion,
       answering: new Set(streamingKey && streamingKey !== ROOT_THREAD_KEY ? [streamingKey] : []),
     };
-  }, [threadStats, queuedSig, isStreaming, liveStreamKey, threadTree, streamEnds]);
+  }, [threadStats, queuedSig, isStreaming, liveStreamKey, threadTree, streamEnds, liveLeftSig]);
   const publishDerived = threadsApi.publishDerived;
   useEffect(() => { publishDerived(threadDerived); }, [publishDerived, threadDerived]);
 
@@ -3031,10 +3046,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     ? markSpecsFor({ tree: threadTree, currentKey, hiddenKeys: threadsApi.hiddenKeys, index: threadsApi.metaIndex })
     : convMode ? allPassageMarks(threadTree, threadsApi.hiddenKeys, threadsApi.metaIndex)
       : NO_MARKS), [stackMode, convMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex]);
+  // A question being answered: its mark's line scans until the answer ends.
+  const liveMarkKeys = useAnsweringKeys(threadDerived.live);
+  const liveLayerRef = useRef<HTMLDivElement | null>(null);
   const markTips = useThreadMarks({
     sessionId, panelKey: quotePanelKey, enabled: stackMode || convMode, containerRef, specs: markSpecs,
     renderNonce: `${messages.length}:${truncationOffset}:${currentKey}`,
     locatePassage, onOpen: (key) => { if (stackMode) stack.pushTo(key, 'mark'); else openCard(key, 'mark'); },
+    live: { keys: liveMarkKeys, layerRef: liveLayerRef },
   });
   useThreadLanding({
     sessionId, enabled: stackMode, targetOnly: threadsApi.viewMode === 'linear', containerRef, stack, tree: threadTree,
@@ -3252,14 +3271,26 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardInitialText = cardPending && !cardNode ? readComposerDraft(composerDraftKey(sessionId, cardPending.pageKey, threadTree)) : '';
   const cardStatus = cardNode ? viewStatusOf(cardNode, threadsApi.metaIndex, threadDerived.live) : undefined;
   const cardTitle = cardKey ? displayTitleOf(cardNode, threadsApi.metaIndex) : undefined;
+  // The card shows one message per turn: the reply's final words. While a turn
+  // for this question still streams, its newest live text block is that message,
+  // and the words the same turn already persisted (a step before a tool call)
+  // give way to it.
+  let cardLive: Extract<TimelineItem, { kind: 'block' }> | undefined;
+  if (cardKey) {
+    for (const item of timeline) {
+      if (item.kind === 'block' && item.block.type === 'text' && pageKeyOfBlock(item.index) === cardKey) cardLive = item;
+    }
+  }
+  const cardLastReply = cardTurns[cardTurns.length - 1]?.replies[0];
+  const cardReplySuperseded = !!cardLive && !!cardLastReply && messages.indexOf(cardLastReply) >= turnWatermark.current;
   const cardBody = cardKey ? (
     <>
       {cardTurns.map((t) => (
         <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
           <p className="thread-card-q">{questionBodyOf(typedUserText(t.user.text ?? ''))}</p>
-          {t.replies.map((r) => (
-            <SessionMessage key={r.msgId ?? r.walnutMessageId} message={r} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-          ))}
+          {t.replies.map((r) => (r === cardLastReply && cardReplySuperseded ? null : (
+            <SessionMessage key={r.msgId ?? r.walnutMessageId} message={r} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} answerOnly onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          )))}
         </div>
       ))}
       {/* Sent, not yet in the transcript: the question as typed, then the answer as it arrives. */}
@@ -3268,16 +3299,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <p className="thread-card-q">{questionBodyOf(typedUserText(m.text))}</p>
         </div>
       ))}
-      {timeline.map((item) => {
-        if (item.kind !== 'block' || item.block.type !== 'text' || pageKeyOfBlock(item.index) !== cardKey) return null;
-        return (
-          <div key={`live-${item.index}`} className="session-msg session-msg-assistant">
-            <div className="session-msg-content">
-              <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isStreaming} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-            </div>
+      {cardLive && (
+        <div key={`live-${cardLive.index}`} className="session-msg session-msg-assistant">
+          <div className="session-msg-content">
+            <StreamingBlockView block={cardLive.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isStreaming} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
           </div>
-        );
-      })}
+        </div>
+      )}
       {cardTurns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === cardKey) && (
         <div className="thread-card-empty">No message in this question yet.</div>
       )}
@@ -3424,6 +3452,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           />
         )}
         <ThreadMarkTipLayer store={markTips} />
+        {/* The scanning lines under passages being answered (useThreadMarks draws them). */}
+        {liveMarkKeys.size > 0 && (stackMode || convMode) && <div ref={liveLayerRef} className="thread-live-layer" aria-hidden="true" />}
         {/* The comment card's layer: zero height at the top of the content, so a
             card placed from a passage's content coordinates scrolls with it. */}
         {cardKey && !cardFile && (
@@ -3652,8 +3682,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <div className="session-streaming-panel">
             {timeline.map((item, i) => {
               // Stack page: a queued bubble shows on ITS question's page; the live
-              // blocks and the working indicator show on the page whose turn they
-              // belong to, as a group (one turn's output, never split across pages).
+              // blocks show on the page of the question they answer (the turn's, or
+              // the newest `[Qn]` before them when one turn answered two), and the
+              // working indicator on the page the turn is answering now.
               if (stackMode) {
                 if (item.kind === 'user') {
                   if (optimisticThreadKey(item.msg) !== currentKey) return null;

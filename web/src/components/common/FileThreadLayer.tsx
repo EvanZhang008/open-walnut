@@ -18,7 +18,8 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type RefObject,
 } from 'react';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
-import { markHighlightName, useThreadMarks } from '@/hooks/useThreadMarks';
+import { liveBarsFor, markHighlightName, useAnsweringKeys, useThreadMarks } from '@/hooks/useThreadMarks';
+import { LIVE_BAR_HEIGHT, LIVE_LINE_CLASS, LIVE_SCAN_MS, paintLiveBars, type BoxLike } from '@/utils/thread-live-lines';
 import { ThreadMarkTipLayer } from '@/components/sessions/ThreadStackFrame';
 import { fileOfParent, fileParentOf, findSamePassageThread } from '@/utils/thread-tree';
 import { pendingPageKey } from '@/utils/thread-stack-state';
@@ -60,10 +61,19 @@ function bodyOf(root: HTMLElement | null, frame: HTMLIFrameElement | null, surfa
 }
 
 const FRAME_STYLE_ID = 'walnut-file-marks';
+const FRAME_LIVE_ID = 'walnut-live-lines';
+/** The frame's copy of the mark paint (thread-stack-page.css), live line included. */
 const FRAME_STYLE = `
 ::highlight(thread-mark-neutral) { background-color: hsl(0 0% 50% / 0.14); text-decoration: underline 1.5px hsl(0 0% 45% / 0.8); text-underline-offset: 3px; }
-::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.08); text-decoration: underline dotted 1.5px hsl(0 0% 50% / 0.6); text-underline-offset: 3px; }
+::highlight(thread-mark-done-neutral) { background-color: hsl(145 40% 45% / 0.13); text-decoration: underline 1.5px hsl(145 45% 36% / 0.75); text-underline-offset: 3px; }
+::highlight(thread-mark-live-neutral) { background-color: hsl(0 0% 50% / 0.14); }
 body[data-thread-mark-hover] { cursor: pointer; }
+#${FRAME_LIVE_ID} { position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 2147483000; }
+.${LIVE_LINE_CLASS} { position: absolute; height: ${LIVE_BAR_HEIGHT}px; border-radius: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, #9a6235, transparent) no-repeat, hsl(28 40% 70% / 0.55);
+  background-size: 40% 100%, 100% 100%; animation: walnut-live-scan ${LIVE_SCAN_MS}ms ease-in-out infinite; }
+@keyframes walnut-live-scan { 0% { background-position: -40% 0, 0 0; } 100% { background-position: 140% 0, 0 0; } }
+@media (prefers-reduced-motion: reduce) { .${LIVE_LINE_CLASS} { animation: none; background: #9a6235; opacity: 0.7; } }
 `;
 
 export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayerProps>(function FileThreadLayer(
@@ -140,9 +150,23 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const b = body();
     return b && p.quote ? rangeForQuote(b, p.quote) : null;
   }, [body]);
+  // A question being answered: its passage's line scans (the overlay is re-placed
+  // on scroll; in the HTML frame the lines live in the frame's own document).
+  const liveKeys = useAnsweringKeys(threads.derived.live);
+  const liveRef = useRef<HTMLDivElement | null>(null);
+  /** The file's visible box: under the sticky toolbar, inside the window. */
+  const visibleBox = useCallback((): BoxLike | null => {
+    const root = rootRef.current;
+    if (!root) return null;
+    const r = root.getBoundingClientRect();
+    const bar = root.querySelector<HTMLElement>(':scope > .fv-html-toolbar');
+    const top = Math.max(r.top, bar ? bar.getBoundingClientRect().bottom : r.top, 0);
+    return { left: r.left, top, right: r.right, bottom: Math.min(r.bottom, window.innerHeight) };
+  }, [rootRef]);
   const tips = useThreadMarks({
     sessionId, panelKey: `file:${sessionId}:${filePath}`, enabled: surface !== 'html' && surface !== 'none',
     containerRef: rootRef, specs, renderNonce: surfaceNonce, locatePassage, onOpen: (key) => openCard(key, 'file-mark'),
+    live: { keys: liveKeys, layerRef: liveRef, overlay: true, clip: visibleBox },
   });
 
   // ── Marks inside the HTML preview's frame (its own document and highlight registry) ──
@@ -160,6 +184,21 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       names.clear();
       frameMarks.current = [];
       doc?.body?.removeAttribute('data-thread-mark-hover');
+      doc?.getElementById(FRAME_LIVE_ID)?.remove();
+    };
+    // The scanning lines: in a layer on the frame's root element (outside the
+    // body the observer watches), so they scroll with the page by themselves.
+    const paintLive = () => {
+      if (!doc?.documentElement) return;
+      let layer = doc.getElementById(FRAME_LIVE_ID);
+      if (!frameMarks.current.some((m) => m.live)) { layer?.remove(); return; }
+      if (!layer) {
+        layer = doc.createElement('div');
+        layer.id = FRAME_LIVE_ID;
+        layer.setAttribute('aria-hidden', 'true');
+        doc.documentElement.appendChild(layer);
+      }
+      paintLiveBars(layer, liveBarsFor(frameMarks.current, layer, doc.documentElement, null));
     };
     const paint = () => {
       if (!doc?.body) return;
@@ -171,17 +210,21 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       for (const s of specs) {
         const range = rangeForQuote(doc.body, s.quote);
         if (!range) continue;
-        out.push({ key: s.key, headId: s.headId, range, hue: s.hue, resolved: s.resolved, title: s.title, neutral: true });
-        const name = markHighlightName(s.hue, s.resolved, true);
+        const live = liveKeys.has(s.key);
+        out.push({ key: s.key, headId: s.headId, range, hue: s.hue, resolved: s.resolved, title: s.title, neutral: true, ...(live ? { live } : {}) });
+        const name = markHighlightName(s.hue, s.resolved, true, live);
         byName.set(name, [...(byName.get(name) ?? []), range]);
       }
       frameMarks.current = out;
+      paintLive();
       if (!reg || !Ctor) return;
       for (const n of names) if (!byName.has(n)) reg.delete(n);
       names.clear();
       for (const [name, ranges] of byName) { const h = new Ctor(...ranges); h.priority = 2; reg.set(name, h); names.add(name); }
     };
     const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paint(); }); };
+    // An inner scroller of the page (not the page itself) moves the passage too.
+    const onFrameScroll = () => { if (frameMarks.current.some((m) => m.live)) paintLive(); };
     const at = (x: number, y: number) => (doc ? hitMark(frameMarks.current, caretFromPoint(doc, x, y), x, y) : null);
     const move = rafThrottle<{ x: number; y: number }>(({ x, y }) => {
       if (!doc?.body) return;
@@ -208,6 +251,8 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       doc.removeEventListener('pointermove', onMove);
       doc.removeEventListener('pointerdown', onDown, true);
       doc.removeEventListener('click', onClick, true);
+      doc.removeEventListener('scroll', onFrameScroll, true);
+      doc.defaultView?.removeEventListener('resize', later);
       mo?.disconnect();
       mo = null;
       clear();
@@ -226,6 +271,8 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       doc.addEventListener('pointermove', onMove, { passive: true });
       doc.addEventListener('pointerdown', onDown, true);
       doc.addEventListener('click', onClick, true);
+      doc.addEventListener('scroll', onFrameScroll, { capture: true, passive: true });
+      doc.defaultView?.addEventListener('resize', later);
       mo = new MutationObserver(later);
       mo.observe(doc.body, { childList: true, subtree: true, characterData: true });
       paint();
@@ -238,7 +285,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       move.cancel();
       detach();
     };
-  }, [surface, surfaceNonce, specs, frameRef, filePath, sessionId, openCard]);
+  }, [surface, surfaceNonce, specs, liveKeys, frameRef, filePath, sessionId, openCard]);
 
   // ── The card's host: registered while this file is on show; its place is
   //    measured while the open card is about a passage of this file. ──
@@ -415,6 +462,8 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const hostW = rootRef.current?.clientWidth ?? 0;
   return (
     <div ref={layerRef} className="fv-thread-layer" data-file-path={filePath} data-surface={surface}>
+      {/* Scanning lines under passages being answered (useThreadMarks draws them). */}
+      <div ref={liveRef} className="fv-live-lines" aria-hidden="true" />
       <FileQuestionRail rows={railRows} top={railBox.top} room={railBox.room} boxWidth={hostW} onOpen={openFromRail} />
       <ThreadMarkTipLayer store={tips} />
       {hover && (

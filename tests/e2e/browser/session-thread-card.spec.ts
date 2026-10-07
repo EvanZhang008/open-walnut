@@ -5,8 +5,8 @@
  *
  * Covers: a sidebar row keeps the scroll position (the 2026-09-30 report: every
  * click landed on the first message) and opens the card below the passage, with
- * the number, the title, the status word, the question without its quote, every
- * answer, and no `[Qn]` tag; Esc and an outside click close it; a click on the
+ * the number, the title, the status word, the question without its quote, each
+ * turn's final answer alone (no thought, no step before a tool), and no `[Qn]` tag; Esc and an outside click close it; a click on the
  * marked passage opens it; Ask on a selection opens a draft card whose own
  * composer is focused, the first send turns it into the question's card (number
  * 3) and the reply arrives inside it; Tree Mode has no card; the card follows
@@ -123,6 +123,14 @@ test.describe('The comment card in Conversation Mode', () => {
     await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText('2')
     await expect(card(panel).locator('.thread-card-q')).toHaveText([T.q2])
     await expect(card(panel).locator('.thread-card-body')).toContainText(T.a2)
+    // Only the answer: not the thought, the step before the tool call, or the
+    // tool (2026-10-06, the user: "just the final message").
+    await expect(card(panel).locator('.thread-card-body')).not.toContainText(T.step2)
+    await expect(card(panel).locator('.thread-card-body')).not.toContainText(T.tool2)
+    await expect(card(panel).locator('.thread-card-body .tool-run-row')).toHaveCount(0)
+    expect(await card(panel).locator('.thread-card-body').innerText()).not.toMatch(/Thinking/)
+    // The timeline still has the step.
+    await expect(history(panel)).toContainText(T.step2)
     // A click on plain text, away from the card (and from any turn label,
     // which would open another card), closes it.
     await row(panel, IDS.R1.a).click({ position: { x: 12, y: 10 } })

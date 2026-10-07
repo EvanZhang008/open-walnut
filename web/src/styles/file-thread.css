@@ -20,6 +20,13 @@
 .fv-thread-layer > .thread-card {
   position: absolute;
 }
+/* The scanning lines under passages being answered: the layer's own box, under
+   the rail and the card (both come later in the layer). */
+.fv-thread-layer > .fv-live-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
 /* The file's question rail (FileQuestionRail): the map's rail marks, as a small
    chip under the toolbar at the left edge; its list opens over the document. */
 .fv-file-rail {

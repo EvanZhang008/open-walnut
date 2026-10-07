@@ -19,18 +19,19 @@ export interface CardRowLike {
   tools?: readonly unknown[];
 }
 
-/** One turn of the question: its user row and the reply rows after it. */
+/** One turn of the question: its user row and the reply's final message. */
 export interface CardTurn<M extends CardRowLike = CardRowLike> {
   user: M;
-  /** The reply's rows with text (tool-only rows are the card's business to hide). */
+  /** The reply's LAST row with text, alone (empty when the reply has none). */
   replies: M[];
 }
 
 /**
  * The question's turns in transcript order: each head row of `node.turnIds`
- * with the rows that follow it up to the next user row, text rows only. A
- * reply whose rows are all tool calls contributes nothing (the card is about
- * the answer, the timeline keeps the tools).
+ * with the final text row of the reply that follows it. The words a turn says
+ * between its tool calls ("Let me check the file") are steps, not the answer:
+ * the card shows the answer, the timeline keeps the steps (2026-10-06, the
+ * user: "the run commands we don't need, just the final message").
  */
 export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node: ThreadNode | undefined): CardTurn<M>[] {
   if (!node || node.turnIds.length === 0) return [];
@@ -40,12 +41,12 @@ export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node:
     const m = messages[i];
     const id = m.msgId ?? m.walnutMessageId;
     if (m.role !== 'user' || !id || !want.has(id)) continue;
-    const replies: M[] = [];
+    let last: M | undefined;
     for (let j = i + 1; j < messages.length && messages[j].role !== 'user'; j++) {
       const r = messages[j];
-      if (r.role === 'assistant' && (r.text ?? '').trim()) replies.push(r);
+      if (r.role === 'assistant' && (r.text ?? '').trim()) last = r;
     }
-    out.push({ user: m, replies });
+    out.push({ user: m, replies: last ? [last] : [] });
   }
   return out;
 }

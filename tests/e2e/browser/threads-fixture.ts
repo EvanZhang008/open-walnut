@@ -38,7 +38,12 @@ export const NO_THREAD_SESSION = 'pw-outline-window-session';
 export interface FixtureAnchor { msgId: string; parent: string; quote?: { exact: string; prefix?: string; suffix?: string }; source: 'selection' | 'sticky' | 'manual'; at: string }
 export interface FixtureMeta { headId: string; status: 'open' | 'suggested' | 'resolved' | 'older'; title?: string; titleSource?: 'ai' | 'user'; titleState?: 'pending' | 'done' | 'failed' | 'unavailable'; question?: string; takeaway?: string; takeawaySource?: 'fallback' | 'user' | 'ai'; takeawayState?: 'pending' | 'done' | 'failed'; hidden?: boolean; suggestDismissed?: boolean; seq?: number; updatedAt: string }
 export interface FixturePin { msgId: string; label: string; role: 'user' | 'assistant' | 'system'; pinnedAt: string; timestamp?: string; id?: string; quote?: { exact: string } }
-export interface FixtureRow { role: 'user' | 'assistant'; uuid: string; text: string; isApiError?: boolean }
+export interface FixtureRow {
+  role: 'user' | 'assistant'; uuid: string; text: string; isApiError?: boolean;
+  /** The line's content blocks as the CLI writes them (thinking, tool_use, a
+   *  tool_result line), when it is more than one text block. */
+  content?: unknown[];
+}
 
 export interface ThreadsFixtureSession {
   sessionId: string;
@@ -451,6 +456,10 @@ export const TAGGED_TEXT = {
   a2: 'The flusher owns it until the checksum is written.',
   merged: 'Does the tie rule also cover a page from another worker?',
   aMerged: 'Yes: the tie rule looks only at slot numbers, never at workers.',
+  /** Question 2's turn thinks and takes a step before its answer (a2). */
+  think2: 'The owner field is set by whoever starts the flush.',
+  step2: 'Let me read the flusher first.',
+  tool2: 'flusher-source-of-truth.ts',
 } as const;
 
 /**
@@ -463,6 +472,7 @@ export function buildTaggedSession(nowMs: number): ThreadsFixtureSession & { ids
   const P = 'a1b2c3';
   const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
   const ids = { R1: t(1), Q1: t(2), LOST: t(3), ROOT: t(4), Q2: t(5), MERGED: t(6) };
+  const STEP2 = t(50);
   const T = TAGGED_TEXT;
   const rows: FixtureRow[] = [
     { role: 'user', uuid: ids.R1.u, text: TAGGED_READY },
@@ -474,7 +484,17 @@ export function buildTaggedSession(nowMs: number): ThreadsFixtureSession & { ids
     { role: 'user', uuid: ids.ROOT.u, text: T.root },
     { role: 'assistant', uuid: ids.ROOT.a, text: `${T.aRoot} ${filler(205, 40)}` },
     { role: 'user', uuid: ids.Q2.u, text: T.q2 },
-    { role: 'assistant', uuid: ids.Q2.a, text: `**[Q2]**\n\n${T.a2} ${filler(206, 40)}` },
+    // The tag opens the turn's first text, the way a model writes it; the
+    // answer is the turn's last text, after a thought and a tool call.
+    {
+      role: 'assistant', uuid: STEP2.a, text: `**[Q2]**\n\n${T.step2}`, content: [
+        { type: 'thinking', thinking: T.think2, signature: 'fx' },
+        { type: 'text', text: `**[Q2]**\n\n${T.step2}` },
+        { type: 'tool_use', id: 'toolu_fx_tagged_q2', name: 'Read', input: { file_path: `/repo/${T.tool2}` } },
+      ],
+    },
+    { role: 'user', uuid: STEP2.u, text: '', content: [{ type: 'tool_result', tool_use_id: 'toolu_fx_tagged_q2', content: 'export const owner = null' }] },
+    { role: 'assistant', uuid: ids.Q2.a, text: `${T.a2} ${filler(206, 40)}` },
     { role: 'user', uuid: ids.MERGED.u, text: T.merged },
     { role: 'assistant', uuid: ids.MERGED.a, text: `[Q1]\n${T.aMerged} ${filler(207, 40)}` },
   ];
@@ -514,9 +534,11 @@ export function fixtureJsonl(s: ThreadsFixtureSession, nowMs: number): string {
     sessionId: s.sessionId,
     timestamp: new Date(start + i * 2000).toISOString(),
     ...(r.isApiError ? { isApiErrorMessage: true } : {}),
-    message: r.role === 'user'
-      ? { role: 'user', content: r.text }
-      : { role: 'assistant', content: [{ type: 'text', text: r.text }] },
+    message: r.content
+      ? { role: r.role, content: r.content }
+      : r.role === 'user'
+        ? { role: 'user', content: r.text }
+        : { role: 'assistant', content: [{ type: 'text', text: r.text }] },
   }));
   return `${lines.join('\n')}\n`;
 }

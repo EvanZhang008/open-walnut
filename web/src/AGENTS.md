@@ -354,13 +354,31 @@ show inline after the open ones, other completed hits that show the query fold i
   the panel on a backdrop, which the user read as a different place, not the card made bigger.
   The card shows the question's turns
   (`cardTurnsOf`: the question without the quote block it was sent with, `questionBodyOf`, then the
-  reply's prose rows with `suppressTools`), the optimistic row and the live text blocks of the turn
-  being answered, and a composer that sends through `threadsApi.sendToTarget` (the same anchored
+  reply's FINAL text row alone with `answerOnly`: no tools, no thinking, no words between steps;
+  2026-10-06, the user: "just the final message"), the optimistic row and the newest live text block
+  of the turn being answered (it replaces the words that turn already persisted), and a composer that sends through `threadsApi.sendToTarget` (the same anchored
   path as the panel's composer). It lives in `.thread-card-layer`, a zero-height positioned box at
   the top of the scroll content, so `top` is a content coordinate and the card scrolls with its
   passage; `placeCard` puts it below the passage's last line, right edges aligned, clamped to the
   layer. Every asked passage wears ONE neutral grey mark (`allPassageMarks`, highlight
-  `thread-mark-neutral`), never a hue. Two rules this slice fixed: `useThreadLanding` takes
+  `thread-mark-neutral`), never a hue; a done one keeps its line in green
+  (`thread-mark-done-neutral`, the fill tinted too for WebKit) while the map folds it into
+  `N done`, the row that shows it again. **A live turn belongs to its NEWEST `[Qn]` tag**
+  (`tagKeyAtBlock`, each block to the newest tag at or before it): a turn that moved on to another
+  question is answering that one, and the question it left is answered. The server keeps a question
+  row out of a running turn on every path (`processNextNow` passes `midTurn` from the session's
+  `inTurn`), because the 60s safety timeout re-enters the drain while the CLI is still answering. **A question being answered scans its line**
+  (`utils/thread-live-lines.ts`, `useThreadMarks`' `live` option, keys from `useAnsweringKeys`):
+  its highlight turns `thread-mark-live-*` (the fill, no underline) and one element per line of
+  text draws the underline instead, with the working indicator's sweeping band, until the answer
+  ends. A highlight cannot animate a gradient, hence the elements. Bars come from TEXT fragments
+  (a range's own rects include whole table cells and list items), live in a layer that scrolls
+  with the text (`.thread-live-layer` in the timeline, `#walnut-live-lines` on the HTML preview
+  frame's root element, outside the observed body) or are re-placed on every scroll (the Files
+  overlay `.fv-live-lines`, clipped under the sticky toolbar), and are never clipped by the box
+  their layer lives in (a line scrolled out must come back with the text, not a frame later).
+  Ratchets: `tests/web/thread-live-lines.test.ts`, `tests/e2e/browser/session-thread-mark-live.spec.ts`.
+  Two rules this slice fixed: `useThreadLanding` takes
   `targetOnly` and does nothing on a navigation in Conversation Mode (a target change is not a page
   change; before, every Ask and every sidebar row "landed at the top" and the whole conversation
   jumped to its first message), and the rail is thin lines (`.thread-map-tick`: root longer,

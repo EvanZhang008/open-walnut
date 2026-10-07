@@ -197,12 +197,14 @@
 ::highlight(thread-mark-done-188) { background-color: hsl(188 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(188 45% 50% / 0.75); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-214) { background-color: hsl(214 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(214 45% 50% / 0.75); text-underline-offset: 3px; }
 /* Conversation Mode paints every asked passage the same way (no hue tells the
-   questions apart; the number does): a faint grey wash and a grey underline,
-   dotted once the question is done. The comment card opens on a click. */
+   questions apart; the number does): a faint grey wash and a grey underline.
+   A done question keeps its line in green (the map folds it away, the passage
+   still says it was asked); the wash carries the color too, for WebKit, which
+   may not draw a highlight's underline. The comment card opens on a click. */
 ::highlight(thread-mark-neutral) { background-color: hsl(0 0% 50% / 0.14); text-decoration: underline 1.5px hsl(0 0% 45% / 0.8); text-underline-offset: 3px; }
-::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.08); text-decoration: underline dotted 1.5px hsl(0 0% 50% / 0.6); text-underline-offset: 3px; }
+::highlight(thread-mark-done-neutral) { background-color: hsl(145 40% 45% / 0.13); text-decoration: underline 1.5px hsl(145 45% 36% / 0.75); text-underline-offset: 3px; }
 [data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(0 0% 70% / 0.18); text-decoration-color: hsl(0 0% 72% / 0.85); }
-[data-theme="dark"] ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 70% / 0.1); text-decoration-color: hsl(0 0% 65% / 0.6); }
+[data-theme="dark"] ::highlight(thread-mark-done-neutral) { background-color: hsl(145 35% 55% / 0.16); text-decoration-color: hsl(145 45% 62% / 0.75); }
 [data-theme="dark"] ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
 [data-theme="dark"] ::highlight(thread-mark-152) { background-color: hsl(152 70% 62% / 0.34); text-decoration-color: hsl(152 85% 70%); }
@@ -230,6 +232,72 @@
   :root:not([data-theme]) ::highlight(thread-mark-done-214) { background-color: hsl(214 10% 68% / 0.2); text-decoration-color: hsl(214 40% 68% / 0.8); }
 }
 [data-thread-mark-hover] { cursor: pointer; }
+
+/* A question being answered: its mark keeps the open fill but drops the
+   underline, and a scanning line takes its place (thread-live-lines.ts): the
+   working indicator's light band sweeping along the passage until the answer
+   ends. A highlight cannot animate a gradient, so the line is an element per
+   line of text, in a layer that scrolls with the timeline's content. */
+::highlight(thread-mark-live-neutral) { background-color: hsl(0 0% 50% / 0.14); }
+::highlight(thread-mark-live-280) { background-color: hsl(280 70% 60% / 0.22); }
+::highlight(thread-mark-live-152) { background-color: hsl(152 70% 60% / 0.22); }
+::highlight(thread-mark-live-28) { background-color: hsl(28 70% 60% / 0.22); }
+::highlight(thread-mark-live-330) { background-color: hsl(330 70% 60% / 0.22); }
+::highlight(thread-mark-live-188) { background-color: hsl(188 70% 60% / 0.22); }
+::highlight(thread-mark-live-214) { background-color: hsl(214 70% 60% / 0.22); }
+[data-theme="dark"] ::highlight(thread-mark-live-neutral) { background-color: hsl(0 0% 70% / 0.18); }
+[data-theme="dark"] ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 62% / 0.34); }
+[data-theme="dark"] ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 62% / 0.34); }
+[data-theme="dark"] ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 62% / 0.34); }
+[data-theme="dark"] ::highlight(thread-mark-live-330) { background-color: hsl(330 70% 62% / 0.34); }
+[data-theme="dark"] ::highlight(thread-mark-live-188) { background-color: hsl(188 70% 62% / 0.34); }
+[data-theme="dark"] ::highlight(thread-mark-live-214) { background-color: hsl(214 70% 62% / 0.34); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 62% / 0.34); }
+  :root:not([data-theme]) ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 62% / 0.34); }
+  :root:not([data-theme]) ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 62% / 0.34); }
+  :root:not([data-theme]) ::highlight(thread-mark-live-330) { background-color: hsl(330 70% 62% / 0.34); }
+  :root:not([data-theme]) ::highlight(thread-mark-live-188) { background-color: hsl(188 70% 62% / 0.34); }
+  :root:not([data-theme]) ::highlight(thread-mark-live-214) { background-color: hsl(214 70% 62% / 0.34); }
+}
+/* Zero height at the top of the timeline's content (like the card layer), so a
+   line placed from a passage's content coordinates scrolls with it. */
+.thread-live-layer {
+  position: relative;
+  align-self: stretch;
+  height: 0;
+  margin-bottom: -4px;
+  z-index: 2;
+  pointer-events: none;
+}
+.thread-live-line {
+  --live-base: hsl(28 40% 70% / 0.55);
+  --live-band: #9a6235;
+  position: absolute;
+  height: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, var(--live-band), transparent) no-repeat,
+    var(--live-base);
+  background-size: 40% 100%, 100% 100%;
+  animation: thread-live-scan 1.6s ease-in-out infinite;
+}
+.thread-live-line[data-hue] {
+  --live-base: hsl(var(--live-hue) 60% 60% / 0.45);
+  --live-band: hsl(var(--live-hue) 80% 42%);
+}
+[data-theme="dark"] .thread-live-line:not([data-hue]) { --live-base: hsl(28 30% 62% / 0.45); --live-band: #e8c9a8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .thread-live-line:not([data-hue]) { --live-base: hsl(28 30% 62% / 0.45); --live-band: #e8c9a8; }
+}
+@keyframes thread-live-scan {
+  0% { background-position: -40% 0, 0 0; }
+  100% { background-position: 140% 0, 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-live-line { animation: none; background: var(--live-band); opacity: 0.7; }
+}
 
 /* ── The outline rail: pins on other question pages ── */
 .session-toc-tick--more { width: 7px; background: var(--fg-muted); opacity: 0.45; }

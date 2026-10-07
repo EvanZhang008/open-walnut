@@ -35,6 +35,19 @@ describe('cardTurnsOf', () => {
     expect(turns[1].replies.map((r) => r.msgId)).toEqual(['a5']);
   });
 
+  it('keeps only the final message of a reply, not the words between its steps', () => {
+    const stepped: Array<ThreadTreeMessage & { tools?: unknown[] }> = [
+      ...rows.slice(0, 3),
+      { role: 'assistant', msgId: 's1', text: 'Let me check the file.', tools: [{ name: 'Read' }] },
+      { role: 'assistant', msgId: 's2', text: 'Now the tests.', tools: [{ name: 'Bash' }] },
+      { role: 'assistant', msgId: 's3', text: 'Because the reader skips.' },
+      { role: 'assistant', msgId: 's4', text: '', tools: [{ name: 'Bash' }] },
+    ];
+    const tree = buildThreadTree(stepped, anchors.slice(0, 1));
+    const turns = cardTurnsOf(stepped, tree.byKey.get(tree.byRow.get('q1')!.key));
+    expect(turns[0].replies.map((r) => r.msgId)).toEqual(['s3']);
+  });
+
   it('is empty for no node and for a node whose rows are not loaded', () => {
     expect(cardTurnsOf(rows, undefined)).toEqual([]);
     const tree = buildThreadTree(rows, anchors);

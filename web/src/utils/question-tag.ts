@@ -185,3 +185,73 @@ export function tagKeyOfBlocks(
   }
   return null;
 }
+
+type TagBlock = { type: string; content?: string; parentToolUseId?: string };
+
+/** The question a block of the run belongs to: the newest tagged main-lane text
+ *  block at or before it (a turn that moves on to `[Q3]` hands everything after
+ *  that line to Q3), else the run's first-text rule (`tagKeyOfBlocks`). */
+export function tagKeyAtBlock(
+  blocks: ReadonlyArray<TagBlock>,
+  from: number,
+  to: number,
+  index: number,
+  keyBySeq: ReadonlyMap<number, string>,
+): string | null {
+  for (let i = Math.min(index, to - 1, blocks.length - 1); i >= from; i--) {
+    const b = blocks[i];
+    if (b.type !== 'text' || b.parentToolUseId) continue;
+    const tag = parseQuestionTag(b.content);
+    const key = tag ? keyBySeq.get(tag.seq) : undefined;
+    if (key) return key;
+  }
+  return tagKeyOfBlocks(blocks, from, to, keyBySeq);
+}
+
+/** `tagKeyAtBlock` for every block in one pass. `ends` are the finished runs'
+ *  end indices, ascending; the blocks after the last one are the live run. A
+ *  render asks for every block's page, and a scan back per block was quadratic
+ *  in a long turn. */
+export function blockTagKeys(
+  blocks: ReadonlyArray<TagBlock>,
+  ends: readonly number[],
+  keyBySeq: ReadonlyMap<number, string>,
+): Array<string | null> {
+  const out: Array<string | null> = new Array(blocks.length).fill(null);
+  let from = 0;
+  for (const end of [...ends, blocks.length]) {
+    const to = Math.min(Math.max(end, from), blocks.length);
+    if (to <= from) continue;
+    const first = tagKeyOfBlocks(blocks, from, to, keyBySeq);
+    let cur: string | null = null;
+    for (let i = from; i < to; i++) {
+      const b = blocks[i];
+      if (b.type === 'text' && !b.parentToolUseId) {
+        const tag = parseQuestionTag(b.content);
+        const key = tag ? keyBySeq.get(tag.seq) : undefined;
+        if (key) cur = key;
+      }
+      out[i] = cur ?? first;
+    }
+    from = to;
+  }
+  return out;
+}
+
+/** Every question the run's tagged text blocks name, in order, each once. */
+export function tagKeysOfBlocks(
+  blocks: ReadonlyArray<TagBlock>,
+  from: number,
+  to: number,
+  keyBySeq: ReadonlyMap<number, string>,
+): string[] {
+  const out: string[] = [];
+  for (let i = from; i < to && i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== 'text' || b.parentToolUseId) continue;
+    const tag = parseQuestionTag(b.content);
+    const key = tag ? keyBySeq.get(tag.seq) : undefined;
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out;
+}

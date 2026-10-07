@@ -197,6 +197,9 @@ interface SessionMessageProps {
   /** True when the timeline dissolved this message's tools into an adjacent
    *  merged run — render only the prose/thinking here. */
   suppressTools?: boolean;
+  /** The words alone, as a question's comment card shows its answer: no tools
+   *  and no thinking (whose part of the turn it was is not knowable there). */
+  answerOnly?: boolean;
   /** Only the last assistant output renders copy actions, keeping middle rows compact. */
   showCopyActions?: boolean;
   onTaskClick?: (taskId: string) => void;
@@ -1004,12 +1007,12 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
 }
 
 
-export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
   // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
   // the turn shows the number, so the line itself never renders.
   const text = role === 'assistant' ? stripQuestionTag(rawText ?? '') : rawText;
-  const tools = suppressTools ? undefined : rawTools;
+  const tools = suppressTools || answerOnly ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
 
@@ -1173,7 +1176,7 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
       onContextMenu={(e) => rowMenu.open(e, undefined)}
     >
       <div className="session-msg-content" onClick={handleContentClick}>
-        {thinking && <SessionThinking text={thinking} />}
+        {thinking && !answerOnly && <SessionThinking text={thinking} />}
         {/* Folded machine blocks first, then the human's words — the typed text
             stays the dominant part of the bubble. A turn that was ONLY banners
             drops the bubble chrome entirely (session-msg-envelope above): there is

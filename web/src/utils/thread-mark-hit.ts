@@ -66,6 +66,8 @@ export interface ThreadMark<R extends MarkRangeLike = Range> {
   title: string;
   /** One neutral paint (Conversation Mode), see markHighlightName. */
   neutral?: boolean;
+  /** Its answer is coming in: the scanning line instead of the underline. */
+  live?: boolean;
 }
 
 /** The mark under the pointer, or null. First match wins (marks never overlap:

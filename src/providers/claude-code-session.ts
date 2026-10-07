@@ -3762,6 +3762,9 @@ export class ClaudeCodeSession {
   /** Does this session's CLI report its command queue (command_lifecycle)? Learnt from its own frames, never assumed. */
   get reportsLineLifecycle(): boolean { return this._sawCommandLifecycle }
 
+  /** The CLI is inside a turn whose result has not landed (the same test `send` uses for a line queued behind it). */
+  get inTurn(): boolean { return this._processStatus === 'running' && !this._turnResultEmitted }
+
   /** Record which process reported lifecycle, so a restarted server knows it before that process prints another frame. */
   private saveLifecyclePid(): void {
     const sid = this.claudeSessionId
@@ -11904,9 +11907,14 @@ export class SessionRunner {
     // went out. Rows that may already be in a CLI (lineTries > 1) go out alone,
     // and the daemon is asked before anything is written for them.
     // A CLI this server already knows reports its queue: its rows say so on disk.
+    // A question row starts its own turn also here: the safety timeout re-enters
+    // processNext while the CLI may still be answering the previous question, and
+    // a question written then was answered inside that turn (2026-10-06: two
+    // questions under one reply, the first card stuck on "Answering").
     let tracked = false
-    for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; break }
-    const msgs = await markProcessing(sessionId, stopFence, { tracked })
+    let inTurn = false
+    for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; inTurn = s.inTurn; break }
+    const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
     if (msgs.length === 0) return
     releaseHeld(sessionId, msgs.map((m) => m.id))
     const dedupe = (msgs[0].lineTries ?? 1) > 1

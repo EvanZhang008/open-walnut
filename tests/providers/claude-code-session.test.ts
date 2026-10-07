@@ -3669,6 +3669,63 @@ describe('activeProcessing safety timeout — batch ids survive for a late resul
   });
 });
 
+// The safety timeout re-enters processNext while the CLI may still be inside the
+// previous turn. A question row (userUuid) written then was answered inside that
+// turn (2026-10-06: one reply for two questions, the first card stuck on
+// "Answering", the second never in progress). It must wait for the turn end.
+describe('processNext while the CLI is still inside a turn', () => {
+  function fakeSession(sid: string, inTurn: boolean) {
+    return {
+      sessionId: sid,
+      inTurn,
+      writeMessage: vi.fn(async () => true),
+      writeSyntheticUserEvent: vi.fn(),
+      hasPendingPermission: false,
+      hasPipe: true,
+      active: true,
+      processPid: 123,
+      host: null,
+      lastMessageDeliveryAt: 0,
+      awaitSpawn: async () => {},
+      kill: vi.fn(),
+    };
+  }
+
+  it('keeps a question row pending until the turn is over, then sends it', async () => {
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
+    const sid = 'question-waits-for-turn';
+    const fake = fakeSession(sid, true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).sessions.set('question-waits-task', fake);
+    await enqueueMessage(sid, '[Q3] what does the year range mean?', { userUuid: '33333333-3333-4333-8333-333333333333' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (runner as any).processNext(sid);
+    expect(fake.writeMessage).not.toHaveBeenCalled();
+    expect((await getQueue(sid))[0]?.status).toBe('pending');
+
+    fake.inTurn = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (runner as any).processNext(sid);
+    expect(fake.writeMessage).toHaveBeenCalledOnce();
+    runner.destroyAndKill();
+  });
+
+  it('still sends a plain row mid-turn (it joins the running turn as before)', async () => {
+    const runner = useDaemon(new SessionRunner(MOCK_CLI));
+    const sid = 'plain-row-mid-turn';
+    const fake = fakeSession(sid, true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (runner as any).sessions.set('plain-row-task', fake);
+    await enqueueMessage(sid, 'also check the footer');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (runner as any).processNext(sid);
+    expect(fake.writeMessage).toHaveBeenCalledOnce();
+    runner.destroyAndKill();
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════
 //  Result-text fallback — the turn answered on `result` alone
 //

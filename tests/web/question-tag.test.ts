@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   QUESTION_BANNER_RE, headsBySeq, keysBySeq, nextQuestionSeq, parseQuestionTag,
   questionBanner, questionBannerName, questionNumbers, stripQuestionTag,
-  tagKeyOfBlocks, withQuestionBanner, withTagAnchors,
+  blockTagKeys, tagKeyAtBlock, tagKeyOfBlocks, tagKeysOfBlocks, withQuestionBanner, withTagAnchors,
 } from '@/utils/question-tag';
 import { buildThreadTree, threadKeyOf, ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import type { ThreadTreeMessage } from '@/utils/thread-tree';
@@ -188,5 +188,56 @@ describe('tagKeyOfBlocks', () => {
     const blocks = [text('[Q1]\nfirst turn'), text('[Q2]\nsecond turn')];
     expect(tagKeyOfBlocks(blocks, 1, 2, keyBySeq)).toBe('k2');
     expect(tagKeyOfBlocks(blocks, 2, 5, keyBySeq)).toBeNull();
+  });
+});
+
+// One turn that answers Q1 and then moves on to Q2 (a question line the CLI took
+// mid-turn, 2026-10-06): everything after the `[Q2]` line is Q2's, the live turn
+// is answering Q2, and Q1 is the question it left.
+describe('tagKeyAtBlock / tagKeysOfBlocks', () => {
+  const keyBySeq = new Map([[1, 'k1'], [2, 'k2']]);
+  const text = (content: string, parentToolUseId?: string) => ({ type: 'text', content, parentToolUseId });
+  const tool = { type: 'tool_call', content: '' };
+  const blocks = [{ type: 'thinking', content: 'hm' }, text('[Q1]\nfirst'), tool, text('more on one'), text('[Q2]\nsecond'), tool, text('done')];
+
+  it('gives each block the newest tag at or before it', () => {
+    expect(blocks.map((_, i) => tagKeyAtBlock(blocks, 0, blocks.length, i, keyBySeq)))
+      .toEqual(['k1', 'k1', 'k1', 'k1', 'k2', 'k2', 'k2']);
+  });
+
+  it('falls back to the first-text rule before any tag, and ignores lane text and unknown numbers', () => {
+    const untagged = [text('plain'), tool, text('[Q2]\nlater')];
+    expect(tagKeyAtBlock(untagged, 0, 3, 0, keyBySeq)).toBeNull();
+    expect(tagKeyAtBlock(untagged, 0, 3, 2, keyBySeq)).toBe('k2');
+    const lane = [text('[Q1]\nmain'), text('[Q2]\nlane', 'tool-9'), text('[Q9]\nunknown')];
+    expect(tagKeyAtBlock(lane, 0, 3, 2, keyBySeq)).toBe('k1');
+  });
+
+  it('honours the window and lists each named question once, in order', () => {
+    expect(tagKeyAtBlock(blocks, 4, blocks.length, 6, keyBySeq)).toBe('k2');
+    expect(tagKeyAtBlock(blocks, 0, 3, 6, keyBySeq)).toBe('k1');
+    expect(tagKeysOfBlocks(blocks, 0, blocks.length, keyBySeq)).toEqual(['k1', 'k2']);
+    expect(tagKeysOfBlocks([...blocks, text('[Q1]\nback')], 0, 8, keyBySeq)).toEqual(['k1', 'k2']);
+    expect(tagKeysOfBlocks(blocks, 4, blocks.length, keyBySeq)).toEqual(['k2']);
+  });
+
+  it('blockTagKeys gives every block what tagKeyAtBlock gives it, run by run', () => {
+    const runs = [
+      text('plain'), tool, text('[Q2]\nlater'), // run 1: [0, 3)
+      { type: 'thinking', content: 'hm' }, text('[Q1]\na'), tool, text('[Q2]\nb'), // run 2: [3, 7)
+      tool, text('no tag'), // live run: [7, 9)
+    ];
+    const ends = [3, 7];
+    const keys = blockTagKeys(runs, ends, keyBySeq);
+    const bounds = [[0, 3], [3, 7], [7, 9]];
+    const expected = runs.map((_, i) => {
+      const [from, to] = bounds.find(([f, t]) => i >= f && i < t)!;
+      return tagKeyAtBlock(runs, from, to, i, keyBySeq);
+    });
+    expect(keys).toEqual(expected);
+    expect(keys).toEqual([null, null, 'k2', 'k1', 'k1', 'k1', 'k2', null, null]);
+    // Ends past the blocks (a reset array) and an empty list are safe.
+    expect(blockTagKeys(runs.slice(0, 2), [3, 7], keyBySeq)).toEqual([null, null]);
+    expect(blockTagKeys([], [], keyBySeq)).toEqual([]);
   });
 });

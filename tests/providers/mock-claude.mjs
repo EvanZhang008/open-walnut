@@ -505,12 +505,19 @@ const plainEcho = process.env.MOCK_CLAUDE_PLAIN_ECHO === '1';
 // decorations included. A fixture that must prove what the agent was handed (the
 // reference card appended to a launch or a send) reads it from this reply.
 let rawEcho = false;
+// `MOCK_TAG_SWITCH:<n>:<ms>` in a slow question's words: the turn answers its own
+// question first, then moves on to question n after ms (one turn, two `[Qn]`
+// tags, the way a CLI that took a second question mid-turn answers both).
+let tagSwitch = null;
 function computeMessageParts() {
   slowDelayMs = 0;
   const bare = stripInputDecorations(stripBanners(message), questionSeq !== null);
   rawEcho = /(^|\s)echo-input(\s|$)/.test(bare);
-  effectiveMessage = bare;
-  const slowMatch = bare.match(/^slow:(\d+)\s+(.*)/);
+  const sw = /\s*MOCK_TAG_SWITCH:(\d+):(\d+)\s*/.exec(bare);
+  tagSwitch = sw ? { seq: Number(sw[1]), ms: Number(sw[2]) } : null;
+  const words = sw ? bare.replace(sw[0], ' ').trim() : bare;
+  effectiveMessage = words;
+  const slowMatch = words.match(/^slow:(\d+)\s+(.*)/);
   if (slowMatch) {
     slowDelayMs = parseInt(slowMatch[1], 10);
     effectiveMessage = slowMatch[2];
@@ -535,11 +542,29 @@ function computeMessageParts() {
   const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
   const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
   const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
-  const tagPart = questionSeq ? `[Q${questionSeq}]\n` : '';
+  const tagPart = tagSwitch ? `[Q${tagSwitch.seq}]\n` : questionSeq ? `[Q${questionSeq}]\n` : '';
   const flags = plainEcho ? '' : `${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
   resultText = `${tagPart}Hello! I processed your message: ${rawEcho ? message : effectiveMessage}${flags}`;
 }
 computeMessageParts();
+
+/** A tag switch's first two texts: the turn's own question now, question n after ms. */
+function startTagSwitch() {
+  if (!tagSwitch || !questionSeq) return () => {};
+  const say = (text) => process.stdout.write(JSON.stringify({
+    type: 'assistant',
+    message: {
+      id: `msg_mock_switch_${process.pid.toString(36)}${Date.now().toString(36)}`,
+      type: 'message', role: 'assistant', model: 'mock-model',
+      content: [{ type: 'text', text }], stop_reason: null,
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+    session_id: outputSessionId,
+  }) + '\n');
+  say(`[Q${questionSeq}]\nFirst, this question: ${effectiveMessage}`);
+  const t = setTimeout(() => say(`[Q${tagSwitch.seq}]\nNow back to question ${tagSwitch.seq}.`), tagSwitch.ms);
+  return () => clearTimeout(t);
+}
 
 // ── stream-json mode: emit JSONL lines ──
 if (outputFormat === 'stream-json') {
@@ -2153,10 +2178,19 @@ if (outputFormat === 'stream-json') {
       message = await new Promise((resolve) => { pendingUserResolve = resolve; });
       computeMessageParts();
       // Known limits of the adopted-message path (extend when a test needs one):
-      // mode-change:* (matched before adoption), slow:'s delay (computed but not
-      // awaited here), and error/parse-error (checked at top level) don't apply
-      // when they arrive as the adopted first FIFO message.
-      emitRemainingEvents();
+      // mode-change:* (matched before adoption) and error/parse-error (checked at
+      // top level) don't apply when they arrive as the adopted first FIFO message.
+      // slow: does: a send that respawns the CLI arrives this way, and a test that
+      // looks at a question while its answer is coming needs the turn to last
+      // (2026-10-04: the answer landed at once and the live state was never seen).
+      if (slowDelayMs > 0) {
+        persistPlainUser(outputSessionId, message);
+        const stopSwitch = startTagSwitch();
+        const pending = setTimeout(() => { onInterrupt = null; emitRemainingEvents(); }, slowDelayMs);
+        onInterrupt = () => { clearTimeout(pending); stopSwitch(); emitAbortedTurnTail(); };
+      } else {
+        emitRemainingEvents();
+      }
     })();
   } else {
     // For mode-change messages, ensure remaining events fire AFTER the mode-change system event
@@ -2164,8 +2198,10 @@ if (outputFormat === 'stream-json') {
     if (effectiveDelay > 0) {
       // A slow turn is a turn in flight: an `interrupt` control_request aborts
       // it (real CLI) instead of letting the delayed result land later.
+      if (slowDelayMs > 0) persistPlainUser(outputSessionId, message);
+      const stopSwitch = slowDelayMs > 0 ? startTagSwitch() : () => {};
       const pending = setTimeout(() => { onInterrupt = null; emitRemainingEvents(); }, effectiveDelay);
-      onInterrupt = () => { clearTimeout(pending); emitAbortedTurnTail(); };
+      onInterrupt = () => { clearTimeout(pending); stopSwitch(); emitAbortedTurnTail(); };
     } else {
       emitRemainingEvents();
     }

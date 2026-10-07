@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 import { createPortal } from 'react-dom';
 import type { ThreadStackMenuProps } from '@/components/sessions/thread-ui-contract';
 import { ThreadConfirm, THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
-import { ThreadCheckIcon, ThreadMoreIcon, ThreadReopenIcon, ThreadTrashIcon } from '@/components/sessions/ThreadIcons';
+import { ThreadMoreIcon, ThreadReopenIcon, ThreadTrashIcon } from '@/components/sessions/ThreadIcons';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { pluralFollowUps } from '@/utils/thread-meta';
 import '@/styles/thread-stack.css';
@@ -58,7 +58,10 @@ export function ThreadStackMenu(props: ThreadStackMenuProps & ThreadStackMenuExt
     if (props.onRename) items.push({ id: 'rename', label: 'Rename…', run: props.onRename });
     items.push(props.resolved
       ? { id: 'reopen', label: 'Reopen', icon: <ThreadReopenIcon size={13} />, run: () => { void actions.reopen(threadKey); } }
-      : { id: 'done', label: 'Mark done', icon: <ThreadCheckIcon size={13} />, run: props.onDone ?? (() => { void actions.done(threadKey); }) });
+      // No check glyph: in a menu a leading check reads as "this is on", so the
+      // action looked already done (2026-10-06, the user: "why it already shows
+      // mark as done when I click?").
+      : { id: 'done', label: 'Mark done', run: props.onDone ?? (() => { void actions.done(threadKey); }) });
     items.push({ id: 'show-in-tree', label: 'Show in tree', run: props.onShowInTree });
     items.push(orderItem);
     items.push({
