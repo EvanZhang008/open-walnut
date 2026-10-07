@@ -6,11 +6,13 @@
  *
  * Each twin dials wss://localhost against a local TLS cloud whose certificate
  * is made at runtime (openssl) and trusted through NODE_EXTRA_CA_CERTS, then:
- * the link works (SNI, a chunked reply), a certificate it was not told to
- * trust is refused with the daemon still up, and a dead wss link is given up
- * and redialed. The JS clients reset the dead link's TCP socket; Bun 1.3.9
- * ends neither a closed nor a terminated wss socket (see abandonBridgeSocket
- * in daemon-standalone.ts), so that check is the JS twins' only.
+ * the link works (SNI, a reply cut into chunks no bigger than the size the
+ * daemon agreed to), a certificate it was not told to trust is refused with
+ * the daemon still up, and a dead wss link is given up and redialed. The JS
+ * clients reset the dead link's TCP socket; Bun 1.3.9 ends neither a closed
+ * nor a terminated wss socket (see abandonBridgeSocket in
+ * daemon-standalone.ts), so that check is the JS twins' only. Without a bun
+ * binary the Bun row is reported as skipped, with the reason in its name.
  *
  * MACHINE SAFETY: HOME, the daemon dir, the streams dir and the certificate
  * are temp paths; the cloud and the link are local servers; daemons are
@@ -39,11 +41,15 @@ let srcDir = ''
 let certDir = ''
 let certFile = ''
 let keyFile = ''
-type Twin = { name: string; wsClient: string; resets: boolean; command: () => [string, string[]] }
+type Twin = { name: string; wsClient: string; resets: boolean; skip: boolean; command: () => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin, no ws package', wsClient: 'builtin', resets: true, command: () => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
-  { name: 'source twin, ws package installed', wsClient: 'ws', resets: true, command: () => [process.execPath, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', wsClient: 'bun', resets: false, command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
+  { name: 'source twin, no ws package', wsClient: 'builtin', resets: true, skip: false, command: () => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
+  { name: 'source twin, ws package installed', wsClient: 'ws', resets: true, skip: false, command: () => [process.execPath, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
+  // Without bun this row is reported as skipped, never dropped.
+  {
+    name: BUN ? 'standalone twin (bun)' : 'standalone twin (bun), SKIPPED: no bun in BUN_INSTALL/bin, ~/.bun/bin, /opt/homebrew/bin or /usr/local/bin',
+    wsClient: 'bun', resets: false, skip: !BUN, command: () => [BUN!, [STANDALONE, '--start']],
+  },
 ]
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -191,7 +197,13 @@ async function startCloud() {
     dials: 0,
     sni: [] as Array<string | null>,
     hellos: [] as number[],
+    /** The id of the bridge.peer request sent on each link, in order. */
+    peerIds: [] as number[],
     replies: new Map<number, Record<string, unknown>>(),
+    /** How many chunks each chunked reply arrived in, by reply id. */
+    chunksOf: new Map<number, number>(),
+    /** The biggest frame the daemon wrote, in bytes. */
+    maxFrameBytes: 0,
     conns: [] as WebSocket[],
     request(cmd: Record<string, unknown>): number {
       const id = nextId++
@@ -207,23 +219,29 @@ async function startCloud() {
     ws.on('error', () => {})
     const parts = new Map<string, string[]>()
     ws.on('message', (data) => {
+      cloud.maxFrameBytes = Math.max(cloud.maxFrameBytes, (data as Buffer).length)
       let f: Record<string, unknown>
       try { f = JSON.parse(data.toString()) } catch { return }
+      let chunks = 0
       if (f.ev === 'chunk') {
         const got = parts.get(f.cid as string) ?? []
         got[f.i as number] = f.part as string
         parts.set(f.cid as string, got)
         if (got.filter((p) => p !== undefined).length !== f.n) return
         parts.delete(f.cid as string)
+        chunks = f.n as number
         f = JSON.parse(got.join('')) as Record<string, unknown>
       }
       if (f.ev === 'hello') {
         cloud.hellos.push(Date.now())
-        ws.send(JSON.stringify({ id: nextId++, cmd: 'bridge.peer', chunkBytes: 256 * 1024 }))
+        const id = nextId++
+        cloud.peerIds.push(id)
+        ws.send(JSON.stringify({ id, cmd: 'bridge.peer', chunkBytes: 256 * 1024 }))
       } else if (f.ev === 'bridge-ping') {
         try { ws.send(JSON.stringify({ id: nextId++, cmd: 'ping', ackSeq: f.seq })) } catch { /* closed */ }
       } else if (typeof f.id === 'number') {
         cloud.replies.set(f.id, f)
+        if (chunks > 0) cloud.chunksOf.set(f.id, chunks)
       }
     })
   })
@@ -263,8 +281,10 @@ async function startLink(targetPort: number) {
   return link
 }
 
-describe.each(TWINS)('bridge over wss: $name', (twin) => {
-  it('dials wss://localhost with SNI, trusts the certificate it was given, and serves a chunked reply', async () => {
+// A plain title, not describe.each's $name, which cuts a long name short (the
+// skip reason with it).
+for (const twin of TWINS) describe(`bridge over wss: ${twin.name}`, () => {
+  it.skipIf(twin.skip)('dials wss://localhost with SNI, trusts the certificate it was given, and serves a chunked reply', async () => {
     const file = path.join(root || fs.realpathSync(os.tmpdir()), `walnut-wss-${process.pid}-${Date.now()}.bin`)
     fs.writeFileSync(file, crypto.randomBytes(256 * 1024))
     closers.push(() => fs.rmSync(file, { force: true }))
@@ -277,17 +297,24 @@ describe.each(TWINS)('bridge over wss: $name', (twin) => {
     expect(procExit, 'the daemon died dialing wss').toBeNull()
     expect(cloud.hellos).toHaveLength(1)
     expect(cloud.sni[0]).toBe('localhost')
+    await waitFor(() => cloud.replies.has(cloud.peerIds[0]), 10_000, 'the answer to bridge.peer')
+    const chunkBytes = Number(cloud.replies.get(cloud.peerIds[0])!.chunkBytes)
+    expect(chunkBytes, 'the daemon turned chunking off').toBeGreaterThan(0)
 
     const id = cloud.request({ cmd: 'fs.readBounded', path: file })
     await waitFor(() => cloud.replies.has(id), 20_000, 'the reply over wss')
     const got = cloud.replies.get(id)!
     expect(got.ok).toBe(true)
     expect(Buffer.from(String(got.data), 'base64').equals(fs.readFileSync(file))).toBe(true)
+    // The reply (over 340 KB of base64) came as chunks no bigger than the
+    // size the daemon agreed to, and was put back together whole.
+    expect(cloud.chunksOf.get(id), 'the reply arrived unchunked').toBeGreaterThanOrEqual(2)
+    expect(cloud.maxFrameBytes).toBeLessThanOrEqual(chunkBytes)
     expect(daemonLog(/^bridge-conn-open$/).map((r) => r.wsClient)).toEqual([twin.wsClient])
     expect(daemonAlive()).toBe(true)
   }, 60_000)
 
-  it('refuses a certificate it was not told to trust, and stays up', async () => {
+  it.skipIf(twin.skip)('refuses a certificate it was not told to trust, and stays up', async () => {
     const cloud = await startCloud()
     await boot(twin, {})
     const ctl = await connect(port)
@@ -302,7 +329,7 @@ describe.each(TWINS)('bridge over wss: $name', (twin) => {
     expect(daemonAlive()).toBe(true)
   }, 60_000)
 
-  it('gives a dead wss link up and redials; the JS clients reset its TCP socket', async () => {
+  it.skipIf(twin.skip)('gives a dead wss link up and redials; the JS clients reset its TCP socket', async () => {
     const cloud = await startCloud()
     const link = await startLink(cloud.port)
     await boot(twin, { NODE_EXTRA_CA_CERTS: certFile, WALNUT_BRIDGE_PING_MS: '300' })

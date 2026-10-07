@@ -9662,14 +9662,19 @@ function armsBridgeFastWindow(s) {
 }
 
 function getWsClientCtor() {
-  // Under Bun its global WebSocket can terminate(). Under Node: the ws package
-  // when it is installed (deploySource() installs it on a remote host), else
-  // createBridgeWsClient. Never Node's global WebSocket: it has no
-  // terminate(), so a link torn down as dead stayed CLOSING and went on
-  // draining what it had buffered; behind one slow bottleneck those streams
-  // starved the new link (gate 2026-10-04: 8 of them in 420 s).
-  // Both Node clients dial their TCP socket through connectBridgeTcp, so a
-  // socket given up on can be reset (abandonBridgeSocket).
+  // Under Node: the ws package when it is installed (deploySource() installs
+  // it on a remote host), else createBridgeWsClient. Never Node's global
+  // WebSocket: it has no terminate(), so a link torn down as dead stayed
+  // CLOSING and went on draining what it had buffered; behind one slow
+  // bottleneck those streams starved the new link (gate 2026-10-04: 8 of them
+  // in 420 s). Both Node clients dial their TCP socket through
+  // connectBridgeTcp, so a socket given up on can be reset
+  // (abandonBridgeSocket), on ws:// and wss:// alike.
+  // Under Bun: its global WebSocket, the only client there is. Its terminate()
+  // resets a ws:// link, but on wss:// it leaves the link in that same state:
+  // CLOSING (readyState 2), no close event, the TCP flow still ESTABLISHED
+  // 180 s on behind a dead path, still draining behind a slow one (gate
+  // 2026-10-07; see abandonBridgeSocket in daemon-standalone.ts).
   if (typeof Bun !== 'undefined' && typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
   try {
     const m = require('ws');

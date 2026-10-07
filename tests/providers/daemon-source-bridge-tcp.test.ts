@@ -120,13 +120,23 @@ describe('JS twin bridge TCP helpers', () => {
     while (peerSaw === null && Date.now() - t0 < 3000) await new Promise((r) => setTimeout(r, 10))
     expect(peerSaw).toBe('ECONNRESET')
 
-    // Still connecting (a dial that never answers): destroyed now, not after a connect.
+    // Still connecting: destroyed now, not after a connect. A dial to a
+    // loopback listener is pending until the event loop turns (Node issues
+    // the connect on a later tick), so the reset runs on it in that state
+    // without a packet leaving the host.
+    let accepted = 0
+    const pendingPort = await listen(() => { accepted++ })
     const connecting: Holder = { tcp: new net.Socket() }
+    let connected = false
     connecting.tcp!.on('error', () => {})
-    connecting.tcp!.connect({ host: '10.255.255.1', port: 9 })
+    connecting.tcp!.on('connect', () => { connected = true })
+    connecting.tcp!.connect({ host: '127.0.0.1', port: pendingPort })
     cleanups.push(() => connecting.tcp!.destroy())
     expect(connecting.tcp!.connecting).toBe(true)
     helpers.resetBridgeTcp(connecting)
     expect(connecting.tcp!.destroyed).toBe(true)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(connected, 'the reset socket went on to connect').toBe(false)
+    expect(accepted).toBe(0)
   })
 })

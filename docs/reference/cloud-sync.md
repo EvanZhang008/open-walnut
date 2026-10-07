@@ -223,7 +223,7 @@ Counts and sizes only, never content. The daemon's lines are in its own log
 |---|---|
 | `connId` | `<daemon instance id>.<n>`, also sent in `hello` |
 | `dialMs` | time from starting the dial to the socket opening |
-| `wsClient` | the WebSocket client that dialed: `bun`, `ws` (the package, when the source twin finds it) or `builtin` (the source twin's own client). Never Node's global WebSocket: it has no `terminate()`, so a link given up on stayed open |
+| `wsClient` | the WebSocket client that dialed: `bun`, `ws` (the package, when the source twin finds it) or `builtin` (the source twin's own client). Never Node's global WebSocket: it has no `terminate()`, so a link given up on stayed open. `ws` and `builtin` reset the TCP socket of a link they give up on, on ws:// and wss://. `bun` resets it on ws:// only: on wss:// Bun 1.3.9's `terminate()` leaves the link open too (CLOSING, no FIN, no RST): the old stream goes on while the path stays dead or slow, and ends with a FIN once the path carries it |
 
 `bridge-conn-close` (daemon), once per connection that opened:
 

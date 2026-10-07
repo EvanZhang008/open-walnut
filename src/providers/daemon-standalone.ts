@@ -8529,9 +8529,14 @@ function scheduleBridgeRedial(gen: number): void {
 //   ws://   close() and terminate() both reset the socket (RST), which drops
 //           what the kernel buffered.
 //   wss://  neither ends it: no FIN, no RST. A bare client's socket stayed open
-//           for the 330 s watched; in the daemon the old stream went on until
-//           160 to 170 s into a 70 s outage on a 4.5 KB/s link (131 to 137 s on
-//           the JS twin), with no extra drop of the new link.
+//           for the 330 s watched; terminate() leaves it CLOSING (readyState
+//           2) with no close event. In the daemon, in a 70 s outage on a
+//           4.5 KB/s link, the old stream went on until 160 to 170 s (131 to
+//           137 s on the JS twin) and the new link was never dropped, but it
+//           had less room: its largest inbound gap was 31.2 and 32.7 s here
+//           and 19.0 to 22.2 s on the JS twins, against a silence watchdog
+//           that gives up 45 to 50 s after the last inbound frame. That left
+//           12 to 14 s of headroom here and 23 to 26 s on the JS twins.
 // This twin cannot end an abandoned wss link. Bun's WebSocket exposes no
 // socket, and the only Bun call that resets a TLS flow is terminate() on a
 // Bun.connect({ tls }) socket (node:tls destroy() and resetAndDestroy() under
