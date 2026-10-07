@@ -153,6 +153,10 @@ const DAEMON_SOURCE_FILES = [
   // import-or-inline rule (docs/plan/daemon-first-hosts.md).
   'src/providers/offline-host-core.ts',
   'src/core/peers/envelope-kit.ts',
+  // The leader book (who leads while the primary is away): same rule
+  // (docs/plan/walnut-control-plane.md).
+  'src/providers/leader-core.ts',
+  'src/providers/offline-board-core.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
   // The paced bridge uplink and loop-drift probe: same import-or-inline rule.

@@ -16,14 +16,50 @@
  */
 
 let selfApiRoot: string | null = null
+let selfCallAuth = false
 
-export function setSelfApiRoot(root: string | null): void {
+/**
+ * `credential`: this server's own op calls must prove themselves (a cloud-mode
+ * server, which has no loopback waiver). Off, they stay as they always were:
+ * loopback-trusted and carrying no Authorization header, which some routes
+ * read to tell who the caller is (routes/devices.ts).
+ */
+export function setSelfApiRoot(root: string | null, opts: { credential?: boolean } = {}): void {
   selfApiRoot = root
+  selfCallAuth = root !== null && opts.credential === true
 }
 
 /** Null outside a listening server (the CLI, the MCP child, unit tests). */
 export function getSelfApiRoot(): string | null {
   return selfApiRoot
+}
+
+let selfCallToken: string | null = null
+
+/**
+ * The credential this server's own op calls carry to its own root. A cloud-mode
+ * server has no loopback waiver, so before this every op it ran on itself (the
+ * backup leader's gateway, an action card) was refused with 401 (2026-10-06).
+ * It lives in this process's memory only: never in env, never given to a session.
+ * Null outside a listening server, and in one that did not ask for it.
+ */
+export function getSelfCallToken(): string | null {
+  if (!selfApiRoot || !selfCallAuth) return null
+  if (!selfCallToken) {
+    const bytes = new Uint8Array(32)
+    globalThis.crypto.getRandomValues(bytes)
+    selfCallToken = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  }
+  return selfCallToken
+}
+
+/** Whether `token` is this server's own self-call credential (constant time). */
+export function isSelfCallToken(token: string): boolean {
+  const mine = selfApiRoot && selfCallAuth ? selfCallToken : null
+  if (!mine || token.length !== mine.length) return false
+  let diff = 0
+  for (let i = 0; i < mine.length; i++) diff |= mine.charCodeAt(i) ^ token.charCodeAt(i)
+  return diff === 0
 }
 
 /**

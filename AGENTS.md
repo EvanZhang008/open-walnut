@@ -282,6 +282,14 @@ delivery and UI plane; a clock, a poll loop, a check script, anything that execu
 in that host's daemon (precedent: walnut-trigger, `docs/plan/walnut-trigger.md`). Offload to the
 daemon whenever the work can live there.**
 
+**If a feature can be self-managed, self-manage it in the daemon; when it cannot, go to the
+leader.** A host keeps a read copy of what its sessions need, answers reads from it, writes its
+own things first and journals them for the leader. The leader is the Mac (the primary); while
+the Mac is away, the cloud companion leads instead when the user allows it, fenced by an epoch
+the daemons hold, and the Mac takes the lead back when it returns (`docs/plan/walnut-control-plane.md`,
+`src/providers/leader-core.ts`, `src/core/leader/`). Only what a host cannot answer alone (a
+session on another host, a task outside its copy) goes to the leader.
+
 Why (each learned the hard way): raw-bytes-over-tunnel hits the WS frame kills and the 32MB
 read ceiling (whale JSONLs); per-file RPC fan-out floods the daemon socket and starves its
 command timeout; and parse work on the server burns the ONE event loop every route shares.

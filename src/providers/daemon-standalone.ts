@@ -72,7 +72,9 @@ import { createFsLs } from './fs-ls-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
-import { createOfflineHost, type HostSlice } from './offline-host-core.js'
+import { createOfflineHost, type HostSlice, type LeaderDelivery } from './offline-host-core.js'
+import { createLeaderBook } from './leader-core.js'
+import { createBoardOffline } from './offline-board-core.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
@@ -687,6 +689,8 @@ interface WsData {
   origin?: 'bridge'
   /** When this socket last sent anything (a frame, a ping, a pong). See heardFrom. */
   lastHeardAt?: number
+  /** When this socket was last told the companion leads its Walnut (see heardFrom). */
+  leaderNudgedAt?: number
 }
 
 /**
@@ -730,6 +734,13 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // data-loss family — a daemon death mid-sequence becomes delayed delivery,
   // not loss. The daemon writes NOTHING itself from this command.
   'session.message',
+  // The backup leader (leader-core.ts, docs/plan/walnut-control-plane.md). Each
+  // checks for itself what the bridge may do: witness only reads; claim is
+  // granted only when the user allowed it and THIS host has not heard the
+  // primary for the takeover window; deliver writes into a session (no more
+  // than `send` already can) only for the current epoch; gateway-result only
+  // answers a relay this host sent to the bridge.
+  'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
@@ -1106,6 +1117,17 @@ const wsClients = new Set<ServerWebSocket<WsData>>()
 const TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15_000, 100)
 function heardFrom(ws: ServerWebSocket<WsData>): void {
   if (ws.data) ws.data.lastHeardAt = Date.now()
+  if (ws.data?.origin === 'bridge') return
+  // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
+  // host is a witness of whether it is still there (leader-core.ts).
+  const home = gatewayClientHomes.get(ws)
+  leaderBook.noteHeard(home)
+  // A socket that outlived the primary's sleep speaks again while the companion
+  // leads: tell the primary, which takes the lead back after its handover.
+  if (home && ws.data && leaderBook.backupLead(home) && Date.now() - (ws.data.leaderNudgedAt ?? 0) > LEADER_NUDGE_MS) {
+    ws.data.leaderNudgedAt = Date.now()
+    sendEvent(ws, 'leader-lost', { home })
+  }
 }
 
 let cronMetadataConfig: Awaited<ReturnType<typeof readCronCliConfig>> | null = null
@@ -1922,9 +1944,15 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
     case 'mobile-event': return cmdMobileEvent(ws, id as number, cmd)
-    // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
-    // client may answer agent-gateway relays (see the gateway section).
+    // A relay is answered by whom it went to (see the gateway section).
     case 'gateway-result': return cmdGatewayResult(ws, id as number, cmd)
+    // Leader book ('leader-epoch-v1'): configure from the trusted primary only;
+    // claim / witness from either side, deliver from the bridge only, each
+    // checked in its handler. Keep in sync with daemon-source.ts.
+    case 'leader.configure': return cmdLeaderConfigure(ws, id as number, cmd)
+    case 'leader.claim': return cmdLeaderClaim(ws, id as number, cmd)
+    case 'leader.witness': return cmdLeaderWitness(ws, id as number)
+    case 'leader.deliver': return daemonCommands.run(() => cmdLeaderDeliver(ws, id as number, cmd))
     // Offline host ('offline-host-v1', docs/plan/daemon-first-hosts.md). NOT in
     // BRIDGE_ALLOWED_COMMANDS: a Walnut's copy and journal belong to that
     // Walnut's trusted SSH-tunneled server only. Keep in sync with daemon-source.ts.
@@ -2453,6 +2481,8 @@ const gatewaySidAliases = new Map<string, string>()
 let gatewayRelayCounter = 0
 const gatewayRelayPending = new Map<number, {
   respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout>
+  /** Sent to the cloud bridge (the companion leads): only the bridge may answer it. */
+  via?: 'bridge'
 }>()
 
 function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse {
@@ -2475,6 +2505,7 @@ const offlineHost = createOfflineHost({
   randomHex: (n) => crypto.randomBytes(n).toString('hex'),
   keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
   kit: createEnvelopeKit(),
+  boards: createBoardOffline(),
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
@@ -2493,8 +2524,115 @@ const offlineHost = createOfflineHost({
       if (client.data?.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home })
     }
   },
+  // A reply or notice for a session on another host: only the companion, while
+  // it leads, can carry it there.
+  relay: (home, req) => new Promise((resolve) => {
+    const sent = forwardToBackup(home, 'leader.deliverText', req.fromSessionId ?? '', req as unknown as Record<string, unknown>, (resp) => {
+      resolve(resp.ok ? { ok: true } : { ok: false, reason: resp.error.message })
+    })
+    if (!sent) resolve({ ok: false, reason: 'no server leads this Walnut right now' })
+  }),
 })
 setInterval(() => { void offlineHost.sweep() }, 60_000).unref?.()
+
+// ── Leader book: who leads this host's work, the primary or (while it is away)
+// the cloud companion (leader-core.ts; docs/plan/walnut-control-plane.md). The
+// primary describes its Walnut with leader.configure and takes the lead back
+// with leader.claim (trusted socket). The companion asks with leader.witness /
+// leader.claim and, once it leads, answers what this host cannot answer itself
+// and routes messages with leader.deliver (bridge, fenced by epoch).
+// Keep in sync with daemon-source.ts.
+
+const LEADER_TAKEOVER_MS = envTimerMs(process.env.WALNUT_LEADER_TAKEOVER_MS, 60_000, 500)
+/** At most one leader-lost event per primary socket in this window. */
+const LEADER_NUDGE_MS = 10_000
+const leaderBook = createLeaderBook({
+  fs, path,
+  dir: path.join(DAEMON_DIR, 'leader'),
+  now: () => Date.now(),
+  keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  takeoverMs: LEADER_TAKEOVER_MS,
+  bootAt: DAEMON_START_TS,
+})
+
+/** A trusted socket of this Walnut's primary is open (heard or not). */
+function primarySocketOpen(home: string): boolean {
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge' && gatewayClientHomes.get(client) === home) return true
+  }
+  return false
+}
+
+/**
+ * Hand one gateway call to the companion while it leads `home`. False when it
+ * does not lead, or there is no bridge. An open primary socket is no reason to
+ * refuse: a sleeping Mac keeps its sockets, and the companion won the lead
+ * because this host stopped hearing them.
+ */
+function forwardToBackup(
+  home: string,
+  capability: string,
+  callerSid: string,
+  payload: Record<string, unknown>,
+  respond: (resp: GatewayResponse) => void,
+): boolean {
+  const lead = leaderBook.backupLead(home)
+  const adapter = bridgeAdapter
+  if (!lead || !adapter) return false
+  const relayId = ++gatewayRelayCounter
+  const timer = setTimeout(() => {
+    gatewayRelayPending.delete(relayId)
+    respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time'))
+  }, gatewayHubTimeoutMs())
+  gatewayRelayPending.set(relayId, { respond, timer, via: 'bridge' })
+  logMsg('info', 'gateway: relaying to the backup leader', { relayId, capability, callerSid, epoch: lead.epoch })
+  sendEvent(adapter, 'gateway-request', {
+    relayId, capability, callerSid, payload,
+    walnutId: lead.walnutId, epoch: lead.epoch,
+    caller: callerSid ? offlineHost.callerOf(home, callerSid) : undefined,
+  })
+  return true
+}
+
+function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only')
+  try {
+    const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true })
+    gatewayClientHomes.set(ws, rec.home)
+    sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS })
+  } catch (err) {
+    sendError(ws, id, (err as Error).message)
+  }
+}
+
+function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin === 'bridge') {
+    const r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch)
+    if (!r.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: r.message, errorKind: r.code, epoch: r.epoch }))
+    return sendOk(ws, id, { epoch: r.record.epoch, holder: r.record.holder })
+  }
+  if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home')
+  const rec = leaderBook.primaryClaim(cmd.home)
+  if (!rec) return sendError(ws, id, 'leader.claim: send leader.configure first')
+  gatewayClientHomes.set(ws, rec.home)
+  sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder })
+}
+
+function cmdLeaderWitness(ws: ServerWebSocket<WsData>, id: number) {
+  sendOk(ws, id, { walnuts: leaderBook.witness(primarySocketOpen), takeoverMs: LEADER_TAKEOVER_MS })
+}
+
+async function cmdLeaderDeliver(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.deliver: the cloud bridge only')
+  const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
+  if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  const delivery = cmd.delivery as LeaderDelivery | undefined
+  if (!delivery || typeof delivery !== 'object') return sendError(ws, id, 'leader.deliver: missing delivery')
+  const r = await offlineHost.deliverFromLeader(f.home, delivery)
+  if (r.ok) return sendOk(ws, id, { result: r.result })
+  safeSend(ws, JSON.stringify({ id, ok: false, error: r.error.message, errorKind: r.error.code, detail: r.error.detail }))
+}
 
 /** The Walnut a session belongs to: the home whose copy lists it. */
 function gatewayOwnerHome(callerSid: string): string | undefined {
@@ -2543,11 +2681,20 @@ function sendGatewayRequest(
   }
   if (!home) target = untagged
   else if (!target && !offlineHost.pendingHandover(home)) target = untagged
+  // While the companion leads this Walnut its primary's sockets are silent
+  // (that is how the lead was won): no target until the primary takes it back.
+  if (home && leaderBook.backupLead(home)) target = null
   // Answer here while the Walnut is away, and while its server is still taking
   // the handover: an id it has not imported yet must never reach it.
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
     logMsg('info', 'gateway: answered offline', { capability, callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target })
-    void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse))
+    void offlineHost.handle(home, callerSid, capability, payload).then((r) => {
+      // What this host cannot answer itself goes to the companion while it
+      // leads (a message to another host, a task outside the copy).
+      if (!r.ok && r.error.code === 'hub_unreachable' && !target
+        && forwardToBackup(home, capability, callerSid, payload, respond)) return
+      respond(r as GatewayResponse)
+    })
     return
   }
   if (!target) {
@@ -2564,14 +2711,20 @@ function sendGatewayRequest(
   sendEvent(target, 'gateway-request', { relayId, capability, callerSid, payload })
 }
 
-// `gateway-result` is deliberately NOT in BRIDGE_ALLOWED_COMMANDS — only a
-// trusted (SSH-tunneled) walnut client may answer a gateway relay.
+// A relay is answered by whom it went to: the trusted walnut client, or, for a
+// relay handed to the companion while it leads (via: 'bridge'), the bridge.
+// So `gateway-result` is on the bridge allowlist, and a bridge answer to a relay
+// it was never sent is refused here.
 function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { relayId, result, error, errorCode, detail } = cmd as {
     relayId?: number; result?: Record<string, unknown>; error?: string
     errorCode?: string; detail?: unknown
   }
   const pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined
+  if (pending && (ws.data?.origin === 'bridge') !== (pending.via === 'bridge')) {
+    logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId, fromBridge: ws.data?.origin === 'bridge' })
+    return sendError(ws, id, 'gateway-result: not sent to this socket')
+  }
   if (!pending) {
     // Late result after timeout — ack and drop (same as cmdLaunchResult).
     return sendOk(ws, id, { stale: true })

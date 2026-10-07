@@ -15,6 +15,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { cutEnd } from './text-cut.js';
 import type { HostSlice, OfflineSliceTask } from '../providers/offline-host-core.js';
+import type { OfflineSliceBoard } from '../providers/offline-board-core.js';
 import type { Task } from './types.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
@@ -24,6 +25,54 @@ const MAX_TASKS = 500;
 /** A session silent this long is not worth a row. */
 const SESSION_RECENCY_MS = 7 * 24 * 60 * 60 * 1000;
 const DESCRIPTION_MAX = 2000;
+/** Levels of subtasks below a session's task kept in the copy (the server's own cap is 3). */
+const TEAM_DEPTH = 3;
+/** Board html in one copy, all boards together; the boards of the newest sessions go first. */
+const BOARDS_MAX_CHARS = 4 * 1024 * 1024;
+/** Newest messages kept per board thread. */
+const THREAD_TAIL = 40;
+
+/**
+ * The team Boards of this host's session tasks (offline-board-core.ts): each
+ * task's board owner (its own board, else the nearest leader's, else its
+ * tree's root, where a first board_set would make one), and the boards that
+ * exist among them.
+ */
+async function teamBoards(sessionTaskIds: string[]): Promise<{ boards: OfflineSliceBoard[]; boardOf: Record<string, string> }> {
+  const [{ resolveTeamBoardTask }, { getBoard }] = await Promise.all([
+    import('./boards/board-team.js'),
+    import('./boards/board-store.js'),
+  ]);
+  const boardOf: Record<string, string> = {};
+  const owners: string[] = [];
+  for (const id of sessionTaskIds) {
+    try {
+      const owner = await resolveTeamBoardTask(id);
+      boardOf[id] = owner.taskId;
+      if (owner.hasBoard && !owners.includes(owner.taskId)) owners.push(owner.taskId);
+    } catch { /* the task is gone */ }
+  }
+  const boards: OfflineSliceBoard[] = [];
+  let chars = 0;
+  for (const id of owners) {
+    const b = await getBoard(id).catch(() => null);
+    if (!b) continue;
+    chars += b.html.length;
+    if (chars > BOARDS_MAX_CHARS) break;
+    boards.push({
+      taskId: id,
+      html: b.html,
+      version: b.version,
+      updated_at: b.updated_at,
+      updated_by: b.updated_by,
+      threads: Object.fromEntries(Object.entries(b.threads ?? {}).map(([k, list]) => [k, list.slice(-THREAD_TAIL)])),
+      marks: Object.fromEntries(Object.entries(b.marks ?? {}).map(([k, m]) => [k, { ...(m.state ? { state: m.state } : {}), ...(m.note ? { note: m.note } : {}) }])),
+      projects: b.projects as unknown as Record<string, Record<string, unknown>>,
+      choices: b.choices as unknown as Record<string, Record<string, unknown>>,
+    });
+  }
+  return { boards, boardOf };
+}
 
 /** '__local__', 'local' and '' all mean this machine. */
 export function normalizeHostKey(host: string | undefined | null): string {
@@ -67,7 +116,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
     import('./session-requests.js'),
   ]);
 
-  const records = (await listSessions())
+  const allSessions = await listSessions();
+  const records = allSessions
     .filter((s) => !s.archived
       && s.provider !== 'embedded' && s.provider !== 'sdk'
       && normalizeHostKey(s.host) === key
@@ -90,22 +140,45 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       ...(t.session_id ? { session_id: t.session_id } : {}),
     });
   };
-  // Session tasks first (newest session first), then their parents, then children.
+  // Session tasks first (newest session first), then their parents, then the
+  // team around them: their subtasks (down to MAX_SUBTASK_DEPTH below), and
+  // their parents' other subtasks, so a leader and its workers read each other.
   const sessionTaskIds = [...new Set(records.map((s) => s.taskId).filter((id): id is string => !!id))];
   const own = new Map((await listTasksByIds(sessionTaskIds)).map((t) => [t.id, t]));
   for (const id of sessionTaskIds) add(own.get(id));
   const parentIds = [...new Set([...own.values()].map((t) => t.parent_task_id).filter((id): id is string => !!id && !own.has(id)))];
   for (const t of await listTasksByIds(parentIds)) add(t);
-  for (const t of await childTasks(sessionTaskIds)) add(t);
+  let level = sessionTaskIds;
+  for (let depth = 0; depth < TEAM_DEPTH && level.length > 0 && picked.size < MAX_TASKS; depth++) {
+    const next: string[] = [];
+    for (const t of await childTasks(level)) {
+      if (!picked.has(t.id)) next.push(t.id);
+      add(t);
+    }
+    level = next;
+  }
+  for (const t of await childTasks(parentIds)) add(t);
 
+  // Pending requests with a party here. One whose other party runs elsewhere
+  // names that host, so an answer can travel through the leader while this
+  // server is away (docs/plan/walnut-control-plane.md).
   const sids = new Set(records.map((s) => s.claudeSessionId));
+  const hostOf = new Map(allSessions.map((s) => [s.claudeSessionId, displayHost(normalizeHostKey(s.host))]));
   const pending = (await requests.listPendingRequests())
-    .filter((r) => sids.has(r.fromSessionId) && !!r.toSessionId && sids.has(r.toSessionId))
-    .map((r) => ({
-      id: r.id, fromSessionId: r.fromSessionId, toSessionId: r.toSessionId,
-      ...(r.toTaskId ? { toTaskId: r.toTaskId } : {}),
-      preview: r.preview, status: 'pending' as const, createdAt: r.createdAt, deadlineAt: r.deadlineAt,
-    }));
+    .filter((r) => sids.has(r.fromSessionId) || (!!r.toSessionId && sids.has(r.toSessionId)))
+    .map((r) => {
+      const fromHost = sids.has(r.fromSessionId) ? undefined : hostOf.get(r.fromSessionId);
+      const toHost = !r.toSessionId || sids.has(r.toSessionId) ? undefined : hostOf.get(r.toSessionId);
+      return {
+        id: r.id, fromSessionId: r.fromSessionId, toSessionId: r.toSessionId,
+        ...(r.toTaskId ? { toTaskId: r.toTaskId } : {}),
+        preview: r.preview, status: 'pending' as const, createdAt: r.createdAt, deadlineAt: r.deadlineAt,
+        ...(fromHost ? { fromHost } : {}),
+        ...(toHost ? { toHost } : {}),
+      };
+    });
+
+  const { boards, boardOf } = await teamBoards(sessionTaskIds);
 
   const body = {
     home: WALNUT_HOME,
@@ -117,6 +190,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
     })),
     tasks: [...picked.values()],
     requests: pending,
+    boards,
+    boardOf,
   };
   const hash = createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 16);
   return { v: 1, ...body, hash, asOf: now };
@@ -142,6 +217,6 @@ export function ensureHostSliceSync(): void {
           .catch((err) => log.session.warn('host slice: re-push failed', { error: err instanceof Error ? err.message : String(err) }));
       }, PUSH_DEBOUNCE_MS);
       timer.unref?.();
-    }, { global: true, interest: ['task:', 'session:started', 'session:status-changed', 'session:renamed', 'session-request:'] });
+    }, { global: true, interest: ['task:', 'session:started', 'session:status-changed', 'session:renamed', 'session-request:', 'board:changed'] });
   });
 }

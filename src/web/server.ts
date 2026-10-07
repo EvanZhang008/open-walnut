@@ -125,6 +125,7 @@ import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { asksV1Router } from './routes/asks-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
+import { leaderRouter } from './routes/leader.js'
 import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
 import { inboxPayloadTooLargeHandler } from './routes/human-inbox-v1.js'
 import { pastesRouter } from './routes/pastes.js'
@@ -556,6 +557,8 @@ let unsubscribeHostPhase: (() => void) | null = null
 /** Unhooks the local Claude Code readiness → system:health push. */
 let unsubscribeLocalClaude: (() => void) | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
+/** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
+let leaderLoopHandle: { stop: () => void } | null = null
 /** Keeps the Inbox Triage routine in line with config.triage (no restart). */
 let triageConfigWatcher: { stop: () => void } | null = null
 /** Keeps what arrived (mail/Slack) for the next Inbox Triage batch. */
@@ -1858,6 +1861,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ephemeral servers, and tests exercise the feed through real servers).
   app.use('/api/v1', eventsV1Router)
   startMobileEventsFeed()
+  // Who leads this Walnut's hosts while the primary is away (core/leader/,
+  // docs/plan/walnut-control-plane.md): the primary heartbeats to its cloud
+  // companion; the companion watches it and, once a host grants it the lead,
+  // answers what that host cannot answer itself.
+  app.use('/api', leaderRouter)
+  if (CLOUD_MODE) {
+    const [{ startBackupLeader }, { handleBackupGatewayFrame }, { setGatewayRequestHandler }] = await Promise.all([
+      import('../core/leader/backup-leader.js'),
+      import('../core/leader/backup-gateway.js'),
+      import('./ws/bridge-registry.js'),
+    ])
+    setGatewayRequestHandler((host, frame) => { void handleBackupGatewayFrame(host, frame).catch(() => { /* answered or timed out on the host */ }) })
+    leaderLoopHandle = await startBackupLeader()
+  } else {
+    const { startLeaderHeartbeat, watchBackupLeaderSetting } = await import('../core/leader/primary-leader.js')
+    const heartbeat = startLeaderHeartbeat()
+    const unwatch = watchBackupLeaderSetting()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch() } }
+  }
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
   // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
@@ -2167,7 +2189,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // hook scripts); stopServer restores whatever was there before.
       const selfRoot = `http://127.0.0.1:${bound.port}`
       priorOpenWalnutApiUrl = { value: process.env.OPEN_WALNUT_API_URL, self: selfRoot }
-      setSelfApiRoot(selfRoot)
+      setSelfApiRoot(selfRoot, { credential: CLOUD_MODE })
       process.env.OPEN_WALNUT_API_URL = selfRoot
     }
   }
@@ -5579,6 +5601,15 @@ export async function stopServer(): Promise<void> {
   if (heartbeatHandle) {
     heartbeatHandle.stop()
     heartbeatHandle = null
+  }
+  // Tell the companion this is a restart, not the Mac going away, so a deploy
+  // never hands it the lead. Bounded: never holds the shutdown up.
+  leaderLoopHandle?.stop()
+  leaderLoopHandle = null
+  if (!CLOUD_MODE) {
+    try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }
+  } else {
+    try { (await import('./ws/bridge-registry.js')).setGatewayRequestHandler(null) } catch { /* best-effort */ }
   }
   try {
     const { stopStallRecorder } = await import('../core/stall-recorder.js')

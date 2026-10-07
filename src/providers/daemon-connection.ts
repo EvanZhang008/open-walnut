@@ -419,6 +419,8 @@ export class DaemonConnection {
   private offlineDrainDue = true
   /** One pending retry after a failed push (a starved daemon timed out the drain). */
   private hostSliceRetryTimer: ReturnType<typeof setTimeout> | null = null
+  /** The Walnut was described to this daemon (leader.configure) on this connection. */
+  private leaderConfigured = false
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -752,7 +754,7 @@ export class DaemonConnection {
     if (changed && value) this.pushTriggers()
     // And for the offline host: first take back what the daemon did while we
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
-    if (changed) { this.lastHostSlicePushHash = null; this.offlineDrainDue = true }
+    if (changed) { this.lastHostSlicePushHash = null; this.offlineDrainDue = true; this.leaderConfigured = false }
     if (changed && value) this.pushHostSlice()
     // Distribute the walnut skill to this host's engine-native discovery
     // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
@@ -1060,6 +1062,14 @@ export class DaemonConnection {
           // until its journal was empty) go in the next round.
           if ((reply as Record<string, unknown>).pendingHandover === true) { this.offlineDrainDue = true; this.hostSlicePushRerun = true }
         } while (this.hostSlicePushRerun)
+        // Once per connection, after the handover: describe the Walnut and take
+        // the lead back if the cloud companion held it (core/leader/).
+        if (!this.leaderConfigured && this.hasCapability('leader-epoch-v1')) {
+          const { configureHostLeader } = await import('../core/leader/primary-leader.js')
+          if (await configureHostLeader({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })) {
+            this.leaderConfigured = true
+          }
+        }
       } catch (err) {
         log.session.warn('DaemonConnection: host slice push failed', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
@@ -1077,6 +1087,12 @@ export class DaemonConnection {
         this.hostSlicePushInFlight = false
       }
     })()
+  }
+
+  /** Describe the Walnut to this daemon again on the next host-slice round. */
+  refreshLeader(): void {
+    this.leaderConfigured = false
+    this.pushHostSlice()
   }
 
   /**
@@ -3716,6 +3732,14 @@ export class DaemonConnection {
         this.pushHostSlice()
         return
       }
+      // The cloud companion led this host while we were silent (a sleep the
+      // socket outlived): take the handover, then the lead back (core/leader/).
+      if (event.ev === 'leader-lost') {
+        log.session.info('DaemonConnection: the cloud companion leads this host, taking the lead back', { host: this.hostKey })
+        this.offlineDrainDue = true
+        this.refreshLeader()
+        return
+      }
       // walnut-trigger: the daemon's check reports. Routed to the registered
       // sink (never to session eventHandlers — a trigger belongs to a ROUTINE,
       // not to a session) before the generic fan-out.
@@ -4933,6 +4957,13 @@ export function pushTriggersToHost(hostKey: string): void {
 export function pushHostSliceToAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.pushHostSlice()
+  }
+}
+
+/** Describe the Walnut to every connected host again (the backup-leader setting changed). */
+export function refreshLeaderOnAllHosts(): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected) conn.refreshLeader()
   }
 }
 

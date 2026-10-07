@@ -110,7 +110,7 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
             host: conn.hostKey, seq: record.seq, kind: record.kind, error: reason, ...await recordScope(record),
           });
         }
-        if (record.kind === 'op') unapplied.push({ callerSid: record.callerSid, op: record.op, taskId: String(record.args?.id ?? ''), reason });
+        if (record.kind === 'op') unapplied.push({ callerSid: record.callerSid, op: record.op, taskId: String(record.args?.id ?? record.args?.task ?? ''), reason });
       }
       upTo = Math.max(upTo, record.seq);
     }
@@ -204,6 +204,19 @@ async function applyRecord(
       return;
     }
     case 'op': {
+      // A Board write made on the host (offline-board-core.ts): replayed through
+      // the same op, whose own checks decide (an edit whose text moved on is
+      // refused, and the writer is told). There is no updated_at race to judge
+      // here: nobody writes a board's html on this side while its team is away.
+      if (record.op.startsWith('board_')) {
+        const { executeOp } = await import('../ops/index.js');
+        const { hostOrigin } = await import('../lib/caller-origin.js');
+        const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host) });
+        if (!r.ok) throw r.unreachable ? new Error(r.message) : new RefusedWrite(r.message);
+        result.replayed++;
+        log.session.info('offline handover: board write applied', { host, op: record.op, boardTaskId: String(record.args.task ?? ''), callerSid: record.callerSid });
+        return;
+      }
       const taskId = String(record.args.id ?? '');
       const { getTask } = await import('./task-manager.js');
       const task = await getTask(taskId).catch(() => null);
@@ -245,7 +258,7 @@ async function applyRecord(
 /** The session (and task) a record is about, for the log line and the card's lifecycle. */
 async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string; taskId?: string }> {
   switch (record.kind) {
-    case 'op': return { sessionId: record.callerSid, taskId: String(record.args?.id ?? '') || undefined };
+    case 'op': return { sessionId: record.callerSid, taskId: String(record.args?.id ?? record.args?.task ?? '') || undefined };
     case 'row': return { sessionId: record.row.fromSessionId };
     case 'delivery': return { sessionId: record.toSessionId };
     case 'settle': {

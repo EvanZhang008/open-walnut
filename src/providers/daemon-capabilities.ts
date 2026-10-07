@@ -281,6 +281,20 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
   // server pushes nothing and the gateway answers as before.
   'offline-host-v1',
+  // 'leader-epoch-v1' (leader-core.ts, docs/plan/walnut-control-plane.md): the
+  // primary describes its Walnut with `leader.configure` ({home, walnutId,
+  // backup}) and takes the lead back with `leader.claim` (trusted socket). The
+  // cloud companion, over the bridge, asks `leader.witness` (has this host heard
+  // the primary lately?) and `leader.claim` (granted only when the user allowed
+  // it and this host has not heard the primary for the takeover window, at a
+  // higher epoch). While it leads, the gateway hands it what this host cannot
+  // answer itself (`gateway-request` over the bridge, answered by
+  // `gateway-result`, which the bridge may send only for those relays), and it
+  // routes messages between hosts with `leader.deliver` (current epoch only).
+  // Both twins implement it (the core is text-injected into the source twin),
+  // so it is NOT sidecar-gated. Optional: without it the primary pushes nothing
+  // and the companion never leads that host.
+  'leader-epoch-v1',
   'session.message',
   'hooks-v1',
   'changes-v1',

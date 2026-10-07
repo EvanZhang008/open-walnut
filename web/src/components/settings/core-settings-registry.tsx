@@ -275,8 +275,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'Phones paired with this Mac and the cloud companion they reach it through.',
     keywords: ['phone', 'iphone', 'pair',
       { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
+      { word: 'away sleep take over backup leader', rowLabel: 'Cloud companion takes over', anchor: 'devices-backup-leader' },
       { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],
-    render: () => <DevicesSection />,
+    render: ({ config, saveSection }) => <DevicesSection config={config} onSave={saveSection} />,
   },
   {
     owner: 'walnut', id: 'cloud', label: 'Cloud Companion', title: 'Cloud Companion', group: 'configure', navHidden: true,

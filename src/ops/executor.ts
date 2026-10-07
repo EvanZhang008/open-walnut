@@ -18,7 +18,7 @@
 
 import { z } from 'zod'
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
-import { getSelfApiRoot } from '../lib/self-api-root.js'
+import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
 import {
   ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
@@ -107,6 +107,10 @@ async function rawRequest(
 ): Promise<OpOutcome> {
   const serverRoot = base.replace(/\/api\/v1$/, '')
   const url = path.startsWith('/api/') ? `${serverRoot}${path}` : `${base}${path}`
+  // A call to this process's own server proves itself (a cloud-mode server has no
+  // loopback waiver); the credential never goes to any other root.
+  const self = getSelfApiRoot()
+  const selfToken = self && resolveApiBase(self) === base ? getSelfCallToken() : null
   let res: Response
   try {
     res = await fetch(url, {
@@ -115,6 +119,7 @@ async function rawRequest(
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
         ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
+        ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
         // Always sent, so no self-call can reach a loopback-trusting route unlabelled.
         [ORIGIN_HEADER]: prov.origin,
       },

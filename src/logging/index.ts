@@ -33,6 +33,8 @@ export const log = {
   stt: createSubsystemLogger('stt'),
   obs: createSubsystemLogger('obs'),
   calendar: createSubsystemLogger('calendar'),
+  /** Who leads a Walnut: the primary, or the cloud companion while it is away (core/leader/). */
+  leader: createSubsystemLogger('leader'),
 };
 
 // ── Initialization ──

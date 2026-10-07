@@ -25,6 +25,7 @@
  */
 
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
+import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 
 export interface OfflineSliceSession { sid: string; taskId?: string; title?: string }
 
@@ -40,7 +41,11 @@ export interface OfflineSliceTask {
   session_id?: string
 }
 
-/** A pending request the SERVER owns, copied because both parties are on this host. */
+/**
+ * A pending request the SERVER owns, copied because one party (or both) runs on
+ * this host. `fromHost` / `toHost` name the other party's host when it runs
+ * elsewhere: an answer to it then travels through the leader.
+ */
 export interface OfflineSliceRequest {
   id: string
   fromSessionId: string
@@ -50,6 +55,8 @@ export interface OfflineSliceRequest {
   status: 'pending'
   createdAt: string
   deadlineAt: number
+  fromHost?: string
+  toHost?: string
 }
 
 export interface HostSlice {
@@ -63,6 +70,10 @@ export interface HostSlice {
   sessions: OfflineSliceSession[]
   tasks: OfflineSliceTask[]
   requests: OfflineSliceRequest[]
+  /** The Boards of the teams whose sessions run here (offline-board-core.ts). */
+  boards?: OfflineSliceBoard[]
+  /** A session task's team board: task id → the board's task id. */
+  boardOf?: Record<string, string>
 }
 
 export type OfflineRequestStatus = 'pending' | 'replied' | 'notified' | 'expired' | 'withdrawn'
@@ -85,6 +96,8 @@ export interface OfflineRequestRow {
   afterV?: number
   /** Offset of the last result line counted, so a re-read of the stream never counts one twice. */
   lastResultV?: number
+  /** The asker runs on another host (named as this Walnut names it): its answer goes through the leader. */
+  fromHost?: string
 }
 
 export type OfflineRecord =
@@ -121,7 +134,42 @@ export interface OfflineHostDeps {
   deliver: (sid: string, text: string, messageId: string) => Promise<DeliverResult>
   /** A journal grew while a server of that home is connected: ask it to drain. */
   onJournal?: (home: string) => void
+  /**
+   * Hand text for a session on ANOTHER host to the server leading this Walnut
+   * while its primary is away (the cloud companion, docs/plan/walnut-control-plane.md).
+   * Absent, or answering not ok, when nobody leads: the caller is told the
+   * primary is needed, as before.
+   */
+  relay?: (home: string, req: { toHost: string; toSid: string; text: string; messageId: string; requestId?: string; reply?: boolean; fromSessionId?: string }) => Promise<DeliverResult>
+  /** Board checks and the copy's overlay; absent: board ops need the server. */
+  boards?: BoardOffline
 }
+
+/** A message the leader routes to a session of this host (`leader.deliver`). */
+export type LeaderDelivery =
+  | {
+    kind: 'peer'
+    /** The sender, on another host. */
+    from: { sid: string; taskId?: string; title?: string; host: string }
+    /** A task id (or unique prefix) or a session id on this host. */
+    to: string
+    text: string
+    title?: string
+    expect_reply?: boolean
+    reply_timeout?: number
+    messageId?: string
+  }
+  | {
+    kind: 'text'
+    /** A session of this Walnut on this host. */
+    toSid: string
+    /** Already built (a reply envelope, a Walnut notice) by the host it came from. */
+    text: string
+    messageId?: string
+    requestId?: string
+    reply?: boolean
+    fromSessionId?: string
+  }
 
 export function createOfflineHost(deps: OfflineHostDeps) {
   const { fs, path, kit } = deps
@@ -142,6 +190,15 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     { name: 'task_update', title: 'Update a task (queued)', description: 'Saved here and applied when the Walnut server reconnects.', readonly: false, signature: 'id ...fields' },
     { name: 'task_complete', title: 'Complete a task (queued)', description: 'Saved here and applied when the Walnut server reconnects.', readonly: false, signature: 'id' },
   ]
+  if (deps.boards) {
+    OFFLINE_OPS.push(
+      { name: 'board_get', title: 'Read your team\'s Board (copy on this host)', description: 'The Board this host keeps for its teams, with the writes made here since.', readonly: true, signature: '[task]' },
+      { name: 'board_set', title: 'Write the whole Board (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] html [version]' },
+      { name: 'board_edit', title: 'Edit the Board in place (applied here, sent later)', description: 'Exact-string edits, as online; applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] edits [version]' },
+      { name: 'board_post', title: 'Post in a Board thread (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] thread text' },
+      { name: 'board_project_set', title: 'Set a Board project (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] id ...fields' },
+    )
+  }
   const OFFLINE_NAMES = OFFLINE_OPS.map((o) => o.name).join(', ')
 
   /** How long a drained-but-unacked row is left to the server before this host acts on it again. */
@@ -295,7 +352,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (!slice) return []
     const overlay = new Map<string, Record<string, unknown>>()
     for (const r of journals.get(home)?.records ?? []) {
-      if (r.kind !== 'op') continue
+      if (r.kind !== 'op' || QUEUED_OPS.indexOf(r.op) === -1) continue
       const id = String(r.args.id ?? '')
       const cur = overlay.get(id) ?? {}
       if (r.op === 'task_complete') cur.phase = 'COMPLETE'
@@ -435,7 +492,10 @@ export function createOfflineHost(deps: OfflineHostDeps) {
    * messages its COMPLETE parent, as this copy (with queued completions) sees it.
    */
   function parentCompleteRefusal(home: string, callerSid: string, targetTaskId: string | undefined): GatewayResult | undefined {
-    const ownId = callerIdentity(home, callerSid).taskId
+    return parentCompleteRefusalOf(home, callerIdentity(home, callerSid).taskId, targetTaskId)
+  }
+
+  function parentCompleteRefusalOf(home: string, ownId: string | undefined, targetTaskId: string | undefined): GatewayResult | undefined {
     if (!ownId || !targetTaskId) return undefined
     const tasks = tasksWithOverlay(home)
     const parentRef = tasks.find((t) => t.id === ownId)?.parent_task_id
@@ -457,7 +517,9 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (!isTarget) return fail('bad_request', `request ${id} was not addressed to this session`)
     const closed = parentCompleteRefusal(home, callerSid, sessionOf(home, row.fromSessionId)?.taskId)
     if (closed) return closed
-    if (!deps.isLive(row.fromSessionId)) {
+    // The asker runs elsewhere: only a leader can carry the answer there.
+    const remoteHost = deps.isLive(row.fromSessionId) ? undefined : row.fromHost
+    if (!deps.isLive(row.fromSessionId) && !(remoteHost && deps.relay)) {
       return needsServer(`The asking session (${row.fromSessionId.slice(0, 8)}) is not running on this host; routing the answer`)
     }
     const denied = admitWrite(callerSid) ?? roomFor(home)
@@ -467,8 +529,13 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
     }, text, { title: typeof args.title === 'string' ? args.title : undefined })
     const mid = messageId(args.messageId)
-    const delivered = await deps.deliver(row.fromSessionId, wrapped, mid)
-    if (!delivered.ok) return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
+    const delivered = remoteHost
+      ? await deps.relay!(home, { toHost: remoteHost, toSid: row.fromSessionId, text: wrapped, messageId: mid, requestId: id, reply: true, fromSessionId: callerSid })
+      : await deps.deliver(row.fromSessionId, wrapped, mid)
+    if (!delivered.ok) {
+      if (remoteHost) return needsServer(`The asking session runs on ${remoteHost} and the answer could not be routed there (${delivered.reason}); answering it`)
+      return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
+    }
     if (own) {
       if (own.status === 'pending') {
         own.status = 'replied'
@@ -479,11 +546,14 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       journalOf(home).settledCopies.push(id)
       append(home, { kind: 'settle', requestId: id, status: 'replied' })
     }
-    append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: row.fromSessionId, messageId: mid, requestId: id, reply: true })
-    deps.log('info', 'offline host: reply delivered', { home, requestId: id, from: callerSid, to: row.fromSessionId })
+    // The host that wrote the text into the asker's session journals the delivery.
+    if (!remoteHost) append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: row.fromSessionId, messageId: mid, requestId: id, reply: true })
+    deps.log('info', 'offline host: reply delivered', { home, requestId: id, from: callerSid, to: row.fromSessionId, viaLeader: !!remoteHost })
     return ok({
       delivery: 'queued', offline: true, targetSessionId: row.fromSessionId, repliedTo: id, messageId: mid,
-      outcome: `Reply delivered on this host to the asking session. ${offlineNote(home)}`,
+      outcome: remoteHost
+        ? `Reply delivered to the asking session on ${remoteHost} through the cloud companion, which leads while the Walnut server is away.`
+        : `Reply delivered on this host to the asking session. ${offlineNote(home)}`,
       next: 'Nothing else is required.',
     })
   }
@@ -600,6 +670,88 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     })
   }
 
+  // ── the Board copy (offline-board-core.ts) ──
+
+  /** The board a call is about: the task it names, else the caller's team board. */
+  function boardIdFor(home: string, callerSid: string, given: unknown): string | undefined {
+    const slice = slices.get(home)
+    if (!slice) return undefined
+    const boards = slice.boards ?? []
+    if (typeof given === 'string' && given.trim()) {
+      const ref = given.trim()
+      const exact = boards.find((b) => b.taskId === ref)
+      if (exact) return exact.taskId
+      const task = resolveTask(home, ref).task
+      return task && (boards.some((b) => b.taskId === task.id) || slice.boardOf?.[task.id] === task.id) ? task.id : undefined
+    }
+    const own = callerIdentity(home, callerSid).taskId
+    return own ? slice.boardOf?.[own] : undefined
+  }
+
+  /** The board as this host sees it: the copy, then every write made here since. */
+  function boardWithOverlay(home: string, boardId: string): OfflineSliceBoard | undefined {
+    const kit = deps.boards!
+    let board = (slices.get(home)?.boards ?? []).find((b) => b.taskId === boardId)
+    for (const r of journals.get(home)?.records ?? []) {
+      if (r.kind !== 'op' || kit.WRITE_OPS.indexOf(r.op) === -1 || r.args.task !== boardId) continue
+      const by = `task:${callerIdentity(home, r.callerSid).taskId ?? ''}`
+      board = kit.apply(board, r.op, r.args, by, new Date(r.at).toISOString(), boardId, () => `bm-offline-${r.seq}`)
+    }
+    return board
+  }
+
+  /** The board's task itself or a task below it, as the copy knows the tree. */
+  function inTeam(home: string, boardId: string, taskId: string | undefined): boolean {
+    const tasks = slices.get(home)?.tasks ?? []
+    let cur = taskId
+    for (let i = 0; cur && i < 12; i++) {
+      if (cur === boardId) return true
+      const at: string = cur
+      cur = tasks.find((t) => t.id === at)?.parent_task_id
+    }
+    return false
+  }
+
+  function opBoard(home: string, callerSid: string, name: string, args: Record<string, unknown>): GatewayResult {
+    const kit = deps.boards!
+    const boardId = boardIdFor(home, callerSid, args.task)
+    if (!boardId) return needsServer(`The Board of that task is not kept on this host; ${name === 'board_get' ? 'reading' : 'writing'} it`)
+    const board = boardWithOverlay(home, boardId)
+    if (name === 'board_get') {
+      if (!board) {
+        return ok({
+          task_id: boardId, board: null, offline: true, as_of: asOf(home),
+          outcome: `Task ${boardId} has no board yet (this host's copy). ${offlineNote(home)}`,
+          next: 'Make one with board_set; it is applied here now and reaches Walnut when the server reconnects.',
+        })
+      }
+      return ok({
+        task_id: boardId,
+        board: { html: board.html, version: board.version, updated_at: board.updated_at, updated_by: board.updated_by },
+        threads: board.threads ?? {}, marks: board.marks ?? {}, projects: board.projects ?? {}, choices: board.choices ?? {},
+        offline: true, as_of: asOf(home),
+        outcome: `Board of ${boardId} (this host's copy, with the writes made here): version ${board.version}, ${board.html.length} chars of html. ${offlineNote(home)}`,
+        next: 'Keep it current with board_edit; a write is applied here now and reaches Walnut when the server reconnects.',
+      })
+    }
+    const me = callerIdentity(home, callerSid)
+    if (!inTeam(home, boardId, me.taskId)) {
+      return fail('not_in_team', 'Only the board task\'s own session or its subtasks\' sessions may write this board')
+    }
+    const prepared = kit.prepare(board, name, args, `task:${me.taskId}`)
+    if (!prepared.ok) return fail(prepared.code, prepared.message, prepared.detail !== undefined ? { detail: prepared.detail } : undefined)
+    const denied = admitWrite(callerSid) ?? roomFor(home)
+    if (denied) return denied
+    append(home, { kind: 'op', op: name, args: { ...prepared.args, task: boardId }, callerSid })
+    const after = boardWithOverlay(home, boardId)
+    deps.log('info', 'offline host: board write queued', { home, op: name, boardId, callerSid })
+    return ok({
+      queued: true, offline: true, task_id: boardId, ...(after ? { version: after.version } : {}),
+      outcome: `Applied to this host's copy of the Board of ${boardId}${after ? ` (now version ${after.version})` : ''}; Walnut applies it when the server reconnects, and its own checks decide again.`,
+      next: 'Nothing else is required. Do not repeat the call.',
+    })
+  }
+
   /** One gateway request for a Walnut that is away. Never throws. */
   async function handle(home: string, callerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult> {
     try {
@@ -619,6 +771,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
         case 'request_get': return opRequestGet(home, args)
         case 'task_send': case 'session_send': return await opTaskSend(home, callerSid, args)
         default:
+          if (deps.boards && deps.boards.BOARD_OPS.indexOf(name) !== -1) return opBoard(home, callerSid, name, args)
           if (QUEUED_OPS.includes(name)) return opQueued(home, callerSid, name, args)
           return needsServer(name ? `"${name}"` : 'That call')
       }
@@ -645,7 +798,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     row.outcome = outcome
     row.settledAt = new Date(deps.now()).toISOString()
     append(home, { kind: 'row', row: { ...row } })
-    if (!deps.isLive(row.fromSessionId)) {
+    const remoteHost = deps.isLive(row.fromSessionId) ? undefined : row.fromHost
+    if (!deps.isLive(row.fromSessionId) && !(remoteHost && deps.relay)) {
       deps.log('info', 'offline host: asker not running, notice skipped', { home, requestId: row.id })
       return
     }
@@ -659,9 +813,11 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       lastMessage: lastText ? kit.clipNoticeMessage(lastText) : undefined,
     })
     const mid = `qm-offline-${deps.randomHex(8)}`
-    const delivered = await deps.deliver(row.fromSessionId, text, mid)
-    if (delivered.ok) append(home, { kind: 'delivery', fromSessionId: row.toSessionId, toSessionId: row.fromSessionId, messageId: mid, requestId: row.id })
-    deps.log(delivered.ok ? 'info' : 'warn', 'offline host: notice', { home, requestId: row.id, outcome, delivered: delivered.ok })
+    const delivered = remoteHost
+      ? await deps.relay!(home, { toHost: remoteHost, toSid: row.fromSessionId, text, messageId: mid, requestId: row.id, fromSessionId: row.toSessionId })
+      : await deps.deliver(row.fromSessionId, text, mid)
+    if (delivered.ok && !remoteHost) append(home, { kind: 'delivery', fromSessionId: row.toSessionId, toSessionId: row.fromSessionId, messageId: mid, requestId: row.id })
+    deps.log(delivered.ok ? 'info' : 'warn', 'offline host: notice', { home, requestId: row.id, outcome, delivered: delivered.ok, viaLeader: !!remoteHost })
   }
 
   /**
@@ -720,6 +876,94 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     }
   }
 
+  /**
+   * A message the leader routes here while the primary is away
+   * (`leader.deliver`, docs/plan/walnut-control-plane.md). A peer message from
+   * a session on another host is delivered as task_send delivers it on one
+   * host, and a reply request it opens is owned HERE, beside the session that
+   * answers it: the answer and the "finished without replying" notice go back
+   * through the leader. Text (a reply or a notice another host built) is
+   * written as it is. Either way the delivery is journaled for the primary.
+   */
+  async function deliverFromLeader(home: string, d: LeaderDelivery): Promise<GatewayResult> {
+    try {
+      const slice = slices.get(home)
+      if (!slice) return fail('not_found', 'this host holds no copy for that Walnut')
+      if (d.kind === 'text') {
+        if (typeof d.toSid !== 'string' || !sessionOf(home, d.toSid)) return fail('not_found', 'no session of that Walnut with that id on this host')
+        if (typeof d.text !== 'string' || !d.text) return fail('bad_request', 'text must be a non-empty string')
+        if (!deps.isLive(d.toSid)) return fail('not_running', `session ${d.toSid.slice(0, 8)} is not running on this host`)
+        const denied = roomFor(home)
+        if (denied) return denied
+        const mid = messageId(d.messageId)
+        const delivered = await deps.deliver(d.toSid, d.text, mid)
+        if (!delivered.ok) return fail('internal', `delivery failed: ${delivered.reason}`)
+        append(home, {
+          kind: 'delivery', fromSessionId: typeof d.fromSessionId === 'string' ? d.fromSessionId : '', toSessionId: d.toSid,
+          messageId: mid, ...(typeof d.requestId === 'string' ? { requestId: d.requestId } : {}), ...(d.reply === true ? { reply: true } : {}),
+        })
+        deps.log('info', 'offline host: leader delivered text', { home, to: d.toSid, requestId: d.requestId, messageId: mid })
+        return ok({ delivered: true, targetSessionId: d.toSid, messageId: mid })
+      }
+      if (d.kind !== 'peer') return fail('bad_request', 'unknown delivery kind')
+      const from = d.from
+      if (!from || typeof from.sid !== 'string' || !from.sid || typeof from.host !== 'string' || !from.host) return fail('bad_request', 'from.sid and from.host are required')
+      const text = typeof d.text === 'string' ? d.text.trim() : ''
+      if (!text) return fail('bad_request', 'text must be a non-empty string')
+      if (typeof d.to !== 'string' || !d.to.trim()) return fail('bad_request', '`to` is required')
+      const fromTaskId = typeof from.taskId === 'string' ? from.taskId : undefined
+      const closed = parentCompleteRefusalOf(home, fromTaskId, resolveTask(home, d.to).task?.id)
+      if (closed) return closed
+      const target = resolveSendTarget(home, d.to)
+      if (target.error) return target.error
+      const targetSid = target.sid!
+      if (targetSid === from.sid) return fail('self_send', 'target resolves to the calling session itself')
+      const denied = admitWrite(from.sid) ?? roomFor(home)
+      if (denied) return denied
+      let row: OfflineRequestRow | undefined
+      if (d.expect_reply !== false) {
+        const implicit = d.expect_reply === undefined
+        row = {
+          id: `rq-${deps.randomHex(6)}`,
+          fromSessionId: from.sid,
+          toSessionId: targetSid,
+          ...(target.taskId ? { toTaskId: target.taskId } : {}),
+          preview: kit.requestPreview(text),
+          status: 'pending',
+          createdAt: new Date(deps.now()).toISOString(),
+          deadlineAt: deps.now() + clampSecs(d.reply_timeout, implicit) * 1000,
+          fromHost: from.host,
+          ...(deps.turnActive(targetSid) ? { skipTurnEnds: 1 } : {}),
+        }
+        const offset = deps.streamOffset(targetSid)
+        if (typeof offset === 'number') row.afterV = offset
+      }
+      let envelope = kit.buildPeerWrapper(text, {
+        title: typeof from.title === 'string' ? from.title : '', shortId: from.sid.slice(0, 8), sessionId: from.sid,
+        taskId: fromTaskId, host: from.host, ...(row ? { requestId: row.id } : {}),
+      }, { title: typeof d.title === 'string' ? d.title : undefined })
+      if (row) envelope = `${envelope}\n${kit.buildReplyTrailer(row)}`
+      const mid = messageId(d.messageId)
+      if (row) journalOf(home).rows[row.id] = row
+      const delivered = await deps.deliver(targetSid, envelope, mid)
+      if (!delivered.ok) {
+        if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
+        return fail('internal', `delivery failed: ${delivered.reason}`)
+      }
+      if (row) append(home, { kind: 'row', row: { ...row } })
+      append(home, { kind: 'delivery', fromSessionId: from.sid, toSessionId: targetSid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
+      deps.log('info', 'offline host: leader delivered a peer message', { home, from: from.sid, fromHost: from.host, to: targetSid, requestId: row?.id, messageId: mid })
+      return ok({
+        delivery: 'queued', targetSessionId: targetSid, targetTitle: target.title ?? null,
+        ...(target.taskId ? { targetTaskId: target.taskId } : {}),
+        ...(row ? { requestId: row.id } : {}), messageId: mid, targetHost: slice.host,
+      })
+    } catch (err) {
+      deps.log('error', 'offline host: leader delivery failed', { home, error: (err as Error).message })
+      return fail('internal', `offline host error: ${(err as Error).message}`)
+    }
+  }
+
   async function sweep(): Promise<number> {
     let n = 0
     const now = deps.now()
@@ -733,7 +977,13 @@ export function createOfflineHost(deps: OfflineHostDeps) {
 
   load()
 
-  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, deliverTrigger, homes: () => [...slices.keys()] }
+  /** Who a caller is, as the copy names it, for a call the leader answers. */
+  function callerOf(home: string, sid: string): { taskId?: string; title: string; host: string } {
+    const me = callerIdentity(home, sid)
+    return { ...(me.taskId ? { taskId: me.taskId } : {}), title: me.title, host: slices.get(home)?.host ?? '' }
+  }
+
+  return { configure, hasHome, ownerOf, pendingHandover, drain, ack, handle, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, homes: () => [...slices.keys()] }
 }
 
 export type OfflineHost = ReturnType<typeof createOfflineHost>

@@ -335,6 +335,16 @@ function handleFrame(conn: BridgeConn, raw: string): void {
     return
   }
 
+  if (ev === 'gateway-request') {
+    // A host's daemon hands the companion a call its own copy cannot answer,
+    // while the companion leads that host (core/leader/backup-gateway.ts). The
+    // daemon only sends this when it granted this companion the lead; the
+    // handler checks the epoch again. Never the primary's own daemon.
+    if (conn.hostAlias === PRIMARY_ALIAS || !gatewayRequestHandler) return
+    gatewayRequestHandler(conn.hostAlias, msg)
+    return
+  }
+
   if (ev === 'mobile-event') {
     // Slim mobile events feed frame relayed from the primary's daemon
     // (events-v1). Only frames from the primary's own bridge are trusted —
@@ -355,6 +365,17 @@ let mobileEventHandler: ((kind: unknown, data: unknown) => void) | null = null
 
 export function setMobileEventHandler(handler: ((kind: unknown, data: unknown) => void) | null): void {
   mobileEventHandler = handler
+}
+
+/**
+ * Cloud-side sink for `gateway-request` frames a host's daemon sends while this
+ * companion leads it (registered at startup by the backup leader). Same
+ * callback shape and reason as mobileEventHandler. Must not throw.
+ */
+let gatewayRequestHandler: ((hostAlias: string, frame: Record<string, unknown>) => void) | null = null
+
+export function setGatewayRequestHandler(handler: ((hostAlias: string, frame: Record<string, unknown>) => void) | null): void {
+  gatewayRequestHandler = handler
 }
 
 /**

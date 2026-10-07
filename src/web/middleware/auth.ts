@@ -27,6 +27,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { verifyDeviceToken } from '../../core/device-auth.js'
 import { recordAuthFailure, isAuthRateLimited } from './auth-rate-limit.js'
 import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
+import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { log } from '../../logging/index.js'
 
 // Paths (relative to the /api mount) that stay public in cloud mode:
@@ -71,6 +72,13 @@ export async function validateBearerCredential(token: string): Promise<{ name: s
  * Express middleware: authenticate requests via Bearer token.
  */
 export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+  // This server's own op calls (src/lib/self-api-root.ts), in both modes: a
+  // cloud-mode server has no loopback waiver to let them through.
+  const selfHeader = req.headers.authorization
+  if (selfHeader?.startsWith('Bearer ') && isSelfCallToken(selfHeader.slice(7))) {
+    next()
+    return
+  }
   if (CLOUD_MODE) {
     await cloudAuthMiddleware(req, res, next)
     return

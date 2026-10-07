@@ -95,7 +95,7 @@ afterAll(async () => {
 })
 
 describe('buildHostSlice', () => {
-  it('holds this host\'s sessions, their tasks with parents and children, and same-host requests only', async () => {
+  it('holds this host\'s sessions, their tasks with parents and children, and the requests with a party here', async () => {
     const sameHost = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: child, text: 'status?' })
     const crossHost = await createSessionRequest({ fromSessionId: A, toSessionId: X, toTaskId: elsewhere, text: 'and you?' })
     const slice = await buildHostSlice('devbox')
@@ -107,14 +107,21 @@ describe('buildHostSlice', () => {
     expect(ids).toEqual(expect.arrayContaining([parent, child, grandchild]))
     expect(ids).not.toContain(elsewhere)
     expect(slice.tasks.find((t) => t.id === child)).toMatchObject({ parent_task_id: parent, project: 'Acme' })
-    expect(slice.requests.map((r) => r.id)).toEqual([sameHost.id])
-    expect(slice.requests.map((r) => r.id)).not.toContain(crossHost.id)
+    // A cross-host request names the other party's host, so its answer can travel
+    // through the leader while this server is away; one with no party here stays out.
+    const unrelated = await createSessionRequest({ fromSessionId: X, toSessionId: L, toTaskId: localTask, text: 'not yours' })
+    const again = await buildHostSlice('devbox')
+    expect(again.requests.map((r) => r.id).sort()).toEqual([sameHost.id, crossHost.id].sort())
+    expect(again.requests.find((r) => r.id === sameHost.id)).not.toHaveProperty('toHost')
+    expect(again.requests.find((r) => r.id === crossHost.id)).toMatchObject({ toHost: 'otherbox' })
+    expect(again.requests.find((r) => r.id === crossHost.id)).not.toHaveProperty('fromHost')
+    expect(again.requests.map((r) => r.id)).not.toContain(unrelated.id)
 
     const local = await buildHostSlice('__local__')
     expect(local.host).toBe('local')
     expect(local.sessions.map((s) => s.sid)).toEqual([L])
     // Same content, same hash: an unchanged copy is never re-sent.
-    expect((await buildHostSlice('devbox')).hash).toBe(slice.hash)
+    expect((await buildHostSlice('devbox')).hash).toBe(again.hash)
   })
 })
 

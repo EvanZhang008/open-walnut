@@ -169,6 +169,9 @@ export const CONTROL_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'control-queue'
  *  while the session host had no live bridge, drained on reconnect + a 60s
  *  sweep. See core/send-queue.ts. */
 export const SEND_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'send-queue');
+/** Who leads this Walnut while the primary is away (NON-git, both boxes): the
+ *  cloud companion's lead and the Walnut it serves. See core/leader/. */
+export const LEADER_STATE_DIR = path.join(WALNUT_HOME, 'cache', 'leader');
 /** Letter read/pin/archive changes a cloud box took for the primary (NON-git,
  *  cloud box only): queued while the primary was unreachable, and kept after
  *  delivery until the git-synced inbox shows them. See core/human-inbox/replica-state.ts. */

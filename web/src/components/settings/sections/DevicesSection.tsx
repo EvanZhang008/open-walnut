@@ -15,6 +15,8 @@ import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
+import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
+import type { Config } from '@open-walnut/core';
 
 import '@/styles/settings-sections-addons.css';
 
@@ -83,7 +85,7 @@ interface DevicesListResponse {
  * any address learns the other addresses by itself, so pick the one the phone
  * can reach right now: a Wi-Fi QR scanned over cellular never connects at all.
  */
-export function DevicesSection() {
+export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (partial: Partial<Config>) => Promise<void> } = {}) {
   const [devices, setDevices] = useState<DeviceEntry[]>([]);
   const [cloudDevices, setCloudDevices] = useState<DeviceEntry[]>([]);
   const [targets, setTargets] = useState<PairingTarget[]>([]);
@@ -312,6 +314,11 @@ export function DevicesSection() {
             onChooseTailnet={chooseTailnet}
             onTailnetChange={refresh}
           />
+        )}
+
+        {/* Only with a cloud companion to take over, and only on the Mac it would stand in for. */}
+        {!replica && config && onSave && targets.some((t) => t.kind === 'cloud') && (
+          <BackupLeaderGroup config={config} onSave={onSave} />
         )}
 
         <SettingsGroup heading="Pair a phone">

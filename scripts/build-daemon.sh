@@ -111,6 +111,8 @@ SOURCES=(
   src/providers/git-commit-core.ts
   src/providers/offline-host-core.ts
   src/core/peers/envelope-kit.ts
+  src/providers/leader-core.ts
+  src/providers/offline-board-core.ts
   src/providers/git-diff-core.ts
   src/providers/bridge-uplink-core.ts
   src/providers/workspace-core.ts

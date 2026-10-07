@@ -39,6 +39,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { attachSse, emitSse, sseConnCount } from '../sse-channels.js'
 import { CHAT_TURN_FRAME_KIND, handleBridgeChatTurnFrame } from './chat-turn-relay.js'
+import { LEADER_HEARTBEAT_KIND } from '../../core/leader/protocol.js'
 import { log } from '../../logging/index.js'
 import type { Task } from '../../core/types.js'
 
@@ -258,6 +259,15 @@ export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   // Projection/transcript pushes → local cache, never the SSE feed.
   if (kind === 'projection-upsert' || kind === 'transcript-upsert') {
     handleBridgeCacheFrame(kind, data)
+    return
+  }
+  // The primary is alive (core/leader/): never a phone event. Only the
+  // primary's own bridge reaches this handler (bridge-registry.ts).
+  if (kind === LEADER_HEARTBEAT_KIND) {
+    void import('../../core/leader/backup-leader.js')
+      .then((m) => m.getBackupLeader())
+      .then((leader) => leader?.noteHeartbeat((data ?? {}) as Record<string, unknown>))
+      .catch(() => { /* the next heartbeat lands */ })
     return
   }
   // Chat-turn frames belong to ONE conversation's own SSE channel, not this

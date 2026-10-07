@@ -1518,6 +1518,12 @@ export interface Config {
   cloud_bridge?: {
     enabled?: boolean;
     url?: string;
+    /** Let the cloud companion lead this Walnut's hosts while this Mac is away
+     *  (asleep, offline): it routes messages between hosts and answers what a
+     *  host cannot answer itself, until this Mac is back and takes the lead
+     *  again. Default on; false keeps every host to what it can do alone.
+     *  See docs/plan/walnut-control-plane.md. */
+    backup_leader?: boolean;
   };
   /** Cloud-companion-only settings (ignored on the primary box). */
   cloud?: {

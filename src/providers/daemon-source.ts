@@ -48,6 +48,8 @@ import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHost } from './offline-host-core.js'
+import { createLeaderBook } from './leader-core.js'
+import { createBoardOffline } from './offline-board-core.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
@@ -228,6 +230,8 @@ export function getDaemonSource(): string {
     ['__FOLD_LINE__', foldLine.toString()],
     ['__CREATE_ENVELOPE_KIT__', createEnvelopeKit.toString()],
     ['__CREATE_OFFLINE_HOST__', createOfflineHost.toString()],
+    ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
+    ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -351,6 +355,23 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         deliver: async () => ({ ok: false, reason: 'smoke' }),
       })
       if (typeof host.handle !== 'function' || host.hasHome('/x') !== false) throw new Error('offline host did not build')
+    }
+    // Board copy smoke: a reconstructed kit must apply an exact edit and refuse
+    // an ambiguous one.
+    const createBoards = reconstructed['__CREATE_BOARD_OFFLINE__'] as typeof createBoardOffline | undefined
+    if (createBoards) {
+      const kit = createBoards()
+      const one = kit.applyEdits('<p>a</p>', [{ old: 'a', new: 'b' }])
+      if (!one.ok || one.html !== '<p>b</p>' || kit.applyEdits('aa', [{ old: 'a', new: 'b' }]).ok) throw new Error('board copy kit did not build')
+    }
+    // Leader book smoke: a reconstructed book must refuse a companion claim for
+    // a Walnut it does not know, without touching disk.
+    const createLeader = reconstructed['__CREATE_LEADER_BOOK__'] as typeof createLeaderBook | undefined
+    if (createLeader) {
+      const noDir = { readdirSync: () => { throw new Error('none') } } as unknown as typeof fs
+      const book = createLeader({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', log: () => {}, takeoverMs: 1, bootAt: 0 })
+      const r = book.backupClaim('w', 2)
+      if (r.ok || r.code !== 'unknown_walnut') throw new Error('leader book did not build')
     }
     // Host runtime smoke: the spawn gate and the boot PATH ride this text, so a
     // reconstructed copy must classify an npm shebang and keep the user's PATH first.
@@ -2473,7 +2494,20 @@ const wsClients = new Set();
 // unset. Parsed once, here, with the floor every daemon timer knob has
 // (envTimerMs).
 var TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15000, 100);
-function heardFrom(client) { client.lastHeardAt = Date.now(); }
+function heardFrom(client) {
+  client.lastHeardAt = Date.now();
+  if (client.origin === 'bridge') return;
+  // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
+  // host is a witness of whether it is still there (leader-core.ts).
+  var home = gatewayClientHomes.get(client);
+  leaderBook.noteHeard(home);
+  // A socket that outlived the primary's sleep speaks again while the companion
+  // leads: tell the primary, which takes the lead back after its handover.
+  if (home && leaderBook.backupLead(home) && Date.now() - (client.leaderNudgedAt || 0) > LEADER_NUDGE_MS) {
+    client.leaderNudgedAt = Date.now();
+    sendEvent(client, 'leader-lost', { home: home });
+  }
+}
 
 let cronMetadataConfig = null;
 let cronMetadataReplay = Promise.resolve();
@@ -2782,6 +2816,9 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // data-loss family — a daemon death mid-sequence becomes delayed delivery,
   // not loss. The daemon writes NOTHING itself from this command.
   'session.message',
+  // The backup leader (leader-core.ts): each checks for itself what the bridge
+  // may do (twin of daemon-standalone.ts).
+  'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
@@ -3006,9 +3043,13 @@ function dispatchCommand(ws, id, cmd) {
     // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
     // client may answer message relays (same rule as control-result).
     case 'message-result': return cmdMessageResult(ws, id, cmd);
-    // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
-    // client may answer agent-gateway relays (see the gateway section).
+    // A relay is answered by whom it went to (see the gateway section).
     case 'gateway-result': return cmdGatewayResult(ws, id, cmd);
+    // Leader book (leader-epoch-v1): each handler checks which side may ask.
+    case 'leader.configure': return cmdLeaderConfigure(ws, id, cmd);
+    case 'leader.claim': return cmdLeaderClaim(ws, id, cmd);
+    case 'leader.witness': return cmdLeaderWitness(ws, id);
+    case 'leader.deliver': return daemonCommands.run(function () { return cmdLeaderDeliver(ws, id, cmd); });
     // Offline host (offline-host-v1). NOT in BRIDGE_ALLOWED_COMMANDS: a Walnut's
     // copy and journal belong to its trusted SSH-tunneled server only.
     case 'host.slice': return cmdHostSlice(ws, id, cmd);
@@ -3561,6 +3602,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
   kit: (__CREATE_ENVELOPE_KIT__)(),
+  boards: (__CREATE_BOARD_OFFLINE__)(),
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
@@ -3582,9 +3624,100 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
       if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home: home });
     }
   },
+  // A reply or notice for a session on another host: only the companion, while
+  // it leads, can carry it there (twin of daemon-standalone.ts).
+  relay: function (home, req) {
+    return new Promise(function (resolve) {
+      var sent = forwardToBackup(home, 'leader.deliverText', req.fromSessionId || '', req, function (resp) {
+        resolve(resp.ok ? { ok: true } : { ok: false, reason: resp.error.message });
+      });
+      if (!sent) resolve({ ok: false, reason: 'no server leads this Walnut right now' });
+    });
+  },
 });
 var offlineSweepTimer = setInterval(function () { offlineHost.sweep().catch(function () {}); }, 60000);
 if (offlineSweepTimer.unref) offlineSweepTimer.unref();
+
+// ── Leader book: who leads this host's work, the primary or (while it is away)
+// the cloud companion (leader-core.ts, inlined; docs/plan/walnut-control-plane.md).
+// Twin of the daemon-standalone.ts block.
+var LEADER_TAKEOVER_MS = envTimerMs(process.env.WALNUT_LEADER_TAKEOVER_MS, 60000, 500);
+// At most one leader-lost event per primary socket in this window.
+var LEADER_NUDGE_MS = 10000;
+var leaderBook = (__CREATE_LEADER_BOOK__)({
+  fs: fs, path: path,
+  dir: path.join(DAEMON_DIR, 'leader'),
+  now: function () { return Date.now(); },
+  keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  takeoverMs: LEADER_TAKEOVER_MS,
+  bootAt: DAEMON_START_TS,
+});
+
+function primarySocketOpen(home) {
+  for (const client of wsClients) {
+    if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) return true;
+  }
+  return false;
+}
+
+function forwardToBackup(home, capability, callerSid, payload, respond) {
+  var lead = leaderBook.backupLead(home);
+  var adapter = bridgeAdapter;
+  if (!lead || !adapter) return false;
+  gatewayRelayCounter += 1;
+  var relayId = gatewayRelayCounter;
+  var timer = setTimeout(function () {
+    gatewayRelayPending.delete(relayId);
+    respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time'));
+  }, GATEWAY_HUB_TIMEOUT_MS);
+  gatewayRelayPending.set(relayId, { respond: respond, timer: timer, via: 'bridge' });
+  logMsg('info', 'gateway: relaying to the backup leader', { relayId: relayId, capability: capability, callerSid: callerSid, epoch: lead.epoch });
+  sendEvent(adapter, 'gateway-request', {
+    relayId: relayId, capability: capability, callerSid: callerSid, payload: payload,
+    walnutId: lead.walnutId, epoch: lead.epoch,
+    caller: callerSid ? offlineHost.callerOf(home, callerSid) : undefined,
+  });
+  return true;
+}
+
+function cmdLeaderConfigure(ws, id, cmd) {
+  if (ws.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only');
+  try {
+    var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true });
+    gatewayClientHomes.set(ws, rec.home);
+    sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS });
+  } catch (err) {
+    sendError(ws, id, err.message);
+  }
+}
+
+function cmdLeaderClaim(ws, id, cmd) {
+  if (ws.origin === 'bridge') {
+    var r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch);
+    if (!r.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: r.message, errorKind: r.code, epoch: r.epoch })); } catch (e) {} return; }
+    return sendOk(ws, id, { epoch: r.record.epoch, holder: r.record.holder });
+  }
+  if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home');
+  var rec = leaderBook.primaryClaim(cmd.home);
+  if (!rec) return sendError(ws, id, 'leader.claim: send leader.configure first');
+  gatewayClientHomes.set(ws, rec.home);
+  sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder });
+}
+
+function cmdLeaderWitness(ws, id) {
+  sendOk(ws, id, { walnuts: leaderBook.witness(primarySocketOpen), takeoverMs: LEADER_TAKEOVER_MS });
+}
+
+async function cmdLeaderDeliver(ws, id, cmd) {
+  if (ws.origin !== 'bridge') return sendError(ws, id, 'leader.deliver: the cloud bridge only');
+  var f = leaderBook.fence(cmd.walnutId, cmd.epoch);
+  if (!f.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })); } catch (e) {} return; }
+  if (!cmd.delivery || typeof cmd.delivery !== 'object') return sendError(ws, id, 'leader.deliver: missing delivery');
+  var r = await offlineHost.deliverFromLeader(f.home, cmd.delivery);
+  if (r.ok) return sendOk(ws, id, { result: r.result });
+  try { ws.send(JSON.stringify({ id: id, ok: false, error: r.error.message, errorKind: r.error.code, detail: r.error.detail })); } catch (e) {}
+}
 
 function cmdHostSlice(ws, id, cmd) {
   try {
@@ -3621,9 +3754,17 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   }
   if (!home) target = untagged;
   else if (!target && !offlineHost.pendingHandover(home)) target = untagged;
+  // While the companion leads this Walnut its primary's sockets are silent: no
+  // target until the primary takes the lead back.
+  if (home && leaderBook.backupLead(home)) target = null;
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
     logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target });
-    offlineHost.handle(home, callerSid, capability, payload).then(respond);
+    offlineHost.handle(home, callerSid, capability, payload).then(function (r) {
+      // What this host cannot answer itself goes to the companion while it leads.
+      if (!r.ok && r.error.code === 'hub_unreachable' && !target
+        && forwardToBackup(home, capability, callerSid, payload, respond)) return;
+      respond(r);
+    });
     return;
   }
   if (!target) {
@@ -3641,11 +3782,16 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   sendEvent(target, 'gateway-request', { relayId: relayId, capability: capability, callerSid: callerSid, payload: payload });
 }
 
-// gateway-result is deliberately NOT in BRIDGE_ALLOWED_COMMANDS — only a
-// trusted (SSH-tunneled) walnut client may answer a gateway relay.
+// A relay is answered by whom it went to: the trusted walnut client, or, for a
+// relay handed to the companion while it leads (via: 'bridge'), the bridge
+// (twin of daemon-standalone.ts).
 function cmdGatewayResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorCode = cmd.errorCode, detail = cmd.detail;
   var pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined;
+  if (pending && (ws.origin === 'bridge') !== (pending.via === 'bridge')) {
+    logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId: relayId, fromBridge: ws.origin === 'bridge' });
+    return sendError(ws, id, 'gateway-result: not sent to this socket');
+  }
   if (!pending) {
     // Late result after timeout — ack and drop (same as cmdLaunchResult).
     return sendOk(ws, id, { stale: true });
