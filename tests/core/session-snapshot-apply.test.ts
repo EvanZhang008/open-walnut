@@ -21,7 +21,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-snap-apply')
 const liveRunnerSync = vi.fn()
 const liveWatermarkReset = vi.fn()
 let liveSessionId: string | null = null
-const liveSession = { turnGen: 1, processStatus: 'idle', hasPendingPermission: false, setProcessStatusFromReconciler: liveRunnerSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
+const liveSession = { turnGen: 1, processStatus: 'idle', consumedOffset: -1, hasPendingPermission: false, setProcessStatusFromReconciler: liveRunnerSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
 vi.mock('../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     findSessionByClaudeId: (sid: string) =>
@@ -90,6 +90,7 @@ beforeEach(async () => {
   liveSessionId = null
   liveSession.turnGen = 1
   liveSession.processStatus = 'idle'
+  liveSession.consumedOffset = -1
   liveSession.hasPendingPermission = false
   liveRunnerSync.mockClear()
   liveWatermarkReset.mockClear()
@@ -820,6 +821,73 @@ describe('applySnapshot — write-time v monotonicity + equal-v tiebreaker', () 
       lastResult: { isError: false, endOffset: 780 },
     }), 'test')
     expect(paused).toMatchObject({ outcome: 'applied', projected: 'running' })
+  })
+})
+
+// A turn that ends on its idle line (a background command's follow-up turn, a
+// withheld result) makes the runner write the watermark at exactly the v the
+// daemon's push carries, while the gate drops the runner's own idle.
+describe('applySnapshot — a turn end the runner already watermarked', () => {
+  async function runnerClosedTurnAt(sid: string, v: number): Promise<void> {
+    setSnapshotModeForTests('enforce')
+    await seedSession(sid, { process_status: 'idle' })
+    // The turn's running came from a mid-turn snapshot (no watermark).
+    expect((await applySnapshot(sid, snap({ v: v - 400, cliState: 'running', turnActive: true }), 'test')).outcome).toBe('applied')
+    // The runner reads the idle line: its watermark-only write lands, its status write is the gate's.
+    await updateSessionRecord(sid, { consumedOffset: v } as never)
+    liveSessionId = sid
+    liveSession.consumedOffset = v
+    liveSession.processStatus = 'idle'
+  }
+  const settled = (v: number) => snap({
+    v, cliState: 'idle', turnActive: false, lastResult: { isError: false, endOffset: v - 160 },
+  })
+
+  it('INCIDENT SHAPE: the settled push at that v ends the turn at once', async () => {
+    const sid = 'runner-watermark-settle'
+    await runnerClosedTurnAt(sid, 193690)
+    const settles: unknown[] = []
+    bus.subscribe('test-settle', (e) => { settles.push(e.data) }, { global: true, interest: [EventNames.SESSION_TURN_SETTLED] })
+    expect(await applySnapshot(sid, settled(193690), 'daemon-push')).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    const rec = await getSessionByClaudeId(sid)
+    expect(rec?.process_status).toBe('idle')
+    expect(rec?.consumedOffset).toBe(193690)
+    expect(settles).toHaveLength(1)
+    // The same push again is a duplicate.
+    expect((await applySnapshot(sid, settled(193690), 'daemon-push')).outcome).toBe('noop')
+  })
+
+  it('a runner that started a new turn since (sent a message) keeps the record running', async () => {
+    const sid = 'runner-watermark-new-turn'
+    await runnerClosedTurnAt(sid, 9000)
+    liveSession.processStatus = 'running'
+    expect(await applySnapshot(sid, settled(9000), 'daemon-push')).toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('without a live runner at that offset, the equal-v rule still refuses', async () => {
+    const sid = 'runner-watermark-absent'
+    await runnerClosedTurnAt(sid, 9000)
+    liveSessionId = null
+    expect(await applySnapshot(sid, settled(9000), 'pull-30s')).toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+
+    const other = 'runner-watermark-elsewhere'
+    await runnerClosedTurnAt(other, 9000)
+    liveSession.consumedOffset = 8800
+    expect(await applySnapshot(other, settled(9000), 'pull-30s')).toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+  })
+
+  it('only settles running: an equal-v idle never revives a record a death snapshot stopped', async () => {
+    const sid = 'runner-watermark-stopped'
+    await runnerClosedTurnAt(sid, 9000)
+    expect((await applySnapshot(sid, snap({
+      v: 9000, cliState: 'dead', turnActive: false, exitCode: 0, pid: null,
+      lastResult: { isError: false, endOffset: 8840 },
+    }), 'test')).outcome).toBe('applied')
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('stopped')
+    // A late push from before the death, at the same v, while the runner still reads idle there.
+    expect(await applySnapshot(sid, settled(9000), 'daemon-push')).toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('stopped')
   })
 })
 

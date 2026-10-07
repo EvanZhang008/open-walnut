@@ -1930,6 +1930,12 @@ export class ClaudeCodeSession {
     return this._processStatus
   }
 
+  /** The consumed turn-end watermark (-1 before the first). The snapshot applier
+   *  reads it to tell a turn end this runner processed from a stale snapshot. */
+  get consumedOffset(): number {
+    return this._consumedOffset
+  }
+
   /** Current turn generation — see `_turnGen`. Read by core/phase.ts's stale-result
    *  gate to reject a SESSION_RESULT whose turn has already been superseded. */
   get turnGen(): number {

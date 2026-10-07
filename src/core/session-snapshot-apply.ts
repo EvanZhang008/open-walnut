@@ -259,6 +259,11 @@ export async function applySnapshot(
     const live = sessionRunner.findSessionByClaudeId(sessionId)
     return live === observedLive && live?.turnGen === observedTurn
   }
+  const runnerEndedTurnAt = (v: number) => {
+    const live = sessionRunner.findSessionByClaudeId(sessionId)
+    return !!live && sameTurn() && live.consumedOffset === v
+      && live.processStatus === 'idle' && !live.hasPendingPermission
+  }
   const record = await getSessionByClaudeId(sessionId)
   if (!record) return { outcome: 'no-record' }
 
@@ -635,8 +640,18 @@ export async function applySnapshot(
       // it must also pass — otherwise a wakeup that never fires wedges the
       // session. The clock can only change liveness; it cannot overturn death evidence at the same version.
       const clockDriven = (snapshot.wakeupAt ?? 0) > 0 && !TERMINAL.has(current.process_status)
+      // The watermark at this v may be the RUNNER's: it read the same bytes to a
+      // turn end and wrote the offset, but its idle was the gate's to drop. A
+      // turn that ends on its idle line (a background command's follow-up turn,
+      // a withheld result) puts that write at exactly the v of the daemon's
+      // push, so the record stayed running until the 30s pull (2026-10-06).
+      // The settled snapshot is then the first status for those bytes, and the
+      // live runner, still in that turn and idle at that offset, agrees.
+      const settlesRunnerTurnEnd = projected === 'idle' && current.process_status === 'running'
+        && runnerEndedTurnAt(snapshot.v)
       // 连接恢复不产生新流字节，但只有读取前后的身份未变时才能推翻连接错误。
-      if (currentOffset === snapshot.v && !outOfBand && !clockDriven && !recoveringConnection) return false
+      if (currentOffset === snapshot.v && !outOfBand && !clockDriven && !recoveringConnection
+        && !settlesRunnerTurnEnd) return false
 
       // (3) Something must actually change (a first-sight epoch stamp counts).
       return recoveringConnection || current.process_status !== projected
@@ -656,8 +671,9 @@ export async function applySnapshot(
   })
 
   // The projection itself ended a turn (running → idle under the lock): the
-  // live runner never reported this result, or it would have written idle
-  // first and the predicate would have found nothing to change. Turn-end hooks
+  // live runner never reported this result, or its idle was the gate's to drop
+  // (settlesRunnerTurnEnd above: its session:result already told the hooks, and
+  // the summary hook folds this second call into the same turn). Turn-end hooks
   // derive from session:result, so tell them separately; a session the server
   // reattaches later skips replay and would otherwise never self-report this
   // turn (session 145318ca, 2026-09-19: detached 02:13, settled 02:18, tip and
