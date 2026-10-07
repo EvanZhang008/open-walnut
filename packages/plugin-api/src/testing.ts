@@ -147,6 +147,8 @@ export interface FakeWalnutResult {
   importRun(): Promise<void>
   /** Projects the plugin extended the importer's lifecycle to (`sessionImports.extendTo`), live ones only. */
   importLifecycleProjects: string[]
+  /** The session ids the plugin last claimed per host (`sessionImports.include`). */
+  importClaims: Map<string, string[]>
   /** The plugin's live tag display defaults (`tags.setDefaultDisplay`), by pattern. */
   tagDisplayDefaults: Map<string, 'shown' | 'value' | 'hidden'>
   /** The plugin's live tag links (`tags.setDefaultLink`), by pattern. */
@@ -182,6 +184,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const importWatchers = new Set<() => void | Promise<void>>()
   const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
   const importLifecycleProjects: string[] = []
+  const importClaims = new Map<string, string[]>()
   const tagDisplayDefaults = new Map<string, 'shown' | 'value' | 'hidden'>()
   const tagLinkDefaults = new Map<string, string>()
   const pinGroups: Array<{ id: string; label: string }> = (options.pinGroups ?? []).map((group) => ({ ...group }))
@@ -592,6 +595,12 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
           if (at >= 0) importLifecycleProjects.splice(at, 1)
         })
       },
+      include(host, sessionIds) {
+        if (!host?.trim()) throw new Error('Host cannot be empty.')
+        const ids = [...new Set(sessionIds.filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)))]
+        importClaims.set(host, ids)
+        return ids.length
+      },
     },
     tags: {
       setDefaultDisplay(pattern, display) {
@@ -809,5 +818,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
 }

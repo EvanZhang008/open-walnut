@@ -320,12 +320,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'external-scan-v1',
   'external-scan-filter-v1',
   'external-describe-v1',
-  // 'external-batch-v1' — the scanner knows fan-out workers (many programmatic
-  // sessions in one cwd opening with one prompt within minutes) are not outside
-  // sessions: the scan skips them and describe says 'batch'. The server's
-  // provenance audit asks again about imports an older scanner already judged.
-  // Sidecar-gated in the source twin. Optional.
-  'external-batch-v1',
+  // 'external-human-v1' — the scanner imports only sessions a person started
+  // (the CLI's own record: entrypoint and first prompt source), and describe
+  // says 'programmatic' for a program's run. The server's provenance audit asks
+  // again about imports an older scanner already judged, and a plugin's claimed
+  // sessions are imported through describe. Sidecar-gated in the source twin.
+  // Optional.
+  'external-human-v1',
   'path-resolve-v1',
   // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):
   // the daemon installs/starts code-server bound to 127.0.0.1 and returns

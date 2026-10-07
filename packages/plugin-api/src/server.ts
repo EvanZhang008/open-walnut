@@ -258,6 +258,15 @@ export interface SessionImportsService {
    *  `autoCompleteAfterDays()`, exactly as in the importer's own project. Without it, moving
    *  an import out takes it out of that sweep. Released when your plugin stops. */
   extendTo(project: string): Disposable
+  /** The importer files only sessions a person started (a terminal, the desktop app, an IDE);
+   *  a program's runs (`claude -p`, an Agent SDK app) are that program's work and stay out. A
+   *  plugin that owns such a program names its runs here: these session ids on `host` (an alias
+   *  from the hosts settings, `__local__` for this machine) are filed like any import, under
+   *  `projectFor(host)` with `tag`, on the importer's next run. Each call replaces your earlier
+   *  list for that host, so pass every run you still want on the board; ids already on the board
+   *  are skipped. Answers how many ids it kept (malformed ones are dropped). An older Walnut has
+   *  no `include` and imports program runs itself. Released when your plugin stops. */
+  include(host: string, sessionIds: string[]): number
 }
 
 /** shown: the pill reads the whole tag; value: only the text after its key (a ticket id without

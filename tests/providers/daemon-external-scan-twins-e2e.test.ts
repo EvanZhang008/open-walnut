@@ -124,14 +124,14 @@ describe.skipIf(TWINS.length === 0)('the external-session scan leaves the daemon
       root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-extscan-')))
       const home = path.join(root, 'home')
       const daemonDir = path.join(root, 'daemon')
-      // Programmatic sessions with a real cwd and a reply: each one is read to
-      // the end of its head, like the bulk of a real host's transcripts.
+      // Sessions a person started, with a reply: each one is read to the end of
+      // its head, the most work a transcript can cost the scan.
       const projectDir = path.join(home, '.claude', 'projects', '-Users-dev-proj')
       fs.mkdirSync(projectDir, { recursive: true })
       const chat = L({ type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'y'.repeat(4000) }] } })
       for (let i = 0; i < 2000; i++) {
         fs.writeFileSync(path.join(projectDir, `bulk-${i}.jsonl`), L({
-          type: 'user', cwd: '/Users/dev/proj', entrypoint: 'sdk-cli', timestamp: '2026-09-29T10:00:00.000Z',
+          type: 'user', cwd: '/Users/dev/proj', entrypoint: 'cli', timestamp: '2026-09-29T10:00:00.000Z',
           message: { role: 'user', content: 'task ' + i },
         }) + chat.repeat(10))
       }
@@ -172,13 +172,14 @@ describe.skipIf(TWINS.length === 0)('the external-session scan leaves the daemon
 /**
  * A scripted fan-out (one `claude -p` per dashboard widget) filed hundreds of
  * tasks a day on one host (2026-10-06). Both daemons booted for real: the scan
- * leaves the workers out, describe names them for the server's audit, and the
- * daemon says it knows the rule so the server asks again about old imports.
+ * imports only what a person started (the CLI's entrypoint and prompt source),
+ * describe says 'programmatic' for the rest so the server's audit and a plugin's
+ * claim can act on it, and the daemon says it knows the rule.
  */
-describe.skipIf(TWINS.length === 0)('fan-out workers are not outside sessions (both twins)', () => {
+describe.skipIf(TWINS.length === 0)('a program\'s runs are not outside sessions (both twins)', () => {
   for (const twin of TWINS) {
-    it(`${twin.name}: the scan skips a run's workers, describe says batch, hello advertises external-batch-v1`, async () => {
-      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-extbatch-')))
+    it(`${twin.name}: the scan keeps only what a person started, describe says programmatic, hello advertises external-human-v1`, async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-exthuman-')))
       const home = path.join(root, 'home')
       const daemonDir = path.join(root, 'daemon')
       const cwd = '/Users/dev/ops/widget-review'
@@ -187,27 +188,34 @@ describe.skipIf(TWINS.length === 0)('fan-out workers are not outside sessions (b
       const reply = L({ type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'no anomaly' }] } })
       const prompt = 'You review ONE CloudWatch dashboard widget for anomalies an on-call engineer must look at. Widget: '
       const t0 = Date.parse('2026-09-20T10:00:00.000Z')
+      const user = (o: Record<string, unknown>, content: string) => L({
+        type: 'user', cwd, timestamp: new Date(t0).toISOString(), message: { role: 'user', content }, ...o,
+      })
       for (let i = 0; i < 12; i++) {
-        fs.writeFileSync(path.join(projectDir, `w-${i}.jsonl`), L({
-          type: 'user', cwd, entrypoint: 'sdk-cli', timestamp: new Date(t0 + i * 20_000).toISOString(),
-          message: { role: 'user', content: prompt + 'latency-p99-' + i },
-        }) + reply)
+        fs.writeFileSync(path.join(projectDir, `w-${i}.jsonl`), user({ entrypoint: 'sdk-cli', promptSource: 'sdk' }, prompt + 'latency-p99-' + i) + reply)
       }
-      fs.writeFileSync(path.join(projectDir, 'person.jsonl'), L({
-        type: 'user', cwd, entrypoint: 'cli', timestamp: new Date(t0).toISOString(),
-        message: { role: 'user', content: 'why did the review flag nothing?' },
-      }) + reply)
+      // `claude -p` from a shell inside a terminal session: inherits 'cli'.
+      fs.writeFileSync(path.join(projectDir, 'child.jsonl'), user({ entrypoint: 'cli', promptSource: 'sdk' }, 'summarize this diff') + reply)
+      fs.writeFileSync(path.join(projectDir, 'person.jsonl'), user({ entrypoint: 'cli', promptSource: 'typed' }, 'why did the review flag nothing?') + reply)
+      fs.writeFileSync(path.join(projectDir, 'ide.jsonl'), user({ entrypoint: 'claude-vscode', promptSource: 'sdk' }, 'explain this file') + reply)
 
       await boot(twin, home, daemonDir)
       const hello = await rpc({ cmd: 'hello' })
-      expect(hello.capabilities as string[]).toContain('external-batch-v1')
+      expect(hello.capabilities as string[]).toContain('external-human-v1')
+      expect(hello.capabilities as string[]).not.toContain('external-batch-v1')
       const scan = await rpc({ cmd: 'sessions.discoverExternal', sinceMs: 30 * 86_400_000, limit: 500 })
       expect(scan.ok, JSON.stringify(scan).slice(0, 300)).toBe(true)
-      expect((scan.candidates as Array<{ sessionId: string }>).map((c) => c.sessionId)).toEqual(['person'])
-      const described = await rpc({ cmd: 'sessions.describeExternal', sessionIds: ['w-0', 'w-11', 'person'] })
+      expect((scan.candidates as Array<{ sessionId: string }>).map((c) => c.sessionId).sort()).toEqual(['ide', 'person'])
+      const described = await rpc({ cmd: 'sessions.describeExternal', sessionIds: ['w-0', 'w-11', 'child', 'person'] })
       expect(described.ok, JSON.stringify(described).slice(0, 300)).toBe(true)
-      expect(Object.fromEntries((described.candidates as Array<{ sessionId: string; notExternal: unknown }>)
-        .map((c) => [c.sessionId, c.notExternal]))).toEqual({ 'w-0': 'batch', 'w-11': 'batch', person: null })
+      const byId = Object.fromEntries((described.candidates as Array<{ sessionId: string; notExternal: unknown; title?: string }>)
+        .map((c) => [c.sessionId, [c.notExternal, c.title]]))
+      expect(byId).toEqual({
+        'w-0': ['programmatic', prompt + 'latency-p99-0'],
+        'w-11': ['programmatic', prompt + 'latency-p99-11'],
+        child: ['programmatic', 'summarize this diff'],
+        person: [null, 'why did the review flag nothing?'],
+      })
     }, 120_000)
   }
 })

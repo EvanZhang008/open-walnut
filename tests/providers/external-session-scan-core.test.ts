@@ -1,8 +1,9 @@
 /**
  * External-session scanner tests — the classifier is the risky part: a wrong
- * predicate would sweep Walnut's OWN thousands of sdk-cli transcripts into the
- * import bucket. These tests build real transcript trees on disk (temp HOME)
- * and assert exactly which ones are picked up.
+ * predicate would sweep Walnut's OWN thousands of sdk-cli transcripts, or every
+ * run of a user's own scripts, into the import project. These tests build real
+ * transcript trees on disk (temp HOME) and assert exactly which ones are picked
+ * up.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -23,6 +24,8 @@ function claudeSession(opts: {
   sid: string
   cwd?: string
   entrypoint: string
+  /** The CLI's stamp on a submitted prompt ('typed', 'sdk', ...). Absent = an older CLI. */
+  promptSource?: string
   firstUserText?: string
   aiTitle?: string
   isSidechain?: boolean
@@ -41,6 +44,7 @@ function claudeSession(opts: {
       cwd,
       sessionId: opts.sid,
       entrypoint: opts.entrypoint,
+      ...(opts.promptSource ? { promptSource: opts.promptSource } : {}),
       isSidechain: opts.isSidechain ?? false,
     },
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, timestamp: '2026-08-10T10:00:05.000Z' },
@@ -120,27 +124,31 @@ describe('scanExternalSessions — claude classification', () => {
     })
   })
 
-  it('picks up other SDK apps with a real cwd, but never temp-dir test debris', async () => {
-    // An SDK-based agent orchestrator records entrypoint 'sdk-cli' — same
-    // as Walnut's own spawns. Walnut's own are excluded by knownSessionIds;
-    // what separates the rest from ephemeral-server test debris is the cwd.
-    claudeSession({ sid: 'sdk-real', entrypoint: 'sdk-cli', cwd: '/Users/dev/agent-orchestrator', firstUserText: 'Investigate ticket 12345' })
-    claudeSession({ sid: 'sdk-tmp1', entrypoint: 'sdk-cli', cwd: '/private/tmp' })
-    claudeSession({ sid: 'sdk-tmp2', entrypoint: 'sdk-cli', cwd: '/tmp/modetest' })
-    claudeSession({ sid: 'sdk-tmp3', entrypoint: 'sdk-cli', cwd: '/private/var/folders/ph/x/T/walnut-test-123/memory' })
+  it('imports what a person started and leaves out every run a program started', async () => {
+    // A person: the terminal UI (a typed prompt, or a CLI older than
+    // promptSource), the desktop app and the VS Code extension (both drive the
+    // CLI over the SDK, so their prompts read 'sdk').
+    claudeSession({ sid: 'typed', entrypoint: 'cli', promptSource: 'typed', firstUserText: 'fix the login redirect' })
+    claudeSession({ sid: 'old-cli', entrypoint: 'cli' })
+    claudeSession({ sid: 'desktop', entrypoint: 'claude-desktop', promptSource: 'sdk' })
+    claudeSession({ sid: 'vscode', entrypoint: 'claude-vscode', promptSource: 'sdk' })
+    // A program: `claude -p` (a script's fan-out, an agent orchestrator, Walnut
+    // itself), the Agent SDKs, and `claude -p` run from a shell inside a
+    // terminal session, which inherits 'cli' but sends its prompt over the SDK.
+    claudeSession({ sid: 'print', entrypoint: 'sdk-cli', promptSource: 'sdk', cwd: '/Users/dev/agent-orchestrator' })
+    claudeSession({ sid: 'sdk-ts', entrypoint: 'sdk-ts', promptSource: 'sdk' })
+    claudeSession({ sid: 'sdk-py', entrypoint: 'sdk-py' })
+    claudeSession({ sid: 'child', entrypoint: 'cli', promptSource: 'sdk' })
+    claudeSession({ sid: 'mcp', entrypoint: 'mcp' })
 
     const { candidates } = await scan()
-    expect(candidates.map((c) => c.sessionId)).toEqual(['sdk-real'])
-    expect(candidates[0].origin).toBe('sdk-cli')
-    // Regression: the entrypoint check used to stop the walk on ANY non-human
-    // entrypoint — including accepted SDK apps — before the first user message
-    // was captured, so every SDK import fell back to "Claude session <id>".
-    expect(candidates[0].title).toBe('Investigate ticket 12345')
-    expect(candidates[0].messageCount).toBe(2)
+    expect(candidates.map((c) => c.sessionId).sort()).toEqual(['desktop', 'old-cli', 'typed', 'vscode'])
+    expect(candidates.find((c) => c.sessionId === 'typed')).toMatchObject({ origin: 'cli', title: 'fix the login redirect', messageCount: 2 })
+    expect(candidates.find((c) => c.sessionId === 'vscode')?.origin).toBe('claude-vscode')
   })
 
   it('excludes configured directories for every entrypoint, without matching sibling paths', async () => {
-    for (const entrypoint of ['cli', 'claude-desktop', 'sdk-cli']) {
+    for (const entrypoint of ['cli', 'claude-desktop', 'claude-vscode']) {
       claudeSession({ sid: `probe-${entrypoint}`, entrypoint, cwd: '/Users/dev/probes/run-1' })
     }
     claudeSession({ sid: 'real', entrypoint: 'cli', cwd: '/Users/dev/probes-app' })
@@ -154,14 +162,14 @@ describe('scanExternalSessions — claude classification', () => {
     for (let i = 0; i < 205; i++) {
       claudeSession({ sid: `probe-${i}`, entrypoint: 'cli', cwd: '/Users/dev/probes' })
     }
-    claudeSession({ sid: 'real', entrypoint: 'sdk-cli', cwd: '/Users/dev/work', mtimeMs: Date.now() - 10_000 })
+    claudeSession({ sid: 'real', entrypoint: 'claude-desktop', cwd: '/Users/dev/work', mtimeMs: Date.now() - 10_000 })
     expect((await scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 })).candidates.map(c => c.sessionId))
       .toEqual(['real'])
     expect((await scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 })).truncated).toBe(false)
   })
 
-  it('still excludes tracked sdk sessions via knownSessionIds (Walnut\'s own)', async () => {
-    claudeSession({ sid: 'walnut-own', entrypoint: 'sdk-cli', cwd: '/Users/dev/proj' })
+  it('excludes tracked sessions via knownSessionIds whoever started them', async () => {
+    claudeSession({ sid: 'walnut-own', entrypoint: 'cli', cwd: '/Users/dev/proj' })
     expect((await scan({ knownSessionIds: ['walnut-own'] })).candidates).toHaveLength(0)
   })
 
@@ -590,7 +598,7 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     expect(byId).toEqual({ 'fork-plain': 'fork' })
   })
 
-  it('keeps a plain SDK session whose later input was queued mid-turn, and a terminal fork', async () => {
+  it('does not call a plain SDK session whose later input was queued mid-turn a fork, and keeps a terminal fork', async () => {
     writeJsonl(file('plain-q'), [
       { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-21T10:00:00.000Z', content: 'start the work' },
       user('plain-q', 'start the work', { timestamp: '2026-09-21T10:00:00.500Z' }),
@@ -602,7 +610,10 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
       user('term-fork-2', 'copied parent turn', { entrypoint: 'cli', timestamp: '2026-09-18T17:55:38.049Z' }),
       reply(),
     ])
-    expect((await scan()).candidates.map((c) => c.sessionId).sort()).toEqual(['plain-q', 'term-fork-2'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['term-fork-2'])
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['plain-q'], homeDir: home }))
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(byId).toEqual({ 'plain-q': 'programmatic' })
   })
 
   it('skips a Walnut-driven session found by the reminder alone, and by the mode switch line', async () => {
@@ -611,12 +622,14 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     expect((await scan()).candidates).toEqual([])
   })
 
-  it('keeps a session whose text merely mentions the markers mid-sentence', async () => {
-    writeJsonl(file('talk-1'), [
-      user('talk-1', 'why does my reply end with [Rich output mode is still on]? and what is <walnut-cache-warmup> for'),
-      reply(),
-    ])
+  it('does not call a session Walnut-driven when its text merely mentions the markers mid-sentence', async () => {
+    const text = 'why does my reply end with [Rich output mode is still on]? and what is <walnut-cache-warmup> for'
+    writeJsonl(file('talk-1'), [user('talk-1', text, { entrypoint: 'cli' }), reply()])
+    writeJsonl(file('talk-2'), [user('talk-2', text), reply()])
     expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['talk-1'])
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['talk-2'], homeDir: home }))
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(byId).toEqual({ 'talk-2': 'programmatic' })
   })
 
   it('keeps a terminal fork of a Walnut session: a person started that work', async () => {
@@ -630,23 +643,24 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
   })
 
   it('skips a probe whose only reply is an API error, and one answered by a synthetic stub', async () => {
+    const cli = { entrypoint: 'cli' }
     writeJsonl(file('probe-1'), [
       { type: 'queue-operation', operation: 'enqueue', content: 'Say only Z.' },
-      user('probe-1', 'Say only Z.'),
+      user('probe-1', 'Say only Z.', cli),
       reply('API Error: 400 capture-only probe', { isApiErrorMessage: true }),
     ])
     writeJsonl(file('stub-1'), [
-      user('stub-1', 'ping'),
+      user('stub-1', 'ping', cli),
       { type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } },
     ])
-    writeJsonl(file('asked-1'), [user('asked-1', 'still thinking about this one')])
-    writeJsonl(file('ok-1'), [user('ok-1', 'Say only Z.'), reply('Z')])
+    writeJsonl(file('asked-1'), [user('asked-1', 'still thinking about this one', cli)])
+    writeJsonl(file('ok-1'), [user('ok-1', 'Say only Z.', cli), reply('Z')])
     expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['ok-1'])
   })
 
   it('does not call a transcript reply-less when the head budget could not reach the reply', async () => {
     const big = 'x'.repeat(2.5 * 1024 * 1024)
-    writeJsonl(file('big-1'), [user('big-1', 'review this log'), user('big-1', big), reply('done')])
+    writeJsonl(file('big-1'), [user('big-1', 'review this log', { entrypoint: 'cli' }), user('big-1', big), reply('done')])
     expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['big-1'])
   })
 
@@ -658,9 +672,11 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     ])
     writeJsonl(file('probe-2'), [user('probe-2', 'Say only Z.'), reply('err', { isApiErrorMessage: true })])
     writeJsonl(file('real-2'), [user('real-2', 'fix the login bug', { entrypoint: 'cli' }), reply()])
-    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['fork-2', 'probe-2', 'real-2'], homeDir: home }))
+    writeJsonl(file('prog-2'), [user('prog-2', 'summarize the deploy'), reply()])
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['fork-2', 'probe-2', 'real-2', 'prog-2'], homeDir: home }))
       .candidates.map((c) => [c.sessionId, c.notExternal]))
-    expect(byId).toEqual({ 'fork-2': 'walnut-driven', 'probe-2': 'no-reply', 'real-2': null })
+    // 'programmatic' only for a real session: a fork or a probe keeps its own reason.
+    expect(byId).toEqual({ 'fork-2': 'walnut-driven', 'probe-2': 'no-reply', 'real-2': null, 'prog-2': 'programmatic' })
   })
 
   it('skips any id in the spawn journal and says which Walnut started it', async () => {
@@ -809,7 +825,7 @@ describe('scanExternalSessions — remembered verdicts and a responsive event lo
   it('lets timers run while it walks a large tree', async () => {
     const chat = { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'y'.repeat(4000) }] } }
     for (let i = 0; i < 400; i++) {
-      writeJsonl(file('bulk-' + i), [user('bulk-' + i, 'task ' + i, { entrypoint: 'sdk-cli' }), ...Array(10).fill(chat)])
+      writeJsonl(file('bulk-' + i), [user('bulk-' + i, 'task ' + i), ...Array(10).fill(chat)])
     }
     let ticks = 0
     const timer = setInterval(() => { ticks++ }, 1)
@@ -826,134 +842,61 @@ describe('scanExternalSessions — remembered verdicts and a responsive event lo
 })
 
 /**
- * A program that fans out `claude -p` starts many sessions in one cwd with one
- * opening prompt within minutes (one per dashboard widget, one per ticket row).
- * Imported one task each, one host's runs added about 1,000 tasks a day to its
- * folders (2026-10-06). Those workers are part of the program's run, like
- * subagents; a session someone or something started on its own is not.
+ * Who started a session decides whether it is an outside session, read from the
+ * CLI's own record rather than guessed. A script that fanned out `claude -p`
+ * (one run per dashboard widget, per ticket row) once filed about 1,000 tasks a
+ * day on one host (2026-10-06): each run is that program's work, like a
+ * subagent, not a session someone opened.
  */
-describe('scanExternalSessions — fan-out workers', () => {
-  const T0 = Date.parse('2026-09-20T10:00:00.000Z')
-  const MIN = 60_000
-  const CWD = '/Users/dev/ops/skills/dashboard-review'
-  // Longer than the 80 characters the rule compares, so the widget name differs past them.
-  const WIDGET = 'You review ONE CloudWatch dashboard widget for anomalies an on-call engineer must look at. Widget: '
+describe('scanExternalSessions — who started it', () => {
+  const file = (sid: string) => path.join(home, '.claude', 'projects', '-Users-dev-ops', sid + '.jsonl')
+  const at = '2026-09-20T10:00:00.000Z'
+  const line = (sid: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+    type: 'user', message: { role: 'user', content }, timestamp: at, cwd: '/Users/dev/ops', sessionId: sid, entrypoint: 'cli', ...extra,
+  })
+  const reply = { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'ok' }] }, timestamp: at }
+  const describeIds = async (sessionIds: string[]) => Object.fromEntries(
+    (await describeExternalSessions({ sessionIds, homeDir: home })).candidates.map((c) => [c.sessionId, c.notExternal]))
 
-  function worker(sid: string, o: {
-    cwd?: string; prompt?: string; startMs?: number; entrypoint?: string; replied?: boolean; mtimeMs?: number; padBytes?: number
-  } = {}): string {
-    const cwd = o.cwd ?? CWD
-    const prompt = o.prompt ?? WIDGET + sid
-    const at = new Date(o.startMs ?? T0).toISOString()
-    const filePath = path.join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), sid + '.jsonl')
-    const lines: unknown[] = [
-      { type: 'queue-operation', operation: 'enqueue', timestamp: at, sessionId: sid, content: prompt },
-      { type: 'user', message: { role: 'user', content: prompt }, timestamp: at, cwd, sessionId: sid, entrypoint: o.entrypoint ?? 'sdk-cli' },
-    ]
-    if (o.padBytes) lines.push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'x'.repeat(o.padBytes) }] }, timestamp: at, cwd, sessionId: sid })
-    lines.push(o.replied === false
-      ? { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'API Error: 500' }] }, isApiErrorMessage: true, timestamp: at }
-      : { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'no anomaly' }] }, timestamp: at })
-    writeJsonl(filePath, lines)
-    if (o.mtimeMs !== undefined) fs.utimesSync(filePath, new Date(o.mtimeMs), new Date(o.mtimeMs))
-    return filePath
-  }
-
-  /** n workers of one run, started 30 s apart. */
-  function fanOut(prefix: string, n: number, o: Parameters<typeof worker>[1] & { everyMs?: number } = {}): string[] {
-    const ids: string[] = []
-    for (let i = 0; i < n; i++) {
-      const sid = prefix + '-' + i
-      worker(sid, { ...o, startMs: (o.startMs ?? T0) + i * (o.everyMs ?? 30_000) })
-      ids.push(sid)
+  it('leaves out a fan-out of `claude -p` runs, keeps a person\'s session in the same folder, and remembers the verdict', async () => {
+    for (let i = 0; i < 12; i++) {
+      writeJsonl(file('w-' + i), [line('w-' + i, 'Review ONE dashboard widget: ' + i, { entrypoint: 'sdk-cli', promptSource: 'sdk' }), reply])
     }
-    return ids
-  }
-
-  const ids = async (over: Partial<Parameters<typeof scanExternalSessions>[0]> = {}) =>
-    (await scan(over)).candidates.map((c) => c.sessionId).sort()
-
-  it('skips every worker of a run, keeps a person\'s session in the same folder, and remembers the verdict', async () => {
-    fanOut('w', 12)
-    worker('person-1', { entrypoint: 'cli', prompt: 'why did the widget review flag nothing today?' })
-    expect(await ids()).toEqual(['person-1'])
+    writeJsonl(file('person'), [line('person', 'why did the widget review flag nothing today?', { promptSource: 'typed' }), reply])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['person'])
     const again = await scan()
     expect(again).toMatchObject({ scanned: 13, parsed: 0 })
-    expect(again.candidates.map((c) => c.sessionId)).toEqual(['person-1'])
+    expect(again.candidates.map((c) => c.sessionId)).toEqual(['person'])
+    expect(await describeIds(['w-0', 'w-11', 'person'])).toEqual({ 'w-0': 'programmatic', 'w-11': 'programmatic', person: null })
   })
 
-  it('keeps sessions below the count, spread over time, split across folders, or opening differently', async () => {
-    fanOut('few', 9, { cwd: '/Users/dev/a' })
-    fanOut('slow', 12, { cwd: '/Users/dev/b', everyMs: 15 * MIN })
-    fanOut('left', 6, { cwd: '/Users/dev/c', prompt: WIDGET })
-    fanOut('right', 6, { cwd: '/Users/dev/d', prompt: WIDGET })
-    // One run per ticket: the ticket id sits inside the compared prefix.
-    for (let i = 0; i < 12; i++) worker('vt-' + i, { cwd: '/Users/dev/vt', prompt: 'Investigate this ticket. Ticket: V' + (2387331 + i) + ' Sev 2', startMs: T0 + i * 10_000 })
-    expect(await ids()).toHaveLength(9 + 12 + 6 + 6 + 12)
+  it('reads the first SUBMITTED prompt: a command expansion before it carries no source', async () => {
+    // A slash command writes its expansion lines first, without promptSource.
+    const command = '<command-message>review</command-message>\n<command-name>/review</command-name>'
+    writeJsonl(file('cmd-typed'), [line('cmd-typed', command), line('cmd-typed', 'look at the auth module', { promptSource: 'typed' }), reply])
+    writeJsonl(file('cmd-sdk'), [line('cmd-sdk', command), line('cmd-sdk', 'look at the auth module', { promptSource: 'sdk' }), reply])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['cmd-typed'])
+    expect(await describeIds(['cmd-sdk'])).toEqual({ 'cmd-sdk': 'programmatic' })
   })
 
-  it('never calls sessions from a human entrypoint a batch', async () => {
-    fanOut('hi', 12, { entrypoint: 'cli', prompt: 'hi' })
-    expect(await ids()).toHaveLength(12)
+  it('a program-started session gets the whole describe answer: title, count, reason', async () => {
+    writeJsonl(file('vt-1'), [
+      { type: 'queue-operation', operation: 'enqueue', timestamp: at, content: 'Investigate ticket V2387331' },
+      line('vt-1', 'Investigate ticket V2387331', { entrypoint: 'sdk-cli', promptSource: 'sdk' }),
+      reply,
+      line('vt-1', 'also check the alarm', { entrypoint: 'sdk-cli', promptSource: 'sdk' }),
+      reply,
+    ])
+    const [c] = (await describeExternalSessions({ sessionIds: ['vt-1'], homeDir: home })).candidates
+    expect(c).toMatchObject({ sessionId: 'vt-1', origin: 'sdk-cli', title: 'Investigate ticket V2387331', messageCount: 4, notExternal: 'programmatic' })
   })
 
-  it('counts the workers the server already tracks, so scan and audit judge a run alike', async () => {
-    // An older scanner imported three workers of a 12-worker run; nine are new.
-    const run = fanOut('mixed', 12)
-    expect(await ids({ knownSessionIds: run.slice(0, 3) })).toEqual([])
-    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: run.slice(0, 3), homeDir: home }))
-      .candidates.map((c) => [c.sessionId, c.notExternal]))
-    expect(byId).toEqual(Object.fromEntries(run.slice(0, 3).map((sid) => [sid, 'batch'])))
-  })
-
-  it('counts a worker rejected for another reason toward its run', async () => {
-    fanOut('ok', 8)
-    fanOut('err', 3, { replied: false, startMs: T0 + 5 * MIN })
-    expect(await ids()).toEqual([])
-  })
-
-  it('offers a programmatic session only once it is 10 minutes old, so a run still starting is judged whole', async () => {
-    const now = Date.now()
-    worker('young', { prompt: 'summarize the deploy', startMs: now - 2 * MIN })
-    worker('old-enough', { prompt: 'summarize the build', startMs: now - 11 * MIN })
-    worker('typed', { entrypoint: 'cli', prompt: 'summarize the deploy', startMs: now })
-    expect(await ids()).toEqual(['old-enough', 'typed'])
-  })
-
-  it('still knows the workers once the oldest of their run leave the scan window', async () => {
-    const now = Date.now()
-    const run = fanOut('edge', 12)
-    // The first five were last written just before the one-day window.
-    for (const sid of run.slice(0, 5)) {
-      const file = path.join(home, '.claude', 'projects', CWD.replace(/[^a-zA-Z0-9]/g, '-'), sid + '.jsonl')
-      fs.utimesSync(file, new Date(now - 25 * 60 * MIN), new Date(now - 25 * 60 * MIN))
-    }
-    const res = await scan({ sinceMs: 24 * 60 * MIN })
-    expect(res).toMatchObject({ candidates: [], scanned: 7 })
-  })
-
-  it('describe names the workers of a run already imported, read from their siblings, and nothing else', async () => {
-    const run = fanOut('done', 11)
-    // A sibling whose opening sits before megabytes of tool output still counts.
-    worker('done-big', { startMs: T0 + 3 * MIN, padBytes: 3 * 1024 * 1024 })
-    worker('solo', { prompt: 'Investigate this ticket. Ticket: V2387331', cwd: '/Users/dev/vt' })
-    worker('person-2', { entrypoint: 'cli', prompt: WIDGET + 'done-1' })
-    const asked = [run[0], run[10], 'done-big', 'solo', 'person-2']
-    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: asked, homeDir: home }))
-      .candidates.map((c) => [c.sessionId, c.notExternal]))
-    expect(byId).toEqual({ [run[0]]: 'batch', [run[10]]: 'batch', 'done-big': 'batch', solo: null, 'person-2': null })
-  })
-
-  it('describe keeps a run below the count, and a reason the transcript gives first', async () => {
-    const run = fanOut('small', 9)
-    worker('small-err', { replied: false, startMs: T0 + MIN })
-    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: [run[0], 'small-err'], homeDir: home }))
-      .candidates.map((c) => [c.sessionId, c.notExternal]))
-    // Ten openings in the window: the run counts as one, and the errored worker keeps its own reason.
-    expect(byId).toEqual({ [run[0]]: 'batch', 'small-err': 'no-reply' })
-    fs.rmSync(path.join(home, '.claude', 'projects', CWD.replace(/[^a-zA-Z0-9]/g, '-'), 'small-err.jsonl'))
-    const after = Object.fromEntries((await describeExternalSessions({ sessionIds: [run[0]], homeDir: home }))
-      .candidates.map((c) => [c.sessionId, c.notExternal]))
-    expect(after).toEqual({ [run[0]]: null })
+  it('codex: describe says programmatic for a non-interactive originator, and reads its title', async () => {
+    codexSession({ id: 'cx-exec', originator: 'codex_exec', firstUserText: 'bump the dependency' })
+    codexSession({ id: 'cx-tui', originator: 'codex-tui', stamp: '2026-08-10T11-00-00' })
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['cx-tui'])
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['cx-exec', 'cx-tui'], homeDir: home }))
+      .candidates.map((c) => [c.sessionId, [c.notExternal, c.title]]))
+    expect(byId).toEqual({ 'cx-exec': ['programmatic', 'bump the dependency'], 'cx-tui': [null, 'add retry to the uploader'] })
   })
 })

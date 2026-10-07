@@ -63,7 +63,7 @@ import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../types.js'
-import { EXTERNAL_IMPORT_EVENT_SOURCE, extendImportLifecycle, externalImportProject, importAutoCompleteAfterDays } from '../sessions/external-session-import.js'
+import { EXTERNAL_IMPORT_EVENT_SOURCE, claimSessionImports, extendImportLifecycle, externalImportProject, importAutoCompleteAfterDays, releaseSessionImportClaims } from '../sessions/external-session-import.js'
 import { listTagDisplayRules, listTagLinkRules, setPluginTagDisplay, setPluginTagLink } from '../tag-display.js'
 import type {
   AdapterCallOptions,
@@ -468,6 +468,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
   let unsafeWarned = false
 
   const own = <T extends Disposable>(registration: T): T => context.own(registration)
+  /** This generation's claimant key for sessionImports.include, made on first use: a reloaded
+   *  plugin's old generation releasing its claims must not drop the new one's. */
+  let importClaimant: string | undefined
 
   /** Refuse a registration BEFORE it writes: `own()` notices too late, so a late publish from a replaced generation lands on the live row and the dispose that follows deletes it. Reads, logging, storage and config stay open for the teardown itself. */
   const assertLive = (registration: string): void => {
@@ -752,6 +755,16 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       extendTo(project: string) {
         assertLive('sessionImports.extendTo')
         return own(toDisposable(extendImportLifecycle(project)))
+      },
+      include(host: string, sessionIds: string[]) {
+        assertLive('sessionImports.include')
+        if (typeof host !== 'string' || !host.trim()) throw new Error('Host cannot be empty.')
+        if (!importClaimant) {
+          const claimant = `plugin:${pluginId}:${++subscriberSequence}`
+          importClaimant = claimant
+          own(toDisposable(() => releaseSessionImportClaims(claimant)))
+        }
+        return claimSessionImports(importClaimant, host, sessionIds)
       },
     },
 

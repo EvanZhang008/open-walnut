@@ -83,6 +83,10 @@ import {
   importFolderLabel,
   isStaleImportTitle,
   _resetImportAuditForTesting,
+  _resetImportClaimsForTesting,
+  claimSessionImports,
+  releaseSessionImportClaims,
+  importSessionsById,
   extendImportLifecycle,
   importAutoCompleteAfterDays,
 } from '../../src/core/sessions/external-session-import.js';
@@ -157,6 +161,7 @@ async function resetAll(): Promise<void> {
   _resetSessionTrackerForTesting();
   _resetTaskManager();
   _resetImportAuditForTesting();
+  _resetImportClaimsForTesting();
   await rmWalnutHome();
 }
 
@@ -1191,8 +1196,8 @@ describe('importExternalSessions — removes imports that were never outside ses
     await expect(getTask(task.id)).rejects.toThrow();
   });
 
-  it('asks once more when the host daemon learns the fan-out rule, and removes the workers', async () => {
-    // The pre-upgrade daemon imported a fan-out run's workers one task each.
+  it('asks once more when the host daemon learns the human-only rule, and removes the program runs', async () => {
+    // The pre-upgrade daemon imported a script's `claude -p` runs one task each.
     const host = setHost('__local__', { candidates: [
       candidate({ sessionId: 'w-1', origin: 'sdk-cli', title: 'You review ONE dashboard widget' }),
       candidate({ sessionId: 'w-2', origin: 'sdk-cli', title: 'You review ONE dashboard widget' }),
@@ -1207,9 +1212,9 @@ describe('importExternalSessions — removes imports that were never outside ses
 
     // The daemon upgrades (same server process): every import is asked again once.
     const upgraded = setHost('__local__', {
-      capabilities: ['external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-batch-v1'],
+      capabilities: ['external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1'],
       candidates: [],
-      described: { 'w-1': described('w-1', 'batch'), 'w-2': described('w-2', 'batch'), 'real-1': described('real-1') },
+      described: { 'w-1': described('w-1', 'programmatic'), 'w-2': described('w-2', 'programmatic'), 'real-1': described('real-1') },
     });
     expect((await importExternalSessions()).removed).toBe(2);
     expect(upgraded.describeCalls.flat().sort()).toEqual(['real-1', 'w-1', 'w-2']);
@@ -1246,6 +1251,86 @@ describe('importExternalSessions — removes imports that were never outside ses
     expect(host.describeCalls.flat().sort()).toEqual(['open-1', 'open-2']);
     expect((await importExternalSessions({ limits: { audit: 2 } })).removed).toBe(1);
     await expect(getTask(done.id)).rejects.toThrow();
+  });
+});
+
+/**
+ * A program's runs stay out of the import, but a plugin that owns the program
+ * names its runs by id (plugin API sessionImports.include) and the importer
+ * files those, and a person can ask for any session by id.
+ */
+describe('importExternalSessions — sessions claimed by id', () => {
+  const HUMAN_ONLY = ['external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1'];
+  const recent = () => new Date(Date.now() - 60_000).toISOString();
+  const run = (sessionId: string, notExternal: string | null, over: Record<string, unknown> = {}) =>
+    candidate({ sessionId, origin: 'sdk-cli', title: 'Investigate ticket ' + sessionId, lastActiveAt: recent(), notExternal, ...over });
+
+  it('imports a claimed run the scan leaves out, keeps it through the audit, and asks again only about runs that may still change', async () => {
+    const host = setHost('__local__', { capabilities: HUMAN_ONLY, candidates: [], described: {
+      'vt-1': run('vt-1', 'programmatic'),
+      'vt-2': run('vt-2', 'no-reply'),
+      'vt-3': run('vt-3', 'fork'),
+      'vt-old': run('vt-old', 'programmatic', { lastActiveAt: '2026-01-01T00:00:00.000Z' }),
+    } });
+    expect(claimSessionImports('plugin:vt:1', '__local__', ['vt-1', 'vt-2', 'vt-3', 'vt-old', 'vt-gone', 'not an id!'])).toBe(5);
+    const res = await importExternalSessions();
+    expect(res.imported).toBe(1);
+    const task = await taskForSession('vt-1');
+    expect(task).toMatchObject({ title: 'Investigate ticket vt-1', project: externalImportProject('__local__') });
+    expect(task.tags).toContain(TAG);
+    expect(host.describeCalls.flat().sort()).toEqual(['vt-1', 'vt-2', 'vt-3', 'vt-gone', 'vt-old']);
+
+    // Next run: the imported one is tracked, a fork and a run older than the
+    // window are settled; a run with no reply yet and one with no transcript
+    // yet are asked again.
+    host.describeCalls.length = 0;
+    await importExternalSessions();
+    expect(host.describeCalls.flat().sort()).toEqual(['vt-2', 'vt-gone']);
+
+    // A restarted server audits it: claimed, it stays.
+    _resetImportAuditForTesting();
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect((await getTask(task.id)).tags).toContain(TAG);
+    // The plugin stopped: nobody claims it, so it goes like any program's run.
+    releaseSessionImportClaims('plugin:vt:1');
+    _resetImportAuditForTesting();
+    expect((await importExternalSessions()).removed).toBe(1);
+    await expect(getTask(task.id)).rejects.toThrow();
+  });
+
+  it('a later claim replaces the earlier list for that host; another claimant keeps its own', async () => {
+    const host = setHost('__local__', { capabilities: HUMAN_ONLY, candidates: [], described: {
+      'a-1': run('a-1', 'no-reply'), 'b-1': run('b-1', 'no-reply'),
+    } });
+    claimSessionImports('plugin:a:1', '__local__', ['a-1']);
+    claimSessionImports('plugin:a:1', 'local', []);
+    claimSessionImports('plugin:b:2', '', ['b-1']);
+    await importExternalSessions();
+    expect(host.describeCalls.flat()).toEqual(['b-1']);
+  });
+
+  it('imports sessions a person asks for by id: theirs, so not the imported type, and never audited away', async () => {
+    const host = setHost('__local__', { capabilities: HUMAN_ONLY, candidates: [], described: {
+      'p-1': run('p-1', 'programmatic', { lastActiveAt: '2026-01-01T00:00:00.000Z' }),
+      'own-1': run('own-1', 'walnut-spawned'),
+      'quiet-1': run('quiet-1', 'no-reply'),
+    } });
+    const res = await importSessionsById('__local__', ['p-1', 'own-1', 'quiet-1', 'missing-1', 'p-1']);
+    expect(res.imported.sort()).toEqual(['p-1', 'quiet-1']);
+    expect(res.skipped).toEqual([{ sessionId: 'own-1', reason: 'walnut-spawned' }, { sessionId: 'missing-1', reason: 'not-found' }]);
+    const task = await taskForSession('p-1');
+    expect(task.project).toBe(externalImportProject('__local__'));
+    expect(task.tags ?? []).not.toContain(TAG);
+    expect(task.description).toMatch(/^Imported on request/);
+
+    expect(await importSessionsById('local', ['p-1'])).toEqual({ imported: [], skipped: [{ sessionId: 'p-1', reason: 'already-tracked' }] });
+    _resetImportAuditForTesting();
+    host.describeCalls.length = 0;
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect(host.describeCalls.flat()).toEqual([]);
+
+    await expect(importSessionsById('elsewhere', ['p-2'])).rejects.toThrow(/not connected/);
+    await expect(importSessionsById('__local__', ['bad id'])).rejects.toThrow(/at least one/);
   });
 });
 

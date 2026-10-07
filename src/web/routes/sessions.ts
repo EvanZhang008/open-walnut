@@ -228,10 +228,26 @@ sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Respon
 // POST /api/sessions/import-external — run the external-session import NOW.
 // The importer already runs on a 10-minute tick; this is the "don't make me
 // wait" button (and what E2E drives). Serialized with background ticks.
+// With `sessionIds` (and `host`, default this machine) it imports exactly those
+// sessions instead, even ones a program started: the by-hand path.
 sessionsRouter.post('/import-external', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { importExternalSessions, DEFAULT_EXTERNAL_SCAN_WINDOW_MS } =
+    const { importExternalSessions, importSessionsById, DEFAULT_EXTERNAL_SCAN_WINDOW_MS } =
       await import('../../core/sessions/external-session-import.js')
+    if (req.body?.sessionIds !== undefined) {
+      const ids = req.body.sessionIds
+      if (!Array.isArray(ids) || ids.some((id: unknown) => typeof id !== 'string')) {
+        res.status(400).json({ error: 'sessionIds must be an array of session ids' })
+        return
+      }
+      const host = typeof req.body.host === 'string' && req.body.host ? req.body.host : '__local__'
+      try {
+        res.json(await importSessionsById(host, ids))
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
     const days = Number(req.body?.days)
     const windowMs = Number.isFinite(days) && days > 0
       ? days * 24 * 60 * 60 * 1000

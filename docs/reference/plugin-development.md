@@ -168,7 +168,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.macos` | Read a file macOS keeps behind Full Disk Access through Walnut's one grant for it, after saying why. Mac only. |
 | `walnut.mcp` | Run a stdio MCP server Walnut keeps alive for you, call any registered server's tools, and choose what Walnut sessions may call on it. |
 | `walnut.expose` | Add a tunnel provider: the command that puts this server one address away from a browser anywhere, which Walnut runs and keeps connected. |
-| `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, and a way to keep its lifecycle on tasks you file elsewhere. |
+| `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, a way to keep its lifecycle on tasks you file elsewhere, and a way to have your own program's runs imported. |
 | `walnut.tags` | Say how your plugin's tags show on tasks: a tag or a `<namespace>:*` can default to hidden (searchable and filterable still, just no pill). |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
@@ -268,9 +268,11 @@ export function useAcmeTunnel(walnut: WalnutServerApi): Disposable {
 
 #### Outside sessions
 
-Walnut's importer files every session started outside Walnut (in a terminal, or by another tool) as one task, under a project per host. `walnut.sessionImports.projectFor(host)` names that project and `walnut.sessionImports.tag` is the tag on every task the importer still owns; the first message a person sends into the session removes it. `walnut.sessionImports.onRun(handler)` fires once after each import run that changed the board, so a plugin that files imported sessions somewhere else can pick up new ones right away instead of on its next timer.
+Walnut's importer files every session a person started outside Walnut (in a terminal, the desktop app or an IDE) as one task, under a project per host. `walnut.sessionImports.projectFor(host)` names that project and `walnut.sessionImports.tag` is the tag on every task the importer still owns; the first message a person sends into the session removes it. `walnut.sessionImports.onRun(handler)` fires once after each import run that changed the board, so a plugin that files imported sessions somewhere else can pick up new ones right away instead of on its next timer.
 
 The importer also completes an imported task nobody wrote to once its session has been idle `autoCompleteAfterDays()` days (0 means never), but only in its own projects. A plugin that files imported tasks into a project of its own keeps that promise with `extendTo(project)`: tasks there still carrying the importer's tag are completed on the same clock, and a task someone wrote to is a regular task. Dispose the returned handle to stop; the plugin's own disposal does it too.
+
+A session a program started (`claude -p`, an Agent SDK app) is that program's work, so the importer leaves it out: the CLI records who started each session, and only a person's count. A plugin that owns such a program and wants its runs on the board names them: `walnut.sessionImports.include(host, sessionIds)` says these session ids on that host are its runs, and the importer files them on its next run like any other import (same project, same tag, same lifecycle). Each call replaces the plugin's earlier list for that host, so pass every run you still want; ids already on the board are skipped, and the claim ends when the plugin stops.
 
 #### Tag display
 

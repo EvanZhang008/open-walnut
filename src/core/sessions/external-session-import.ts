@@ -65,8 +65,9 @@ const SCAN_CAPABILITY = 'external-scan-v1';
 /** Daemon capability for re-reading specific transcripts by id (retitle of
  *  placeholder-titled imports whose files aged out of the scan window). */
 const DESCRIBE_CAPABILITY = 'external-describe-v1';
-/** Daemon capability: its scanner skips fan-out workers and describe names them. */
-const BATCH_CAPABILITY = 'external-batch-v1';
+/** Daemon capability: its scanner imports only sessions a person started, and
+ *  describe says 'programmatic' for a program's run. */
+const HUMAN_ONLY_CAPABILITY = 'external-human-v1';
 /** Placeholder-titled sessions re-read per host per run. */
 const RETITLE_LIMIT_PER_RUN = 100;
 /** The scan walks directories on the host; give it room but never hang a tick. */
@@ -85,6 +86,10 @@ const SWEEP_LIMIT_PER_RUN = 300;
 const FOLDER_BACKFILL_LIMIT_PER_RUN = 300;
 /** Per-run cap on imports re-read to check they really were outside sessions. */
 const AUDIT_LIMIT_PER_RUN = 100;
+/** Claimed sessions looked up per host per run (sessionImports.include). */
+const CLAIM_DESCRIBE_LIMIT = 100;
+/** Most session ids one claimant may claim on one host. */
+const CLAIM_MAX_IDS = 50_000;
 /** Idle window before an imported task is auto-completed (config override:
  *  external_session_import.auto_complete_after_days). */
 export const DEFAULT_AUTO_COMPLETE_AFTER_DAYS = 7;
@@ -594,6 +599,98 @@ async function sweepIdleImports(imports: Task[], idleMs: number, now: number, li
   return completed;
 }
 
+// ── claimed sessions ──────────────────────────────────────────────────────
+
+/**
+ * A program's runs are left out of the import (only a session a person started
+ * is an outside session), but a plugin that owns such a program can put them on
+ * the board: it names its runs by id (plugin API `sessionImports.include`) and
+ * the importer looks each one up through describe and files it like any other
+ * import. The id is the claim, so nothing is guessed from the transcript. Process
+ * memory: a plugin claims on every pass, and a claim ends when the plugin stops.
+ * claimant → host → ids.
+ */
+const importClaims = new Map<string, Map<string, Set<string>>>();
+/** Claimed ids the host said can never be imported (Walnut's own, a fork), or
+ *  that are older than the scan window: never looked up again in this process. */
+const settledClaims = new Set<string>();
+/** When each claimed id was last looked up, so a capped run asks the least
+ *  recently asked first (a run still starting has no reply yet: asked again). */
+const lastClaimAsk = new Map<string, number>();
+
+const CLAIM_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+function claimHost(host: string): string {
+  const h = (host ?? '').trim();
+  return h === '' || h === 'local' ? '__local__' : h;
+}
+
+/** `claimant`'s runs on `host` are these ids (replacing its earlier list there). */
+export function claimSessionImports(claimant: string, host: string, sessionIds: readonly string[]): number {
+  if (!Array.isArray(sessionIds)) throw new Error('sessionIds must be an array of session ids.');
+  if (sessionIds.length > CLAIM_MAX_IDS) throw new Error(`At most ${CLAIM_MAX_IDS} session ids per host.`);
+  const ids = new Set(sessionIds.filter((id) => typeof id === 'string' && CLAIM_ID_RE.test(id)));
+  const byHost = importClaims.get(claimant) ?? new Map<string, Set<string>>();
+  byHost.set(claimHost(host), ids);
+  importClaims.set(claimant, byHost);
+  return ids.size;
+}
+
+/** Drop every claim `claimant` made (its plugin stopped). */
+export function releaseSessionImportClaims(claimant: string): void {
+  importClaims.delete(claimant);
+}
+
+/** Does any claimant name this session on this host? */
+export function isClaimedImport(host: string, sessionId: string): boolean {
+  const key = claimHost(host);
+  for (const byHost of importClaims.values()) if (byHost.get(key)?.has(sessionId)) return true;
+  return false;
+}
+
+/** Test seam: forget every claim and what was learned about claimed ids. */
+export function _resetImportClaimsForTesting(): void {
+  importClaims.clear();
+  settledClaims.clear();
+  lastClaimAsk.clear();
+}
+
+/** Reasons a claim cannot overrule: the session is Walnut's own, a copy of
+ *  another one, or was driven by a Walnut. 'no-reply' is asked again later. */
+const UNCLAIMABLE = new Set(['walnut-spawned', 'fork', 'walnut-driven']);
+
+/** This host's claimed sessions to import now: looked up by id (at most
+ *  CLAIM_DESCRIBE_LIMIT per run) and kept when the host calls them a real
+ *  session (an older daemon judges none) written within the scan window. */
+async function claimedCandidates(
+  host: string,
+  skip: (sessionId: string) => boolean,
+  windowMs: number,
+): Promise<ExternalSessionCandidate[]> {
+  const wanted = new Set<string>();
+  const key = claimHost(host);
+  for (const byHost of importClaims.values()) {
+    for (const id of byHost.get(key) ?? []) if (!skip(id) && !settledClaims.has(id)) wanted.add(id);
+  }
+  if (wanted.size === 0) return [];
+  const now = Date.now();
+  const batch = [...wanted]
+    .sort((a, b) => (lastClaimAsk.get(a) ?? 0) - (lastClaimAsk.get(b) ?? 0))
+    .slice(0, CLAIM_DESCRIBE_LIMIT);
+  for (const id of batch) lastClaimAsk.set(id, now);
+  const answer = await describeHost(host, batch, false);
+  if (!answer) return [];
+  const out: ExternalSessionCandidate[] = [];
+  for (const c of answer.candidates) {
+    if (c.notExternal && UNCLAIMABLE.has(c.notExternal)) { settledClaims.add(c.sessionId); continue; }
+    if (c.notExternal && c.notExternal !== 'programmatic') continue;
+    if (!(Date.parse(c.lastActiveAt) >= now - windowMs)) { settledClaims.add(c.sessionId); continue; }
+    const { notExternal: _verdict, spawnedBy: _spawn, ...candidate } = c;
+    out.push(candidate);
+  }
+  return out;
+}
+
 // ── provenance audit ──────────────────────────────────────────────────────
 
 /** Session ids whose host already answered the audit in this process, and
@@ -604,10 +701,10 @@ const auditedSessions = new Map<string, number>();
 const auditedTasks = new Map<string, { host: string; level: number }>();
 
 /** The audit rules a host's scanner applies: 0 = it cannot be asked, 1 = the
- *  provenance rules, 2 = fan-out workers too (external-batch-v1). */
+ *  provenance rules, 2 = only sessions a person started (external-human-v1). */
 function auditRuleLevel(conn: { hasCapability(cap: string): boolean } | null | undefined): number {
   if (!conn?.hasCapability(DESCRIBE_CAPABILITY)) return 0;
-  return conn.hasCapability(BATCH_CAPABILITY) ? 2 : 1;
+  return conn.hasCapability(HUMAN_ONLY_CAPABILITY) ? 2 : 1;
 }
 
 /** Test seam: forget which imports were audited (module state outlives a test). */
@@ -620,9 +717,10 @@ export function _resetImportAuditForTesting(): void {
  * Remove imports that were never outside sessions. Older scanners imported
  * Walnut's own forks (side threads minted by another Walnut instance on the same
  * host, whose records this server never held), one-shot probes that never
- * got a reply, and the workers of scripted fan-outs (hundreds of `claude -p`
- * runs in one folder, one task each); the scan now skips all three, and this
- * pass cleans up what they left. Each import is re-read through describe once
+ * got a reply, and every run of a program driving the CLI (a script's
+ * `claude -p` fan-out filed hundreds of tasks a day); the scan now skips all of
+ * them, and this pass cleans up what they left. A program's run a plugin claims
+ * (sessionImports.include) stays. Each import is re-read through describe once
  * per process and host rule level (a daemon that learns a rule is asked again),
  * open tasks first (one imported by this process was classified by its host's
  * rules already); a host with no answer is asked again next tick. Only tasks
@@ -682,6 +780,7 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
       if (c && c.notExternal === undefined) continue;
       auditedSessions.set(p.sessionId, p.level);
       auditedTasks.set(p.task.id, { host: p.host, level: p.level });
+      if (c?.notExternal === 'programmatic' && isClaimedImport(p.host, p.sessionId)) continue;
       if (c?.notExternal) verdicts.set(p.sessionId, { reason: c.notExternal, spawnedBy: c.spawnedBy });
     }
   }
@@ -733,6 +832,9 @@ async function importCandidate(
   candidate: ExternalSessionCandidate,
   host: string,
   folders: FolderIndex,
+  /** Asked for by a person (importSessionsById): theirs from the start, so no
+   *  imported type (no pill, no idle sweep, no audit). */
+  opts: { onRequest?: boolean } = {},
 ): Promise<'imported' | 'retitled' | 'skipped'> {
   const { getSessionByClaudeId, importSessionRecord, updateSessionRecordConditionally } =
     await import('../session-tracker.js');
@@ -790,10 +892,12 @@ async function importCandidate(
     project,
     source: 'local',
     priority: 'none',
-    tags: [HOLDER_TAG],
+    tags: opts.onRequest ? [] : [HOLDER_TAG],
     ...(candidate.cwd ? { cwd: candidate.cwd } : {}),
     ...(groupId ? { group_id: groupId } : {}),
-    description: `Imported automatically — session started outside Walnut (${candidate.origin}).`,
+    description: opts.onRequest
+      ? `Imported on request — session started outside Walnut (${candidate.origin}).`
+      : `Imported automatically — session started outside Walnut (${candidate.origin}).`,
     _skipPluginOps: true,
   });
 
@@ -818,7 +922,7 @@ async function importCandidate(
       // engine drives which history reader the UI uses — a codex record read as
       // claude renders an empty transcript.
       ...(importedEngine ? { engine: importedEngine } : {}),
-      human_note: `Imported automatically — started outside Walnut (${candidate.origin}).`,
+      human_note: `Imported ${opts.onRequest ? 'on request' : 'automatically'} — started outside Walnut (${candidate.origin}).`,
     });
   } catch (err) {
     // importSessionRecord throws on an id that raced in — remove the task we
@@ -925,7 +1029,8 @@ async function scanAndImport(
   // them each tick, and importCandidate upgrades one in place as soon as its
   // transcript yields a real title.
   const retitleable = await retitleableSessions();
-  const knownSessionIds = [...await listAllSessionIds()].filter((id) => !retitleable.has(id));
+  const tracked = await listAllSessionIds();
+  const knownSessionIds = [...tracked].filter((id) => !retitleable.has(id));
   // Folders of the sessions imported this run, for the picker's quick paths.
   const uses: DirectoryUse[] = [];
 
@@ -940,7 +1045,9 @@ async function scanAndImport(
     const offered = new Set(scanned.candidates.map((c) => c.sessionId));
     const stale = [...retitleable].filter(([id, h]) => h === host && !offered.has(id)).map(([id]) => id);
     const described = await describeHost(host, pickRetitleBatch(stale, retitleLimit, Date.now()), false);
-    const candidates = [...scanned.candidates, ...(described?.candidates ?? [])];
+    // A plugin's claimed runs the scan leaves out (see claimSessionImports).
+    const claimed = await claimedCandidates(host, (id) => tracked.has(id) || offered.has(id), windowMs);
+    const candidates = [...scanned.candidates, ...(described?.candidates ?? []), ...claimed];
     const truncated = scanned.truncated;
     if (truncated) {
       result.truncated = true;
@@ -995,6 +1102,67 @@ async function scanAndImport(
       });
     });
   }
+}
+
+export interface ImportByIdResult {
+  imported: string[];
+  /** Why each other id was not imported: already-tracked, not-found (no
+   *  transcript on that host), or the host's reason (walnut-spawned, fork,
+   *  walnut-driven). */
+  skipped: Array<{ sessionId: string; reason: string }>;
+}
+
+/** Most ids one request may name (the daemon's describe limit). */
+const IMPORT_BY_ID_LIMIT = 300;
+
+/**
+ * Import these sessions on `host` because a person asked for them by id: the
+ * manual path for a session the scan leaves out (a program started it, or it is
+ * older than the window). Same task shape and project as an automatic import,
+ * but without the imported type: someone asked for it, so it is theirs. Only
+ * Walnut's own sessions and copies of them are refused. Serialized with the
+ * background runs.
+ */
+export function importSessionsById(host: string, sessionIds: readonly string[]): Promise<ImportByIdResult> {
+  const run = importQueue.then(() => runImportById(claimHost(host), sessionIds));
+  importQueue = run.catch(() => {});
+  return run;
+}
+
+async function runImportById(host: string, sessionIds: readonly string[]): Promise<ImportByIdResult> {
+  const ids = [...new Set(sessionIds.filter((id) => typeof id === 'string' && CLAIM_ID_RE.test(id)))];
+  if (ids.length === 0) throw new Error('Name at least one session id.');
+  if (ids.length > IMPORT_BY_ID_LIMIT) throw new Error(`At most ${IMPORT_BY_ID_LIMIT} session ids per request.`);
+  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
+  if (!getConnectedDaemonConnection(host)?.hasCapability(DESCRIBE_CAPABILITY)) {
+    throw new Error(`Host ${host} is not connected, or its daemon is too old to look sessions up by id.`);
+  }
+  const { listAllSessionIds } = await import('../session-tracker.js');
+  const tracked = await listAllSessionIds();
+  const result: ImportByIdResult = { imported: [], skipped: [] };
+  const ask = ids.filter((id) => {
+    if (!tracked.has(id)) return true;
+    result.skipped.push({ sessionId: id, reason: 'already-tracked' });
+    return false;
+  });
+  const answer = ask.length ? await describeHost(host, ask, false) : { candidates: [] };
+  if (!answer) throw new Error(`Host ${host} did not answer.`);
+  const byId = new Map(answer.candidates.map((c) => [c.sessionId, c]));
+  const folders: FolderIndex = new Map();
+  for (const id of ask) {
+    const c = byId.get(id);
+    if (!c) { result.skipped.push({ sessionId: id, reason: 'not-found' }); continue; }
+    if (c.notExternal && UNCLAIMABLE.has(c.notExternal)) { result.skipped.push({ sessionId: id, reason: c.notExternal }); continue; }
+    const { notExternal: _verdict, spawnedBy: _spawn, ...candidate } = c;
+    const outcome = await importCandidate(candidate, host, folders, { onRequest: true });
+    if (outcome === 'imported') result.imported.push(id);
+    else result.skipped.push({ sessionId: id, reason: 'already-tracked' });
+  }
+  if (result.imported.length > 0) {
+    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: EXTERNAL_IMPORT_EVENT_SOURCE });
+    log.session.info('imported sessions on request', { host, imported: result.imported.length, skipped: result.skipped.length });
+  }
+  return result;
 }
 
 // ── Periodic runner ───────────────────────────────────────────────────────

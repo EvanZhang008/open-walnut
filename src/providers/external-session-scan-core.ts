@@ -9,14 +9,15 @@
  * sessions.
  *
  * Two engines:
- *   - claude: ~/.claude/projects/<encoded-cwd>/<sid>.jsonl. "External" means the
- *     first `user` line's `entrypoint` is a HUMAN entrypoint ('cli' = typed in a
- *     terminal, 'claude-desktop' = the desktop app). Walnut's own spawns are
- *     'sdk-cli' (it drives `claude -p --input-format stream-json`), so the
- *     entrypoint can also be inherited by child processes; it does not prove
- *     human intent. Title: the CLI's own rule, ported verbatim (a `/rename`
- *     `custom-title` line wins, then the AI-generated `ai-title` line, then the
- *     first user message that is neither a meta line nor a compaction summary).
+ *   - claude: ~/.claude/projects/<encoded-cwd>/<sid>.jsonl. "External" means
+ *     the CLI recorded that a PERSON started it (isHumanStartedClaude): the
+ *     terminal UI, the desktop app or the VS Code extension. A session a
+ *     program started (`claude -p`, an Agent SDK app, Walnut's own spawns) is
+ *     that program's work and is left out; a plugin that owns such a program
+ *     claims its runs by id instead (sessionImports.include). Title: the CLI's
+ *     own rule, ported verbatim (a `/rename` `custom-title` line wins, then the
+ *     AI-generated `ai-title` line, then the first user message that is neither
+ *     a meta line nor a compaction summary).
  *   - codex: ~/.codex/sessions/<y>/<m>/<d>/rollout-<ts>-<id>.jsonl. The first
  *     line is a `session_meta` whose `originator` names the surface:
  *     'codex-tui' / 'Codex Desktop' are human, 'open-walnut' is ours. Codex
@@ -86,25 +87,11 @@ export interface SpawnJournalEntry {
  * Walnut envelope sits in a user turn, so some Walnut drove the session.
  * 'no-reply': the whole transcript holds no real model reply (a probe, or a
  * first turn that only ever errored), so there is nothing to adopt.
- * 'batch': one worker of a scripted fan-out (see BATCH_MIN_SESSIONS).
+ * 'programmatic': a program started it, not a person (isHumanStartedClaude).
+ * Checked last, so this reason alone means "a real session a program ran": the
+ * one kind a plugin may claim and have imported anyway.
  */
-export type NotExternalReason = 'walnut-spawned' | 'fork' | 'walnut-driven' | 'no-reply' | 'batch'
-
-/**
- * A program that fans out `claude -p` (one worker per dashboard widget, per
- * ticket row) starts many sessions in one directory with the same opening
- * prompt within minutes. Each worker is part of that program's run, like a
- * subagent, not a session someone opened: imported one task each, one host's
- * runs added about 1,000 tasks a day to its folders (2026-10-06). A
- * programmatic session is a batch worker when at least BATCH_MIN_SESSIONS
- * sessions with its cwd and the first BATCH_PROMPT_CHARS of its opening prompt
- * started within BATCH_WINDOW_MS of it. Measured on that host's 60 days: the
- * fan-outs ran 26 to 340 workers in the window, the busiest non-batch pattern 7
- * (one ticket run again, a repeated "hi"), and nothing on the Mac reached 10.
- */
-export const BATCH_MIN_SESSIONS = 10
-export const BATCH_WINDOW_MS = 10 * 60 * 1000
-const BATCH_PROMPT_CHARS = 80
+export type NotExternalReason = 'walnut-spawned' | 'fork' | 'walnut-driven' | 'no-reply' | 'programmatic'
 
 export interface ScanExternalSessionsOptions {
   /** Only consider transcripts written within this window. */
@@ -131,18 +118,29 @@ export interface ScanExternalSessionsResult {
   truncated: boolean
 }
 
-/** Claude entrypoints that mean "a human started this", not Walnut's SDK spawn. */
-const HUMAN_CLAUDE_ENTRYPOINTS = new Set(['cli', 'claude-desktop'])
 /**
- * Programmatic entrypoints — OTHER SDK apps (e.g. an agent orchestrator running
- * investigations through the Agent SDK) record the same 'sdk-cli' Walnut's own
- * spawns do, so entrypoint alone cannot separate them. Walnut's own sessions
- * are excluded by knownSessionIds (they are all tracked); what remains is other
- * programs' sessions plus TEST DEBRIS from ephemeral/dev servers whose isolated
- * DBs are gone. The debris lives under temp dirs, so programmatic sessions are
- * accepted only with a real (non-temp) cwd — human sessions stay unconditional.
+ * Claude entrypoints of the surfaces a person types into: the terminal UI, the
+ * desktop app, the VS Code extension. Every other one is a program driving the
+ * CLI: 'sdk-cli' (`claude -p`, Walnut's own spawns among them), 'sdk-ts' and
+ * 'sdk-py' (the Agent SDKs), 'mcp', a CI action. The CLI writes the value on
+ * every user line (CLAUDE_CODE_ENTRYPOINT).
  */
-const PROGRAMMATIC_CLAUDE_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts'])
+const HUMAN_CLAUDE_ENTRYPOINTS = new Set(['cli', 'claude-desktop', 'claude-vscode'])
+
+/**
+ * Who started a claude session, by the CLI's own record. The entrypoint names
+ * the surface, but a child process inherits it: `claude -p` run from a shell
+ * inside an interactive session records 'cli' as well. Its prompt comes in over
+ * the SDK, though, and the CLI stamps every submitted prompt with where it came
+ * from (promptSource: 'typed', 'queued', 'sdk', ...), so 'cli' whose first
+ * prompt is 'sdk' is a program's run. The apps drive the CLI over the SDK
+ * themselves (their prompts read 'sdk' too), so for them the entrypoint alone
+ * answers. A transcript older than promptSource keeps the entrypoint's answer.
+ */
+export function isHumanStartedClaude(entrypoint: string | undefined, promptSource: string | undefined): boolean {
+  if (!entrypoint || !HUMAN_CLAUDE_ENTRYPOINTS.has(entrypoint)) return false
+  return !(entrypoint === 'cli' && promptSource === 'sdk')
+}
 /** Codex originators that mean "a human started this". */
 const HUMAN_CODEX_ORIGINATORS = new Set(['codex-tui', 'Codex Desktop', 'codex_desktop'])
 
@@ -243,16 +241,6 @@ export function walnutSpawnedIds(homeDir: string, journalFile = spawnJournalPath
     }
   }
   return out
-}
-
-/** Temp/test locations whose programmatic sessions are throwaway debris. */
-function isTempCwd(cwd: string | undefined): boolean {
-  if (!cwd) return true // no cwd recorded → can't place it → not worth a task
-  if (cwd === '/tmp' || cwd === '/private/tmp') return true
-  if (cwd.startsWith('/tmp/') || cwd.startsWith('/private/tmp/')) return true
-  if (cwd.startsWith('/var/folders/') || cwd.startsWith('/private/var/folders/')) return true
-  if (cwd.includes('walnut-test-') || cwd.includes('open-walnut-test')) return true
-  return false
 }
 
 export function isExcludedExternalCwd(cwd: string | undefined, excludedCwds: string[]): boolean {
@@ -508,6 +496,9 @@ function pickClaudeTitle(head: ClaudeHead, tail: TitleLines): string | undefined
 
 interface ClaudeHead extends TitleLines {
   entrypoint?: string
+  /** promptSource of the first user line that has one: the first submitted
+   *  prompt (a slash command's expansion lines come before it without one). */
+  promptSource?: string
   cwd?: string
   startedAt?: string
   firstUserText?: string
@@ -525,54 +516,18 @@ interface ClaudeHead extends TitleLines {
   readFailed?: boolean
 }
 
-/** Why a programmatic claude transcript is not an outside session, if it isn't.
- *  The envelope rule is programmatic-only: a person who forks a Walnut session
- *  in a terminal started real outside work, even though the history they
- *  copied carries Walnut's envelopes. */
+/** Why a claude transcript is not an outside session, if it isn't. The fork and
+ *  envelope rules apply to program-started sessions only: a person who forks a
+ *  Walnut session in a terminal started real outside work, even though the
+ *  history they copied carries Walnut's envelopes. 'programmatic' comes last,
+ *  so it is never said of a fork, a Walnut-driven run or a probe. */
 function claudeNotExternal(head: ClaudeHead): NotExternalReason | undefined {
-  const human = head.entrypoint !== undefined && HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
+  const human = isHumanStartedClaude(head.entrypoint, head.promptSource)
   if (head.forked && !human) return 'fork'
   if (head.walnutDriven && !human) return 'walnut-driven'
   if (head.readWhole && !head.replied) return 'no-reply'
+  if (!human) return 'programmatic'
   return undefined
-}
-
-/** How a programmatic session opened: the key fan-out workers share (cwd +
- *  opening prompt) and when it started. None for a human entrypoint, a temp
- *  cwd, or a session with no prompt or start to compare. */
-interface Opening { key: string; startMs: number }
-
-function openingOf(head: ClaudeHead): Opening | undefined {
-  if (!head.entrypoint || !PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) || isTempCwd(head.cwd)) return undefined
-  const prompt = (head.firstUserText ?? '').replace(/\s+/g, ' ').trim().slice(0, BATCH_PROMPT_CHARS)
-  const startMs = head.startedAt ? Date.parse(head.startedAt) : NaN
-  if (!prompt || !Number.isFinite(startMs)) return undefined
-  return { key: head.cwd + '\n' + prompt, startMs }
-}
-
-/** Openings grouped by key, each group's starts sorted. */
-function startsByKey(openings: Iterable<Opening>): Map<string, number[]> {
-  const out = new Map<string, number[]>()
-  for (const o of openings) {
-    const starts = out.get(o.key)
-    if (starts) starts.push(o.startMs)
-    else out.set(o.key, [o.startMs])
-  }
-  for (const starts of out.values()) starts.sort((a, b) => a - b)
-  return out
-}
-
-function earliestStart(items: Array<{ opening: Opening }>): number {
-  let min = Infinity
-  for (const { opening } of items) if (opening.startMs < min) min = opening.startMs
-  return min
-}
-
-/** Sessions with this opening's key that started within the window of it (itself included). */
-function batchCount(opening: Opening, byKey: Map<string, number[]>): number {
-  let n = 0
-  for (const at of byKey.get(opening.key) ?? []) if (Math.abs(at - opening.startMs) <= BATCH_WINDOW_MS) n++
-  return n
 }
 
 /**
@@ -593,10 +548,9 @@ function isRealReply(entry: Record<string, unknown>): boolean {
   return !(message && message.model === '<synthetic>')
 }
 
-/** openingOnly: stop once the opening is known (entrypoint, cwd, start, first
- *  prompt), a few KB in. Enough for openingOf, and nothing else on the head is
- *  complete then. */
-function parseClaudeHead(filePath: string, size: number, openingOnly = false): ClaudeHead {
+/** humanOnly (the scan): stop as soon as the file shows a program started it,
+ *  since nothing else on it matters then. Describe reads on, to say why. */
+function parseClaudeHead(filePath: string, size: number, humanOnly: boolean): ClaudeHead {
   const out: ClaudeHead = {
     messageCount: 0, isSidechain: false, walnutDriven: false, forked: false, replied: false,
     readWhole: size <= MAX_HEAD_BYTES,
@@ -628,22 +582,20 @@ function parseClaudeHead(filePath: string, size: number, openingOnly = false): C
     if (type === 'user' && !out.entrypoint) {
       out.entrypoint = typeof entry.entrypoint === 'string' ? entry.entrypoint : 'unknown'
       if (entry.isSidechain === true) out.isSidechain = true
-      // Stop early only when the file can never be imported: an entrypoint in
-      // neither set, or a programmatic session in a temp dir (cwd rides this
-      // same line). Accepted programmatic sessions MUST keep walking — their
-      // title is the first user message further down, and exiting here is what
-      // once left every SDK import named "Claude session <id>".
-      const human = HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)
-      const program = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(out.entrypoint)
-      if (!human && !program) return true
-      if (program && !human && isTempCwd(out.cwd)) return true
     }
-    // Settled: a programmatic fork or Walnut-driven session is never imported.
-    if ((out.walnutDriven || out.forked) && out.entrypoint && !HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)) return true
+    if (type === 'user' && out.promptSource === undefined && typeof entry.promptSource === 'string') {
+      out.promptSource = entry.promptSource
+    }
+    // Stop early only when the file can never be imported. A session a person
+    // started MUST keep walking: its title is the first user message further
+    // down, and exiting here is what once left imports named "Claude session <id>".
+    const human = out.entrypoint !== undefined && isHumanStartedClaude(out.entrypoint, out.promptSource)
+    if (humanOnly && out.entrypoint && !human) return true
+    // Settled: a program-started fork or Walnut-driven session is never imported.
+    if ((out.walnutDriven || out.forked) && out.entrypoint && !human) return true
     if (type === 'user' && !out.firstUserText && isTitleBearingUserLine(entry)) {
       out.firstUserText = titleFromMessage(entry.message)
     }
-    if (openingOnly && out.entrypoint && (out.firstUserText || !PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(out.entrypoint))) return true
     // Title lines can sit in the head too: an ai-title written early scrolls
     // out of the tail window on a long session, and the CLI's own readers fall
     // back to the head buffer for exactly that case.
@@ -699,31 +651,25 @@ function sameStamp(a: FileStamp, b: FileStamp): boolean {
  * read and all, every ten minutes. Each scan rebuilds the map from the files it
  * visits, so it never outgrows the directory.
  */
-type ClaudeVerdict = { candidate: ExternalSessionCandidate | null; opening?: Opening }
+type ClaudeVerdict = { candidate: ExternalSessionCandidate | null }
 const claudeVerdicts = new Map<string, FileStamp & ClaudeVerdict>()
 const codexHeads = new Map<string, FileStamp & { head: CodexHead }>()
 
 interface ScanTally { scanned: number; parsed: number }
 
-/** One claude transcript's verdict from its bytes: its descriptor or null
- *  (with its opening, for the fan-out rule), and whether the bytes could be
- *  read at all (a failed read is not a verdict). */
+/** One claude transcript's verdict from its bytes: its descriptor or null, and
+ *  whether the bytes could be read at all (a failed read is not a verdict). */
 function classifyClaude(
   sessionId: string,
   filePath: string,
   stat: fs.Stats,
 ): ClaudeVerdict & { readable: boolean } {
-  const head = parseClaudeHead(filePath, stat.size)
+  const head = parseClaudeHead(filePath, stat.size, true)
   const reject = { candidate: null, readable: !head.readFailed }
   // A sidechain file is a subagent transcript, not a session someone opened.
   if (!head.entrypoint || head.isSidechain) return reject
-  const isHuman = HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
-  // Programmatic (other SDK apps, e.g. an investigation orchestrator):
-  // only with a real working directory — temp-dir ones are test debris.
-  const isProgram = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) && !isTempCwd(head.cwd)
-  if (!isHuman && !isProgram) return reject
   if (claudeNotExternal(head)) return reject
-  return { candidate: claudeCandidate(sessionId, filePath, stat, head), opening: openingOf(head), readable: true }
+  return { candidate: claudeCandidate(sessionId, filePath, stat, head), readable: true }
 }
 
 async function scanClaude(
@@ -739,8 +685,6 @@ async function scanClaude(
   let dirs: string[]
   try { dirs = fs.readdirSync(root) } catch { return }
   const verdicts = new Map<string, FileStamp & ClaudeVerdict>()
-  // Programmatic candidates by project dir: the fan-out rule needs their siblings.
-  const programmatic = new Map<string, Array<{ candidate: ExternalSessionCandidate; opening: Opening }>>()
 
   for (const dirName of dirs) {
     await pause()
@@ -764,36 +708,17 @@ async function scanClaude(
 
       const stamp = stampOf(stat)
       const prev = claudeVerdicts.get(filePath)
-      let verdict: ClaudeVerdict
+      let candidate: ExternalSessionCandidate | null
       if (prev && sameStamp(prev, stamp)) {
-        verdict = prev
+        candidate = prev.candidate
         verdicts.set(filePath, prev)
       } else {
         tally.parsed++
         const fresh = classifyClaude(sessionId, filePath, stat)
-        verdict = { candidate: fresh.candidate, opening: fresh.opening }
-        if (fresh.readable) verdicts.set(filePath, { ...stamp, ...verdict })
+        candidate = fresh.candidate
+        if (fresh.readable) verdicts.set(filePath, { ...stamp, candidate })
       }
-      const candidate = verdict.candidate
-      if (!candidate || isExcludedExternalCwd(candidate.cwd, excludedCwds)) continue
-      if (!verdict.opening) { out.push({ ...candidate }); continue }
-      const inDir = programmatic.get(dir) ?? []
-      inDir.push({ candidate, opening: verdict.opening })
-      programmatic.set(dir, inDir)
-    }
-  }
-  // A programmatic session younger than the window waits a scan: workers still
-  // starting would join its batch, and one imported early stays imported. The
-  // rest are judged against every transcript in their dir, the ones the server
-  // already tracks and the ones the window no longer reaches included, exactly
-  // as describe judges them for the audit.
-  const now = Date.now()
-  for (const [dir, pending] of programmatic) {
-    const settled = pending.filter((p) => p.opening.startMs <= now - BATCH_WINDOW_MS)
-    if (settled.length === 0) continue
-    const byKey = startsByKey(await dirOpenings(dir, earliestStart(settled) - BATCH_WINDOW_MS, pause))
-    for (const { candidate, opening } of settled) {
-      if (batchCount(opening, byKey) < BATCH_MIN_SESSIONS) out.push({ ...candidate })
+      if (candidate && !isExcludedExternalCwd(candidate.cwd, excludedCwds)) out.push({ ...candidate })
     }
   }
   claudeVerdicts.clear()
@@ -827,7 +752,8 @@ interface CodexHead {
   readFailed?: boolean
 }
 
-function parseCodexHead(filePath: string, size: number): CodexHead {
+/** humanOnly (the scan): stop at session_meta when another surface started it. */
+function parseCodexHead(filePath: string, size: number, humanOnly: boolean): CodexHead {
   const out: CodexHead = { messageCount: 0 }
   const readable = walkHeadLines(filePath, size, (entry) => {
     const payload = (entry.payload ?? {}) as Record<string, unknown>
@@ -839,9 +765,9 @@ function parseCodexHead(filePath: string, size: number): CodexHead {
       const ts = payload.timestamp ?? entry.timestamp
       if (typeof ts === 'string') out.startedAt = ts
       // session_meta is line 1 and holds everything needed to reject a
-      // Walnut-owned rollout — stop before reading its ~22KB of prompt plus the
-      // AGENTS.md replay that follows.
-      if (out.originator && !HUMAN_CODEX_ORIGINATORS.has(out.originator)) return true
+      // program's rollout (Walnut's own included): stop before reading its ~22KB
+      // of prompt plus the AGENTS.md replay that follows.
+      if (humanOnly && out.originator && !HUMAN_CODEX_ORIGINATORS.has(out.originator)) return true
       return false
     }
     if (entry.type === 'event_msg') {
@@ -931,7 +857,7 @@ async function scanCodex(
       heads.set(file.filePath, remembered)
     } else {
       tally.parsed++
-      head = parseCodexHead(file.filePath, file.size)
+      head = parseCodexHead(file.filePath, file.size, true)
       if (!head.readFailed) heads.set(file.filePath, { ...stampOf(file), head })
     }
     if (!head.sessionId || !head.originator) continue
@@ -1027,10 +953,11 @@ async function locateTranscripts(
  * the server asks for exactly those ids and retitles from the answer. With
  * activityOnly it answers each id's current transcript mtime instead: an
  * imported session someone keeps using in a terminal is never re-scanned (it
- * is known), so this is the only way the server learns it is still alive. No
- * entrypoint/originator classification: the ids are ones Walnut already owns.
- * An id with no transcript is simply absent from the answer. A transcript
- * the scan would have skipped says why in notExternal.
+ * is known), so this is the only way the server learns it is still alive.
+ * Nothing is filtered out: the ids are ones the server asked about (its
+ * imports, or sessions a plugin claimed). An id with no transcript is simply
+ * absent from the answer. A transcript the scan would have skipped says why in
+ * notExternal.
  */
 export async function describeExternalSessions(
   options: DescribeExternalSessionsOptions,
@@ -1042,9 +969,6 @@ export async function describeExternalSessions(
   if (ids.length === 0) return { candidates, activity }
   const spawned = walnutSpawnedIds(homeDir, options.spawnJournal)
   const pause = createPause()
-  // Still-undecided programmatic sessions, by directory: a batch is judged
-  // against the siblings in its project dir once all of them are read.
-  const undecided = new Map<string, Array<{ candidate: ExternalSessionCandidate; opening: Opening }>>()
   for (const [sessionId, hit] of await locateTranscripts(homeDir, ids, pause)) {
     await pause()
     if (options.activityOnly) {
@@ -1052,7 +976,7 @@ export async function describeExternalSessions(
       continue
     }
     if (hit.engine === 'claude') {
-      const head = parseClaudeHead(hit.file.filePath, hit.file.size)
+      const head = parseClaudeHead(hit.file.filePath, hit.file.size, false)
       if (head.isSidechain) continue
       let stat: fs.Stats
       try { stat = fs.statSync(hit.file.filePath) } catch { continue }
@@ -1060,62 +984,16 @@ export async function describeExternalSessions(
       candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : (claudeNotExternal(head) ?? null)
       if (spawned.has(sessionId)) candidate.spawnedBy = spawned.get(sessionId)
       candidates.push(candidate)
-      const opening = candidate.notExternal ? undefined : openingOf(head)
-      if (opening) {
-        const dir = path.dirname(hit.file.filePath)
-        const inDir = undecided.get(dir) ?? []
-        inDir.push({ candidate, opening })
-        undecided.set(dir, inDir)
-      }
     } else {
-      const candidate = codexCandidate(sessionId, hit.file, parseCodexHead(hit.file.filePath, hit.file.size))
-      candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : null
+      const head = parseCodexHead(hit.file.filePath, hit.file.size, false)
+      const candidate = codexCandidate(sessionId, hit.file, head)
+      candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned'
+        : head.originator && HUMAN_CODEX_ORIGINATORS.has(head.originator) ? null : 'programmatic'
       if (spawned.has(sessionId)) candidate.spawnedBy = spawned.get(sessionId)
       candidates.push(candidate)
     }
   }
-  for (const [dir, pending] of undecided) {
-    const byKey = startsByKey(await dirOpenings(dir, earliestStart(pending) - BATCH_WINDOW_MS, pause))
-    for (const { candidate, opening } of pending) {
-      if (batchCount(opening, byKey) >= BATCH_MIN_SESSIONS) candidate.notExternal = 'batch'
-    }
-  }
   return { candidates, activity }
-}
-
-/** Openings of the transcripts in one project dir, remembered per file until
- *  it changes: an audit asks about one batch's workers over many runs. */
-const dirOpeningCache = new Map<string, FileStamp & { opening?: Opening }>()
-const DIR_OPENING_CACHE_MAX = 50000
-
-/** The openings in `dir` of every transcript written since `sinceMs` (a file
- *  is last written after its session starts, so an older one cannot have
- *  started inside the window). Each read stops a few KB in. */
-async function dirOpenings(dir: string, sinceMs: number, pause: () => Promise<void>): Promise<Opening[]> {
-  let names: string[] = []
-  try { names = fs.readdirSync(dir) } catch { return [] }
-  if (dirOpeningCache.size > DIR_OPENING_CACHE_MAX) dirOpeningCache.clear()
-  const out: Opening[] = []
-  for (const name of names) {
-    if (!name.endsWith('.jsonl')) continue
-    await pause()
-    const filePath = path.join(dir, name)
-    let stat: fs.Stats
-    try { stat = fs.statSync(filePath) } catch { continue }
-    if (!stat.isFile() || stat.size === 0 || stat.mtimeMs < sinceMs) continue
-    const stamp = stampOf(stat)
-    const prev = dirOpeningCache.get(filePath)
-    let opening: Opening | undefined
-    if (prev && sameStamp(prev, stamp)) {
-      opening = prev.opening
-    } else {
-      const head = parseClaudeHead(filePath, stat.size, true)
-      opening = head.isSidechain ? undefined : openingOf(head)
-      if (!head.readFailed) dirOpeningCache.set(filePath, { ...stamp, opening })
-    }
-    if (opening) out.push(opening)
-  }
-  return out
 }
 
 /**

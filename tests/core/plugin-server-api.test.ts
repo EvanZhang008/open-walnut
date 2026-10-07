@@ -435,6 +435,28 @@ describe('createServerPluginApi', () => {
     expect(runs).toHaveBeenCalledOnce()
   })
 
+  it('lets a plugin claim its program\'s runs for the importer until it stops', async () => {
+    const { isClaimedImport, _resetImportClaimsForTesting } = await import('../../src/core/sessions/external-session-import.js')
+    _resetImportClaimsForTesting()
+    const { api, context } = setup()
+    expect(api.sessionImports.include('devbox', ['run-1', 'run-2', 'no good'])).toBe(2)
+    expect(isClaimedImport('devbox', 'run-1')).toBe(true)
+    expect(isClaimedImport('__local__', 'run-1')).toBe(false)
+    // A later call replaces the list for that host.
+    api.sessionImports.include('devbox', ['run-2'])
+    expect(isClaimedImport('devbox', 'run-1')).toBe(false)
+    expect(isClaimedImport('devbox', 'run-2')).toBe(true)
+    expect(() => api.sessionImports.include('', ['run-3'])).toThrow(/Host/)
+    // A second generation of the same plugin keeps its own claims when the first stops.
+    const next = setup()
+    next.api.sessionImports.include('devbox', ['run-9'])
+    await context.dispose()
+    expect(isClaimedImport('devbox', 'run-2')).toBe(false)
+    expect(isClaimedImport('devbox', 'run-9')).toBe(true)
+    await next.context.dispose()
+    expect(isClaimedImport('devbox', 'run-9')).toBe(false)
+  })
+
   it('registers typed multi-point hooks with filters and timeouts', async () => {
     const dispatcher = new HookDispatcher()
     dispatchers.push(dispatcher)

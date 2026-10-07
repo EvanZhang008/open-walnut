@@ -1,20 +1,22 @@
 ---
 name: walnut-import-external-sessions
 description: >-
-  Import coding-agent sessions started outside Walnut (terminal `claude`,
-  Claude Desktop, codex TUI, other SDK apps) into Walnut as tasks. Use when the
-  user says "import my sessions", "find sessions opened outside Walnut", asks
-  why a session id isn't in Walnut, asks what the "Imported" pill means or why
-  an imported task completed itself, or wants the external-session scan run
-  NOW instead of waiting for the background tick.
+  Import coding-agent sessions a person started outside Walnut (terminal
+  `claude`, Claude Desktop, the VS Code extension, codex TUI) into Walnut as
+  tasks. Use when the user says "import my sessions", "find sessions opened
+  outside Walnut", asks why a session id isn't in Walnut (a script's
+  `claude -p` runs are left out on purpose), asks what the "Imported" pill means
+  or why an imported task completed itself, or wants the external-session scan
+  run NOW instead of waiting for the background tick.
 ---
 
 # Import External Sessions
 
-Walnut automatically imports sessions that were started outside it (someone ran
-`claude` in a terminal, used Claude Desktop or the codex TUI, or another SDK
-app spawned sessions). A background job runs every 10 minutes; this skill is
-the on-demand path.
+Walnut automatically imports sessions a person started outside it (someone ran
+`claude` in a terminal, used Claude Desktop, the VS Code extension or the codex
+TUI). A session a program started (a script's `claude -p`, an Agent SDK app) is
+that program's work and is left out, unless a plugin claims it. A background
+job runs every 10 minutes; this skill is the on-demand path.
 
 Each imported session becomes **its own task**, titled with the session's own
 name, grouped under a per-host project: **"Imported from this Mac"** /
@@ -40,7 +42,7 @@ into their cwd folder (at most 300 per tick), placeholder titles are re-read by
 id (`sessions.describeExternal`, so a transcript older than the scan window is
 still fixed) until a real title exists, imports an older scanner took in by
 mistake (Walnut's own sessions per the spawn journal, forks, reply-less probes,
-fan-out workers) are removed together with their session row (each import is
+runs a program started) are removed together with their session row (each import is
 re-read once per server start, and again once its host's daemon learns a newer
 rule, at most 100 per tick, open tasks first), and idle imports are swept.
 
@@ -70,23 +72,55 @@ If it's missing after an import run, the usual reasons:
 1. **Host not scanned**: check `hostsSkipped` in the response. The host's
    daemon must be connected and advertise `external-scan-v1`.
 2. **Older than the window**: re-run with a bigger `days`.
-3. **Directory filter**: SDK sessions under temp directories are never imported;
-   `external_session_import.excluded_cwds` (per host) applies to every entry
-   point. A host with exclusions configured needs `external-scan-filter-v1`; an
-   older daemon is skipped rather than allowed to ignore the rules.
+3. **A program started it**: see "Who started it" below. Bring it in by id
+   (next section), or have the program's plugin claim its runs.
+4. **Directory filter**: `external_session_import.excluded_cwds` (per host)
+   applies to every entry point. A host with exclusions configured needs
+   `external-scan-filter-v1`; an older daemon is skipped rather than allowed to
+   ignore the rules.
+
+## Import specific sessions by id
+
+```bash
+curl -s -X POST http://localhost:3456/api/sessions/import-external \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"__local__","sessionIds":["<session-id>"]}'
+```
+
+Imports exactly those sessions (`host` is a host alias, default this machine),
+whoever started them and however old they are, into the same "Imported from …"
+project and cwd folder. Someone asked for them, so they are not the imported
+type: no pill, no idle sweep. The answer lists `imported` ids and `skipped` ones
+with a reason (`already-tracked`, `not-found`, or `walnut-spawned` / `fork` /
+`walnut-driven` for Walnut's own sessions and copies of them). At most 300 ids.
 
 ## What gets imported
 
 | Source | Imported? |
 |---|---|
-| Terminal `claude` / Claude Desktop | Yes, unless a directory rule excludes it |
+| Terminal `claude` / Claude Desktop / VS Code extension | Yes, unless a directory rule excludes it |
 | codex TUI / Codex Desktop | Yes, unless a directory rule excludes it |
-| Other SDK apps | Yes, when the cwd is a real directory and no rule excludes it. A programmatic session is offered once it is 10 minutes old, so a fan-out that is still starting workers is judged whole |
-| Fan-out workers | Never: 10 or more programmatic sessions in one cwd whose opening prompts share their first 80 characters, started within 10 minutes of each other, are one program's run (one `claude -p` per widget, per row), like subagents. Needs `external-batch-v1` on the host's daemon |
+| A program's runs (`claude -p`, Agent SDK apps, `codex exec`) | Only when a plugin claims them by id (`sessionImports.include`, how a plugin that owns such a program puts its runs on the board). Otherwise never: see "Who started it". Needs `external-human-v1` on the host's daemon; an older one still imports them |
 | Walnut's own sessions | Never. It is answered by id, not by guessing. The daemon on each host keeps a **spawn journal**, `~/.open-walnut/local/spawn-journal.jsonl`: one append-only JSON line per session it ever started, under the CLI's own session id, saying how (`new`, `fork` with its `parent`, `resume`) and for whom (the asking Walnut's data dir as `home`, and the `task`). So a session started by ANY Walnut instance on that host (prod, a dev server, an ephemeral test server whose own database is gone) is skipped even when this server holds no record of it, and a removal names who started it. The file stays on its host (git-sync ignores `local/`); at startup the daemon folds older records into it (the per-id marker files it replaced, and its streams captures). Text rules back it up for transcripts older than any record: a programmatic fork (its first message predates earlier lines, copied history), or a Walnut envelope in a user turn (the side-thread cache warm-up, the output-mode reminder) |
 | Sessions with no real reply | Never, when the whole transcript was read: a probe or a first turn that only errored has nothing to adopt |
 | Subagent sidechains | Never |
-| SDK runs under temp directories | Never; a `cli` run in a temp dir needs an explicit rule |
+
+## Who started it
+
+The CLI records who started every session, and the scan reads that record
+rather than guessing from timing or prompts. Every user line carries the
+`entrypoint`: `cli` (the terminal UI), `claude-desktop`, `claude-vscode` are
+surfaces a person types into; `sdk-cli` (`claude -p`), `sdk-ts` / `sdk-py` (the
+Agent SDKs), `mcp` and the CI action are programs. A child process inherits the
+entrypoint, so `claude -p` run from a shell inside an interactive session
+records `cli` too; the CLI also stamps each submitted prompt with its source
+(`promptSource`: `typed`, `queued`, `sdk`, ...), and `cli` whose first prompt is
+`sdk` is a program's run. The desktop app and the IDE extension drive the CLI
+over the SDK themselves, so their prompts read `sdk` as well and their
+entrypoint alone decides. For codex, the rollout's `originator` names the
+surface the same way. A transcript the scan skips for this reason is answered
+`programmatic` by describe, and the audit removes such imports from the
+"Imported from …" projects unless a plugin claims them.
 
 ## Configuration
 
@@ -110,7 +144,6 @@ section before writing so other hosts' rules survive.
   Claude probes should run with `--print --no-session-persistence` so they never
   produce a transcript to import.
 
-The `cli` entry point can be inherited by child processes, so it does not prove
-a human started the session. Do not delete or merge records on that basis. A
+Do not delete or merge records by hand on the strength of an entrypoint. A
 retitle keeps the task id, filing, phase, notes, session links and timestamps;
 the scan never modifies a transcript.
