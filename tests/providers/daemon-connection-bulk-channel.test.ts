@@ -12,6 +12,8 @@
  *     (daemon picks its FIRST client; after a main reconnect that can be bulk)
  *   - B5: a bulk-routed command timeout terminates the bulk socket (self-heal)
  *   - B6: hello instanceId mismatch → bulk channel refused, no routing
+ *   - B7/B8: a command pending on a socket that dies fails at once (outcome
+ *     unknown), not after its timeout; only that socket's commands
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -20,6 +22,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { isDaemonCommandOutcomeUnknown } from '../../src/providers/delivery-failure.js'
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
 
@@ -129,6 +132,43 @@ describe('DaemonConnection bulk channel', () => {
     const read = await conn.send('fs.read', { path: tmpFile })
     expect(read.ok).toBe(true)
     expect(daemon.getCommandHistoryFor('fs.read')[0].connIndex).toBe(0)
+  })
+
+  // B7 — a command waiting on a socket that dies fails at once, not after its
+  // timeout: the daemon answers on that socket only. 2026-10-07: a tunnel that
+  // died right after a deploy held a host copy round 60s and an attach 30s.
+  it('B7: a bulk command pending when the bulk socket dies fails at once; the main socket is untouched', async () => {
+    daemon.swallowNextCommand('fs.read')
+    daemon.swallowNextCommand('fs.ls')
+    const read = conn.send('fs.read', { path: tmpFile }, 30_000)
+    const ls = conn.send('fs.ls', { path: os.tmpdir() }, 1_000)
+    await waitFor(() => daemon.getCommandHistoryFor('fs.read').length > 0 && daemon.getCommandHistoryFor('fs.ls').length > 0, 5_000, 'both commands to reach the daemon')
+    const startedAt = Date.now()
+    expect(daemon.killClient(1)).toBe(true)
+    const err = await read.then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/^daemon command lost: fs\.read: connection closed before bulk-test-host answered \[traceId=[0-9a-f]+\]$/)
+    expect(isDaemonCommandOutcomeUnknown(err)).toBe(true)
+    expect(Date.now() - startedAt).toBeLessThan(5_000)
+    // The main-socket command is not the bulk socket's: it runs to its own timeout.
+    await expect(ls).rejects.toThrow(/daemon command timeout: fs\.ls/)
+    expect(conn.connected).toBe(true)
+  })
+
+  it('B8: commands pending when the main socket dies fail at once, on both sockets, and the connection comes back', async () => {
+    daemon.swallowNextCommand('fs.ls')
+    daemon.swallowNextCommand('fs.read')
+    const ls = conn.send('fs.ls', { path: os.tmpdir() }, 30_000)
+    const read = conn.send('fs.read', { path: tmpFile }, 30_000)
+    await waitFor(() => daemon.getCommandHistoryFor('fs.ls').length > 0 && daemon.getCommandHistoryFor('fs.read').length > 0, 5_000, 'both commands to reach the daemon')
+    const startedAt = Date.now()
+    expect(daemon.killClient(0)).toBe(true)
+    const errors = await Promise.all([ls, read].map((p) => p.then(() => null, (e: Error) => e)))
+    expect(errors.map((e) => e?.message.replace(/ \[traceId=\w+\]$/, ''))).toEqual([
+      'daemon command lost: fs.ls: connection closed before bulk-test-host answered',
+      'daemon command lost: fs.read: connection closed before bulk-test-host answered',
+    ])
+    expect(Date.now() - startedAt).toBeLessThan(5_000)
+    expect((conn as unknown as { pendingCommands: Map<number, unknown> }).pendingCommands.size).toBe(0)
   })
 
   // B6 — daemon-identity mismatch on the bulk hello → channel refused

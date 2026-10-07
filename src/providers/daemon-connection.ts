@@ -139,6 +139,9 @@ interface PendingCommand {
   cmd?: string
   startedAt?: number
   traceId?: string
+  /** The socket the command was written to: the daemon answers on that socket
+   *  only, so when it goes the command is failed at once (failPendingOn). */
+  socket?: WebSocket
 }
 
 // ── Mobile-relay enqueue ledger (post-delivery idempotency) ──
@@ -1416,8 +1419,9 @@ export class DaemonConnection {
         reject(new Error(`daemon command timeout: ${cmd} (${timeoutMs}ms) [traceId=${traceId}]`))
       }, timeoutMs)
 
-      this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId })
-      ;(bulkSocket ?? this.ws!).send(message)
+      const socket = bulkSocket ?? this.ws!
+      this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId, socket })
+      socket.send(message)
     })
   }
 
@@ -2625,7 +2629,7 @@ export class DaemonConnection {
         this.pendingCommands.delete(id)
         reject(new Error(`daemon command timeout: ${cmd} (${DaemonConnection.COMMAND_TIMEOUT_MS}ms)`))
       }, DaemonConnection.COMMAND_TIMEOUT_MS)
-      this.pendingCommands.set(id, { resolve, reject, timer })
+      this.pendingCommands.set(id, { resolve, reject, timer, cmd, socket: this.ws! })
       this.ws!.send(message)
     })
   }
@@ -3616,6 +3620,8 @@ export class DaemonConnection {
             pending.reject(new Error('Cloud companion tunnel failed: the companion closed the tunnel'))
           }
           this.pendingCommands.clear()
+        } else {
+          this.failPendingOn(ws)
         }
       })
 
@@ -3871,7 +3877,7 @@ export class DaemonConnection {
           this.pendingCommands.delete(id)
           reject(new Error('bulk hello timeout'))
         }, 10_000)
-        this.pendingCommands.set(id, { resolve, reject, timer })
+        this.pendingCommands.set(id, { resolve, reject, timer, cmd: 'hello', socket: ws })
         ws.send(JSON.stringify({ id, cmd: 'hello' }))
       })
       hello.then((res) => {
@@ -3909,6 +3915,7 @@ export class DaemonConnection {
     ws.on('error', () => { /* close always follows — handled there */ })
 
     ws.on('close', () => {
+      this.failPendingOn(ws)
       if (seq !== this.bulkDialSeq) return // superseded or deliberately torn down
       if (this.bulkWs === ws) this.bulkWs = null
       if (established) {
@@ -3936,6 +3943,7 @@ export class DaemonConnection {
   private closeTransport(): void {
     this.closeBulkChannel()
     if (this.ws) {
+      this.failPendingOn(this.ws)
       try { this.ws.close() } catch {}
       this.ws = null
     }
@@ -3954,8 +3962,27 @@ export class DaemonConnection {
       this.bulkRedialTimer = null
     }
     if (this.bulkWs) {
+      this.failPendingOn(this.bulkWs)
       try { this.bulkWs.terminate() } catch {}
       this.bulkWs = null
+    }
+  }
+
+  /**
+   * Fail every command still waiting on `socket`, now. The daemon answers a
+   * command on the socket it came in on, so once that socket is gone no answer
+   * can come, and waiting out the command's timeout only held its caller (a
+   * host copy round 60s, a session attach 30s) after the reconnect was already
+   * up. The daemon may have run the command: the error says the outcome is
+   * unknown (delivery-failure.ts), as a timeout does.
+   */
+  private failPendingOn(socket: WebSocket): void {
+    for (const [id, pending] of this.pendingCommands) {
+      if (pending.socket !== socket) continue
+      clearTimeout(pending.timer)
+      this.pendingCommands.delete(id)
+      const trace = pending.traceId ? ` [traceId=${pending.traceId}]` : ''
+      pending.reject(new Error(`daemon command lost: ${pending.cmd ?? 'command'}: connection closed before ${this.hostKey} answered${trace}`))
     }
   }
 
@@ -3981,6 +4008,7 @@ export class DaemonConnection {
     // reconnect path re-dials it via setConnected(true).
     this.closeBulkChannel()
     if (this.ws) {
+      this.failPendingOn(this.ws)
       try { this.ws.close() } catch {}
       this.ws = null
     }

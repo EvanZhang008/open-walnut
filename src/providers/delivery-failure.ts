@@ -71,13 +71,15 @@ export function isPermanentDeliveryFailure(err: unknown): boolean {
  * ran for 1.6h behind a 'stopped' record no recovery loop would look at.)
  *
  * Matches the connection-class shapes the daemon layer produces:
- * "daemon command timeout: <cmd> (<ms>ms)" and
- * "DaemonConnection not connected to <host>" (both from send()), plus
+ * "daemon command timeout: <cmd> (<ms>ms)",
+ * "daemon command lost: <cmd>: connection closed before <host> answered" (its
+ * socket went with it pending) and
+ * "DaemonConnection not connected to <host>" (all from send()), plus
  * "Connection to <host> failed <N>s ago: …" (getDaemonConnection's failure
  * cache — the shape a RETRY surfaces after an earlier send already timed out,
  * so the earlier command may still land).
  */
-const CONN_OUTCOME_UNKNOWN = /daemon command timeout|not connected|connection to .+ failed \d+s ago/i;
+const CONN_OUTCOME_UNKNOWN = /daemon command timeout|daemon command lost|not connected|connection to .+ failed \d+s ago/i;
 
 export function isDaemonCommandOutcomeUnknown(err: unknown): boolean {
   if (err instanceof SendOutcomeUnknownError) return true;

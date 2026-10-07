@@ -10,7 +10,7 @@
  *   - too wide → a plain ssh outage strands a message the user must retry by hand
  */
 import { describe, it, expect } from 'vitest';
-import { classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown } from '../../src/providers/delivery-failure.js';
+import { classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded } from '../../src/providers/delivery-failure.js';
 import { CwdMissingError } from '../../src/providers/cwd-check.js';
 import { SessionStopSupersededError } from '../../src/core/sessions/session-stop.js';
 
@@ -82,13 +82,18 @@ describe('classifyDeliveryFailure — transient (keeps the current retry behavio
 // ═══════════════════════════════════════════════════════════════════
 
 describe('isDaemonCommandOutcomeUnknown', () => {
-  it('matches the two shapes DaemonConnection.send() produces', () => {
+  it('matches the three shapes DaemonConnection.send() produces', () => {
     expect(isDaemonCommandOutcomeUnknown(
       new Error('daemon command timeout: start (30000ms) [traceId=2956aa25]'),
     )).toBe(true);
     expect(isDaemonCommandOutcomeUnknown(
       new Error('DaemonConnection not connected to __local__'),
     )).toBe(true);
+    // The socket went with the command pending: the daemon may have run it.
+    const lost = new Error('daemon command lost: start: connection closed before devbox answered [traceId=2956aa25]');
+    expect(isDaemonCommandOutcomeUnknown(lost)).toBe(true);
+    expect(sendMayHaveLanded(lost)).toBe(true);
+    expect(classifyDeliveryFailure(lost).kind).toBe('transient');
   });
 
   it('matches the failure-cache shape a RETRY surfaces after an earlier timeout', () => {
