@@ -316,6 +316,29 @@ describe('a worker caller', () => {
     }
   })
 
+  it('work that lands in the caller\'s subfolder later never pushes the family a level deeper', async () => {
+    // 2026-10-06: each newcomer (a fork of a subtask, an old task with no
+    // parent) moved a leader and all its subtasks into a new subfolder on its
+    // next create, until the folder sat five levels deep.
+    const shared = await createFolder('Pipeline', 'marina')
+    const { task: caller, sid } = await seedCaller('marina', { folder: shared.group_id })
+    const { task: neighbour } = await addTask({ title: 'Unrelated work', project: 'marina' })
+    await addToGroup(shared.group_id, [neighbour.id])
+    const first = await post({ title: 'Part 1' }, sid)
+    const home = first.json.placement.group_id as string
+    for (let round = 2; round <= 4; round++) {
+      const { task: newcomer } = await addTask({ title: `Fork of part ${round - 1}`, project: 'marina' })
+      await addToGroup(home, [newcomer.id])
+      const next = await post({ title: `Part ${round}` }, sid)
+      expect(next.status).toBe(201)
+      expect(next.json.placement).toMatchObject({ group_id: home, folder_created: false, parent_task_id: caller.id })
+    }
+    const groups = await listGroups()
+    expect(groups.filter((g) => g.parent_id === home)).toEqual([])
+    expect(groups.find((g) => g.group_id === home)?.parent_id).toBe(shared.group_id)
+    expect((await getTask(caller.id)).group_id).toBe(home)
+  })
+
   it('a caller task deleted mid-create: the work is still filed, just not as its subtask', async () => {
     const { sid } = await seedCaller('marina')
     const vanish = (extra: Record<string, string>) => (c: Placement) =>

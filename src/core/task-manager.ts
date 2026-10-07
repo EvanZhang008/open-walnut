@@ -5394,8 +5394,11 @@ export async function placeInFolderBeside(
     let created = false;
     let parentId: string | undefined;
     let resolvedLabel: string;
-    if (groupId && opts.nest && folderRecord(store, groupId)
-        && !folderHoldsOnlyLineOf(store, groupId, source.id, born.id)
+    // The folder made for the source's family stays its home whatever lands in
+    // it later; one that holds only the family becomes its home now.
+    const familyHome = Boolean(groupId && opts.nest && folderRecord(store, groupId)
+      && (source.family_group_id === groupId || folderHoldsOnlyLineOf(store, groupId, source.id, born.id)))
+    if (groupId && opts.nest && folderRecord(store, groupId) && !familyHome
         && folderDepth(store, groupId) < FOLDER_MAX_DEPTH) {
       parentId = groupId;
       groupId = `g_${generateId()}`;
@@ -5411,17 +5414,20 @@ export async function placeInFolderBeside(
       for (const t of store.tasks) {
         if (t.group_id === parentId && (t.id === source.id || inLine(t))) t.group_id = groupId;
       }
+      source.family_group_id = groupId;
     } else if (groupId) {
       resolvedLabel = folderRecord(store, groupId)?.label ?? source.title;
       if (!folderRecord(store, groupId)) {
         store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
       }
+      if (familyHome) source.family_group_id = groupId;
     } else {
       groupId = `g_${generateId()}`;
       created = true;
       resolvedLabel = label.trim() || source.title;
       store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
       source.group_id = groupId;
+      if (opts.nest) source.family_group_id = groupId;
     }
     born.group_id = groupId;
     await writeStore(store);

@@ -19,8 +19,12 @@
  *     its own subtasks; when it holds other work too, a SUBFOLDER of it named
  *     after the caller, holding the caller and the new task (the caller moves
  *     in); when the caller has no folder, a new folder holding both (the same
- *     shape a fork produces). A folder never follows work into another
- *     project, because a folder is that project's private structure.
+ *     shape a fork produces). A folder made for the caller this way (or found
+ *     holding only its family) stays the family's home (`family_group_id`):
+ *     later subtasks join it even after other work lands there, instead of
+ *     moving the family one level deeper per newcomer. A folder never follows
+ *     work into another project, because a folder is that project's private
+ *     structure.
  *   - parent: whatever a session files is a SUBTASK of that session's task
  *     (`parent_task_id`), the same relation a promoted side question gets:
  *     in the caller's project, in another one, and from a Personal AI

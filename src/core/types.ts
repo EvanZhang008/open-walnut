@@ -680,6 +680,13 @@ export interface Task {
    *  column). The folder record (label, project, parent) lives in
    *  TaskStore.task_groups. */
   group_id?: string;
+  /** The folder caller placement made for this task and its subtasks (or found
+   *  holding only them). While the task sits in it, the subtasks it files join
+   *  it whatever else landed there since: a fork of a subtask, a task the user
+   *  dropped in. Without it each newcomer pushed the whole family into a new
+   *  subfolder, one level deeper per newcomer (2026-10-06: five levels). Rides
+   *  the payload blob like group_id; local-only. */
+  family_group_id?: string;
   depends_on?: string[];       // Full IDs of tasks that must complete before this one
   description: string;
   /** DERIVED short text — auto-extracted from the note's "## Executive Summary"
