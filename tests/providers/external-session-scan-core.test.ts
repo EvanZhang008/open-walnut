@@ -824,3 +824,136 @@ describe('scanExternalSessions — remembered verdicts and a responsive event lo
     expect(scanned).toBe(400)
   })
 })
+
+/**
+ * A program that fans out `claude -p` starts many sessions in one cwd with one
+ * opening prompt within minutes (one per dashboard widget, one per ticket row).
+ * Imported one task each, one host's runs added about 1,000 tasks a day to its
+ * folders (2026-10-06). Those workers are part of the program's run, like
+ * subagents; a session someone or something started on its own is not.
+ */
+describe('scanExternalSessions — fan-out workers', () => {
+  const T0 = Date.parse('2026-09-20T10:00:00.000Z')
+  const MIN = 60_000
+  const CWD = '/Users/dev/ops/skills/dashboard-review'
+  // Longer than the 80 characters the rule compares, so the widget name differs past them.
+  const WIDGET = 'You review ONE CloudWatch dashboard widget for anomalies an on-call engineer must look at. Widget: '
+
+  function worker(sid: string, o: {
+    cwd?: string; prompt?: string; startMs?: number; entrypoint?: string; replied?: boolean; mtimeMs?: number; padBytes?: number
+  } = {}): string {
+    const cwd = o.cwd ?? CWD
+    const prompt = o.prompt ?? WIDGET + sid
+    const at = new Date(o.startMs ?? T0).toISOString()
+    const filePath = path.join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), sid + '.jsonl')
+    const lines: unknown[] = [
+      { type: 'queue-operation', operation: 'enqueue', timestamp: at, sessionId: sid, content: prompt },
+      { type: 'user', message: { role: 'user', content: prompt }, timestamp: at, cwd, sessionId: sid, entrypoint: o.entrypoint ?? 'sdk-cli' },
+    ]
+    if (o.padBytes) lines.push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'x'.repeat(o.padBytes) }] }, timestamp: at, cwd, sessionId: sid })
+    lines.push(o.replied === false
+      ? { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'API Error: 500' }] }, isApiErrorMessage: true, timestamp: at }
+      : { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'no anomaly' }] }, timestamp: at })
+    writeJsonl(filePath, lines)
+    if (o.mtimeMs !== undefined) fs.utimesSync(filePath, new Date(o.mtimeMs), new Date(o.mtimeMs))
+    return filePath
+  }
+
+  /** n workers of one run, started 30 s apart. */
+  function fanOut(prefix: string, n: number, o: Parameters<typeof worker>[1] & { everyMs?: number } = {}): string[] {
+    const ids: string[] = []
+    for (let i = 0; i < n; i++) {
+      const sid = prefix + '-' + i
+      worker(sid, { ...o, startMs: (o.startMs ?? T0) + i * (o.everyMs ?? 30_000) })
+      ids.push(sid)
+    }
+    return ids
+  }
+
+  const ids = async (over: Partial<Parameters<typeof scanExternalSessions>[0]> = {}) =>
+    (await scan(over)).candidates.map((c) => c.sessionId).sort()
+
+  it('skips every worker of a run, keeps a person\'s session in the same folder, and remembers the verdict', async () => {
+    fanOut('w', 12)
+    worker('person-1', { entrypoint: 'cli', prompt: 'why did the widget review flag nothing today?' })
+    expect(await ids()).toEqual(['person-1'])
+    const again = await scan()
+    expect(again).toMatchObject({ scanned: 13, parsed: 0 })
+    expect(again.candidates.map((c) => c.sessionId)).toEqual(['person-1'])
+  })
+
+  it('keeps sessions below the count, spread over time, split across folders, or opening differently', async () => {
+    fanOut('few', 9, { cwd: '/Users/dev/a' })
+    fanOut('slow', 12, { cwd: '/Users/dev/b', everyMs: 15 * MIN })
+    fanOut('left', 6, { cwd: '/Users/dev/c', prompt: WIDGET })
+    fanOut('right', 6, { cwd: '/Users/dev/d', prompt: WIDGET })
+    // One run per ticket: the ticket id sits inside the compared prefix.
+    for (let i = 0; i < 12; i++) worker('vt-' + i, { cwd: '/Users/dev/vt', prompt: 'Investigate this ticket. Ticket: V' + (2387331 + i) + ' Sev 2', startMs: T0 + i * 10_000 })
+    expect(await ids()).toHaveLength(9 + 12 + 6 + 6 + 12)
+  })
+
+  it('never calls sessions from a human entrypoint a batch', async () => {
+    fanOut('hi', 12, { entrypoint: 'cli', prompt: 'hi' })
+    expect(await ids()).toHaveLength(12)
+  })
+
+  it('counts the workers the server already tracks, so scan and audit judge a run alike', async () => {
+    // An older scanner imported three workers of a 12-worker run; nine are new.
+    const run = fanOut('mixed', 12)
+    expect(await ids({ knownSessionIds: run.slice(0, 3) })).toEqual([])
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: run.slice(0, 3), homeDir: home }))
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(byId).toEqual(Object.fromEntries(run.slice(0, 3).map((sid) => [sid, 'batch'])))
+  })
+
+  it('counts a worker rejected for another reason toward its run', async () => {
+    fanOut('ok', 8)
+    fanOut('err', 3, { replied: false, startMs: T0 + 5 * MIN })
+    expect(await ids()).toEqual([])
+  })
+
+  it('offers a programmatic session only once it is 10 minutes old, so a run still starting is judged whole', async () => {
+    const now = Date.now()
+    worker('young', { prompt: 'summarize the deploy', startMs: now - 2 * MIN })
+    worker('old-enough', { prompt: 'summarize the build', startMs: now - 11 * MIN })
+    worker('typed', { entrypoint: 'cli', prompt: 'summarize the deploy', startMs: now })
+    expect(await ids()).toEqual(['old-enough', 'typed'])
+  })
+
+  it('still knows the workers once the oldest of their run leave the scan window', async () => {
+    const now = Date.now()
+    const run = fanOut('edge', 12)
+    // The first five were last written just before the one-day window.
+    for (const sid of run.slice(0, 5)) {
+      const file = path.join(home, '.claude', 'projects', CWD.replace(/[^a-zA-Z0-9]/g, '-'), sid + '.jsonl')
+      fs.utimesSync(file, new Date(now - 25 * 60 * MIN), new Date(now - 25 * 60 * MIN))
+    }
+    const res = await scan({ sinceMs: 24 * 60 * MIN })
+    expect(res).toMatchObject({ candidates: [], scanned: 7 })
+  })
+
+  it('describe names the workers of a run already imported, read from their siblings, and nothing else', async () => {
+    const run = fanOut('done', 11)
+    // A sibling whose opening sits before megabytes of tool output still counts.
+    worker('done-big', { startMs: T0 + 3 * MIN, padBytes: 3 * 1024 * 1024 })
+    worker('solo', { prompt: 'Investigate this ticket. Ticket: V2387331', cwd: '/Users/dev/vt' })
+    worker('person-2', { entrypoint: 'cli', prompt: WIDGET + 'done-1' })
+    const asked = [run[0], run[10], 'done-big', 'solo', 'person-2']
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: asked, homeDir: home }))
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(byId).toEqual({ [run[0]]: 'batch', [run[10]]: 'batch', 'done-big': 'batch', solo: null, 'person-2': null })
+  })
+
+  it('describe keeps a run below the count, and a reason the transcript gives first', async () => {
+    const run = fanOut('small', 9)
+    worker('small-err', { replied: false, startMs: T0 + MIN })
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: [run[0], 'small-err'], homeDir: home }))
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    // Ten openings in the window: the run counts as one, and the errored worker keeps its own reason.
+    expect(byId).toEqual({ [run[0]]: 'batch', 'small-err': 'no-reply' })
+    fs.rmSync(path.join(home, '.claude', 'projects', CWD.replace(/[^a-zA-Z0-9]/g, '-'), 'small-err.jsonl'))
+    const after = Object.fromEntries((await describeExternalSessions({ sessionIds: [run[0]], homeDir: home }))
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(after).toEqual({ [run[0]]: null })
+  })
+})

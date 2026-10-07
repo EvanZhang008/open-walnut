@@ -1191,6 +1191,40 @@ describe('importExternalSessions — removes imports that were never outside ses
     await expect(getTask(task.id)).rejects.toThrow();
   });
 
+  it('asks once more when the host daemon learns the fan-out rule, and removes the workers', async () => {
+    // The pre-upgrade daemon imported a fan-out run's workers one task each.
+    const host = setHost('__local__', { candidates: [
+      candidate({ sessionId: 'w-1', origin: 'sdk-cli', title: 'You review ONE dashboard widget' }),
+      candidate({ sessionId: 'w-2', origin: 'sdk-cli', title: 'You review ONE dashboard widget' }),
+      candidate({ sessionId: 'real-1' }),
+    ] });
+    await importExternalSessions();
+    const real = await taskForSession('real-1');
+    const worker = await taskForSession('w-1');
+    // Judged by that daemon's rules already: the audit asks nothing.
+    await importExternalSessions();
+    expect(host.describeCalls.flat()).toEqual([]);
+
+    // The daemon upgrades (same server process): every import is asked again once.
+    const upgraded = setHost('__local__', {
+      capabilities: ['external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-batch-v1'],
+      candidates: [],
+      described: { 'w-1': described('w-1', 'batch'), 'w-2': described('w-2', 'batch'), 'real-1': described('real-1') },
+    });
+    expect((await importExternalSessions()).removed).toBe(2);
+    expect(upgraded.describeCalls.flat().sort()).toEqual(['real-1', 'w-1', 'w-2']);
+    await expect(getTask(worker.id)).rejects.toThrow();
+    expect(await getSessionByClaudeId('w-2')).toBeNull();
+    expect((await getTask(real.id)).tags).toContain(TAG);
+
+    // Settled at the new level: no more asks, and a session this host imports now is not asked about.
+    upgraded.describeCalls.length = 0;
+    upgraded.candidates = [candidate({ sessionId: 'new-2' })];
+    await importExternalSessions();
+    await importExternalSessions();
+    expect(upgraded.describeCalls.flat()).toEqual([]);
+  });
+
   it('does not re-ask about a session this process imported (the scan already applied the rule)', async () => {
     const host = setHost('__local__', { candidates: [candidate({ sessionId: 'new-1' })] });
     await importExternalSessions();

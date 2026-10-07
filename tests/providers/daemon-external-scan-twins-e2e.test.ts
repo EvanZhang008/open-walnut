@@ -168,3 +168,46 @@ describe.skipIf(TWINS.length === 0)('the external-session scan leaves the daemon
     }, 180_000)
   }
 })
+
+/**
+ * A scripted fan-out (one `claude -p` per dashboard widget) filed hundreds of
+ * tasks a day on one host (2026-10-06). Both daemons booted for real: the scan
+ * leaves the workers out, describe names them for the server's audit, and the
+ * daemon says it knows the rule so the server asks again about old imports.
+ */
+describe.skipIf(TWINS.length === 0)('fan-out workers are not outside sessions (both twins)', () => {
+  for (const twin of TWINS) {
+    it(`${twin.name}: the scan skips a run's workers, describe says batch, hello advertises external-batch-v1`, async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-extbatch-')))
+      const home = path.join(root, 'home')
+      const daemonDir = path.join(root, 'daemon')
+      const cwd = '/Users/dev/ops/widget-review'
+      const projectDir = path.join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+      fs.mkdirSync(projectDir, { recursive: true })
+      const reply = L({ type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'no anomaly' }] } })
+      const prompt = 'You review ONE CloudWatch dashboard widget for anomalies an on-call engineer must look at. Widget: '
+      const t0 = Date.parse('2026-09-20T10:00:00.000Z')
+      for (let i = 0; i < 12; i++) {
+        fs.writeFileSync(path.join(projectDir, `w-${i}.jsonl`), L({
+          type: 'user', cwd, entrypoint: 'sdk-cli', timestamp: new Date(t0 + i * 20_000).toISOString(),
+          message: { role: 'user', content: prompt + 'latency-p99-' + i },
+        }) + reply)
+      }
+      fs.writeFileSync(path.join(projectDir, 'person.jsonl'), L({
+        type: 'user', cwd, entrypoint: 'cli', timestamp: new Date(t0).toISOString(),
+        message: { role: 'user', content: 'why did the review flag nothing?' },
+      }) + reply)
+
+      await boot(twin, home, daemonDir)
+      const hello = await rpc({ cmd: 'hello' })
+      expect(hello.capabilities as string[]).toContain('external-batch-v1')
+      const scan = await rpc({ cmd: 'sessions.discoverExternal', sinceMs: 30 * 86_400_000, limit: 500 })
+      expect(scan.ok, JSON.stringify(scan).slice(0, 300)).toBe(true)
+      expect((scan.candidates as Array<{ sessionId: string }>).map((c) => c.sessionId)).toEqual(['person'])
+      const described = await rpc({ cmd: 'sessions.describeExternal', sessionIds: ['w-0', 'w-11', 'person'] })
+      expect(described.ok, JSON.stringify(described).slice(0, 300)).toBe(true)
+      expect(Object.fromEntries((described.candidates as Array<{ sessionId: string; notExternal: unknown }>)
+        .map((c) => [c.sessionId, c.notExternal]))).toEqual({ 'w-0': 'batch', 'w-11': 'batch', person: null })
+    }, 120_000)
+  }
+})

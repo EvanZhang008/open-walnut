@@ -65,6 +65,8 @@ const SCAN_CAPABILITY = 'external-scan-v1';
 /** Daemon capability for re-reading specific transcripts by id (retitle of
  *  placeholder-titled imports whose files aged out of the scan window). */
 const DESCRIBE_CAPABILITY = 'external-describe-v1';
+/** Daemon capability: its scanner skips fan-out workers and describe names them. */
+const BATCH_CAPABILITY = 'external-batch-v1';
 /** Placeholder-titled sessions re-read per host per run. */
 const RETITLE_LIMIT_PER_RUN = 100;
 /** The scan walks directories on the host; give it room but never hang a tick. */
@@ -595,9 +597,18 @@ async function sweepIdleImports(imports: Task[], idleMs: number, now: number, li
 // ── provenance audit ──────────────────────────────────────────────────────
 
 /** Session ids whose host already answered the audit in this process, and
- *  their tasks (so a settled task costs no session lookup on later ticks). */
-const auditedSessions = new Set<string>();
-const auditedTasks = new Set<string>();
+ *  their tasks (so a settled task costs no session lookup on later ticks), each
+ *  with the rule level that answered. A host whose daemon later learns a rule
+ *  is asked again about everything an older scanner let through. */
+const auditedSessions = new Map<string, number>();
+const auditedTasks = new Map<string, { host: string; level: number }>();
+
+/** The audit rules a host's scanner applies: 0 = it cannot be asked, 1 = the
+ *  provenance rules, 2 = fan-out workers too (external-batch-v1). */
+function auditRuleLevel(conn: { hasCapability(cap: string): boolean } | null | undefined): number {
+  if (!conn?.hasCapability(DESCRIBE_CAPABILITY)) return 0;
+  return conn.hasCapability(BATCH_CAPABILITY) ? 2 : 1;
+}
 
 /** Test seam: forget which imports were audited (module state outlives a test). */
 export function _resetImportAuditForTesting(): void {
@@ -608,14 +619,17 @@ export function _resetImportAuditForTesting(): void {
 /**
  * Remove imports that were never outside sessions. Older scanners imported
  * Walnut's own forks (side threads minted by another Walnut instance on the same
- * host, whose records this server never held) and one-shot probes that never
- * got a reply; the scan now skips both, and this pass cleans up what they left.
- * Each import is re-read once per process through describe, open tasks first
- * (one imported by this process was classified by the current rule already);
- * a host with no answer is asked again next tick. Only tasks still tagged and
- * still in a per-host import project are touched: an adopted task, or one the
- * user filed elsewhere, is theirs. The session row goes too, so nothing points
- * at the removed task; the scan keeps skipping the transcript by the same rule.
+ * host, whose records this server never held), one-shot probes that never
+ * got a reply, and the workers of scripted fan-outs (hundreds of `claude -p`
+ * runs in one folder, one task each); the scan now skips all three, and this
+ * pass cleans up what they left. Each import is re-read through describe once
+ * per process and host rule level (a daemon that learns a rule is asked again),
+ * open tasks first (one imported by this process was classified by its host's
+ * rules already); a host with no answer is asked again next tick. Only tasks
+ * still tagged and still in a per-host import project are touched: an adopted
+ * task, or one the user filed elsewhere, is theirs. The session row goes too,
+ * so nothing points at the removed task; the scan keeps skipping the
+ * transcript by the same rule.
  */
 async function auditImports(imports: Task[], limit: number): Promise<number> {
   const { getSessionsForTask, deleteSessionRecords } = await import('../session-tracker.js');
@@ -624,25 +638,33 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
   const importProjects = await importProjectNames();
   // Only hosts that can answer now take a slot: a disconnected host's backlog
   // would otherwise fill the batch every tick and starve the reachable ones.
-  const reachable = new Map<string, boolean>();
-  const canAnswer = (host: string): boolean => {
-    if (!reachable.has(host)) reachable.set(host, getConnectedDaemonConnection(host)?.hasCapability(DESCRIBE_CAPABILITY) === true);
-    return reachable.get(host) === true;
+  const levels = new Map<string, number>();
+  const levelOf = (host: string): number => {
+    if (!levels.has(host)) levels.set(host, auditRuleLevel(getConnectedDaemonConnection(host)));
+    return levels.get(host) ?? 0;
   };
-  const pending: Array<{ task: Task; sessionId: string; host: string }> = [];
+  const pending: Array<{ task: Task; sessionId: string; host: string; level: number }> = [];
   const ordered = [...imports].sort((a, b) => Number(a.phase === 'COMPLETE') - Number(b.phase === 'COMPLETE'));
   for (const task of ordered) {
     if (pending.length >= limit) break;
-    if (auditedTasks.has(task.id) || isLegacyBucket(task)) continue;
+    const settled = auditedTasks.get(task.id);
+    if (settled && (settled.level === Infinity || settled.level >= levelOf(settled.host))) continue;
+    if (isLegacyBucket(task)) continue;
     if (!importProjects.has((task.project ?? '').toLowerCase())) continue;
     const sessions = await getSessionsForTask(task.id);
     // One session per import; anything else was reshaped by hand, leave it.
-    if (sessions.length !== 1 || auditedSessions.has(sessions[0].claudeSessionId)) {
-      auditedTasks.add(task.id);
+    if (sessions.length !== 1) {
+      auditedTasks.set(task.id, { host: '', level: Infinity });
       continue;
     }
+    const sessionId = sessions[0].claudeSessionId;
     const host = sessions[0].host || '__local__';
-    if (canAnswer(host)) pending.push({ task, sessionId: sessions[0].claudeSessionId, host });
+    const level = levelOf(host);
+    if ((auditedSessions.get(sessionId) ?? 0) >= Math.max(level, 1)) {
+      auditedTasks.set(task.id, { host, level: auditedSessions.get(sessionId) as number });
+      continue;
+    }
+    if (level > 0) pending.push({ task, sessionId, host, level });
   }
 
   const idsByHost = new Map<string, string[]>();
@@ -658,8 +680,8 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
       // No key = a daemon older than the rule: no verdict, ask again after it
       // upgrades. No candidate = no transcript left, nothing to judge.
       if (c && c.notExternal === undefined) continue;
-      auditedSessions.add(p.sessionId);
-      auditedTasks.add(p.task.id);
+      auditedSessions.set(p.sessionId, p.level);
+      auditedTasks.set(p.task.id, { host: p.host, level: p.level });
       if (c?.notExternal) verdicts.set(p.sessionId, { reason: c.notExternal, spawnedBy: c.spawnedBy });
     }
   }
@@ -907,8 +929,10 @@ async function scanAndImport(
   // Folders of the sessions imported this run, for the picker's quick paths.
   const uses: DirectoryUse[] = [];
 
+  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
   for (const host of scannable) {
     const hostExclusions = excludedCwds[host] ?? [];
+    const hostLevel = auditRuleLevel(getConnectedDaemonConnection(host));
     const scanned = await scanHost(host, knownSessionIds, windowMs, hostExclusions);
     result.hostsScanned.push(host);
     // Placeholder-titled sessions the window no longer reaches: ask for them by
@@ -940,8 +964,9 @@ async function scanAndImport(
         result[outcome]++;
         if (outcome === 'imported') {
           result.projectByHost[host] = externalImportProject(host);
-          // Classified by the current rule just now: nothing for the audit to ask.
-          auditedSessions.add(candidate.sessionId);
+          // Classified by this host's rules just now: nothing for the audit to
+          // ask until the host learns a newer one.
+          auditedSessions.set(candidate.sessionId, hostLevel);
           if (candidate.cwd) {
             uses.push({
               cwd: candidate.cwd, host: host === '__local__' ? null : host,
