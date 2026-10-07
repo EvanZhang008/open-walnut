@@ -157,6 +157,8 @@ describe.each([
         STREAMS_DIR: '/fixture', process: { kill: vi.fn() }, readStartTime: () => 'start',
         logStateTransition: vi.fn(), startOrphanPoll: vi.fn(), broadcastSessionState: vi.fn(),
         processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }),
+        // Adopting a live CLI locks its stdin FIFO write-only (LIVE_FIFO_MODE); no FIFO here.
+        lockLiveFifo: () => true,
       })
       reconcile()
     }

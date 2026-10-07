@@ -89,22 +89,23 @@ describe('POST /api/tasks/batch/phase', () => {
     }
   });
 
-  it('returns 200 with failed[] when one task is blocked — the rest still apply', async () => {
+  it('returns 200 with failed[] when one task cannot change — the rest still apply', async () => {
+    // A parent with an open child completes too (2026-10-04); the child is untouched.
     const [parent, sibling] = await makeTasks(['Parent', 'Sibling']);
-    await addTask({ title: 'Child', project: 'Marina', parent_task_id: parent });
+    const { task: child } = await addTask({ title: 'Child', project: 'Marina', parent_task_id: parent });
 
     const res = await request(createApp())
       .post('/api/tasks/batch/phase')
-      .send({ task_ids: [parent, sibling], phase: 'COMPLETE' });
+      .send({ task_ids: [parent, 'zzzzzzzz', sibling], phase: 'COMPLETE' });
 
     // Partial success must NOT be an error status — the client needs the successes.
     expect(res.status).toBe(200);
-    expect(res.body.changed).toHaveLength(1);
-    expect(res.body.changed[0].id).toBe(sibling);
+    expect(res.body.changed.map((t: { id: string }) => t.id).sort()).toEqual([parent, sibling].sort());
     expect(res.body.failed).toHaveLength(1);
-    expect(res.body.failed[0].id).toBe(parent);
+    expect(res.body.failed[0].id).toBe('zzzzzzzz');
     expect((await getTask(sibling)).phase).toBe('COMPLETE');
-    expect((await getTask(parent)).phase).not.toBe('COMPLETE');
+    expect((await getTask(parent)).phase).toBe('COMPLETE');
+    expect((await getTask(child.id)).phase).not.toBe('COMPLETE');
   });
 
   it('rejects a missing/empty task_ids array', async () => {

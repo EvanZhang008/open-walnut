@@ -103,20 +103,24 @@ describe('setPhaseBulk', () => {
     }
   });
 
-  it('skips a parent with active children but still completes the rest', async () => {
+  it('completes a parent with an open child, leaves the child open, and reports an unknown id', async () => {
+    // 2026-10-04: a parent completes with its subtasks still open (the old guard
+    // left a leader of a recurring job impossible to close); they keep running.
     const [parent, sibling] = await makeTasks(['Parent', 'Sibling']);
     const { task: child } = await addTask({ title: 'Child', project: 'Marina', parent_task_id: parent });
 
-    const { changed, failed } = await setPhaseBulk([parent, sibling], 'COMPLETE');
+    const { changed, failed } = await setPhaseBulk([parent, 'zzzzzzzz', sibling], 'COMPLETE');
 
-    // Partial success: the sibling went through, the blocked parent is reported.
-    expect(changed.map((t) => t.id)).toEqual([sibling]);
+    // Partial success: both real tasks went through, the unknown id is reported.
+    expect(changed.map((t) => t.id).sort()).toEqual([parent, sibling].sort());
     expect(failed).toHaveLength(1);
-    expect(failed[0].id).toBe(parent);
-    expect(failed[0].error).toMatch(/child task/i);
-    expect((await getTask(parent)).phase).not.toBe('COMPLETE');
+    expect(failed[0].id).toBe('zzzzzzzz');
+    expect(failed[0].error).toMatch(/No task found/);
+    expect((await getTask(parent)).phase).toBe('COMPLETE');
     expect((await getTask(sibling)).phase).toBe('COMPLETE');
-    expect((await getTask(child.id)).phase).not.toBe('COMPLETE');
+    const after = await getTask(child.id);
+    expect(after.phase).not.toBe('COMPLETE');
+    expect(after.parent_task_id).toBe(parent);
   });
 
   it('completes a parent when its children are in the SAME batch', async () => {

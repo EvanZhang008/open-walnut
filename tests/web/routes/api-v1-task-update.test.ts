@@ -104,7 +104,9 @@ describe('PATCH /api/v1/tasks/:id', () => {
     expect(reopened.phase).toBe('TODO')
   })
 
-  it('409 conflict when completing a parent with active children (guard preserved)', async () => {
+  it('completes a parent whose child is still open, and leaves the child open', async () => {
+    // 2026-10-04: the old 409 guard left a leader whose worker was a recurring
+    // job impossible to close. A parent now completes; its subtasks keep running.
     const parent = await createTask({ title: 'Parent with child' })
     // Child task via the web API (parent_task_id is not a v1 create field).
     const childRes = await fetch(apiUrl('/api/tasks'), {
@@ -113,11 +115,16 @@ describe('PATCH /api/v1/tasks/:id', () => {
       body: JSON.stringify({ title: 'Active child', parent_task_id: parent.id }),
     })
     expect(childRes.status).toBe(201)
+    const { task: child } = await childRes.json() as { task: { id: string } }
 
     const res = await patchTask(parent.id, { status: 'done' })
-    expect(res.status).toBe(409)
-    const json = await res.json() as { error: { code: string } }
-    expect(json.error.code).toBe('conflict')
+    expect(res.status).toBe(200)
+    const { task: done } = await res.json() as { task: Record<string, unknown> }
+    expect(done.status).toBe('done')
+    expect(done.phase).toBe('COMPLETE')
+    const childNow = await (await fetch(apiUrl(`/api/v1/tasks/${child.id}`))).json() as { task: Record<string, unknown> }
+    expect(childNow.task.status).not.toBe('done')
+    expect(childNow.task.parent_task_id).toBe(parent.id)
   })
 
   it('moves a task to a new project (registry row auto-created) and back to Inbox', async () => {

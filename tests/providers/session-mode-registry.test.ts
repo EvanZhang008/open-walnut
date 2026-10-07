@@ -235,8 +235,18 @@ describe('validators and pickers all derive from the registry', () => {
     // old code legitimately quotes it.
     expect(pill).not.toMatch(/modeLabel = isPlanSession \? 'Plan' : 'Bypass'/)
     expect(pill).not.toMatch(/legacyModeLabel = legacyMode === 'plan' \? 'Plan' : 'Bypass'/)
-    // TodoPanel leaked the raw camelCase id ('dontAsk') instead of a label.
-    expect(read('web/src/components/tasks/TodoPanel.tsx')).toContain('SESSION_MODE_LABELS[record.mode]')
+    // The task details leaked the raw camelCase id ('dontAsk') instead of a
+    // label. They now live in their own files (2026-10-07) and show a Plan badge
+    // alone; whatever reads a session's mode there compares it or labels it
+    // (falling back to the id only for a mode the registry does not know yet).
+    const rawModeReads = (src: string) => [...src.matchAll(/\b\w+\??\.mode\b(?!\s*[!=]==)/g)]
+      .filter((m) => !/SESSION_MODE_LABELS\[$|SESSION_MODE_LABELS\[[^\]]+\]\s*\?\?\s*$/.test(src.slice(Math.max(0, m.index! - 80), m.index!)))
+      .map((m) => m[0])
+    expect(rawModeReads("const l = SESSION_MODE_LABELS[record.mode] ?? record.mode; if (live?.mode === 'plan') x()")).toEqual([])
+    expect(rawModeReads('<span>{record.mode}</span>')).toEqual(['record.mode'])
+    for (const rel of ['TodoPanel.tsx', 'TaskDetailPane.tsx', 'TaskDetailRows.tsx', 'TaskDetailModal.tsx']) {
+      expect(rawModeReads(read(`web/src/components/tasks/${rel}`)), rel).toEqual([])
+    }
   })
 
   it('a mode change persists first and never awaits the CLI hand-shake', () => {

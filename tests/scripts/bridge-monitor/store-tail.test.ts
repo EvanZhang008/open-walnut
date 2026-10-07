@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Store, dayRange, dayStartMs, localDay, nextDay, prevDay, pruneStore, readDays } from '../../../scripts/bridge-monitor/lib/store.mjs'
 import { Tailer } from '../../../scripts/bridge-monitor/lib/tail.mjs'
-import { loadConfig, mergeConfig, DEFAULTS } from '../../../scripts/bridge-monitor/lib/config.mjs'
+import { HOME, loadConfig, mergeConfig, DEFAULTS } from '../../../scripts/bridge-monitor/lib/config.mjs'
 
 let dir = ''
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-store-')) })
@@ -142,8 +142,14 @@ describe('config', () => {
     expect(error).toBeNull()
     expect(cfg.probe.enabled).toBe(false)
     expect(cfg.retentionDays).toBe(14)
-    expect(cfg.logDir).toMatch(/Library\/Logs\/Walnut\/bridge-monitor$/)
-    expect(cfg.logDir.startsWith('/tmp')).toBe(false)
+    // Records live under the user's home, never in the system temp dir a reboot
+    // wipes. The test setup points HOME at a temp dir (on Linux under /tmp), so
+    // the rule is checked against HOME, not against a literal /tmp prefix.
+    expect(cfg.logDir).toBe(path.join(HOME, 'Library', 'Logs', 'Walnut', 'bridge-monitor'))
+    expect(cfg.stateDir.startsWith(HOME + path.sep)).toBe(true)
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../scripts/bridge-monitor/lib/config.mjs'), 'utf8')
+    expect(src).toMatch(/^ {2}logDir: path\.join\(HOME, /m)
+    expect(src).toMatch(/^ {2}stateDir: path\.join\(SUPPORT_DIR, /m)
   })
 
   it('a broken file falls back to defaults and reports the error (never a crash loop)', () => {
