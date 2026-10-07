@@ -29,6 +29,7 @@ import {
   initIncidentSink,
 } from '../../../src/core/observability/incidents.js';
 import { recordTurn, registerIncidentSink } from '../../../src/core/observability/recorder.js';
+import { bus, EventNames } from '../../../src/core/event-bus.js';
 import type { TurnEvent } from '../../../src/core/observability/types.js';
 
 // incidents.json moved to LOG_DIR (commit 958236a: bundles/index are ephemeral
@@ -189,6 +190,24 @@ describe('incident sink (auto-open on violating turn)', () => {
 
     const list = await listIncidents();
     expect(list.filter((i) => i.sessionId === 'sess-dedupe')).toHaveLength(1);
+  });
+
+  it('never asks for a phone push: an incident is a developer diagnostic', async () => {
+    // It used to emit a CRON_NOTIFICATION to the push subscriber, which the
+    // phone showed as "Scheduled: forensic". The incident itself still opens.
+    const emit = vi.spyOn(bus, 'emit');
+    try {
+      initIncidentSink();
+      recordTurn(truncatedTurn('sess-no-push'));
+      const list = await pollIncidents((l) => l.length >= 1);
+      expect(list.map((i) => i.sessionId)).toEqual(['sess-no-push']);
+      // Let the rest of the sink's chain run before judging what it emitted.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(emit.mock.calls.filter(([name]) => name === EventNames.CRON_NOTIFICATION)).toEqual([]);
+      expect(emit.mock.calls.filter(([, , destinations]) => (destinations as string[]).includes('push-notifications'))).toEqual([]);
+    } finally {
+      emit.mockRestore();
+    }
   });
 
   it('does NOT dedupe across different sessions', async () => {

@@ -22,12 +22,12 @@
  */
 
 import { bus, eventData, EventNames } from '../event-bus.js'
-import { getConfig, updatePushTokens } from '../config-manager.js'
+import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
-import { sendApns, type ApnsTarget } from './apns.js'
 import { getQuiet, logQuietSkipOnce, quietSuppresses } from '../quiet/quiet-state.js'
-import { apnsPayload, tokenKind, type PushContent } from './send.js'
+import { deliverPush } from './deliver.js'
+import type { PushContent } from './send.js'
 import {
   ACTIVE_LEASE_MS,
   parseMode,
@@ -240,106 +240,27 @@ async function attemptLetterPush(
     }, { devices: tokens.length, targeted: 0 })
   }
 
-  const content = letterPushContent(letter)
-  const payload = apnsPayload(content)
-
-  const apnsTargets: ApnsTarget[] = []
-  const expoTokens: string[] = []
-  for (const { device } of chosen) {
-    const entry = device.entry
-    if (tokenKind(entry) === 'expo') expoTokens.push(entry.token)
-    else apnsTargets.push({ token: entry.token, ...(entry.environment ? { environment: entry.environment } : {}) })
-  }
-
-  let sent = 0
-  let failed = 0
-  let attempted = false
-  let reason: string | undefined
-
-  let pruned = 0
-  if (apnsTargets.length > 0) {
-    const out = await sendApns(apnsTargets, payload, {
-      priority: content.priority,
-      // One letter = one banner: a redelivered event replaces the earlier
-      // undelivered notification instead of stacking a second one.
-      ...(content.collapseId ? { collapseId: content.collapseId } : {}),
-    })
-    attempted = attempted || out.attempted
-    sent += out.sent
-    failed += out.failed
-    if (!out.attempted) {
-      reason = out.reason
-      // The missing-credential text itself is warned once per process inside
-      // apns.ts; this names the letter that just lost its push.
-      warnOnce('apns-unconfigured',
-        'letter push: APNs is not configured on this box — letters cannot notify',
-        { reason: out.reason })
-    }
-    if (out.deadTokens.length > 0) {
-      pruned = out.deadTokens.length
-      await pruneDead(out.deadTokens)
-    }
-  }
-  if (expoTokens.length > 0) {
-    const out = await sendExpoLetter(expoTokens, content)
-    attempted = attempted || out.attempted
-    sent += out.sent
-    failed += out.failed
+  // One letter = one banner: the content's collapse id makes a redelivered
+  // event replace the earlier undelivered notification instead of stacking.
+  const out = await deliverPush(chosen.map(({ device }) => device.entry), letterPushContent(letter))
+  if (out.reason) {
+    // The missing-credential text itself is warned once per process inside
+    // apns.ts; this names the letter that just lost its push.
+    warnOnce('apns-unconfigured',
+      'letter push: APNs is not configured on this box, so letters cannot notify',
+      { reason: out.reason })
   }
 
   return finish(
-    { attempted, sent, failed, suppressed, ...(reason ? { reason } : {}) },
+    {
+      attempted: out.attempted, sent: out.sent, failed: out.failed, suppressed,
+      ...(out.reason ? { reason: out.reason } : {}),
+    },
     {
       devices: tokens.length, targeted: chosen.length,
-      ...(pruned > 0 ? { deadTokensPruned: pruned } : {}),
+      ...(out.deadTokens.length > 0 ? { deadTokensPruned: out.deadTokens.length } : {}),
     },
   )
-}
-
-/** Expo delivery for legacy tokens (kept minimal — nothing new mints these). */
-async function sendExpoLetter(
-  tokens: string[],
-  content: PushContent,
-): Promise<{ attempted: boolean; sent: number; failed: number }> {
-  try {
-    const resp = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(tokens.map((to) => ({
-        to, title: content.title, body: content.body.slice(0, 200),
-        data: content.data, sound: 'default' as const, priority: 'high' as const,
-      }))),
-    })
-    if (!resp.ok) return { attempted: true, sent: 0, failed: tokens.length }
-    const result = await resp.json() as { data?: Array<{ status: string }> }
-    let sent = 0
-    let failed = 0
-    for (const t of result.data ?? []) { if (t.status === 'error') failed++; else sent++ }
-    return { attempted: true, sent, failed }
-  } catch (err) {
-    log.notif.warn('letter push: Expo send failed', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return { attempted: true, sent: 0, failed: tokens.length }
-  }
-}
-
-async function pruneDead(dead: string[]): Promise<void> {
-  try {
-    let removed = 0
-    // Atomic read-modify-write: a prune racing a fresh registration on the plain
-    // read-then-updateConfig path would drop the new device's row.
-    await updatePushTokens((tokens) => {
-      const keep = tokens.filter((t) => !dead.includes(t.token))
-      removed = tokens.length - keep.length
-      return removed === 0 ? null : keep
-    })
-    if (removed > 0) log.notif.info('letter push: pruned dead device tokens', { removed })
-  } catch (err) {
-    log.notif.warn('letter push: could not prune dead tokens', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
 }
 
 let subscribed = false

@@ -1,9 +1,9 @@
 /**
- * Forensic Observability — incident store + notification sink.
+ * Forensic Observability: incident store + sink.
  *
  * An incident is a first-class "problem case file": when an invariant fires on a
  * completed turn, we open a durable Incident (the sid it concerns + the auto
- * label + an evidence bundle path + status) and notify the user. Persisting them
+ * label + an evidence bundle path + status). Persisting them
  * means incidents accumulate into a corpus we can later mine for triggers
  * ("7/8 truncations were opus-4-8 + remote") instead of evaporating with the logs.
  *
@@ -18,7 +18,6 @@ import path from 'node:path';
 import { LOG_DIR } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
-import { bus, EventNames } from '../event-bus.js';
 import { registerIncidentSink } from './recorder.js';
 import type { Incident, IncidentStatus, InvariantViolation, TurnEvent } from './types.js';
 
@@ -200,7 +199,7 @@ export async function createIncidentIfNotRecent(
 /**
  * Register the incident sink. recorder.recordTurn() calls it synchronously on a
  * violation; we MUST NOT throw or block, so all the async work (dedupe check,
- * persist, notify, bundle capture) runs in a fire-and-forget promise chain whose
+ * persist, bundle capture) runs in a fire-and-forget promise chain whose
  * top level is .catch'd. A failure here never affects turn completion.
  */
 export function initIncidentSink(): void {
@@ -241,17 +240,9 @@ async function handleViolation(turn: TurnEvent, violations: InvariantViolation[]
     severity,
   });
 
-  // Notify (push-notifications subscriber reads jobName + text; action satisfies
-  // the CronJobEvent type). No-op when WS clients are connected — see push-notification.ts.
-  try {
-    bus.emit(
-      EventNames.CRON_NOTIFICATION,
-      { action: 'notification', jobName: 'forensic', text: incident.summary },
-      ['push-notifications'],
-    );
-  } catch (err) {
-    log.obs.warn('incident notification emit failed', { incidentId: incident.id, error: errMsg(err) });
-  }
+  // No phone push. An incident is a developer diagnostic, read through
+  // /api/incidents and its bundle; a "Scheduled: forensic" banner means nothing
+  // to the user, so nothing here emits the push event.
 
   // Capture an evidence bundle. Imported lazily so a missing/in-progress bundle
   // module can't break the store; the agreed signature is

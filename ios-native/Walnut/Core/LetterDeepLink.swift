@@ -20,7 +20,7 @@ import UserNotifications
 final class LetterDeepLink {
     static let shared = LetterDeepLink()
 
-    /// `data.type` the server stamps on a letter push (src/core/push-notification.ts).
+    /// `data.type` the server stamps on a letter push (`LETTER_PUSH_TYPE` in src/core/push/letter-push.ts).
     nonisolated static let payloadType = "human_inbox_letter"
 
     /// A deep link older than this is dropped. The dangerous case is a tap that

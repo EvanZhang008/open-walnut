@@ -32,7 +32,7 @@ import { readFile } from 'node:fs/promises'
 import { connect, constants, type ClientHttp2Session } from 'node:http2'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
-import { tokenPrefix } from './send.js'
+import { tokenTag, withoutTokens } from './send.js'
 
 /** The app's bundle id — the APNs topic, unless overridden. */
 export const DEFAULT_APNS_TOPIC = 'dev.openwalnut.ios'
@@ -391,10 +391,12 @@ export async function sendApns(
     if (r.ok) { sent++; continue }
     failed++
     if (r.unregistered) deadTokens.push(token)
-    const message = r.error ?? `${r.status ?? '?'} ${r.reason ?? 'unknown'}`
-    recordApnsError(message)
+    // Apple's reply is service text: scrub the token out before it is kept or logged.
+    const reason = withoutTokens(r.reason, [token])
+    const error = withoutTokens(r.error, [token])
+    recordApnsError(error ?? `${r.status ?? '?'} ${reason ?? 'unknown'}`)
     log.notif.warn('apns: send failed', {
-      tokenPrefix: tokenPrefix(token), status: r.status, reason: r.reason, error: r.error,
+      tokenTag: tokenTag(token), status: r.status, reason, error,
     })
   }
   return { attempted: true, sent, failed, deadTokens }

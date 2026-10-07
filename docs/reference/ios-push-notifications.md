@@ -185,6 +185,32 @@ You can also mute letter types per device (`letterTypes` on `POST
 varies on its own is delivery priority (`action_required` is sent at priority 10,
 the rest at 5, which affects timing and never whether a letter is sent).
 
+## Which service each device gets
+
+Every push leaves through one function, `deliverPush` in `src/core/push/deliver.ts`.
+Letters use it, and so does the general subscriber in
+`src/core/push-notification.ts` (scheduled-job notices, background agent replies,
+session results and errors, triage chat updates). Those branches are unwired: no
+producer on a running server sends those events to that subscriber, so today only
+letters notify a phone. Connecting one is a product decision, because it makes the
+phone buzz for that event. Forensic incidents never push: they are developer
+diagnostics and stay in `/api/incidents`.
+`deliverPush` routes each device token by the token's shape:
+
+- a raw hex token, which the native app registers, goes to Apple over APNs;
+- an `ExponentPushToken[...]` row, left by the retired Expo build of the app, goes
+  to Expo. Such rows keep working, but nothing mints new ones.
+
+Notification text never goes to Expo for any other token. The `kind` stored on a
+row is only a label, so a label that disagrees with its token cannot change the
+route. A token Expo or Apple reports as dead is removed. The general notifications
+push only while no web client is connected, never while quiet mode holds, and
+never from a cloud replica; letters follow the per-device modes above.
+
+Log lines name a device by `tokenTag`, a short hash of its token, never by the
+token or a slice of it, and any text a push service sends back is scrubbed of the
+token before it is logged.
+
 ## Payload contract
 
 Renaming any of these keys breaks the tap-to-open deep link silently, so both

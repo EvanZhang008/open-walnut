@@ -1,11 +1,26 @@
 /**
- * Push notification service using Expo Push API.
+ * General push notifications: scheduled-job notices, background agent replies,
+ * session results and errors, and triage chat updates.
  *
- * Subscribes to the event bus and sends push notifications when:
+ * Subscribes to the event bus and pushes when:
  * - No WebSocket clients are connected (user not actively viewing)
  * - The event matches a push-worthy condition
  *
- * Uses expo-server-sdk to send via Expo's push service → APNs/FCM.
+ * Delivery goes through core/push/deliver.ts, the same path letters take: each
+ * token reaches the service that minted it (APNs for the native app, Expo only
+ * for a legacy Expo token). This file used to post every event to Expo for every
+ * token, so an iPhone's APNs token and the notification text reached Expo, a
+ * third party, on every push.
+ *
+ * Unwired today: no producer on a running server emits any of these events to
+ * this subscriber, so none of the branches below ever sends. Background replies
+ * (AGENT_RESPONSE) reach the console over WebSocket only; session results and
+ * errors (SESSION_RESULT, SESSION_ERROR) go to the main AI and the session
+ * runner; triage chat (CHAT_HISTORY_UPDATED) goes to the web UI; and nothing
+ * emits CRON_NOTIFICATION since forensic incidents stopped pushing (they are
+ * developer diagnostics, read through /api/incidents). The branches stay so a
+ * producer can opt in. Wiring one is a product decision, because it makes the
+ * phone buzz for that event. Letters push through core/push/letter-push.ts.
  */
 
 import { bus, eventData, EventNames } from './event-bus.js'
@@ -13,88 +28,8 @@ import { CLOUD_MODE } from '../constants.js'
 import { getConfig } from './config-manager.js'
 import { clientCount } from '../web/ws/handler.js'
 import { log } from '../logging/index.js'
-import type { PushTokenEntry } from './types.js'
 import { getQuiet, logQuietSkipOnce, quietSuppresses } from './quiet/quiet-state.js'
-
-// Expo push message format (inline — no need for expo-server-sdk dependency for MVP)
-interface ExpoPushMessage {
-  to: string
-  title: string
-  body: string
-  data?: Record<string, unknown>
-  sound?: 'default' | null
-  badge?: number
-  priority?: 'default' | 'normal' | 'high'
-}
-
-interface ExpoPushTicket {
-  status: 'ok' | 'error'
-  id?: string
-  message?: string
-  details?: { error?: string }
-}
-
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
-
-/**
- * Send push notifications via Expo Push API.
- */
-async function sendPushNotifications(messages: ExpoPushMessage[]): Promise<void> {
-  if (messages.length === 0) return
-
-  try {
-    const resp = await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify(messages),
-    })
-
-    if (!resp.ok) {
-      log.web.warn('push: Expo API error', { status: resp.status })
-      return
-    }
-
-    const result = (await resp.json()) as { data: ExpoPushTicket[] }
-    for (const ticket of result.data) {
-      if (ticket.status === 'error') {
-        log.web.warn('push: ticket error', {
-          message: ticket.message,
-          error: ticket.details?.error,
-        })
-        // DeviceNotRegistered → remove the token
-        if (ticket.details?.error === 'DeviceNotRegistered') {
-          // token cleanup handled by the caller checking tickets
-        }
-      }
-    }
-  } catch (err) {
-    log.web.error('push: send failed', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
-}
-
-/**
- * Build push messages for all registered tokens.
- */
-async function buildMessages(title: string, body: string, data?: Record<string, unknown>): Promise<ExpoPushMessage[]> {
-  const config = await getConfig()
-  const tokens = config.push_tokens ?? []
-
-  if (tokens.length === 0) return []
-
-  return tokens.map((t: PushTokenEntry) => ({
-    to: t.token,
-    title,
-    body: body.slice(0, 200), // truncate body
-    data,
-    sound: 'default' as const,
-    priority: 'high' as const,
-  }))
-}
+import { deliverPush } from './push/deliver.js'
 
 /**
  * Send a push notification if no WebSocket clients are connected.
@@ -118,11 +53,14 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
     return
   }
 
-  const messages = await buildMessages(title, body, data)
-  if (messages.length === 0) return
+  const tokens = (await getConfig()).push_tokens ?? []
+  if (tokens.length === 0) return
 
-  log.web.info('push: sending', { title, tokenCount: messages.length })
-  await sendPushNotifications(messages)
+  const out = await deliverPush(tokens, { title, body, ...(data ? { data } : {}) })
+  log.web.info('push: delivery', {
+    title, apns: out.apns, expo: out.expo, sent: out.sent, failed: out.failed,
+    ...(out.reason ? { reason: out.reason } : {}),
+  })
 }
 
 /**

@@ -371,8 +371,11 @@ describe('token kind is decided from the token, never guessed at send time', () 
     expect(tokenKind({ token: 'ExpoPushToken[xxx]' })).toBe('expo');
   });
 
-  it('an explicit kind wins over the shape', () => {
-    expect(tokenKind({ token: APNS_TOKEN, kind: 'expo' })).toBe('expo');
+  it('the shape wins over a stored kind label (a hex token is never sent to Expo)', () => {
+    // A label that disagrees with its token is a hand edit or an old writer; routing
+    // on it would hand Expo, a third party, an APNs token plus the notification text.
+    expect(tokenKind({ token: APNS_TOKEN, kind: 'expo' })).toBe('apns');
+    expect(tokenKind({ token: 'ExponentPushToken[xxx]', kind: 'apns' })).toBe('expo');
   });
 
   it('an APNs token never goes to the Expo endpoint', async () => {

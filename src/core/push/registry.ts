@@ -19,7 +19,7 @@
 import { getConfig, updatePushTokens } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import { apnsStatus } from './apns.js'
-import { tokenKind, tokenPrefix } from './send.js'
+import { tokenKind, tokenPrefix, tokenTag } from './send.js'
 import { ACTIVE_LEASE_MS, parseMode, type LetterPushMode } from './letter-push-policy.js'
 import { LETTER_TYPES } from '../human-inbox/types.js'
 import type { PushTokenEntry } from '../types.js'
@@ -205,7 +205,7 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
   const apns = await apnsStatus()
   log.notif.info('push: token registered', {
     keyName, origin, platform, kind, environment, mode: entry.mode,
-    tokenPrefix: tokenPrefix(token),
+    tokenTag: tokenTag(token),
     ...(swept > 0 ? { replacedRotatedTokens: swept } : {}),
     apnsConfigured: apns.configured,
     ...(apns.configured ? {} : { apnsReason: apns.reason }),
@@ -228,7 +228,7 @@ export async function unregisterPushToken(rawToken: unknown): Promise<{ ok: true
     removed = tokens.length - filtered.length
     return removed === 0 ? null : filtered
   })
-  log.notif.info('push: token unregistered', { tokenPrefix: tokenPrefix(token), removed })
+  log.notif.info('push: token unregistered', { tokenTag: tokenTag(token), removed })
   return { ok: true, removed }
 }
 

@@ -73,16 +73,20 @@ describe('generic push', () => {
     await setQuiet({ source: 'user' })
     await cronAndSettle()
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(sendApns).not.toHaveBeenCalled()
 
     await clearQuiet('user')
     await cronAndSettle()
+    // One send per service: the Expo row through Expo, the APNs row through Apple.
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(sendApns).toHaveBeenCalledTimes(1)
   })
 
   it('is not let through by allowPermissions (none of its events is an ask)', async () => {
     await setQuiet({ source: 'plugin:walnut-rhythm', allowPermissions: true })
     await cronAndSettle()
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(sendApns).not.toHaveBeenCalled()
   })
 })
 

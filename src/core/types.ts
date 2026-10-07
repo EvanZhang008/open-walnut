@@ -1582,10 +1582,10 @@ export interface PushTokenEntry {
   /** Platform: ios or android */
   platform: 'ios' | 'android';
   /**
-   * Which push service this token belongs to. Inferred from the token's shape
-   * when absent (see core/push/send.ts `tokenKind`) — sending an APNs token to
-   * Expo, or the reverse, is a silent total loss, so the kind is never guessed
-   * at send time twice.
+   * Which push service this token belongs to, as recorded at registration. A
+   * label for the status readout only: delivery routes on the token's shape
+   * (core/push/send.ts `tokenKind`), so a label that disagrees with its token can
+   * never send an APNs token, and the notification text, to Expo.
    */
   kind?: 'apns' | 'expo';
   /**
