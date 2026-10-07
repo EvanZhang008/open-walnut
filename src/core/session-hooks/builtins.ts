@@ -24,6 +24,7 @@ import type {
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
+import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -60,6 +61,9 @@ export function __resetTriageRateLimiter(): void {
   triageLastDispatch.clear();
   lastNotifiedSignal.clear();
   selfReportInFlight.clear();
+  triageRuns.clear();
+  finalSummaries.clear();
+  finalSummaryWaiters.clear();
 }
 
 /** Test-only: clear ONLY the dispatch cooldown, keeping the in-flight set —
@@ -90,7 +94,9 @@ function cancelPendingTriage(sessionId: string): void {
 // + the 4-model eval evidence: docs/decision/summarizer-self-report.md.
 // Do not re-introduce a summarizer/notify-deciding model without reading it. If the
 // session is dead when the quiet-period fires, we skip; the next turn's report (which
-// merges against the fed-back summary) covers the gap.
+// merges against the fed-back summary) covers the gap. A session stopping because it
+// completed its own task has no next turn, so it is asked before the stop
+// (awaitFinalSummary).
 //
 // TIMEOUT IS A LEAK GUARD, NOT A QOS KNOB. Nothing is held while we await the answer
 // (no lock, no event-loop time) — the only reason to time out at all is to not leak a
@@ -106,6 +112,98 @@ const SELF_REPORT_TIMEOUT_MS = 10 * 60_000;
 // the pending one will be answered from the session's newest context anyway (covers the
 // new turns), and double-asking just queues duplicate control requests on the FIFO.
 const selfReportInFlight = new Set<string>();
+
+// The runTriage in progress per session, so a stop can wait for the ask it holds.
+// `final` marks a final summary (below) and the turn generation it was asked for.
+const triageRuns = new Map<string, { run: Promise<void>; final?: { gen: number | undefined } }>();
+
+function startTriage(p: OnTurnCompletePayload, final?: { gen: number | undefined }): Promise<void> {
+  const running = triageRuns.get(p.sessionId);
+  // Single-flight: its answer covers this turn too. Not for a final summary,
+  // which must be asked after its own turn ended: an ask still out for an
+  // earlier turn (or sent mid-turn by the quiet timer) is answered first, and
+  // then the last turn is asked about. The same turn's second onTurnComplete
+  // (session:result, then session:turn-settled) reuses its run.
+  if (running && (!final || (running.final && running.final.gen === final.gen))) return running.run;
+  const begin = () => runTriage(p, { final: !!final });
+  const run = (running ? running.run.catch(() => {}).then(begin) : begin()).finally(() => {
+    if (triageRuns.get(p.sessionId)?.run === run) triageRuns.delete(p.sessionId);
+  });
+  triageRuns.set(p.sessionId, { run, final });
+  return run;
+}
+
+async function liveTurnGen(sessionId: string): Promise<number | undefined> {
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  return sessionRunner.findSessionByClaudeId(sessionId)?.turnGen;
+}
+
+// ── Final summary (sessions/self-complete-stop.ts) ──
+// A session that completed its own task stops when the turn ends, and nothing
+// answers a self-report after that. So that turn's summary skips the debounce,
+// and the stop waits for it. Keyed by session; `at` and the runner's turn
+// generation `gen` tell the turn that just ended from an earlier one (a
+// background command's follow-up turn ends after the turn that completed the task).
+const finalSummaries = new Map<string, { run: Promise<void>; at: number; gen: number | undefined }>();
+const finalSummaryWaiters = new Map<string, () => void>();
+const FINAL_SUMMARY_LIMITS = {
+  /** The turn's onTurnComplete is dispatched from the same result as the turn
+   *  end, so it has normally started the run already; a turn that never
+   *  completes one (an error, a background follow-up) stops after this. */
+  startMs: 10_000,
+  /** An idle CLI answers in 6-18s; past this the stop goes ahead without it. */
+  finishMs: 3 * 60_000,
+};
+let finalSummaryLimits = FINAL_SUMMARY_LIMITS;
+
+/** Test-only: shorten (or restore, with no argument) the final-summary waits. */
+export function __setFinalSummaryLimits(limits?: Partial<typeof FINAL_SUMMARY_LIMITS>): void {
+  finalSummaryLimits = { ...FINAL_SUMMARY_LIMITS, ...limits };
+}
+
+/**
+ * Wait for the summary of the turn that just ended, before its session stops.
+ * Resolves 'done' when it finished, 'none' when no summary runs for it (the
+ * summary hook is off, or the turn produced no onTurnComplete), 'timeout' when
+ * it outlived the finish limit.
+ */
+export async function awaitFinalSummary(sessionId: string, since: number): Promise<'done' | 'none' | 'timeout'> {
+  const { getSessionHookDispatcher } = await import('./index.js');
+  if (!getSessionHookDispatcher()?.getHooks().some((h) => h.id === turnCompleteTriageHook.id)) return 'none';
+  const gen = await liveTurnGen(sessionId);
+  const fresh = () => {
+    const entry = finalSummaries.get(sessionId);
+    return entry && entry.at >= since && (entry.gen === undefined || gen === undefined || entry.gen === gen)
+      ? entry : undefined;
+  };
+  let entry = fresh();
+  if (!entry) {
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); finalSummaryWaiters.delete(sessionId); resolve(); };
+      const timer = setTimeout(done, finalSummaryLimits.startMs);
+      timer.unref?.();
+      finalSummaryWaiters.set(sessionId, done);
+    });
+    entry = fresh();
+    if (!entry) return 'none';
+  }
+  finalSummaries.delete(sessionId);
+  let timer: NodeJS.Timeout | undefined;
+  const finished = await Promise.race([
+    entry.run.then(() => true, () => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), finalSummaryLimits.finishMs);
+      timer.unref?.();
+    }),
+  ]);
+  clearTimeout(timer);
+  return finished ? 'done' : 'timeout';
+}
+
+/** The stop is over: drop what its turn left (a duplicate onTurnComplete after the wait). */
+export function forgetFinalSummary(sessionId: string): void {
+  finalSummaries.delete(sessionId);
+}
 
 /** Past this NOTE length the fire becomes a MANDATORY REORGANIZE pass: the session
  *  must merge the oldest Work Log entries and bring the note back under the cap
@@ -605,7 +703,7 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
  * time it only suppresses the rare case where two fires land within the cooldown
  * (e.g. a replayed event firing right after a real one). Exported for unit tests.
  */
-export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
+export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolean } = {}): Promise<void> {
   // Defensive: the arming handler already gated on taskId/task, but runTriage may be
   // called directly (tests) and the timer fires asynchronously — re-narrow taskId so
   // the type flows and a stale/cleared task can't trigger a no-op triage.
@@ -626,7 +724,9 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
   }
 
   const lastAt = triageLastDispatch.get(dedupKey);
-  if (lastAt && now - lastAt < TRIAGE_COOLDOWN_MS) {
+  // A final summary is one ask per turn by construction (startTriage), and no
+  // replay reaches it: the wait it serves lives only in this process.
+  if (!opts.final && lastAt && now - lastAt < TRIAGE_COOLDOWN_MS) {
     log.session.warn('turn-complete-triage: skipped — cooldown', {
       taskId: p.taskId, sessionId: p.sessionId,
       msSinceLast: now - lastAt,
@@ -660,6 +760,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
 
     let existingNote = '';
     let promptedTitle = '';
+    let taskPhase = '';
     let selfReport = '';
     let uiLanguage: string | undefined;
     const askedAt = Date.now();
@@ -672,6 +773,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
         const taskRow = await getTask(taskId);
         existingNote = (taskRow.note ?? '').trim();
         promptedTitle = (taskRow.title ?? '').trim();
+        taskPhase = taskRow.phase;
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
         // write ALL sections", the model rewrites from scratch, the shrink
@@ -713,7 +815,10 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
     // silently reverts the concurrent write.
     try {
       const { getTask } = await import('../task-manager.js');
-      const freshNote = ((await getTask(taskId)).note ?? '').trim();
+      const freshTask = await getTask(taskId);
+      // The phase may have moved during the ask too (the session completed its task).
+      taskPhase = freshTask.phase;
+      const freshNote = (freshTask.note ?? '').trim();
       if (freshNote !== existingNote) {
         log.session.info('turn-complete-summary: note changed during ask — merging against fresh copy', {
           sessionId: p.sessionId, taskId: p.taskId,
@@ -886,7 +991,9 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
     // blockage (session:error / idle-timeout kill / all-dead reconcile). The
     // result's own session:result → NEED_ACTION flip is the terminal state.
 
-    const notifyMessage = decideNotify(selfReport, dedupKey);
+    // A completed task's last summary only records it: what it did is done,
+    // and the inbox is for what still needs the user.
+    const notifyMessage = taskPhase === 'COMPLETE' ? null : decideNotify(selfReport, dedupKey);
     if (notifyMessage) {
       // (d) Notify — same event contract the triage subagent's notify_main_agent
       // produced. agentId stays 'turn-complete-triage' so the server's notify_mode
@@ -950,6 +1057,19 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     // Skip triage for embedded subagent sessions (provider='embedded').
     if (p.session?.provider === 'embedded') return;
 
+    // This turn is the session's last: its task completed, and it stops now
+    // (sessions/self-complete-stop.ts), so the summary cannot wait.
+    if (isAwaitingTurnEnd(p.sessionId)) {
+      cancelPendingTriage(p.sessionId);
+      const gen = await liveTurnGen(p.sessionId);
+      finalSummaries.set(p.sessionId, { run: startTriage(p, { gen }), at: Date.now(), gen });
+      finalSummaryWaiters.get(p.sessionId)?.();
+      log.session.info('turn-complete-summary: final turn before the session stops — summarizing now', {
+        sessionId: p.sessionId, taskId: p.taskId,
+      });
+      return;
+    }
+
     // Trailing debounce: (re)arm the per-session timer. A prior pending run for this
     // session is cancelled — a burst of turn-completes thus collapses into one run
     // that fires only after the configured quiet window. Read the window fresh each
@@ -963,7 +1083,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     cancelPendingTriage(p.sessionId);
     const timer = setTimeout(() => {
       triageDebounceTimers.delete(p.sessionId);
-      void runTriage(p);
+      void startTriage(p);
     }, debounceMs);
     timer.unref?.(); // don't keep the process alive for a pending triage
     triageDebounceTimers.set(p.sessionId, timer);

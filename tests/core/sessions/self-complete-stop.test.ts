@@ -53,6 +53,7 @@ import { closeDb as closeTaskDb } from '../../../src/core/task-db.js'
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import {
+  __setSelfCompleteSettleMs,
   _pendingSelfCompleteStopsForTest,
   _resetSelfCompleteStopsForTest,
 } from '../../../src/core/sessions/self-complete-stop.js'
@@ -98,6 +99,8 @@ beforeEach(async () => {
   _resetSessionTrackerForTesting()
   _resetForTesting()
   _resetSelfCompleteStopsForTest()
+  // The settle window has its own tests below; elsewhere a turn end stops at once.
+  __setSelfCompleteSettleMs(0)
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   ownerStops.length = 0
@@ -112,6 +115,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   expect(signals, 'no stop path may signal a pid it read from a record').toEqual([])
+  __setSelfCompleteSettleMs()
   vi.restoreAllMocks()
   closeTaskDb()
   closeSessionDb()
@@ -279,5 +283,40 @@ describe('completions made by anyone else stop every live session at once', () =
     expect(await getSessionByClaudeId('lane')).toMatchObject({ process_status: 'stopped' })
     expect(ownerStops).toEqual([])
     expect(_pendingSelfCompleteStopsForTest()).toEqual([])
+  })
+})
+
+describe('the settle window after the turn end', () => {
+  it("a turn that another follows at once (a background command's follow-up) is not the end", async () => {
+    __setSelfCompleteSettleMs(300)
+    const task = await taskWithSessions([{ sid: 'self', status: 'running' }])
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']))
+
+    // The command drains: idle for a moment, then the CLI starts its follow-up turn.
+    await turnEnds('self')
+    await settle(50)
+    const rec = await updateSessionRecord('self', { process_status: 'running' })
+    emitSessionStatusChanged(rec, {}, ['*'], { source: 'snapshot:daemon-push' })
+    await settle(500)
+    expect(stoppedSids()).toEqual([])
+    expect(_pendingSelfCompleteStopsForTest()).toEqual(['self'])
+
+    // The follow-up turn ends and nothing follows it.
+    await turnEnds('self')
+    await vi.waitFor(() => expect(stoppedSids()).toEqual(['self']))
+  })
+
+  it('a turn end that stays put stops once the window has passed', async () => {
+    __setSelfCompleteSettleMs(300)
+    const task = await taskWithSessions([{ sid: 'self', status: 'running' }])
+    await completeTask(task.id, { actorSid: 'self' })
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']))
+    const endedAt = Date.now()
+    await turnEnds('self')
+    await settle(200)
+    expect(stoppedSids()).toEqual([])
+    await vi.waitFor(() => expect(stoppedSids()).toEqual(['self']))
+    expect(Date.now() - endedAt).toBeGreaterThanOrEqual(300)
   })
 })
