@@ -183,6 +183,7 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
     // An older companion without the route: a 404, or its app shell for an unknown path.
     if (status === 404 || status === 405 || (res.ok && !json)) {
       replicaUnsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
+      log.session.info('cloud replica: the companion keeps no task copy yet (older build), asking again in 10 minutes', { status })
       return { ok: false, outcome: 'unsupported', status }
     }
     if (status === 401 || status === 403) {
