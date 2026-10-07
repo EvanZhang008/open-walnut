@@ -32,6 +32,8 @@ export default defineConfig({
     // (they otherwise leak forever with ppid=1). See the file for the incident.
     // tmp-reaper: the harness removes every temp dir a test file creates directly
     // under $TMPDIR and forgot to clean (2,700 per full run before it existed).
+    // temp-tree-rm: a test's recursive rm of a temp tree retries, so a late
+    // writer of the code under test is not an ENOTEMPTY failure of its hook.
     // git-env-isolation: GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE override the
     // `cwd` every git test passes, so an inherited one aims the whole suite at
     // whatever repo the launcher was holding (2026-09-20: a stray commit on main).
@@ -42,6 +44,7 @@ export default defineConfig({
       'tests/setup/runtime-dir-isolation.ts',
       'tests/setup/git-env-isolation.ts',
       'tests/setup/tmp-reaper.ts',
+      'tests/setup/temp-tree-rm.ts',
       'tests/setup/worker-watchdog.ts',
     ],
     include: ['tests/**/*.test.ts'],
