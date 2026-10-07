@@ -736,8 +736,8 @@ describe('DaemonConnection — a service probe with no answer is not a verdict',
     stubSsh(c, routes)
     vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     vi.spyOn(log.session, 'info').mockImplementation(() => {})
-    const stopMaster = vi.spyOn(priv(c), 'stopControlMaster').mockResolvedValue(undefined)
-    vi.spyOn(priv(c), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The reconnect's first SSH step: it must not touch the master under the stop.
+    const master = vi.spyOn(priv(c), 'ensureControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(c), 'resolveRemoteDir').mockResolvedValue(undefined)
     const deployAndStart = vi.spyOn(priv(c), 'deployAndStart').mockResolvedValue(32200)
     vi.spyOn(priv(c), 'createTunnel').mockResolvedValue(5555)
@@ -760,11 +760,11 @@ describe('DaemonConnection — a service probe with no answer is not a verdict',
     routes.probe = noAnswer
     const reconnecting = priv(c).reconnect() as Promise<void>
     await vi.advanceTimersByTimeAsync(0)
-    expect(stopMaster).not.toHaveBeenCalled()
+    expect(master).not.toHaveBeenCalled()
 
     release()
     await reconnecting
-    expect(stopMaster).toHaveBeenCalledTimes(1)
+    expect(master).toHaveBeenCalledTimes(1)
     expect(deployAndStart).toHaveBeenCalledTimes(1)
 
     // It stood in for an answer once: the next reconnect needs a real one.

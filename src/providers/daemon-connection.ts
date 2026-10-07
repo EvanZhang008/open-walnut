@@ -29,7 +29,7 @@ import crypto from 'node:crypto'
 import { log } from '../logging/index.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
-import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
+import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
@@ -63,6 +63,7 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
+import { cancelRecordedForwards, controlSocketPath, exitControlMaster, probeControlMaster, recordForward, removeStaleMaster, startControlMaster } from './ssh-control-master.js'
 import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
@@ -1788,6 +1789,7 @@ export class DaemonConnection {
     // logs "channel N: open failed" per refused connection; an unread pipe
     // fills, ssh blocks, and the forward freezes while its port still accepts.
     const proc = spawn('ssh', args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    if (this._controlPath) recordForward(this._controlPath, `${localPort}:${target}:${remotePort}`)
     let stderrTail = ''
     proc.stderr?.on('data', (chunk: Buffer) => { stderrTail = (stderrTail + chunk.toString()).slice(-2_000) })
     proc.unref()
@@ -1823,7 +1825,7 @@ export class DaemonConnection {
     }
   }
 
-  disconnect(): void {
+  disconnect(opts: { keepSshMaster?: boolean } = {}): void {
     this._destroyed = true
     this.setConnected(false)
     this._connecting = false
@@ -1872,8 +1874,9 @@ export class DaemonConnection {
     }
     this.portForwards.clear()
 
-    // Stop SSH ControlMaster (fire-and-forget — cleanup only)
-    this.stopControlMaster().catch(() => {})
+    // Stop SSH ControlMaster (fire-and-forget — cleanup only), or leave it for the
+    // next server process when this one is shutting down.
+    this.stopControlMaster({ keep: opts.keepSshMaster }).catch(() => {})
 
     log.session.info('DaemonConnection: disconnected', { host: this.hostKey })
   }
@@ -1909,33 +1912,38 @@ export class DaemonConnection {
    * Start an SSH ControlMaster — a persistent background SSH connection that
    * all subsequent SSH commands multiplex through. This avoids opening 5-7
    * separate SSH connections during connect(), which triggers rate-limiting
-   * on corporate hosts.
+   * on corporate hosts. A master an earlier server process left running for this
+   * data dir and target is reused instead: it is already authenticated, which is
+   * all that keeps the host reachable once the user's SSH credential has expired
+   * (ssh-control-master.ts).
    */
   private async ensureControlMaster(): Promise<void> {
     if (this._controlMaster) return
-    const socketPath = path.join(os.tmpdir(), `walnut-ssh-${this.hostKey}-${process.pid}`)
+    const socketPath = controlSocketPath({ hostKey: this.hostKey, target: this.sshTargetIdentity, home: WALNUT_HOME })
+    const sshArgs = this.buildSshArgs({ useControlMaster: false })
+    const state = await probeControlMaster(socketPath, sshArgs, this.sshHostString)
+    if (state === 'live') {
+      this._controlPath = socketPath
+      const cancelled = await cancelRecordedForwards(socketPath, sshArgs, this.sshHostString)
+      log.session.info('DaemonConnection: SSH ControlMaster reused', {
+        host: this.hostKey, socketPath, staleForwards: cancelled.length,
+      })
+      return
+    }
+    if (state === 'foreign') {
+      log.session.warn('DaemonConnection: control socket is not this user\'s, falling back to individual connections', {
+        host: this.hostKey, socketPath,
+      })
+      this._controlPath = null
+      return
+    }
+    if (state === 'stale') await removeStaleMaster(socketPath, sshArgs, this.sshHostString)
     this._controlPath = socketPath
-
-    const args = [
-      '-o', 'BatchMode=yes',
-      '-o', 'StrictHostKeyChecking=no',
-      '-o', `ControlPath=${socketPath}`,
-      '-o', 'ControlMaster=yes',
-      '-o', 'ControlPersist=300',  // keep alive 5 min after last use
-      '-o', 'ServerAliveInterval=15',
-      '-o', 'ServerAliveCountMax=3',
-    ]
-    if (this.ssh.port) args.push('-p', String(this.ssh.port))
-    args.push('-fN', this.sshHostString)  // -f: background, -N: no command
 
     try {
       // Bounded (remote-sh.ts runSshBounded): execFile's own timeout killed ssh but
       // then waited for the ProxyCommand child holding its stderr, 15 minutes once.
-      const run = await runSshBounded(args, { timeoutMs: 15_000 })
-      if (run.spawnError) throw run.spawnError
-      if (run.timedOut || run.code !== 0) {
-        throw new Error(`Command failed: ssh ${args.join(' ')}\n${run.timedOut ? 'timed out after 15000ms' : run.stderr.trim() || `exit code ${run.code}`}`)
-      }
+      await startControlMaster(socketPath, sshArgs, this.sshHostString)
       // ssh returns once -f backgrounds. ControlMaster is now running.
       log.session.info('DaemonConnection: SSH ControlMaster started', {
         host: this.hostKey, socketPath,
@@ -1948,17 +1956,22 @@ export class DaemonConnection {
     }
   }
 
+  /** What decides which machine this connection reaches: the master's identity. */
+  private get sshTargetIdentity(): string {
+    return `${this.sshHostString}:${this.ssh.port ?? ''}`
+  }
+
   /**
-   * Stop the SSH ControlMaster connection.
+   * Stop the SSH ControlMaster connection. `keep` only forgets it: a server that
+   * is stopping leaves the master for the next process (ControlPersist ends it
+   * if none comes).
    */
-  private async stopControlMaster(): Promise<void> {
-    if (this._controlPath) {
+  private async stopControlMaster(opts: { keep?: boolean } = {}): Promise<void> {
+    if (this._controlPath && !opts.keep) {
       // Nothing to check: a master that is already gone is the usual case here.
-      try {
-        await runSshBounded(['-o', `ControlPath=${this._controlPath}`, '-O', 'exit', this.sshHostString], { timeoutMs: 5_000 })
-      } catch { /* already gone */ }
-      this._controlPath = null
+      await exitControlMaster(this._controlPath, this.buildSshArgs({ useControlMaster: false }), this.sshHostString)
     }
+    this._controlPath = null
     this._controlMaster = null
   }
 
@@ -3403,6 +3416,8 @@ export class DaemonConnection {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+    // Through a master, the master holds the forward: listed so the next server cancels it.
+    if (this._controlPath) recordForward(this._controlPath, `${localPort}:127.0.0.1:${remotePort}`)
     this.tunnel.unref()
     // What ssh said while setting the tunnel up ("Port forwarding is disabled
     // to avoid man-in-the-middle attacks" after a host key change): the error
@@ -4230,8 +4245,8 @@ export class DaemonConnection {
     }
 
     // A postponed update going ahead drops the socket while its stop is still
-    // confirming: wait for it, or this reconnect would kill the ControlMaster
-    // under that stop and race it to the deploy.
+    // confirming: wait for it, or this reconnect would probe (and maybe rebuild)
+    // the ControlMaster under that stop and race it to the deploy.
     if (this._upgradeRecheckInFlight) await this._upgradeRecheckInFlight.catch(() => {})
 
     // Reset deploy flags — if daemon is still alive we skip deploy entirely;
@@ -4247,11 +4262,14 @@ export class DaemonConnection {
       this.tunnel = null
     }
 
-    // When the WebSocket/tunnel drops, the ControlMaster usually died with it.
-    // Tear it down and rebuild before probing — otherwise every SSH command
-    // silently fails through a dead socket and we misdiagnose a live daemon
-    // as dead, burning ~10s on a pointless redeploy.
-    await this.stopControlMaster().catch(() => {})
+    // When the WebSocket/tunnel drops, the ControlMaster often died with it, and
+    // every SSH command through a dead one would fail and misdiagnose a live
+    // daemon as dead (~10s on a pointless redeploy). ensureControlMaster keeps a
+    // master only once a command through it came back, and rebuilds otherwise:
+    // a dropped tunnel (a daemon restart or upgrade) must not throw away a master
+    // that still works, the one thing that reaches a host whose SSH credential
+    // has expired since it authenticated.
+    this._controlPath = null
     await this.ensureControlMaster()
 
     // Check if daemon is still running. Strict mode: an SSH failure now means
@@ -5247,11 +5265,12 @@ export function credentialWaitingHosts(): Array<{ host: string; failedAt: number
 }
 
 /**
- * Disconnect all daemon connections. Called on server shutdown.
+ * Disconnect all daemon connections. Called on server shutdown, so each host's
+ * SSH ControlMaster is left running for the next server process to reuse.
  */
 export function disconnectAllDaemons(): void {
   for (const [key, conn] of connectionPool) {
-    conn.disconnect()
+    conn.disconnect({ keepSshMaster: true })
   }
   connectionPool.clear()
 }

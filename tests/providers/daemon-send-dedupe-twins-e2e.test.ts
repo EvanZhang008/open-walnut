@@ -26,6 +26,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 let cliPath = ''
@@ -318,7 +319,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     // Root reads it whatever its mode, so this half only holds for a normal user.
     if (!isRoot) {
       const grep = spawnSync('/bin/sh', ['-c', 'cd "$1" && exec grep -l never-matches-anything $(ls -t)', 'sh', dirs.streams],
-        { timeout: 5000, env: { PATH: '/usr/bin:/bin' } })
+        { timeout: 5000, env: { PATH: guardedPath([], '/usr/bin:/bin') } })
       expect(grep.error).toBeUndefined()
       expect(grep.signal).toBeNull()
     }
