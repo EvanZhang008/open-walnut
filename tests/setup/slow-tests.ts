@@ -88,6 +88,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/daemon-isolated-exit-reap-twins.test.ts', // ~15s: both daemon twins exit with live sessions; one case waits out the 5s SIGINT grace
   'tests/providers/daemon-link-liveness-twins-e2e.test.ts', // ~35s: both daemon twins, the bridge silence watchdog and the trusted-client keepalive on sub-second clocks
   'tests/providers/daemon-bridge-slow-link-twins-e2e.test.ts', // ~55s: three daemon runtimes, a 1 MB read across a rate-limited bridge link, and a dead link's teardown
+  'tests/providers/daemon-bridge-wss-twins-e2e.test.ts', // ~35s: three daemon runtimes dialing wss://localhost with a certificate made by openssl at runtime
   'tests/web/routes/bug-report.test.ts', // 5s
   'tests/web/routes/task-hook-maintainer.test.ts', // 5s
   'tests/web/routes/chat-plan-mode.test.ts', // 5s

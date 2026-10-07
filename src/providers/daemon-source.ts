@@ -9588,6 +9588,11 @@ function connectBridgeTcp(opts, secure, holder, done) {
   const host = opts.host || opts.hostname;
   const tcp = net.connect({ host: host, port: Number(opts.port) });
   holder.tcp = tcp;
+  // This socket always has an 'error' listener of its own, for its whole life:
+  // an 'error' nobody listens for is an uncaught exception, and that ends the
+  // daemon. What a failure means reaches the client another way: through done
+  // or request() before the upgrade, through the socket on top after it.
+  tcp.on('error', function() {});
   if (!secure) return tcp;
   const onError = function(err) { done(err); };
   tcp.once('error', onError);
@@ -9752,8 +9757,8 @@ function createBridgeWsClient(url) {
 // A socket given up on is reset, not closed: a close handshake on a slow or
 // dead link keeps the stream draining (see getWsClientCtor), and so does a
 // FIN (see resetBridgeTcp). Under Bun there is no TCP socket to reach:
-// terminate() is all there is (see daemon-standalone.ts). Keep in sync with
-// daemon-standalone.ts.
+// terminate() is all there is, and on wss:// it ends nothing (see
+// daemon-standalone.ts). Keep in sync with daemon-standalone.ts.
 function abandonBridgeSocket(client) {
   resetBridgeTcp(client.bridgeTcp);
   try { if (typeof client.terminate === 'function') client.terminate(); else client.close(); } catch {}

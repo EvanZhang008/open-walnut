@@ -8439,11 +8439,20 @@ function scheduleBridgeRedial(gen: number): void {
 
 // A socket given up on is terminated, not closed: a close handshake on a slow
 // or dead link keeps the stream draining what it had buffered, and behind one
-// slow bottleneck those streams starve the new link. On Bun 1.3.9 close() and
-// terminate() both reset a client socket whose own send buffer is empty
-// (measured 2026-10-05), which drops what the kernel buffered, and neither
-// stops one still sending from that buffer; terminate() is the call whose
-// contract is to end the socket at once. Keep in sync with daemon-source.ts.
+// slow bottleneck those streams starve the new link. terminate() is the call
+// whose contract is to end the socket at once; what Bun 1.3.9 really does with
+// a client behind a path that stopped answering (measured 2026-10-05/06):
+//   ws://   close() and terminate() both reset the socket (RST), which drops
+//           what the kernel buffered.
+//   wss://  neither ends it: no FIN, no RST. A bare client's socket stayed open
+//           for the 330 s watched; in the daemon the old stream went on until
+//           160 to 170 s into a 70 s outage on a 4.5 KB/s link (131 to 137 s on
+//           the JS twin), with no extra drop of the new link.
+// This twin cannot end an abandoned wss link. Bun's WebSocket exposes no
+// socket, and the only Bun call that resets a TLS flow is terminate() on a
+// Bun.connect({ tls }) socket (node:tls destroy() and resetAndDestroy() under
+// Bun end nothing either), so doing it means owning the TLS transport under
+// the WebSocket, which this twin does not. Keep in sync with daemon-source.ts.
 function abandonBridgeSocket(client: WebSocket) {
   try {
     const t = (client as unknown as { terminate?: () => void }).terminate

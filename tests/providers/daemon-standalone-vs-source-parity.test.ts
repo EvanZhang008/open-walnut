@@ -2240,8 +2240,9 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
     }
   })
   // Gate M7 (2026-10-05): the bun twin's terminate branch had no test. On Bun
-  // 1.3.9 close() also resets a client socket, so no run can tell the two
-  // apart (the slow-link e2e pins the reset itself); this pins the call.
+  // 1.3.9 no run can tell close() from terminate(): on ws:// both reset the
+  // socket (the slow-link e2e pins that reset), and on wss:// neither ends it
+  // (gate 2026-10-06, see abandonBridgeSocket). So this pins the call.
   it('the bun twin terminates a socket it gives up on, closing it only when it cannot terminate', () => {
     const helper = standaloneSrc.slice(standaloneSrc.indexOf('function abandonBridgeSocket('), standaloneSrc.indexOf('function abandonBridgeSocket(') + 300)
     expect(helper).toMatch(/const t = \(client as unknown as \{ terminate\?: \(\) => void \}\)\.terminate\s*\n\s*if \(typeof t === 'function'\) t\.call\(client\); else client\.close\(\)/)

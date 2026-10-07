@@ -17,7 +17,9 @@
  *    open, and on a shared slow link it kept draining. Then it destroyed the
  *    socket, and the kernel still sent what it had buffered before the FIN
  *    (gate 2026-10-05: 8 dials, 7 drops, no reply behind a slow link). Now
- *    both Node clients reset the TCP socket and Bun's terminate() resets it.
+ *    both Node clients reset the TCP socket, and so does Bun's terminate() on
+ *    ws:// (these links are ws://). On wss:// Bun 1.3.9 ends nothing; see
+ *    daemon-bridge-wss-twins-e2e.test.ts and abandonBridgeSocket.
  *
  * Runtimes: the source twin with no ws package (its own client), the source
  * twin with the ws package next to it (as deploySource installs it on a remote
