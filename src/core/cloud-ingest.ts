@@ -149,6 +149,15 @@ export type CloudReplicaReply =
 
 let replicaUnsupportedUntil = 0
 
+/** The pooled keep-alive socket was closed by the far side just as this request
+ *  went out on it (ECONNRESET / EPIPE / undici "other side closed"): no answer
+ *  was read, and a fresh connection is worth one more try. Never a timeout. */
+function staleSocketReset(err: unknown): boolean {
+  if (!(err instanceof Error) || err.name === 'TimeoutError' || err.name === 'AbortError') return false
+  const code = (err as { cause?: { code?: unknown } }).cause?.code
+  return code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET'
+}
+
 /** A companion is set up and the replica lane is not resting: worth building a manifest for. */
 export async function cloudReplicaAvailable(): Promise<boolean> {
   if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return false
@@ -161,6 +170,10 @@ export async function cloudReplicaAvailable(): Promise<boolean> {
  * JSON answer. Never rejects. A companion without the route (404/405) rests
  * this lane for 10 minutes without resting the ingest lane: an older companion
  * still takes projections. A refused credential rests both.
+ *
+ * Both steps are idempotent (a manifest, or rows written as they are), so a
+ * request whose reused socket was reset before any answer goes out once more on
+ * a fresh connection instead of failing the whole round.
  */
 export async function postToCloudReplica(payload: Record<string, unknown>, opts: { timeoutMs?: number } = {}): Promise<CloudReplicaReply> {
   if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return { ok: false, outcome: 'unsupported' }
@@ -171,11 +184,15 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
   let status = 0
   try {
     const body = await gzip(Buffer.from(JSON.stringify(payload), 'utf8'))
-    const res = await fetch(url, {
+    const send = (): Promise<globalThis.Response> => fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
       body,
       signal: AbortSignal.timeout(opts.timeoutMs ?? timeoutMs),
+    })
+    const res = await send().catch((err: unknown) => {
+      if (!staleSocketReset(err)) throw err
+      return send()
     })
     status = res.status
     const json = await res.json().catch(() => null) as Record<string, unknown> | null

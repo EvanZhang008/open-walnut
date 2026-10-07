@@ -8,6 +8,8 @@
  *     upload bytes damaged in transit, and the bridge must not carry them);
  *   - the body is gzip'd `{kind, data}`, with the bearer machine token;
  *   - latest-wins serialization per key;
+ *   - the replica lane's one retry when a socket is reset before any answer
+ *     (the companion closing a pooled keep-alive socket under the next step);
  *   - the documented limits: 2 requests in flight, a request deadline, a
  *     10-minute rest after a refusal that ENDS (the lane is tried again), one
  *     endpoint lookup shared by concurrent cold pushes, and no queued request
@@ -48,6 +50,8 @@ let status = 200
 let htmlBody = false
 /** 'hold': keep the answer until the test releases it; 'hang': never answer. */
 let answerMode: 'now' | 'hold' | 'hang' = 'now'
+/** The next N requests have their socket reset once the body is read, with no answer. */
+let resets = 0
 const held: Array<() => void> = []
 let open = 0
 let maxOpen = 0
@@ -68,6 +72,7 @@ const replica = http.createServer((req, res) => {
       res.writeHead(code, { 'Content-Type': 'application/json' })
       res.end(code < 300 ? '{"ok":true,"need":["t1"]}' : '{"error":"x"}')
     }
+    if (resets > 0) { resets--; req.socket.resetAndDestroy(); return }
     if (answerMode === 'hang') return
     if (answerMode === 'hold') { held.push(answer); return }
     answer()
@@ -87,7 +92,7 @@ afterEach(() => {
   vi.useRealTimers()
   replica.closeAllConnections() // a hung or held request must not leak into the next case
   _resetCloudIngestForTesting()
-  seen.length = 0; held.length = 0; status = 200; answerMode = 'now'; open = 0; maxOpen = 0; htmlBody = false
+  seen.length = 0; held.length = 0; status = 200; answerMode = 'now'; open = 0; maxOpen = 0; htmlBody = false; resets = 0
   bridgeCfg = { enabled: false }; cfgCalls = 0; cfgDelayMs = 0
 })
 const tail = (sid: string): string => JSON.stringify({ sid, data: { version: 1, sessionId: sid, exportedAt: 'z', truncated: false, messages: [] } })
@@ -272,6 +277,27 @@ describe('postToCloudReplica (the companion\'s task copy, beside ingest)', () =>
     status = 401
     expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'unsupported', status: 401 })
     expect(cloudIngestResting()).toBe(true)
+  })
+
+  it('a socket reset before any answer is tried once more on a fresh connection; a second reset is a failure', async () => {
+    point()
+    resets = 1
+    expect(await postToCloudReplica({ op: 'sync', kind: 'tasks', entries: [] })).toEqual({ ok: true, reply: { ok: true, need: ['t1'] } })
+    expect(seen).toHaveLength(2) // the same step, twice
+    expect(seen[1]?.body).toEqual(seen[0]?.body)
+    seen.length = 0
+    resets = 2
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'failed' })
+    expect(seen).toHaveLength(2) // never a third
+    expect(await cloudReplicaAvailable()).toBe(true) // a failure rests nothing
+  })
+
+  it('a deadline is not retried', async () => {
+    _resetCloudIngestForTesting({ timeoutMs: 300 })
+    point()
+    answerMode = 'hang'
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'failed' })
+    expect(seen).toHaveLength(1)
   })
 
   it('no companion set up: not available, and nothing is sent', async () => {
