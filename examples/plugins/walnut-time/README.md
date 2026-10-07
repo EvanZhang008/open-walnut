@@ -19,20 +19,20 @@ Each tab is a real URL, so any of them can be bookmarked or linked:
 
 ## Time on a task and on a session
 
-Two slots (`walnut.ui.slot`) bring the numbers to the work itself, so nobody has to open the App to ask "how long did this take":
+Two slots (`walnut.ui.slot`) bring the numbers to the work itself, so nobody has to open the App to ask "how long did this take". Each is one short "Time" fact, `You 25m · Agent 1h 12m` (all time); hover it for Total, Today and the last 7 days of both clocks:
 
-- **Task details** (`task.detail`): under the details of a task, in the Home task popup and on the task page, one compact table: You and Agent, each for Total, Today and the last 7 days.
-- **Session header** (`session.header`): one chip on the session's tool row, `25m · 1h 12m` (your time · agent time on the session). Hover it for all six numbers. When the column is narrow it is the first chip to move into the row's "..." menu, and it still opens from there.
+- **Task** (`task.meta`): with the task's id and dates, in the Home task details popup, and in the side rail of the task page.
+- **Session** (`session.meta`): at the top of the session's ⋮ menu, under Panels. The session header's tool row stays the host's own.
 
 Both are links into one more page of the App, which can be bookmarked like the tabs:
 
 | Page | Path | What it shows |
 |---|---|---|
 | Task | `/apps/walnut-time~main/task/<taskId>` | The task's totals, then every day it has time on, newest first. Open a day for each session's share and the time spent on the task outside any session. |
-| Task, one session | `/apps/walnut-time~main/task/<taskId>?session=<sessionId>` | The same page narrowed to one session; the session chip lands here. |
+| Task, one session | `/apps/walnut-time~main/task/<taskId>?session=<sessionId>` | The same page narrowed to one session; the session menu's Time fact lands here. |
 | Session | `/apps/walnut-time~main/session/<sessionId>` | A session with no task. |
 
-The two clocks stay apart on all three, as everywhere else in the App: you and an agent often work at the same moment and sessions run side by side, so a sum would be more time than passed. Sessions are named by their titles, never by their ids. A task's time is its own: a subtask's time stays on the subtask. "Total" is everything recorded; days older than the summary's 90-day window are read in the background after a restart, and the page says "Still reading older days" until they are in. Agent time on days before the agent clock existed comes from the usage ledger, exactly as the Overview fills those days, so the two never disagree. A task with nothing recorded shows no Time row at all.
+The two clocks stay apart on all three, as everywhere else in the App: you and an agent often work at the same moment and sessions run side by side, so a sum would be more time than passed. Sessions are named by their titles, never by their ids. A task's time is its own: a subtask's time stays on the subtask. "Total" is everything recorded; days older than the summary's 90-day window are read in the background after a restart, and the page says "Still reading older days" until they are in. Agent time on days before the agent clock existed comes from the usage ledger, exactly as the Overview fills those days, so the two never disagree. A task or session with nothing recorded shows no Time fact at all.
 
 The numbers refresh a few seconds after a session's turn ends (that is when agent time is banked), every minute while the page is visible, and from one shared cache, so a task shown in three places costs one request.
 

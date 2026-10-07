@@ -120,9 +120,9 @@ const taskIds = DENSE_TASKS.map((_, i) => `t-time-${String(i + 1).padStart(2, '0
 /**
  * PW_TIME_APP_SLOTS=1 adds one task with three sessions and time spread over four
  * days (today, 3 days ago, 10 days ago, and one far past the 90-day hydrate window),
- * for the task detail slot, the session header chip and the task page
- * (time-task-slots.spec.ts). Off by default, so the App spec's dense day keeps
- * exactly its own tasks.
+ * plus a fourth session and a second task with nothing recorded, for the Time facts in
+ * the task details and the session menu and for the task page (time-task-slots.spec.ts).
+ * Off by default, so the App spec's dense day keeps exactly its own tasks.
  */
 const SLOTS = process.env.PW_TIME_APP_SLOTS === '1'
 const SLOT_TASK = 't-time-slots'
@@ -131,7 +131,24 @@ const SLOT_SESSIONS = [
   { id: 'sess-time-slots-b', title: 'Review the day-by-day list and the session chip in a narrow column, a title long enough to truncate' },
   // Untitled: the page names it by the last day it ran, never by its id.
   { id: 'sess-time-slots-c', title: undefined },
+  // Nothing recorded: its menu carries no Time fact at all.
+  { id: 'sess-time-slots-d', title: 'A fresh session with nothing recorded yet' },
 ] as const
+// A task with nothing recorded: its details carry no Time fact at all.
+const EMPTY_TASK = 't-time-none'
+const emptyTask = {
+  id: EMPTY_TASK,
+  title: 'Time empty fixture task',
+  status: 'todo',
+  phase: 'TODO',
+  priority: 'none',
+  project: 'Console',
+  source: 'local',
+  pinned: true,
+  focus_tier: 'focus',
+  pin_order: -2,
+  created_at: now,
+}
 const slotTask = {
   id: SLOT_TASK,
   title: 'Time slots fixture task',
@@ -157,7 +174,7 @@ const slotTask = {
 
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({
   version: 1,
-  tasks: [...(SLOTS ? [slotTask] : []), ...DENSE_TASKS.map((spec, i) => ({
+  tasks: [...(SLOTS ? [slotTask, emptyTask] : []), ...DENSE_TASKS.map((spec, i) => ({
     id: taskIds[i],
     title: spec.title,
     status: 'in_progress',
@@ -485,7 +502,7 @@ const fixture = {
   previousDate: previous,
   outsideEmptyDate,
   outsideHintDate,
-  ...(SLOTS ? { slots: { taskId: SLOT_TASK, sessionIds: SLOT_SESSIONS.map((s) => s.id), today: slotToday } } : {}),
+  ...(SLOTS ? { slots: { taskId: SLOT_TASK, emptyTaskId: EMPTY_TASK, sessionIds: SLOT_SESSIONS.map((s) => s.id), today: slotToday } } : {}),
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`TIME_APP_READY ${JSON.stringify(fixture)}`)

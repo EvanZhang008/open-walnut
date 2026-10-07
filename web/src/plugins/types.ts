@@ -101,23 +101,23 @@ export interface PluginSettingsContribution {
 }
 
 /** Mirrors `@open-walnut/plugin-api`'s SlotTarget: the host surfaces a plugin can draw inside. */
-export type PluginSlotTarget = 'task.detail' | 'session.header'
-export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.detail', 'session.header']
+export type PluginSlotTarget = 'task.meta' | 'session.meta'
+export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.meta', 'session.meta']
 
-export interface PluginTaskDetailSlotProps {
+export interface PluginTaskMetaSlotProps {
   taskId: string
   navigate(path: string): void
 }
 
-export interface PluginSessionHeaderSlotProps {
+export interface PluginSessionMetaSlotProps {
   sessionId: string
   taskId?: string
   navigate(path: string): void
 }
 
 export interface PluginSlotPropsByTarget {
-  'task.detail': PluginTaskDetailSlotProps
-  'session.header': PluginSessionHeaderSlotProps
+  'task.meta': PluginTaskMetaSlotProps
+  'session.meta': PluginSessionMetaSlotProps
 }
 
 /** Mirrors `@open-walnut/plugin-api`'s SlotContribution (see ChatViewProps for why it must). */

@@ -1,12 +1,20 @@
 /* Where plugin slots sit inside host surfaces (web/src/plugins/PluginSlots.tsx).
-   The wrappers exist only while at least one plugin draws in that slot. */
-.todo-detail-plugin-slots,
-.tdv2-plugin-slots {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
+   Every slot is one labelled fact; on the task details' metadata line the label
+   reads like the line's other words ("Created", "Updated"). */
+.todo-detail-meta-fact-label {
+  color: var(--fg-muted);
 }
-.todo-detail-plugin-slots { margin-bottom: 12px; }
-.todo-detail-plugin-slots:empty,
-.tdv2-plugin-slots:empty { display: none; }
+
+/* At the top of the session ⋮ menu (SessionMetaFacts), shaped like the Panels row
+   above it: the label, then the plugin's value. */
+.task-kebab-fact {
+  font-size: 12px;
+  cursor: default;
+}
+.task-kebab-fact-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}

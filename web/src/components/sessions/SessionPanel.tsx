@@ -73,7 +73,7 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
-import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
+import { PanelCountRow, SessionKebabSection, SessionMetaFacts } from './SessionKebabSection';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -109,7 +109,6 @@ import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskSta
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
-import { PluginSlots, slotHeaderId } from '@/plugins/PluginSlots';
 import '@/styles/session-header-fit.css';
 
 /**
@@ -1977,22 +1976,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 )}
               </>
             )}
-            {/* Plugin slots (walnut.ui.slot 'session.header'): chips like the ones above,
-                measured by the same fit, and the first chip to move into "...". */}
-            <PluginSlots
-              target="session.header"
-              props={{ sessionId, ...(session?.taskId ? { taskId: session.taskId } : {}) }}
-              wrap={(entry, node) => (
-                <span
-                  className="session-header-item"
-                  data-header-id={slotHeaderId(entry)}
-                  data-header-name={entry.value.title}
-                  data-hidden={hid(slotHeaderId(entry))}
-                >
-                  {node}
-                </span>
-              )}
-            />
+            {/* This row's width is very precious: it holds only the host's own tools, and
+                every new chip pushes them into "...". Do not add more here. Plugins
+                (walnut.ui.slot 'session.meta') and any other fact about the session go
+                in the ⋮ menu (SessionMetaFacts in SessionKebabSection.tsx). 2026-10-06: a time chip
+                put here was taken out at the user's request. */}
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
             <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} />
             {activityAge && (
@@ -2202,6 +2190,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     <>
                       <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
                       <PanelCountRow onAfterAction={close} />
+                      <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
                     </>
                   )}
                   extraSection={(close) => (

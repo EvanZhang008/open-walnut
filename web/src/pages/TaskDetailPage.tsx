@@ -5,7 +5,7 @@ import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchTask, toggleCompleteTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
 import { TaskFieldEditor } from '@/components/tasks/TaskFieldEditor';
 import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
-import { PluginSlots } from '@/plugins/PluginSlots';
+import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { DatePicker } from '@/components/common/DatePicker';
 import { fetchSessionsForTask, updateSession } from '@/api/sessions';
 import type { SessionRecord } from '@open-walnut/core';
@@ -413,8 +413,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
 
       <div className="tdv2-body">
       <div className="tdv2-main">
-        {/* Plugin slots (walnut.ui.slot 'task.detail'), e.g. the time this task took. */}
-        <PluginSlots target="task.detail" props={{ taskId: task.id }} className="tdv2-plugin-slots mb-4" />
         {/* Dependencies */}
         <div className="card mb-4" style={{ display: task.is_blocked || showDepPicker || (task.depends_on?.length ?? 0) > 0 || (task.dependents?.length ?? 0) > 0 ? undefined : 'none' }}>
         <div style={{ marginBottom: '0' }}>
@@ -855,6 +853,14 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             )}
           </span>
         </div>
+        {/* Plugin facts (walnut.ui.slot 'task.meta'), e.g. the time this task took. */}
+        <PluginSlots
+          target="task.meta"
+          props={{ taskId: task.id }}
+          wrap={(entry, node) => (
+            <PluginSlotFact entry={entry} className="tdv2-kv" labelClassName="tdv2-k" valueClassName="tdv2-v">{node}</PluginSlotFact>
+          )}
+        />
       </aside>
       </div>{/* /tdv2-body */}
     </div>

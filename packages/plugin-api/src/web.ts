@@ -62,25 +62,27 @@ export interface SettingsContribution {
 }
 
 /**
- * Where a slot renders. A slot is a small piece of UI the host draws INSIDE one of
- * its own surfaces, next to the host's own content, for every object it shows there.
+ * Where a slot renders. A slot is ONE labelled fact the host prints with its own facts
+ * about an object (a task, a session): the host writes the slot's `title` as the label
+ * and your component renders the value, short enough for one line ("2h 10m", a link).
  *
- * - `'task.detail'`: one row in a task's details, below its title and dates (the
- *   task details popup and the `/tasks/:id` page).
- * - `'session.header'`: one chip on a session panel's tool row, beside Changed, Files
- *   and Board. When the column is narrow it leaves the row before any of the host's
- *   own chips (only the last-activity time goes sooner), into the row's "..." menu,
- *   where a click on its row clicks your chip's first button.
+ * - `'task.meta'`: with a task's id, created and updated time, in the task details popup
+ *   and on the `/tasks/:id` page.
+ * - `'session.meta'`: at the top of a session's ⋮ menu, under the Panels row. The
+ *   menu closes when your value navigates.
+ *
+ * There is deliberately no slot on a session's header row: its width belongs to the
+ * host's own tools.
  */
-export type SlotTarget = 'task.detail' | 'session.header'
+export type SlotTarget = 'task.meta' | 'session.meta'
 
-export interface TaskDetailSlotProps {
+export interface TaskMetaSlotProps {
   taskId: string
   /** Navigate within the console (an App path, `/tasks/<id>`, ...). */
   navigate(path: string): void
 }
 
-export interface SessionHeaderSlotProps {
+export interface SessionMetaSlotProps {
   sessionId: string
   /** The session's task, when it has one. */
   taskId?: string
@@ -88,19 +90,19 @@ export interface SessionHeaderSlotProps {
 }
 
 export interface SlotPropsByTarget {
-  'task.detail': TaskDetailSlotProps
-  'session.header': SessionHeaderSlotProps
+  'task.meta': TaskMetaSlotProps
+  'session.meta': SessionMetaSlotProps
 }
 
 export interface SlotContribution<T extends SlotTarget = SlotTarget> {
   /** Local id, unique within the plugin. */
   id: string
   target: T
-  /** A word or two naming the slot (the session header's "..." menu lists it by this). */
+  /** The fact's label, a word or two ("Time"). */
   title: string
   /**
-   * Rendered once per object the surface shows, inside its own error boundary. Render
-   * nothing (`null`) when there is nothing worth showing: the host leaves no gap.
+   * The value, rendered once per object inside its own error boundary. Render nothing
+   * (`null`) when there is nothing worth showing: the host then drops the label too.
    */
   component: PluginComponent<SlotPropsByTarget[T]>
   /** Sort weight among the plugins in the same slot. Default 500. */

@@ -4,8 +4,8 @@ import net from 'node:net'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
 /**
- * How long a task took, where the task is: the walnut-time plugin's two slots
- * (`walnut.ui.slot`) and the task page they lead to.
+ * How long a task took, where the task is: the walnut-time plugin's two Time facts
+ * (`walnut.ui.slot` 'task.meta' and 'session.meta') and the task page they lead to.
  *
  * The fixture (time-app-server.ts with PW_TIME_APP_SLOTS=1) links the real plugin and
  * seeds one task with three sessions and time on four days: today, 3 days ago, 10 days
@@ -19,15 +19,17 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
  *   -200                                                      you 20
  *
  * so the task reads You 1h 34m / 29m / 59m and Agent 3h 19m / 1h 12m / 3h 12m
- * (Total / Today / 7 days), and session A reads 50m · 3h 02m.
+ * (Total / Today / 7 days), and session A reads 50m and 3h 02m. A fourth session and
+ * a second task have nothing recorded.
  *
- * What it pins: the numbers on both slots are those (two lanes, never summed); each
- * slot leads to the task page, the chip with its session already chosen; the page
- * lists the days newest first with each session's share and the time outside any
- * session, names sessions by title and never by id; a narrow column moves the chip
- * into the header's "..." menu and it still opens from there; the end of a turn (a
- * real session:result on the server's bus) refreshes the chip; and disabling the
- * plugin takes both slots away without a reload.
+ * What it pins: each fact is ONE short value with its surface's own facts (the task
+ * details' metadata line, the top of the session menu), never a block and never a chip
+ * on the session header's row; the hover text carries all six numbers; each leads to
+ * the task page, the session's with that session chosen; the page lists the days newest
+ * first with each session's share and the time outside any session, names sessions by
+ * title and never by id; nothing recorded means no fact and no stray label; the end of
+ * a turn (a real session:result on the server's bus) refreshes the open menu; and
+ * disabling the plugin takes both facts away without a reload.
  */
 
 const SHOTS = '/tmp/time-task-slots'
@@ -37,7 +39,7 @@ const SID_A = 'sess-time-slots-a'
 interface Fixture {
   port: number
   home: string
-  slots: { taskId: string; sessionIds: string[]; today: string }
+  slots: { taskId: string; emptyTaskId: string; sessionIds: string[]; today: string }
 }
 
 let child: ChildProcessWithoutNullStreams | null = null
@@ -122,9 +124,9 @@ async function loadHome(page: Page): Promise<void> {
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 60_000 })
 }
 
-async function openDetails(page: Page): Promise<Locator> {
-  await page.locator('.todo-search-input').fill('Time slots fixture')
-  const row = page.locator(`.todo-panel-item[data-task-id="${TASK}"]:visible`).first()
+async function openDetails(page: Page, taskId = TASK, search = 'Time slots fixture'): Promise<Locator> {
+  await page.locator('.todo-search-input').fill(search)
+  const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]:visible`).first()
   await expect(row).toBeVisible({ timeout: 20_000 })
   await row.getByRole('button', { name: 'More actions' }).click()
   await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
@@ -136,6 +138,17 @@ async function openDetails(page: Page): Promise<Locator> {
 const cell = (slot: Locator, name: string) => slot.locator(`[data-cell="${name}"]`)
 const column = (page: Page, sid: string) => page.locator(`.main-page-session-column[data-column-id="${sid}"]`)
 
+async function openMenu(page: Page, col: Locator): Promise<Locator> {
+  await col.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).first().click()
+  const menu = page.locator('.task-kebab-menu:visible').first()
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+/** Wait for the plugin's answer about one object, so an absence is a real one. */
+const answered = (page: Page, path: string) =>
+  page.waitForResponse((r) => r.url().includes(path) && r.status() === 200, { timeout: 30_000 })
+
 async function openColumnFromDetails(page: Page, sid: string): Promise<Locator> {
   const modal = await openDetails(page)
   await modal.locator(`.todo-detail-session-item[title="${sid}"]`).click()
@@ -144,34 +157,35 @@ async function openColumnFromDetails(page: Page, sid: string): Promise<Locator> 
   // Opening a session from the details leaves them open over its column; put them away.
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
-  await expect(col.getByText('slots answer 12')).toBeVisible({ timeout: 30_000 })
+  await expect(col.getByText('slots answer 12').first()).toBeVisible({ timeout: 30_000 })
   return col
 }
 
-test('the task details carry the time, and lead to the task\'s days', async ({ page }) => {
+test('the task details carry the time as one fact, and lead to the task\'s days', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
   const modal = await openDetails(page)
-  const slot = modal.getByTestId('time-task-slot')
-  await expect(slot).toBeVisible({ timeout: 30_000 })
+  const dates = modal.locator('.todo-detail-dates')
+  const fact = dates.getByTestId('time-task-fact')
 
   // The 200-day-old 20 minutes arrive with the history read, a moment after boot; the
-  // slot asks again until the server says it has every day.
-  await expect(cell(slot, 'you-total')).toHaveText('1h 34m', { timeout: 60_000 })
-  await expect(cell(slot, 'you-today')).toHaveText('29m')
-  await expect(cell(slot, 'you-week')).toHaveText('59m')
-  await expect(cell(slot, 'agent-total')).toHaveText('3h 19m')
-  await expect(cell(slot, 'agent-today')).toHaveText('1h 12m')
-  await expect(cell(slot, 'agent-week')).toHaveText('3h 12m')
-  await expect(slot).toHaveAttribute('aria-label', /You: 1h 34m total, 29m today, 59m in 7 days/)
-  // A table inside the details, not a block that overflows them.
-  const [slotBox, modalBox] = await Promise.all([slot.boundingBox(), modal.boundingBox()])
-  expect(slotBox!.x + slotBox!.width).toBeLessThanOrEqual(modalBox!.x + modalBox!.width + 0.5)
-  await modal.screenshot({ path: `${SHOTS}/task-detail-slot.png` })
+  // fact asks again until the server says it has every day.
+  await expect(cell(fact, 'you-total')).toHaveText('1h 34m', { timeout: 60_000 })
+  await expect(cell(fact, 'agent-total')).toHaveText('3h 19m')
+  await expect(fact).toHaveText('You 1h 34m \u00b7 Agent 3h 19m')
+  // One labelled fact on the metadata line, and the hover text holds all six numbers.
+  await expect(dates).toContainText('Time You 1h 34m \u00b7 Agent 3h 19m')
+  await expect(fact).toHaveAttribute('title', /You: 1h 34m total, 29m today, 59m in 7 days/)
+  await expect(fact).toHaveAttribute('title', /Agent: 3h 19m total, 1h 12m today, 3h 12m in 7 days/)
+  // Never a block of its own: the old table and its wrapper are gone.
+  await expect(modal.locator('.wt-slot-task, .todo-detail-plugin-slots')).toHaveCount(0)
+  const [factBox, idBox] = await Promise.all([fact.boundingBox(), dates.boundingBox()])
+  expect(factBox!.height).toBeLessThanOrEqual(idBox!.height + 0.5)
+  await dates.screenshot({ path: `${SHOTS}/task-detail-fact.png` })
   // The open details are part of Home's address (written a moment after they open).
   await expect(page).toHaveURL(new RegExp(`/\\?task=${TASK}$`))
 
-  await slot.click()
+  await fact.click()
   await expect(page).toHaveURL(new RegExp(`/apps/walnut-time~main/task/${TASK}$`))
   // The details float over Home; going somewhere else closes them, or they would cover the page.
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
@@ -186,9 +200,9 @@ test('the task details carry the time, and lead to the task\'s days', async ({ p
   const today = fixture!.slots.today
   const days = page.getByTestId('time-task-day')
   await expect(days).toHaveCount(4)
-  const dates = await days.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.date ?? ''))
-  expect(dates[0]).toBe(today)
-  expect([...dates].sort().reverse()).toEqual(dates)
+  const dayDates = await days.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.date ?? ''))
+  expect(dayDates[0]).toBe(today)
+  expect([...dayDates].sort().reverse()).toEqual(dayDates)
 
   // Today is open: each session's share, then the time on the task outside any session.
   const todayRow = days.first()
@@ -197,53 +211,58 @@ test('the task details carry the time, and lead to the task\'s days', async ({ p
   await expect(todayRow).toContainText('Agent 1h 02m')
   await expect(todayRow.locator('.is-other')).toContainText('Outside a session')
   await expect(todayRow.locator('.is-other')).toContainText('You 4m')
-  // A second day opens on click.
   await days.nth(1).locator('.wt-task-day-row').click()
   await expect(days.nth(1).locator('.wt-task-day-sessions')).toContainText('Agent 2h 00m')
 
-  // Every session by its title; the untitled one by the day it last ran. Never an id.
+  // Every session with time by its title; the untitled one by the day it last ran. Never an id.
   const tabs = page.getByTestId('time-task-session')
   await expect(tabs).toHaveCount(3)
   await expect(tabs.filter({ hasText: 'Untitled session (' })).toHaveCount(1)
   expect(await view.innerText()).not.toContain('sess-time-slots')
   await page.screenshot({ path: `${SHOTS}/task-page.png` })
 
-  // Narrowed to one session: its own totals and only its days.
   await tabs.filter({ hasText: 'Rename the time grid' }).click()
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
   await expect(total).toContainText('50m')
   await expect(total).toContainText('3h 02m')
   await expect(days).toHaveCount(2)
-  await page.screenshot({ path: `${SHOTS}/task-page-session.png` })
 
   // Back is where the click came from: Home, with the same details open again.
   await page.getByTestId('time-task-back').click()
   await expect(page).toHaveURL(new RegExp(`/\\?task=${TASK}$`))
-  await expect(page.locator('.task-detail-modal').getByTestId('time-task-slot')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.task-detail-modal').getByTestId('time-task-fact')).toBeVisible({ timeout: 30_000 })
   expect(errors).toEqual([])
 })
 
-test('the session header carries a chip that opens the task page on that session', async ({ page }) => {
+test('a session\'s time is a fact in its menu, never a chip on the header row', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
   const col = await openColumnFromDetails(page, SID_A)
-  const chip = col.getByTestId('time-session-chip')
-  await expect(chip).toBeVisible({ timeout: 30_000 })
-  await expect(chip.locator('.is-human')).toHaveText('50m')
-  await expect(chip.locator('.is-agent')).toHaveText('3h 02m')
-  await expect(chip).toHaveAttribute('title', /You: 50m total, 20m today, 50m in 7 days/)
-  await expect(chip).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
-  // One line, the height of the row's own chips.
-  const [chipBox, filesBox] = await Promise.all([
-    chip.boundingBox(),
-    col.locator('[data-header-id="files"]').boundingBox(),
-  ])
-  if (filesBox) expect(Math.abs(chipBox!.height - filesBox.height)).toBeLessThanOrEqual(3)
-  const headBox = (await col.boundingBox())!
-  await page.screenshot({ path: `${SHOTS}/session-chip.png`, clip: { x: headBox.x, y: headBox.y, width: headBox.width, height: 140 } })
+  // The header row is the host's own tools, and nothing else.
+  await expect(col.locator('.session-panel-header').getByTestId('time-session-fact')).toHaveCount(0)
+  await expect(col.locator('[data-header-id^="slot:"], .wt-slot-chip')).toHaveCount(0)
 
-  await chip.click()
+  const menu = await openMenu(page, col)
+  const fact = menu.getByTestId('time-session-fact')
+  await expect(cell(fact, 'you-total')).toHaveText('50m', { timeout: 30_000 })
+  await expect(cell(fact, 'agent-total')).toHaveText('3h 02m')
+  // A labelled row at the top of the menu, right under Panels, seen without scrolling.
+  const row = menu.locator('.task-kebab-fact')
+  await expect(row).toHaveText('Time You 50m \u00b7 Agent 3h 02m')
+  await expect(fact).toHaveAttribute('title', /You: 50m total, 20m today, 50m in 7 days/)
+  await expect(fact).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
+  const [rowBox, menuBox, panelsBox] = await Promise.all([
+    row.boundingBox(), menu.boundingBox(),
+    menu.locator('.task-kebab-tier').filter({ hasText: 'Panels' }).boundingBox(),
+  ])
+  expect(rowBox!.y).toBeGreaterThan(panelsBox!.y)
+  expect(rowBox!.y - menuBox!.y).toBeLessThan(120)
+  expect(rowBox!.height).toBeLessThanOrEqual(panelsBox!.height + 1)
+  await page.screenshot({ path: `${SHOTS}/session-menu-fact.png`, clip: { x: menuBox!.x, y: menuBox!.y, width: menuBox!.width, height: 220 } })
+
+  await fact.click()
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
+  await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
   await expect(page.getByTestId('time-task-session').filter({ hasText: 'Rename the time grid' }))
     .toHaveAttribute('aria-selected', 'true')
   await page.getByTestId('time-task-back').click()
@@ -251,52 +270,37 @@ test('the session header carries a chip that opens the task page on that session
   expect(errors).toEqual([])
 })
 
-test('a narrow column moves the chip into the "..." menu, and it opens from there', async ({ page }) => {
+test('nothing recorded means no Time fact and no stray label', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
-  // Columns side by side: the crowded case, where each column is narrow. A last, so
-  // the panel count (which evicts the oldest column) keeps it.
-  const modal = await openDetails(page)
-  for (const sid of [...fixture!.slots.sessionIds].reverse()) {
-    await modal.locator(`.todo-detail-session-item[title="${sid}"]`).click()
-    await expect(column(page, sid)).toBeVisible({ timeout: 30_000 })
-  }
-  await expect(page.locator('.main-page-session-column').first()).toBeVisible()
+  const emptyTask = fixture!.slots.emptyTaskId
+  const taskAnswer = answered(page, `/api/time/task/${emptyTask}`)
+  const modal = await openDetails(page, emptyTask, 'Time empty fixture')
+  await taskAnswer
+  await page.waitForTimeout(300)
+  await expect(modal.getByTestId('time-task-fact')).toHaveCount(0)
+  await expect(modal.locator('.todo-detail-dates')).not.toContainText('Time')
   await page.keyboard.press('Escape')
-  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
-  const col = column(page, SID_A)
-  const wrapper = col.locator('[data-header-id^="slot:"]')
-  await expect(wrapper).toHaveAttribute('data-header-name', 'Time', { timeout: 30_000 })
 
-  // Narrow the window (never into the phone layout) until the chip leaves the row.
-  let width = 1280
-  while ((await wrapper.getAttribute('data-hidden')) !== 'true' && width > 800) {
-    width -= 40
-    await page.setViewportSize({ width, height: 860 })
-    await page.waitForTimeout(150)
-  }
-  await expect(wrapper).toHaveAttribute('data-hidden', 'true')
-  // It is the first chip to leave: the host's own chips are still on the row.
-  await expect(col.locator('[data-header-id="files"]')).not.toHaveAttribute('data-hidden', 'true')
-
-  await col.locator('[data-header-more]').click()
-  const item = page.locator('.session-header-more-menu [role="menuitem"]', { hasText: 'Time' })
-  await expect(item).toBeVisible()
-  // The menu says what the chip said.
-  await expect(item.locator('.session-header-more-value')).toHaveText('50m · 3h 02m')
-  await page.screenshot({ path: `${SHOTS}/session-chip-in-more.png` })
-  await item.click()
-  await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
-  await expect(page.getByTestId('time-task-page')).toBeVisible()
+  const SID_D = fixture!.slots.sessionIds[3]!
+  const col = await openColumnFromDetails(page, SID_D)
+  const sessionAnswer = answered(page, `/api/time/session/${SID_D}`)
+  const menu = await openMenu(page, col)
+  await sessionAnswer
+  await page.waitForTimeout(300)
+  await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
+  await expect(menu.locator('.task-kebab-fact')).toBeHidden()
+  expect(await menu.locator('.task-kebab-tier-label').allTextContents()).not.toContain('Time')
   expect(errors).toEqual([])
 })
 
-test('the end of a turn refreshes the chip', async ({ page }) => {
+test('the end of a turn refreshes the open menu', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
   const col = await openColumnFromDetails(page, SID_A)
-  const chip = col.getByTestId('time-session-chip')
-  await expect(chip.locator('.is-agent')).toHaveText('3h 02m', { timeout: 30_000 })
+  const menu = await openMenu(page, col)
+  const fact = menu.getByTestId('time-session-fact')
+  await expect(cell(fact, 'agent-total')).toHaveText('3h 02m', { timeout: 30_000 })
 
   // A five-minute turn of session A ends. The fixture emits the server's real
   // session:result: the agent-time collector banks it, and the server forwards the
@@ -304,29 +308,29 @@ test('the end of a turn refreshes the chip', async ({ page }) => {
   await fs.writeFile(`${fixture!.home}/end-turn.json`, JSON.stringify({
     sessionId: SID_A, taskId: TASK, turnGen: 101, duration: 5 * 60_000,
   }))
-  await expect(chip.locator('.is-agent')).toHaveText('3h 07m', { timeout: 15_000 })
+  await expect(cell(fact, 'agent-total')).toHaveText('3h 07m', { timeout: 15_000 })
   // Well before the 60s poll: it was the turn's end that refreshed it.
   expect(errors).toEqual([])
 })
 
 /* LAST: it disables the plugin, and the fixture is shared by the whole file. */
-test('disabling the plugin takes both slots away without a reload', async ({ page }) => {
+test('disabling the plugin takes both facts away without a reload', async ({ page }) => {
   const errors = watchErrors(page)
   await loadHome(page)
   const col = await openColumnFromDetails(page, SID_A)
-  await expect(col.getByTestId('time-session-chip')).toBeVisible({ timeout: 30_000 })
   const modal = await openDetails(page)
-  await expect(modal.getByTestId('time-task-slot')).toBeVisible({ timeout: 30_000 })
+  await expect(modal.getByTestId('time-task-fact')).toBeVisible({ timeout: 30_000 })
 
   const disabled = await page.request.post(`${base()}/api/plugin-runtime/walnut-time/disable`)
   expect(disabled.ok(), await disabled.text()).toBe(true)
 
-  await expect(modal.getByTestId('time-task-slot')).toHaveCount(0, { timeout: 60_000 })
-  await expect(modal.locator('.todo-detail-plugin-slots')).toHaveCount(0)
+  await expect(modal.getByTestId('time-task-fact')).toHaveCount(0, { timeout: 60_000 })
+  await expect(modal.locator('.todo-detail-dates')).not.toContainText('Time')
   await page.keyboard.press('Escape')
-  await expect(col.getByTestId('time-session-chip')).toHaveCount(0)
-  await expect(col.locator('[data-header-id^="slot:"]')).toHaveCount(0)
-  // The rest of the row is untouched.
-  await expect(col.locator('[data-header-more], [data-header-id="files"]').first()).toBeVisible()
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
+  const menu = await openMenu(page, col)
+  await expect(menu.locator('.task-kebab-tier').filter({ hasText: 'Panels' })).toBeVisible()
+  await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
+  await expect(menu.locator('.task-kebab-fact')).toHaveCount(0)
   expect(errors).toEqual([])
 })

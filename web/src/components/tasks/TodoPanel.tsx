@@ -7,7 +7,7 @@ import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
 import { fetchTask, updateTask as apiUpdateTask, type BatchTaskOutcome } from '@/api/tasks';
 import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
-import { PluginSlots } from '@/plugins/PluginSlots';
+import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
@@ -2103,11 +2103,20 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           {task.phase === 'WAITING' && task.wait_until && (
             <span data-testid="task-detail-wait-until"> · Waiting until {formatWaitUntil(task.wait_until)}</span>
           )}
+          {/* Plugin facts (walnut.ui.slot 'task.meta'), e.g. the time this task took:
+              one short value on this line, never a block of its own. */}
+          <PluginSlots
+            target="task.meta"
+            props={{ taskId: task.id }}
+            onNavigate={onClose}
+            wrap={(entry, node) => (
+              <PluginSlotFact entry={entry} className="todo-detail-meta-fact" labelClassName="todo-detail-meta-fact-label" separator=" · ">
+                {node}
+              </PluginSlotFact>
+            )}
+          />
         </div>
       </div>
-
-      {/* Plugin slots (walnut.ui.slot 'task.detail'), e.g. the time this task took. */}
-      <PluginSlots target="task.detail" props={{ taskId: task.id }} className="todo-detail-plugin-slots" onNavigate={onClose} />
 
       {parentTask && (
         <div className="todo-detail-section">

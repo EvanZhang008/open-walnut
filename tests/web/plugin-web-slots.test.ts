@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// `walnut.ui.slot`: a plugin's small component on the task detail or the session
-// header. It belongs to its plugin like a page does: registered under the plugin's
+// `walnut.ui.slot`: one labelled fact a plugin adds to a task's details or a session's
+// menu. It belongs to its plugin like a page does: registered under the plugin's
 // namespace, gone the moment the plugin is disabled, and refused at registration
 // when it names a place the host does not have.
 
@@ -80,14 +80,14 @@ afterEach(async () => {
 describe('walnut.ui.slot', () => {
   it('registers each slot under its plugin, and a disabled plugin takes them all away', async () => {
     activate = (api) => {
-      api.ui.slot?.({ id: 'task-time', target: 'task.detail', title: 'Time', component: Component })
-      api.ui.slot?.({ id: 'session-time', target: 'session.header', title: 'Time', component: Component, order: 10 })
+      api.ui.slot?.({ id: 'task-time', target: 'task.meta', title: 'Time', component: Component })
+      api.ui.slot?.({ id: 'session-time', target: 'session.meta', title: 'Time', component: Component, order: 10 })
     }
     serve(true)
     await refreshWebPlugins()
     expect(slots()).toEqual([
-      ['sample:task-time', 'task.detail', 'Time'],
-      ['sample:session-time', 'session.header', 'Time'],
+      ['sample:task-time', 'task.meta', 'Time'],
+      ['sample:session-time', 'session.meta', 'Time'],
     ])
     expect(pluginUiRegistry.getSnapshot().slots[0]!.pluginName).toBe('Sample')
 
@@ -98,19 +98,21 @@ describe('walnut.ui.slot', () => {
 
   it('removes one slot when its own disposable is disposed', async () => {
     activate = (api) => {
-      const gone = api.ui.slot!({ id: 'a', target: 'task.detail', title: 'A', component: Component })
-      api.ui.slot!({ id: 'b', target: 'task.detail', title: 'B', component: Component })
+      const gone = api.ui.slot!({ id: 'a', target: 'task.meta', title: 'A', component: Component })
+      api.ui.slot!({ id: 'b', target: 'task.meta', title: 'B', component: Component })
       gone.dispose()
     }
     serve(true)
     await refreshWebPlugins()
-    expect(slots()).toEqual([['sample:b', 'task.detail', 'B']])
+    expect(slots()).toEqual([['sample:b', 'task.meta', 'B']])
   })
 
   it.each([
     ['an unknown target', { target: 'task.sidebar', title: 'Time' }, 'slot target must be one of'],
-    ['an empty title', { target: 'task.detail', title: '  ' }, 'slot title is required'],
-    ['a non-finite order', { target: 'task.detail', title: 'Time', order: Number.NaN }, 'slot order must be finite'],
+    // The header row is the host's own: a plugin built for the retired target learns it at once.
+    ['the retired header target', { target: 'session.header', title: 'Time' }, 'slot target must be one of'],
+    ['an empty title', { target: 'task.meta', title: '  ' }, 'slot title is required'],
+    ['a non-finite order', { target: 'task.meta', title: 'Time', order: Number.NaN }, 'slot order must be finite'],
   ])('refuses %s at registration, so the plugin learns it at once', async (_name, bad, message) => {
     activate = (api) => {
       api.ui.slot!({ id: 'x', component: Component, ...bad } as never)
@@ -123,7 +125,7 @@ describe('walnut.ui.slot', () => {
 
   it('refuses a component that is not one', async () => {
     activate = (api) => {
-      api.ui.slot!({ id: 'x', target: 'session.header', title: 'Time', component: 'nope' as never })
+      api.ui.slot!({ id: 'x', target: 'session.meta', title: 'Time', component: 'nope' as never })
     }
     serve(true)
     await refreshWebPlugins()
@@ -135,11 +137,11 @@ describe('walnut.ui.slot', () => {
 describe('the slot registry', () => {
   it('keeps a stale disposable from removing a later slot of the same id', () => {
     const stale = pluginUiRegistry.registerSlot('plugin-a', 'Plugin A', {
-      id: 'time', target: 'task.detail', title: 'Before', component: Component,
+      id: 'time', target: 'task.meta', title: 'Before', component: Component,
     })
     expect(pluginUiRegistry.removeOwner('plugin-a')).toBe(1)
     pluginUiRegistry.registerSlot('plugin-a', 'Plugin A', {
-      id: 'time', target: 'task.detail', title: 'After', component: Component,
+      id: 'time', target: 'task.meta', title: 'After', component: Component,
     })
     stale.dispose()
     expect(pluginUiRegistry.getSnapshot().slots.map((s) => s.value.title)).toEqual(['After'])

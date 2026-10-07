@@ -23,9 +23,10 @@ import { createTaskTimeStore } from './web/task-time-store'
  * group rather than in the Sidebar. A day report is something you open now and then; the
  * Sidebar is for the surfaces you live in.
  *
- * The slots (`walnut.ui.slot`) are where a task's own time shows: a compact table on
- * the task's detail, and a chip on each session's header. Both lead to the App's task
- * page (`/task/<id>`), which is not a tab: it is a page about one task.
+ * The slots (`walnut.ui.slot`) are where a task's own time shows: one "Time" fact with
+ * the task's other facts in its details, and one at the top of each session's menu. Both
+ * lead to the App's task page (`/task/<id>`), which is not a tab: it is a page about
+ * one task.
  */
 
 /** The documented default weight for a plugin App (core screens use 10 to 1000). */
@@ -86,10 +87,10 @@ export async function activate(walnut: WalnutWebApi) {
     placement: 'settings',
   })
 
-  // A host older than slots has no `slot`: the App still works, the two slots just are not drawn.
-  const { TaskTimeSlot, SessionTimeChip } = createTimeSlots(store, timePaths(app.path))
-  walnut.ui.slot?.({ id: 'task-time', target: 'task.detail', title: 'Time', component: TaskTimeSlot })
-  walnut.ui.slot?.({ id: 'session-time', target: 'session.header', title: 'Time', component: SessionTimeChip })
+  // A host older than slots has no `slot`: the App still works, the two facts just are not drawn.
+  const { TaskTime, SessionTime } = createTimeSlots(store, timePaths(app.path))
+  walnut.ui.slot?.({ id: 'task-time', target: 'task.meta', title: 'Time', component: TaskTime })
+  walnut.ui.slot?.({ id: 'session-time', target: 'session.meta', title: 'Time', component: SessionTime })
 
   walnut.ui.injectCss(TIME_CSS)
   log.info('Time app activated', { appPath: app.path, slots: typeof walnut.ui.slot === 'function' })

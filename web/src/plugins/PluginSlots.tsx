@@ -3,14 +3,14 @@
  *
  * A surface places ONE <PluginSlots target=… props=…/> where its slot belongs; every
  * active plugin's contribution for that target renders there, in order, each inside
- * its own PluginBoundary, so a plugin that throws costs its own chip and nothing of the
+ * its own PluginBoundary, so a plugin that throws costs its own value and nothing of the
  * panel around it. With no contribution it renders nothing at all: no wrapper, no gap.
  *
- * `wrap` lets a surface put each slot inside its own element. The session header uses it
- * to give every slot a `data-header-id`, which is what lets the tool row's width fit
- * measure it and move it into the "..." menu like a built-in chip.
+ * Every target is a labelled fact (the task's metadata, the top of the session menu), so a
+ * surface wraps each slot in <PluginSlotFact>, which prints the slot's title in the
+ * surface's own label style and hides the whole fact while the plugin renders nothing.
  */
-import { Fragment, useCallback, useMemo, type ComponentType, type ReactNode } from 'react'
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { isPopoutPath } from '@/popout/openPopout'
@@ -24,9 +24,6 @@ export type SlotEntry = RegisteredUiContribution<PluginSlotContribution>
 
 const DEFAULT_ORDER = 500
 
-/** The id a slot carries in the session header's tool row (`data-header-id`). */
-export const slotHeaderId = (entry: SlotEntry) => `slot:${entry.key}`
-
 interface PluginSlotsProps<T extends PluginSlotTarget> {
   target: T
   props: Omit<PluginSlotPropsByTarget[T], 'navigate'>
@@ -36,7 +33,8 @@ interface PluginSlotsProps<T extends PluginSlotTarget> {
   className?: string
   /**
    * Runs before a slot navigates. A surface that floats over the page (the task detail
-   * modal) closes itself here; otherwise it would stay on top of the page the slot opened.
+   * modal, the session menu) closes itself here; otherwise it would stay on top of the
+   * page the slot opened.
    */
   onNavigate?: () => void
 }
@@ -80,4 +78,45 @@ export function PluginSlots<T extends PluginSlotTarget>({ target, props, wrap, c
     return wrap ? <Fragment key={entry.key}>{wrap(entry, node)}</Fragment> : node
   })
   return className ? <div className={className}>{nodes}</div> : <>{nodes}</>
+}
+
+interface PluginSlotFactProps {
+  entry: SlotEntry
+  children: ReactNode
+  className?: string
+  labelClassName?: string
+  valueClassName?: string
+  /** Text before the label, for a fact inside a run of text (" · "). */
+  separator?: string
+}
+
+/**
+ * One slot as a labelled fact: the slot's title, then the plugin's value. The fact is
+ * hidden while the value is empty (the plugin rendered null: no data, not loaded yet, a
+ * replica without the store), so a label never stands alone.
+ */
+export function PluginSlotFact({ entry, children, className, labelClassName, valueClassName, separator }: PluginSlotFactProps) {
+  const valueRef = useRef<HTMLSpanElement>(null)
+  const [empty, setEmpty] = useState(true)
+  useLayoutEffect(() => {
+    const el = valueRef.current
+    if (!el) return
+    const check = () => setEmpty(el.childNodes.length === 0)
+    check()
+    const observer = new MutationObserver(check)
+    observer.observe(el, { childList: true })
+    return () => observer.disconnect()
+  }, [])
+  return (
+    <span
+      className={className}
+      data-slot={entry.key}
+      // An inline style, not the `hidden` attribute: a surface's display rule would beat that.
+      style={empty ? { display: 'none' } : undefined}
+    >
+      {/* No label while empty: a hidden fact must not even count as a label. */}
+      {!empty && <>{separator}<span className={labelClassName}>{entry.value.title}</span>{' '}</>}
+      <span ref={valueRef} className={valueClassName}>{children}</span>
+    </span>
+  )
 }

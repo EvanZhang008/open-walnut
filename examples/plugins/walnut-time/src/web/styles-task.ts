@@ -1,92 +1,39 @@
 /**
  * The two slots (task-slots.tsx) and the task page (task-page.tsx).
  *
- * The slots render INSIDE the console's own surfaces, outside `.wt-root`, so they
+ * The slot values render INSIDE the console's own surfaces, outside `.wt-root`, so they
  * carry their own lane colours (the same two the reports use) and borrow nothing
  * from the page. Every class is `wt-` prefixed, every colour a theme token.
  */
 export const TASK_CSS = `
-.wt-slot-task, .wt-slot-chip {
+.wt-fact {
   --wt-human: var(--accent);
   --wt-agent: #af52de;
 }
 
-/* ── task.detail: one compact table, the whole of it a button ── */
+/* ── task.meta / session.meta: one short value beside the host's label ── */
 
-.wt-slot-task {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  width: 100%;
-  padding: 8px 10px;
+.wt-fact {
+  display: inline;
+  padding: 0 4px;
+  margin: 0 -4px;
   font: inherit;
-  font-size: 12px;
-  text-align: left;
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 8px);
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.wt-slot-task:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.wt-slot-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-.wt-slot-grid {
-  display: grid;
-  grid-template-columns: auto repeat(3, minmax(52px, auto));
-  column-gap: 16px;
-  row-gap: 2px;
-  align-items: baseline;
-  min-width: 0;
-}
-.wt-slot-cap {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
-.wt-slot-col { font-size: 11px; color: var(--fg-muted); text-align: right; }
-.wt-slot-lane { font-weight: 600; }
-.wt-slot-lane.is-human { color: var(--wt-human); }
-.wt-slot-lane.is-agent { color: var(--wt-agent); }
-.wt-slot-grid .wt-slot-v { text-align: right; font-variant-numeric: tabular-nums; }
-.wt-slot-more {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--fg-muted);
+  line-height: inherit;
   white-space: nowrap;
-}
-.wt-slot-task:hover .wt-slot-more { color: var(--accent); }
-
-/* ── session.header: one chip, sized like the row's own ── */
-
-.wt-slot-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 7px;
-  font: inherit;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.6;
-  white-space: nowrap;
-  color: var(--fg-muted);
+  color: inherit;
   background: transparent;
   border: none;
-  border-radius: 10px;
+  border-radius: 4px;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s;
 }
-.wt-slot-chip:hover { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); }
-.wt-slot-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.wt-slot-chip .wt-slot-clock { flex-shrink: 0; opacity: 0.85; }
-.wt-slot-chip .is-human { color: var(--wt-human); }
-.wt-slot-chip .is-agent { color: var(--wt-agent); }
-.wt-slot-chip .wt-slot-sep { opacity: 0.6; }
+.wt-fact:hover { background: var(--bg-tertiary, color-mix(in srgb, var(--fg) 8%, transparent)); }
+.wt-fact:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wt-fact-v { font-weight: 600; }
+.wt-fact-v.is-human { color: var(--wt-human); }
+.wt-fact-v.is-agent { color: var(--wt-agent); }
+.wt-fact-sep { opacity: 0.6; }
 
 /* ── The task page ── */
 
