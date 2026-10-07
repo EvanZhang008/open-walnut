@@ -6963,6 +6963,105 @@ export async function replaceCustomTiersFromSync(tiers: CustomTierRecord[]): Pro
   });
 }
 
+/** The registry half of the companion's task copy: projects, folders, custom tiers. */
+export interface TaskReplicaRegistry {
+  projects: Record<string, ProjectRecord>;
+  task_groups: Record<string, TaskGroupRecord>;
+  custom_tiers: CustomTierRecord[];
+}
+
+/**
+ * PRIMARY: the canonical store as the companion's copy is made from it
+ * (core/replication/task-replica.ts). Read-only: never mutate what this
+ * returns. An unchanged row keeps its object identity between writes, so the
+ * replica hashes only the rows that changed.
+ */
+export async function taskStoreForReplica(): Promise<{ tasks: readonly Task[]; registry: TaskReplicaRegistry }> {
+  const store = await readStoreView();
+  return {
+    tasks: store.tasks,
+    registry: { projects: store.projects ?? {}, task_groups: store.task_groups ?? {}, custom_tiers: store.custom_tiers ?? [] },
+  };
+}
+
+/**
+ * REPLICA only (core/replication/task-replica-store.ts): make rows match the
+ * primary's exactly. `rows` replace whole rows (no phase guard, no merge: the
+ * primary's row is the truth), `removeIds` go, `order` is the primary's store
+ * order (rows it does not name keep their relative order after it), and
+ * `registry` replaces projects, folders and custom tiers. Rows alone are
+ * targeted SQL (an existing row keeps its place, a new one goes last); an order
+ * or a registry is one whole-store write. A row SQLite refuses (a constraint)
+ * is skipped and named in `skipped`. Never called on the primary.
+ */
+export async function applyTaskReplica(change: {
+  rows?: readonly Task[];
+  removeIds?: readonly string[];
+  order?: readonly string[];
+  registry?: TaskReplicaRegistry;
+}): Promise<{ written: number; removed: number; skipped: string[] }> {
+  await ensureInit();
+  if (!change.order && !change.registry) return applyTaskReplicaRows(change.rows ?? [], change.removeIds ?? []);
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const byId = new Map(store.tasks.map((t) => [t.id, t]));
+    let written = 0;
+    let removed = 0;
+    for (const row of change.rows ?? []) {
+      byId.set(row.id, { ...row });
+      written++;
+    }
+    for (const id of change.removeIds ?? []) if (byId.delete(id)) removed++;
+    const tasks: Task[] = [];
+    const placed = new Set<string>();
+    const place = (id: string): void => {
+      const t = byId.get(id);
+      if (t && !placed.has(id)) { tasks.push(t); placed.add(id); }
+    };
+    for (const id of change.order ?? []) place(id);
+    for (const t of store.tasks) place(t.id);
+    for (const id of byId.keys()) place(id);
+    store.tasks = tasks;
+    if (change.registry) {
+      store.projects = change.registry.projects;
+      store.task_groups = change.registry.task_groups;
+      store.custom_tiers = change.registry.custom_tiers;
+    }
+    await writeStore(store);
+    return { written, removed, skipped: [] };
+  });
+}
+
+/** applyTaskReplica's row-only path: O(rows sent), every column bound (an absent field is a clear). */
+function applyTaskReplicaRows(rows: readonly Task[], removeIds: readonly string[]): Promise<{ written: number; removed: number; skipped: string[] }> {
+  return withWriteLock(async () => {
+    let written = 0;
+    let removed = 0;
+    const skipped: string[] = [];
+    const cols = INSERT_COLS.filter((c) => c !== 'id');
+    dbTransaction((handle) => {
+      const exists = handle.prepare('SELECT 1 FROM tasks WHERE id = ?').pluck();
+      const update = handle.prepare(`UPDATE tasks SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`);
+      const insert = handle.prepare(`INSERT INTO tasks (${INSERT_COLS.join(', ')}) VALUES (${INSERT_COLS.map((c) => `@${c}`).join(', ')})`);
+      const del = handle.prepare('DELETE FROM tasks WHERE id = ?');
+      for (const row of rows) {
+        try {
+          const bound = boundRow(rowFingerprint(row));
+          if (exists.get(row.id)) update.run(bound);
+          else insert.run(bound);
+          written++;
+        } catch (err) {
+          skipped.push(row.id);
+          log.task.warn('applyTaskReplica: row refused', { id: row.id, err: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      for (const id of removeIds) removed += del.run(id).changes;
+    });
+    patchStoreCacheRows([...rows.map((r) => r.id), ...removeIds]);
+    return { written, removed, skipped };
+  });
+}
+
 /** Rename a custom tier. Same label validation as create (excluding self). */
 export async function renameCustomTier(id: string, label: string): Promise<{ tier: CustomTierRecord; tiers: CustomTierRecord[] }> {
   return withWriteLock(async () => {

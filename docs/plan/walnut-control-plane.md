@@ -65,9 +65,10 @@ sends at the old epoch is refused.
   host's daemon, which delivers it as task_send does and owns the reply request
   beside the session that answers it. The answer and the "finished without
   replying" notice go back the same way (`leader.deliverText`).
-- Reads and task writes outside every copy run on the companion's replica
-  through the op registry, on the same routes the phone's calls reach; its task
-  queue carries the writes to the Mac. A cloud-mode server has no loopback
+- Reads and task writes outside every copy run on the companion's copy of the
+  task store ("The companion's copy of the tasks" below) through the op
+  registry, on the same routes the phone's calls reach; its task queue carries
+  the writes to the Mac. A cloud-mode server has no loopback
   waiver, so its own op calls carry a credential that lives only in that
   process (`src/lib/self-api-root.ts`).
 - What needs the Mac itself (starting a session, a session on the Mac) says so.
@@ -133,6 +134,48 @@ the host (`replica.drop`), and its reads go to the server again. The commands
 are trusted-socket only: the companion's bridge can neither send nor read a
 copy. An old daemon (no `host-replica-v1`) keeps no copy and is never sent one.
 
+## The companion's copy of the tasks
+
+The companion keeps an exact copy of the Mac's task store: every task with
+every field (description, notes, parent, folder, session links), done tasks of
+any age, the projects, folders and custom tiers, and the store's order. It is
+kept the way a host's copy is (`src/core/replication/task-replica.ts` on the
+Mac, `task-replica-store.ts` on the companion):
+
+1. The Mac sends a manifest, every task id with the sha256 head of its row in
+   store order, to `POST /bridge/replica` (same machine credential and gzip as
+   `/bridge/ingest`).
+2. The companion removes the rows the manifest no longer names, follows its
+   order, and answers the ids it lacks or holds at another hash.
+3. The Mac sends those rows, at most 512 KB a request. The registry rides
+   beside them as one document.
+
+A round runs a few seconds after a task or registry change, and every 5
+minutes. An unchanged manifest is sent again only by the 5-minute round, which
+is how a companion that lost its copy is found. The Mac hashes a row once per
+change (an unchanged row keeps its object in the store's cache), so a round
+over thousands of tasks costs only what changed.
+
+A row the companion wrote itself is **held**: it is neither replaced nor
+removed while its op waits in the companion's task queue, while a delete
+tombstone covers it, or for 30 seconds after the write (its relay to the Mac
+may still be in flight). The companion says how many rows it held; the Mac then
+sends the manifest again 35 seconds later, and once the Mac applied the write,
+the Mac's row comes back. A manifest that would remove more than half of a
+store of 50 or more rows is refused: a Mac that lost its store must not empty
+the copy, which may then be the only one left.
+
+What it replaces: the import of the slim task projection into the companion's
+store (no description or notes, done tasks for 14 days only, deletes guessed
+from absence). That import stands down while the copy is fresh (a manifest in
+the last 15 minutes), and for any projection older than the copy, so an old
+projection cannot bring back a removed row. An older Mac that sends only
+projections is still imported. The phone's task list there is built from the
+copy (as it was from the imported rows), and task detail answers from it
+instead of asking the Mac (which waited 5 s and gave up while the Mac slept). The copy is kept in `cache/task-replica.json` (row hashes, order, the
+Mac's clock), so a companion restart asks for nothing again. A companion
+without the route answers 404, and the Mac rests the lane for 10 minutes.
+
 ## Settings
 
 `cloud_bridge.backup_leader` (Settings, Phones & Cloud, "Cloud companion takes
@@ -157,6 +200,11 @@ is away. A change reaches every host and the companion at once.
 | Mac asleep, a session writes a note | refused at once (the note is the leader's), or done by the companion while it leads |
 | Mac asleep, a session's context is compacted | `open_items` is answered from the copy, so the list of what is open comes back |
 | Notes turned off for a host | its copy of the notes is removed; `note_read` there needs the server |
+| The Mac creates or edits a task | the companion holds the new row within seconds, every field |
+| Mac asleep, the phone or the leader opens a task | the companion answers from its copy at once, description and notes included |
+| Mac asleep, the companion writes a task | written there and queued; the Mac's next manifest does not undo it; the Mac's row comes back once the Mac applied it |
+| The companion lost its copy | the 5-minute round finds it and sends every row again |
+| An older companion (no `/bridge/replica`) | the Mac rests the lane; the companion keeps importing the projection |
 
 ## Tests
 
@@ -180,11 +228,20 @@ is away. A change reaches every host and the companion at once.
   leader can make refused at once), `tests/providers/offline-open-items.test.ts`
   (`open_items` from the copy, worded as the server words it), and the
   per-host list, both engines: `tests/e2e/browser/remote-hosts-keep.spec.ts`.
+- The companion's copy of the tasks: `tests/core/task-replica.test.ts` (the
+  Mac's rounds against the real companion store: every field, only what
+  changed, removals, order, held rows, restart, the projection standing down),
+  `tests/web/routes/bridge-replica-cloud.test.ts` (the route on a real
+  cloud-mode server, over the real client), and the live e2e above (every task
+  on the companion, a new one within seconds, task detail from the copy while
+  the Mac sleeps, the companion's own write delivered and its row the Mac's
+  again after the wake).
 
 ## Not yet
 
-- The companion's full replica (a change stream of every store instead of the
-  slim projections) and retiring its special-purpose queues.
+- The companion's copy of the other stores (sessions, reply requests, inbox,
+  routines), retiring the task projection push once every companion takes the
+  copy, and retiring the companion's special-purpose queues.
 - Writes to a host's own work, and messages between its sessions, made on the
   host even while the Mac answers (docs/plan/daemon-first-hosts.md "Same-host
   messages while the server answers" says what that would lose today).

@@ -589,6 +589,14 @@ export async function importProjectionOnCloud(): Promise<number> {
   if (mtimeMs === lastProjectionMtimeMs) return 0;
   const projection = await readTaskProjection();
   if (!projection) return 0;
+  // The primary keeps an exact, complete copy of its store here
+  // (replication/task-replica-store.ts). This slim import would only lag it,
+  // and a projection older than that copy would bring back the rows it removed.
+  const { taskReplicaSupersedes } = await import('./replication/task-replica-store.js');
+  if (await taskReplicaSupersedes(projection.exportedAt)) {
+    lastProjectionMtimeMs = mtimeMs;
+    return 0;
+  }
 
   // Rows with an UNDELIVERED local write are skipped — the local row is newer
   // than the projection by construction. Two pending sources: the legacy git

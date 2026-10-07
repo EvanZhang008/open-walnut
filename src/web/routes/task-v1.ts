@@ -117,7 +117,11 @@ taskV1Router.get('/tasks/:id', async (req: Request, res: Response, next: NextFun
     // old primary just serves the local row (fast, mildly degraded), never an
     // error. LWW guard: never let a STALE primary row (op still queued /
     // in-flight) shadow a newer local edit.
-    if (CLOUD_MODE) {
+    // A row the primary's own copy of its store holds is already its row, every
+    // field included (core/replication/task-replica-store.ts): no round trip,
+    // and no 5s wait while the primary is asleep.
+    const { taskReplicaHoldsRow } = await import('../../core/replication/task-replica-store.js')
+    if (CLOUD_MODE && !(await taskReplicaHoldsRow(task.id))) {
       try {
         const { callPrimaryControl } = await import('./v1-control-relay.js')
         const reply = await callPrimaryControl('server.tasks.get', '__server__', { id: task.id }, 5_000)

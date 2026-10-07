@@ -40,9 +40,12 @@ void warmMock
 
 import {
   ingestUrlFromBridgeUrl, postToCloudIngest, runLatestPerKey, cloudIngestResting, _resetCloudIngestForTesting,
+  postToCloudReplica, cloudReplicaAvailable,
 } from '../../src/core/cloud-ingest.js'
 
 let status = 200
+/** Answer with an HTML page (an app shell) instead of JSON. */
+let htmlBody = false
 /** 'hold': keep the answer until the test releases it; 'hang': never answer. */
 let answerMode: 'now' | 'hold' | 'hang' = 'now'
 const held: Array<() => void> = []
@@ -61,8 +64,9 @@ const replica = http.createServer((req, res) => {
     seen.push({ url: req.url ?? '', auth: req.headers.authorization, encoding: req.headers['content-encoding'], body: JSON.parse(text) })
     const code = status
     const answer = (): void => {
+      if (htmlBody) { res.writeHead(code, { 'Content-Type': 'text/html' }); res.end('<!doctype html><title>app</title>'); return }
       res.writeHead(code, { 'Content-Type': 'application/json' })
-      res.end(code < 300 ? '{"ok":true}' : '{"error":"x"}')
+      res.end(code < 300 ? '{"ok":true,"need":["t1"]}' : '{"error":"x"}')
     }
     if (answerMode === 'hang') return
     if (answerMode === 'hold') { held.push(answer); return }
@@ -83,7 +87,7 @@ afterEach(() => {
   vi.useRealTimers()
   replica.closeAllConnections() // a hung or held request must not leak into the next case
   _resetCloudIngestForTesting()
-  seen.length = 0; held.length = 0; status = 200; answerMode = 'now'; open = 0; maxOpen = 0
+  seen.length = 0; held.length = 0; status = 200; answerMode = 'now'; open = 0; maxOpen = 0; htmlBody = false
   bridgeCfg = { enabled: false }; cfgCalls = 0; cfgDelayMs = 0
 })
 const tail = (sid: string): string => JSON.stringify({ sid, data: { version: 1, sessionId: sid, exportedAt: 'z', truncated: false, messages: [] } })
@@ -233,6 +237,47 @@ describe('the documented limits', () => {
     expect(await postToCloudIngest('transcript-upsert', tail('fresh'))).toBe('sent')
     expect(cfgCalls).toBe(before + 1)
     expect(seen.at(-1)?.auth).toBe('Bearer machine-token-reminted')
+  })
+})
+
+describe('postToCloudReplica (the companion\'s task copy, beside ingest)', () => {
+  it('posts gzip JSON to /bridge/replica with the machine token and returns the answer', async () => {
+    point()
+    expect(await cloudReplicaAvailable()).toBe(true)
+    const r = await postToCloudReplica({ op: 'sync', kind: 'tasks', entries: [] })
+    expect(r).toEqual({ ok: true, reply: { ok: true, need: ['t1'] } })
+    expect(seen[0]).toMatchObject({ url: '/bridge/replica', auth: 'Bearer machine-token-local', encoding: 'gzip', body: { op: 'sync', kind: 'tasks' } })
+  })
+
+  it.each([
+    ['a 404', 404, false],
+    ['an app shell (HTML 200) for an unknown path', 200, true],
+  ] as const)('%s: an older companion; the replica lane rests, the ingest lane does not', async (_label, code, html) => {
+    point()
+    status = code
+    htmlBody = html
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'unsupported' })
+    expect(await cloudReplicaAvailable()).toBe(false)
+    expect(cloudIngestResting()).toBe(false)
+    htmlBody = false
+    status = 200
+    expect(await postToCloudIngest('transcript-upsert', '{"sid":"s1","data":{}}')).toBe('sent')
+  })
+
+  it('a refused token rests both lanes; a 5xx is a failure and rests nothing', async () => {
+    point()
+    status = 500
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'failed', status: 500 })
+    expect(await cloudReplicaAvailable()).toBe(true)
+    status = 401
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'unsupported', status: 401 })
+    expect(cloudIngestResting()).toBe(true)
+  })
+
+  it('no companion set up: not available, and nothing is sent', async () => {
+    expect(await cloudReplicaAvailable()).toBe(false)
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'unsupported' })
+    expect(seen).toHaveLength(0)
   })
 })
 

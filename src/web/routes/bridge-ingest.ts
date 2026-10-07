@@ -40,7 +40,8 @@ export function ingestAdmission(cred: IngestCredential): { ok: true } | { ok: fa
   return { ok: true }
 }
 
-async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
+/** The primary's machine credential, or no further (also guards /bridge/replica). */
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Cloud mode sets `trust proxy: loopback`, so req.ip is the client behind the
   // local reverse proxy, the same key the other cloud gates rate-limit on.
   const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
@@ -96,7 +97,7 @@ async function ingest(req: Request, res: Response): Promise<void> {
 }
 
 /** Body-parser failures in the contract's JSON shape (Express's default is HTML). */
-function parseErrors(err: unknown, _req: Request, res: Response, next: NextFunction): void {
+export function parseErrors(err: unknown, _req: Request, res: Response, next: NextFunction): void {
   const e = err as { type?: string; status?: number } | null
   if (e?.type === 'entity.too.large') {
     res.status(413).json({ error: 'too_large' })

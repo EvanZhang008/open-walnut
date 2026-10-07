@@ -143,6 +143,61 @@ export async function postToCloudIngest(
   }
 }
 
+export type CloudReplicaReply =
+  | { ok: true; reply: Record<string, unknown> }
+  | { ok: false; outcome: 'failed' | 'unsupported'; status?: number; error?: string }
+
+let replicaUnsupportedUntil = 0
+
+/** A companion is set up and the replica lane is not resting: worth building a manifest for. */
+export async function cloudReplicaAvailable(): Promise<boolean> {
+  if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return false
+  return (await resolveEndpoint()) !== null
+}
+
+/**
+ * POST one step of the companion's task copy to /bridge/replica (the route
+ * beside /bridge/ingest, same machine credential, same gzip) and return its
+ * JSON answer. Never rejects. A companion without the route (404/405) rests
+ * this lane for 10 minutes without resting the ingest lane: an older companion
+ * still takes projections. A refused credential rests both.
+ */
+export async function postToCloudReplica(payload: Record<string, unknown>, opts: { timeoutMs?: number } = {}): Promise<CloudReplicaReply> {
+  if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return { ok: false, outcome: 'unsupported' }
+  const ep = await resolveEndpoint()
+  if (!ep) return { ok: false, outcome: 'unsupported' }
+  const url = ep.url.replace(/\/ingest$/, '/replica')
+  await acquireSlot()
+  let status = 0
+  try {
+    const body = await gzip(Buffer.from(JSON.stringify(payload), 'utf8'))
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
+      body,
+      signal: AbortSignal.timeout(opts.timeoutMs ?? timeoutMs),
+    })
+    status = res.status
+    const json = await res.json().catch(() => null) as Record<string, unknown> | null
+    if (res.ok && json) return { ok: true, reply: json }
+    // An older companion without the route: a 404, or its app shell for an unknown path.
+    if (status === 404 || status === 405 || (res.ok && !json)) {
+      replicaUnsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
+      return { ok: false, outcome: 'unsupported', status }
+    }
+    if (status === 401 || status === 403) {
+      unsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
+      endpoint = null
+      return { ok: false, outcome: 'unsupported', status }
+    }
+    return { ok: false, outcome: 'failed', status, error: typeof json?.error === 'string' ? json.error : undefined }
+  } catch (err) {
+    return { ok: false, outcome: 'failed', status, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    releaseSlot()
+  }
+}
+
 /** At most MAX_IN_FLIGHT requests at once: a burst of transcript exports must
  *  not open a TLS connection per session. */
 const MAX_IN_FLIGHT = 2
@@ -209,6 +264,7 @@ function drive<T>(key: string, lane: Lane, run: () => Promise<T>): Promise<T> {
 /** Tests only. `timeoutMs` shortens the request deadline (default 30s). */
 export function _resetCloudIngestForTesting(opts: { timeoutMs?: number } = {}): void {
   unsupportedUntil = 0
+  replicaUnsupportedUntil = 0
   endpoint = null
   endpointLookup = null
   lookupGen++

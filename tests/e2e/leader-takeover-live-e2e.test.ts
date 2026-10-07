@@ -240,7 +240,7 @@ const { startServer, stopServer, armGracefulSignalExit } = await import(${src('s
 const server = await startServer({ port: 0, dev: true })
 const tm = await import(${src('src/core/task-manager.ts')})
 const lead = (await tm.addTask({ title: 'Leader: ship the release', project: 'Acme' })).task
-const worker = (await tm.addTask({ title: 'Worker: fix the build', project: 'Acme', parent_task_id: lead.id })).task
+const worker = (await tm.addTask({ title: 'Worker: fix the build', project: 'Acme', parent_task_id: lead.id, description: 'Fix the flaky build step before Friday.' })).task
 const far = (await tm.addTask({ title: 'Far task: release notes', project: 'Other' })).task
 const st = await import(${src('src/core/session-tracker.ts')})
 await st.createSessionRecord(${JSON.stringify(A)}, lead.id, 'Acme', ${JSON.stringify(dev.dir)}, { host: 'devbox', title: 'Leader', initialProcessStatus: 'idle' })
@@ -389,6 +389,24 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     expect(await companionLeads()).toEqual([])
   }, 400_000)
 
+  it('the Mac keeps the companion\'s copy of its task store: every task, at the Mac\'s own row', async () => {
+    const held = await waitFor(() => {
+      try {
+        const s = JSON.parse(fs.readFileSync(path.join(companion.data, 'cache', 'task-replica.json'), 'utf8'))
+        const ids = Object.values(primary.ids)
+        return ids.every((id) => typeof s.hashes?.[id] === 'string') && s.registry ? s : null
+      } catch { return null }
+    }, 120_000, 'the companion to hold every task')
+    expect(held.order).toEqual(expect.arrayContaining(Object.values(primary.ids)))
+    // A task the Mac creates now reaches it within a few seconds (the round follows the change).
+    const made = await api(primary, '/api/v1/tasks', { method: 'POST', body: JSON.stringify({ title: 'Release checklist', project: 'Acme', description: 'Rollback drill, smoke, tag.' }) })
+    expect(made.status, JSON.stringify(made.json)).toBe(201)
+    const id = String(made.json.task?.id ?? made.json.id)
+    await waitFor(() => {
+      try { return typeof JSON.parse(fs.readFileSync(path.join(companion.data, 'cache', 'task-replica.json'), 'utf8')).hashes?.[id] === 'string' } catch { return false }
+    }, 30_000, 'the new task on the companion')
+  }, 200_000)
+
   it('the Mac gives every host a copy of the notes, memory and skills, and a note written there reaches it', async () => {
     for (const d of [devbox, oldbox]) {
       await waitFor(async () => {
@@ -431,6 +449,16 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     }
   }, 120_000)
 
+  it('while the Mac sleeps, the companion answers a task with every field from its own copy, at once', async () => {
+    const started = Date.now()
+    const r = await api(companion, `/api/v1/tasks/${primary.ids.worker}`)
+    expect(r.status, JSON.stringify(r.json)).toBe(200)
+    const t = r.json.task ?? r.json
+    expect(t).toMatchObject({ id: primary.ids.worker, parent_task_id: primary.ids.lead, description: 'Fix the flaky build step before Friday.' })
+    // No round trip to the sleeping Mac (that one waits 5s and gives up).
+    expect(Date.now() - started).toBeLessThan(3_000)
+  }, 60_000)
+
   it('A on devbox asks B on oldbox, and B answers, through the companion', async () => {
     const sent = await gatewayCall(devbox, A, 'task_send', { to: primary.ids.worker, text: 'Is the build green? \u4e2d' })
     expect(sent.ok, JSON.stringify(sent)).toBe(true)
@@ -451,6 +479,10 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     const far = await gatewayCall(devbox, A, 'task_update', { id: primary.ids.far, description: 'Drafted while the Mac slept.' })
     expect(far.ok, JSON.stringify(far)).toBe(true)
     if (far.ok) expect(far.result.viaLeader).toBe(true)
+    // The companion's own write: its row is no longer the Mac's, and is held until the Mac has it.
+    await waitFor(() => {
+      try { return JSON.parse(fs.readFileSync(path.join(companion.data, 'cache', 'task-replica.json'), 'utf8')).hashes?.[primary.ids.far] === undefined } catch { return false }
+    }, 15_000, 'the companion to let go of the Mac\'s row of the far task')
   }, 120_000)
 
   it('the Mac wakes: it takes back what the hosts did, takes the lead back, and the companion lets go', async () => {
@@ -488,5 +520,13 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
       const t = r.json.task ?? r.json
       return String(t.description ?? '').includes('Drafted while the Mac slept.') ? t : null
     }, 120_000, 'the far task change on the Mac')
+    // And the companion's copy of that task is the Mac's row again, its own write delivered.
+    await waitFor(() => {
+      try {
+        const s = JSON.parse(fs.readFileSync(path.join(companion.data, 'cache', 'task-replica.json'), 'utf8'))
+        const queued = fs.existsSync(path.join(companion.data, 'cache', 'task-queue')) ? fs.readdirSync(path.join(companion.data, 'cache', 'task-queue')).filter((f) => f.endsWith('.json')) : []
+        return typeof s.hashes?.[primary.ids.far] === 'string' && queued.length === 0
+      } catch { return false }
+    }, 120_000, 'the companion to hold the Mac\'s row of the far task again')
   }, 400_000)
 })

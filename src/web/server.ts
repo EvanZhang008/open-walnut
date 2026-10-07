@@ -1280,6 +1280,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // parser applies. See src/web/routes/bridge-ingest.ts.
     const { createBridgeIngestRouter, BRIDGE_INGEST_PATH } = await import('./routes/bridge-ingest.js')
     app.use(BRIDGE_INGEST_PATH, createBridgeIngestRouter())
+    // The primary keeps this box's copy of its task store (same door as ingest).
+    const { createBridgeReplicaRouter, BRIDGE_REPLICA_PATH } = await import('./routes/bridge-replica.js')
+    app.use(BRIDGE_REPLICA_PATH, createBridgeReplicaRouter())
   }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,
@@ -1873,7 +1876,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       import('./ws/bridge-registry.js'),
     ])
     setGatewayRequestHandler((host, frame) => { void handleBackupGatewayFrame(host, frame).catch(() => { /* answered or timed out on the host */ }) })
-    leaderLoopHandle = await startBackupLeader()
+    const backup = await startBackupLeader()
+    // A task write on this box holds its row against the primary's copy until the primary has it.
+    const { startTaskReplicaLocalWrites } = await import('../core/replication/task-replica-store.js')
+    const localWrites = startTaskReplicaLocalWrites()
+    leaderLoopHandle = { stop: () => { backup?.stop(); localWrites.stop() } }
   } else {
     const { startLeaderHeartbeat, watchBackupLeaderSetting } = await import('../core/leader/primary-leader.js')
     const { startHostReplicaSync } = await import('../core/host-replica-sync.js')
@@ -1881,7 +1888,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const unwatch = watchBackupLeaderSetting()
     // Each host's read copy of the notes, memory and skills (core/host-replica.ts).
     const replicas = startHostReplicaSync()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop() } }
+    // The companion's copy of the task store (core/replication/task-replica.ts).
+    const { startTaskReplicaSync } = await import('../core/replication/task-replica.js')
+    const taskReplica = startTaskReplicaSync()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop() } }
   }
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
@@ -2734,7 +2744,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Ops the apply path itself produced (import/apply) are event-silent, but
         // guard on source anyway in case that ever changes — echoing an applied
         // op back to the primary would be an infinite round trip.
-        if (event.source === 'cloud-outbox') return
+        if (event.source === 'cloud-outbox' || event.source === 'task-replica') return
         const data = event.data as {
           task?: import('../core/types.js').Task; id?: string
           // Additive op-scoping extras some emitters attach (see task-queue.ts):
