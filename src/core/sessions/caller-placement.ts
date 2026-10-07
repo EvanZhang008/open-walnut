@@ -15,10 +15,12 @@
  *   - project: the caller's project unless the call names one ('' = Inbox, on
  *     purpose).
  *   - folder:  only inside the caller's project, and the folder tree follows
- *     the subtask tree. The caller's folder when it holds only the caller and
- *     its own subtasks; when it holds other work too, a SUBFOLDER of it named
- *     after the caller, holding the caller and the new task (the caller moves
- *     in); when the caller has no folder, a new folder holding both (the same
+ *     the subtask tree. The caller's folder when its open tasks are only the
+ *     caller and its own subtasks (finished tasks and subfolders don't count:
+ *     the board hides the one and files the other apart); when it holds other
+ *     open work too, a SUBFOLDER of it named after the caller, holding the
+ *     caller and the new task (the caller moves in); when the caller has no
+ *     folder, a new folder holding both (the same
  *     shape a fork produces). A folder made for the caller this way (or found
  *     holding only its family) stays the family's home (`family_group_id`):
  *     later subtasks join it even after other work lands there, instead of

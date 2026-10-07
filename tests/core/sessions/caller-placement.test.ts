@@ -423,7 +423,11 @@ describe('against the real store', () => {
     expect((await listGroups()).filter((g) => g.parent_id === own.group_id).map((g) => g.group_id)).toEqual([inner.group_id])
   })
 
-  it('an unrelated task in a SUBFOLDER makes the folder shared', async () => {
+  // 2026-10-07: a leader sat in a folder whose other tasks were all finished
+  // (old tickets, forks of other work) or already filed in subfolders. The
+  // board showed only the leader's team there, yet each subtask nested the
+  // team again: three folders of one name, the outer two showing nothing.
+  it('unrelated work already in a SUBFOLDER is filed apart: the folder is still the caller\'s', async () => {
     const { task: me } = await seedCaller()
     const { task: stranger } = await addTask({ title: 'Stranger', project: 'marina' })
     const own = await createFolder('Mine', 'marina')
@@ -433,7 +437,35 @@ describe('against the real store', () => {
     await addToGroup(inner.group_id, [stranger.id])
     const born = await subtaskOf(me.id, 'Child')
     const r = await joinOrCreateSiblingFolder({ ...me, group_id: own.group_id }, born.id, { eventSource: 'test', nest: true })
-    expect(r).toMatchObject({ created: true, parentId: own.group_id })
+    expect(r).toMatchObject({ created: false, groupId: own.group_id })
+    expect((await listGroups()).filter((g) => g.parent_id === own.group_id).map((g) => g.group_id)).toEqual([inner.group_id])
+  })
+
+  it('finished unrelated tasks do not make a folder shared; an open one does', async () => {
+    const { me, shared, neighbours } = await callerInSharedFolder(3)
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js')
+    for (const n of neighbours) await updateTaskRaw(n.id, { phase: 'COMPLETE' })
+    for (let i = 1; i <= 3; i++) {
+      const child = await subtaskOf(me.id, `Part ${i}`)
+      const r = await joinOrCreateSiblingFolder(await getTask(me.id), child.id, { eventSource: 'test', nest: true })
+      expect(r).toMatchObject({ created: false, groupId: shared })
+    }
+    expect((await listGroups()).filter((g) => g.parent_id === shared)).toEqual([])
+    // Reopened, a neighbour is open work again, but the folder is the family's
+    // home by now (found holding only it), so the family stays put.
+    await updateTaskRaw(neighbours[0].id, { phase: 'IN_PROGRESS' })
+    const late = await subtaskOf(me.id, 'Part 4')
+    expect(await joinOrCreateSiblingFolder(await getTask(me.id), late.id, { eventSource: 'test', nest: true }))
+      .toMatchObject({ created: false, groupId: shared })
+  })
+
+  it('an open unrelated task beside finished ones still makes the folder shared', async () => {
+    const { me, shared, neighbours } = await callerInSharedFolder(2)
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js')
+    await updateTaskRaw(neighbours[0].id, { phase: 'COMPLETE' })
+    const born = await subtaskOf(me.id, 'Child')
+    expect(await joinOrCreateSiblingFolder(me, born.id, { eventSource: 'test', nest: true }))
+      .toMatchObject({ created: true, parentId: shared })
   })
 
   it('a subtask of a subtask nests one level deeper, so the folder tree follows the subtask tree', async () => {

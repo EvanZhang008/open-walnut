@@ -5397,7 +5397,7 @@ export async function placeInFolderBeside(
     // The folder made for the source's family stays its home whatever lands in
     // it later; one that holds only the family becomes its home now.
     const familyHome = Boolean(groupId && opts.nest && folderRecord(store, groupId)
-      && (source.family_group_id === groupId || folderHoldsOnlyLineOf(store, groupId, source.id, born.id)))
+      && (source.family_group_id === groupId || folderHoldsOnlyLineOf(store, groupId, source.id, born.id)));
     if (groupId && opts.nest && folderRecord(store, groupId) && !familyHome
         && folderDepth(store, groupId) < FOLDER_MAX_DEPTH) {
       parentId = groupId;
@@ -5461,19 +5461,17 @@ function lineOf(store: TaskStore, rootId: string): (task: Task) => boolean {
 }
 
 /**
- * True when every task in `groupId` and its subfolders is `rootId` or one of its
- * subtasks. `ignoreId` (the task being placed) never counts.
+ * True when every OPEN task filed directly in `groupId` is `rootId` or one of
+ * its subtasks: the folder is that family's, as the board shows it. A finished
+ * task is not anyone's work in progress (the board hides it), and work already in
+ * a subfolder is filed apart, so neither makes the folder shared. Counting them
+ * nested a leader once per subtask under a folder of finished tickets: three
+ * folders of one name, the outer two showing nothing (2026-10-07).
+ * `ignoreId` (the task being placed) never counts.
  */
 function folderHoldsOnlyLineOf(store: TaskStore, groupId: string, rootId: string, ignoreId: string): boolean {
-  const inTree = new Set<string>([groupId]);
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const [gid, rec] of Object.entries(store.task_groups ?? {})) {
-      if (!inTree.has(gid) && rec.parent_id && inTree.has(rec.parent_id)) { inTree.add(gid); grew = true; }
-    }
-  }
   const inLine = lineOf(store, rootId);
-  return store.tasks.every((t) => !t.group_id || !inTree.has(t.group_id) || t.id === ignoreId || inLine(t));
+  return store.tasks.every((t) => t.group_id !== groupId || t.phase === 'COMPLETE' || t.id === ignoreId || inLine(t));
 }
 
 /**
