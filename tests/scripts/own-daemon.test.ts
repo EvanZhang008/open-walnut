@@ -72,4 +72,15 @@ describe('stopOwnDaemon', () => {
       expect(src, rel).not.toMatch(/daemon\.pid/)
     }
   })
+
+  it('the Mac app smoke removes its work dir only after the server and every holder are gone', () => {
+    // The 0.6.5 rerun failed the same way with the daemon waited for: the server
+    // writes its log in the daemon dir after its port closes, so the port is not
+    // the signal, and a daemon an earlier launch started is not in daemon.pid.
+    const src = fs.readFileSync(path.join(ROOT, 'scripts/desktop-smoke.mjs'), 'utf8')
+    expect(src).toMatch(/!listener\(port\) && !pidAlive\(serverPid\)/)
+    const cleanup = src.slice(src.indexOf('await stopOwnDaemon('))
+    expect(cleanup.indexOf('await stopHolders(work)')).toBeGreaterThan(0)
+    expect(src).toMatch(/if \(!opts\.keep\) removeWorkDir\(work\)/)
+  })
 })

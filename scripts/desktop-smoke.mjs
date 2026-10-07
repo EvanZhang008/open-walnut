@@ -59,6 +59,11 @@ const answers = async (port) => {
   return res.ok
 }
 
+const pidAlive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 1) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
 function listener(port) {
   try {
     return execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim().split('\n')[0] || null
@@ -115,6 +120,15 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
   const desktopLog = () => { try { return fs.readFileSync(path.join(support, 'desktop.log'), 'utf8') } catch { return '' } }
 
   let app = null
+  // The server writes its log into the daemon dir until it exits, which is
+  // after its port closes: wait for the process, not the port (2026-10-07: the
+  // work dir was removed under a server still shutting down, rmdir ENOTEMPTY).
+  let serverPid = null
+  const appGone = async () => {
+    app.kill('SIGKILL')
+    await until(`port ${port} to close and the server to exit`, 60_000, async () => !listener(port) && !pidAlive(serverPid))
+    app = null
+  }
   try {
     await step('first launch installs Walnut and serves the console', async () => {
       app = launch('app-1.log')
@@ -128,31 +142,27 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
       const printed = execFileSync(path.join(home, '.local', 'bin', 'walnut'), ['--version'], { env, encoding: 'utf8' }).trim()
       if (printed.split(/\s/)[0] !== version) throw new Error(`~/.local/bin/walnut reports "${printed}", expected ${version}`)
       const pid = listener(port)
+      serverPid = Number(pid)
       const command = pid ? execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim() : ''
       const node = fs.realpathSync(path.join(runtimeDir, 'app', 'runtime', 'bin', 'node'))
       if (!fs.realpathSync(command.split(' ')[0]).startsWith(node)) throw new Error(`the server on ${port} is "${command}", not the installed runtime's Node`)
       return `walnut ${printed}; server: ${command.slice(0, 120)}`
     })
-    await step('the server goes when the app does', async () => {
-      app.kill('SIGKILL')
-      await until(`port ${port} to close`, 60_000, async () => !listener(port))
-      app = null
-    })
+    await step('the server goes when the app does', appGone)
     await step('a second launch starts the installed copy, downloading nothing', async () => {
       const before = (desktopLog().match(/runtime_install_started/g) ?? []).length
       app = launch('app-2.log')
       await until('the console again', 3 * 60_000, () => answers(port))
+      serverPid = Number(listener(port))
       const after = (desktopLog().match(/runtime_install_started/g) ?? []).length
       if (after !== before) throw new Error('the second launch ran install.sh again')
     })
   } finally {
-    if (app) {
-      app.kill('SIGKILL')
-      await until(`port ${port} to close`, 60_000, async () => !listener(port)).catch(() => {})
-    }
+    if (app) await appGone().catch(() => {})
     // The session daemon outlives its server on purpose; this one is ours, in our
     // own dir, and the work dir can go only once it has exited.
     await stopOwnDaemon(env.WALNUT_DAEMON_DIR)
+    await stopHolders(work)
     const table = ['| Step | Result | Time | Detail |', '|---|---|---|---|',
       ...results.map((r) => `| ${r.name} | ${r.ok ? 'pass' : '**FAIL**'} | ${Math.round(r.secs)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 200)} |`)]
     process.stdout.write(`\n${table.join('\n')}\n`)
@@ -185,7 +195,53 @@ async function main() {
     await smokeDesktopApp({ app: opts.app, work, version: opts.version ?? archiveVersion(opts.archive), releaseUrl })
   } finally {
     await releases?.close()
-    if (!opts.keep) fs.rmSync(work, { recursive: true, force: true })
+    if (!opts.keep) removeWorkDir(work)
+  }
+}
+
+/**
+ * Whatever still holds a file open in the work dir (a daemon an earlier launch
+ * started and its pid file no longer names, a CLI it spawned) was started by this
+ * smoke: say which, stop it, and wait, so the dir can be removed.
+ */
+async function stopHolders(work) {
+  // Open files only, not a working directory: a shell that merely sits in the
+  // dir (the one that ran this smoke) is not a writer. Never this process or its parent.
+  const own = new Set([process.pid, process.ppid])
+  const holders = () => {
+    let out = ''
+    try {
+      out = execFileSync('lsof', ['-t', '-a', '-d', '^cwd', '+D', work], { encoding: 'utf8', timeout: 30_000 })
+    } catch (e) {
+      out = String(e?.stdout ?? '') // lsof exits 1 when nothing holds a file there
+    }
+    return out.split('\n').map(Number).filter((pid) => pid > 1 && !own.has(pid))
+  }
+  const left = [...new Set(holders())]
+  if (left.length === 0) return
+  for (const pid of left) {
+    let command = ''
+    try { command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim() } catch { /* gone */ }
+    process.stdout.write(`desktop-smoke: stopping ${pid} (${command.slice(0, 160)}), still holding files in the work dir\n`)
+    try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+  }
+  await until('the processes holding the work dir to exit', 15_000, async () => left.every((pid) => !pidAlive(pid)))
+    .catch(() => { for (const pid of left) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } } })
+}
+
+/** Remove the work dir; when something still writes there, name it before failing. */
+function removeWorkDir(work) {
+  try {
+    fs.rmSync(work, { recursive: true, force: true })
+  } catch (err) {
+    let holders = ''
+    try {
+      holders = execFileSync('lsof', ['+D', work], { encoding: 'utf8', timeout: 30_000 })
+    } catch (e) {
+      holders = String(e?.stdout ?? '')
+    }
+    process.stderr.write(`desktop-smoke: ${work} is still in use${holders ? `:\n${holders.slice(0, 4000)}` : ' (lsof names no process)'}\n`)
+    throw err
   }
 }
 
