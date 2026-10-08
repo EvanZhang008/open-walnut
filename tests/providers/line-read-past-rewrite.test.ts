@@ -306,14 +306,21 @@ describe('a lost line across a server restart, an old window, and a pending perm
   })
 
   it('one answer proves the CLI read past every unnamed line before it: they go out again in order', async () => {
+    // A probe proves only the lines written before it. The first line's probe
+    // waits long enough for the second line here, and the probe answered is the
+    // first one written after both lines are out: on a slow runner the first
+    // line could be probed alone (40 ms grace), and answering that probe rightly
+    // left the second line processing (flake hunt, 2026-10-08).
+    Object.assign(knobs, { LINE_ACK_GRACE_MS: 400 })
     const h = harness()
     await enqueueMessage(SID, 'first')
     await h.internals.processNext(SID)
     await enqueueMessage(SID, 'second')
     h.internals.onLinesReclaimedFor(SID, 'lost')
     await vi.waitFor(() => expect(h.writes).toHaveLength(2), { timeout: 2000 })
-    await vi.waitFor(() => expect(h.probes().length).toBeGreaterThanOrEqual(1), { timeout: 2000 })
-    h.answer(h.probes()[0].request_id)
+    const before = h.probes().length
+    await vi.waitFor(() => expect(h.probes().length).toBeGreaterThan(before), { timeout: 3000 })
+    h.answer(h.probes()[before].request_id)
     await vi.waitFor(async () => expect((await rows()).map((r) => r.status)).toEqual(['pending', 'pending']), { timeout: 2000 })
     h.internals.onLinesReclaimedFor(SID, 'lost')
     // Both go out again under their own uuid, the older line first.
