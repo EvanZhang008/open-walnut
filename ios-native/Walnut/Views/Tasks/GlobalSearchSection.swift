@@ -74,33 +74,43 @@ enum BoardSearchHitDedup {
     ///   drew a second row 55pt below the first. The board keys such a row by the owning
     ///   task id now, and this set still carries the session id as well, so the drop
     ///   happens regardless of which id the row was keyed by.
+    /// The ids the list above answers to, indexed for `sameTask` lookups.
+    ///
+    /// Indexed instead of scanned per hit: this runs on every body pass of the section,
+    /// while the user is typing, against a board that can hold hundreds of visible rows.
+    /// The prefix lane cannot fire unless two ids agree on their first
+    /// `minimumIdOverlap` characters, so bucketing by exactly those characters is
+    /// equivalent to the scan, not an approximation of it: anything shorter than the
+    /// floor can only match EXACTLY, which is the `exact` set.
+    struct VisibleIndex {
+        private var exact = Set<String>()
+        private var buckets: [String: [String]] = [:]
+
+        init(_ ids: Set<String>) {
+            for raw in ids {
+                let id = raw.trimmingCharacters(in: .whitespaces)
+                guard !id.isEmpty else { continue }
+                exact.insert(id)
+                if id.count >= BoardSearchHitDedup.minimumIdOverlap {
+                    buckets[String(id.prefix(BoardSearchHitDedup.minimumIdOverlap)), default: []].append(id)
+                }
+            }
+        }
+
+        func contains(_ key: String) -> Bool {
+            if exact.contains(key) { return true }
+            guard key.count >= BoardSearchHitDedup.minimumIdOverlap else { return false }
+            guard let candidates = buckets[String(key.prefix(BoardSearchHitDedup.minimumIdOverlap))] else { return false }
+            return candidates.contains { BoardSearchHitDedup.sameTask($0, key) }
+        }
+    }
+
     static func visibleHits(
         _ hits: [GlobalSearchResult], visibleTaskIds: Set<String>
     ) -> [GlobalSearchResult] {
         guard !hits.isEmpty else { return [] }
-        // Index the visible ids instead of scanning them per hit. This runs on every
-        // body pass of the section, while the user is typing, against a board that can
-        // hold hundreds of visible rows — and the prefix lane cannot fire unless two
-        // ids agree on their first `minimumIdOverlap` characters, so bucketing by
-        // exactly those characters is equivalent to the scan, not an approximation of
-        // it: anything shorter than the floor can only match EXACTLY, which is the
-        // `exact` set.
-        var exact = Set<String>()
-        var buckets: [String: [String]] = [:]
-        for raw in visibleTaskIds {
-            let id = raw.trimmingCharacters(in: .whitespaces)
-            guard !id.isEmpty else { continue }
-            exact.insert(id)
-            if id.count >= minimumIdOverlap {
-                buckets[String(id.prefix(minimumIdOverlap)), default: []].append(id)
-            }
-        }
-        func isAlreadyOnScreen(_ key: String) -> Bool {
-            if exact.contains(key) { return true }
-            guard key.count >= minimumIdOverlap else { return false }
-            guard let candidates = buckets[String(key.prefix(minimumIdOverlap))] else { return false }
-            return candidates.contains { sameTask($0, key) }
-        }
+        let visible = VisibleIndex(visibleTaskIds)
+        func isAlreadyOnScreen(_ key: String) -> Bool { visible.contains(key) }
 
         var kept: [GlobalSearchResult] = []
         // Task key → index in `kept`, so a pair collapses into the slot the FIRST of
@@ -130,71 +140,165 @@ enum BoardSearchHitDedup {
     }
 }
 
-/// Server-side global search results (GET /v1/search — tasks/memory/sessions)
-/// rendered as an extra List section under the local matches while the user
-/// types in the Tasks search field. Debounced 350ms. On a cloud REPLICA the
-/// endpoint answers 501 not_supported_cloud → a one-line degradation notice
-/// (notes search elsewhere still works there).
+/// The Tasks tab's search results below the rows the list already shows: the completed
+/// tasks that match, and what the Mac's search found (GET /v1/search: keyword and
+/// semantic lanes over tasks and session transcripts, with the tasks its rows name).
 ///
-/// What it renders is `BoardSearchHitDedup.visibleHits`, never the raw response —
-/// see there for the triple-listing this fixes.
+/// Arranged the way the web console arranges its home search (`SearchArrangement`):
+/// open hits first, at most three completed title hits inline, then "Completed (N)"
+/// and "Related (N)" folds, each hit a real task row. The phone's own completed matches
+/// show at once, offline too; the server's rows follow a 350 ms typing pause. While the
+/// Mac is away the companion answers with keyword matches only, and says so; an old
+/// companion answers 501 not_supported_cloud, a one-line notice.
+///
+/// Nothing here draws a second row for a task the list above shows: see
+/// `BoardSearchHitDedup` for the triple listing that rule fixed.
 struct GlobalSearchSection: View {
     let query: String
+    /// The search itself. The tab owns it and schedules it on every query change, so
+    /// it runs whether or not this section has been drawn yet (it sits at the foot of a
+    /// lazy List): see `GlobalSearchModel`.
+    let search: GlobalSearchModel
     /// Task ids the list ABOVE already shows, so this section never draws a second
     /// copy of a row the user is looking at.
     var visibleTaskIds: Set<String> = []
-    /// Open a task hit (the parent resolves the id against its store).
+    /// No row above matched: when this section has no primary rows either, its first
+    /// fold is the answer and shows open.
+    var nothingAbove = false
+    /// The completed tasks the phone holds (the quick lane's half of this section).
+    var localDone: [WalnutTask] = []
+    /// Everything the phone holds, so a hit draws from the live copy.
+    var storeTasks: [WalnutTask] = []
+    /// The list's own row for a task, with the snippet when it says more than the title.
+    var taskRow: (WalnutTask, String?) -> AnyView
+    /// Open a hit neither the phone nor the response could draw as a task.
     var onOpenTask: (String) -> Void
 
-    @State private var results: [GlobalSearchResult] = []
-    @State private var searching = false
-    /// Non-nil = show the degraded/unavailable line instead of results.
-    @State private var unavailableNotice: String?
-    @State private var debounceTask: Task<Void, Never>?
-    @State private var searchedQuery = ""
-
-    private let api = WalnutAPI()
-
     var body: some View {
-        // ONE dedup per body pass, and the empty states read from the SAME array the
-        // rows do: "No server-side matches" while holding hits that were all already
-        // on screen would be a lie, and the two branches disagreeing about what is
-        // empty is how that lie gets shipped.
-        let hits = BoardSearchHitDedup.visibleHits(results, visibleTaskIds: visibleTaskIds)
-        Section {
-            if let unavailableNotice {
-                Label(unavailableNotice, systemImage: "icloud.slash")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if searching && hits.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Searching server…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if hits.isEmpty && !results.isEmpty {
-                // Every hit collapsed into a row above. Say so, rather than claiming
-                // the server found nothing.
-                Text("Every server match is already listed above.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else if hits.isEmpty && searchedQuery == query {
-                Text("No server-side matches.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ForEach(hits) { result in
-                    resultRow(result)
+        // ONE arrangement per body pass, and the status line reads from the SAME value
+        // the rows do: "No more matches" while holding hits that were all already on
+        // screen would be a lie, and two branches disagreeing about what is empty is
+        // how that lie gets shipped.
+        let answered = search.answer(for: query)
+        let arrangement = SearchArrangement.arrange(
+            query: query,
+            serverRows: answered?.results,
+            responseTasks: answered?.tasks ?? [],
+            storeTasks: storeTasks,
+            localDone: localDone,
+            visibleTaskIds: visibleTaskIds,
+            nothingAbove: nothingAbove
+        )
+        let status = statusLine(arrangement, answered: answered)
+        Group {
+            if !arrangement.isEmpty || status != nil {
+                Section {
+                    ForEach(Array(arrangement.primary.prefix(SearchArrangement.renderCap))) { hit in
+                        hitRow(hit)
+                    }
+                    if !arrangement.completed.isEmpty {
+                        foldRow("Completed", count: arrangement.completed.count, expanded: search.showCompleted, key: "completed") {
+                            search.showCompleted.toggle()
+                        }
+                        if search.showCompleted {
+                            ForEach(Array(arrangement.completed.prefix(SearchArrangement.renderCap))) { hit in
+                                hitRow(hit)
+                            }
+                        }
+                    }
+                    if !arrangement.related.isEmpty {
+                        foldRow("Related", count: arrangement.related.count, expanded: search.showRelated, key: "related") {
+                            search.showRelated.toggle()
+                        }
+                        if search.showRelated {
+                            ForEach(Array(arrangement.related.prefix(SearchArrangement.renderCap))) { hit in
+                                hitRow(hit)
+                            }
+                        }
+                    }
+                    if let status {
+                        status
+                    }
+                } header: {
+                    Text("More Results")
                 }
             }
-        } header: {
-            Text("Server Search")
         }
-        .onChange(of: query, initial: true) { _, newQuery in
-            schedule(newQuery)
+    }
+
+    @ViewBuilder
+    private func hitRow(_ hit: SearchHit) -> some View {
+        if let task = hit.task {
+            taskRow(task, Self.snippetWorthShowing(title: task.title, snippet: hit.snippet.map(Self.plainSnippet)))
+        } else if let row = hit.row {
+            resultRow(row)
         }
-        .onDisappear { debounceTask?.cancel() }
+    }
+
+    /// "Completed (12) ›": one tap shows the rows, another hides them.
+    private func foldRow(
+        _ label: String, count: Int, expanded: Bool, key: String, toggle: @escaping () -> Void
+    ) -> some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text("\(label) (\(count))")
+                    .font(.subheadline.weight(.medium))
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("search.fold.\(key)")
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(expanded ? "Hides these results" : "Shows these results")
+    }
+
+    /// The one line under the rows that says how the search stands, or nil.
+    private func statusLine(_ arrangement: SearchArrangement, answered: GlobalSearchResponse?) -> AnyView? {
+        func caption(_ text: String, systemImage: String? = nil) -> AnyView {
+            AnyView(Group {
+                if let systemImage {
+                    Label(text, systemImage: systemImage)
+                } else {
+                    Text(text)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("search.status"))
+        }
+        if let unavailableNotice = search.unavailableNotice {
+            return caption(unavailableNotice, systemImage: "icloud.slash")
+        }
+        if search.searching {
+            return AnyView(HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Searching…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("search.status"))
+        }
+        if search.failed && answered == nil {
+            return caption("Couldn't search right now. Showing what this phone has.", systemImage: "exclamationmark.triangle")
+        }
+        guard let answered else { return nil }
+        if answered.offline == true {
+            return caption("Your Mac is away: keyword matches only.", systemImage: "icloud.slash")
+        }
+        if arrangement.allOnScreen {
+            return caption("Every match is already listed above.")
+        }
+        if arrangement.isEmpty {
+            return caption("No more matches.")
+        }
+        return nil
     }
 
     /// Characters a snippet uses to say "this text is a window into something longer".
@@ -262,6 +366,15 @@ struct GlobalSearchSection: View {
     /// the title out and ask whether what is left says anything (`remainderBeyondTitle`
     /// + `carriesRealContent`). Punctuation, ellipses, quotes and whitespace are not
     /// something to say; `#finance #q2` is.
+    /// A snippet without the Markdown it was cut from: the server windows a task's
+    /// description or a transcript as written, so a row read "…**User:** the search…".
+    /// Only the paired markers go (`**`, `__`, backticks); a lone `*` or `_` can be content.
+    static func plainSnippet(_ text: String) -> String {
+        text.replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
+    }
+
     static func snippetWorthShowing(title: String, snippet: String?) -> String? {
         guard let snippet else { return nil }
         let trimmed = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -334,7 +447,7 @@ struct GlobalSearchSection: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
-            if let snippet = Self.snippetWorthShowing(title: result.title, snippet: result.snippet) {
+            if let snippet = Self.snippetWorthShowing(title: result.title, snippet: result.snippet.map(Self.plainSnippet)) {
                 Text(snippet)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -351,38 +464,6 @@ struct GlobalSearchSection: View {
             // Memory/session hits have no dedicated phone surface yet —
             // render read-only (title + snippet carries the answer).
             row
-        }
-    }
-
-    private func schedule(_ newQuery: String) {
-        debounceTask?.cancel()
-        let trimmed = newQuery.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count >= 2 else {
-            results = []
-            searchedQuery = ""
-            return
-        }
-        debounceTask = Task {
-            try? await Task.sleep(for: .milliseconds(350))
-            guard !Task.isCancelled else { return }
-            searching = true
-            defer { searching = false }
-            do {
-                let hits = try await api.globalSearch(query: trimmed, limit: 15)
-                guard !Task.isCancelled else { return }
-                results = hits
-                searchedQuery = newQuery
-                unavailableNotice = nil
-            } catch let error as APIError where error.isNotSupportedCloud {
-                unavailableNotice = "Global search needs your Mac online. Notes search still works."
-            } catch let error as APIError where error.isCancelled {
-                return
-            } catch {
-                // Old server (404) or transient failure — hide quietly; local
-                // search results above still work.
-                results = []
-                searchedQuery = newQuery
-            }
         }
     }
 

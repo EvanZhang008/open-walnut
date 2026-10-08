@@ -372,17 +372,26 @@ extension DemoServer {
     func globalSearch(_ r: DemoRequest) -> DemoReply {
         let q = (r.query["q"] ?? "").lowercased().trimmingCharacters(in: .whitespaces)
         let limit = Int(r.query["limit"] ?? "") ?? 30
-        let results = withState { state -> [GlobalSearchResult] in
-            guard !q.isEmpty else { return [] }
+        let wantsTasks = r.query["tasks"] == "1"
+        let (results, named) = withState { state -> ([GlobalSearchResult], [WalnutTask]) in
+            guard !q.isEmpty else { return ([], []) }
             let tasks = state.tasks
                 .filter { $0.title.lowercased().contains(q) || ($0.summary ?? "").lowercased().contains(q) }
                 .map { GlobalSearchResult(type: "task", resultId: $0.id, title: $0.title, snippet: $0.summary, score: 1) }
+            // A session row carries the task it belongs to, as the real server's does.
             let sessions = state.visibleSessions
                 .filter { $0.title.lowercased().contains(q) }
-                .map { GlobalSearchResult(type: "session", resultId: $0.id, title: $0.title, snippet: $0.description, score: 0.8) }
-            return Array((tasks + sessions).prefix(limit))
+                .map {
+                    GlobalSearchResult(
+                        type: "session", resultId: $0.taskId ?? $0.id, title: $0.title,
+                        snippet: $0.description, score: 0.8, taskId: $0.taskId
+                    )
+                }
+            let rows = Array((tasks + sessions).prefix(limit))
+            let ids = Set(rows.compactMap(\.ownerTaskId))
+            return (rows, state.tasks.filter { ids.contains($0.id) }.map(\.wire))
         }
-        return .encoded(GlobalSearchResponse(results: results))
+        return .encoded(GlobalSearchResponse(results: results, tasks: wantsTasks ? named : nil))
     }
 
     func asks(_ r: DemoRequest) -> DemoReply {

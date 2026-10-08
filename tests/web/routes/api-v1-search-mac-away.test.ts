@@ -102,4 +102,25 @@ describe('global search while the Mac is away', () => {
     expect(res.body).toEqual({ results: [{ type: 'task', id: 't1', title: 'From the Mac' }] })
     expect(bridgeRequestMock).toHaveBeenCalledTimes(1)
   })
+
+  it('the phone\'s extras: the Mac is asked for them, and the copy carries the named tasks', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { results: [] } })
+    await request(createApp()).get('/api/v1/search?q=release&types=task,session&limit=80&tasks=1&semanticWaitMs=1500')
+    expect(bridgeRequestMock.mock.calls[0]![2]).toMatchObject({
+      action: 'server.search',
+      params: { q: 'release', types: ['task', 'session'], limit: 80, semanticWaitMs: 1500, tasks: true },
+    })
+
+    // The Mac away: the copy's own tasks, the completed one included, so the phone
+    // can draw and open a task its 14-day list does not hold.
+    leader.lastSeenAt = Date.now() - 120_000
+    const res = await request(createApp()).get('/api/v1/search?q=release%20notes&types=task&tasks=1')
+    expect(res.body).toMatchObject({ offline: true, degraded: 'offline-keyword' })
+    // (The task store outlives each test's data dir, so earlier seeds are in it too.)
+    const named = res.body.tasks as Array<{ id: string; title: string; status: string }>
+    const rowIds = (res.body.results as Array<{ taskId?: string }>).map((r) => r.taskId)
+    expect(named.map((t) => t.id)).toEqual([...new Set(rowIds)])
+    expect(named.map((t) => t.id)).toContain(releaseId)
+    expect(named.some((t) => t.title === 'Old release notes' && t.status === 'done')).toBe(true)
+  })
 })

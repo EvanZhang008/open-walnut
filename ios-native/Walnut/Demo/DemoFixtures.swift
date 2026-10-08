@@ -9,7 +9,7 @@ enum DemoFixtures {
     /// Model ids and labels as `src/model/providers/model-catalog.ts` lists them
     /// (Anthropic API ids): the newest of each family, the default first.
     static let mainModel = "claude-opus-5-5"
-    static let fastModel = "claude-haiku-4-5"
+    static let fastModel = "claude-haiku-5-5"
     /// What the API uses when no effort is sent (`DEFAULT_SESSION_EFFORT`).
     static let defaultEffort = "high"
     static let macCodeRoot = "/Users/demo/code"
@@ -228,14 +228,14 @@ enum DemoFixtures {
     ]
 
     static let models: [SessionModelOptions.Model] = [
-        // Effort levels as the server's capability map gives them: Opus and
-        // Sonnet take all five, Haiku takes none.
+        // Effort levels as the server's capability map gives them: Opus,
+        // Sonnet and Haiku 5.5 take all five.
         .init(id: mainModel, label: "Opus 5.5", supportsEffort: true,
               supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"]),
         .init(id: "claude-sonnet-5-5", label: "Sonnet 5.5", supportsEffort: true,
               supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"]),
-        .init(id: fastModel, label: "Haiku 4.5", supportsEffort: false,
-              supportedEffortLevels: nil),
+        .init(id: fastModel, label: "Haiku 5.5", supportsEffort: true,
+              supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"]),
     ]
 
     static var launchOptions: SessionLaunchOptions {

@@ -1192,8 +1192,14 @@ export async function handleSessionControlRelay(
         }
         const limit = p.limit !== undefined
           ? Math.max(1, Math.min(100, Number(p.limit) || 20)) : undefined;
-        const { search } = await import('../search.js');
-        result = { results: await search(q, { types, limit }) };
+        const [{ search }, extras] = await Promise.all([
+          import('../search.js'),
+          import('../search-hit-tasks.js'),
+        ]);
+        const semanticDeadlineMs = extras.clampSemanticWaitMs(p.semanticWaitMs);
+        const results = await search(q, { types, limit, semanticDeadlineMs });
+        const tasks = extras.wantsHitTasks(p.tasks) ? await extras.searchHitTasks(results) : undefined;
+        result = tasks ? { results, tasks } : { results };
         break;
       }
       case 'server.asks': {

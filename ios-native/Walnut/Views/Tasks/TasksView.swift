@@ -49,6 +49,9 @@ struct TasksView: View {
     /// Local search — filters tasks (title/project) and sessions
     /// (title/task/host/cwd) in place; no server round-trip.
     @State private var searchText = ""
+    /// The server half of the search ("More Results"), scheduled from here on every
+    /// query change so it never waits for its lazy section to be drawn.
+    @State private var globalSearch = GlobalSearchModel()
     /// Locate-me flash for a just-created task (scroll target + row tint).
     @State private var highlightedTaskId: String?
     /// True while the inline add row's field is focused — rapid consecutive
@@ -759,19 +762,26 @@ struct TasksView: View {
                     }
                 }
 
-                // Server-side global search augments the local matches while
-                // a query is typed (tasks/memory/sessions; 501 on cloud →
-                // a degradation notice).
+                // "More Results" augments the local matches while a query is typed:
+                // the completed tasks that match (three inline, the rest behind
+                // "Completed (N)"), and the Mac's keyword + semantic search over tasks
+                // and session transcripts, arranged as the web console arranges it
+                // (`SearchArrangement`). Each hit is this list's own task row.
                 //
                 // AUGMENTS, so it is handed what is already on screen. `/api/search`
                 // answers a task hit AND the hit for the session that task owns, both
                 // carrying the same taskId, which put one task on screen three times
-                // in one viewport (its board row plus two "Server Search" rows).
+                // in one viewport (its board row plus two server rows).
                 // `BoardSearchHitDedup` is where that is decided.
                 if !trimmedQuery.isEmpty {
                     GlobalSearchSection(
                         query: trimmedQuery,
-                        visibleTaskIds: alreadyVisibleTaskIds
+                        search: globalSearch,
+                        visibleTaskIds: alreadyVisibleTaskIds,
+                        nothingAbove: alreadyVisibleTaskIds.isEmpty,
+                        localDone: tasks.tasks(for: .done),
+                        storeTasks: tasks.tasks,
+                        taskRow: { task, snippet in AnyView(taskRowButton(task, matchSnippet: snippet)) }
                     ) { taskId in
                         if let hit = tasks.tasks.first(where: { $0.id == taskId || $0.id.hasPrefix(taskId) }) {
                             selected = hit
@@ -901,6 +911,9 @@ struct TasksView: View {
             // Switching filters re-groups everything, so the header that owned
             // the open row may not exist any more — a row anchored to a vanished
             // group would file into a group the user can no longer see.
+            .onChange(of: trimmedQuery, initial: true) { _, query in
+                globalSearch.schedule(query)
+            }
             .onChange(of: activeFilter) { _, _ in
                 openAddGroup = nil
                 // The next filter has its own chrome height and its own drawer, so the
@@ -1215,7 +1228,7 @@ struct TasksView: View {
     /// One row of the task list: edit mode = selection toggle; normal = detail
     /// sheet + swipe/context quick actions.
     @ViewBuilder
-    private func taskRowButton(_ task: WalnutTask) -> some View {
+    private func taskRowButton(_ task: WalnutTask, matchSnippet: String? = nil) -> some View {
         Button {
             if isEditing {
                 if selectedIds.contains(task.id) { selectedIds.remove(task.id) }
@@ -1230,7 +1243,7 @@ struct TasksView: View {
                         .font(.title3)
                         .foregroundStyle(selectedIds.contains(task.id) ? Theme.tint : Color(.systemGray3))
                 }
-                TaskRow(task: task, tierBadge: tasks.tierBadge(for: task))
+                TaskRow(task: task, tierBadge: tasks.tierBadge(for: task), matchSnippet: matchSnippet)
             }
         }
         .buttonStyle(.plain)
@@ -1428,12 +1441,12 @@ struct TasksView: View {
 
     /// Empty-state copy for a filter, search-aware. With a query active the
     /// filter wording ("No agent sessions.", "No open tasks.") reads as "your
-    /// search found nothing" while the real hits sit BELOW in Server Search —
+    /// search found nothing" while the real hits sit BELOW in More Results —
     /// a user could bail before scrolling (2026-08-23 dogfood R11). Say what
     /// actually happened and point at where the results are.
     static func emptyPlaceholder(filter: TaskFilter, query: String) -> String {
         if !query.isEmpty {
-            return "No local matches. See Server Search below."
+            return "No local matches. See More Results below."
         }
         switch filter {
         case .today: return "Nothing due today."

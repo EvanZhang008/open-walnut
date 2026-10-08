@@ -16,6 +16,12 @@ final class DemoModeTests: XCTestCase {
     private let api = WalnutAPI()
 
     override func setUp() async throws {
+        // The host app runs beside these tests: its task store's events feed, pointed
+        // at the test blackhole, retries on a backoff clock, and a retry that lands
+        // inside a test is a "blocked" request this suite did not make (it failed
+        // `testEveryRouteTheAppCallsHasAnAnswer` twice running on 2026-10-08). The
+        // host's connections stay down for the whole class (`tearDown()` below).
+        LifecycleHub.shared.teardownAll()
         savedURL = AppConfig.processServerURLOverride
         savedToken = AppConfig.processTokenOverride
         AppConfig.processServerURLOverride = DemoMode.baseURL
@@ -32,6 +38,13 @@ final class DemoModeTests: XCTestCase {
         DemoServer.shared.turnScale = 1
         AppConfig.processServerURLOverride = savedURL
         AppConfig.processTokenOverride = savedToken
+    }
+
+    /// The host's connections come back once, after the last test here: resuming
+    /// per test would start a board refresh that can land inside the next one.
+    nonisolated override class func tearDown() {
+        MainActor.assumeIsolated { LifecycleHub.shared.resumeAll() }
+        super.tearDown()
     }
 
     /// Wait until every scripted step queued so far has run, and the stream hub

@@ -41,7 +41,8 @@ extension WalnutAPI {
         return false
     }
 
-    private static func queryValue(_ raw: String) -> String {
+    /// A query parameter value with `&`, `+`, `=`, `?` and `#` encoded, so they stay part of it.
+    static func queryValue(_ raw: String) -> String {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&+=?#")
         return raw.addingPercentEncoding(withAllowedCharacters: allowed) ?? raw

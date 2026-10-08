@@ -200,13 +200,18 @@ extension WalnutAPI {
 
     // MARK: - Global search
 
-    /// Console global search (tasks/memory/sessions). REPLICA → 501
-    /// not_supported_cloud — callers show the "needs your Mac online" state.
-    func globalSearch(query: String, limit: Int = 30) async throws -> [GlobalSearchResult] {
-        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        let response: GlobalSearchResponse = try await get("/search?q=\(q)&limit=\(limit)")
-        return response.results
+    /// The Tasks tab's search: the web console's task + session lanes (string and
+    /// semantic) with the tasks the rows name (`tasks=1`). `semanticWaitMs` lets the
+    /// Mac's semantic lane finish: at its 150 ms default a fresh query often ranked
+    /// by keywords alone, and the phone's own rows are on screen meanwhile. An old
+    /// REPLICA answers 501 not_supported_cloud ("needs your Mac online").
+    func globalSearch(query: String, limit: Int = 80, semanticWaitMs: Int = 1500) async throws -> GlobalSearchResponse {
+        // `queryValue` keeps `&`, `+`, `#` and `=` inside the value (`.urlQueryAllowed`
+        // does not, so "C++" reached the server as "C  ").
+        let q = Self.queryValue(query)
+        return try await get("/search?q=\(q)&types=task,session&limit=\(limit)&tasks=1&semanticWaitMs=\(semanticWaitMs)")
     }
+
 
     // MARK: - No-content plumbing
 

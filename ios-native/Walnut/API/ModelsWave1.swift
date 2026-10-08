@@ -430,19 +430,27 @@ struct ConversationStopped: Codable {
 
 // MARK: - Global search
 
-/// GET /v1/search → { results } (REPLICA answers 501 not_supported_cloud).
+/// GET /v1/search → { results, tasks? } (an old REPLICA answers 501 not_supported_cloud).
 struct GlobalSearchResult: Codable, Identifiable, Equatable {
     let type: String // "task" | "memory" | "session"
     let resultId: String?
     let title: String
     let snippet: String?
     let score: Double?
+    /// The task a session row's transcript belongs to (a task row's own id is `resultId`).
+    var taskId: String? = nil
+    /// The field the best keyword match was in; `id` / `session_id` / … mean the
+    /// query was an identifier, which answers exactly what was typed.
+    var matchField: String? = nil
+    /// The server's coverage tier for a multi-word query (0-4, 4 = every rare term
+    /// is in the document), even when the short snippet cannot show them all.
+    var coveredTermHits: Double? = nil
 
     private enum CodingKeys: String, CodingKey {
         case type, title, snippet, score
         // The doc says `id?` but the live server emits typed keys.
         case genericId = "id"
-        case taskId, sessionId
+        case taskId, sessionId, matchField, coveredTermHits
     }
 
     init(from decoder: Decoder) throws {
@@ -451,9 +459,12 @@ struct GlobalSearchResult: Codable, Identifiable, Equatable {
         title = try c.decode(String.self, forKey: .title)
         snippet = try c.decodeIfPresent(String.self, forKey: .snippet)
         score = try c.decodeIfPresent(Double.self, forKey: .score)
+        taskId = try c.decodeIfPresent(String.self, forKey: .taskId)
         resultId = try c.decodeIfPresent(String.self, forKey: .genericId)
-            ?? c.decodeIfPresent(String.self, forKey: .taskId)
+            ?? taskId
             ?? c.decodeIfPresent(String.self, forKey: .sessionId)
+        matchField = try c.decodeIfPresent(String.self, forKey: .matchField)
+        coveredTermHits = try c.decodeIfPresent(Double.self, forKey: .coveredTermHits)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -463,14 +474,33 @@ struct GlobalSearchResult: Codable, Identifiable, Equatable {
         try c.encodeIfPresent(snippet, forKey: .snippet)
         try c.encodeIfPresent(score, forKey: .score)
         try c.encodeIfPresent(resultId, forKey: .genericId)
+        try c.encodeIfPresent(taskId, forKey: .taskId)
+        try c.encodeIfPresent(matchField, forKey: .matchField)
+        try c.encodeIfPresent(coveredTermHits, forKey: .coveredTermHits)
     }
 
-    init(type: String, resultId: String?, title: String, snippet: String?, score: Double?) {
+    init(
+        type: String, resultId: String?, title: String, snippet: String?, score: Double?,
+        taskId: String? = nil, matchField: String? = nil, coveredTermHits: Double? = nil
+    ) {
         self.type = type
         self.resultId = resultId
         self.title = title
         self.snippet = snippet
         self.score = score
+        self.taskId = taskId
+        self.matchField = matchField
+        self.coveredTermHits = coveredTermHits
+    }
+
+    /// The task this row is about: a task row's own id, a session row's owning
+    /// task. nil for memory rows and for a session no task owns.
+    var ownerTaskId: String? {
+        switch type {
+        case "task": return resultId
+        case "session": return taskId
+        default: return nil
+        }
     }
 
     // Search results have no guaranteed id — synthesize a stable-enough one.
@@ -479,6 +509,12 @@ struct GlobalSearchResult: Codable, Identifiable, Equatable {
 
 struct GlobalSearchResponse: Codable {
     let results: [GlobalSearchResult]
+    /// `tasks=1`: the task each row names, completed ones included (the phone's own
+    /// list holds only 14 days of those). Absent from an older server.
+    var tasks: [WalnutTask]? = nil
+    /// The companion answered from its own copy while the Mac is away: keyword
+    /// matches only, no semantic ranking, no transcripts.
+    var offline: Bool? = nil
 }
 
 // MARK: - Error helpers (Wave 1 codes)

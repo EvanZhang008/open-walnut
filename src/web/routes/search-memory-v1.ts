@@ -90,6 +90,18 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       types = [...new Set(requested)] as Array<(typeof VALID_TYPES)[number]>
     }
     const limit = req.query.limit ? Math.max(1, Math.min(100, Number(req.query.limit) || 20)) : undefined
+    // The phone's extras (core/search-hit-tasks.ts): a longer semantic wait, and
+    // the tasks its rows name, so a completed task can be drawn and opened.
+    const [{ search }, extras] = await Promise.all([
+      import('../../core/search.js'),
+      import('../../core/search-hit-tasks.js'),
+    ])
+    const semanticDeadlineMs = extras.clampSemanticWaitMs(req.query.semanticWaitMs)
+    const wantsTasks = extras.wantsHitTasks(req.query.tasks)
+    const withTasks = async (results: Awaited<ReturnType<typeof search>>) => {
+      const tasks = wantsTasks ? await extras.searchHitTasks(results) : undefined
+      return tasks ? { results, tasks } : { results }
+    }
     if (CLOUD_MODE) {
       // While the Mac answers, the forward (web/v1-forward/) took this call
       // already; here it is away by the forward's view, or the forward is off.
@@ -97,6 +109,8 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
         const { callPrimaryControl } = await import('./v1-control-relay.js')
         const outcome = await callPrimaryControl('server.search', SERVER_RELAY_SID, {
           q, ...(types ? { types } : {}), ...(limit !== undefined ? { limit } : {}),
+          ...(semanticDeadlineMs !== undefined ? { semanticWaitMs: semanticDeadlineMs } : {}),
+          ...(wantsTasks ? { tasks: true } : {}),
         })
         if (outcome.ok) {
           res.json(outcome.result)
@@ -106,12 +120,10 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       }
       // The Mac away: a keyword search of this box's own copies (the task copy
       // holds every task; the semantic index and the transcripts stay on the Mac).
-      const { search } = await import('../../core/search.js')
-      res.json({ results: await search(q, { types, limit }), offline: true, degraded: 'offline-keyword' })
+      res.json({ ...(await withTasks(await search(q, { types, limit }))), offline: true, degraded: 'offline-keyword' })
       return
     }
-    const { search } = await import('../../core/search.js')
-    res.json({ results: await search(q, { types, limit }) })
+    res.json(await withTasks(await search(q, { types, limit, semanticDeadlineMs })))
   } catch (err) {
     next(err)
   }

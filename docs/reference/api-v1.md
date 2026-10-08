@@ -2024,6 +2024,17 @@ like the other conversation endpoints (absent → `general`).
   copy answers instead, with `"offline": true` and
   `"degraded": "offline-keyword"`; its session lane holds only the sessions the
   replica runs itself. Before 2026-10 that case was `501 not_supported_cloud`.
+- `GET /api/v1/search` phone extras (additive, 2026-10-08), both opt-in:
+  `tasks=1` adds `"tasks": [ProjectedTask]`, the task each task or session row
+  names (once each, in row order, completed ones of any age included; memory rows
+  and sessions no task owns name none). The phone's own list holds only 14 days
+  of completed tasks, and this is what lets it draw and open an older one.
+  `semanticWaitMs=` (0 to 5000) is how long the semantic lane may wait for the
+  query embedding; its default is 150 ms, sized for the web list's typing loop.
+  The phone sends `types=task,session&limit=80&tasks=1&semanticWaitMs=1500`. On
+  the REPLICA both reach the Mac (its `server.search` relay takes them as
+  `tasks: true` and `semanticWaitMs`), and the keyword answer of the replica's
+  own copy while the Mac is away carries `tasks` from that copy.
 - `GET /api/v1/notes/search?q=&mode=hybrid|string|semantic&limit=&all=1` →
   `200 { "results": [ { id, path, title, snippet, matchType, … } ],
   "folders"?, "degraded"? }` — the notes panel's hybrid search. Works on BOTH

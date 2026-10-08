@@ -10,6 +10,9 @@ struct TaskRow: View {
     /// just that it is. nil = no badge (unpinned rows, callers without the
     /// tier map).
     var tierBadge: String? = nil
+    /// Where a search found the query, when it says more than the title (a
+    /// description or transcript hit). nil everywhere but the search results.
+    var matchSnippet: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -38,6 +41,13 @@ struct TaskRow: View {
                         .lineLimit(2)
                 }
                 secondaryLine
+                if let matchSnippet {
+                    Text(matchSnippet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .accessibilityIdentifier("task.matchSnippet")
+                }
             }
             Spacer(minLength: 0)
         }

@@ -464,7 +464,7 @@ final class TasksEmptyPlaceholderTests: XCTestCase {
         for filter in [TaskFilter.sessions, .allOpen, .today, .inProgress, .done] {
             XCTAssertEqual(
                 TasksView.emptyPlaceholder(filter: filter, query: "AMD"),
-                "No local matches. See Server Search below.",
+                "No local matches. See More Results below.",
                 "filter \(filter) must not show its own empty copy while searching"
             )
         }
