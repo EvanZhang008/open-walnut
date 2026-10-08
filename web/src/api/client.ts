@@ -377,8 +377,8 @@ export function apiPut<T>(path: string, body?: unknown): Promise<T> {
 
 // Default void for fire-and-forget deletes; pass T when the server responds
 // 200 + JSON body (request() parses any JSON response regardless of method).
-export function apiDelete<T = void>(path: string): Promise<T> {
-  return request<T>('DELETE', path);
+export function apiDelete<T = void>(path: string, opts?: { timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
+  return request<T>('DELETE', path, undefined, opts);
 }
 
 export { ApiError };

@@ -2,7 +2,7 @@
  * CalendarContextMenu — right-click menu for the calendar surfaces, replacing
  * the browser menu with regular calendar actions:
  *   task chip   → Open task · Complete · Unschedule (clear that date) · Delete
- *   event chip  → Hide its calendar · Delete event (writable calendars only)
+ *   event chip  → Hide event · Hide its calendar · Delete event (writable calendars only)
  *   empty slot  → New task… · New event… (seeds the quick-create popover)
  * Anchored at the pointer via useMenuPlacement's anchorPoint mode.
  */
@@ -10,6 +10,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { CalendarItem } from './calendar-items';
+import { calendarEventNeedsApproval } from '@/api/calendar';
+import './visibility.css';
 import type { CreateSeed } from './QuickCreatePopover';
 
 export interface CalendarContextTarget {
@@ -30,6 +32,8 @@ interface Props {
   /** Delete the task entirely (two-step confirm, same as event delete). */
   onDeleteTask?: (item: CalendarItem) => void;
   onDeleteEvent?: (item: CalendarItem) => void;
+  /** Hide this one event in Walnut (read-only calendars too); the source keeps it. */
+  onHideEvent?: (eventId: string) => void;
   /** Hide the external calendar that owns the selected event. */
   onHideCalendar?: (calendarId: string) => void;
   /** Open the quick-create popover on the given tab. */
@@ -45,6 +49,7 @@ export function CalendarContextMenu({
   onCompleteTask,
   onDeleteTask,
   onDeleteEvent,
+  onHideEvent,
   onHideCalendar,
   onCreate,
   canCreateEvent,
@@ -117,10 +122,18 @@ export function CalendarContextMenu({
               {item.event.calendarName} · {item.event.accountName}
               {item.event.readonly ? ' (read-only)' : ''}
             </div>
+            {onHideEvent && (
+              <button role="menuitem" onClick={run(() => onHideEvent(item.event.id))}>
+                Hide event
+              </button>
+            )}
             {onHideCalendar && (
               <button role="menuitem" onClick={run(() => onHideCalendar(item.event.calendarId))}>
                 Hide calendar
               </button>
+            )}
+            {eventWritable && calendarEventNeedsApproval(item.event) && (
+              <div className="cal-item-warning">{item.event.recurring ? 'Recurring series. ' : ''}Delete may notify the organizer{item.event.recurring ? ' and affect the whole series' : ''}. Hide leaves the source unchanged.</div>
             )}
             {eventWritable && onDeleteEvent && (
               <button

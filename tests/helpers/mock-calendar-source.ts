@@ -9,6 +9,7 @@ import type {
   CalendarEvent,
   CalendarEventCreate,
   CalendarEventPatch,
+  CalendarWriteOptions,
   CalendarInfo,
   CalendarSource,
 } from '../../src/integrations/calendar/types.js';
@@ -20,6 +21,7 @@ export interface MockCalendarState {
   calls: { method: string; args: unknown[] }[];
   /** When set, every source method throws this error (e.g. permission-denied). */
   failWith: CalendarHelperError | null;
+  humanConfirmation: boolean;
 }
 
 export function fixtureCalendars(): CalendarInfo[] {
@@ -39,6 +41,9 @@ export function fixtureEvents(): CalendarEvent[] {
       calendarName: 'Work',
       accountName: 'Google',
       title: 'Standup',
+      walnutCreated: true,
+      hasAttendees: false,
+      writeSafetyVersion: 1,
       start: '2026-08-04T09:00:00',
       end: '2026-08-04T09:30:00',
       allDay: false,
@@ -52,6 +57,10 @@ export function fixtureEvents(): CalendarEvent[] {
       calendarName: 'Home',
       accountName: 'iCloud',
       title: 'Gym',
+      walnutCreated: true,
+      hasAttendees: false,
+      recurring: true,
+      writeSafetyVersion: 1,
       start: '2026-08-05T18:00:00',
       end: '2026-08-05T19:00:00',
       allDay: false,
@@ -125,6 +134,7 @@ export function createMockCalendarSource(opts?: {
     events: opts?.events ?? fixtureEvents(),
     calls: [],
     failWith: null,
+    humanConfirmation: false,
   };
   let createdSeq = 0;
 
@@ -161,8 +171,14 @@ export function createMockCalendarSource(opts?: {
       return state.events.map((e) => ({ ...e }));
     },
 
-    async updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent> {
+    async getEvent(id: string): Promise<CalendarEvent> {
+      guard('getEvent', [id]);
+      return { ...findEvent(id) };
+    },
+
+    async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
       guard('updateEvent', [id, patch]);
+      if (opts?.humanConfirm && !state.humanConfirmation) throw new CalendarHelperError('Calendar confirmation canceled.', 'approval-canceled');
       const ev = findEvent(id);
       assertWritable(ev.calendarId);
       if (patch.start) ev.start = patch.start;
@@ -185,14 +201,19 @@ export function createMockCalendarSource(opts?: {
         start: input.start,
         end: input.end,
         allDay: !!input.allDay,
+        walnutCreated: true,
+        hasAttendees: false,
+        writeSafetyVersion: 1,
+        recurring: false,
         color: cal.color,
       };
       state.events.push(ev);
       return { ...ev };
     },
 
-    async deleteEvent(id: string): Promise<void> {
+    async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
       guard('deleteEvent', [id]);
+      if (opts?.humanConfirm && !state.humanConfirmation) throw new CalendarHelperError('Calendar confirmation canceled.', 'approval-canceled');
       const ev = findEvent(id);
       assertWritable(ev.calendarId);
       state.events = state.events.filter((e) => e.id !== id);

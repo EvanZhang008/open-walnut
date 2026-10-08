@@ -9,21 +9,72 @@
  * "Hide calendar" patched the grid, so the same action felt instant one way and
  * laggy the other.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useCalendarVisibility } from '@/hooks/useCalendarEvents';
-import type { CalendarInfo } from '@/api/calendar';
+import type { CalendarEvent, CalendarInfo } from '@/api/calendar';
+import './visibility.css';
 
 interface Props {
   anchorEl: HTMLElement;
   onClose: () => void;
+  /** Individually hidden events in the surface's range. */
+  hiddenEvents?: CalendarEvent[];
+  onShowEvent?: (eventId: string) => void;
 }
 
-export function CalendarsPopover({ anchorEl, onClose }: Props) {
+function formatWhen(ev: CalendarEvent): string {
+  const at = new Date(ev.start.includes('T') ? ev.start : `${ev.start}T00:00:00`);
+  if (Number.isNaN(at.getTime())) return ev.start;
+  const day = at.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  return ev.allDay ? day : `${day}, ${at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+/** Its own portalled flyout, so a long list scrolls instead of growing the parent. */
+function HiddenEventsFlyout({ anchorRef, events, onShow, onClose }: {
+  anchorRef: RefObject<HTMLElement | null>;
+  events: CalendarEvent[];
+  onShow: (eventId: string) => void;
+  onClose: () => void;
+}) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const placement = useMenuPlacement(true, anchorRef, listRef, { minHeight: 120, onAnchorLost: onClose });
+  return createPortal(
+    <div
+      ref={listRef}
+      className="cal-cals-popover cal-hidden-events"
+      style={{ ...menuPlacementStyle(placement), zIndex: 10001 }}
+      role="dialog"
+      aria-label="Hidden events"
+      data-testid="cal-hidden-events"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div className="cal-cals-account">Hidden events</div>
+      {events.length === 0 && <div className="cal-cals-empty">No hidden events here.</div>}
+      {events.map((ev) => (
+        <div key={ev.id} className="cal-hidden-events-row">
+          <span className="cal-settings-dot" style={{ background: ev.color ?? 'var(--accent)' }} />
+          <span className="cal-hidden-events-text">
+            <span className="cal-cals-name" title={ev.title}>{ev.title || '(No title)'}</span>
+            <span className="cal-hidden-events-when">{formatWhen(ev)}</span>
+          </span>
+          <button type="button" className="cal-hidden-events-show" onClick={() => onShow(ev.id)}>
+            Show
+          </button>
+        </div>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
+export function CalendarsPopover({ anchorEl, onClose, hiddenEvents = [], onShowEvent }: Props) {
   const anchorRef = useRef<HTMLElement | null>(anchorEl);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const hiddenBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   const placement = useMenuPlacement(true, anchorRef, menuRef);
   const { calendars, unavailable, setHidden } = useCalendarVisibility();
 
@@ -86,6 +137,29 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
             ))}
           </div>
         ))}
+        {onShowEvent && (hiddenEvents.length > 0 || hiddenOpen) && (
+          <div className="cal-cals-group">
+            <button
+              ref={hiddenBtnRef}
+              type="button"
+              className="cal-cals-row cal-hidden-events-btn"
+              aria-expanded={hiddenOpen}
+              aria-label={`Hidden events (${hiddenEvents.length})`}
+              onClick={() => setHiddenOpen((open) => !open)}
+            >
+              <span className="cal-cals-name">Hidden events</span>
+              <span className="cal-hidden-events-count">{hiddenEvents.length}</span>
+            </button>
+          </div>
+        )}
+        {onShowEvent && hiddenOpen && (
+          <HiddenEventsFlyout
+            anchorRef={hiddenBtnRef}
+            events={hiddenEvents}
+            onShow={onShowEvent}
+            onClose={() => setHiddenOpen(false)}
+          />
+        )}
         <div className="cal-cals-footer">
           <Link to="/settings#calendar" onClick={onClose}>
             Calendar settings…

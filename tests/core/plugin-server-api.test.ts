@@ -124,8 +124,9 @@ describe('createServerPluginApi', () => {
       'calendar_event_create',
       'calendar_event_update',
       'calendar_event_delete',
+      'calendar_event_visibility',
     ])
-    expect(new Set(calendar.collected.tools.map((tool) => tool.name)).size).toBe(4)
+    expect(new Set(calendar.collected.tools.map((tool) => tool.name)).size).toBe(5)
 
     await msTodo.context.dispose()
     await jira.context.dispose()

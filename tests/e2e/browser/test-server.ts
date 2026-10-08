@@ -3975,7 +3975,13 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
   _setCalendarServiceForTest(new CalendarService(createMockCalendarSource({
     events: [
       {
+        id: 'ev-e2e-invited-series#1770000000', source: 'eventkit', calendarId: 'cal-work', calendarName: 'Work', accountName: 'Cloud Calendar',
+        title: 'Invited daily series', start: `${today}T16:00:00`, end: `${today}T17:00:00`, allDay: false,
+        walnutCreated: false, hasAttendees: true, organizerIsCurrentUser: false, organizerName: 'Meeting organizer', recurring: true, writeSafetyVersion: 1,
+      },
+      {
         id: 'ev-e2e-brief',
+        walnutCreated: true, hasAttendees: false, writeSafetyVersion: 1,
         source: 'eventkit',
         calendarId: 'cal-work',
         calendarName: 'Work',
@@ -3990,6 +3996,7 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
         // Separate event for the resize spec — fullyParallel would race the
         // move spec if both touched ev-e2e-brief.
         id: 'ev-e2e-review',
+        walnutCreated: true, hasAttendees: false, writeSafetyVersion: 1,
         source: 'eventkit',
         calendarId: 'cal-work',
         calendarName: 'Work',
@@ -4018,6 +4025,7 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
         // not disturb the other specs' cal-work/cal-holidays assertions
         // (fullyParallel runs them concurrently against this shared server).
         id: 'ev-e2e-errand',
+        walnutCreated: true, hasAttendees: false, writeSafetyVersion: 1,
         source: 'eventkit',
         calendarId: 'cal-personal',
         calendarName: 'Personal',

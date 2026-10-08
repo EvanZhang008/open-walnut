@@ -39,6 +39,8 @@ import { QuickCreatePopover, type CreateSeed } from '@/components/calendar/Quick
 import { CalendarsPopover } from '@/components/calendar/CalendarsPopover';
 import { CalendarContextMenu, type CalendarContextTarget } from '@/components/calendar/CalendarContextMenu';
 import { CalendarItemPopover } from '@/components/calendar/CalendarItemPopover';
+import { calendarEventNeedsApproval } from '@/api/calendar';
+import { confirmCalendarWrite } from '@/components/calendar/calendar-event-actions';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
 const LS_RAIL_KEY = 'open-walnut-calendar-rail-open';
@@ -162,7 +164,8 @@ export function CalendarPage() {
       if (!rect || !metrics) return { day: target.day, slot: null, zone: 'col' };
       const pointerY = dragPointerY.current ?? (e.activatorEvent as PointerEvent)?.clientY ?? 0;
       const y = pointerY - rect.top;
-      const mins = snapMinutes((y / metrics.slotPx) * SLOT_MINUTES, SLOT_MINUTES);
+      const mins = Math.max(metrics.startMinute, Math.min(metrics.endMinute - SLOT_MINUTES,
+        snapMinutes(metrics.startMinute + (y / metrics.slotPx) * SLOT_MINUTES, SLOT_MINUTES)));
       return { day: target.day, slot: Math.floor(mins / SLOT_MINUTES), zone: 'col' };
     },
     []
@@ -232,10 +235,10 @@ export function CalendarPage() {
       else if (kind === 'task-due') update(rest, { due_date: newWhen });
       else if (kind === 'event') {
         const ev = calendar.events.find((e) => e.id === rest);
-        if (!ev) return;
+        if (!ev || !confirmCalendarWrite(ev, 'update')) return;
         if (!newWhen.includes('T')) {
           // dropped in the all-day row / a month cell with a date-only value
-          calendar.moveEvent(rest, { start: newWhen, end: newWhen });
+          calendar.moveEvent(rest, { start: newWhen, end: newWhen, human_confirm: calendarEventNeedsApproval(ev) });
           return;
         }
         // Moving keeps the duration.
@@ -248,7 +251,7 @@ export function CalendarPage() {
         const pad = (n: number) => String(n).padStart(2, '0');
         const fmt = (d: Date) =>
           `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-        calendar.moveEvent(rest, { start: newWhen, end: fmt(newEnd) });
+        calendar.moveEvent(rest, { start: newWhen, end: fmt(newEnd), human_confirm: calendarEventNeedsApproval(ev) });
       }
     },
     [update, calendar]
@@ -264,8 +267,8 @@ export function CalendarPage() {
         return;
       }
       const ev = calendar.events.find((e) => e.id === rest);
-      if (!ev) return;
-      calendar.moveEvent(rest, { start: ev.start, end: newEnd });
+      if (!ev || !confirmCalendarWrite(ev, 'update')) return;
+      calendar.moveEvent(rest, { start: ev.start, end: newEnd, human_confirm: calendarEventNeedsApproval(ev) });
     },
     [calendar, update]
   );
@@ -314,8 +317,8 @@ export function CalendarPage() {
 
   const deleteEventItem = useCallback(
     (item: CalendarItem) => {
-      if (item.kind !== 'event') return;
-      calendar.removeEvent(item.event.id);
+      if (item.kind !== 'event' || !confirmCalendarWrite(item.event, 'delete')) return;
+      calendar.removeEvent(item.event.id, calendarEventNeedsApproval(item.event));
     },
     [calendar]
   );
@@ -421,7 +424,7 @@ export function CalendarPage() {
           onCreateEvent={canCreateEvent ? calendar.createEvent : undefined}
         />
       )}
-      {calsAnchor && <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} />}
+      {calsAnchor && <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} hiddenEvents={calendar.hiddenEvents} onShowEvent={calendar.showEvent} />}
       {ctxTarget && (
         <CalendarContextMenu
           target={ctxTarget}
@@ -431,6 +434,7 @@ export function CalendarPage() {
           onDeleteTask={deleteTaskItem}
           onDeleteEvent={deleteEventItem}
           onHideCalendar={calendar.hideCalendar}
+          onHideEvent={calendar.hideEvent}
           onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
           canCreateEvent={canCreateEvent}
         />
@@ -440,8 +444,13 @@ export function CalendarPage() {
           item={openItem.item}
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
-          onSaveEvent={(ev, patch) => calendar.moveEvent(ev.id, patch)}
-          onDeleteEvent={(ev) => calendar.removeEvent(ev.id)}
+          onSaveEvent={(ev, patch) => {
+            if (confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
+          }}
+          onDeleteEvent={(ev) => {
+            if (confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
+          }}
+          onHideEvent={calendar.hideEvent}
           onSaveTaskWhen={saveTaskWhen}
           onSaveTaskEnd={(item, newEnd) => {
             if (item.kind !== 'event') update(item.task.id, { end_date: newEnd });

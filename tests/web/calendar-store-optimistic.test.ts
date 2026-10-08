@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   updateCalendarSource: vi.fn(),
   createCalendarEvent: vi.fn(),
   deleteCalendarEvent: vi.fn(),
+  setCalendarEventVisibility: vi.fn(),
   warn: vi.fn(),
 }))
 
@@ -29,6 +30,7 @@ vi.mock('@/api/calendar', () => ({
   updateCalendarSource: mocks.updateCalendarSource,
   createCalendarEvent: mocks.createCalendarEvent,
   deleteCalendarEvent: mocks.deleteCalendarEvent,
+  setCalendarEventVisibility: mocks.setCalendarEventVisibility,
 }))
 vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn() } }))
 
@@ -41,8 +43,12 @@ import {
   loadCalendarRange,
   moveCalendarEvent,
   removeCalendarEvent,
+  setCalendarEventHidden,
   setCalendarHidden,
   subscribeCalendarRange,
+  subscribeCalendarVisibilityFailures,
+  subscribeCalendarWriteFailures,
+  type CalendarVisibilityFailure,
 } from '../../web/src/stores/calendar-events-store.js'
 
 const DAY = '2026-09-03'
@@ -182,6 +188,27 @@ describe('calendar events store', () => {
     off()
   })
 
+  it('protected writes wait for confirmation and never roll back a newer server record', async () => {
+    const off = await mountBothRanges([event()])
+    const update = deferred<{ event: CalendarEvent }>()
+    const remove = deferred<void>()
+    mocks.updateCalendarEvent.mockReturnValue(update.promise)
+    mocks.deleteCalendarEvent.mockReturnValue(remove.promise)
+    const failures: string[] = []
+    const offFailures = subscribeCalendarWriteFailures((f) => { failures.push(f.action) })
+    moveCalendarEvent('ev-1', { start: `${DAY}T13:00:00`, end: `${DAY}T13:30:00`, human_confirm: true })
+    removeCalendarEvent('ev-1', true)
+    expect(getCalendarRange(DAY_KEY).events[0].start).toBe(`${DAY}T09:00:00`)
+    expect(getCalendarRange(WEEK_KEY).events).toHaveLength(1)
+    mocks.listCalendarEvents.mockResolvedValue({ events: [event({ title: 'Source changed' })], sources: [] })
+    await loadCalendarRange(DAY_KEY, true)
+    update.reject(new Error('approval-canceled'))
+    remove.reject(new Error('approval-canceled'))
+    await vi.waitFor(() => expect(failures.sort()).toEqual(['delete', 'update']))
+    expect(getCalendarRange(DAY_KEY).events[0].title).toBe('Source changed')
+    offFailures(); off()
+  })
+
   it('a failed delete puts the chip back', async () => {
     const off = await mountBothRanges([event()])
     mocks.deleteCalendarEvent.mockRejectedValue(new Error('gone'))
@@ -209,5 +236,165 @@ describe('calendar events store', () => {
     await done
     expect(getCalendarRange(DAY_KEY).events.map((e) => e.id).sort()).toEqual(['ev-1', 'ev-2'])
     off()
+  })
+})
+
+describe('single-event visibility', () => {
+  const hiddenIn = (key: string) => getCalendarRange(key).events.find((e) => e.id === 'ev-1')?.hidden ?? false
+  let failures: CalendarVisibilityFailure[]
+  let offFailures: () => void
+
+  beforeEach(() => {
+    __resetCalendarEventsStore()
+    for (const fn of Object.values(mocks)) fn.mockReset()
+    failures = []
+    offFailures = subscribeCalendarVisibilityFailures((f) => { failures.push(f) })
+  })
+
+  it('every range fetch asks for hidden events too', async () => {
+    const off = await mountBothRanges([event()])
+    expect(mocks.listCalendarEvents).toHaveBeenCalledWith(DAY, DAY, { includeHidden: true })
+    expect(mocks.listCalendarEvents).toHaveBeenCalledWith(WEEK_FROM, WEEK_TO, { includeHidden: true })
+    off(); offFailures()
+  })
+
+  it('a hide marks every range before the PATCH answers, and keeps the event in the store', async () => {
+    const off = await mountBothRanges([event()])
+    const held = deferred<{ id: string; hidden: boolean }>()
+    mocks.setCalendarEventVisibility.mockReturnValue(held.promise)
+
+    const done = setCalendarEventHidden('ev-1', true)
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+    expect(hiddenIn(WEEK_KEY)).toBe(true)
+    expect(getCalendarRange(DAY_KEY).events).toHaveLength(1)
+    expect(mocks.setCalendarEventVisibility).toHaveBeenCalledWith('ev-1', true)
+
+    held.resolve({ id: 'ev-1', hidden: true })
+    await done
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+    expect(failures).toEqual([])
+    off(); offFailures()
+  })
+
+  it('a rejected hide rolls back on every range and reports the failure once', async () => {
+    const off = await mountBothRanges([event()])
+    mocks.setCalendarEventVisibility.mockRejectedValue(new Error('Controlled failure'))
+
+    await setCalendarEventHidden('ev-1', true)
+    expect(hiddenIn(DAY_KEY)).toBe(false)
+    expect(hiddenIn(WEEK_KEY)).toBe(false)
+    expect(failures).toEqual([{ id: 'ev-1', hidden: true, title: 'Standup', message: 'Controlled failure' }])
+    off(); offFailures()
+  })
+
+  it('hide then show sends one request at a time while the screen follows the latest click', async () => {
+    const off = await mountBothRanges([event()])
+    const first = deferred<{ id: string; hidden: boolean }>()
+    mocks.setCalendarEventVisibility
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ id: 'ev-1', hidden: false })
+
+    const done = setCalendarEventHidden('ev-1', true)
+    void setCalendarEventHidden('ev-1', false)
+    expect(hiddenIn(DAY_KEY)).toBe(false)
+    expect(mocks.setCalendarEventVisibility).toHaveBeenCalledTimes(1)
+
+    first.resolve({ id: 'ev-1', hidden: true })
+    await done
+    expect(mocks.setCalendarEventVisibility.mock.calls).toEqual([['ev-1', true], ['ev-1', false]])
+    expect(hiddenIn(DAY_KEY)).toBe(false)
+    off(); offFailures()
+  })
+
+  it('a failed older hide does not undo a newer hide, which is still sent', async () => {
+    const off = await mountBothRanges([event()])
+    const first = deferred<{ id: string; hidden: boolean }>()
+    mocks.setCalendarEventVisibility
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ id: 'ev-1', hidden: true })
+
+    const done = setCalendarEventHidden('ev-1', true)
+    void setCalendarEventHidden('ev-1', false)
+    void setCalendarEventHidden('ev-1', true)
+
+    first.reject(new Error('timeout'))
+    await vi.waitFor(() => expect(mocks.setCalendarEventVisibility).toHaveBeenCalledTimes(2))
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+    await done
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+    expect(failures).toEqual([])
+    off(); offFailures()
+  })
+
+  it('a failed hide superseded by show still sends show because the first write may have committed', async () => {
+    const off = await mountBothRanges([event()])
+    mocks.setCalendarEventVisibility.mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce({ id: 'ev-1', hidden: false })
+
+    const done = setCalendarEventHidden('ev-1', true)
+    void setCalendarEventHidden('ev-1', false)
+    await done
+    expect(mocks.setCalendarEventVisibility.mock.calls).toEqual([['ev-1', true], ['ev-1', false]])
+    expect(hiddenIn(DAY_KEY)).toBe(false)
+    expect(failures).toEqual([])
+    off(); offFailures()
+  })
+
+  it('a GET that left before the hide cannot unhide it, pending or settled', async () => {
+    const off = await mountBothRanges([event()])
+    const pendingGet = deferred<{ events: CalendarEvent[]; sources: [] }>()
+    const settledGet = deferred<{ events: CalendarEvent[]; sources: [] }>()
+    const write = deferred<{ id: string; hidden: boolean }>()
+    mocks.listCalendarEvents.mockReturnValueOnce(pendingGet.promise).mockReturnValueOnce(settledGet.promise)
+    mocks.setCalendarEventVisibility.mockReturnValue(write.promise)
+
+    const dayLoad = loadCalendarRange(DAY_KEY, true)
+    const weekLoad = loadCalendarRange(WEEK_KEY, true)
+    const done = setCalendarEventHidden('ev-1', true)
+
+    pendingGet.resolve({ events: [event()], sources: [] })
+    await dayLoad
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+
+    write.resolve({ id: 'ev-1', hidden: true })
+    await done
+    settledGet.resolve({ events: [event()], sources: [] })
+    await weekLoad
+    expect(hiddenIn(WEEK_KEY)).toBe(true)
+
+    // A GET sent after the write settled is the server's word (an agent may have unhidden it).
+    mocks.listCalendarEvents.mockResolvedValueOnce({ events: [event()], sources: [] })
+    await loadCalendarRange(DAY_KEY, true)
+    expect(hiddenIn(DAY_KEY)).toBe(false)
+    off(); offFailures()
+  })
+
+  it('a move response without the flag keeps a pending hide', async () => {
+    const off = await mountBothRanges([event()])
+    const move = deferred<{ event: CalendarEvent }>()
+    mocks.updateCalendarEvent.mockReturnValue(move.promise)
+    mocks.setCalendarEventVisibility.mockReturnValue(new Promise(() => {}))
+
+    moveCalendarEvent('ev-1', { start: `${DAY}T13:00:00`, end: `${DAY}T13:30:00` })
+    void setCalendarEventHidden('ev-1', true)
+    move.resolve({ event: event({ start: `${DAY}T13:00:00`, end: `${DAY}T13:30:00` }) })
+    await move.promise
+    await Promise.resolve()
+    expect(getCalendarRange(DAY_KEY).events[0].start).toBe(`${DAY}T13:00:00`)
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+    off(); offFailures()
+  })
+
+  it('a failed move keeps the newer hide instead of the captured record', async () => {
+    const off = await mountBothRanges([event()])
+    mocks.updateCalendarEvent.mockRejectedValue(new Error('read-only'))
+    mocks.setCalendarEventVisibility.mockReturnValue(new Promise(() => {}))
+
+    moveCalendarEvent('ev-1', { start: `${DAY}T13:00:00`, end: `${DAY}T13:30:00` })
+    void setCalendarEventHidden('ev-1', true)
+    await vi.waitFor(() => expect(mocks.warn).toHaveBeenCalled())
+    expect(getCalendarRange(DAY_KEY).events[0].start).toBe(`${DAY}T09:00:00`)
+    expect(hiddenIn(DAY_KEY)).toBe(true)
+    off(); offFailures()
   })
 })

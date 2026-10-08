@@ -32,6 +32,14 @@ import { createCalendarTools } from './tools.js'
  */
 const PERMISSION_GRANTED = 'permission:granted'
 
+const OP_TITLES: Record<string, string> = {
+  calendar_query: 'Query calendar events',
+  calendar_event_create: 'Create a calendar event',
+  calendar_event_update: 'Move or rename a calendar event',
+  calendar_event_delete: 'Delete a calendar event',
+  calendar_event_visibility: 'Hide or show a calendar event in Walnut',
+}
+
 let live: CalendarService | null = null
 
 function teardown(): void {
@@ -55,12 +63,29 @@ export async function activate(walnut: WalnutServerPluginApi): Promise<Disposabl
   const service = adoptCalendarService(() => source.createSource())
   live = service
 
-  for (const tool of createCalendarTools(getCalendarService)) {
+  for (const tool of createCalendarTools(getCalendarService, (patch) => walnut.config.patch(patch))) {
     walnut.registry.tool({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.input_schema,
       execute: (input) => tool.execute(input),
+    })
+    // The same definition in the op catalogue, so `walnut tools call` reaches this service
+    // (and its live update) instead of an agent driving the EventKit helper directly.
+    walnut.registry.op({
+      // Local name: the host prefixes `calendar_`, so the op keeps the tool's exact name.
+      name: tool.name.slice('calendar_'.length),
+      title: OP_TITLES[tool.name] ?? tool.name,
+      description: tool.description,
+      inputSchema: tool.input_schema,
+      readonly: tool.name === 'calendar_query',
+      remote: 'allow',
+      ...(tool.name === 'calendar_event_delete' ? { destructive: true } : {}),
+      handler: async (args) => {
+        const out = await tool.execute(args)
+        if (typeof out === 'string' && out.startsWith('Error')) throw new Error(out)
+        return out
+      },
     })
   }
 

@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { addDays, formatDateOnly, weekRange } from '@/utils/calendar-date';
+import { CalendarGridControls } from './CalendarGridControls';
 
 export type CalendarViewKind = 'day' | 'week' | 'month';
 
@@ -79,6 +80,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
         <h2 className="cal-title">{title(view, anchor)}</h2>
       </div>
       <div className="cal-toolbar-right">
+        {view !== 'month' && <CalendarGridControls />}
         {onOpenCalendars && (
           <button
             className="cal-cals-btn"

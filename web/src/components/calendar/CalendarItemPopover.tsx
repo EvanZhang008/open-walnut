@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { CalendarItem } from './calendar-items';
-import type { CalendarEvent } from '@/api/calendar';
+import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
+import './visibility.css';
 
 interface Props {
   item: CalendarItem;
@@ -19,6 +20,8 @@ interface Props {
   onClose: () => void;
   onSaveEvent?: (ev: CalendarEvent, patch: { start: string; end: string; title?: string }) => void;
   onDeleteEvent?: (ev: CalendarEvent) => void;
+  /** Hide this one event in Walnut (read-only calendars too). */
+  onHideEvent?: (eventId: string) => void;
   /** Persist the task date this chip represents; '' clears it (unschedule). */
   onSaveTaskWhen?: (item: CalendarItem, newWhen: string) => void;
   /** Persist the task's end_date (task-start chips only); '' clears it. */
@@ -28,7 +31,7 @@ interface Props {
 const datePart = (iso: string) => iso.slice(0, 10);
 const timePart = (iso: string, fallback = '09:00') => (iso.includes('T') ? iso.slice(11, 16) : fallback);
 
-export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onSaveTaskWhen, onSaveTaskEnd }: Props) {
+export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onHideEvent, onSaveTaskWhen, onSaveTaskEnd }: Props) {
   const anchorRef = useRef<HTMLElement | null>(anchorEl);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef);
@@ -243,6 +246,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             : `${item.task.project || 'Inbox'}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}
         </div>
         {isEvent && item.event.location && <div className="cal-item-location">{item.event.location}</div>}
+        {isEvent && !readonly && calendarEventNeedsApproval(item.event) && (
+          <div className="cal-item-warning">{item.event.recurring ? 'Recurring series. ' : ''}Editing or deleting may notify the organizer{item.event.organizerName ? ` (${item.event.organizerName})` : ''}{item.event.recurring ? ' and affect the whole series' : ''}. Use Hide event to skip it locally.</div>
+        )}
 
         <div className="cal-item-fields">
           {/* Events get date and start–end on SEPARATE rows: all three inputs on
@@ -292,6 +298,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         </div>
 
         <div className="cal-item-footer">
+          {isEvent && onHideEvent && (
+            <button className="cal-item-hide" onClick={() => { onHideEvent(item.event.id); onClose(); }}>Hide event</button>
+          )}
           {!readonly && (
             <button className="cal-item-save" disabled={invalid || (isEvent && !title.trim())} onClick={save}>
               Save

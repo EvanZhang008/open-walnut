@@ -14,6 +14,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -33,11 +34,13 @@ import {
   weekRange,
 } from '@/utils/calendar-date';
 import { visibleInterval } from '@/utils/page-visibility';
+import { gridMinute, gridY, gridLocalIso, setCalendarGridSettings, useCalendarGridSettings } from './calendar-grid-settings';
+import './grid-controls.css';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
 import type { CreateSeed } from './QuickCreatePopover';
 
-export const SLOT_PX = 24; // 30-min row height → 48px/hour, 1152px/day
+export const SLOT_PX = 24;
 const CLICK_TOLERANCE_PX = 4;
 const MIN_EVENT_PX = 20;
 /** Resize can't shrink an event below this. */
@@ -56,6 +59,8 @@ export interface DropPreview {
 export interface GridMetrics {
   colTops: Map<string, DOMRect>;
   slotPx: number;
+  startMinute: number;
+  endMinute: number;
   /** Viewport top edge of the scrollable time area — pointer above it = the
    *  all-day zone. Column rects can't answer this once the grid has scrolled
    *  (their top goes far above the viewport). */
@@ -102,10 +107,8 @@ interface CreateDrag {
   pointer: { x: number; y: number };
 }
 
-const HOURS = Array.from({ length: 24 }, (_, h) => h);
-
 function hourLabel(h: number): string {
-  if (h === 0) return '';
+  if (h === 0 || h === 24) return '12 AM';
   if (h === 12) return 'Noon';
   return h < 12 ? `${h} AM` : `${h - 12} PM`;
 }
@@ -168,6 +171,9 @@ const DayColumn = memo(function DayColumn({
   isToday,
   items,
   ghostItemId,
+  startMinute,
+  endMinute,
+  slotPx,
   onChipPointerDown,
   onResizePointerDown,
   onChipClick,
@@ -179,6 +185,9 @@ const DayColumn = memo(function DayColumn({
   isToday: boolean;
   items: CalendarItem[];
   ghostItemId: string | null;
+  startMinute: number;
+  endMinute: number;
+  slotPx: number;
   onChipPointerDown: (e: ReactPointerEvent, item: CalendarItem) => void;
   onResizePointerDown?: (e: ReactPointerEvent, item: CalendarItem) => void;
   onChipClick: (item: CalendarItem, el: HTMLElement) => void;
@@ -209,8 +218,10 @@ const DayColumn = memo(function DayColumn({
     >
       {items.map((it) => {
         const p = placements.get(it.id)!;
-        const top = (it.startMin / SLOT_MINUTES) * SLOT_PX;
-        const height = Math.max(((it.endMin - it.startMin) / SLOT_MINUTES) * SLOT_PX, MIN_EVENT_PX);
+        const start = Math.max(startMinute, it.startMin);
+        const end = Math.min(endMinute, it.endMin);
+        const top = gridY(start, startMinute, slotPx);
+        const height = Math.min(gridY(endMinute, start, slotPx), Math.max(gridY(end, start, slotPx), MIN_EVENT_PX));
         const widthPct = 100 / p.laneCount;
         return (
           <CalendarChip
@@ -251,6 +262,11 @@ export const TimeGrid = memo(function TimeGrid({
   onItemClick,
   resizableAllDay = false,
 }: Props) {
+  const { zoom, fullDay } = useCalendarGridSettings();
+  const startMinute = fullDay ? 0 : 7 * 60;
+  const endMinute = fullDay ? 24 * 60 : 23 * 60;
+  const slotPx = SLOT_PX * zoom;
+  const hours = Array.from({ length: (endMinute - startMinute) / 60 }, (_, i) => startMinute / 60 + i);
   const dayList = useMemo(() => {
     const base = days === 7 ? weekRange(anchor) : [anchor];
     return base.map((d) => formatDateOnly(d));
@@ -259,6 +275,7 @@ export const TimeGrid = memo(function TimeGrid({
   const today = new Date();
   const todayStr = formatDateOnly(today);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollTopRef = useRef(0);
   const colsRef = useRef<HTMLDivElement>(null);
   const allDayRef = useRef<HTMLDivElement>(null);
   const allDayResize = useResizableHeight(ALL_DAY_HEIGHT_STORAGE_KEY, {
@@ -274,10 +291,12 @@ export const TimeGrid = memo(function TimeGrid({
     cols.forEach((el) => colTops.set(el.dataset.day!, el.getBoundingClientRect()));
     metricsRef.current = {
       colTops,
-      slotPx: SLOT_PX,
+      slotPx,
+      startMinute,
+      endMinute,
       gridTop: scrollRef.current?.getBoundingClientRect().top ?? 0,
     };
-  }, [metricsRef]);
+  }, [metricsRef, slotPx, startMinute, endMinute]);
 
   useEffect(() => {
     publishMetrics();
@@ -296,10 +315,21 @@ export const TimeGrid = memo(function TimeGrid({
     };
   }, [publishMetrics, dayList]);
 
-  // Auto-scroll to ~8 AM on mount / day-count change.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 8 * 2 * SLOT_PX - 12 });
+    scrollRef.current?.scrollTo({ top: fullDay ? gridY(8 * 60, startMinute, slotPx) : 0 });
   }, [days]);
+
+  const previousScale = useRef({ slotPx, startMinute });
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const previous = previousScale.current;
+    const minute = gridMinute(scrollTopRef.current, previous.startMinute, previous.slotPx);
+    scroller.scrollTop = Math.max(0, gridY(minute, startMinute, slotPx));
+    scrollTopRef.current = scroller.scrollTop;
+    previousScale.current = { slotPx, startMinute };
+    publishMetrics();
+  }, [slotPx, startMinute, publishMetrics]);
 
   // Now-line, re-anchored every 60s. visibleInterval: hidden tabs skip; the
   // catch-up tick on return recomputes from the clock, so it's never stale.
@@ -320,11 +350,11 @@ export const TimeGrid = memo(function TimeGrid({
     }
     for (const it of items) {
       const bucket = it.allDay ? allDay : timed;
-      bucket.get(it.day)?.push(it);
+      if (it.allDay || (it.endMin > startMinute && it.startMin < endMinute)) bucket.get(it.day)?.push(it);
     }
     for (const list of timed.values()) list.sort((a, b) => a.startMin - b.startMin);
     return { allDayByDay: allDay, timedByDay: timed };
-  }, [items, dayList]);
+  }, [items, dayList, startMinute, endMinute]);
 
   const dayAtX = useCallback(
     (x: number): string | null => {
@@ -342,9 +372,9 @@ export const TimeGrid = memo(function TimeGrid({
     (day: string, y: number): number => {
       const rect = metricsRef.current?.colTops.get(day);
       if (!rect) return 0;
-      return snapMinutes(((y - rect.top) / SLOT_PX) * SLOT_MINUTES);
+      return Math.max(startMinute, Math.min(endMinute - SNAP_MINUTES, snapMinutes(gridMinute(y - rect.top, startMinute, slotPx))));
     },
-    [metricsRef]
+    [metricsRef, startMinute, endMinute, slotPx]
   );
 
   // ---- chip move gesture -----------------------------------------------------
@@ -372,7 +402,7 @@ export const TimeGrid = memo(function TimeGrid({
       // Above the scrollable grid's viewport edge = the all-day row →
       // date-only preview. (Column rect tops are useless here once scrolled.)
       const inAllDay = m.y < (metricsRef.current?.gridTop ?? 0);
-      const previewMin = inAllDay ? null : Math.max(0, minAtY(overDay, m.y) - drag.grabOffsetMin);
+      const previewMin = inAllDay ? null : Math.max(0, Math.min(endMinute - SNAP_MINUTES, minAtY(overDay, m.y) - drag.grabOffsetMin));
       drag.overDay = overDay;
       drag.previewMin = previewMin;
       setMoveGhost({
@@ -431,8 +461,10 @@ export const TimeGrid = memo(function TimeGrid({
     onMove: (m) => {
       const rs = resizeRef.current;
       if (!rs) return;
-      const raw = minAtY(rs.item.day, m.y);
-      rs.endMin = Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw);
+      const rect = metricsRef.current?.colTops.get(rs.item.day);
+      if (!rect) return;
+      const raw = Math.round(gridMinute(m.y - rect.top, startMinute, slotPx) / SNAP_MINUTES) * SNAP_MINUTES;
+      rs.endMin = Math.min(endMinute, Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw));
       setResizeGhost({ itemId: rs.item.id, day: rs.item.day, startMin: rs.item.startMin, endMin: rs.endMin });
     },
     onEnd: ({ canceled }) => {
@@ -445,7 +477,7 @@ export const TimeGrid = memo(function TimeGrid({
       justDraggedRef.current = true;
       if (!rs || canceled || !onResizeItem) return;
       if (rs.endMin === rs.item.endMin) return;
-      const end = `${rs.item.day}T${String(Math.floor(rs.endMin / 60)).padStart(2, '0')}:${String(rs.endMin % 60).padStart(2, '0')}:00`;
+      const end = gridLocalIso(rs.item.day, rs.endMin);
       onResizeItem(rs.item.id, end);
     },
   });
@@ -500,7 +532,7 @@ export const TimeGrid = memo(function TimeGrid({
   const handleEmptyPointerDown = useCallback(
     (e: ReactPointerEvent, day: string) => {
       publishMetrics();
-      const mins = snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES);
+      const mins = Math.min(endMinute - SLOT_MINUTES, snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES));
       createRef.current = {
         day,
         anchorMin: mins,
@@ -511,7 +543,7 @@ export const TimeGrid = memo(function TimeGrid({
       };
       createGesture.onPointerDown(e);
     },
-    [createGesture, minAtY, publishMetrics]
+    [createGesture, minAtY, endMinute, publishMetrics]
   );
 
   const handleAllDayEmptyClick = useCallback(
@@ -530,13 +562,13 @@ export const TimeGrid = memo(function TimeGrid({
       if (!onContextMenu) return;
       e.preventDefault();
       publishMetrics();
-      const mins = snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES);
+      const mins = Math.min(endMinute - SLOT_MINUTES, snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES));
       onContextMenu(
         { x: e.clientX, y: e.clientY },
         { seed: { start: slotToLocalIso(day, Math.floor(mins / SLOT_MINUTES)), anchorPoint: { x: e.clientX, y: e.clientY } } }
       );
     },
-    [onContextMenu, minAtY, publishMetrics]
+    [onContextMenu, minAtY, endMinute, publishMetrics]
   );
 
   const handleAllDayContextMenu = useCallback(
@@ -563,7 +595,8 @@ export const TimeGrid = memo(function TimeGrid({
   };
 
   return (
-    <div className="cal-grid" data-days={days}>
+    <div className="cal-grid" data-days={days} data-start-minute={startMinute} data-end-minute={endMinute}
+      style={{ '--cal-slot-px': `${slotPx}px`, '--cal-hour-px': `${slotPx * 2}px` } as React.CSSProperties}>
       <div className="cal-grid-header">
         <div className="cal-grid-gutter" />
         <div className="cal-grid-dayheads">{dayList.map(dayHeader)}</div>
@@ -604,15 +637,21 @@ export const TimeGrid = memo(function TimeGrid({
           onPointerDown={(e) => allDayResize.handlePointerDown(e, allDayRef.current)}
         />
       )}
-      <div className="cal-grid-scroll" ref={scrollRef}>
-        <div className="cal-grid-ruler">
-          {HOURS.map((h) => (
-            <div key={h} className="cal-grid-hour" style={{ height: SLOT_PX * 2 }}>
+      {!fullDay && items.some((it) => !it.allDay && dayList.includes(it.day) && (it.startMin < startMinute || it.endMin > endMinute)) && (
+        <button className="cal-outside-hours" onClick={() => setCalendarGridSettings({ fullDay: true })}>
+          Events outside 7 AM to 11 PM · Show full day
+        </button>
+      )}
+      <div className="cal-grid-scroll" ref={scrollRef} onScroll={(e) => { scrollTopRef.current = e.currentTarget.scrollTop; }}>
+        <div className="cal-grid-ruler" style={{ height: gridY(endMinute, startMinute, slotPx) }}>
+          {hours.map((h) => (
+            <div key={h} className="cal-grid-hour" style={{ height: slotPx * 2 }}>
               <span className="cal-grid-hourlabel">{hourLabel(h)}</span>
             </div>
           ))}
+          <span className="cal-grid-range-end">{hourLabel(endMinute / 60)}</span>
         </div>
-        <div className="cal-grid-cols" ref={colsRef} style={{ height: SLOT_PX * 2 * 24 }}>
+        <div className="cal-grid-cols" ref={colsRef} style={{ height: gridY(endMinute, startMinute, slotPx) }}>
           {dayList.map((d) => (
             <DayColumn
               key={d}
@@ -620,6 +659,9 @@ export const TimeGrid = memo(function TimeGrid({
               isToday={d === todayStr}
               items={timedByDay.get(d) ?? []}
               ghostItemId={moveGhost?.itemId ?? null}
+              startMinute={startMinute}
+              endMinute={endMinute}
+              slotPx={slotPx}
               onChipPointerDown={handleChipPointerDown}
               onResizePointerDown={onResizeItem ? handleResizePointerDown : undefined}
               onChipClick={handleChipClick}
@@ -632,7 +674,7 @@ export const TimeGrid = memo(function TimeGrid({
           {/* drop preview line for rail-task drags (page-computed) */}
           {dropPreview?.zone === 'col' && dropPreview.slot !== null && (
             <GridOverlay day={dropPreview.day} dayList={dayList}>
-              <div className="cal-drop-line" style={{ top: dropPreview.slot * SLOT_PX }}>
+              <div className="cal-drop-line" style={{ top: gridY(dropPreview.slot * SLOT_MINUTES, startMinute, slotPx) }}>
                 <span className="cal-drop-time">{minsToLabel(dropPreview.slot * SLOT_MINUTES)}</span>
               </div>
             </GridOverlay>
@@ -645,8 +687,8 @@ export const TimeGrid = memo(function TimeGrid({
               <div
                 className="cal-move-ghost cal-move-ghost-solid"
                 style={{
-                  top: (moveGhost.startMin / SLOT_MINUTES) * SLOT_PX,
-                  height: Math.max((moveGhost.lengthMin / SLOT_MINUTES) * SLOT_PX, MIN_EVENT_PX),
+                  top: gridY(moveGhost.startMin, startMinute, slotPx),
+                  height: Math.max(gridY(moveGhost.lengthMin, 0, slotPx), MIN_EVENT_PX),
                   ...(moveGhost.tint ? ({ '--cal-chip-tint': moveGhost.tint } as React.CSSProperties) : {}),
                 }}
               >
@@ -662,8 +704,8 @@ export const TimeGrid = memo(function TimeGrid({
               <div
                 className="cal-move-ghost"
                 style={{
-                  top: (resizeGhost.startMin / SLOT_MINUTES) * SLOT_PX,
-                  height: Math.max(((resizeGhost.endMin - resizeGhost.startMin) / SLOT_MINUTES) * SLOT_PX, MIN_EVENT_PX),
+                  top: gridY(resizeGhost.startMin, startMinute, slotPx),
+                  height: Math.max(gridY(resizeGhost.endMin, resizeGhost.startMin, slotPx), MIN_EVENT_PX),
                 }}
               >
                 <span className="cal-drop-time" style={{ top: 'auto', bottom: -18 }}>
@@ -679,8 +721,8 @@ export const TimeGrid = memo(function TimeGrid({
               <div
                 className="cal-create-sel"
                 style={{
-                  top: (createSel.startMin / SLOT_MINUTES) * SLOT_PX,
-                  height: ((createSel.endMin - createSel.startMin) / SLOT_MINUTES) * SLOT_PX,
+                  top: gridY(createSel.startMin, startMinute, slotPx),
+                  height: gridY(createSel.endMin, createSel.startMin, slotPx),
                 }}
               >
                 <span className="cal-drop-time">
@@ -691,9 +733,9 @@ export const TimeGrid = memo(function TimeGrid({
           )}
 
           {/* now line */}
-          {dayList.includes(todayStr) && (
+          {dayList.includes(todayStr) && nowMin >= startMinute && nowMin < endMinute && (
             <GridOverlay day={todayStr} dayList={dayList}>
-              <div className="cal-now-line" style={{ top: (nowMin / SLOT_MINUTES) * SLOT_PX }}>
+              <div className="cal-now-line" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
                 <span className="cal-now-dot" />
               </div>
             </GridOverlay>

@@ -5,13 +5,19 @@
 // Walnut needs no per-provider OAuth; macOS owns sync back to the cloud.
 //
 // Subcommands (all output JSON on stdout; errors as {"error":..., "code":...}):
+//   capabilities                       → {writeSafetyVersion}   (no Calendars access)
+//   status                             → {state}                (no prompt)
 //   calendars                          → [{id,title,account,color,readonly}]
-//   list <fromISO> <toISO> [refresh]   → [{id,calendarId,calendarName,account,
-//                                          title,start,end,allDay,location,readonly,
-//                                          status,selfStatus}]
-//   update <eventId> <startISO> <endISO> [title]
-//   create <calendarId> <title> <startISO> <endISO> [allDay]
-//   delete <eventId>
+//   list <fromISO> <toISO> [refresh]   → [event]
+//   get <eventId>                      → event
+//   update <eventId> <startISO> <endISO> [title] [--human-confirm]   → event
+//   create <calendarId> <title> <startISO> <endISO> [allDay]          → event
+//   delete <eventId> [--human-confirm]                                → {ok}
+//
+// Write safety: update/delete pass on their own only for a Walnut block (stamped
+// openwalnut://calendar-block/<UUID> by `create`, no attendees, organizer none or
+// the user); anything else fails `human-approval-required`, or with
+// --human-confirm shows a native dialog that only a click on "… and notify" passes.
 //
 // `status`/`selfStatus` are omitted when the source says nothing useful, so a
 // plain personal event stays a plain payload. They matter for invitations: a
@@ -27,8 +33,8 @@
 //
 // Dates are tz-less LOCAL wall time ("2026-08-05T09:00:00") to match Walnut's
 // task-date contract. Recurring events: `list` expands occurrences (EventKit
-// does this natively); `update`/`delete` touch only that occurrence
-// (span:.thisEvent).
+// does this natively); `get`/`update`/`delete` resolve exactly that occurrence
+// or answer not-found, and write with span:.thisEvent.
 //
 // Compiled, signed and cached lazily by src/core/helper-build.ts, for
 // src/core/calendar/sources/eventkit.ts (which owns HELPER_VERSION).
@@ -41,6 +47,7 @@
 // everything here except walnutCalendarMain is `private` (the app module has its
 // own `fail`/`output`), and the `@main` entry point exists only in the helper.
 
+import AppKit
 import Darwin
 import EventKit
 import Foundation
@@ -225,26 +232,272 @@ private func eventJson(_ e: EKEvent) -> [String: Any] {
     if let loc = e.location, !loc.isEmpty { out["location"] = loc }
     if let status = statusString(e.status) { out["status"] = status }
     if let selfStatus = selfStatusString(e) { out["selfStatus"] = selfStatus }
+    let facts = writeFacts(e)
+    out["walnutCreated"] = facts.walnutCreated
+    out["hasAttendees"] = facts.hasAttendees
+    out["recurring"] = facts.recurring
+    out["writeSafetyVersion"] = writeSafetyVersion
+    // Absent organizer means "none", never "not me".
+    if let mine = facts.organizerIsCurrentUser { out["organizerIsCurrentUser"] = mine }
+    if let name = facts.organizerName { out["organizerName"] = name }
     return out
 }
 
-/// Resolve an occurrence id ("<ekid>" or "<ekid>#<epoch>") to the concrete
-/// EKEvent instance, searching around the occurrence time for recurring events.
-private func findEvent(_ occId: String) -> EKEvent? {
-    let parts = occId.split(separator: "#", maxSplits: 1)
+/// Exactly the named occurrence, or not-found: a write through the base event of a
+/// recurring meeting can reach the whole series, so the base is never a fallback.
+private func findOccurrence(_ occId: String) -> EKEvent {
+    let parts = occId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
     let baseId = String(parts[0])
-    guard let base = store.event(withIdentifier: baseId) else { return nil }
-    if parts.count == 1 { return base }
-    guard let epoch = Double(parts[1]) else { return base }
+    guard !baseId.isEmpty, let base = store.event(withIdentifier: baseId) else {
+        fail("event not found: \(occId)", code: "not-found")
+    }
+    if parts.count == 1 {
+        // EventKit answers a bare recurring id with its first occurrence, not the one meant.
+        if base.hasRecurrenceRules || base.isDetached {
+            fail("event not found: \(occId) is a recurring event; name one occurrence as <id>#<start epoch>", code: "not-found")
+        }
+        return base
+    }
+    guard let epoch = Double(parts[1]), epoch.isFinite else {
+        fail("occurrence not found: \(occId)", code: "not-found")
+    }
     let target = Date(timeIntervalSince1970: epoch)
     let predicate = store.predicateForEvents(
         withStart: target.addingTimeInterval(-1),
         end: target.addingTimeInterval(24 * 3600),
         calendars: [base.calendar]
     )
-    return store.events(matching: predicate).first {
+    guard let occurrence = store.events(matching: predicate).first(where: {
         $0.eventIdentifier == baseId && abs($0.startDate.timeIntervalSince1970 - epoch) < 1
-    } ?? base
+    }) else {
+        fail("occurrence not found: \(occId)", code: "not-found")
+    }
+    return occurrence
+}
+
+// BEGIN pure write-safety rules (Foundation only: the policy test compiles and runs this block alone)
+
+/// Reported by `capabilities`; binaries from before the write rules do not know that subcommand.
+private let writeSafetyVersion = 1
+
+/// Opens the confirmation dialog for a protected event; never an approval by itself.
+private let humanConfirmFlag = "--human-confirm"
+
+/// The dialog cancels itself this long after the request started, inside the server's timeout.
+private let humanConfirmBudget: TimeInterval = 85
+
+private let walnutBlockScheme = "openwalnut"
+private let walnutBlockHost = "calendar-block"
+
+private func newWalnutBlockURL() -> URL {
+    return URL(string: "\(walnutBlockScheme)://\(walnutBlockHost)/\(UUID().uuidString)")!
+}
+
+/// Only Walnut's own stamp counts, never "has no attendees" (every personal event has none).
+private func isWalnutBlockURL(_ url: URL?) -> Bool {
+    guard let url = url,
+          let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          c.scheme == walnutBlockScheme, c.host == walnutBlockHost,
+          c.user == nil, c.password == nil, c.port == nil,
+          c.query == nil, c.fragment == nil,
+          c.percentEncodedPath.hasPrefix("/") else { return false }
+    return UUID(uuidString: String(c.percentEncodedPath.dropFirst())) != nil
+}
+
+private enum WriteAction {
+    case update, delete
+    var verb: String { self == .update ? "Update" : "Delete" }
+    var confirmButton: String { self == .update ? "Update and notify" : "Delete and notify" }
+}
+
+private struct WriteFacts {
+    let title: String
+    let walnutCreated: Bool
+    let hasAttendees: Bool
+    /// nil when the event has no organizer at all.
+    let organizerIsCurrentUser: Bool?
+    let organizerName: String?
+    let recurring: Bool
+
+    var writableWithoutHuman: Bool {
+        return walnutCreated && !hasAttendees
+            && (organizerIsCurrentUser == nil || organizerIsCurrentUser == true)
+    }
+}
+
+private func protectionReasons(_ f: WriteFacts) -> String {
+    var reasons: [String] = []
+    if !f.walnutCreated { reasons.append("Walnut did not create it") }
+    if f.hasAttendees { reasons.append("it has attendees") }
+    if f.organizerIsCurrentUser == false {
+        reasons.append(f.organizerName.map { "\($0) organizes it" } ?? "someone else organizes it")
+    }
+    guard let last = reasons.popLast() else { return "" }
+    return reasons.isEmpty ? last : reasons.joined(separator: ", ") + " and " + last
+}
+
+private func organizerPhrase(_ f: WriteFacts) -> String {
+    return f.organizerName.map { "The organizer (\($0))" } ?? "The organizer"
+}
+
+private func approvalRequiredMessage(_ action: WriteAction, _ f: WriteFacts) -> String {
+    var parts = ["\(action.verb) \"\(f.title)\" needs a person to confirm it on this Mac: \(protectionReasons(f))."]
+    if f.recurring {
+        parts.append("It is one occurrence of a recurring series, and the calendar server may apply this to the whole series.")
+    }
+    parts.append("\(organizerPhrase(f)) may be notified.")
+    parts.append("Use Hide event instead to remove it from Walnut without changing the calendar.")
+    return parts.joined(separator: " ")
+}
+
+private func confirmAlertTitle(_ action: WriteAction, _ f: WriteFacts) -> String {
+    return "\(action.verb) \"\(f.title)\"?"
+}
+
+/// `when` names the occurrence and calendar: for a recurring event the title alone does not.
+private func confirmAlertText(_ action: WriteAction, _ f: WriteFacts, when: String) -> String {
+    let doing = action == .delete ? "deleting" : "changing"
+    let series = f.recurring
+        ? "This is one occurrence of a recurring series. On some calendar servers (Exchange among them) \(doing) it can affect the whole series."
+        : "If this event belongs to a recurring series, \(doing) it can affect the whole series on some calendar servers."
+    let notify = action == .delete
+        ? "\(organizerPhrase(f)) may be notified, and deleting an invitation can decline it for you."
+        : "\(organizerPhrase(f)) and the attendees may be notified of the change."
+    return [
+        when,
+        "Walnut will not change this event on its own: \(protectionReasons(f)).",
+        series,
+        notify,
+        "To take it off Walnut only, press Cancel and use Hide event instead. Hiding changes nothing in your calendar.",
+    ].filter { !$0.isEmpty }.joined(separator: "\n\n")
+}
+
+/// The flag counts only as the last argument after the required ones, so it is never a title; anything else is nil (usage).
+private func splitHumanConfirm(_ rest: [String], required: Int, optional: Int) -> (positional: [String], humanConfirm: Bool)? {
+    var positional = rest
+    var humanConfirm = false
+    if positional.count > required, positional.last == humanConfirmFlag {
+        positional.removeLast()
+        humanConfirm = true
+    }
+    guard positional.count >= required, positional.count <= required + optional else { return nil }
+    guard !positional.contains(humanConfirmFlag) else { return nil }
+    return (positional, humanConfirm)
+}
+// END pure write-safety rules
+
+private func participantName(_ p: EKParticipant) -> String? {
+    if let name = p.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+    guard p.url.scheme?.lowercased() == "mailto",
+          let address = URLComponents(url: p.url, resolvingAgainstBaseURL: false)?.path,
+          !address.isEmpty else { return nil }
+    return address
+}
+
+private func writeFacts(_ e: EKEvent) -> WriteFacts {
+    let organizer = e.organizer
+    return WriteFacts(
+        title: e.title ?? "(untitled)",
+        walnutCreated: isWalnutBlockURL(e.url),
+        hasAttendees: e.hasAttendees || !(e.attendees ?? []).isEmpty,
+        organizerIsCurrentUser: organizer?.isCurrentUser,
+        organizerName: organizer.flatMap(participantName),
+        recurring: e.hasRecurrenceRules || e.isDetached
+    )
+}
+
+private func occurrenceLabel(_ e: EKEvent) -> String {
+    let f = DateFormatter()
+    f.dateStyle = .full
+    f.timeStyle = e.isAllDay ? .none : .short
+    return "\(f.string(from: e.startDate)) · \(e.calendar.title) (\(e.calendar.source?.title ?? "Local"))"
+}
+
+/// Returns only when the write may go ahead; the default path (no flag) never shows anything.
+private func requireWriteApproval(_ e: EKEvent, _ action: WriteAction, humanConfirm: Bool, caller: pid_t, startedAt: Date) {
+    let facts = writeFacts(e)
+    if facts.writableWithoutHuman { return }
+    guard humanConfirm else {
+        fail(approvalRequiredMessage(action, facts), code: "human-approval-required")
+    }
+    confirmWithPerson(action, facts, when: occurrenceLabel(e), caller: caller, startedAt: startedAt)
+}
+
+private enum ConfirmEnd { case confirmed, cancelled, timedOut, callerGone }
+
+/// Set by the watch timer and read after the modal loop, both on the main thread.
+private final class ConfirmWatch: @unchecked Sendable {
+    var end: ConfirmEnd?
+}
+
+private func confirmWithPerson(_ action: WriteAction, _ facts: WriteFacts, when: String, caller: pid_t, startedAt: Date) {
+    let subject = "\(action.verb.lowercased()) \"\(facts.title)\""
+    let hide = "Use Hide event instead to remove it from Walnut without changing the calendar."
+    // No unlocked screen (an ssh-started server, a locked Mac): nobody could answer, so refuse now.
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+          session[kCGSessionOnConsoleKey] as? Bool == true,
+          session["CGSSessionScreenIsLocked"] as? Bool != true else {
+        fail("No one can confirm \(subject) on this Mac's screen right now; nothing was changed. \(hide)", code: "human-approval-required")
+    }
+    let deadline = startedAt.addingTimeInterval(humanConfirmBudget)
+    guard deadline.timeIntervalSinceNow >= 10 else {
+        fail("No time was left to confirm \(subject); nothing was changed. \(hide)", code: "human-approval-required")
+    }
+    let end = MainActor.assumeIsolated {
+        runConfirmAlert(
+            title: confirmAlertTitle(action, facts),
+            text: confirmAlertText(action, facts, when: when),
+            confirmButton: action.confirmButton,
+            caller: caller,
+            deadline: deadline
+        )
+    }
+    switch end {
+    case .confirmed:
+        return
+    case .cancelled:
+        fail("\(action.verb) \"\(facts.title)\" was cancelled on this Mac; nothing was changed. \(hide)", code: "approval-canceled")
+    case .timedOut, .callerGone:
+        fail("No answer to \(subject) in time; nothing was changed. \(hide)", code: "human-approval-required")
+    }
+}
+
+/// Cancel is first (default, Return); the go-ahead has no key equivalent, so only a click passes.
+@MainActor
+private func runConfirmAlert(title: String, text: String, confirmButton: String, caller: pid_t, deadline: Date) -> ConfirmEnd {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let alert = NSAlert()
+    alert.alertStyle = .critical
+    alert.messageText = title
+    alert.informativeText = text
+    let cancel = alert.addButton(withTitle: "Cancel")
+    cancel.keyEquivalent = "\r"
+    let goAhead = alert.addButton(withTitle: confirmButton)
+    goAhead.keyEquivalent = ""
+    if #available(macOS 11.0, *) { goAhead.hasDestructiveAction = true }
+    // Asked from a background process while the person looks at Walnut: come to the front.
+    app.activate(ignoringOtherApps: true)
+
+    let watch = ConfirmWatch()
+    // runModal has no timeout; this ends it at the deadline or once the caller (parent) is gone.
+    let timer = Timer(timeInterval: 0.25, repeats: true) { t in
+        let end: ConfirmEnd? = getppid() != caller ? .callerGone : (Date() >= deadline ? .timedOut : nil)
+        guard let end = end else { return }
+        watch.end = end
+        t.invalidate()
+        // stopModal from a timer waits for the next event; abortModal ends the loop now.
+        MainActor.assumeIsolated { NSApplication.shared.abortModal() }
+    }
+    RunLoop.main.add(timer, forMode: .modalPanel)
+    let response = alert.runModal()
+    timer.invalidate()
+    if let end = watch.end { return end }
+    guard response == .alertSecondButtonReturn else { return .cancelled }
+    // A click between two timer ticks must not land after the deadline or a caller that gave up.
+    if getppid() != caller { return .callerGone }
+    if Date() >= deadline { return .timedOut }
+    return .confirmed
 }
 
 private func output(_ obj: Any) {
@@ -257,15 +510,23 @@ private func output(_ obj: Any) {
 /// One request, then exit. `args` is argv-shaped: args[0] is the program, args[1]
 /// the subcommand. Walnut.app passes its own argv with `--calendar-bridge` removed.
 func walnutCalendarMain(_ args: [String]) -> Never {
-guard args.count >= 2 else { fail("usage: walnut-calendar <status|calendars|list|update|create|delete> …", code: "usage") }
+guard args.count >= 2 else { fail("usage: walnut-calendar <capabilities|status|calendars|list|get|update|create|delete> …", code: "usage") }
+// Before the re-exec and requestAccess(): the server probes any binary with it, never prompting.
+if args[1] == "capabilities" {
+    output(["writeSafetyVersion": writeSafetyVersion])
+    exit(0)
+}
 reexecDisclaimedIfNeeded()
+// The process the server's timeout kills: a dialog outliving it must not write.
+let caller = getppid()
+let startedAt = Date()
 // `status` must run BEFORE requestAccess(): it exists precisely to observe
 // the auth state without mutating it (no prompt, no denial recorded).
 if args[1] == "status" { printAuthStatus() }
 // And a subcommand we do not know is refused BEFORE requestAccess() too: asking
 // for Calendars and then answering "usage" put a real permission dialog on the
 // user's screen for a typo (2026-09-26, a verification run of this very file).
-guard ["calendars", "list", "update", "create", "delete"].contains(args[1]) else {
+guard ["calendars", "list", "get", "update", "create", "delete"].contains(args[1]) else {
     fail("unknown subcommand: \(args[1])", code: "usage")
 }
 requestAccess()
@@ -287,19 +548,26 @@ case "list":
     let predicate = store.predicateForEvents(withStart: from, end: to, calendars: nil)
     output(store.events(matching: predicate).map(eventJson))
 
+case "get":
+    guard args.count == 3 else { fail("usage: get <eventId>", code: "usage") }
+    output(eventJson(findOccurrence(args[2])))
+
 case "update":
-    guard args.count >= 5, let start = parseLocal(args[3]), let end = parseLocal(args[4]) else {
-        fail("usage: update <eventId> <startISO> <endISO> [title]", code: "usage")
+    guard let parsed = splitHumanConfirm(Array(args.dropFirst(2)), required: 3, optional: 1),
+          let start = parseLocal(parsed.positional[1]), let end = parseLocal(parsed.positional[2]) else {
+        fail("usage: update <eventId> <startISO> <endISO> [title] [--human-confirm]", code: "usage")
     }
-    guard let event = findEvent(args[2]) else { fail("event not found: \(args[2])", code: "not-found") }
+    let pos = parsed.positional
+    let event = findOccurrence(pos[0])
     if !event.calendar.allowsContentModifications { fail("calendar is read-only", code: "readonly") }
-    let allDay = !args[3].contains("T")
+    requireWriteApproval(event, .update, humanConfirm: parsed.humanConfirm, caller: caller, startedAt: startedAt)
+    let allDay = !pos[1].contains("T")
     event.startDate = start
     // All-day "end" arrives as an inclusive day → extend to end-of-day so
     // EventKit doesn't get a zero-length event.
-    event.endDate = allDay && !args[4].contains("T") && end <= start ? end.addingTimeInterval(24 * 3600 - 1) : end
+    event.endDate = allDay && !pos[2].contains("T") && end <= start ? end.addingTimeInterval(24 * 3600 - 1) : end
     event.isAllDay = allDay
-    if args.count >= 6 && !args[5].isEmpty { event.title = args[5] }
+    if pos.count >= 4 && !pos[3].isEmpty { event.title = pos[3] }
     do {
         try store.save(event, span: .thisEvent, commit: true)
         output(eventJson(event))
@@ -321,14 +589,21 @@ case "create":
     event.isAllDay = allDay
     // All-day "end" is an inclusive day → EventKit wants end-of-day.
     event.endDate = allDay && !args[5].contains("T") ? endRaw.addingTimeInterval(24 * 3600 - 1) : endRaw
+    // The stamp that lets a later update/delete pass without a person.
+    event.url = newWalnutBlockURL()
     do {
         try store.save(event, span: .thisEvent, commit: true)
         output(eventJson(event))
     } catch { fail("save failed: \(error.localizedDescription)", code: "save-failed") }
 
 case "delete":
-    guard args.count >= 3 else { fail("usage: delete <eventId>", code: "usage") }
-    guard let event = findEvent(args[2]) else { fail("event not found: \(args[2])", code: "not-found") }
+    guard let parsed = splitHumanConfirm(Array(args.dropFirst(2)), required: 1, optional: 0) else {
+        fail("usage: delete <eventId> [--human-confirm]", code: "usage")
+    }
+    let event = findOccurrence(parsed.positional[0])
+    // Before the gate: never ask a person to confirm a delete that cannot happen.
+    if !event.calendar.allowsContentModifications { fail("calendar is read-only", code: "readonly") }
+    requireWriteApproval(event, .delete, humanConfirm: parsed.humanConfirm, caller: caller, startedAt: startedAt)
     do {
         try store.remove(event, span: .thisEvent, commit: true)
         output(["ok": true])

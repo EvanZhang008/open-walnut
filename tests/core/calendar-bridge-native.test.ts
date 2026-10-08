@@ -8,10 +8,14 @@
  * #if, so whether both shapes build is a question only the compiler can answer.
  *
  * Only arguments that can never reach EventKit's permission request are run: no
- * subcommand, and an unknown one (which the shared source refuses BEFORE asking).
+ * subcommand, an unknown one (which the shared source refuses BEFORE asking), and
+ * `capabilities` (answered before the re-exec, needing no calendar at all).
  * Anything else would put a real Calendars dialog on the screen of whoever runs the
  * suite, which is exactly what happened on 2026-09-26 when an unknown subcommand
  * still asked first. Nothing here is signed, installed, or granted.
+ *
+ * The app shape is built for macOS 12, like desktop/build-release.sh, so an API
+ * newer than that without an #available guard fails here and not in a release.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -59,7 +63,12 @@ describe.skipIf(!hasSwift)('calendar protocol, both shipped shapes', () => {
     fs.writeFileSync(main, TEST_MAIN);
     appExe = path.join(dir, 'app');
     helperExe = path.join(dir, 'helper');
-    compile(appExe, ['-D', 'WALNUT_APP', main, BRIDGE, SHARED, '-framework', 'EventKit']);
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+    compile(appExe, [
+      '-D', 'WALNUT_APP', main, BRIDGE, SHARED, '-framework', 'EventKit',
+      '-target', `${arch}-apple-macos12.0`,
+    ]);
+    // Exactly what src/core/helper-build.ts runs: no -framework, autolinking only.
     compile(helperExe, ['-parse-as-library', SHARED]);
   }, 600_000);
 
@@ -75,6 +84,10 @@ describe.skipIf(!hasSwift)('calendar protocol, both shipped shapes', () => {
     const unknown = run(appExe, ['--calendar-bridge', 'bogus']);
     expect(unknown.status).toBe(1);
     expect(unknown.json).toEqual({ error: 'unknown subcommand: bogus', code: 'usage' });
+
+    const caps = run(appExe, ['--calendar-bridge', 'capabilities']);
+    expect(caps.status).toBe(0);
+    expect(caps.json).toEqual({ writeSafetyVersion: 1 });
   });
 
   it('the app shape falls through to a normal launch without the flag', () => {
@@ -90,5 +103,9 @@ describe.skipIf(!hasSwift)('calendar protocol, both shipped shapes', () => {
     const unknown = run(helperExe, ['bogus']);
     expect(unknown.status).toBe(1);
     expect(unknown.json).toEqual({ error: 'unknown subcommand: bogus', code: 'usage' });
+
+    const caps = run(helperExe, ['capabilities']);
+    expect(caps.status).toBe(0);
+    expect(caps.json).toEqual({ writeSafetyVersion: 1 });
   });
 });

@@ -100,7 +100,10 @@ async function columnPoint(
 // rides ui-prefs). Several tests below open the agenda and leave it open; without this the
 // shared fixture would hand "agenda open" to the next context, whose toggle click would then
 // CLOSE the panel it expects to open.
-test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
+test.beforeEach(async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.addInitScript(() => localStorage.setItem('open-walnut-calendar-grid-settings', JSON.stringify({ zoom: 1, fullDay: true })))
+})
 
 test.describe('Calendar view', () => {
   test('sidebar navigation opens week view with URL state', async ({ page }) => {
@@ -938,14 +941,16 @@ test.describe('Calendar view', () => {
     await expect(panel.locator('.cal-chip[data-item-id="event:ev-e2e-brief"]')).toBeVisible()
 
     // Clicking an empty slot opens the quick-create popover
-    const point = await columnPoint(page, today, 16, panel)
+    const point = await columnPoint(page, today, 18, panel)
     await page.mouse.click(point.x, point.y)
     await expect(page.locator('.cal-create-popover .quick-task-composer')).toBeVisible()
     await page.keyboard.press('Escape')
 
     // Toggle closes
     await panel.locator('button[title="Close calendar panel"]').click()
-    await expect(panel).toHaveCount(0)
+    await expect(panel).toBeHidden()
+    await page.getByTestId('sidebar-toggle-calendar').click()
+    await expect(panel).toBeVisible()
   })
 
   test('homepage all-day area grows to ten rows, scrolls, resizes, and persists', async ({ page }) => {
@@ -1207,32 +1212,20 @@ test.describe('Calendar view', () => {
     await page.keyboard.press('Escape')
   })
 
-  test('homepage calendar panel resizes by dragging its right edge and persists', async ({ page }) => {
+  test('homepage calendar fills its companion column after resizing the viewport', async ({ page }) => {
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    await page.click('[data-testid="sidebar-toggle-calendar"]')
-    const panel = page.locator('[data-testid="cal-side-panel"]')
+    await page.getByTestId('sidebar-toggle-calendar').click()
+    const panel = page.getByTestId('cal-side-panel')
+    const column = page.getByTestId('home-companion')
     await expect(panel).toBeVisible()
-
-    const before = (await panel.boundingBox())!.width
-    const handle = page.locator('.cal-side-resize-handle')
-    const hb = await handle.boundingBox()
-    if (!hb) throw new Error('resize handle not visible')
-
-    // width:0 handle — the ±3px ::before zone straddles the seam.
-    await page.mouse.move(hb.x, hb.y + 300)
-    await page.mouse.down()
-    await page.mouse.move(hb.x + 150, hb.y + 300, { steps: 8 })
-    await page.mouse.up()
-
-    const after = (await panel.boundingBox())!.width
-    expect(after).toBeGreaterThan(before + 100)
-
-    // Width is persisted (localStorage) and survives a reload.
+    for (const width of [1280, 1024]) {
+      await page.setViewportSize({ width, height: 900 })
+      expect(Math.abs((await panel.boundingBox())!.width - (await column.boundingBox())!.width)).toBeLessThanOrEqual(1)
+      expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+    }
     await page.reload()
-    await page.waitForLoadState('networkidle')
     await expect(panel).toBeVisible()
-    expect((await panel.boundingBox())!.width).toBeGreaterThan(before + 100)
+    expect(Math.abs((await panel.boundingBox())!.width - (await column.boundingBox())!.width)).toBeLessThanOrEqual(1)
   })
 })
 

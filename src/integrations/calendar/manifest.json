@@ -15,6 +15,7 @@
       "source_enabled": { "type": "boolean", "default": true },
       "hidden_calendar_ids": { "type": "array", "items": { "type": "string" } },
       "visible_calendar_ids": { "type": "array", "items": { "type": "string" } },
+      "hidden_event_ids": { "type": "array", "items": { "type": "string" } },
       "refresh_minutes": { "type": "integer", "default": 15 },
       "read_ttl_seconds": { "type": "integer", "default": 60 }
     }
@@ -31,6 +32,10 @@
     "visible_calendar_ids": {
       "label": "Visible calendars",
       "help": "When set, ONLY these calendar ids show, including calendars added to the Mac later."
+    },
+    "hidden_event_ids": {
+      "label": "Hidden events",
+      "help": "Single event ids hidden in Walnut only. The events stay in your calendars."
     },
     "refresh_minutes": {
       "label": "Background poll (minutes)",

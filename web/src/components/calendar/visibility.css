@@ -1,0 +1,62 @@
+.cal-item-warning {
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border-radius: 5px;
+}
+
+.cal-hidden-events-btn {
+  justify-content: space-between;
+}
+
+.cal-hidden-events-count {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.cal-hidden-events {
+  min-width: 260px;
+}
+
+.cal-hidden-events-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  border-radius: 6px;
+}
+
+.cal-hidden-events-row:hover {
+  background: var(--bg-hover);
+}
+
+.cal-hidden-events-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 13px;
+}
+
+.cal-hidden-events-when {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.cal-hidden-events-show {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cal-hidden-events-show:hover {
+  background: var(--bg-hover);
+}

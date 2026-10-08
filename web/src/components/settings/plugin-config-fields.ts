@@ -111,7 +111,7 @@ export interface FieldOwner {
 
 const FIELD_OWNERS: Record<string, FieldOwner> = {
   calendar: {
-    keys: ['source_enabled', 'hidden_calendar_ids', 'visible_calendar_ids'],
+    keys: ['source_enabled', 'hidden_calendar_ids', 'visible_calendar_ids', 'hidden_event_ids'],
     pane: 'calendar',
     label: 'Which calendars show',
     help: 'Calendar Accounts turns Mac calendars on and picks which ones show.',

@@ -13,6 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js';
+import { getConfig, updatePluginConfig } from '../../../src/core/config-manager.js';
 import { CalendarService, _setCalendarServiceForTest } from '../../../src/integrations/calendar/service.js';
 import { CalendarHelperError } from '../../../src/core/calendar/sources/eventkit.js';
 import { createMockCalendarSource, type MockCalendarState } from '../../helpers/mock-calendar-source.js';
@@ -27,11 +28,12 @@ function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`;
 }
 
-function resetService(): void {
+function resetService(): CalendarService {
   const mock = createMockCalendarSource();
   state = mock.state;
   const service = new CalendarService(mock.source);
   _setCalendarServiceForTest(service);
+  return service;
 }
 
 beforeAll(async () => {
@@ -51,7 +53,9 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Config outlives a service instance: every case starts with no single event hidden.
+  await updatePluginConfig('calendar', { hidden_event_ids: [] });
   resetService();
   busEvents = [];
 });
@@ -66,6 +70,7 @@ interface EventShape {
   readonly?: boolean;
   status?: string;
   selfStatus?: string;
+  hidden?: boolean;
 }
 
 describe('GET /api/calendar/events', () => {
@@ -275,6 +280,20 @@ describe('POST /api/calendar/events + DELETE', () => {
     expect(sources[0].available).toBe(true);
   });
 
+  it('refuses a relayed human confirmation before the source can open a dialog', async () => {
+    const event = state.events.find((e) => e.id === 'ev-standup')!;
+    Object.assign(event, { walnutCreated: false, hasAttendees: true, recurring: true });
+    for (const method of ['DELETE', 'PATCH']) {
+      const res = await fetch(apiUrl(`/api/calendar/events/ev-standup${method === 'DELETE' ? '?human_confirm=1' : ''}`), {
+        method, headers: { 'Content-Type': 'application/json', 'x-walnut-origin': 'remote-http' },
+        ...(method === 'PATCH' ? { body: JSON.stringify({ start: event.start, end: event.end, human_confirm: true }) } : {}),
+      });
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toContain('on the Mac');
+    }
+    expect(state.calls).toEqual([]);
+  });
+
   it('rejects creates on read-only calendars (409) and incomplete bodies (400)', async () => {
     const readonly = await fetch(apiUrl('/api/calendar/events'), {
       method: 'POST',
@@ -422,5 +441,162 @@ describe('PUT /api/calendar/sources/eventkit', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden_calendar_ids: [] }),
     });
+  });
+});
+
+describe('PATCH /api/calendar/events/:id/visibility', () => {
+  const RANGE = 'from=2026-08-03&to=2026-08-09';
+  const GYM = 'ev-gym#1770000000';
+
+  function setVisibility(id: string, body: unknown, base = '/api/calendar'): Promise<Response> {
+    return fetch(apiUrl(`${base}/events/${encodeURIComponent(id)}/visibility`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    });
+  }
+
+  async function readEvents(query = ''): Promise<EventShape[]> {
+    const res = await fetch(apiUrl(`/api/calendar/events?${RANGE}${query}`));
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { events: EventShape[] }).events;
+  }
+
+  async function persistedHiddenIds(): Promise<unknown> {
+    const config = (await getConfig()) as { plugins?: Record<string, Record<string, unknown>> };
+    return config.plugins?.calendar?.hidden_event_ids;
+  }
+
+  function sourceWrites(): string[] {
+    return state.calls
+      .map((c) => c.method)
+      .filter((m) => m === 'updateEvent' || m === 'deleteEvent' || m === 'createEvent');
+  }
+
+  it('hides a read-only occurrence id in Walnut only, include_hidden marks it, and show restores it', async () => {
+    await readEvents(); // the rendered view is what loaded the id
+    const res = await setVisibility('ev-holiday', { hidden: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: 'ev-holiday', hidden: true, changed: true });
+
+    expect((await readEvents()).some((e) => e.id === 'ev-holiday')).toBe(false);
+    for (const flag of ['1', 'true']) {
+      const marked = (await readEvents(`&include_hidden=${flag}`)).filter((e) => e.hidden);
+      expect(marked.map((e) => e.id)).toEqual(['ev-holiday']);
+    }
+    expect(await persistedHiddenIds()).toEqual(['ev-holiday']);
+
+    // The recurring occurrence arrives percent-encoded and is matched exactly.
+    expect((await setVisibility(GYM, { hidden: true }, '/api/plugins/calendar')).status).toBe(200);
+    expect((await readEvents()).some((e) => e.id === GYM)).toBe(false);
+    expect(await persistedHiddenIds()).toEqual(['ev-holiday', GYM]);
+
+    const shown = await setVisibility('ev-holiday', { hidden: false });
+    expect(await shown.json()).toMatchObject({ id: 'ev-holiday', hidden: false, changed: true });
+    expect((await readEvents()).some((e) => e.id === 'ev-holiday')).toBe(true);
+    expect(await persistedHiddenIds()).toEqual([GYM]);
+
+    expect(sourceWrites()).toEqual([]);
+    expect(state.events.some((e) => e.id === 'ev-holiday')).toBe(true);
+  });
+
+  it('announces calendar:updated so open views drop the event live', async () => {
+    await readEvents();
+    busEvents = [];
+    await setVisibility('ev-standup', { hidden: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(busEvents.some((e) => e.name === EventNames.CALENDAR_UPDATED)).toBe(true);
+  });
+
+  it('a repeated hide changes nothing, and concurrent hides keep both ids', async () => {
+    await readEvents();
+    const [a, b] = await Promise.all([
+      setVisibility('ev-standup', { hidden: true }),
+      setVisibility('ev-canceled', { hidden: true }),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    const again = await setVisibility('ev-standup', { hidden: true });
+    expect(await again.json()).toMatchObject({ changed: false });
+    expect(((await persistedHiddenIds()) as string[]).slice().sort()).toEqual(['ev-canceled', 'ev-standup']);
+  });
+
+  it('a new service keeps the hidden set once it has read config', async () => {
+    await readEvents();
+    await setVisibility('ev-standup', { hidden: true });
+    await fetch(apiUrl('/api/calendar/refresh'), { method: 'POST' });
+    expect((await readEvents()).some((e) => e.id === 'ev-standup')).toBe(false);
+
+    const fresh = resetService();
+    await fresh.reloadConfig(); // activate's init() does this for the real instance
+    expect((await readEvents()).some((e) => e.id === 'ev-standup')).toBe(false);
+    expect((await readEvents('&include_hidden=1')).find((e) => e.id === 'ev-standup')?.hidden).toBe(true);
+  });
+
+  it('a hidden calendar stays filtered even with include_hidden', async () => {
+    await readEvents();
+    await setVisibility('ev-standup', { hidden: true });
+    await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_calendar_ids: ['cal-home'] }),
+    });
+    try {
+      const events = await readEvents('&include_hidden=1');
+      expect(events.some((e) => e.calendarId === 'cal-home')).toBe(false);
+      expect(events.some((e) => e.hidden && e.calendarId === 'cal-home')).toBe(false);
+      expect(events.find((e) => e.id === 'ev-standup')?.hidden).toBe(true);
+    } finally {
+      await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden_calendar_ids: [] }),
+      });
+    }
+  });
+
+  it('rejects a bad body, an empty id and a bad include_hidden with 400', async () => {
+    await readEvents();
+    for (const body of [{}, { hidden: 'true' }, { hidden: 1 }, { hidden: null }, '{not json']) {
+      expect((await setVisibility('ev-standup', body)).status).toBe(400);
+    }
+    expect((await setVisibility(' ', { hidden: true })).status).toBe(400);
+    expect((await fetch(apiUrl(`/api/calendar/events?${RANGE}&include_hidden=yes`))).status).toBe(400);
+    expect(await persistedHiddenIds()).toEqual([]);
+  });
+
+  it('proves an uncached id with one exact read and 404s an id that is not there', async () => {
+    // Nothing is cached: each id is proven by the source's read-by-id, never a window scan.
+    expect((await setVisibility('ev-standup', { hidden: true })).status).toBe(200);
+    for (const id of ['ev-nope', 'ev-nope#1770000000']) {
+      const missing = await setVisibility(id, { hidden: true });
+      expect(missing.status).toBe(404);
+      expect((await missing.json()) as { code: string }).toMatchObject({ code: 'not-found' });
+    }
+    expect(state.calls.map((c) => [c.method, c.args[0]])).toEqual([
+      ['getEvent', 'ev-standup'],
+      ['getEvent', 'ev-nope'],
+      ['getEvent', 'ev-nope#1770000000'],
+    ]);
+    expect(await persistedHiddenIds()).toEqual(['ev-standup']);
+
+    // Showing accepts any persisted id, loaded or not.
+    await updatePluginConfig('calendar', { hidden_event_ids: ['ev-gone'] });
+    const shown = await setVisibility('ev-gone', { hidden: false });
+    expect(shown.status).toBe(200);
+    expect(await persistedHiddenIds()).toEqual([]);
+  });
+
+  it('does not reach the event-update route', async () => {
+    await readEvents();
+    await setVisibility('ev-standup', { hidden: true });
+    expect(state.calls.some((c) => c.method === 'updateEvent')).toBe(false);
+    // The plain PATCH still updates and is not mistaken for a visibility call.
+    const moved = await fetch(apiUrl('/api/calendar/events/ev-standup'), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start: '2026-08-04T11:00:00', end: '2026-08-04T11:30:00' }),
+    });
+    expect(moved.status).toBe(200);
+    expect(state.calls.filter((c) => c.method === 'updateEvent').map((c) => c.args[0])).toEqual(['ev-standup']);
   });
 });

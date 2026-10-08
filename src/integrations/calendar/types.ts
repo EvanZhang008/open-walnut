@@ -44,7 +44,22 @@ export interface CalendarEvent {
   status?: CalendarEventStatus;
   /** Omitted when the source reports nothing (e.g. an event with no attendees). */
   selfStatus?: CalendarSelfStatus;
+  /** Hidden in Walnut only (`hidden_event_ids`); set by CalendarService on `includeHidden` reads, never by a source. */
+  hidden?: boolean;
+  walnutCreated?: boolean;
+  hasAttendees?: boolean;
+  organizerIsCurrentUser?: boolean;
+  organizerName?: string;
+  recurring?: boolean;
+  writeSafetyVersion?: number;
 }
+
+export function calendarEventNeedsApproval(event: CalendarEvent): boolean {
+  return event.writeSafetyVersion !== 1 || event.walnutCreated !== true || event.hasAttendees !== false ||
+    (event.organizerIsCurrentUser !== undefined && event.organizerIsCurrentUser !== true);
+}
+
+export interface CalendarWriteOptions { humanConfirm?: boolean }
 
 export interface CalendarInfo {
   id: string;
@@ -103,7 +118,8 @@ export interface CalendarSource {
    *  that pull asynchronously, so it freshens the NEXT fetch, not this one —
    *  only the background refresh loop passes it. */
   listEvents(from: string, to: string, opts?: { refresh?: boolean }): Promise<CalendarEvent[]>;
-  updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent>;
+  getEvent?(id: string): Promise<CalendarEvent>;
+  updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent>;
   createEvent(input: CalendarEventCreate): Promise<CalendarEvent>;
-  deleteEvent(id: string): Promise<void>;
+  deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void>;
 }

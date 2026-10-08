@@ -20,6 +20,9 @@ import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
 import { CalendarContextMenu, type CalendarContextTarget } from './CalendarContextMenu';
 import { CalendarItemPopover } from './CalendarItemPopover';
 import { CalendarsPopover } from './CalendarsPopover';
+import { CalendarGridControls } from './CalendarGridControls';
+import { calendarEventNeedsApproval } from '@/api/calendar';
+import { confirmCalendarWrite } from './calendar-event-actions';
 
 interface Props {
   onClose: () => void;
@@ -64,7 +67,8 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
     const rect = m?.colTops.get(dayRef.current);
     if (!m || !rect) return null;
     if (y < m.gridTop) return null; // above the scrollable grid = all-day
-    const mins = snapMinutes(((y - rect.top) / m.slotPx) * SLOT_MINUTES, SLOT_MINUTES);
+    const mins = Math.max(m.startMinute, Math.min(m.endMinute - SLOT_MINUTES,
+      snapMinutes(m.startMinute + ((y - rect.top) / m.slotPx) * SLOT_MINUTES, SLOT_MINUTES)));
     return Math.max(0, Math.min(Math.floor(mins / SLOT_MINUTES), (24 * 60) / SLOT_MINUTES - 1));
   }, []);
   useDragBusTarget({
@@ -122,7 +126,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
       else if (kind === 'task-due') update(rest, { due_date: newWhen });
       else if (kind === 'event') {
         const ev = calendar.events.find((e) => e.id === rest);
-        if (!ev || !newWhen.includes('T')) return;
+        if (!ev || !newWhen.includes('T') || !confirmCalendarWrite(ev, 'update')) return;
         const durMs = Math.max(
           15 * 60_000,
           parseDateLocal(ev.end || ev.start).getTime() - parseDateLocal(ev.start).getTime()
@@ -131,6 +135,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
         const pad = (n: number) => String(n).padStart(2, '0');
         calendar.moveEvent(rest, {
           start: newWhen,
+          human_confirm: calendarEventNeedsApproval(ev),
           end: `${newEnd.getFullYear()}-${pad(newEnd.getMonth() + 1)}-${pad(newEnd.getDate())}T${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}:00`,
         });
       }
@@ -201,6 +206,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
             <circle cx="15.5" cy="14" r="1.4" />
           </svg>
         </button>
+        <CalendarGridControls />
         <Link to={`/calendar?view=day&d=${day}`} className="cal-side-expand" title="Open calendar">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 3h6v6" /><path d="M10 14L21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
@@ -225,7 +231,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
               else {
                 const rest = itemId.slice(sep + 1);
                 const ev = calendar.events.find((e) => e.id === rest);
-                if (ev) calendar.moveEvent(rest, { start: ev.start, end: newEnd });
+                if (ev && confirmCalendarWrite(ev, 'update')) calendar.moveEvent(rest, { start: ev.start, end: newEnd, human_confirm: calendarEventNeedsApproval(ev) });
               }
             }}
             onChipDragging={setChipDragging}
@@ -254,23 +260,29 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           // Context menu hands back the ITEM (id "event:<real-id>"), not the
           // event — passing item.id to the API 404s and the chip resurrects.
           onDeleteEvent={(item) => {
-            if (item.kind === 'event') calendar.removeEvent(item.event.id);
+            if (item.kind === 'event' && confirmCalendarWrite(item.event, 'delete')) calendar.removeEvent(item.event.id, calendarEventNeedsApproval(item.event));
           }}
           onHideCalendar={calendar.hideCalendar}
+          onHideEvent={calendar.hideEvent}
           onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
           canCreateEvent={canCreateEvent}
         />
       )}
       {active && calsAnchor && (
-        <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} />
+        <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} hiddenEvents={calendar.hiddenEvents} onShowEvent={calendar.showEvent} />
       )}
       {active && openItem && (
         <CalendarItemPopover
           item={openItem.item}
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
-          onSaveEvent={(ev, patch) => calendar.moveEvent(ev.id, patch)}
-          onDeleteEvent={(ev) => calendar.removeEvent(ev.id)}
+          onSaveEvent={(ev, patch) => {
+            if (confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
+          }}
+          onDeleteEvent={(ev) => {
+            if (confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
+          }}
+          onHideEvent={calendar.hideEvent}
           onSaveTaskWhen={saveTaskWhen}
           onSaveTaskEnd={(item, newEnd) => {
             if (item.kind !== 'event') update(item.task.id, { end_date: newEnd });

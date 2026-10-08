@@ -4,10 +4,11 @@
  * Canonical path is `/api/plugins/calendar/*`; `/api/calendar/*` is a core alias kept for
  * the existing web clients (src/web/routes/calendar-alias.ts says when it can go).
  *
- * GET    /events?from=YYYY-MM-DD&to=YYYY-MM-DD[&fresh=1] → { events, sources }
+ * GET    /events?from=YYYY-MM-DD&to=YYYY-MM-DD[&fresh=1][&include_hidden=1] → { events, sources }
  *          `fresh=1` skips the read cache (~0.25s slower) — use it when a stale
  *          answer is worse than a slow one. `sources[0].lastRefresh` always says
- *          how old the served data actually is.
+ *          how old the served data actually is. `include_hidden=1` also returns
+ *          single hidden events, marked `hidden: true`.
  *          Events may carry `status` ('confirmed' | 'tentative' | 'canceled')
  *          and `selfStatus` ('pending' | 'accepted' | 'declined' | 'tentative' |
  *          'delegated'). Cancelled and declined events are MARKED, not dropped:
@@ -16,6 +17,8 @@
  * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids?, visible_calendar_ids? }
  *          `visible_calendar_ids: null` CLEARS the allowlist (an omitted key changes nothing).
  * POST   /refresh                              → force re-fetch all cached windows
+ * PATCH  /events/:id/visibility                → { hidden: boolean } → { id, hidden, changed, sources }
+ *          Walnut-only hide/show by exact id; 400 bad body/id or uncached one-off id, 404 missing.
  * PATCH  /events/:id                           → { start, end, title? }
  * POST   /events                               → { calendarId, title, start, end, allDay? }
  * DELETE /events/:id
@@ -25,10 +28,13 @@
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import type { PluginRouteReply, PluginRouteRequest } from '../../core/plugins/plugin-route-adapter.js'
 import { calendarErrorCode } from './api.js'
+import { ORIGIN_HEADER, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import type { CalendarService } from './service.js'
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const LOCAL_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}))?$/
+const QUERY_BOOLEANS = new Set(['1', 'true', '0', 'false'])
+const VISIBILITY_SUFFIX = '/visibility'
 
 /** Map helper error codes to HTTP statuses. */
 function errorReply(walnut: WalnutServerPluginApi, err: unknown): PluginRouteReply {
@@ -37,6 +43,7 @@ function errorReply(walnut: WalnutServerPluginApi, err: unknown): PluginRouteRep
     const status =
       code === 'not-found' ? 404
       : code === 'usage' ? 400
+      : code === 'human-approval-required' || code === 'approval-canceled' ? 403
       : code === 'readonly' ? 409
       : code === 'permission-denied' ? 403
       : code === 'disabled' || code === 'not-configured' || code === 'cloud' ? 503
@@ -59,9 +66,14 @@ function firstQuery(value: string | string[] | undefined): string | undefined {
  * recurring occurrence id contains `#` and therefore arrives percent-encoded (`%23`), and
  * the same handler serves both the canonical `/api/plugins/calendar/events/<id>` and the
  * legacy `/api/calendar/events/<id>`, so the prefix is found rather than assumed.
+ * `suffix` (`/visibility`) is cut off first, or it would be read as part of the id.
  */
-function eventIdFrom(request: PluginRouteRequest): string {
-  const pathname = request.path.split('?')[0]
+function eventIdFrom(request: PluginRouteRequest, suffix = ''): string {
+  let pathname = request.path.split('?')[0]
+  if (suffix) {
+    pathname = pathname.replace(/\/+$/, '')
+    if (pathname.endsWith(suffix)) pathname = pathname.slice(0, -suffix.length)
+  }
   const marker = '/events/'
   const at = pathname.lastIndexOf(marker)
   const raw = at < 0 ? '' : pathname.slice(at + marker.length)
@@ -90,10 +102,15 @@ export function registerCalendarRoutes(
     const from = firstQuery(request.query.from)
     const to = firstQuery(request.query.to)
     const fresh = firstQuery(request.query.fresh)
+    const includeHiddenRaw = firstQuery(request.query.include_hidden)
     if (!from || !to || !DAY_RE.test(from) || !DAY_RE.test(to) || from > to) {
       return { status: 400, json: { error: 'from/to must be YYYY-MM-DD with from <= to' } }
     }
+    if (includeHiddenRaw !== undefined && !QUERY_BOOLEANS.has(includeHiddenRaw)) {
+      return { status: 400, json: { error: 'include_hidden must be 1, true, 0 or false' } }
+    }
     const force = fresh === '1' || fresh === 'true'
+    const includeHidden = includeHiddenRaw === '1' || includeHiddenRaw === 'true'
     // Resolving is itself guarded, in every handler: between `deactivate` and the dispose
     // that follows it there is no service, and `resolve()` throws `not-configured` then.
     // Unguarded that surfaced as a 500 rather than the documented 503.
@@ -104,7 +121,7 @@ export function registerCalendarRoutes(
       return errorReply(walnut, err)
     }
     try {
-      const events = await service.getEvents(from, to, { force })
+      const events = await service.getEvents(from, to, { force, includeHidden })
       return { json: { events, sources: [service.status()] } }
     } catch (err) {
       // Reads degrade gracefully: the calendar view still renders tasks.
@@ -181,15 +198,41 @@ export function registerCalendarRoutes(
     }
   })
 
+  // Before `PATCH /events/:id`: plugin routes mount with `router.use`, a prefix match.
+  walnut.http.route('patch', `/events/:id${VISIBILITY_SUFFIX}`, async (request) => {
+    const body = await readBody(request)
+    if (!body) return { status: 400, json: { error: 'body must be JSON' } }
+    const { hidden } = body as { hidden?: unknown }
+    if (typeof hidden !== 'boolean') {
+      return { status: 400, json: { error: 'hidden must be true or false', code: 'usage' } }
+    }
+    const id = eventIdFrom(request, VISIBILITY_SUFFIX)
+    if (!id.trim()) return { status: 400, json: { error: 'event id is required', code: 'usage' } }
+    let service: CalendarService
+    try {
+      service = resolve()
+    } catch (err) {
+      return errorReply(walnut, err)
+    }
+    try {
+      const result = await service.setEventHidden(id, hidden, (patch) => walnut.config.patch(patch))
+      return { json: { ...result, sources: [service.status()] } }
+    } catch (err) {
+      return errorReply(walnut, err)
+    }
+  })
+
   walnut.http.route('patch', '/events/:id', async (request) => {
     const body = await readBody(request)
     if (!body) return { status: 400, json: { error: 'body must be JSON' } }
-    const { start, end, title } = body as { start?: string; end?: string; title?: string }
+    const { start, end, title, human_confirm } = body as { start?: string; end?: string; title?: string; human_confirm?: boolean }
+    if (human_confirm !== undefined && typeof human_confirm !== 'boolean') return { status: 400, json: { error: 'human_confirm must be a boolean' } }
+    if (human_confirm && (request.headers['x-walnut-caller-sid'] || (request.headers[ORIGIN_HEADER] && request.headers[ORIGIN_HEADER] !== LOCAL_ORIGIN))) return { status: 403, json: { error: 'Protected calendar writes must be confirmed in Walnut on the Mac. Use Hide event instead.', code: 'human-approval-required' } }
     if (!start || !end || !LOCAL_ISO_RE.test(start) || !LOCAL_ISO_RE.test(end)) {
       return { status: 400, json: { error: 'start and end are required, tz-less local ISO' } }
     }
     try {
-      const event = await resolve().updateEvent(eventIdFrom(request), { start, end, title })
+      const event = await resolve().updateEvent(eventIdFrom(request), { start, end, title }, human_confirm ? { humanConfirm: true } : undefined)
       return { json: { event } }
     } catch (err) {
       return errorReply(walnut, err)
@@ -218,8 +261,11 @@ export function registerCalendarRoutes(
   })
 
   walnut.http.route('delete', '/events/:id', async (request) => {
+    const confirmation = firstQuery(request.query.human_confirm)
+    if (confirmation !== undefined && confirmation !== '1') return { status: 400, json: { error: 'human_confirm must be 1' } }
+    if (confirmation && (request.headers['x-walnut-caller-sid'] || (request.headers[ORIGIN_HEADER] && request.headers[ORIGIN_HEADER] !== LOCAL_ORIGIN))) return { status: 403, json: { error: 'Protected calendar writes must be confirmed in Walnut on the Mac. Use Hide event instead.', code: 'human-approval-required' } }
     try {
-      await resolve().deleteEvent(eventIdFrom(request))
+      await resolve().deleteEvent(eventIdFrom(request), confirmation ? { humanConfirm: true } : undefined)
       return { json: { ok: true } }
     } catch (err) {
       return errorReply(walnut, err)

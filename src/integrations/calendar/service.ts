@@ -32,7 +32,9 @@ import { log } from '../../logging/index.js';
 // `instanceof` does not cross that seam.
 import { CalendarHelperError } from '../../core/calendar/helper-error.js';
 import { calendarErrorCode } from './api.js';
+import { calendarEventNeedsApproval } from './types.js';
 import type {
+  CalendarWriteOptions,
   CalendarEvent,
   CalendarEventCreate,
   CalendarEventPatch,
@@ -68,13 +70,47 @@ export interface CalendarPluginConfig {
    * one would come back on the next read. See {@link mergeCalendarConfig}.
    */
   visible_calendar_ids?: string[] | null;
+  /** Single events hidden in Walnut by exact id (an occurrence id hides one occurrence). Plugin-only. */
+  hidden_event_ids?: string[];
   refresh_minutes?: number;
   read_ttl_seconds?: number;
 }
 
 /** The legacy top-level `config.calendar`, read for one release. */
-interface LegacyCalendarConfig extends Omit<CalendarPluginConfig, 'source_enabled'> {
+interface LegacyCalendarConfig extends Omit<CalendarPluginConfig, 'source_enabled' | 'hidden_event_ids'> {
   enabled?: boolean;
+}
+
+/** The HOST's `walnut.config.patch`: this bundle's own config-manager copy would hold a second write lock. */
+export type CalendarConfigPatcher = (patch: Record<string, unknown>) => Promise<void>;
+
+export interface CalendarEventVisibility {
+  id: string;
+  hidden: boolean;
+  changed: boolean;
+}
+
+function idList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+const MAX_EVENT_ID_LENGTH = 1024;
+
+function assertEventId(id: unknown): string {
+  if (typeof id !== 'string' || id.trim() === '') throw new CalendarHelperError('event id is required', 'usage');
+  if (id.length > MAX_EVENT_ID_LENGTH) throw new CalendarHelperError('event id is too long', 'usage');
+  return id;
+}
+
+/** Local start day of an occurrence id "<ekid>#<epochSeconds>" (walnut-calendar.swift `eventJson`); null for one-off ids. */
+function occurrenceDay(id: string): string | null {
+  const match = /^.+#(\d{1,10})$/.exec(id);
+  if (!match) return null;
+  const date = new Date(Number(match[1]) * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 /**
@@ -104,6 +140,7 @@ export function mergeCalendarConfig(
     hidden_calendar_ids: plugin.hidden_calendar_ids ?? old.hidden_calendar_ids,
     visible_calendar_ids:
       plugin.visible_calendar_ids !== undefined ? plugin.visible_calendar_ids : old.visible_calendar_ids,
+    hidden_event_ids: idList(plugin.hidden_event_ids),
     refresh_minutes: plugin.refresh_minutes ?? old.refresh_minutes,
     read_ttl_seconds: plugin.read_ttl_seconds ?? old.read_ttl_seconds,
   };
@@ -162,7 +199,9 @@ function eventsHash(events: CalendarEvent[]): string {
   // changes nothing else, and leaving them out meant open views never heard.
   for (const e of events)
     h.update(
-      `${e.id}|${e.title}|${e.start}|${e.end}|${e.calendarId}|${e.status ?? ''}|${e.selfStatus ?? ''};`
+      JSON.stringify([e.id, e.title, e.start, e.end, e.calendarId, e.status, e.selfStatus,
+        e.readonly, e.walnutCreated, e.hasAttendees, e.organizerIsCurrentUser, e.organizerName,
+        e.recurring, e.writeSafetyVersion])
     );
   return h.digest('hex');
 }
@@ -187,6 +226,9 @@ export class CalendarService {
   private hiddenIds = new Set<string>();
   /** When non-null, ONLY these ids are visible (allowlist); hiddenIds still applies on top. */
   private visibleIds: Set<string> | null = null;
+  private hiddenEventIds = new Set<string>();
+  /** Serializes hide/show read-patch-reload so two writers never drop each other's id; never rejects. */
+  private visibilityTail: Promise<void> = Promise.resolve();
   private enabled = true;
   private refreshMinutes = DEFAULT_REFRESH_MINUTES;
   private readTtlMs = DEFAULT_READ_TTL_SECONDS * 1000;
@@ -238,9 +280,11 @@ export class CalendarService {
     const prevEnabled = this.enabled;
     const prevHidden = this.hiddenIds;
     const prevVisible = this.visibleIds;
+    const prevHiddenEvents = this.hiddenEventIds;
     this.enabled = cal.source_enabled !== false;
     this.hiddenIds = new Set(cal.hidden_calendar_ids ?? []);
     this.visibleIds = cal.visible_calendar_ids ? new Set(cal.visible_calendar_ids) : null;
+    this.hiddenEventIds = new Set(cal.hidden_event_ids ?? []);
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
     // 0 is legal and means "never serve from cache" (every read re-fetches).
     this.readTtlMs = Math.max(0, cal.read_ttl_seconds ?? DEFAULT_READ_TTL_SECONDS) * 1000;
@@ -249,7 +293,12 @@ export class CalendarService {
     // only notice on its next unrelated refetch.
     const setChanged = (a: Set<string> | null, b: Set<string> | null) =>
       (a === null) !== (b === null) || (a && b && (a.size !== b.size || [...b].some((id) => !a.has(id))));
-    if (prevEnabled !== this.enabled || setChanged(prevHidden, this.hiddenIds) || setChanged(prevVisible, this.visibleIds))
+    if (
+      prevEnabled !== this.enabled ||
+      setChanged(prevHidden, this.hiddenIds) ||
+      setChanged(prevVisible, this.visibleIds) ||
+      setChanged(prevHiddenEvents, this.hiddenEventIds)
+    )
       this.emitUpdated();
   }
 
@@ -300,16 +349,60 @@ export class CalendarService {
    *  that would rather wait ~0.25s than report a cancelled meeting as live.
    *  Hidden-calendar filtering happens HERE, not in the source: the cache
    *  keeps everything, so toggling visibility applies on the next read with
-   *  no refetch. */
-  async getEvents(from: string, to: string, opts?: { force?: boolean }): Promise<CalendarEvent[]> {
+   *  no refetch. `includeHidden` marks single hidden events instead of dropping them. */
+  async getEvents(from: string, to: string, opts?: { force?: boolean; includeHidden?: boolean }): Promise<CalendarEvent[]> {
     if (!this.enabled || !this.source.available().ok) return [];
+    const includeHidden = opts?.includeHidden === true;
     const key = windowKey(from, to);
     const cached = this.cache.get(key);
     if (!opts?.force && cached && Date.now() - cached.fetchedAt < this.readTtlMs) {
-      return this.visible(filterRange(cached.events, from, to));
+      return this.visible(filterRange(cached.events, from, to), includeHidden);
     }
     const events = await this.fetchWindow(key, from, to);
-    return this.visible(filterRange(events, from, to));
+    return this.visible(filterRange(events, from, to), includeHidden);
+  }
+
+  /** Hide/show one event in Walnut only (config, never the source). Idempotent; showing accepts any id. */
+  async setEventHidden(id: string, hidden: boolean, patchConfig: CalendarConfigPatcher): Promise<CalendarEventVisibility> {
+    const eventId = assertEventId(id);
+    if (typeof hidden !== 'boolean') throw new CalendarHelperError('hidden must be true or false', 'usage');
+    const run = this.visibilityTail.then(() => this.applyEventHidden(eventId, hidden, patchConfig));
+    this.visibilityTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async applyEventHidden(id: string, hidden: boolean, patchConfig: CalendarConfigPatcher): Promise<CalendarEventVisibility> {
+    const current = (await readCalendarConfig()).hidden_event_ids ?? [];
+    if (current.includes(id) === hidden) {
+      await this.reloadConfig(); // the file is the truth even when nothing is written
+      return { id, hidden, changed: false };
+    }
+    if (hidden) await this.assertEventExists(id);
+    const next = hidden ? [...current, id] : current.filter((existing) => existing !== id);
+    await patchConfig({ hidden_event_ids: next });
+    await this.reloadConfig();
+    return { id, hidden, changed: true };
+  }
+
+  /** Bounded: any cached window, else the one month an occurrence id names; an uncached one-off id is a usage error (no read-by-id, never scan). */
+  private async assertEventExists(id: string): Promise<void> {
+    for (const entry of this.cache.values()) {
+      if (entry.events.some((e) => e.id === id)) return;
+    }
+    if (this.source.getEvent) {
+      await this.source.getEvent(id);
+      return;
+    }
+    const day = occurrenceDay(id);
+    if (!day) {
+      throw new CalendarHelperError(
+        `event ${id} is not in any date range Walnut has loaded; query the range that holds it first (calendar_query or GET /events), then hide it`,
+        'usage',
+      );
+    }
+    this.assertUsable();
+    const events = await this.fetchWindow(windowKey(day, day), day, day);
+    if (!events.some((e) => e.id === id)) throw new CalendarHelperError(`event not found: ${id}`, 'not-found');
   }
 
   /** Fetch + cache one month window, collapsing concurrent callers onto a single
@@ -342,9 +435,13 @@ export class CalendarService {
     return this.hiddenIds.has(calendarId);
   }
 
-  private visible(events: CalendarEvent[]): CalendarEvent[] {
-    if (this.hiddenIds.size === 0 && !this.visibleIds) return events;
-    return events.filter((e) => !this.isHidden(e.calendarId));
+  /** Hidden calendars always filter; hidden events are dropped, or marked on a copy when `includeHidden`. */
+  private visible(events: CalendarEvent[], includeHidden = false): CalendarEvent[] {
+    const shown =
+      this.hiddenIds.size === 0 && !this.visibleIds ? events : events.filter((e) => !this.isHidden(e.calendarId));
+    if (this.hiddenEventIds.size === 0) return shown;
+    if (!includeHidden) return shown.filter((e) => !this.hiddenEventIds.has(e.id));
+    return shown.map((e) => (this.hiddenEventIds.has(e.id) ? { ...e, hidden: true } : e));
   }
 
   /** Re-fetch every cached window (periodic refresh / manual refresh). Asks the
@@ -371,9 +468,19 @@ export class CalendarService {
     if (anyChanged) this.emitUpdated();
   }
 
-  async updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent> {
+  private async guardWrite(id: string, opts?: CalendarWriteOptions): Promise<void> {
+    if (!this.source.getEvent) throw new CalendarHelperError('Calendar write safety is unavailable. Use Hide event instead.', 'human-approval-required');
+    const event = await this.source.getEvent(assertEventId(id));
+    if (event.readonly) throw new CalendarHelperError('calendar is read-only', 'readonly');
+    if (calendarEventNeedsApproval(event) && opts?.humanConfirm !== true) {
+      throw new CalendarHelperError(`\"${event.title}\"${event.recurring ? ' belongs to a recurring series' : ' is not a private Walnut-created block'}. This change may affect the whole series and notify the organizer. Use Hide event instead, or ask the user to confirm in Calendar.`, 'human-approval-required');
+    }
+  }
+
+  async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
     this.assertUsable();
-    const event = await this.trackErrors(() => this.source.updateEvent(id, patch));
+    await this.guardWrite(id, opts);
+    const event = await this.trackErrors(() => this.source.updateEvent(id, patch, opts));
     await this.writeThrough();
     return event;
   }
@@ -385,9 +492,10 @@ export class CalendarService {
     return event;
   }
 
-  async deleteEvent(id: string): Promise<void> {
+  async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
     this.assertUsable();
-    await this.trackErrors(() => this.source.deleteEvent(id));
+    await this.guardWrite(id, opts);
+    await this.trackErrors(() => this.source.deleteEvent(id, opts));
     await this.writeThrough();
   }
 
@@ -429,7 +537,7 @@ export class CalendarService {
         // readonly one) say nothing about the SOURCE's health — latching them
         // into lastError flipped available:false and silently removed the
         // Event tab + "New event…" everywhere until a manual refresh.
-        if (code === 'not-found' || code === 'readonly') throw err;
+        if (code === 'not-found' || code === 'readonly' || code === 'human-approval-required' || code === 'approval-canceled') throw err;
         this.lastError = {
           reason: code === 'permission-denied' ? 'permission-denied' : code === 'not-configured' ? 'not-configured' : 'fetch-error',
           message: err instanceof Error ? err.message : String(err),

@@ -117,7 +117,7 @@ describe('calendar plugin lifecycle over a real server', () => {
     await fsp.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('registers the four calendar tools under their unchanged names', () => {
+  it('registers the calendar tools under their unchanged names', () => {
     const names = getPluginToolSpecs(registry)
       .map((tool) => tool.name)
       .filter((name) => name.startsWith('calendar'))
@@ -126,8 +126,78 @@ describe('calendar plugin lifecycle over a real server', () => {
     // plugin called `calendar` keeps the names the Personal AI already knows. A rename
     // here would invalidate every cached prompt prefix.
     expect(names).toEqual([
-      'calendar_event_create', 'calendar_event_delete', 'calendar_event_update', 'calendar_query',
+      'calendar_event_create', 'calendar_event_delete', 'calendar_event_update', 'calendar_event_visibility',
+      'calendar_query',
     ]);
+  });
+
+  it('the registered visibility tool writes plugins.calendar through the host config writer', async () => {
+    const visibility = getPluginToolSpecs(registry).find((tool) => tool.name === 'calendar_event_visibility')!;
+    const read = async (query = ''): Promise<{ id: string; hidden?: boolean }[]> => {
+      const res = await fetch(apiUrl(`/api/calendar/events?from=2026-08-03&to=2026-08-09${query}`));
+      return ((await res.json()) as { events: { id: string; hidden?: boolean }[] }).events;
+    };
+    await read();
+    const before = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as {
+      plugins?: Record<string, Record<string, unknown>>;
+    };
+    expect(await visibility.execute({ id: 'ev-holiday', hidden: true })).toContain('hidden in Walnut');
+    const raw = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as {
+      plugins?: Record<string, Record<string, unknown>>;
+    };
+    expect(raw.plugins?.calendar?.hidden_event_ids).toEqual(['ev-holiday']);
+    expect(raw.plugins?.calendar?.enabled).toBe(before.plugins?.calendar?.enabled);
+    expect((await read()).some((e) => e.id === 'ev-holiday')).toBe(false);
+    expect((await read('&include_hidden=1')).find((e) => e.id === 'ev-holiday')?.hidden).toBe(true);
+
+    expect(await visibility.execute({ id: 'ev-holiday', hidden: false })).toContain('shown in Walnut again');
+    expect((await read()).some((e) => e.id === 'ev-holiday')).toBe(true);
+  });
+
+  it('publishes the same five definitions as ops, and an op write updates open views live', async () => {
+    const listed = await fetch(apiUrl('/api/plugin-runtime/calendar/ops')).then((r) => r.json()) as {
+      ops: { name: string; readonly: boolean; owner: string }[];
+    };
+    const mine = listed.ops.filter((op) => op.owner === 'calendar');
+    expect(mine.map((op) => [op.name, op.readonly]).sort()).toEqual([
+      ['calendar_event_create', false],
+      ['calendar_event_delete', false],
+      ['calendar_event_update', false],
+      ['calendar_event_visibility', false],
+      ['calendar_query', true],
+    ]);
+
+    const callOp = async (name: string, args: Record<string, unknown>) =>
+      fetch(apiUrl(`/api/plugin-runtime/calendar/ops/${name}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+      }).then((r) => r.json()) as Promise<{ ok: boolean; result?: string; message?: string }>;
+    const today = '2026-08-06';
+    const readDay = async (): Promise<{ id: string; title: string }[]> => {
+      const res = await fetch(apiUrl(`/api/calendar/events?from=${today}&to=${today}`));
+      return ((await res.json()) as { events: { id: string; title: string }[] }).events;
+    };
+    await readDay(); // an open day view has this window cached
+
+    const seen: string[] = [];
+    bus.subscribe('calendar-plugin-op-test', (e) => { seen.push(e.name); }, { global: true, interest: ['calendar:'] });
+    try {
+      const created = await callOp('calendar_event_create', {
+        calendar_id: 'cal-work', title: 'Op-created review', start: `${today}T11:00:00`,
+      });
+      expect(created.ok).toBe(true);
+      expect(created.result).toContain('Event created');
+      await vi.waitFor(() => expect(seen).toContain('calendar:updated'));
+      expect((await readDay()).some((e) => e.title === 'Op-created review')).toBe(true);
+    } finally {
+      bus.unsubscribe('calendar-plugin-op-test');
+    }
+
+    // A refused call is a failed op, not a successful one carrying error text.
+    const refused = await callOp('calendar_event_visibility', { id: 'ev-nope#1770000000', hidden: true });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/not-found/);
   });
 
   it('arms the background refresh loop during activate', () => {

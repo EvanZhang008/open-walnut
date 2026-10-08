@@ -10,7 +10,7 @@
  * means this source reports not-configured with an actionable message instead of
  * crashing.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
@@ -19,6 +19,7 @@ import {
   type HelperSpec,
 } from '../../helper-build.js';
 import { findDesktopAppWith } from '../../../providers/desktop-app.js';
+import { safeKillProcessGroup } from '../../process-group-kill.js';
 import { CalendarHelperError } from '../helper-error.js';
 import type {
   CalendarEvent,
@@ -29,6 +30,7 @@ import type {
   CalendarSelfStatus,
   CalendarSource,
   CalendarSourceReason,
+  CalendarWriteOptions,
   // Type-only, and pointed at the plugin on purpose: the event shape is the calendar
   // plugin's contract now, and this file is one implementation of its `CalendarSource`.
   // Erased at build time, so core keeps no runtime dependency on a plugin.
@@ -66,7 +68,13 @@ const execFileAsync = promisify(execFile);
 // HELPER_SPEC below), and it needs a NEW file name rather than a re-sign of v5
 // because tccd had already recorded an entry for v5's path whose code
 // requirement no longer matches, and it will not re-prompt for that path.
-const HELPER_VERSION = 'v6';
+// v7: the write-safety protocol (`capabilities`, `get`, ownership fields, guarded update/delete).
+const HELPER_VERSION = 'v7';
+/** The `writeSafetyVersion` a binary must report before any write or pre-write `get` goes to it. */
+const WRITE_SAFETY_VERSION = 1;
+/** Last argument of update/delete: the helper asks the user in a native dialog before a protected write. */
+const HUMAN_CONFIRM_FLAG = '--human-confirm';
+const HUMAN_CONFIRM_TIMEOUT_MS = 90_000;
 
 /**
  * Walnut.app answers calendar requests itself: `Walnut --calendar-bridge <sub> …`
@@ -156,18 +164,60 @@ export function resetCalendarHelperFallback(): void {
   fallbackBin = null;
   lastFallbackProbe = 0;
   lastStandInProbe = 0;
-  appAnswered = false;
+  currentAnswered = false;
 }
 
 /** `[program, ...leading args]`: `[helper]` or `[Walnut, '--calendar-bridge']`. */
 type CalendarCommand = readonly string[];
 
-async function execHelper<T>(cmd: CalendarCommand, args: string[]): Promise<T> {
+async function execHelper<T>(cmd: CalendarCommand, args: string[], timeoutMs = HELPER_TIMEOUT_MS): Promise<T> {
   const { stdout } = await execFileAsync(cmd[0]!, [...cmd.slice(1), ...args], {
-    timeout: HELPER_TIMEOUT_MS,
+    timeout: timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
   });
   return JSON.parse(stdout) as T;
+}
+
+/** execHelper for writes, in its own process group: at the deadline the whole group gets SIGKILL and it rejects with `killed: true`. */
+function execHelperGroup<T>(cmd: CalendarCommand, args: string[], timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    // spawn, not execFile (which drops `detached`): the helper re-execs a disclaimed child that would outlive a parent-only kill.
+    const child = spawn(cmd[0]!, [...cmd.slice(1), ...args], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let timedOut = false;
+    let settled = false;
+    const killGroup = () => { safeKillProcessGroup(child.pid, 'SIGKILL'); };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
+      finish(new Error('Calendar helper timed out'));
+    }, timeoutMs);
+    const finish = (err: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!err) {
+        try {
+          resolve(JSON.parse(stdout) as T);
+        } catch (parseErr) {
+          reject(parseErr);
+        }
+        return;
+      }
+      reject(Object.assign(err, { stdout, killed: timedOut }));
+    };
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      if (stdout.length > 16 * 1024 * 1024) return;
+      stdout += chunk;
+      if (stdout.length > 16 * 1024 * 1024) killGroup();
+    });
+    child.stderr?.resume();
+    child.on('error', (err) => finish(err));
+    child.on('close', (code, signal) => {
+      finish(code === 0 && !timedOut ? null : new Error(`calendar helper exited with ${signal ?? `code ${code}`}`));
+    });
+  });
 }
 
 /**
@@ -209,9 +259,9 @@ async function findGrantedOlderHelper(currentIsApp: boolean): Promise<string | n
 /** Which identity the CURRENT route asks as, for the Permission Doctor and the
  *  degraded message. Null until the first request resolves it. */
 let currentRoute: { kind: 'app'; app: string } | { kind: 'helper' } | null = null;
-/** Set once Walnut.app has answered a real request, which ends the migration
- *  check below for the life of the process. */
-let appAnswered = false;
+/** Set once the current route has answered a real request, which ends the
+ *  migration check below for the life of the process. */
+let currentAnswered = false;
 /** Its own clock, not lastFallbackProbe: sharing one would let this check use up
  *  the cooldown and stop a DENIED Walnut from falling back right after it. */
 let lastStandInProbe = 0;
@@ -227,17 +277,18 @@ let lastStandInProbe = 0;
  * grant keeps the calendar full and the ONE ask for Walnut waits for the user to
  * press Request access in Settings → macOS Access (requestCalendarAccess).
  * With no granted helper there is nothing to stand in, and Walnut asks as before.
+ * A new helper generation (v6 → v7) on the helper route is the same moment.
  */
-async function standInWhileWalnutUnasked(app: CalendarCommand): Promise<string | null> {
+async function standInWhileCurrentUnasked(current: CalendarCommand, currentIsApp: boolean): Promise<string | null> {
   if (Date.now() - lastStandInProbe <= FALLBACK_PROBE_COOLDOWN_MS) return null;
   lastStandInProbe = Date.now();
   try {
-    const { state } = await execHelper<{ state?: string }>(app, ['status']);
+    const { state } = await execHelper<{ state?: string }>(current, ['status']);
     if (state !== 'not-determined') return null;
   } catch {
     return null;
   }
-  return findGrantedOlderHelper(true);
+  return findGrantedOlderHelper(currentIsApp);
 }
 
 /**
@@ -265,10 +316,19 @@ export async function calendarGrantApp(): Promise<string | null> {
   return currentRoute?.kind === 'app' ? currentRoute.app : null;
 }
 
-async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): Promise<T> {
+interface RunOptions {
+  /** Pin to the current route (the Permission Doctor). */
+  currentOnly?: boolean;
+  /** A write, or the `get` a write is checked against: see runSafeWrite. */
+  safeWrite?: boolean;
+  /** The args end with HUMAN_CONFIRM_FLAG, so the helper may wait on a native dialog. */
+  humanConfirm?: boolean;
+}
+
+async function runHelper<T>(args: string[], opts?: RunOptions): Promise<T> {
   const current = await currentCommand();
-  const cmd = opts?.currentOnly ? current : (fallbackBin ? [fallbackBin] : current);
-  if (!cmd) {
+  const cmd = opts?.currentOnly || opts?.safeWrite ? current : (fallbackBin ? [fallbackBin] : current);
+  if (!cmd || !current) {
     // The compile message would send a fixture author to install Xcode for a helper
     // that was refused on purpose.
     const message = !nativeHelpersAllowed() || helperFailure(HELPER_SPEC.name) === 'ephemeral'
@@ -276,20 +336,23 @@ async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): P
       : 'Calendar helper unavailable (needs macOS + Xcode Command Line Tools for one-time compile).';
     throw new CalendarHelperError(message, 'not-configured');
   }
-  if (!opts?.currentOnly && !fallbackBin && currentRoute?.kind === 'app' && !appAnswered && current) {
-    const standIn = await standInWhileWalnutUnasked(current);
+  if (opts?.safeWrite) return runSafeWrite<T>(current, args, opts.humanConfirm === true);
+  if (!opts?.currentOnly && !fallbackBin && currentRoute && !currentAnswered) {
+    const standIn = await standInWhileCurrentUnasked(current, currentRoute.kind === 'app');
     if (standIn) {
       fallbackBin = standIn;
-      log.calendar.info('Walnut has not been asked for Calendars yet, reading through the granted helper', {
+      log.calendar.info('the current calendar route has not been asked for Calendars yet, reading through a granted helper', {
+        route: currentRoute.kind,
         fallback: standIn,
-        note: 'Settings → macOS Access → Calendar → Request access moves the grant to Walnut',
+        note: 'Settings → macOS Access → Calendar → Request access moves the grant to the current route',
       });
       return await execHelper<T>([standIn], args);
     }
   }
   try {
     const result = await execHelper<T>(cmd, args);
-    if (cmd === current && currentRoute?.kind === 'app') appAnswered = true;
+    // Only a read that needs the grant proves it; `status` answers without one.
+    if (cmd === current && (args[0] === 'calendars' || args[0] === 'list')) currentAnswered = true;
     return result;
   } catch (err) {
     const mapped = toHelperError(err);
@@ -315,6 +378,52 @@ async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): P
     }
     throw mapped;
   }
+}
+
+/** True only when `cmd` answers `capabilities` with this build's write-safety version. */
+async function speaksWriteSafety(cmd: CalendarCommand): Promise<boolean> {
+  try {
+    // Answered before requestAccess on every bridge-capable binary, so the probe never prompts.
+    const caps = await execHelper<{ writeSafetyVersion?: unknown }>(cmd, ['capabilities']);
+    return caps?.writeSafetyVersion === WRITE_SAFETY_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+/** Writes and their pre-write `get` go only to Walnut.app or the current helper once it proves the protocol, never to a stand-in or older generation. */
+async function runSafeWrite<T>(current: CalendarCommand, args: string[], humanConfirm: boolean): Promise<T> {
+  const picks = currentRoute?.kind === 'app' ? ['current', 'helper'] as const : ['current'] as const;
+  let denied: CalendarHelperError | null = null;
+  for (const pick of picks) {
+    let cmd: CalendarCommand | null = current;
+    if (pick === 'helper') {
+      const bin = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
+      cmd = bin ? [bin] : null;
+    }
+    // Probed per call, never cached: a stale yes would send a guarded write to a binary that ignores the guard.
+    if (!cmd || !(await speaksWriteSafety(cmd))) continue;
+    if (pick === 'helper' && !denied) {
+      log.calendar.info('Walnut.app predates the calendar write-safety check, writing through the helper', {
+        helper: cmd[0], subcommand: args[0],
+      });
+    }
+    try {
+      return await execHelperGroup<T>(cmd, args, humanConfirm ? HUMAN_CONFIRM_TIMEOUT_MS : HELPER_TIMEOUT_MS);
+    } catch (err) {
+      if (humanConfirm && (err as { killed?: boolean }).killed) {
+        throw new CalendarHelperError('Timed out waiting for the macOS confirmation dialog.', 'human-approval-required');
+      }
+      const mapped = toHelperError(err);
+      // A denied identity changed nothing, so the other safe route may still answer.
+      if (mapped.code !== 'permission-denied') throw mapped;
+      denied = mapped;
+    }
+  }
+  throw denied ?? new CalendarHelperError(
+    'Walnut cannot check whose calendar event this is (the calendar bridge predates the write-safety check), so nothing was changed.',
+    'human-approval-required',
+  );
 }
 
 /** Map an execFile rejection onto our error shape. Non-zero exit still prints a
@@ -392,6 +501,13 @@ interface RawEvent {
    *  nothing about — treat "missing" as "unknown", never as "confirmed". */
   status?: string;
   selfStatus?: string;
+  /** Write-safety protocol fields; `unknown` because only the exact JSON type counts (absent = unknown). */
+  writeSafetyVersion?: unknown;
+  walnutCreated?: unknown;
+  hasAttendees?: unknown;
+  organizerIsCurrentUser?: unknown;
+  organizerName?: unknown;
+  recurring?: unknown;
 }
 
 const EVENT_STATUSES: readonly string[] = ['confirmed', 'tentative', 'canceled'];
@@ -425,6 +541,12 @@ function toEvent(raw: RawEvent, colorByCalendar: Map<string, string>): CalendarE
     ...(raw.readonly ? { readonly: true } : {}),
     ...(status ? { status } : {}),
     ...(selfStatus ? { selfStatus } : {}),
+    ...(raw.writeSafetyVersion === WRITE_SAFETY_VERSION ? { writeSafetyVersion: WRITE_SAFETY_VERSION } : {}),
+    ...(typeof raw.walnutCreated === 'boolean' ? { walnutCreated: raw.walnutCreated } : {}),
+    ...(typeof raw.hasAttendees === 'boolean' ? { hasAttendees: raw.hasAttendees } : {}),
+    ...(typeof raw.organizerIsCurrentUser === 'boolean' ? { organizerIsCurrentUser: raw.organizerIsCurrentUser } : {}),
+    ...(typeof raw.organizerName === 'string' && raw.organizerName ? { organizerName: raw.organizerName } : {}),
+    ...(typeof raw.recurring === 'boolean' ? { recurring: raw.recurring } : {}),
   };
 }
 
@@ -486,13 +608,21 @@ export function createEventKitSource(): CalendarSource {
       return raw.map((e) => toEvent(e, colors));
     },
 
-    async updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent> {
+    async getEvent(id: string): Promise<CalendarEvent> {
+      const raw = await runHelper<RawEvent>(['get', id], { safeWrite: true });
+      return toEvent(raw, await colorMap());
+    },
+
+    async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
       if (!patch.start || !patch.end) {
         throw new CalendarHelperError('update requires start and end', 'usage');
       }
+      const humanConfirm = opts?.humanConfirm === true;
       const args = ['update', id, patch.start, patch.end];
-      if (patch.title !== undefined) args.push(patch.title);
-      const raw = await runHelper<RawEvent>(args);
+      // The title slot is always filled before the flag, so the flag can never be read as a title.
+      if (patch.title !== undefined || humanConfirm) args.push(patch.title ?? '');
+      if (humanConfirm) args.push(HUMAN_CONFIRM_FLAG);
+      const raw = await runHelper<RawEvent>(args, { safeWrite: true, humanConfirm });
       return toEvent(raw, await colorMap());
     },
 
@@ -504,12 +634,16 @@ export function createEventKitSource(): CalendarSource {
         input.start,
         input.end,
         String(!!input.allDay),
-      ]);
+      ], { safeWrite: true });
       return toEvent(raw, await colorMap());
     },
 
-    async deleteEvent(id: string): Promise<void> {
-      await runHelper<{ ok: boolean }>(['delete', id]);
+    async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
+      const humanConfirm = opts?.humanConfirm === true;
+      await runHelper<{ ok: boolean }>(
+        humanConfirm ? ['delete', id, HUMAN_CONFIRM_FLAG] : ['delete', id],
+        { safeWrite: true, humanConfirm },
+      );
     },
   };
 }

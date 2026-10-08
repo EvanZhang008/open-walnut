@@ -20,6 +20,7 @@ import {
   deleteCalendarEvent,
   listCalendarEvents,
   listCalendarSources,
+  setCalendarEventVisibility,
   updateCalendarEvent,
   updateCalendarSource,
   type CalendarEvent,
@@ -27,6 +28,7 @@ import {
   type CalendarSourceStatus,
 } from '@/api/calendar';
 import { log } from '@/utils/log';
+import { createEventVisibility } from './calendar-event-visibility';
 
 /** A newly mounted surface reuses a range list this fresh instead of re-fetching. */
 const STALE_MS = 15_000;
@@ -159,10 +161,15 @@ export function loadCalendarRange(key: string, force = false): Promise<void> {
     try {
       do {
         wantsRefetch.delete(key);
-        const res = await listCalendarEvents(from, to);
-        loadedAt.set(key, Date.now());
-        setEntry(key, { events: res.events, loading: false });
-        setSources(res.sources);
+        const t = visibility.fetchStarted();
+        try {
+          const res = await listCalendarEvents(from, to, { includeHidden: true });
+          loadedAt.set(key, Date.now());
+          setEntry(key, { events: visibility.overlay(res.events, t), loading: false });
+          setSources(res.sources);
+        } finally {
+          visibility.fetchEnded(t);
+        }
       } while (wantsRefetch.has(key));
     } catch (err) {
       wantsRefetch.delete(key);
@@ -229,7 +236,21 @@ function patchEvent(id: string, patch: Partial<CalendarEvent>): void {
 
 /** Swap in the server's canonical record (a recurring edit can change the id). */
 function replaceEvent(id: string, next: CalendarEvent): void {
-  mapEntries((events) => (events.some((e) => e.id === id) ? events.map((e) => (e.id === id ? next : e)) : events));
+  mapEntries((events) => (events.some((e) => e.id === id) ? events.map((e) => (e.id === id ? keepHidden(next, e) : e)) : events));
+}
+
+/** A write's record never takes back a pending hide/show, and an absent flag keeps the local one. */
+function keepHidden(next: CalendarEvent, prev: CalendarEvent): CalendarEvent {
+  const hidden = visibility.pending(next.id) ?? visibility.pending(prev.id) ?? next.hidden ?? prev.hidden;
+  return !!hidden === !!next.hidden ? next : { ...next, hidden: !!hidden };
+}
+
+function findEvent(id: string): CalendarEvent | undefined {
+  for (const entry of entries.values()) {
+    const found = entry.events.find((e) => e.id === id);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function dropEvent(id: string): void {
@@ -250,9 +271,9 @@ function restoreEvent(before: Map<string, CalendarEvent>): void {
   for (const [key, event] of before) {
     const entry = entries.get(key);
     if (!entry) continue;
-    const events = entry.events.some((e) => e.id === event.id)
-      ? entry.events.map((e) => (e.id === event.id ? event : e))
-      : [...entry.events, event];
+    const cur = entry.events.find((e) => e.id === event.id);
+    const back = { ...event, hidden: visibility.pending(event.id) ?? cur?.hidden ?? event.hidden };
+    const events = cur ? entry.events.map((e) => (e === cur ? back : e)) : [...entry.events, back];
     setEntry(key, { ...entry, events });
   }
 }
@@ -273,15 +294,16 @@ function insertEvent(event: CalendarEvent): void {
 // ── write API (same call signatures the hook has always exposed) ──
 
 /** Optimistic move/resize/retitle; rolls back to the exact previous record on failure. */
-export function moveCalendarEvent(id: string, patch: { start: string; end: string; title?: string }): void {
+export function moveCalendarEvent(id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }): void {
   const before = captureEvent(id);
-  patchEvent(id, { start: patch.start, end: patch.end, ...(patch.title ? { title: patch.title } : {}) });
+  if (!patch.human_confirm) patchEvent(id, { start: patch.start, end: patch.end, ...(patch.title ? { title: patch.title } : {}) });
   writesInFlight += 1;
   updateCalendarEvent(id, patch)
     .then((res) => { replaceEvent(id, res.event); })
     .catch((err) => {
       log.warn('calendar', 'event move failed, rolling back', { id, error: String(err).slice(0, 200) });
-      restoreEvent(before);
+      if (!patch.human_confirm) restoreEvent(before);
+      reportWriteFailure(id, 'update', err);
     })
     .finally(settleWrite);
 }
@@ -325,16 +347,66 @@ export async function createCalendarEventOptimistic(
   }
 }
 
-export function removeCalendarEvent(id: string): void {
+export function removeCalendarEvent(id: string, humanConfirm = false): void {
   const before = captureEvent(id);
-  dropEvent(id);
+  if (!humanConfirm) dropEvent(id);
   writesInFlight += 1;
-  deleteCalendarEvent(id)
+  deleteCalendarEvent(id, humanConfirm)
+    .then(() => { if (humanConfirm) dropEvent(id); })
     .catch((err) => {
       log.warn('calendar', 'event delete failed, rolling back', { id, error: String(err).slice(0, 200) });
-      restoreEvent(before);
+      if (!humanConfirm) restoreEvent(before);
+      reportWriteFailure(id, 'delete', err);
     })
     .finally(settleWrite);
+}
+
+export interface CalendarWriteFailure { id: string; action: 'update' | 'delete'; message: string }
+const writeFailureSubs = new Set<(failure: CalendarWriteFailure) => void>();
+export function subscribeCalendarWriteFailures(fn: (failure: CalendarWriteFailure) => void): () => void {
+  writeFailureSubs.add(fn);
+  return () => { writeFailureSubs.delete(fn); };
+}
+function reportWriteFailure(id: string, action: 'update' | 'delete', error: unknown): void {
+  for (const fn of writeFailureSubs) fn({ id, action, message: error instanceof Error ? error.message : String(error) });
+}
+
+// ── single-event visibility (Walnut-only mark, the source event is untouched) ──
+
+export interface CalendarVisibilityFailure {
+  id: string;
+  hidden: boolean;
+  title: string;
+  message: string;
+}
+
+const visibilityFailureSubs = new Set<(failure: CalendarVisibilityFailure) => void>();
+
+export function subscribeCalendarVisibilityFailures(fn: (failure: CalendarVisibilityFailure) => void): () => void {
+  visibilityFailureSubs.add(fn);
+  return () => { visibilityFailureSubs.delete(fn); };
+}
+
+const visibility = createEventVisibility({
+  send: setCalendarEventVisibility,
+  apply: (id, hidden) => patchEvent(id, { hidden }),
+  onFailure: ({ id, hidden, error }) => {
+    log.warn('calendar', 'event visibility write failed, rolled back', { id, hidden, error: String(error).slice(0, 200) });
+    const failure = {
+      id,
+      hidden,
+      title: findEvent(id)?.title ?? '',
+      message: error instanceof Error ? error.message : String(error),
+    };
+    for (const fn of [...visibilityFailureSubs]) fn(failure);
+  },
+  begin: () => { writesInFlight += 1; },
+  end: settleWrite,
+});
+
+/** Hide or show one event in every range at once; resolves when its writes settle. */
+export function setCalendarEventHidden(id: string, hidden: boolean): Promise<void> {
+  return visibility.set(id, hidden, !!findEvent(id)?.hidden);
 }
 
 // ── calendar visibility ──
@@ -427,10 +499,13 @@ export function __resetCalendarEventsStore(): void {
   wantsRefetch.clear();
   rangeSubs.clear();
   sourcesSubs.clear();
+  writeFailureSubs.clear();
   sourcesEntry = { sources: [], calendars: [], calendarsLoaded: false, unavailable: false };
   calendarsInflight = null;
   writesInFlight = 0;
   pendingRefetch = false;
   provisionalSeq = 0;
+  visibility.reset();
+  visibilityFailureSubs.clear();
   if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
 }

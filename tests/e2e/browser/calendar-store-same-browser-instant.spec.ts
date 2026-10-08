@@ -21,7 +21,7 @@ const HOLD_MS = 3000
 /** How long a same-frame update may take to reach the other surface. */
 const INSTANT_MS = 700
 /** TimeGrid geometry: SLOT_MINUTES=30 at SLOT_PX=24 → 48px per hour. */
-const topForHour = (hour: number) => `${((hour * 60) / 30) * 24}px`
+const topForHour = (hour: number) => `${((hour - 7) * 60 / 30) * 24}px`
 
 function localDay(offset = 0): string {
   const d = new Date()

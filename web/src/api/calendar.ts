@@ -29,6 +29,19 @@ export interface CalendarEvent {
   status?: 'confirmed' | 'tentative' | 'canceled';
   /** The user's own answer to the invite, when the source tracks it. */
   selfStatus?: 'pending' | 'accepted' | 'declined' | 'tentative' | 'delegated';
+  /** Hidden in Walnut only; the source event is untouched. Sent with `include_hidden=1`. */
+  hidden?: boolean;
+  walnutCreated?: boolean;
+  hasAttendees?: boolean;
+  organizerIsCurrentUser?: boolean;
+  organizerName?: string;
+  recurring?: boolean;
+  writeSafetyVersion?: number;
+}
+
+export function calendarEventNeedsApproval(event: CalendarEvent): boolean {
+  return event.writeSafetyVersion !== 1 || event.walnutCreated !== true || event.hasAttendees !== false ||
+    (event.organizerIsCurrentUser !== undefined && event.organizerIsCurrentUser !== true);
 }
 
 export interface CalendarSourceStatus {
@@ -52,8 +65,16 @@ export interface CalendarInfo {
   hidden: boolean;
 }
 
-export function listCalendarEvents(from: string, to: string) {
-  return apiGet<{ events: CalendarEvent[]; sources: CalendarSourceStatus[] }>('/api/calendar/events', { from, to });
+export function listCalendarEvents(from: string, to: string, opts: { includeHidden?: boolean } = {}) {
+  return apiGet<{ events: CalendarEvent[]; sources: CalendarSourceStatus[] }>('/api/calendar/events', {
+    from,
+    to,
+    ...(opts.includeHidden ? { include_hidden: '1' } : {}),
+  });
+}
+
+export function setCalendarEventVisibility(id: string, hidden: boolean) {
+  return apiPatch<{ id: string; hidden: boolean }>(`/api/calendar/events/${encodeURIComponent(id)}/visibility`, { hidden });
 }
 
 export function listCalendarSources() {
@@ -72,14 +93,16 @@ export function refreshCalendar() {
   return apiPost<{ sources: CalendarSourceStatus[] }>('/api/calendar/refresh');
 }
 
-export function updateCalendarEvent(id: string, patch: { start: string; end: string; title?: string }) {
-  return apiPatch<{ event: CalendarEvent }>(`/api/calendar/events/${encodeURIComponent(id)}`, patch);
+export function updateCalendarEvent(id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }) {
+  return apiPatch<{ event: CalendarEvent }>(`/api/calendar/events/${encodeURIComponent(id)}`, patch,
+    patch.human_confirm ? { timeoutMs: 180_000, quietStatuses: [403] } : { quietStatuses: [403] });
 }
 
 export function createCalendarEvent(input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) {
   return apiPost<{ event: CalendarEvent }>('/api/calendar/events', input);
 }
 
-export function deleteCalendarEvent(id: string) {
-  return apiDelete(`/api/calendar/events/${encodeURIComponent(id)}`);
+export function deleteCalendarEvent(id: string, humanConfirm = false) {
+  return apiDelete(`/api/calendar/events/${encodeURIComponent(id)}${humanConfirm ? '?human_confirm=1' : ''}`,
+    { ...(humanConfirm ? { timeoutMs: 180_000 } : {}), quietStatuses: [403] });
 }

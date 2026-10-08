@@ -67,6 +67,7 @@ describe('N3-05: the Voice scan ends in a sentence, never in silence', () => {
 describe('N3-04: one place per setting', () => {
   it('hands the calendar choice keys to Calendar Accounts', () => {
     expect(fieldOwnerFor('calendar', 'hidden_calendar_ids')?.pane).toBe('calendar')
+    expect(fieldOwnerFor('calendar', 'hidden_event_ids')?.pane).toBe('calendar')
     expect(fieldOwnerFor('calendar', 'visible_calendar_ids')?.pane).toBe('calendar')
     expect(fieldOwnerFor('calendar', 'refresh_minutes')).toBeNull()
     expect(fieldOwnerFor('mail', 'hidden_calendar_ids')).toBeNull()

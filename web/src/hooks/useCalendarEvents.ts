@@ -7,8 +7,9 @@
  * instead of one private copy per mount. Reconciles on the `calendar:updated`
  * WS push and after a socket gap.
  */
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { CalendarEvent, CalendarInfo, CalendarSourceStatus } from '@/api/calendar';
+import { useNotifications } from '@/contexts/notifications';
 import { useEvent } from '@/hooks/useWebSocket';
 import { runWhenVisible } from '@/utils/page-visibility';
 import {
@@ -23,26 +24,44 @@ import {
   onCalendarUpdated,
   refetchLiveCalendarRanges,
   removeCalendarEvent,
+  setCalendarEventHidden,
   setCalendarHidden,
   subscribeCalendarRange,
   subscribeCalendarSources,
+  subscribeCalendarVisibilityFailures,
+  subscribeCalendarWriteFailures,
 } from '@/stores/calendar-events-store';
 
+const NO_EVENTS: CalendarEvent[] = [];
+
 export interface UseCalendarEvents {
+  /** Visible events only; individually hidden ones are in `hiddenEvents`. */
   events: CalendarEvent[];
+  hiddenEvents: CalendarEvent[];
   sources: CalendarSourceStatus[];
   loading: boolean;
   /** Optimistic move/resize; rolls back and refetches on failure. */
-  moveEvent: (id: string, patch: { start: string; end: string; title?: string }) => void;
+  moveEvent: (id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }) => void;
   createEvent: (input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) => Promise<CalendarEvent>;
-  removeEvent: (id: string) => void;
+  removeEvent: (id: string, humanConfirm?: boolean) => void;
   /** Hide one external calendar and persist it in the shared visibility config. */
   hideCalendar: (calendarId: string) => void;
+  /** Hide one event in Walnut only; the source calendar keeps it. */
+  hideEvent: (eventId: string) => void;
+  showEvent: (eventId: string) => void;
   refetch: () => void;
 }
 
 function hideCalendar(calendarId: string): void {
   void setCalendarHidden(calendarId, true);
+}
+
+function hideEvent(eventId: string): void {
+  void setCalendarEventHidden(eventId, true);
+}
+
+function showEvent(eventId: string): void {
+  void setCalendarEventHidden(eventId, false);
 }
 
 export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
@@ -63,16 +82,47 @@ export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
     runWhenVisible('calendar-events:reconnect', () => { void refetchLiveCalendarRanges(); });
   });
 
+  // Every mounted surface hears a failure; the shared dedupKey leaves one toast.
+  const { notify } = useNotifications();
+  useEffect(() => subscribeCalendarVisibilityFailures((failure) => {
+    const name = failure.title ? `"${failure.title}"` : 'The event';
+    notify({
+      kind: 'operation-error',
+      severity: 'error',
+      title: failure.hidden ? 'Could not hide event' : 'Could not show event',
+      body: `${name} is ${failure.hidden ? 'visible' : 'hidden'} again: ${failure.message}`,
+      persistent: false,
+      dedupKey: `calendar-event-visibility:${failure.id}`,
+    });
+  }), [notify]);
+
+  useEffect(() => subscribeCalendarWriteFailures((failure) => {
+    notify({ kind: 'operation-error', severity: 'error', title: `Could not ${failure.action} event`,
+      body: failure.message, persistent: false, dedupKey: `calendar-write:${failure.id}` });
+  }), [notify]);
+
   const refetch = useCallback(() => { void loadCalendarRange(key, true); }, [key]);
 
+  const events = useMemo(
+    () => (range.events.some((e) => e.hidden) ? range.events.filter((e) => !e.hidden) : range.events),
+    [range.events],
+  );
+  const hiddenEvents = useMemo(() => {
+    const hidden = range.events.filter((e) => e.hidden);
+    return hidden.length ? hidden : NO_EVENTS;
+  }, [range.events]);
+
   return {
-    events: range.events,
+    events,
+    hiddenEvents,
     sources: shared.sources,
     loading: range.loading,
     moveEvent: moveCalendarEvent,
     createEvent: createCalendarEventOptimistic,
     removeEvent: removeCalendarEvent,
     hideCalendar,
+    hideEvent,
+    showEvent,
     refetch,
   };
 }
