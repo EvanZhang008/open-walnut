@@ -214,6 +214,51 @@ final class InboxStore {
         Task { await sendRead(id: id, generation: generation) }
     }
 
+    /// Requests a batch keeps on the wire at once. A Select All over a full inbox
+    /// would otherwise open one request per letter in the same instant, each one a
+    /// bridge hop when the phone reaches the Mac through the cloud relay.
+    nonisolated static let batchReadWidth = 4
+
+    /// The human set several letters read or unread at once (Select mode, Mark
+    /// All). Every letter goes through the same intent machine as a single tap:
+    /// all rows and the badge flip NOW, each write is retried or rolled back on
+    /// its own, and a letter already in that state spends no request. Returns how
+    /// many letters it set.
+    @discardableResult
+    func mark(ids: [String], read: Bool) -> Int {
+        var jobs: [(id: String, generation: Int)] = []
+        for id in Self.unique(ids) {
+            if let current = letter(id: id), current.isRead == read { continue }
+            if read && filter == .unread { keptReadIds.insert(id) }
+            jobs.append((id, beginRead(id: id, read: read)))
+        }
+        guard !jobs.isEmpty else { return 0 }
+        Task { await sendReads(jobs) }
+        return jobs.count
+    }
+
+    private nonisolated static func unique(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        return ids.filter { seen.insert($0).inserted }
+    }
+
+    /// Send several pending writes, at most `batchReadWidth` at a time, and write
+    /// the cache once at the end instead of once per answer.
+    private func sendReads(_ jobs: [(id: String, generation: Int)]) async {
+        var next = 0
+        await withTaskGroup(of: Void.self) { group in
+            func addNext() {
+                guard next < jobs.count else { return }
+                let job = jobs[next]
+                next += 1
+                group.addTask { await self.sendRead(id: job.id, generation: job.generation, persist: false) }
+            }
+            for _ in 0..<min(Self.batchReadWidth, jobs.count) { addNext() }
+            while await group.next() != nil { addNext() }
+        }
+        DiskCache.save(letters, key: "inbox-letters")
+    }
+
     /// Flip read state: optimistic at once (row + badge), then the route.
     ///
     /// A failure never leaves a read the server did not take on screen: the row
@@ -252,18 +297,23 @@ final class InboxStore {
     /// flicker between read and unread.
     func flushReadRetries() {
         guard isActive else { return }
+        var jobs: [(id: String, generation: Int)] = []
         for (id, intent) in readIntents where !intent.sending {
             var next = intent
             next.sending = true
             next.optimistic = false
             readIntents[id] = next
-            let generation = intent.generation
-            Task { await self.sendRead(id: id, generation: generation) }
+            jobs.append((id, intent.generation))
         }
+        guard !jobs.isEmpty else { return }
+        // A batch that failed whole (the relay down) comes back whole: the same
+        // width limit as when it was first sent.
+        Task { await self.sendReads(jobs) }
     }
 
     /// One attempt of the pending write for `id`, if it is still the current one.
-    private func sendRead(id: String, generation: Int) async {
+    /// `persist` false: the caller writes the cache once for a whole batch.
+    private func sendRead(id: String, generation: Int, persist: Bool = true) async {
         guard let intent = readIntents[id], intent.generation == generation else { return }
         do {
             let updated = try await api.setLetterRead(id: id, read: intent.read)
@@ -272,7 +322,7 @@ final class InboxStore {
             readIntents[id] = nil
             readRetryIds.remove(id)
             merge(keepingNewerReadStamp(updated))
-            DiskCache.save(letters, key: "inbox-letters")
+            if persist { DiskCache.save(letters, key: "inbox-letters") }
             connection?.reportReachability(true, source: "inbox-rest")
         } catch {
             // Re-read after the await: a refresh that landed meanwhile moved the
