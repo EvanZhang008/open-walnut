@@ -231,6 +231,23 @@ describe('search() memo (wired)', () => {
     expect(lane).toHaveBeenCalledTimes(1);
   });
 
+  it('never memoizes an answer whose caller asked for no semantic wait', async () => {
+    // semanticWaitMs=0 is a keyword-order answer the caller chose; stored under the
+    // shared key, it was replayed to the next caller (the phone, the web list).
+    const lane = mockLane();
+    lane.mockImplementation(async (_q: string, opts: { onSemantic?: (s: string) => void; semanticDeadlineMs?: number }) => {
+      opts.onSemantic?.(opts.semanticDeadlineMs === 0 ? 'skipped' : 'ok');
+      return [];
+    });
+    const { search } = await import('../../src/core/search.js');
+    await search('helm crd', { types: ['memory'], semanticDeadlineMs: 0 });
+    await search('helm crd', { types: ['memory'] });
+    expect(lane).toHaveBeenCalledTimes(2);
+    // A complete answer still serves the no-wait caller.
+    await search('helm crd', { types: ['memory'], semanticDeadlineMs: 0 });
+    expect(lane).toHaveBeenCalledTimes(2);
+  });
+
   it('passes the caller\'s semantic deadline to every hybrid lane', async () => {
     const lane = mockLane();
     const { search } = await import('../../src/core/search.js');

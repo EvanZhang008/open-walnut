@@ -778,7 +778,10 @@ export async function search(
     // lane's own report, not by its hits: a paraphrase with no keyword overlap
     // comes back EMPTY from a cold lane, and that empty list was memoized
     // (measured 2026-10-03: 0 results for 20 s, then 5 once the worker was warm).
-    if (memoable && !run.semanticIncomplete) {
+    // Nor an answer whose caller asked for no semantic wait (`semanticWaitMs=0`):
+    // that caller chose keyword order, and the next one, under the same key, did not.
+    const askedNoWait = options.semanticDeadlineMs !== undefined && options.semanticDeadlineMs <= 0;
+    if (memoable && !run.semanticIncomplete && !askedNoWait) {
       bindResultCacheInvalidation();
       resultCache.set(key, results.map((row) => ({ ...row })));
     }
