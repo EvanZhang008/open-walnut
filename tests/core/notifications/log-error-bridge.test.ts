@@ -571,6 +571,42 @@ describe('humanized copy on the way into the feed', () => {
     expect(new Set(feed.map(n => n.dedupKey)).size).toBe(2);
   });
 
+  it('a relative age in the error ("failed 1s ago") is not identity: one start failure, one card', async () => {
+    // 2026-10-08: "Connection to devbox failed 1s ago: …" and "… 0s ago: …" were
+    // two cards for one task's session start, while the host's credential expired.
+    const fp = (ago: string) => dedupFingerprintForTest({
+      subsystem: 'session', message: 'transport start failed',
+      meta: { taskId: 't-1', error: `Connection to devbox failed ${ago} ago: Permission denied (publickey).` },
+    });
+    expect(fp('1s')).toBe(fp('0s'));
+    expect(fp('12s')).toBe(fp('3 min'));
+    expect(fp('1.5h')).toBe(fp('2 days'));
+    expect(fp('1s')).toContain('failed <n> ago');
+    // A different cause is still its own card, and a number that is not an age stays.
+    expect(dedupFingerprintForTest({
+      subsystem: 'session', message: 'transport start failed',
+      meta: { taskId: 't-1', error: 'Connection to devbox failed 1s ago: Connection timed out' },
+    })).not.toBe(fp('1s'));
+    expect(dedupFingerprintForTest({ subsystem: 'web', message: 'HTTP 502 after 3 retries', meta: {} }))
+      .toContain('HTTP 502 after 3 retries');
+
+    const logger = createSubsystemLogger('session');
+    logger.error('transport start failed', { taskId: 't-1', error: 'Connection to devbox failed 1s ago: Permission denied (publickey).' });
+    await feedAfterCount(1);
+    // Past the 60s repeat absorber, so the second one reaches the store.
+    const realNow = Date.now;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+    try {
+      logger.error('transport start failed', { taskId: 't-1', error: 'Connection to devbox failed 0s ago: Permission denied (publickey).' });
+      await new Promise(r => setTimeout(r, 200));
+    } finally {
+      nowSpy.mockRestore();
+    }
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].count).toBe(2);
+  });
+
   it("a PLUGIN condition folds across tasks: one cause, one card, the task as the latest deep link", async () => {
     // 2026-10-05: with a sync plugin's sign-in expired, every task the user
     // touched minted its own "couldn't save a task change" card, because the

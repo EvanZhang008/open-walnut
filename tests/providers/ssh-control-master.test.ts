@@ -11,8 +11,8 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  cancelRecordedForwards, controlSocketPath, forwardsFile, probeControlMaster, recordForward, removeStaleMaster,
-  startControlMaster, type SshRunner,
+  cancelRecordedForwards, controlSocketPath, forwardsFile, MASTER_PATIENT_VERIFY_TIMEOUT_MS, planControlMaster,
+  probeControlMaster, recordForward, removeStaleMaster, startControlMaster, type SshRunner,
 } from '../../src/providers/ssh-control-master.js'
 import type { SshRun } from '../../src/providers/remote-sh.js'
 
@@ -21,14 +21,18 @@ const T = { hostKey: 'devbox', target: 'tester@devbox.example.com:', home: HOME 
 const ok: SshRun = { stdout: '', stderr: '', code: 0, timedOut: false }
 const fail: SshRun = { stdout: '', stderr: 'Control socket connect: Connection refused', code: 255, timedOut: false }
 
-function runner(answers: Array<SshRun | ((argv: string[]) => SshRun)>): { run: SshRunner; seen: string[][] } {
+const slow: SshRun = { stdout: '', stderr: '', code: null, timedOut: true }
+
+function runner(answers: Array<SshRun | ((argv: string[]) => SshRun)>): { run: SshRunner; seen: string[][]; budgets: number[] } {
   const seen: string[][] = []
-  const run: SshRunner = async (argv) => {
+  const budgets: number[] = []
+  const run: SshRunner = async (argv, opts) => {
     seen.push(argv)
+    budgets.push(opts.timeoutMs)
     const next = answers.shift() ?? fail
     return typeof next === 'function' ? next(argv) : next
   }
-  return { run, seen }
+  return { run, seen, budgets }
 }
 
 const dirs: string[] = []
@@ -100,11 +104,85 @@ describe('probeControlMaster', () => {
     expect(seen[1]).toEqual(['-p', '22', '-o', `ControlPath=${sock}`, '-o', 'ControlMaster=no', 'u@h', 'true'])
   })
 
-  it('stale when the master does not answer, or answers but its link carries nothing (timed out)', async () => {
+  it('stale when the master refuses, or its link refuses the command', async () => {
     const sock = path.join(tmp(), 's')
     await listen(sock)
     expect(await probeControlMaster(sock, [], 'h', runner([fail]))).toBe('stale')
-    expect(await probeControlMaster(sock, [], 'h', runner([ok, { ...ok, code: null, timedOut: true }]))).toBe('stale')
+    expect(await probeControlMaster(sock, [], 'h', runner([ok, fail]))).toBe('stale')
+  })
+
+  it('unanswered, not stale, when the check or the command only ran out of time', async () => {
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    expect(await probeControlMaster(sock, [], 'h', runner([slow]))).toBe('unanswered')
+    expect(await probeControlMaster(sock, [], 'h', runner([ok, slow]))).toBe('unanswered')
+  })
+})
+
+describe('planControlMaster: a master is ended only when it is dead, or when a new login replaces it', () => {
+  const isExit = (argv: string[]) => argv.includes('-O') && argv[argv.indexOf('-O') + 1] === 'exit'
+  const isFreshLogin = (argv: string[]) => argv.includes('ControlPath=none')
+
+  it('reuses a live master', async () => {
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    const { run, seen } = runner([ok, ok])
+    expect(await planControlMaster(sock, [], 'h', { run })).toEqual({ action: 'reuse', state: 'live' })
+    expect(seen.some(isExit)).toBe(false)
+  })
+
+  it('starts one where none is, and ends a dead one first', async () => {
+    expect(await planControlMaster(path.join(tmp(), 's'), [], 'h', runner([]))).toEqual({ action: 'start', state: 'absent' })
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    const { run, seen } = runner([fail, ok])
+    expect(await planControlMaster(sock, [], 'h', { run })).toEqual({ action: 'start', state: 'stale', replaced: 'stale' })
+    expect(seen.some(isExit)).toBe(true)
+    expect(fs.existsSync(sock)).toBe(false)
+  })
+
+  it('replaces a master that did not answer when a new login works (a dead link after sleep)', async () => {
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    const { run, seen } = runner([ok, slow, ok, ok])
+    expect(await planControlMaster(sock, ['-o', 'BatchMode=yes'], 'u@h', { run })).toEqual({ action: 'start', state: 'unanswered', replaced: 'unanswered' })
+    expect(seen[2]).toEqual(['-o', 'BatchMode=yes', '-o', 'ControlPath=none', '-o', 'ControlMaster=no', 'u@h', 'true'])
+    expect(seen.some(isExit)).toBe(true)
+  })
+
+  it('keeps a master that only answered late when no new login works (the expired-credential case)', async () => {
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    const denied: SshRun = { ...fail, stderr: 'u@h: Permission denied (publickey).' }
+    const { run, seen, budgets } = runner([ok, slow, denied, ok, ok])
+    expect(await planControlMaster(sock, [], 'u@h', { run })).toEqual({ action: 'reuse', state: 'unanswered', patient: true })
+    expect(seen.some(isFreshLogin)).toBe(true)
+    expect(seen.some(isExit)).toBe(false)
+    expect(budgets.at(-1)).toBe(MASTER_PATIENT_VERIFY_TIMEOUT_MS)
+    expect(fs.existsSync(sock)).toBe(true)
+  })
+
+  it('keeps it and connects without it when it still does not answer, so the next connect can try again', async () => {
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    const { run, seen } = runner([ok, slow, fail, ok, slow])
+    expect(await planControlMaster(sock, [], 'h', { run })).toEqual({ action: 'fallback', state: 'unanswered', reason: 'unanswered' })
+    expect(seen.some(isExit)).toBe(false)
+    expect(fs.existsSync(sock)).toBe(true)
+  })
+
+  it('ends it after all when the second look finds its link dead, and starts over when it is gone', async () => {
+    const sock = path.join(tmp(), 's')
+    await listen(sock)
+    const dead = runner([ok, slow, fail, ok, fail, ok])
+    expect(await planControlMaster(sock, [], 'h', { run: dead.run })).toEqual({ action: 'start', state: 'unanswered', replaced: 'stale' })
+    expect(dead.seen.some(isExit)).toBe(true)
+
+    const sock2 = path.join(tmp(), 's')
+    await listen(sock2)
+    const gone = runner([ok, slow, () => { fs.rmSync(sock2, { force: true }); return fail }])
+    expect(await planControlMaster(sock2, [], 'h', { run: gone.run })).toEqual({ action: 'start', state: 'unanswered' })
+    expect(gone.seen.some(isExit)).toBe(false)
   })
 })
 

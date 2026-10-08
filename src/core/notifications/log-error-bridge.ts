@@ -237,6 +237,9 @@ export function dedupFingerprintForTest(payload: ErrorNotifyPayload): string {
   return dedupFingerprint(payload);
 }
 
+/** A relative age ("1s ago", "3 min ago") in a dedup fingerprint. */
+const RELATIVE_AGE = /\b\d+(?:\.\d+)?\s?(?:ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)\s+ago\b/gi;
+
 function dedupFingerprint(payload: ErrorNotifyPayload): string {
   // A plugin's condition is the PLUGIN's (its account, its API), and the task a
   // failed push named is context, not identity: with the sign-in expired, every
@@ -263,7 +266,10 @@ function dedupFingerprint(payload: ErrorNotifyPayload): string {
   } catch {
     meta = '[unserializable]';
   }
-  return redactSensitiveText(`${payload.message}\n${meta}`);
+  // A relative age in an error ("Connection to devbox failed 1s ago: …") changes
+  // with every retry and is never part of what failed: it split one session's
+  // start failure into two cards (2026-10-08).
+  return redactSensitiveText(`${payload.message}\n${meta}`).replace(RELATIVE_AGE, '<n> ago');
 }
 
 export interface LogErrorBridgeHooks {

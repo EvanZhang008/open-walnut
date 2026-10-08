@@ -157,7 +157,8 @@ describe('the SSH ControlMaster across a server restart', () => {
     resetCalls()
     conn.disconnect()
     await waitFor('the exit request', () => kinds().includes('exit'))
-    expect(fs.existsSync(socket)).toBe(false)
+    // The fake logs the call before it acts on it: wait for the socket, not the log.
+    await waitFor('the socket to go', () => !fs.existsSync(socket))
   })
 
   it('a reconnect in the same process keeps a master that still works', async () => {

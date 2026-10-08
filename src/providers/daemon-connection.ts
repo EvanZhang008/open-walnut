@@ -63,7 +63,7 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
-import { cancelRecordedForwards, controlSocketPath, exitControlMaster, probeControlMaster, recordForward, removeStaleMaster, startControlMaster } from './ssh-control-master.js'
+import { cancelRecordedForwards, controlSocketPath, exitControlMaster, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
 import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
@@ -1962,23 +1962,30 @@ export class DaemonConnection {
     if (this._controlMaster) return
     const socketPath = controlSocketPath({ hostKey: this.hostKey, target: this.sshTargetIdentity, home: WALNUT_HOME })
     const sshArgs = this.buildSshArgs({ useControlMaster: false })
-    const state = await probeControlMaster(socketPath, sshArgs, this.sshHostString)
-    if (state === 'live') {
+    // Reuse, start, or connect without one; a master that is only slow is kept.
+    const plan = await planControlMaster(socketPath, sshArgs, this.sshHostString)
+    if (plan.action === 'reuse') {
       this._controlPath = socketPath
       const cancelled = await cancelRecordedForwards(socketPath, sshArgs, this.sshHostString)
       log.session.info('DaemonConnection: SSH ControlMaster reused', {
-        host: this.hostKey, socketPath, staleForwards: cancelled.length,
+        host: this.hostKey, socketPath, staleForwards: cancelled.length, ...(plan.patient ? { answeredLate: true } : {}),
       })
       return
     }
-    if (state === 'foreign') {
-      log.session.warn('DaemonConnection: control socket is not this user\'s, falling back to individual connections', {
+    if (plan.action === 'fallback') {
+      log.session.warn(plan.reason === 'foreign'
+        ? 'DaemonConnection: control socket is not this user\'s, falling back to individual connections'
+        : 'DaemonConnection: SSH ControlMaster did not answer and no new login works; kept it, falling back to individual connections', {
         host: this.hostKey, socketPath,
       })
       this._controlPath = null
       return
     }
-    if (state === 'stale') await removeStaleMaster(socketPath, sshArgs, this.sshHostString)
+    if (plan.replaced === 'unanswered') {
+      log.session.info('DaemonConnection: SSH ControlMaster did not answer; a new login works, replacing it', {
+        host: this.hostKey, socketPath,
+      })
+    }
     this._controlPath = socketPath
 
     try {

@@ -66,13 +66,20 @@ export function forwardsFile(socketPath: string): string {
 }
 
 export type MasterState =
-  | 'live'     // ours, and a command through it came back: multiplex through it
-  | 'absent'   // nothing there: start one
-  | 'stale'    // ours but dead, or alive with a link that no longer carries anything
-  | 'foreign'  // not a socket this user owns: never use it, never remove it
+  | 'live'       // ours, and a command through it came back: multiplex through it
+  | 'absent'     // nothing there: start one
+  | 'stale'      // ours but dead, or alive with a link that refuses to carry anything
+  | 'foreign'    // not a socket this user owns: never use it, never remove it
+  | 'unanswered' // ours, but the check or the command through it did not come back in time
 
 /** How long the command that proves a master's link still carries traffic may take. */
 export const MASTER_VERIFY_TIMEOUT_MS = 8_000
+/**
+ * How long a master that did not answer gets on a second look. Past ServerAlive's
+ * 45 s (15 s x 3, set at start): a master whose link died ends itself by then, so
+ * what still has not answered is slow, not dead.
+ */
+export const MASTER_PATIENT_VERIFY_TIMEOUT_MS = 50_000
 
 /**
  * What sits at `socketPath`, and whether this process may multiplex through it.
@@ -85,7 +92,7 @@ export async function probeControlMaster(
   socketPath: string,
   sshArgs: string[],
   host: string,
-  opts: { run?: SshRunner; uid?: number } = {},
+  opts: { run?: SshRunner; uid?: number; verifyTimeoutMs?: number } = {},
 ): Promise<MasterState> {
   let st: fs.Stats
   try {
@@ -100,11 +107,69 @@ export async function probeControlMaster(
   const run = opts.run ?? runSshBounded
   const control = ['-o', `ControlPath=${socketPath}`]
   const check = await run([...sshArgs, ...control, '-O', 'check', host], { timeoutMs: MASTER_CONTROL_TIMEOUT_MS })
-  if (check.code !== 0 || check.timedOut) return 'stale'
+  if (check.timedOut) return 'unanswered'
+  if (check.code !== 0) return 'stale'
   // ControlMaster=no: a mux client only, so a master that just died cannot turn
   // this into a fresh login (BatchMode would refuse one anyway).
-  const verify = await run([...sshArgs, ...control, '-o', 'ControlMaster=no', host, 'true'], { timeoutMs: MASTER_VERIFY_TIMEOUT_MS })
-  return verify.code === 0 && !verify.timedOut ? 'live' : 'stale'
+  const verify = await run([...sshArgs, ...control, '-o', 'ControlMaster=no', host, 'true'], {
+    timeoutMs: opts.verifyTimeoutMs ?? MASTER_VERIFY_TIMEOUT_MS,
+  })
+  if (verify.timedOut) return 'unanswered'
+  return verify.code === 0 ? 'live' : 'stale'
+}
+
+export type MasterPlan =
+  | { action: 'reuse'; state: MasterState; patient?: boolean }
+  | { action: 'start'; state: MasterState; replaced?: 'stale' | 'unanswered' }
+  | { action: 'fallback'; state: MasterState; reason: 'foreign' | 'unanswered' }
+
+/**
+ * What a connect does with the master at `socketPath`: reuse it, start one (after
+ * ending a dead one), or connect without one. Ends a master only when it is dead,
+ * or when it did not answer AND a fresh login works, so nothing is lost by it.
+ *
+ * Slow is not dead. A master that did not answer in time used to be ended like a
+ * dead one, but on a starved machine (load over 150 is common here) or a remote
+ * slow to run a shell, a live master misses an 8 s budget, and once the SSH
+ * credential that made it has expired, ending it is the one step nothing undoes
+ * (2026-10-08: the first deploy after the certificate expired lost the host).
+ */
+export async function planControlMaster(
+  socketPath: string,
+  sshArgs: string[],
+  host: string,
+  opts: { run?: SshRunner; uid?: number } = {},
+): Promise<MasterPlan> {
+  const state = await probeControlMaster(socketPath, sshArgs, host, opts)
+  if (state === 'live') return { action: 'reuse', state }
+  if (state === 'foreign') return { action: 'fallback', state, reason: 'foreign' }
+  if (state === 'absent') return { action: 'start', state }
+  if (state === 'stale') {
+    await removeStaleMaster(socketPath, sshArgs, host, opts)
+    return { action: 'start', state, replaced: 'stale' }
+  }
+  // Unanswered. When a new login works, a new master costs nothing: replace it.
+  if (await freshLoginWorks(sshArgs, host, opts)) {
+    await removeStaleMaster(socketPath, sshArgs, host, opts)
+    return { action: 'start', state, replaced: 'unanswered' }
+  }
+  // It is the only way in: look again, longer than a dead link survives.
+  const again = await probeControlMaster(socketPath, sshArgs, host, { ...opts, verifyTimeoutMs: MASTER_PATIENT_VERIFY_TIMEOUT_MS })
+  if (again === 'live') return { action: 'reuse', state, patient: true }
+  if (again === 'stale') {
+    await removeStaleMaster(socketPath, sshArgs, host, opts)
+    return { action: 'start', state, replaced: 'stale' }
+  }
+  if (again === 'absent') return { action: 'start', state }
+  // Still no answer (or no longer ours): keep it for the next connect to try.
+  return { action: 'fallback', state, reason: again === 'foreign' ? 'foreign' : 'unanswered' }
+}
+
+/** Whether a new SSH connection, without any master, authenticates now. */
+async function freshLoginWorks(sshArgs: string[], host: string, opts: { run?: SshRunner }): Promise<boolean> {
+  const run = opts.run ?? runSshBounded
+  const res = await run([...sshArgs, '-o', 'ControlPath=none', '-o', 'ControlMaster=no', host, 'true'], { timeoutMs: MASTER_START_TIMEOUT_MS })
+  return res.code === 0 && !res.timedOut
 }
 
 /** End a master that failed its probe and remove what it left. Bounded. */
