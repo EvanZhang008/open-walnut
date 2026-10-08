@@ -16,7 +16,8 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
 import { isStaticAssetPath } from './static-asset-path.js'
-import { refreshStaticMirror, bundleIdInHtml } from './static-mirror.js'
+import { refreshStaticMirror, bundleIdInHtml, mirrorHoldsBuild } from './static-mirror.js'
+import { createStaticRootWatch } from './static-root-watch.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
 import { requestLogger, setRouteRecoveryPublisher, seedFailingRoutes } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
@@ -147,7 +148,7 @@ import { quietRouter } from './routes/quiet.js'
 import { pluginStatusItemsRouter } from './routes/plugin-status-items.js'
 import { initQuiet, stopQuiet } from '../core/quiet/quiet-state.js'
 import { hooksRouter } from './routes/hooks.js'
-import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
+import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications, expireOwnCardsOfUnloadedPlugins } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
 import { humanizeErrorNotification } from '../core/notifications/humanize.js'
 import { withOriginNote } from '../core/notifications/origin.js'
@@ -345,28 +346,45 @@ async function publishErrorNotification(input: {
  *
  * Exported so the e2e suite can drive a recovery without waiting out a real poll
  * interval; production callers are the success points below.
+ *
+ * A failed store write is retried (RECOVERY_RETRY_DELAYS_MS): the callers signal
+ * an EDGE, which never comes again, so a lost write left its card up until some
+ * later failure and recovery (2026-10-08: a boot's 'web-assets' recovery lost
+ * the notifications.json lock to the server it replaced, twice in a row). A
+ * retry retires only cards last raised before the signal (`asOf`).
  */
 export async function publishRecovery(keys: string[]): Promise<number> {
   if (keys.length === 0) return 0
+  // The TTL absorber must be released for these scopes even when nothing was
+  // recovered. It is keyed by dedupScope and suppresses a repeat for 60s; if a
+  // condition fails → recovers → fails again inside one window, an armed
+  // absorber would swallow the RE-failure and leave the card sitting green
+  // ('recovered', severity info) while the thing is broken again. Recovery is
+  // exactly the moment that suppression stops being correct, whether or not
+  // the store write below goes through (and only that moment: a retry of the
+  // write must not release an absorber a later failure armed).
+  for (const [scope, scopeKeys] of errorNotificationScopeRecoveryKeys) {
+    if (!scopeKeys.some(k => keys.includes(k))) continue
+    errorNotificationRecentScopes.delete(scope)
+    errorNotificationScopeRecoveryKeys.delete(scope)
+  }
+  // The log-error BRIDGE keeps its own absorber (60s per dedup hash) for
+  // everything that arrives as a log.error — routes, bus pairs, session
+  // family. Same argument, different map, so release both: a route that 500s,
+  // recovers, and 500s again seconds later is the common case, and only this
+  // makes the second failure visible.
+  releaseAbsorbedKeys(keys)
+  return writeRecovery(keys, Date.now(), -1)
+}
+
+/** Waits before each retry of a failed recovery write (a stale lock is free after 30s). */
+const RECOVERY_RETRY_DELAYS_MS = [15_000, 60_000, 300_000]
+const recoveryRetryTimers = new Set<NodeJS.Timeout>()
+
+/** The store half of publishRecovery; `attempt` -1 is the signal itself, 0.. the retries. */
+async function writeRecovery(keys: string[], asOf: number, attempt: number): Promise<number> {
   try {
-    const { recovered } = await recoverNotifications(keys)
-    // The TTL absorber must be released for these scopes even when nothing was
-    // recovered. It is keyed by dedupScope and suppresses a repeat for 60s; if a
-    // condition fails → recovers → fails again inside one window, an armed
-    // absorber would swallow the RE-failure and leave the card sitting green
-    // ('recovered', severity info) while the thing is broken again. Recovery is
-    // exactly the moment that suppression stops being correct.
-    for (const [scope, scopeKeys] of errorNotificationScopeRecoveryKeys) {
-      if (!scopeKeys.some(k => keys.includes(k))) continue
-      errorNotificationRecentScopes.delete(scope)
-      errorNotificationScopeRecoveryKeys.delete(scope)
-    }
-    // The log-error BRIDGE keeps its own absorber (60s per dedup hash) for
-    // everything that arrives as a log.error — routes, bus pairs, session
-    // family. Same argument, different map, so release both: a route that 500s,
-    // recovers, and 500s again seconds later is the common case, and only this
-    // makes the second failure visible.
-    releaseAbsorbedKeys(keys)
+    const { recovered } = await recoverNotifications(keys, attempt < 0 ? {} : { asOf })
     if (recovered.length === 0) return 0
     // One frame per record: the panel patches in place (F2 merge), so the card
     // gains its Recovered chip live without a refresh.
@@ -376,10 +394,21 @@ export async function publishRecovery(keys: string[]): Promise<number> {
     })
     return recovered.length
   } catch (err) {
+    const next = attempt + 1
+    const retryInMs = RECOVERY_RETRY_DELAYS_MS[next]
     log.web.warn('failed to publish notification recovery', {
       keys: keys.join(','),
       error: err instanceof Error ? err.message : String(err),
+      retryInMs: retryInMs ?? null,
     })
+    if (retryInMs !== undefined) {
+      const timer = setTimeout(() => {
+        recoveryRetryTimers.delete(timer)
+        void writeRecovery(keys, asOf, next)
+      }, retryInMs)
+      timer.unref()
+      recoveryRetryTimers.add(timer)
+    }
     return 0
   }
 }
@@ -921,6 +950,7 @@ async function isWalnutAnsweringOn(port: number): Promise<boolean> {
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
   bootCompleted = false // boot in progress → unhandled rejections are fatal again
+  const bootStartedAt = Date.now()
   // Until the plugin walk below ends, a task push that finds no plugin waits for
   // it: sessions reattach (and move their tasks' phases) before the plugins load.
   registry.beginLoading()
@@ -2090,32 +2120,44 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       } catch { /* primary gone — keep the last known answer */ }
     }
     refreshBundle()
-    let staticRootOk = checkStaticRoot()
+    const staticRootOkAtBoot = checkStaticRoot()
     // One condition, 'web-assets': the primary static root is not servable. A
     // deploy that swept dist from under the OLD server raised it, and the NEW
     // server booting with its assets in place is what settles it; the running
     // server seeing them come back settles it too. Keyless, the card sat until
     // the 48h debris sweep (2026-10-04, raised by the cloud companion's deploy).
     const WEB_ASSETS_RECOVERY_KEY = 'web-assets'
-    if (!staticRootOk) {
+    if (!staticRootOkAtBoot) {
       log.web.error('web assets are NOT servable at startup', { staticDir, mirrorReady, recoveryKey: WEB_ASSETS_RECOVERY_KEY })
     } else {
       void publishRecovery([WEB_ASSETS_RECOVERY_KEY])
     }
+    // A gap the mirror covers (a deploy rebuilding dist in place) is a warning
+    // until it outlasts the grace; see static-root-watch.ts.
+    const staticRootWatch = createStaticRootWatch({
+      initialOk: staticRootOkAtBoot,
+      check: checkStaticRoot,
+      mirrorCovers: () => mirrorHoldsBuild(mirrorDir, bundle),
+      report: (event) => {
+        if (event.kind === 'servable') {
+          log.web.info('web assets are servable again', { staticDir })
+          void publishRecovery([WEB_ASSETS_RECOVERY_KEY])
+        } else if (event.kind === 'covered') {
+          log.web.warn('web assets vanished from under the running server; the mirror is serving this build', { staticDir, mirrorDir, bundle })
+        } else {
+          log.web.error('web assets VANISHED from under the running server', {
+            staticDir, mirrorReady, mirrorCovers: event.mirrorCovers, missingForMs: event.missingForMs,
+            recoveryKey: WEB_ASSETS_RECOVERY_KEY,
+          })
+        }
+      },
+    })
     const staticRootTimer = setInterval(() => {
       refreshBundle()
-      const ok = checkStaticRoot()
-      if (ok === staticRootOk) return
-      staticRootOk = ok
-      if (ok) {
-        log.web.info('web assets are servable again', { staticDir })
-        void publishRecovery([WEB_ASSETS_RECOVERY_KEY])
-      } else {
-        log.web.error('web assets VANISHED from under the running server', { staticDir, mirrorReady, recoveryKey: WEB_ASSETS_RECOVERY_KEY })
-      }
+      staticRootWatch.tick()
     }, 60_000)
     staticRootTimer.unref()
-    setStaticRootReporter(() => ({ staticDir, ok: staticRootOk, mirrorDir, mirrorReady, bundle }))
+    setStaticRootReporter(() => ({ staticDir, ok: staticRootWatch.ok(), mirrorDir, mirrorReady, bundle }))
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()
@@ -4707,6 +4749,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   } finally {
     registry.endLoading()
   }
+  // The companion runs only some plugins; its cards about the others, from a
+  // previous life, wait for a success this box can never have.
+  if (CLOUD_MODE) {
+    void expireOwnCardsOfUnloadedPlugins((id) => !!registry.get(id), bootStartedAt)
+      .then(({ expired }) => {
+        for (const record of expired) broadcastEvent('notification:updated', record)
+        if (expired.length > 0) {
+          log.notif.info('expired cards of plugins this replica does not run', {
+            count: expired.length, keys: [...new Set(expired.map(r => r.recoveryKey))].join(','),
+          })
+        }
+      })
+      .catch((err) => log.notif.warn('expiring cards of unloaded plugins failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }))
+  }
   // Every window that connected while the walk ran read a partial list (marked `loading`).
   // This is what tells them the list is whole now, instead of waiting on their own retry.
   bus.emit('plugin:runtime-changed', { action: 'loaded' }, ['web-ui'], { source: 'plugin-loader' })
@@ -5678,6 +5736,9 @@ export async function stopServer(): Promise<void> {
   unsubscribeLocalDaemonReady?.()
   unsubscribeLocalDaemonReady = null
   localDaemonTracker.reset()
+  // A pending recovery retry is this process's; the next boot sends its own.
+  for (const timer of recoveryRetryTimers) clearTimeout(timer)
+  recoveryRetryTimers.clear()
   // Before the plugins are disposed below: sessions and routes keep moving tasks
   // until much later, and a push that then finds no plugin is the next server's
   // to send, not an error. Also ends a boot stopped before its plugin walk did.

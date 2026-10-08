@@ -659,12 +659,18 @@ export async function removeNotification(dedupKey: string): Promise<Notification
  *
  * Returns SHALLOW CLONES of the records it changed so the caller can broadcast
  * `notification:updated` per record without handing out live store objects.
+ *
+ * `asOf` (epoch ms) is for a recovery applied after the moment it was observed
+ * (a retry of a write that failed): only cards last raised at or before it are
+ * retired, so a failure that came back in between keeps its card.
  */
 export async function recoverNotifications(
   recoveryKeys: string[],
+  opts: { asOf?: number } = {},
 ): Promise<{ recovered: NotificationRecord[] }> {
   if (recoveryKeys.length === 0) return { recovered: [] };
   const keys = new Set(recoveryKeys);
+  const { asOf } = opts;
   // A key matches a record's CONDITION (recoveryKey) or its ROOT CAUSE
   // (causeKey): `host:<alias>` recovering must retire every card that outage
   // produced, whatever condition each one was filed under.
@@ -674,6 +680,7 @@ export async function recoverNotifications(
   // companion whose cards share the feed (see NotificationRecord.origin).
   const matches = (rec: NotificationRecord): boolean =>
     writtenHere(rec)
+    && (asOf === undefined || (rec.lastTimestamp ?? rec.timestamp) <= asOf)
     && ((!!rec.recoveryKey && keys.has(rec.recoveryKey))
       || conditionKeysOf(rec).some(k => keys.has(k))
       || (!!rec.causeKey && keys.has(rec.causeKey)));
@@ -743,6 +750,41 @@ export async function expireErrorNotifications(
     for (const rec of store.notifications) {
       if (rec.kind !== 'operation-error' || rec.resolved) continue;
       if (!rec.recoveryKey || !keys.has(rec.recoveryKey)) continue;
+      rec.resolved = 'expired';
+      rec.resolvedAt = Date.now();
+      rec.severity = 'info';
+      expired.push({ ...rec });
+    }
+    return { expired };
+  }));
+}
+
+/**
+ * Stamp `expired` on THIS Walnut's unresolved `plugin:<id>` cards for plugins it
+ * does not run, last raised before `raisedBefore` (this boot's start).
+ *
+ * Such a card retires on that plugin's next success on the box that wrote it. The
+ * cloud companion runs only some plugins (one whose config lives on the primary
+ * never loads there), so a card it wrote about another one waited for a success
+ * that could not happen there, and recovery is origin-scoped, so the primary's
+ * success could not settle it either (2026-10-07: "Sync skipped: plugin not
+ * loaded", raised by the companion for edits the primary pushed).
+ */
+export async function expireOwnCardsOfUnloadedPlugins(
+  isLoaded: (pluginId: string) => boolean,
+  raisedBefore: number,
+): Promise<{ expired: NotificationRecord[] }> {
+  const stale = (rec: NotificationRecord): boolean => {
+    if (rec.kind !== 'operation-error' || rec.resolved || !writtenHere(rec)) return false;
+    const id = /^plugin:([^:]+)/.exec(rec.recoveryKey ?? '')?.[1];
+    return !!id && !isLoaded(id) && (rec.lastTimestamp ?? rec.timestamp) < raisedBefore;
+  };
+  const snapshot = await readStoreOrNull();
+  if (snapshot && !snapshot.notifications.some(stale)) return { expired: [] };
+  return withWriteLock(() => withStore((store) => {
+    const expired: NotificationRecord[] = [];
+    for (const rec of store.notifications) {
+      if (!stale(rec)) continue;
       rec.resolved = 'expired';
       rec.resolvedAt = Date.now();
       rec.severity = 'info';

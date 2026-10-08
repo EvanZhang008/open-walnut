@@ -105,6 +105,39 @@ function isLockStaleSync(lock: string): boolean {
 
 // ── Asynchronous (for server modules) ──
 
+// The async locks this process holds right now. A process that exits while it
+// holds one (a server stopping while a card is being written) used to leave the
+// lock dir behind, often with the pid file still empty: the dir is made first and
+// the pid written after. With no pid to check, waiters treat such a lock as live
+// until it is STALE_AGE_MS old, and each gives up at TIMEOUT_MS before then: on
+// 2026-10-08 the next server's boot lost its recovery write to the dead one's
+// notifications.json lock that way, twice, and the card it would have retired
+// stayed up. The exit hook gives every held lock back.
+const heldLocks = new Set<string>();
+let exitReleaseInstalled = false;
+
+/**
+ * Remove the locks this process holds. Sync, for process 'exit'. A lock whose pid
+ * file names another process is not ours any more and is left alone; an empty
+ * or missing pid file is ours (we made the dir and had not written the pid yet).
+ */
+export function releaseHeldLocksSync(): void {
+  for (const lock of heldLocks) {
+    let pid = '';
+    try { pid = fs.readFileSync(pidFile(lock), 'utf-8').trim(); } catch { /* empty or gone */ }
+    if (pid !== '' && pid !== String(process.pid)) continue;
+    try { fs.rmSync(lock, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+  heldLocks.clear();
+}
+
+function trackHeldLock(lock: string): void {
+  heldLocks.add(lock);
+  if (exitReleaseInstalled) return;
+  exitReleaseInstalled = true;
+  process.on('exit', releaseHeldLocksSync);
+}
+
 /**
  * Acquire a file lock asynchronously, run fn, release.
  * Uses setTimeout polling — non-blocking for the event loop.
@@ -120,6 +153,8 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
   while (true) {
     try {
       await fsp.mkdir(lock);
+      // Tracked before the pid write: an exit in between is the case it is for.
+      trackHeldLock(lock);
       // Write PID for liveness-based stale detection
       try { await fsp.writeFile(pidFile(lock), String(process.pid)); } catch { /* best effort */ }
       break; // Acquired
@@ -142,6 +177,9 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
   try {
     return await fn();
   } finally {
+    // Untracked first: by now the pid file names this process, so a lock the rm
+    // has not removed when the process exits reads as a dead holder's.
+    heldLocks.delete(lock);
     try { await fsp.rm(lock, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }

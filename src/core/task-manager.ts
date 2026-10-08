@@ -1,5 +1,5 @@
 import fsSync from 'node:fs';
-import { TASKS_FILE } from '../constants.js';
+import { CLOUD_MODE, TASKS_FILE } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { log } from '../logging/index.js';
 import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
@@ -2287,6 +2287,15 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   if (!plugin && !registry.isClosing() && await registry.waitForPlugins(PLUGIN_CHANGE_WAIT_MS)) {
     plugin = registry.get(task.source);
     if (plugin) task = (await getTask(task.id).catch(() => null)) ?? task;
+  }
+  if (!plugin && CLOUD_MODE) {
+    // A plugin the cloud companion does not run is the primary's to push to:
+    // every task write here also goes to the primary as an op (task-queue), which
+    // applies it with a push. Carding it here was an error no success could ever
+    // retire on this box (2026-10-07: "Sync skipped: plugin not loaded" for each
+    // phone edit of a synced task, each of which also went to the Mac).
+    log.task.info('sync left to the primary: plugin not loaded on this replica', { task: task.id, source: task.source });
+    return { success: true };
   }
   if (!plugin && registry.isClosing()) {
     // This server is stopping and has already let its plugins go. The stamp is the

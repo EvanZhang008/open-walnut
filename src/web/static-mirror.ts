@@ -176,6 +176,11 @@ export function refreshStaticMirror(opts: MirrorRefreshOptions): MirrorRefreshRe
   return result
 }
 
+/** Whether the mirror holds a usable copy of build `id` (an entry hash). */
+export function mirrorHoldsBuild(mirrorDir: string, id: string | null): boolean {
+  return !!id && isUsableGeneration(path.join(mirrorDir, GENS_DIR, id))
+}
+
 /**
  * A generation is usable only if it has the index.html AND the entry chunk that
  * index names. Anything less is a partial copy, not a build.
