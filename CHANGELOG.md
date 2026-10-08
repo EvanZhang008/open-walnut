@@ -6,6 +6,120 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-08
+
+### Added
+
+- The companion keeps an exact copy of the Mac's task store
+- The task details popup reads as a header, a main column and a rail of facts
+- A host stops waiting on a server that has stopped answering
+- A scanning line while a question is answered; one turn per question; done folds away in green
+- Pin a session fact to the header from its menu row, off by default
+- Every host reads its own copy of the notes, memory and skills
+- The cloud companion leads while the Mac is away, and the Mac takes the lead back
+- A team kanban, the Cards view beside Projects and Page
+- A task and each of its sessions show their time, with a per-day page
+- Load earlier on the session page
+- An hourly run hands mail to the task that owns it and may mark promotional mail read
+- Folder and project menus get the task menu's Pinned, Project and Sprint rows
+- Folder and project menus get setting rows like the task menu
+- A crowded task row folds its pills to one letter, and the TRIGGER pill drops its count and PAUSED
+- Each row in the Leader pill's list ends in an unlink icon that releases that worker
+- The task menu's team actions fold into one Team row, and a leader can release a worker
+- The iPhone records the places you visit once you turn Places on, and keeps them on your Mac
+- The Mac app installs the self-contained Walnut, and releases sign and notarize it
+- The model pill opens a Select model sheet, and the chat's mode pill keeps its seat
+- Completing a task from its column header rolls the column up and closes it, with an Undo
+- The Overview is a project board: a status strip, and a card per project with its tasks, the leader's text, choices and questions
+- Deploy the committed HEAD from a clean clone, and done means live on prod
+- A trigger parks its task by default, and every park a session makes sends the user a receipt
+- A one-line installer and a Homebrew formula, no Node needed
+- The Overview reads by the board's projects when the leader defined any
+- Sort and Group work in every view, and each filter page names its default
+- One model pill with its effort, a mode pill on every composer, Side question/Note/Fork in the + menu
+- Messages between sessions fold to who and a one-line title
+- The composer is a floating card; New Session's model and mode sit on its bottom row
+- Transcript pages reach back to the first message
+- The Mac keeps the places the iPhone records once the user turns Places on, and agents can read them
+
+### Fixed
+
+- The Mac app smoke waits for its daemon before removing its dir
+- A wss bridge is tested end to end, and the bridge socket always has an error listener
+- The phone's model pill shows the companion's own chat while the Mac is away
+- A replica step whose reused socket was reset goes out once more
+- A family keeps the folder made for it
+- A server restart keeps the host's SSH connection, so it needs no new login
+- A scripted fan-out's workers are not outside sessions
+- A command waiting on a socket that closed fails at once
+- A deploy no longer resends the shipped skills to every host
+- Only letters reach the phone, and no push log line carries a device token
+- The time is one fact in the session menu and the task details, never a header chip
+- A turn that ends on its idle line settles at once, not on the 30s pull
+- A self-completed session writes its last summary before it stops
+- A menu with the Pinned pills is wide enough to keep them on one line
+- A task change made while the server restarts is not a sync failure
+- One quick folder chip per folder name, not per path
+- No other process can read a session's stdin, and a stolen line goes out again
+- A working turn stays one closed run, its reasoning inside
+- A mail-only run counts only mail, and a Mac session reaches plugin ops
+- A turn past the server's reach keeps the chat and fills the gap
+- A working turn stays one closed run, its reasoning inside
+- Load earlier messages pages a transcript past the full read's byte ceiling
+- The darwin-x64 archive builds without onnxruntime's missing binary
+- A trigger's memory survives a reboot
+- The local walnut CLI runs the build that serves
+- A slow bridge link stays up, and a dead one is reset, not left draining
+- A park's clock is short and checks the trigger
+- Completing a task closes its column even when the column is pinned
+- A session that completes its own task stops when that turn ends
+- Completing a task from its column header closes the column with the ordinary fade
+- A slow start under the session host waits once more, and a failed start's card retires
+- A retired op field is dropped, so a park queued offline is not refused at replay
+- A run with nothing for the user sends no summary letter
+- A tight task column draws every pill as one letter, a lone one too
+- A fire reaches its live session on the same host while Walnut is away
+- A message the user sent runs exactly once, across crashes and restarts
+- The nightly finds the newest green commit from git, not from GitHub's branch run list
+- A whale fork's turn-end delta reaches back for its anchor too
+- A turn bigger than a whale's tail window no longer wipes the chat
+- A teammate's message is the user's, and a worker's question goes to its leader
+- This-Mac-only routes refuse a self-call made for a remote caller
+- A park sends no letter, and agents write to the inbox only when the user is needed or asked
+- A dead or slow bridge link is noticed in seconds and never starves the next one
+- The source fallback daemon starts when the server was built with name helpers
+- Only this Mac itself may act on its cloud companion
+- Sweep transfer corpses on every pull, and give the repo-size card its own lifecycle
+- An append inside the mtime's resolution is not served from the cache
+- A stable whose updater predates the archive gets no archives, and the run stays green
+- A nightly is due at 4.5h, so a check GitHub runs a little early still ships it
+- No session error card for a turn auto-continue is about to resume
+- A leader completes with its subtasks still open, and then hears nothing more from them
+- A park holds for the rest of its turn, whoever made it
+- A project card shows every task its project names, and a thread's peek line drops markdown marks
+- A plugin's push failures fold into one card across tasks
+- A full pull has a deadline, and its card waits while the delta loop is already failing
+- The rehearsal's formula takes its prerelease version, and archives skip the CUDA provider
+- Opening Display covers no bar, the filter row sits above the list, and Show tab bar keeps the menu open
+- Lock, Expand and Close end the header row in a fixed order, and the button reads Lock
+- The Apple Health history read survives a dropped connection, and recent days never wait behind it
+- Message cards name the other side by its task, never by a session id
+- The header keeps Pin on the row and fills the room beside the "..." menu
+- A reply card names the session that asked even when the tool output was cut
+- The pinned chip rail sits inside its card, so it is never stretched under the bar
+- The web-assets check has a lifecycle, a refused list shows its remedy, a redirect names the sign-in
+- Apple Health history recorded while access was off reaches the Mac
+- Ask for Apple Health only when a health question comes up, and recover after Don't Allow
+- Opening the same path again lands on it after browsing elsewhere
+- The pinned band bar keeps its chips; Show done moves into Filters
+- Board rows show the web's unread dots instead of a status line
+- An opened tool run stays open; messages to other tasks stay out of runs
+- A finished turn no longer reopens on the phone
+- "Save as todo" sits beside the send arrow
+- The Date filter drops No dates, Source folds into More filters, New task loses its frame
+- A peer is named by its tailnet machine name, not its OS hostname
+- The darwin-x64 archive builds without onnxruntime's missing binary
+
 ## [0.6.5] - 2026-10-07
 
 ### Added
