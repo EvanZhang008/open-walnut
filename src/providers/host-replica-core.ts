@@ -415,6 +415,19 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return ok({ memory, offline: true, as_of: ageOf(home, 'memory'), outcome: `Read from this host's copy of the memory (as of ${ageOf(home, 'memory')}). ${why}` })
   }
 
+  /** MEMORY.md and USER.md of this host's copy, for the offline `search` (offline-search-core.ts). */
+  function memoryDocs(home: string): Array<{ path: string; title: string; content: string }> {
+    const out: Array<{ path: string; title: string; content: string }> = []
+    if (!has(home, 'memory')) return out
+    for (const doc of ['global', 'user']) {
+      const m = jsonEntry(home, 'memory', doc) as { path?: unknown; content?: unknown } | undefined
+      if (!m || typeof m.content !== 'string') continue
+      const name = typeof m.path === 'string' && m.path ? m.path : doc === 'global' ? 'MEMORY.md' : 'USER.md'
+      out.push({ path: name, title: name, content: m.content })
+    }
+    return out
+  }
+
   function skillRead(home: string, args: Record<string, unknown>, why: string): GatewayResult {
     const dirName = str(args.dirName)
     if (!/^[A-Za-z0-9._-]+$/.test(dirName)) return fail('bad_request', 'Invalid skill name')
@@ -443,7 +456,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return OPS.filter((o) => has(home, o.kind)).map(({ kind: _kind, ...o }) => o)
   }
 
-  return { sync, put, drop, status, answer, ops, has, keeps, READ_OPS: Object.keys(READ_OPS) }
+  return { sync, put, drop, status, answer, ops, has, keeps, memoryDocs, READ_OPS: Object.keys(READ_OPS) }
 }
 
 export type HostReplica = ReturnType<typeof createHostReplica>

@@ -278,6 +278,10 @@ for (const twin of twinsToRun) {
         const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
         expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { content: RETRO, contentHash: sha12(RETRO), offline: true } })
         expect(r.ms).toBeGreaterThanOrEqual(GATEWAY_TIMEOUT - 200)
+        // A search, too: a read, so nothing is applied twice.
+        const s = await gatewayCall(d, 'search', { q: 'release' })
+        expect(s, JSON.stringify(s)).toMatchObject({ ok: true, result: { offline: true } })
+        expect(primary.relays).toContain('search')
         const w = await gatewayCall(d, 'note_write', { path: 'Projects/New', content: 'x' })
         expect(w).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
       } finally {
@@ -300,6 +304,13 @@ for (const twin of twinsToRun) {
         expect(await gatewayCall(d, 'skill_read', { dirName: 'deploy' })).toMatchObject({ ok: true, result: { skill: { content: '---\nname: deploy\n---\nRun the deploy script.' } } })
         // The task copy rides the same path.
         expect(await gatewayCall(d, 'task_get', { id: 'mtask000-0001' })).toMatchObject({ ok: true, result: { offline: true } })
+        // Search: a keyword search of this host's tasks, sessions and memory copy.
+        const found = await gatewayCall(d, 'search', { q: 'release work', types: 'task' })
+        expect(found, JSON.stringify(found)).toMatchObject({ ok: true, result: { offline: true, degraded: 'offline-keyword' } })
+        expect(found.ok && (found.result.results as Array<{ taskId: string }>).map((x) => x.taskId)).toEqual(['mtask000-0001'])
+        expect(found.ms).toBeLessThan(GATEWAY_TIMEOUT)
+        const remembered = await gatewayCall(d, 'search', { q: 'deploy script', types: 'memory' })
+        expect(remembered.ok && remembered.result.results).toEqual([expect.objectContaining({ type: 'memory', path: 'MEMORY.md' })])
         // A left-out folder is not in the copy.
         expect(await gatewayCall(d, 'note_read', { path: 'health/Checkup' })).toMatchObject({ ok: false, error: { code: 'not_found' } })
         // Its own task: written here at once, journaled for the server.

@@ -27,6 +27,7 @@
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
 import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 import type { HostReplica } from './host-replica-core.js'
+import type { OfflineSearch } from './offline-search-core.js'
 import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
 
 /** `aside`: an environment or lane session, which the server never picks as a message's address by name. */
@@ -175,6 +176,8 @@ export interface OfflineHostDeps {
   replica?: HostReplica
   /** The post-compaction block's wording (open-items-text.ts); absent: open_items needs the server. */
   openItems?: OpenItemsText
+  /** Keyword search of this host's copy (offline-search-core.ts); absent: search needs the server. */
+  search?: OfflineSearch
 }
 
 /** A message the leader routes to a session of this host (`leader.deliver`). */
@@ -230,6 +233,9 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       { name: 'board_post', title: 'Post in a Board thread (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] thread text' },
       { name: 'board_project_set', title: 'Set a Board project (applied here, sent later)', description: 'Applied to this host\'s copy now and to Walnut when the server reconnects.', readonly: false, signature: '[task] id ...fields' },
     )
+  }
+  if (deps.search) {
+    OFFLINE_OPS.push({ name: 'search', title: 'Search Walnut (copy on this host)', description: 'Keyword search of the tasks and sessions this host keeps, and its copy of the memory; the server\'s semantic ranking and its transcripts need the server.', readonly: true, signature: 'q [types] [limit]' })
   }
   if (deps.openItems) {
     OFFLINE_OPS.push({ name: 'open_items', title: 'What is still open for your task (copy on this host)', description: 'Unfinished subtasks and pending reply requests, as this host\'s copy has them; also what Walnut puts into your context after a compaction.', readonly: true, signature: '[hook]' })
@@ -503,6 +509,25 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       count: Math.min(limit, all.length), total: all.length, truncated: all.length > limit,
       tasks: all.slice(0, limit),
       hint: `${offlineNote(home)} Only tasks of this host's sessions (and their parents and children) are listed.`,
+    })
+  }
+
+  /** `search` from this host's copy: its tasks (with the writes made here), its sessions, its memory copy. */
+  function opSearch(home: string, args: Record<string, unknown>): GatewayResult {
+    const slice = slices.get(home)
+    const tasks = tasksWithOverlay(home) as Array<OfflineSliceTask & { note?: string; summary?: string }>
+    const titleOf = new Map(tasks.map((t) => [t.id, t.title]))
+    const sessions = (slice?.sessions ?? []).filter((x) => !x.aside).map((x) => ({
+      id: x.sid, title: x.title, taskId: x.taskId, taskTitle: x.taskId ? titleOf.get(x.taskId) : undefined,
+    }))
+    const memory = deps.replica ? deps.replica.memoryDocs(home) : []
+    const r = deps.search!.run({ q: args.q, types: args.types, limit: args.limit, tasks, sessions, memory })
+    if (!r.ok) return fail('bad_request', r.error)
+    const kept = 'the tasks and sessions of this host' + (memory.length > 0 && r.types.indexOf('memory') !== -1 ? ' and its copy of the memory' : '')
+    return ok({
+      results: r.results, queryTokens: r.tokens, offline: true, degraded: 'offline-keyword', as_of: asOf(home),
+      outcome: `${r.results.length} result${r.results.length === 1 ? '' : 's'} from a keyword search of ${kept}. Tasks of other hosts and session transcripts need the server. ${offlineNote(home)}`,
+      next: r.results.length > 0 ? 'Open a task with task_get; search notes with note_search.' : 'Try fewer or other words, or note_search for the notes.',
     })
   }
 
@@ -1078,6 +1103,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
         case 'request_get': return opRequestGet(home, args)
         case 'task_send': case 'session_send': return await opTaskSend(home, callerSid, args)
         case 'open_items': if (deps.openItems) return opOpenItems(home, callerSid, args); return needsServer('"open_items"')
+        case 'search': if (deps.search) return opSearch(home, args); return needsServer('"search"')
         default: {
           const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
           if (fromCopy) return fromCopy

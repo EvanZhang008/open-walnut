@@ -534,6 +534,19 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     expect(after.json).toMatchObject({ current: 'sonnet', currentEffort: 'low', offline: true })
   }, 60_000)
 
+  it('while the Mac sleeps, a session\'s search and the phone\'s both reach the companion\'s copy of every task', async () => {
+    // The far task is in no host's copy: only the companion holds it.
+    const fromHost = await gatewayCall(devbox, A, 'search', { q: 'release notes', types: 'task' })
+    expect(fromHost.ok, JSON.stringify(fromHost)).toBe(true)
+    if (fromHost.ok) expect((fromHost.result.results as Array<{ taskId?: string }>).map((r) => r.taskId)).toContain(primary.ids.far)
+    const started = Date.now()
+    const phone = await api(companion, '/api/v1/search?q=release%20notes&types=task')
+    expect(phone.status, JSON.stringify(phone.json)).toBe(200)
+    expect(phone.json).toMatchObject({ offline: true, degraded: 'offline-keyword' })
+    expect((phone.json.results as Array<{ taskId?: string }>).map((r) => r.taskId)).toContain(primary.ids.far)
+    expect(Date.now() - started).toBeLessThan(3_000)
+  }, 60_000)
+
   it('the Mac wakes: it takes back what the hosts did, takes the lead back, and the companion lets go', async () => {
     for (const pid of macPids()) process.kill(pid, 'SIGCONT')
     const states = await waitFor(async () => {

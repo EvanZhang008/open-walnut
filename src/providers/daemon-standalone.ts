@@ -75,6 +75,7 @@ import { createClaudeCheck } from './claude-check-core.js'
 import { createOfflineHost, type HostSlice, type LeaderDelivery } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createLiveSettings } from './live-settings-core.js'
+import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
@@ -2539,6 +2540,7 @@ const offlineHost = createOfflineHost({
   boards: createBoardOffline(),
   replica: hostReplica,
   openItems: createOpenItemsText(),
+  search: createOfflineSearch(),
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
@@ -2786,6 +2788,15 @@ function sendGatewayRequest(
   // Answer here while the Walnut is away, and while its server is still taking
   // the handover: an id it has not imported yet must never reach it.
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
+    // A search goes to the companion first while it leads: its copy holds every
+    // task, this host's only its own. Answered here when the companion cannot.
+    if (!target && capability === 'tools.call' && payload.name === 'search') {
+      const here = () => { void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse)) }
+      if (forwardToBackup(home, capability, callerSid, payload, (resp) => { if (resp.ok) respond(resp); else here() })) return
+      logMsg('info', 'gateway: answered offline', { capability, callerSid, op: 'search', serverConnected: false })
+      here()
+      return
+    }
     logMsg('info', 'gateway: answered offline', { capability, callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target })
     void offlineHost.handle(home, callerSid, capability, payload).then((r) => {
       // What this host cannot answer itself goes to the companion while it

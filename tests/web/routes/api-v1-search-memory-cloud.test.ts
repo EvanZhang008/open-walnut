@@ -1,7 +1,8 @@
 /**
  * /api/v1 search + notifications — CLOUD_MODE (REPLICA) behavior.
- * Global search is C-class (the QMD store never initializes on the cloud
- * box) → explicit 501 not_supported_cloud. Notifications are B-class: the
+ * Global search is relayed to the primary (the search index never initializes
+ * on the cloud box); when the primary cannot answer, the replica answers with a
+ * keyword search of its own copies, marked offline. Notifications are B-class: the
  * durable store lives on the primary, so the replica relays through the
  * `session.control` command's `server.*` action family (bridge mocked at its
  * module seam). Notes search stays local (its semantic leg self-gates on
@@ -75,18 +76,22 @@ describe('global search B-relay on a REPLICA', () => {
     )
   })
 
-  it('GET /search → 501 not_supported_cloud when the bridge is down (honest degraded state)', async () => {
+  it('GET /search with the bridge down: a keyword search of this box\'s task copy, marked offline', async () => {
+    const { addTask } = await import('../../../src/core/task-manager.js')
+    const { task } = await addTask({ title: 'Rollback drill checklist', project: 'Acme', description: 'Smoke, tag, notes.' })
+    await addTask({ title: 'Unrelated groceries', project: 'Home' })
     bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
-    const res = await request(createApp()).get('/api/v1/search?q=anything')
-    expect(res.status).toBe(501)
-    expect(res.body.error.code).toBe('not_supported_cloud')
+    const res = await request(createApp()).get('/api/v1/search?q=rollback%20drill&types=task')
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ offline: true, degraded: 'offline-keyword' })
+    expect(res.body.results.map((r: { taskId?: string }) => r.taskId)).toEqual([task.id])
   })
 
-  it('GET /search → 501 not_supported_cloud when the primary predates server.search', async () => {
+  it('GET /search when the primary predates server.search: the same keyword search', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Unknown control action: server.search', errorKind: 'bad_request' })
     const res = await request(createApp()).get('/api/v1/search?q=anything')
-    expect(res.status).toBe(501)
-    expect(res.body.error.code).toBe('not_supported_cloud')
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ results: [], offline: true })
   })
 
   it('GET /search without q → 400 before any relay', async () => {

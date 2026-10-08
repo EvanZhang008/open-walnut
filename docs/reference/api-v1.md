@@ -54,7 +54,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `session_launch_needs_upgrade` | 400 | Session creation via the cloud companion when the primary's daemon predates the `session.launch` relay — self-heals on the next primary-box reconnect (auto-deploy) |
 | `session_control_needs_upgrade` | 400 | Any `session.control`-relayed action (model/effort/fork/lifecycle/notifications) via the cloud companion when the primary's daemon OR server predates that action — self-heals on the next primary-box upgrade/reconnect |
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
-| `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all (e.g. global search needs the primary's semantic index) |
+| `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
 | `subtask_too_deep` | 409 | `POST /tasks` from a session: the new task would be its subtask more than 3 levels below a top-level task. Nothing is created |
@@ -151,7 +151,7 @@ path on the companion".
 | DELETE | `/api/v1/conversations/:id` | Delete a conversation (main is protected) |
 | POST | `/api/v1/conversations/:id/stop` | Stop the agent's active turn(s) |
 | POST | `/api/v1/conversations/:id/answer` | Retired: always `409 conflict` (nothing can hold a question) |
-| GET | `/api/v1/search` | Global search: tasks/memory/sessions (501 on REPLICA) |
+| GET | `/api/v1/search` | Global search: tasks/memory/sessions (REPLICA: relayed to the primary; a keyword search of the replica's task copy while it is away) |
 | GET | `/api/v1/notes/search` | Hybrid notes search (string leg only on REPLICA) |
 | GET | `/api/v1/memory/browse` | Memory source tree (metadata only) |
 | GET | `/api/v1/memory?category=` | List memory entries |
@@ -2004,8 +2004,12 @@ like the other conversation endpoints (absent → `general`).
 
 - `GET /api/v1/search?q=&types=task,memory,session&limit=` →
   `200 { "results": [ { type, id?, title, snippet?, score, … } ] }` — the
-  console's global search (string + semantic legs). **REPLICA: `501
-  not_supported_cloud`** (the semantic index lives on the primary only).
+  console's global search (string + semantic legs). **REPLICA**: relayed to
+  the primary (the semantic index lives there). While the primary is away, or
+  the relay cannot serve (2026-10), a keyword search of the replica's own task
+  copy answers instead, with `"offline": true` and
+  `"degraded": "offline-keyword"`; its session lane holds only the sessions the
+  replica runs itself. Before 2026-10 that case was `501 not_supported_cloud`.
 - `GET /api/v1/notes/search?q=&mode=hybrid|string|semantic&limit=&all=1` →
   `200 { "results": [ { id, path, title, snippet, matchType, … } ],
   "folders"?, "degraded"? }` — the notes panel's hybrid search. Works on BOTH

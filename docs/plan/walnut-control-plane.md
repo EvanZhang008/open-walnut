@@ -301,6 +301,29 @@ phone ──► companion ──(Mac away)──► the session's row in the Mac
   Mac adopts them without sending anything, so it never writes older values
   back.
 
+## Search while the Mac is away
+
+While the Mac answers, search is the Mac's, for a phone and for a session on
+any host: its index has the semantic ranking and every transcript. While it is
+away, each side searches what it holds, by keyword:
+
+| Who asks | The Mac answers | The Mac away, the companion leads | The Mac away, nobody leads |
+|---|---|---|---|
+| A session on a host (`search`) | the Mac | the companion's copy of every task (its `search` op on its own store) | this host's copy: its tasks (with the writes made here), its sessions, its memory copy (`offline-search-core.ts`) |
+| The phone (`GET /api/v1/search`) | the Mac (the forward) | the companion's copy of every task, at once | the same |
+
+- On a host, `search` goes to the companion first while it leads, and is
+  answered from the host's own copy when the companion cannot. A Mac that is
+  heard but does not answer gets the read from the copy at the timeout, as
+  every read does. Notes keep their own `note_search`, from the host's copy.
+- On the companion, a phone's search while the Mac is away (or when the relay
+  cannot serve) is a keyword search of its task copy, marked `offline` and
+  `degraded: 'offline-keyword'`, no longer a 501. Its session lane holds only
+  the sessions the companion runs itself.
+- Ranking on a host follows `note_search`: every word first, then the rows with
+  the most words; a title hit over a body hit, the whole phrase over scattered
+  words; a finished task below an open one.
+
 ## Settings
 
 `cloud_bridge.backup_leader` (Settings, Phones & Cloud, "Cloud companion takes
@@ -342,6 +365,9 @@ every host and the companion at once.
 | Mac asleep, the phone switches a remote session's model or effort | the companion has the host apply it to the live CLI; the Mac keeps it when it wakes |
 | Mac asleep, a session on the Mac itself | the picker reads from the copy; a change says the Mac is offline |
 | Mac asleep, the companion not leading yet | a change says it takes over within about a minute |
+| Mac asleep, a session searches, the companion leads | the companion's copy of every task answers |
+| Mac asleep, a session searches, no companion | its host's copy answers by keyword: its tasks, sessions and memory |
+| Mac asleep, the phone searches | the companion's task copy answers at once, marked offline |
 
 ## Tests
 
@@ -392,7 +418,17 @@ every host and the companion at once.
   `tests/integration/leader-takeover-twins.test.ts` (real daemon processes: a
   live session's CLI gets the change, an old epoch is refused), and the live
   e2e above (the phone's picker and switch on a real companion while the Mac
-  sleeps, the Mac's record after the wake).
+  sleeps, the Mac's record after the wake), and
+  `tests/core/projection-self-heal-catalogs.test.ts` (the 5-minute sweep keeps
+  the catalogs on the companion's copy).
+- Search while the Mac is away: `tests/providers/offline-search-core.test.ts`
+  (the ranking), `tests/providers/offline-host-core.test.ts` (the host's op),
+  `tests/providers/leader-twins.test.ts` (both twins: the companion first),
+  `tests/integration/host-replica-twins.test.ts` (real daemon processes: the Mac
+  asleep and stuck), `tests/web/routes/api-v1-search-mac-away.test.ts` and
+  `tests/web/routes/api-v1-search-memory-cloud.test.ts` (the phone's route),
+  and the live e2e above (a session's search and the phone's reach the
+  companion's copy of a task no host holds).
 
 ## Not yet
 
@@ -404,12 +440,12 @@ every host and the companion at once.
   "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).
 - Answers the companion gives alone while the Mac is away for what only the Mac
-  holds today (usage, search): copies of those stores, and the other session
+  holds today (usage): a copy of that store, and the other session
   controls (stop, interrupt, permission mode) sent straight to the host's daemon
   while the companion leads.
-- Search on a host while the Mac is away, over its own copy (keyword first; the
-  Mac's vectors and a query embedder for meaning). While the Mac answers, search
-  stays on the Mac.
+- Search by meaning while the Mac is away (the Mac's vectors on the host and the
+  companion, and a query embedder there), and the Mac's sessions in the
+  companion's search.
 - Calls the forward cannot carry yet: a device's own identity (`devices/self`,
   `instance`, `routes` stay the companion's), replies over 256 KB, and non-JSON
   bodies.

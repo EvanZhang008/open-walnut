@@ -13,6 +13,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createLeaderBook } from '../../src/providers/leader-core.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
 import { createLiveSettings } from '../../src/providers/live-settings-core.js'
+import { createOfflineSearch } from '../../src/providers/offline-search-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
@@ -110,6 +111,21 @@ describe('leader protocol: both twins', () => {
       expect(src).toMatch(/if \(parsed\.type === 'control_response'\) liveSettings\.noteResponse\(sid, parsed\);?\n\s*if \(parsed\.type === 'control_request' && parsed\.request_id/)
     })
 
+    it(`${name}: search goes to the companion first while it leads, and is answered from this host's copy when it cannot`, () => {
+      expect(src).toMatch(/search: (createOfflineSearch\(\)|\(__CREATE_OFFLINE_SEARCH__\)\(\))/)
+      const send = fnBody(src, 'sendGatewayRequest')
+      const guard = send.indexOf("payload.name === 'search'")
+      const forward = send.indexOf('forwardToBackup(home, capability, callerSid, payload, ', guard)
+      const general = send.indexOf("r.error.code === 'hub_unreachable' && !target")
+      expect(guard).toBeGreaterThan(-1)
+      expect(forward).toBeGreaterThan(guard)
+      // Before the general path, and only with no server to ask.
+      expect(general).toBeGreaterThan(forward)
+      expect(send.slice(guard - 80, guard)).toMatch(/!target && capability === 'tools\.call' && $/)
+      // The companion's failure falls back to this host's own answer.
+      expect(send.slice(forward, forward + 160)).toMatch(/if \(resp\.ok\) respond\(resp\);? else here\(\)/)
+    })
+
     it(`${name}: the offline host keeps boards and relays answers for another host through the companion`, () => {
       expect(src).toMatch(/boards: (createBoardOffline\(\)|\(__CREATE_BOARD_OFFLINE__\)\(\))/)
       expect(src).toMatch(/forwardToBackup\(home, 'leader\.deliverText'/)
@@ -120,7 +136,7 @@ describe('leader protocol: both twins', () => {
   it('both cores are part of the daemon version hash, in the build script', () => {
     const versionSrc = read('src/providers/daemon-version-check.ts')
     const buildSrc = read('scripts/build-daemon.sh')
-    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts']) {
+    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts']) {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
     }
@@ -133,7 +149,8 @@ describe('the source twin template', () => {
     expect(rendered).not.toContain('__CREATE_LEADER_BOOK__')
     expect(rendered).not.toContain('__CREATE_BOARD_OFFLINE__')
     expect(rendered).not.toContain('__CREATE_LIVE_SETTINGS__')
-    for (const fn of [createLeaderBook, createBoardOffline, createLiveSettings]) {
+    expect(rendered).not.toContain('__CREATE_OFFLINE_SEARCH__')
+    for (const fn of [createLeaderBook, createBoardOffline, createLiveSettings, createOfflineSearch]) {
       const text = fn.toString()
       expect(text).not.toMatch(/__name\(|__vite|import\(/)
       expect(rendered).toContain(text)

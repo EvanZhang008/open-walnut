@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineHost, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
+import { createOfflineSearch } from '../../src/providers/offline-search-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
 import { buildReplyTrailer, buildReplyDeliveryText, buildRequestNotification, clipNoticeMessage, type SessionRequest } from '../../src/core/session-requests.js'
@@ -164,6 +165,62 @@ describe('offline host: the read copy', () => {
     const r = await h.host.handle(HOME, A, 'tools.list', {})
     expect(r.ok && (r.result.ops as Array<{ name: string }>).map((o) => o.name)).toEqual(
       ['task_get', 'task_list', 'session_list', 'task_send', 'request_get', 'task_update', 'task_complete'])
+  })
+})
+
+describe('offline host: search from the copy', () => {
+  function searching(memory: Array<{ path: string; title: string; content: string }> = []) {
+    const h = harness()
+    const replica = { memoryDocs: () => memory, ops: () => [], answer: () => null, keeps: () => false } as unknown as NonNullable<OfflineHostDeps['replica']>
+    const host = createOfflineHost({ ...h.deps, search: createOfflineSearch(), replica })
+    host.configure(slice({
+      tasks: [
+        ...slice().tasks,
+        { id: 'mtaskddd-0005', title: 'Release checklist', phase: 'TODO', project: 'Acme', description: 'Rollback drill before the tag.' },
+      ],
+    }))
+    return { ...h, host }
+  }
+
+  it('finds tasks and sessions of this host by keyword, in the server\'s row shape, marked offline', async () => {
+    const h = searching()
+    const r = await call(h, A, 'search', { q: 'build page' })
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    if (!r.ok) return
+    expect(r.result).toMatchObject({ offline: true, degraded: 'offline-keyword', as_of: '2026-09-28T10:00:00.000Z' })
+    const rows = r.result.results as Array<{ type: string; taskId?: string; sessionId?: string }>
+    expect(rows.map((x) => [x.type, x.type === 'session' ? x.sessionId : x.taskId])).toEqual([['task', 'mtaskbbb-0002'], ['session', B]])
+    expect(String(r.result.outcome)).toMatch(/keyword search of the tasks and sessions of this host/)
+  })
+
+  it('a description hit, a write made here, and the memory copy', async () => {
+    const h = searching([{ path: 'MEMORY.md', title: 'MEMORY.md', content: '- deploy with the script\n' }])
+    const drill = await call(h, A, 'search', { q: 'rollback drill', types: 'task' })
+    expect(drill.ok && (drill.result.results as Array<{ taskId: string; matchField: string }>)[0]).toMatchObject({ taskId: 'mtaskddd-0005', matchField: 'description' })
+    // A queued write is searched as this host shows it.
+    await call(h, A, 'task_update', { id: 'mtaskccc-0003', description: 'waiting on the flaky runner' })
+    const queued = await call(h, A, 'search', { q: 'flaky runner' })
+    expect(queued.ok && (queued.result.results as Array<{ taskId: string }>).map((x) => x.taskId)).toEqual(['mtaskccc-0003'])
+    const memory = await call(h, A, 'search', { q: 'deploy script', types: 'memory' })
+    expect(memory.ok && memory.result.results).toEqual([expect.objectContaining({ type: 'memory', path: 'MEMORY.md' })])
+    expect(memory.ok && String(memory.result.outcome)).toContain('its copy of the memory')
+  })
+
+  it('a bad query is a bad_request; search is listed and is a read', async () => {
+    const h = searching()
+    const bad = await call(h, A, 'search', { q: '' })
+    expect(!bad.ok && bad.error.code).toBe('bad_request')
+    const list = await h.host.handle(HOME, A, 'tools.list', {})
+    expect(list.ok && (list.result.ops as Array<{ name: string }>).map((o) => o.name)).toContain('search')
+    expect(h.host.answersRead('search', HOME)).toBe(true)
+  })
+
+  it('without the search core it needs the server, as before', async () => {
+    const h = harness()
+    h.host.configure(slice())
+    const r = await call(h, A, 'search', { q: 'build' })
+    expect(!r.ok && r.error.code).toBe('hub_unreachable')
+    expect(h.host.answersRead('search', HOME)).toBe(false)
   })
 })
 

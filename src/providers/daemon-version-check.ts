@@ -158,6 +158,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/leader-core.ts',
   // A model or effort change while the companion leads: same rule.
   'src/providers/live-settings-core.ts',
+  // The offline search on a host: same rule.
+  'src/providers/offline-search-core.ts',
   'src/providers/offline-board-core.ts',
   'src/providers/host-replica-core.ts',
   'src/core/sessions/open-items-text.ts',

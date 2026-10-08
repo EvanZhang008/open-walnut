@@ -50,6 +50,7 @@ import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHost } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createLiveSettings } from './live-settings-core.js'
+import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
@@ -235,6 +236,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_HOST__', createOfflineHost.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
+    ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
@@ -403,6 +405,12 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     if (createLive) {
       const live = createLive({ writeLine: async () => 'not_found', randomHex: () => '00', now: () => 0, log: () => {} })
       if (typeof live.apply !== 'function' || live.pending() !== 0) throw new Error('live settings did not build')
+    }
+    // Offline search smoke: a reconstructed copy must find a task by a word of its title.
+    const createSearch = reconstructed['__CREATE_OFFLINE_SEARCH__'] as typeof createOfflineSearch | undefined
+    if (createSearch) {
+      const r = createSearch().run({ q: 'drill', tasks: [{ id: 't1', title: 'Rollback drill' }], sessions: [], memory: [] })
+      if (!r.ok || r.results[0]?.taskId !== 't1') throw new Error('offline search did not build')
     }
     // Host runtime smoke: the spawn gate and the boot PATH ride this text, so a
     // reconstructed copy must classify an npm shebang and keep the user's PATH first.
@@ -3661,6 +3669,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   boards: (__CREATE_BOARD_OFFLINE__)(),
   openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
   replica: hostReplica,
+  search: (__CREATE_OFFLINE_SEARCH__)(),
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
@@ -3875,6 +3884,14 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   }
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
+    // A search goes to the companion first while it leads (twin of daemon-standalone.ts).
+    if (!target && capability === 'tools.call' && payload.name === 'search') {
+      var here = function () { offlineHost.handle(home, callerSid, capability, payload).then(function (r) { respond(r); }); };
+      if (forwardToBackup(home, capability, callerSid, payload, function (resp) { if (resp.ok) respond(resp); else here(); })) return;
+      logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: 'search', serverConnected: false });
+      here();
+      return;
+    }
     logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target });
     offlineHost.handle(home, callerSid, capability, payload).then(function (r) {
       // What this host cannot answer itself goes to the companion while it leads.
