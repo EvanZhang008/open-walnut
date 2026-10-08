@@ -33,7 +33,10 @@
 import { sendMessage } from '../model/model.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { log } from '../logging/index.js';
-import { fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled } from './cheap-model.js';
+import {
+  fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled, fastCallBudgetMs, CLI_FAST_CALL_BUDGET_MS,
+} from './cheap-model.js';
+import type { CallPurpose } from '../model/providers/types.js';
 import type { Task } from './types.js';
 
 const SUBSCRIBER = 'project-summary';
@@ -53,12 +56,27 @@ const CATCHUP_DELAY_MS = 120_000;
 const THRESHOLDS = [1, 2, 4, 8, 20];
 const STEP = 20;
 const MAX_TASKS_IN_PROMPT = 30;
+/** One generation attempt over a direct API (a CLI attempt gets fastCallBudgetMs). */
+const DIRECT_ATTEMPT_MS = 15_000;
+/**
+ * The whole of one "Regenerate summary" click: the direct attempt, then the CLI
+ * fallback with its own budget. The server stops the turn by then, and the web
+ * client waits longer than this (REGENERATE_SUMMARY_TIMEOUT_MS in
+ * web/src/api/projects.ts), so the spinner never stops while the server still
+ * works on the click. It used to give up at 15 s with the CLI turn holding a
+ * slot for up to 45 s more, and every repeat click started another.
+ */
+export const SUMMARY_REGENERATE_DEADLINE_MS = DIRECT_ATTEMPT_MS + CLI_FAST_CALL_BUDGET_MS;
 
 let queueTail: Promise<void> = Promise.resolve();
 const pendingSync = new Map<string, ReturnType<typeof setTimeout>>();
 let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
+/** On-demand regenerates in flight, by project (NOCASE): repeat clicks join one. */
+const onDemand = new Map<string, { promise: Promise<boolean>; stop: AbortController; waiting: number }>();
 
 export function __resetProjectSummaryState(): void {
+  for (const run of onDemand.values()) run.stop.abort();
+  onDemand.clear();
   queueTail = Promise.resolve();
   for (const timer of pendingSync.values()) clearTimeout(timer);
   pendingSync.clear();
@@ -115,7 +133,14 @@ function projectSummaryTasks<T extends SummaryTaskLike>(all: readonly T[], proje
  */
 export async function generateProjectSummary(
   project: string,
-  opts: { timeoutMs?: number; modelOverride?: string; tasks?: readonly SummaryTaskLike[] } = {},
+  opts: {
+    timeoutMs?: number; modelOverride?: string; tasks?: readonly SummaryTaskLike[];
+    /** Who waits: the regenerate route's user (interactive, the default) or nobody
+     *  (the task-count maintainer and the boot catch-up, background). */
+    purpose?: CallPurpose;
+    /** Stops the model turn (the requester went away, or its deadline passed). */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<ProjectSummaryResult | null> {
   const name = (project ?? '').trim();
   if (!name) return null; // Inbox
@@ -150,12 +175,12 @@ export async function generateProjectSummary(
     // it blew the 15s budget often enough that most projects had no summary).
     // Prefer a configured direct-API haiku, keeping the CLI as the fallback so
     // CLI-only setups lose nothing.
+    const { getConfig } = await import('./config-manager.js');
+    const config = await getConfig();
     let model = opts.modelOverride;
     let provider: string | undefined;
     let cliFallbackModel: string | undefined;
     if (!model) {
-      const { getConfig } = await import('./config-manager.js');
-      const config = await getConfig();
       const direct = fastModelRidesCli(config) ? directFastRoute(config) : undefined;
       if (direct) {
         provider = direct.provider;
@@ -176,7 +201,10 @@ export async function generateProjectSummary(
 
     const attempt = async (prov: string | undefined, mdl: string | undefined) => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 15_000);
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? fastCallBudgetMs(config, DIRECT_ATTEMPT_MS, prov));
+      const stop = (): void => controller.abort();
+      opts.signal?.addEventListener('abort', stop, { once: true });
+      if (opts.signal?.aborted) controller.abort();
       try {
         // Small maxTokens: Haiku's 64K catalog default trips the SDK's
         // "streaming required" guard on the non-streaming path.
@@ -185,19 +213,25 @@ export async function generateProjectSummary(
           messages: [{ role: 'user', content }],
           config: { maxTokens: 256, ...(prov ? { provider: prov } : {}), ...(mdl ? { model: mdl } : {}) },
           signal: controller.signal,
+          // The maintainer's refresh is background (the utility band when the
+          // server was raised); "Regenerate summary" is a person waiting.
+          purpose: opts.purpose ?? 'interactive',
         });
       } finally {
         clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', stop);
       }
     };
 
+    if (opts.signal?.aborted) return null;
     let result;
     try {
       result = await attempt(provider, model);
     } catch (err) {
       // Direct route unavailable (no creds, network) → the CLI path is still
-      // a real answer for CLI-only setups; give it its own full budget.
-      if (!provider) throw err;
+      // a real answer for CLI-only setups; give it its own full budget. Not
+      // when the caller stopped the call: nobody waits for the fallback.
+      if (!provider || opts.signal?.aborted) throw err;
       log.web.debug('project-summary: direct route failed, retrying via main provider', {
         project: name, provider, errorKind: err instanceof Error ? err.name : typeof err,
       });
@@ -224,14 +258,18 @@ export async function generateProjectSummary(
   }
 }
 
-/** Generate + persist into the project registry. For the rebuild route + tests. */
+/**
+ * Generate + persist into the project registry. For the rebuild route, the
+ * maintainer and tests. The caller says who waits (`purpose`): the route's user
+ * is interactive, the maintainer's refresh is background.
+ */
 export async function refreshProjectSummary(
   project: string,
-  opts: { tasks?: readonly SummaryTaskLike[] } = {},
+  opts: { tasks?: readonly SummaryTaskLike[]; purpose: CallPurpose; signal?: AbortSignal },
 ): Promise<boolean> {
   const name = (project ?? '').trim();
   if (!name) return false;
-  const generated = await generateProjectSummary(name, { tasks: opts.tasks });
+  const generated = await generateProjectSummary(name, { tasks: opts.tasks, purpose: opts.purpose, signal: opts.signal });
   if (!generated) return false;
   const { setProjectMetadata } = await import('./task-manager.js');
   await setProjectMetadata(name, {
@@ -242,6 +280,49 @@ export async function refreshProjectSummary(
     project: name, taskCount: generated.taskCount,
   });
   return true;
+}
+
+/**
+ * "Regenerate summary" (both routes): an interactive refresh that ends with its
+ * requesters. A request for a project already regenerating joins that run (a
+ * repeat click, a second tab, the phone) instead of starting another turn; the
+ * turn stops when every requester has gone (`signal` aborts: the route's
+ * response closed) or at SUMMARY_REGENERATE_DEADLINE_MS.
+ */
+export function regenerateSummaryOnDemand(
+  project: string, signal?: AbortSignal, opts: { deadlineMs?: number } = {},
+): Promise<boolean> {
+  const name = (project ?? '').trim();
+  if (!name) return Promise.resolve(false);
+  const key = name.toLowerCase();
+  let run = onDemand.get(key);
+  if (!run) {
+    const stop = new AbortController();
+    const deadline = setTimeout(() => stop.abort(), opts.deadlineMs ?? SUMMARY_REGENERATE_DEADLINE_MS);
+    deadline.unref?.();
+    const entry = { stop, waiting: 0, promise: Promise.resolve(false) };
+    entry.promise = refreshProjectSummary(name, { purpose: 'interactive', signal: stop.signal })
+      .finally(() => {
+        clearTimeout(deadline);
+        if (onDemand.get(key) === entry) onDemand.delete(key);
+      });
+    onDemand.set(key, entry);
+    run = entry;
+  }
+  const joined = run;
+  joined.waiting++;
+  let left = false;
+  const leave = (): void => {
+    if (left) return;
+    left = true;
+    if (--joined.waiting > 0) return;
+    // Nobody waits any more: stop the turn, and let the next click start afresh.
+    joined.stop.abort();
+    if (onDemand.get(key) === joined) onDemand.delete(key);
+  };
+  if (signal?.aborted) leave();
+  else signal?.addEventListener('abort', leave, { once: true });
+  return joined.promise.finally(() => signal?.removeEventListener('abort', leave));
 }
 
 /**
@@ -267,7 +348,7 @@ async function gateAndRefresh(project: string, context: string): Promise<boolean
     const hasSummary = typeof meta?.summary === 'string' && meta.summary.trim().length > 0;
     if (!hasCrossedThreshold(hasSummary ? lastCount : 0, tasks.length)) return false;
 
-    return await refreshProjectSummary(project, { tasks });
+    return await refreshProjectSummary(project, { tasks, purpose: 'background' });
   } catch (err) {
     log.web.warn('project-summary: refresh check failed', {
       project, context, error: err instanceof Error ? err.message : String(err),
@@ -336,7 +417,7 @@ export async function runSummaryCatchUp(): Promise<number> {
       const hasSummary = typeof meta?.summary === 'string' && meta.summary.trim().length > 0;
       if (!hasCrossedThreshold(hasSummary ? lastCount : 0, tasks.length)) continue;
 
-      if (await refreshProjectSummary(name, { tasks })) {
+      if (await refreshProjectSummary(name, { tasks, purpose: 'background' })) {
         refreshed += 1;
         consecutiveFailures = 0;
       } else {

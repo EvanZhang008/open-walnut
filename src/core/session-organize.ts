@@ -19,7 +19,7 @@
 
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastModelFor } from './cheap-model.js';
+import { fastCallBudgetMs, fastModelFor } from './cheap-model.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
 import type { Config } from './types.js';
 
@@ -170,7 +170,7 @@ export async function suggestSessionPlacement(
     ].join('\n');
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10_000);
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? fastCallBudgetMs(config, 10_000));
     let result;
     try {
       // maxTokens stays small: Haiku catalog default (64K) trips the SDK's
@@ -180,6 +180,8 @@ export async function suggestSessionPlacement(
         messages: [{ role: 'user', content }],
         config: { maxTokens: 128, ...(model ? { model } : {}) },
         signal: controller.signal,
+        // A helper nobody waits on: the utility band when the server was raised.
+        purpose: 'background',
       });
     } finally {
       clearTimeout(timer);

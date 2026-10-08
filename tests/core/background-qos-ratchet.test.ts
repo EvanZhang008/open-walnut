@@ -4,24 +4,23 @@
  * server to Interactive and asked for it. When it did, every child below would
  * otherwise inherit priority 31 and compete with the server it was meant to
  * leave room for: the local daemon (and every agent session under it), the
- * embedding model workers, the git backups and gc, and the history compaction.
+ * embedding model workers, the git backups and gc, the history compaction, and
+ * the model adapter's `claude -p` turns for helpers nobody waits on
+ * (`purpose: 'background'`, tests/model/model-call-purpose.test.ts).
  *
  * Left in the server's band on purpose (user-facing or too short to matter):
  * the terminal PTY, voice input, the editor server, the files and git routes,
- * the Personal AI's own CLI turns and subagents (the user waits on those), the
+ * model calls a person waits on, the Personal AI's own CLI turns and subagents
+ * (the user waits on those), the
  * warm search-agent CLI (micro-claude-warm.ts, same reason), the
  * outside-activity sampler (a few ms per 5 s, and its macOS permission grant
  * is tied to how it is launched), and one-shot probes and setup (ps, sysctl,
  * lsof, the data repo's init and remote reads at boot).
  *
- * Not yet clamped, and not on purpose: the model adapter's `claude -p` turns
- * (src/model/providers/adapter-claude-cli.ts) also carry background callers
- * (titles, triage, summaries), but the call carries no purpose, so a clamp
- * there would slow the Personal AI chat too.
- *
  * A source ratchet like the other spawn rules (signal-call-ratchet): a site
- * that drops the clamp fails here; tests/providers/local-daemon-qos-spawn.test.ts
- * and tests/lib/hybrid-search-embed-launcher.test.ts run two of them for real.
+ * that drops the clamp fails here; tests/providers/local-daemon-qos-spawn.test.ts,
+ * tests/core/search-v2-embed-qos.test.ts and
+ * tests/model/providers/adapter-claude-cli-qos.test.ts run three of them for real.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -37,6 +36,7 @@ const SITES: Array<{ file: string; what: string; pattern: RegExp; count?: number
   { file: 'src/integrations/git-sync.ts', what: 'git backups by argv', pattern: /withUtilityQosClamp\('git', args, /g },
   { file: 'src/web/server.ts', what: 'the history compaction worker', pattern: /fork\(workerPath, \[\], \{ stdio: 'ignore', \.\.\.utilityQosForkExec\(process\.execArgv\) \}\)/g },
   { file: 'src/core/search/wiring.ts', what: 'the embedding model workers', pattern: /workerLauncher: \{ execPath: launch\.execPath, execArgv: launch\.execArgv \}/g },
+  { file: 'src/model/providers/adapter-claude-cli.ts', what: 'background model turns', pattern: /purpose === 'background'\n\s+\? withUtilityQosClamp\(command, args, /g },
 ]
 
 describe('background children go through the QoS clamp', () => {

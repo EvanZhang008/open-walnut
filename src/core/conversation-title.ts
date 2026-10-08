@@ -19,7 +19,7 @@
 
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastModelFor } from './cheap-model.js';
+import { fastCallBudgetMs, fastModelFor } from './cheap-model.js';
 import { listConversations, renameConversation } from './conversations.js';
 import { bus, EventNames } from './event-bus.js';
 import * as chatHistory from './chat-history.js';
@@ -127,7 +127,7 @@ export async function generateConversationTitle(
     const model = fastModelFor(config); // undefined → model.ts uses main_model
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
+    const timer = setTimeout(() => controller.abort(), fastCallBudgetMs(config, 15_000));
     let result;
     try {
       result = await sendMessage({
@@ -139,6 +139,8 @@ export async function generateConversationTitle(
         // required for operations that may take longer than 10 minutes").
         config: { ...(model ? { model } : {}), maxTokens: 256 },
         signal: controller.signal,
+        // A helper nobody waits on: the utility band when the server was raised.
+        purpose: 'background',
       });
     } finally {
       clearTimeout(timer);

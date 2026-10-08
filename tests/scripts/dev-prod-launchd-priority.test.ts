@@ -70,14 +70,19 @@ describe('dev-prod.sh launchd priority', () => {
     expect(fn('write_launchd_plist')).toMatch(/<key>KeepAlive<\/key><true\/>/)
   })
 
-  it('quotes every pattern-substitution replacement that holds an ampersand', () => {
+  it('quotes everything in a pattern-substitution replacement that bash 5.2 would expand', () => {
     // The static half of the bash 5.2 rule, so a Mac with only bash 3.2 still
-    // catches a new `${x//a/&b}`: a replacement with `&` must be one quoted variable.
+    // catches a new one. Unquoted, a replacement's `&` is the matched text, and
+    // so is a `&` inside an unquoted expansion (`${x//</$lt}` with lt='&lt;' gives
+    // `<lt;`, the r4 gate's E3), and a backslash escapes it. Whatever a
+    // replacement holds outside quotes must be plain text.
     const code = script.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
     const bad: string[] = []
-    for (const m of code.matchAll(/\$\{[A-Za-z_][A-Za-z0-9_]*\/\/?((?:\\.|[^/}])*)\/((?:\\.|"[^"]*"|[^}])*)\}/g)) {
-      const rep = m[2]
-      if (rep.includes('&') && !/^"\$[A-Za-z_][A-Za-z0-9_]*"$/.test(rep)) bad.push(m[0])
+    const subs = [...code.matchAll(/\$\{[A-Za-z_][A-Za-z0-9_]*\/\/?((?:\\.|[^/}])*)\/((?:\\.|"[^"]*"|'[^']*'|[^}])*)\}/g)]
+    expect(subs.length).toBeGreaterThanOrEqual(4) // xml_escape's four, so the parser still sees them
+    for (const m of subs) {
+      const unquoted = m[2].replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '')
+      if (/[&$\\`]/.test(unquoted)) bad.push(m[0])
     }
     expect(bad).toEqual([])
     // And never inside a double-quoted expansion: bash 3.2 keeps those inner

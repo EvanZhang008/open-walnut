@@ -4,14 +4,17 @@
  * says so (WALNUT_DAEMON_QOS_CLAMP=1). Every other launch (a terminal, the Mac
  * app) leaves them in the band they inherit.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { fork, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  QOS_CLAMP_ENV,
   TASKPOLICY,
+  _resetQosClampRequestForTest,
   backgroundQosClampOn,
+  takeQosClampRequest,
   utilityQosForkExec,
   withUtilityQosClamp,
 } from '../../src/lib/background-qos.js'
@@ -81,5 +84,54 @@ describe('utilityQosForkExec', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('the clamp request is read once and leaves process.env', () => {
+  const saved = process.env[QOS_CLAMP_ENV]
+  afterEach(() => {
+    _resetQosClampRequestForTest()
+    if (saved === undefined) delete process.env[QOS_CLAMP_ENV]
+    else process.env[QOS_CLAMP_ENV] = saved
+  })
+
+  /** What a child built the way the terminal and the model turns build theirs sees. */
+  const childSees = (): string =>
+    spawnSync(process.execPath, ['-e', `process.stdout.write(process.env.${QOS_CLAMP_ENV} ?? 'unset')`], {
+      encoding: 'utf8', env: { ...process.env, TERM: 'xterm-256color' },
+    }).stdout
+
+  it('startup takes it: the server keeps the decision, no child built from process.env inherits it', () => {
+    // 2026-10-03 (r4 gate): the in-app terminal and the model's `claude -p`
+    // turns copy process.env, and both showed clamp=1.
+    _resetQosClampRequestForTest()
+    process.env[QOS_CLAMP_ENV] = '1'
+    expect(childSees()).toBe('1')
+    expect(takeQosClampRequest()).toBe(true)
+    expect(process.env[QOS_CLAMP_ENV]).toBeUndefined()
+    expect(childSees()).toBe('unset')
+    expect(backgroundQosClampOn({ platform: 'darwin', exists: all })).toBe(true)
+    // Read once: setting it again later is not a new request, and is taken too.
+    process.env[QOS_CLAMP_ENV] = '0'
+    expect(takeQosClampRequest()).toBe(true)
+    expect(process.env[QOS_CLAMP_ENV]).toBeUndefined()
+  })
+
+  it('no request at startup stays no request', () => {
+    _resetQosClampRequestForTest()
+    delete process.env[QOS_CLAMP_ENV]
+    expect(takeQosClampRequest()).toBe(false)
+    process.env[QOS_CLAMP_ENV] = '1'
+    expect(backgroundQosClampOn({ platform: 'darwin', exists: all })).toBe(false)
+    expect(process.env[QOS_CLAMP_ENV]).toBeUndefined()
+  })
+
+  it('startServer takes it before its first await, ahead of any child', () => {
+    const server = fs.readFileSync(path.join(import.meta.dirname, '../../src/web/server.ts'), 'utf8')
+    const start = server.indexOf('export async function startServer(')
+    const body = server.slice(start, server.indexOf('\n}\n', start))
+    const take = body.indexOf('takeQosClampRequest()')
+    expect(take).toBeGreaterThan(0)
+    expect(take).toBeLessThan(body.indexOf('await '))
   })
 })

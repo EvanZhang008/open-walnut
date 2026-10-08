@@ -160,6 +160,7 @@ import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
+import { takeQosClampRequest } from '../lib/background-qos.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
 import {
@@ -954,6 +955,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Until the plugin walk below ends, a task push that finds no plugin waits for
   // it: sessions reattach (and move their tasks' phases) before the plugins load.
   registry.beginLoading()
+
+  // The deploy's QoS clamp request describes how this process was launched:
+  // read it once and take it out of process.env before anything copies that
+  // env into a child (the in-app terminal, model turns, plugins).
+  takeQosClampRequest()
 
   // FIRST, before any await: install exit diagnostics + always-fatal SIGTERM/
   // SIGHUP handlers. A `kill -15` during the multi-second boot below must kill

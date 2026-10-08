@@ -580,23 +580,51 @@ launchd_job_pid() {
   launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null | launchd_print_pid || true
 }
 
+# The two per-user domains the label can be in: a deploy from a GUI login loads
+# it into gui/<uid>, one over ssh into user/<uid>.
+launchd_label_domains() {
+  local uid
+  uid="$(id -u)"
+  printf '%s\n' "gui/$uid" "user/$uid"
+}
+
+# The domains that still hold the label, space separated (empty: none).
+launchd_label_loaded_in() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local d out=""
+  for d in $(launchd_label_domains); do
+    if launchctl print "$d/$LAUNCH_LABEL" >/dev/null 2>&1; then
+      out="${out:+$out }$d"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # bootout returns before a slow job has exited: measured 2026-10-03, 47 ms for
 # a job whose process took 3 s to exit, while `print` still showed it loaded.
 # A bootstrap of the same label in that window fails (a remove followed at
-# once by a bootstrap fell back to submit that way, 2026-10-03), so wait, bounded, until
-# launchd has let go. launchd sends SIGKILL after the job's ExitTimeOut (20 s
-# by default), so the default wait covers that with margin.
+# once by a bootstrap fell back to submit that way, 2026-10-03), so wait,
+# bounded, until launchd has let go. launchd SIGKILLs a job that ignores SIGTERM
+# about 5 s after a bootout or a remove (measured 2026-10-03: 5.3 s and 5.1 s),
+# so the default 25 s wait covers that with margin. The label goes from both
+# per-user domains, so a job an earlier deploy loaded from the other kind of
+# session goes too. Returns 1 when the label is still loaded after the wait:
+# the caller decides, since a bootstrap of that label would fail. The wait is
+# on the clock ($SECONDS), not a count of rounds: each round also runs one
+# `launchctl print` per domain, and on a loaded Mac those take their own time.
 remove_launchd_job() {
   [[ "$(uname -s)" == "Darwin" ]] || return 0
-  launchctl bootout "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1 || true
-  local waited=0
-  while launchd_job_exists; do
-    if (( waited >= LAUNCHD_BOOTOUT_WAIT_SECS * 5 )); then
-      echo "launchd job '$LAUNCH_LABEL' is still loaded in $LAUNCHD_DOMAIN ${LAUNCHD_BOOTOUT_WAIT_SECS}s after bootout." >&2
-      return 0
+  local d left deadline
+  for d in $(launchd_label_domains); do
+    launchctl bootout "$d/$LAUNCH_LABEL" >/dev/null 2>&1 || true
+  done
+  deadline=$(( SECONDS + LAUNCHD_BOOTOUT_WAIT_SECS ))
+  while left="$(launchd_label_loaded_in)" && [[ -n "$left" ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "launchd job '$LAUNCH_LABEL' is still loaded in $left ${LAUNCHD_BOOTOUT_WAIT_SECS}s after bootout." >&2
+      return 1
     fi
     sleep 0.2
-    waited=$(( waited + 1 ))
   done
   return 0
 }
@@ -605,7 +633,13 @@ use_launchd=0
 if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
   use_launchd=1
   LAUNCHD_DOMAIN="$(launchd_domain)"
-  remove_launchd_job
+  # The old job got its SIGTERM from the bootout, so this deploy is past the
+  # point of refusing: a label launchd will not let go of cannot be loaded
+  # again, and the new server starts under nohup instead.
+  if ! remove_launchd_job; then
+    echo "Starting the new server with nohup; remove the stuck job later with: launchctl bootout $LAUNCHD_DOMAIN/$LAUNCH_LABEL" >&2
+    use_launchd=0
+  fi
 fi
 
 existing_pids="$(listener_pids)"
@@ -921,7 +955,8 @@ launch_server() {
         done
         if [[ -n "$spawned" ]]; then break; fi
         echo "launchd job '$LAUNCH_LABEL' registered but never spawned (attempt $attempt); resubmitting." >&2
-        remove_launchd_job
+        # Still loaded after the wait: a resubmit of the label would fail too.
+        remove_launchd_job || break
         sleep 1
         if (( attempt == 2 )) || ! submit_launchd_job "$cli_js"; then
           break
@@ -929,7 +964,8 @@ launch_server() {
       done
       if [[ -z "$spawned" ]]; then
         echo "launchd would not spawn '$LAUNCH_LABEL'; falling back to nohup." >&2
-        remove_launchd_job
+        # A job that stays loaded has no process; the nohup server takes the port.
+        remove_launchd_job || true
         use_launchd=0
       fi
     fi
@@ -996,7 +1032,9 @@ launch_server "$CLI_JS"
 
 stop_new_server() {
   if (( use_launchd )); then
-    remove_launchd_job
+    # A label launchd will not let go of cannot be loaded again: the rollback
+    # that follows starts under nohup instead (never an abort under set -e).
+    remove_launchd_job || use_launchd=0
   elif [[ -n "$pid" ]]; then
     kill -15 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
@@ -1111,7 +1149,7 @@ if (( use_launchd )); then
       echo "Port :$PORT is served by PID $listener_now, not by launchd job '$LAUNCH_LABEL' (PID ${job_pid_now:-none})." >&2
       echo "Another supervisor (for example the Mac app) restarted the server first: ${listener_cmd:-unknown command}" >&2
       echo "Removing the redundant job so KeepAlive cannot relaunch a duplicate server." >&2
-      remove_launchd_job
+      remove_launchd_job || echo "Until it goes, KeepAlive can relaunch a duplicate: launchctl bootout $LAUNCHD_DOMAIN/$LAUNCH_LABEL" >&2
     fi
   fi
 fi

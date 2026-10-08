@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
-import { QOS_CLAMP_ENV, _setQosClampProgramForTest } from '../../src/lib/background-qos.js'
+import { QOS_CLAMP_ENV, _resetQosClampRequestForTest, _setQosClampProgramForTest, takeQosClampRequest } from '../../src/lib/background-qos.js'
 
 const WS_MODULE = path.resolve(import.meta.dirname, '../../node_modules/ws')
 
@@ -27,6 +27,7 @@ const DIR = ${JSON.stringify(daemonDir)}
 fs.mkdirSync(DIR, { recursive: true })
 const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
 wss.on('listening', () => {
+  fs.writeFileSync(DIR + '/clamp-env', process.env.${QOS_CLAMP_ENV} ?? 'unset')
   fs.writeFileSync(DIR + '/daemon.port', String(wss.address().port))
   fs.writeFileSync(DIR + '/daemon.pid', String(process.pid))
 })
@@ -70,10 +71,12 @@ describe('local daemon spawn and the QoS clamp', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ld-qos-'))
     daemonDir = path.join(dir, 'daemon')
     saved = process.env[QOS_CLAMP_ENV]
+    _resetQosClampRequestForTest()
   })
 
   afterEach(() => {
     _setQosClampProgramForTest(null)
+    _resetQosClampRequestForTest()
     if (saved === undefined) delete process.env[QOS_CLAMP_ENV]
     else process.env[QOS_CLAMP_ENV] = saved
     try {
@@ -93,6 +96,34 @@ describe('local daemon spawn and the QoS clamp', () => {
     expect(port).toBeGreaterThan(0)
     // The clamp execs the program, so the pid LocalDaemon tracks is the daemon's.
     expect(fs.readFileSync(clamp.log, 'utf8')).toBe(`-c utility ${bin} --start\n`)
+    // The request is this server's, not the daemon's: a Walnut server started
+    // inside one of its sessions must not clamp its own children by inheritance.
+    expect(fs.readFileSync(path.join(daemonDir, 'clamp-env'), 'utf8')).toBe('unset')
+  }, 15_000)
+
+  it('never hands the request down, even when process.env still carries it at spawn', async () => {
+    // startServer takes the request out of process.env at boot; this daemon
+    // spawn runs first (no startServer here), so only its own strip keeps the
+    // variable out of the daemon and every agent session under it.
+    const bin = mockDaemon(dir, daemonDir)
+    _setQosClampProgramForTest(clampStandIn(dir).program)
+    process.env[QOS_CLAMP_ENV] = '1'
+    const daemon = new LocalDaemon({ daemonDir, binaryPath: bin })
+    expect(await daemon.ensureRunning()).toBeGreaterThan(0)
+    expect(fs.readFileSync(path.join(daemonDir, 'clamp-env'), 'utf8')).toBe('unset')
+  }, 15_000)
+
+  it('keeps clamping after startServer took the request out of process.env', async () => {
+    const bin = mockDaemon(dir, daemonDir)
+    const clamp = clampStandIn(dir)
+    _setQosClampProgramForTest(clamp.program)
+    process.env[QOS_CLAMP_ENV] = '1'
+    expect(takeQosClampRequest()).toBe(true)
+    expect(process.env[QOS_CLAMP_ENV]).toBeUndefined()
+    const daemon = new LocalDaemon({ daemonDir, binaryPath: bin })
+    expect(await daemon.ensureRunning()).toBeGreaterThan(0)
+    expect(fs.readFileSync(clamp.log, 'utf8')).toBe(`-c utility ${bin} --start\n`)
+    expect(fs.readFileSync(path.join(daemonDir, 'clamp-env'), 'utf8')).toBe('unset')
   }, 15_000)
 
   it('inherits the server band by default: a terminal or Mac app server never clamps', async () => {

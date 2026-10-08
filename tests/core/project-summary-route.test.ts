@@ -36,8 +36,8 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
 }));
 
 import { WALNUT_HOME } from '../../src/constants.js';
-import { generateProjectSummary } from '../../src/core/project-summary.js';
-import { directFastRoute } from '../../src/core/cheap-model.js';
+import { generateProjectSummary, SUMMARY_REGENERATE_DEADLINE_MS } from '../../src/core/project-summary.js';
+import { CLI_FAST_CALL_BUDGET_MS, directFastRoute, fastCallBudgetMs } from '../../src/core/cheap-model.js';
 import { addTask, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import type { Config } from '../../src/core/types.js';
@@ -119,6 +119,21 @@ describe('generateProjectSummary routing', () => {
     expect(retry.provider).toBeUndefined(); // second attempt = original main-provider behavior
   });
 
+  it('a caller that stopped the call gets no CLI fallback after the direct attempt fails', async () => {
+    await addTask({ title: 'A real task', project: 'walnut' });
+    // The direct API rejects on abort (as the SDK does), which used to look like
+    // "direct route unavailable" and start a CLI turn nobody waited for.
+    sendMessageMock.mockImplementationOnce((opts: { signal: AbortSignal }) => new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }));
+    const stop = new AbortController();
+    const pending = generateProjectSummary('walnut', { signal: stop.signal });
+    while (sendMessageMock.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 10));
+    stop.abort();
+    expect(await pending).toBeNull();
+    expect(sendMessageMock).toHaveBeenCalledOnce();
+  });
+
   it('a direct-API main provider is untouched — no provider override', async () => {
     config.agent.main_provider = 'bedrock';
     await addTask({ title: 'A real task', project: 'walnut' });
@@ -137,5 +152,58 @@ describe('generateProjectSummary routing', () => {
     const [{ config: sent }] = sendMessageMock.mock.calls[0] as [{ config: { provider?: string; model?: string } }];
     expect(sent.provider).toBeUndefined();
     expect(sent.model).toBe('pinned-model');
+  });
+});
+
+describe('generateProjectSummary attempt budget', () => {
+  /** The budget of each model attempt: the timer the attempt arms right before
+   *  it calls sendMessage (nothing runs between the two). */
+  async function attemptBudgets(): Promise<number[]> {
+    const timers = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      await generateProjectSummary('walnut')
+      // Mocks share one call counter: pair each model call with the last timer before it.
+      const order = timers.mock.invocationCallOrder
+      return sendMessageMock.mock.invocationCallOrder.map((at) => {
+        let i = -1
+        for (let k = 0; k < order.length; k++) if (order[k] < at) i = k
+        return Number(timers.mock.calls[i]?.[1])
+      })
+    } finally {
+      timers.mockRestore()
+    }
+  }
+
+  it('a CLI-only setup gives the call the CLI budget, not the direct 15 s', async () => {
+    config.providers = { claude_cli: {} }
+    await addTask({ title: 'A real task', project: 'walnut' })
+    expect(await attemptBudgets()).toEqual([CLI_FAST_CALL_BUDGET_MS])
+  })
+
+  it('the direct attempt keeps 15 s and the CLI fallback gets the CLI budget', async () => {
+    await addTask({ title: 'A real task', project: 'walnut' })
+    sendMessageMock
+      .mockRejectedValueOnce(new Error('no credentials'))
+      .mockResolvedValueOnce(textResult('{"summary":"Via CLI."}'))
+    expect(await attemptBudgets()).toEqual([15_000, CLI_FAST_CALL_BUDGET_MS])
+  })
+
+  it('the regenerate deadline covers both attempts', () => {
+    expect(SUMMARY_REGENERATE_DEADLINE_MS).toBe(15_000 + CLI_FAST_CALL_BUDGET_MS)
+  })
+})
+
+describe('fastCallBudgetMs', () => {
+  it('gives a call that rides the CLI at least a minute and leaves a direct call its own budget', () => {
+    const cli = { version: 1, user: {}, agent: { main_provider: 'claude_cli' } } as unknown as Config;
+    const direct = { version: 1, user: {}, agent: { main_provider: 'bedrock' } } as unknown as Config;
+    expect(CLI_FAST_CALL_BUDGET_MS).toBe(60_000);
+    expect(fastCallBudgetMs(cli, 15_000)).toBe(60_000);
+    expect(fastCallBudgetMs(cli, 10_000)).toBe(60_000);
+    expect(fastCallBudgetMs(cli, 90_000)).toBe(90_000);
+    expect(fastCallBudgetMs(direct, 15_000)).toBe(15_000);
+    // The provider the call names wins over the main one (a summary's direct route).
+    expect(fastCallBudgetMs(cli, 15_000, 'bedrock')).toBe(15_000);
+    expect(fastCallBudgetMs(direct, 15_000, 'claude_cli')).toBe(60_000);
   });
 });

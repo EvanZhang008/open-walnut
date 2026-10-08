@@ -46,6 +46,7 @@ import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
 import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
 import { claudeFallbackCommand } from '../../core/test-claude-guard.js';
+import { withUtilityQosClamp } from '../../lib/background-qos.js';
 import { randomUUID } from 'node:crypto';
 import {
   buildToolProtocolSection, parseProtocolReply, synthesizeToolUseBlocks,
@@ -62,6 +63,12 @@ export const MAX_CONCURRENT_CLI = (() => {
   const n = Number(process.env.WALNUT_CLAUDE_CLI_CONCURRENCY);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
 })();
+
+/** A background turn queued this long may go ahead of queued interactive turns
+ *  (one at a time, never with a single slot: see pump). Without it, four
+ *  interactive loops keep one of them always queued, and a background turn
+ *  waits until its caller gives up: the title or summary never comes. */
+export const BACKGROUND_MAX_WAIT_MS = 10_000;
 
 /** How long to wait for the CLI to finish one text turn before giving up. */
 const CLI_TURN_TIMEOUT_MS = 120_000;
@@ -85,24 +92,117 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
   /** conversationKey → CLI session for --resume chaining. In-process only. */
   private sessions = new Map<string, CliSession>();
 
-  /** Process gate: MAX_CONCURRENT_CLI turns at once, the rest queue in order. */
+  /**
+   * Process gate: MAX_CONCURRENT_CLI turns at once. A turn someone waits on
+   * (purpose interactive, the default) goes ahead of every queued background
+   * turn, and background turns hold at most all slots but one, so a person's
+   * turn never waits behind titles and summaries. Since background turns run
+   * in the utility band (withUtilityQosClamp), they also take longer: measured
+   * 2026-10-04 at load ~375, an interactive turn queued behind three of them
+   * took 5.7 s instead of 2.9 s, all of it waiting for a slot. A queued turn
+   * whose signal aborts leaves the queue without spawning anything. A
+   * background turn queued backgroundMaxWaitMs or longer may take a freed slot
+   * ahead of queued interactive turns, so a steady stream of them delays it by
+   * that much, not until its caller's budget runs out. Only one such turn runs
+   * at a time, and never with a single slot: interactive turns always keep a
+   * slot of their own (2026-10-05 gate: with one slot, aging handed every
+   * freed slot to the backlog and interactive turns waited 65 s at the median).
+   */
   private inFlight = 0;
-  private waiters: Array<() => void> = [];
-  private async withSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.inFlight >= MAX_CONCURRENT_CLI) {
-      await new Promise<void>((resolve) => this.waiters.push(resolve));
-    }
+  private backgroundInFlight = 0;
+  private interactiveWaiters: Array<{ wake: () => void; queuedAt: number }> = [];
+  private backgroundWaiters: Array<{ wake: () => void; queuedAt: number }> = [];
+  private readonly backgroundMaxWaitMs: number;
+  constructor(opts: { backgroundMaxWaitMs?: number } = {}) {
+    this.backgroundMaxWaitMs = opts.backgroundMaxWaitMs ?? BACKGROUND_MAX_WAIT_MS;
+  }
+  private backgroundCap(): number {
+    return MAX_CONCURRENT_CLI > 1 ? MAX_CONCURRENT_CLI - 1 : 1;
+  }
+  private slotFree(background: boolean): boolean {
+    return this.inFlight < MAX_CONCURRENT_CLI && (!background || this.backgroundInFlight < this.backgroundCap());
+  }
+  private take(background: boolean): void {
     this.inFlight++;
+    if (background) this.backgroundInFlight++;
+  }
+  /** Whether the oldest background turn may go ahead of queued interactive
+   *  ones: it has waited backgroundMaxWaitMs, and the slot it takes is not one
+   *  interactive turns need (more than one slot, no other background turn
+   *  running, so they keep at least MAX_CONCURRENT_CLI - 1 slots). */
+  private agedMayGoAhead(queuedAt: number): boolean {
+    return MAX_CONCURRENT_CLI > 1 && this.backgroundInFlight === 0
+      && Date.now() - queuedAt >= this.backgroundMaxWaitMs;
+  }
+  /** Hand free slots to waiters: queued interactive turns first, unless the
+   *  oldest background turn may go ahead (agedMayGoAhead). */
+  private pump(): void {
+    for (;;) {
+      const oldest = this.backgroundWaiters[0];
+      if (oldest && this.slotFree(true) && (this.interactiveWaiters.length === 0
+        || this.agedMayGoAhead(oldest.queuedAt))) {
+        this.take(true);
+        this.backgroundWaiters.shift()!.wake();
+      } else if (this.interactiveWaiters.length > 0 && this.slotFree(false)) {
+        this.take(false);
+        this.interactiveWaiters.shift()!.wake();
+      } else {
+        return;
+      }
+    }
+  }
+  private async withSlot<T>(
+    purpose: AdapterCallOptions['purpose'], signal: AbortSignal | undefined, fn: () => Promise<T>,
+  ): Promise<T> {
+    const background = purpose === 'background';
+    const queue = background ? this.backgroundWaiters : this.interactiveWaiters;
+    // Nobody queued ahead of this turn's kind (interactive outranks background).
+    const ahead = background
+      ? this.interactiveWaiters.length + this.backgroundWaiters.length
+      : this.interactiveWaiters.length;
+    if (ahead === 0 && this.slotFree(background)) {
+      this.take(background);
+    } else {
+      // pump() takes the slot on this turn's behalf before it wakes it, so no
+      // newcomer can slip in between the release and the wake-up.
+      const got = await new Promise<boolean>((resolve) => {
+        const entry = {
+          queuedAt: Date.now(),
+          wake: (): void => { signal?.removeEventListener('abort', onAbort); resolve(true); },
+        };
+        const onAbort = (): void => {
+          const i = queue.indexOf(entry);
+          if (i >= 0) queue.splice(i, 1);
+          resolve(false);
+        };
+        queue.push(entry);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      // Aborted while queued: no slot, and fn sees the aborted signal and
+      // answers at once without spawning.
+      if (!got) return fn();
+    }
     try {
       return await fn();
     } finally {
       this.inFlight--;
-      this.waiters.shift()?.();
+      if (background) this.backgroundInFlight--;
+      this.pump();
     }
   }
   /** Test hook: how many turns are running / waiting right now. */
-  _gateStateForTesting(): { inFlight: number; waiting: number } {
-    return { inFlight: this.inFlight, waiting: this.waiters.length };
+  _gateStateForTesting(): { inFlight: number; waiting: number; backgroundInFlight: number; backgroundWaiting: number } {
+    return {
+      inFlight: this.inFlight,
+      waiting: this.interactiveWaiters.length + this.backgroundWaiters.length,
+      backgroundInFlight: this.backgroundInFlight,
+      backgroundWaiting: this.backgroundWaiters.length,
+    };
+  }
+  /** Test hook: run `fn` through the process gate without spawning anything. */
+  _withSlotForTesting<T>(purpose: AdapterCallOptions['purpose'], signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+    return this.withSlot(purpose, signal, fn);
   }
 
   resetClient(): void {
@@ -222,7 +322,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
 
     const args = [...buildArgs(opts), session.flag, session.id];
 
-    return this.withSlot(() => this.execCli(command, args, env, prompt, opts.signal, onTextDelta))
+    return this.withSlot(opts.purpose, opts.signal, () => this.execCli(command, args, env, prompt, opts.signal, onTextDelta, opts.purpose))
       .then((result) => {
         // Track AFTER a successful turn: the CLI now knows the whole history
         // plus the assistant turn it just produced.
@@ -249,7 +349,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
             + (overridePrompt ? `\n\nUser: ${overridePrompt}` : '');
           const freshId = randomUUID();
           const freshArgs = [...buildArgs(opts), '--session-id', freshId];
-          return this.withSlot(() => this.execCli(command, freshArgs, env, freshPrompt || '(continue)', opts.signal, onTextDelta))
+          return this.withSlot(opts.purpose, opts.signal, () => this.execCli(command, freshArgs, env, freshPrompt || '(continue)', opts.signal, onTextDelta, opts.purpose))
             .then((result) => {
               this.sessions.set(key, {
                 sessionId: freshId,
@@ -285,7 +385,11 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
     prompt: string,
     signal?: AbortSignal,
     onTextDelta?: (delta: string) => void,
+    purpose?: AdapterCallOptions['purpose'],
   ): Promise<ModelResult> {
+    // Aborted before it started (its caller's budget ran out in the queue):
+    // nothing to spawn.
+    if (signal?.aborted) return Promise.resolve(abortedResult());
 
     return new Promise<ModelResult>((resolve, reject) => {
       let settled = false;
@@ -294,7 +398,13 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       let stderrTail = '';
       let stdoutBuffer = '';
 
-      const child = spawn(command, args, {
+      // A background turn (a title, a summary) is a whole `claude` process
+      // nobody waits on: in the utility band when the deploy raised this server
+      // above it. A turn someone waits on keeps the server's band.
+      const [cmd, cmdArgs] = purpose === 'background'
+        ? withUtilityQosClamp(command, args, { searchPath: env.PATH ?? '' })
+        : [command, args];
+      const child = spawn(cmd, cmdArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
       });

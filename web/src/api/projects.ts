@@ -128,7 +128,16 @@ export function saveProjectMetadata(
   return apiPut<ProjectMetadata>(`/api/projects/${encodeURIComponent(name)}/metadata`, settings);
 }
 
+/**
+ * How long "Regenerate summary" waits. Longer than the server's whole budget for
+ * one (SUMMARY_REGENERATE_DEADLINE_MS, 75 s: a direct attempt, then a `claude -p`
+ * fallback that may wait for a slot), so the spinner stops when the server
+ * answers, not while it still works. The default 15 s gave up first, and a
+ * repeat click then started a second turn.
+ */
+export const REGENERATE_SUMMARY_TIMEOUT_MS = 90_000;
+
 /** Rebuild the fast-model summary on demand. Rejects 422 when it produced nothing. */
 export function regenerateProjectSummary(name: string): Promise<{ summary: string | null; summary_task_count: number | null }> {
-  return apiPost(`/api/projects/${encodeURIComponent(name)}/summary/regenerate`);
+  return apiPost(`/api/projects/${encodeURIComponent(name)}/summary/regenerate`, undefined, { timeoutMs: REGENERATE_SUMMARY_TIMEOUT_MS });
 }

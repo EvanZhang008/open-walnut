@@ -1,8 +1,10 @@
 /**
  * scripts/dev-prod.sh keeps its launchd job in ONE domain for the job's whole
  * life: it bootstraps into $LAUNCHD_DOMAIN, and every later look at the job
- * (loaded? which pid?) and every removal name that same domain through
- * `launchctl print|bootout <domain>/<label>`.
+ * (loaded? which pid?) names that same domain through `launchctl print
+ * <domain>/<label>`. A removal boots the label out of both per-user domains
+ * (gui/<uid> and user/<uid>: an earlier deploy may have run from the other kind
+ * of session), waits until neither holds it, and returns 1 when one still does.
  *
  * The script used to bootstrap into gui/<uid> but list and remove with the legacy
  * commands, which act in the CALLER's domain (not gui/<uid> from ssh). And a
@@ -28,12 +30,17 @@ function fn(name: string): string {
   return m![0]
 }
 
+/** The shell under test: /bin/bash (3.2 on macOS, 5.x on Linux CI), or the
+ *  first one WALNUT_TEST_BASH names (colon separated), to run these under
+ *  another bash on the same machine. */
+const BASH = (process.env.WALNUT_TEST_BASH ?? '').split(':').filter(Boolean)[0] ?? '/bin/bash'
+
 function bash(body: string, env: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string; ms: number } {
   const t0 = Date.now()
   // A non-interactive bash reads $BASH_ENV, never a profile; HOME points
   // nowhere so no rc file of the machine's can write to stderr.
-  const r = spawnSync('/bin/bash', ['-c', `set -euo pipefail\n${body}`], {
-    encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent', ...env }, timeout: 20_000,
+  const r = spawnSync(BASH, ['-c', `set -euo pipefail\n${body}`], {
+    encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent', TMPDIR: os.tmpdir(), ...env }, timeout: 20_000,
   })
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, ms: Date.now() - t0 }
 }
@@ -65,13 +72,43 @@ describe('dev-prod.sh launchd domain', () => {
     expect(removes).toEqual(['      launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true'])
     const at = script.indexOf(removes[0])
     expect(script.lastIndexOf('elif ! launchd_job_exists; then', at)).toBeGreaterThan(script.lastIndexOf('launch_server() {', at))
-    // Every other launchctl call that names the job names its domain too.
-    for (const l of code.filter((x) => /launchctl (print|bootout|bootstrap) /.test(x) && !/^\s*why=/.test(x))) {
+    // Every other launchctl call that names the job names its domain too: the
+    // job's own, or (only to take it away) each per-user domain in turn.
+    const removal = fn('launchd_label_loaded_in') + fn('remove_launchd_job')
+    for (const l of code.filter((x) => /launchctl (print|bootout|bootstrap) /.test(x) && !/^\s*why=/.test(x) && !/^\s*echo /.test(x) && !/ \|\| echo /.test(x))) {
+      if (/"\$d\/\$LAUNCH_LABEL"/.test(l)) {
+        expect(removal).toContain(l)
+        continue
+      }
       expect(l).toMatch(/launchctl (print|bootout) "\$LAUNCHD_DOMAIN\/\$LAUNCH_LABEL"|launchctl bootstrap "\$LAUNCHD_DOMAIN"/)
     }
     // Picked once, before the first removal, on the launchd path only.
-    const pick = script.indexOf('  LAUNCHD_DOMAIN="$(launchd_domain)"\n  remove_launchd_job\n')
-    expect(pick).toBeGreaterThan(script.indexOf('  use_launchd=1\n'))
+    const launchdPath = script.indexOf('  use_launchd=1\n')
+    const pick = script.indexOf('  LAUNCHD_DOMAIN="$(launchd_domain)"\n', launchdPath)
+    expect(pick).toBeGreaterThan(launchdPath)
+    expect(script.indexOf('remove_launchd_job', launchdPath)).toBeGreaterThan(pick)
+  })
+
+  it('never lets a removal that failed abort the deploy (set -e): every call site decides', () => {
+    // The definition aside, each call is in an `if !` or has an `||`.
+    const calls = code.filter((l) => /\bremove_launchd_job\b/.test(l) && !/^remove_launchd_job\(\) \{/.test(l))
+    expect(calls.length).toBe(5)
+    for (const l of calls) expect(l).toMatch(/if ! remove_launchd_job; then|remove_launchd_job \|\| /)
+    // The first, after the old job got its SIGTERM, starts the new server with nohup.
+    const first = script.slice(script.indexOf('  if ! remove_launchd_job; then'))
+    expect(first.slice(0, first.indexOf('\n  fi\n'))).toMatch(/use_launchd=0/)
+  })
+
+  it('stop_new_server turns a stuck job into a nohup rollback instead of failing', () => {
+    const r = bash([
+      'use_launchd=1', 'pid=""',
+      'remove_launchd_job() { return 1; }',
+      fn('stop_new_server'),
+      'stop_new_server',
+      'echo "rc=$? use_launchd=$use_launchd"',
+    ].join('\n'))
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('rc=0 use_launchd=0\n')
   })
 
   it.each([
@@ -99,39 +136,67 @@ describe('dev-prod.sh launchd domain', () => {
     expect(noPid.stdout).toBe('rc=0\n')
   })
 
-  const removeHarness = (loadedPrints: number, waitSecs: number) => [
+  /**
+   * remove_launchd_job against a stub: the job stays loaded in each domain for
+   * that many more prints, and each print takes `printSecs`.
+   */
+  const removeHarness = (gui: number, user: number, waitSecs: number, printSecs = 0) => [
     'LAUNCH_LABEL=com.example.walnut-test',
     'LAUNCHD_DOMAIN=gui/501',
     `LAUNCHD_BOOTOUT_WAIT_SECS=${waitSecs}`,
     'uname() { echo Darwin; }',
-    `LEFT=${loadedPrints}`,
-    'BOOTOUTS=0',
-    // bootout returns at once; the job stays loaded for LEFT more prints.
+    'id() { echo 501; }',
+    // The loaded-in check runs in a command substitution (a subshell), so the
+    // stub keeps its counters in files.
+    'S="$(mktemp -d)"; trap \'rm -rf "$S"\' EXIT',
+    `echo ${gui} > "$S/gui"; echo ${user} > "$S/user"`,
+    'BOOTOUTS=""',
+    // bootout returns at once; the job stays loaded for that many more prints per domain.
+    `loaded() { local n; ${printSecs > 0 ? `sleep ${printSecs}; ` : ''}n="$(cat "$S/$1")"; if (( n > 0 )); then echo $(( n - 1 )) > "$S/$1"; return 0; fi; return 113; }`,
     'launchctl() {',
     '  case "$1 $2" in',
-    '    "bootout gui/501/com.example.walnut-test") BOOTOUTS=$(( BOOTOUTS + 1 )); return 0 ;;',
-    '    "print gui/501/com.example.walnut-test") if (( LEFT > 0 )); then LEFT=$(( LEFT - 1 )); return 0; fi; return 113 ;;',
+    '    "bootout gui/501/com.example.walnut-test"|"bootout user/501/com.example.walnut-test") BOOTOUTS="$BOOTOUTS ${2%%/com.*}"; return 0 ;;',
+    '    "print gui/501/com.example.walnut-test") loaded gui ;;',
+    '    "print user/501/com.example.walnut-test") loaded user ;;',
+    '    *) echo "UNEXPECTED launchctl $*"; return 1 ;;',
     '  esac',
-    '  echo "UNEXPECTED launchctl $*"; return 1',
     '}',
-    fn('launchd_job_exists'),
+    fn('launchd_label_domains'),
+    fn('launchd_label_loaded_in'),
     fn('remove_launchd_job'),
-    'remove_launchd_job',
-    'echo "DONE left=$LEFT bootouts=$BOOTOUTS"',
+    'if remove_launchd_job; then rc=0; else rc=$?; fi',
+    'echo "DONE rc=$rc bootouts=$BOOTOUTS"',
   ].join('\n')
 
-  it('waits after bootout until the job is really gone', () => {
-    const r = bash(removeHarness(3, 5))
+  it('boots the label out of both per-user domains and waits until it is really gone', () => {
+    const r = bash(removeHarness(3, 0, 5))
     expect(r.status).toBe(0)
-    expect(r.stdout).toBe('DONE left=0 bootouts=1\n')
+    expect(r.stdout).toBe('DONE rc=0 bootouts= gui/501 user/501\n')
     expect(r.stderr).toBe('')
   })
 
-  it('gives up after the bounded wait and says so, without failing the deploy', () => {
-    const r = bash(removeHarness(1_000_000, 1))
+  it('takes away a job an earlier deploy loaded from the other kind of session', () => {
+    // This deploy runs from a GUI login (gui/501); the old job came from ssh.
+    const r = bash(removeHarness(0, 2, 5))
+    expect(r.stdout).toBe('DONE rc=0 bootouts= gui/501 user/501\n')
+    expect(r.stderr).toBe('')
+  })
+
+  it('gives up after the bounded wait, says where the job still is, and returns 1', () => {
+    const r = bash(removeHarness(1_000_000, 1_000_000, 1))
     expect(r.status).toBe(0)
-    expect(r.stdout).toMatch(/^DONE left=\d+ bootouts=1\n$/)
-    expect(r.stderr).toMatch(/still loaded in gui\/501 1s after bootout/)
+    expect(r.stdout).toBe('DONE rc=1 bootouts= gui/501 user/501\n')
+    expect(r.stderr).toMatch(/still loaded in gui\/501 user\/501 1s after bootout/)
+    expect(r.ms).toBeLessThan(8_000)
+  })
+
+  it('bounds the wait by the clock, not by rounds, when every print is slow', () => {
+    // Two prints of 1 s per round: counting rounds (5 per second of the wait)
+    // made a 2 s wait take 10 rounds, 22 s.
+    const r = bash(removeHarness(1_000_000, 1_000_000, 2, 1))
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('DONE rc=1 bootouts= gui/501 user/501\n')
+    expect(r.stderr).toMatch(/still loaded in gui\/501 user\/501 2s after bootout/)
     expect(r.ms).toBeLessThan(8_000)
   })
 

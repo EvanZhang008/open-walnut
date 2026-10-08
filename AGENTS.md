@@ -164,12 +164,21 @@ bare `launchctl submit` job is launchd's Standard type, which macOS schedules in
 `WALNUT_DAEMON_QOS_CLAMP=1`, and only then does the server start its background children under
 `taskpolicy -c utility` (`src/lib/background-qos.ts`): the local daemon and so every agent
 session, the embedding model workers, the git backups and the history compaction keep the band
-they had. Still in the server's band: the model adapter's own `claude -p` turns (one call path
-carries the Personal AI chat and background titles alike, and nothing on the call says which),
-the warm search-agent CLI, and one-shot setup at boot. A server started any other way (a terminal, the Mac app, the submit fallback) clamps
+they had, and so do the model adapter's `claude -p` turns for helpers nobody waits on (titles,
+summaries, placement: `purpose: 'background'` on the call). Those turns hold at most two of the
+adapter's three `claude` slots, and a turn a person waits on goes ahead of every queued one,
+except that one queued 10 s or longer may take a freed slot while no other background turn runs
+(never with a single slot: `withSlot` in `src/model/providers/adapter-claude-cli.ts`): with one queue for both, a turn
+queued behind three utility-band ones took 5.7 s instead of 2.9 s (load ~375). Still in the server's band:
+model calls a person waits on ("Regenerate summary" included), the warm search-agent CLI, and
+one-shot setup at boot. The server reads
+the request once at startup and removes it from `process.env`, so the in-app terminal and every
+other child built from that env never carry it. A server started any other way (a terminal, the Mac app, the submit fallback) clamps
 nothing, so its children inherit its band. `WALNUT_DEVPROD_PROCESS_TYPE=Standard` restores the
 plain submit. The job lives in one launchd domain (gui/<uid> from a GUI login, user/<uid> over
-ssh), and every look at it goes through `launchctl print|bootout <domain>/<label>`. Check with
+ssh), and every look at it goes through `launchctl print <domain>/<label>`. A removal boots the
+label out of both per-user domains and waits (bounded) until launchd lets go; when it will not,
+the deploy starts the new server with nohup instead of failing. Check with
 `ps -o pri= -p <pid>` (31 server, 20 daemon).
 
 **⚠️ NEVER wrap `npm run dev:prod` in a bare `launchctl submit`.** `launchctl submit` jobs are

@@ -137,7 +137,14 @@ export interface AdapterCallOptions {
   betas?: string[];
   /** Thinking configuration for Claude models. */
   thinking?: ThinkingConfig;
+  /** Who waits on the call: `interactive` (the default) is a person; `background`
+   *  is a helper nobody watches (titles, summaries, placement). Adapters that run
+   *  a local process (claude-cli) start background calls in the utility QoS band
+   *  when the deploy raised the server above it (src/lib/background-qos.ts). */
+  purpose?: CallPurpose;
 }
+
+export type CallPurpose = 'interactive' | 'background';
 
 /** The adapter interface — one implementation per protocol. */
 export interface ProtocolAdapter {

@@ -20,7 +20,7 @@ import {
   INTERLEAVED_THINKING_BETA,
 } from './providers/defaults.js';
 import { MODEL_CATALOG } from './providers/model-catalog.js';
-import type { UsageStats, ModelResult, ThinkingConfig, ModelEntry } from './providers/types.js';
+import type { UsageStats, ModelResult, ThinkingConfig, ModelEntry, CallPurpose } from './providers/types.js';
 
 // Re-export types for backward compatibility — all callers import from here
 export type { MessageParam, ContentBlock, Tool, TextBlockParam };
@@ -175,13 +175,15 @@ export async function sendMessage(opts: {
   tools?: Tool[];
   config?: ModelConfig;
   signal?: AbortSignal;
+  /** `background` for a helper nobody waits on (AdapterCallOptions.purpose). */
+  purpose?: CallPurpose;
 }): Promise<ModelResult> {
   const { adapter, config: providerConfig, model, maxTokens, betas, thinking } = await resolveForCall(opts.config);
 
   return adapter.sendMessage({
     providerConfig, model, maxTokens,
     system: opts.system, messages: opts.messages, tools: opts.tools,
-    signal: opts.signal, betas, thinking,
+    signal: opts.signal, betas, thinking, purpose: opts.purpose,
   });
 }
 
@@ -197,13 +199,14 @@ export async function sendMessageStream(opts: {
   config?: ModelConfig;
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
+  purpose?: CallPurpose;
 }): Promise<ModelResult> {
   const { adapter, config: providerConfig, model, maxTokens, betas, thinking } = await resolveForCall(opts.config);
 
   return adapter.sendMessageStream({
     providerConfig, model, maxTokens,
     system: opts.system, messages: opts.messages, tools: opts.tools,
-    signal: opts.signal, onTextDelta: opts.onTextDelta, betas, thinking,
+    signal: opts.signal, onTextDelta: opts.onTextDelta, betas, thinking, purpose: opts.purpose,
   });
 }
 

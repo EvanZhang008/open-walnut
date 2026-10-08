@@ -23,6 +23,7 @@ import {
   currentSemanticLaneDecision,
   getSearchV2Index,
   resetSearchV2IndexForTests,
+  searchV2Lane,
   startSearchV2Wiring,
   type SearchV2Wiring,
 } from '../../src/core/search/wiring.js'
@@ -117,4 +118,17 @@ describe('search wiring vector backfill', () => {
     expect(backfill).toHaveBeenCalled()
     expect(release).toHaveBeenCalledTimes(1)
   }, 60_000)
+})
+
+describe('searchV2Lane', () => {
+  it('hands the caller the semantic state, which the result memo reads (src/core/search.ts)', async () => {
+    // No model here, so the lane is keyword-only and says `disabled`; the memo
+    // skips a result whose state is `cold` or `timeout`, so a lane that drops
+    // the callback would let an incomplete answer be replayed for 20 s.
+    getSearchV2Index().upsert({ kind: 'task', ref: 't-lane-1', title: 'Rotate the marina keys', updatedAt: Date.now() })
+    const states: string[] = []
+    const hits = await searchV2Lane('rotate marina keys', { kinds: ['task'], onSemantic: (s) => states.push(s) })
+    expect(hits.map((h) => h.ref)).toContain('t-lane-1')
+    expect(states).toEqual(['disabled'])
+  })
 })

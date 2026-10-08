@@ -269,6 +269,8 @@ export const runWorkingMemoryUpdate: WorkingMemoryRunner = async (prompt) => {
       messages: [{ role: 'user', content: prompt }],
       config: { maxTokens: UPDATE_MAX_TOKENS },
       signal: controller.signal,
+      // A helper nobody waits on: the utility band when the server was raised.
+      purpose: 'background',
     });
     return (result.content ?? [])
       .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))

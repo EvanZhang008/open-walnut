@@ -16,7 +16,7 @@ import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { resolveMainProviderName } from '../model/providers/default-provider.js';
 import { log } from '../logging/index.js';
 import { updateTaskRaw, getTask } from './task-manager.js';
-import { backgroundAiDisabled } from './cheap-model.js';
+import { backgroundAiDisabled, fastCallBudgetMs } from './cheap-model.js';
 import type { Task } from './types.js';
 
 const MAX_DESC_LEN = 120;
@@ -59,7 +59,7 @@ export function titleNeedsDesc(title: string): boolean {
  */
 export async function generateLedgerDesc(
   task: Pick<Task, 'title' | 'description' | 'project'>,
-  timeoutMs = 15_000,
+  timeoutMs?: number,
 ): Promise<string> {
   const title = (task.title ?? '').trim();
   if (!title) return '';
@@ -78,7 +78,7 @@ export async function generateLedgerDesc(
       '\n\nOne-line label:';
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? fastCallBudgetMs(config, 15_000));
     let result;
     try {
       result = await sendMessage({
@@ -89,6 +89,8 @@ export async function generateLedgerDesc(
         // streaming-required failure mode this avoids).
         config: { maxTokens: 96, ...(model ? { model } : {}) },
         signal: controller.signal,
+        // A helper nobody waits on: the utility band when the server was raised.
+        purpose: 'background',
       });
     } finally {
       clearTimeout(timer);

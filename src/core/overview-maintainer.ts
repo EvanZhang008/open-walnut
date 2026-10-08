@@ -224,6 +224,8 @@ async function defaultRunner(userMessage: string, options: MaintainerRunOptions)
       messages: [{ role: 'user', content: userMessage }],
       config: { maxTokens: options.maxTokens },
       signal: controller.signal,
+      // A helper nobody waits on: the utility band when the server was raised.
+      purpose: 'background',
     });
   } finally {
     clearTimeout(timer);

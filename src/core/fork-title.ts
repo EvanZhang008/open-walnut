@@ -20,7 +20,7 @@
 
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastModelFor } from './cheap-model.js';
+import { fastCallBudgetMs, fastModelFor } from './cheap-model.js';
 
 const MAX_WORDS = 4;
 const MAX_LABEL_LEN = 40; // keep the prefix short; the full title also carries "- fork of <parent>"
@@ -75,7 +75,7 @@ function heuristicLabel(prompt: string): string {
  * Summarize a fork's new prompt into a short English label. Best-effort: returns
  * a label string, or '' if nothing usable could be produced. NEVER throws.
  */
-export async function summarizeForkPrompt(prompt: string, timeoutMs = 15_000): Promise<string> {
+export async function summarizeForkPrompt(prompt: string, timeoutMs?: number): Promise<string> {
   const trimmed = (prompt ?? '').trim();
   if (!trimmed) return '';
 
@@ -85,7 +85,7 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs = 15_000): P
     const model = fastModelFor(config); // undefined → model.ts uses main_model
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? fastCallBudgetMs(config, 15_000));
     let result;
     try {
       result = await sendMessage({
@@ -98,6 +98,8 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs = 15_000): P
         // fall back to the heuristic. A tiny cap keeps it a fast non-stream call.
         config: { maxTokens: 64, ...(model ? { model } : {}) },
         signal: controller.signal,
+        // A helper nobody waits on: the utility band when the server was raised.
+        purpose: 'background',
       });
     } finally {
       clearTimeout(timer);
@@ -141,7 +143,7 @@ function groupHeuristicLabel(titles: string[]): string {
  * summarizeForkPrompt: cheap Haiku-tier call, best-effort, NEVER throws (returns
  * a heuristic label or '' so the caller can fall back to the lead task's title).
  */
-export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000): Promise<string> {
+export async function summarizeGroupLabel(titles: string[], timeoutMs?: number): Promise<string> {
   const cleaned = titles.map((t) => (t ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return '';
   const joined = cleaned.slice(0, 12).map((t) => `- ${t}`).join('\n');
@@ -152,7 +154,7 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000):
     const model = fastModelFor(config);
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? fastCallBudgetMs(config, 15_000));
     let result;
     try {
       result = await sendMessage({
@@ -160,6 +162,8 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000):
         messages: [{ role: 'user', content: `Task titles:\n${joined.slice(0, 2000)}\n\nGroup name:` }],
         config: { maxTokens: 64, ...(model ? { model } : {}) },
         signal: controller.signal,
+        // A helper nobody waits on: the utility band when the server was raised.
+        purpose: 'background',
       });
     } finally {
       clearTimeout(timer);

@@ -31,8 +31,8 @@ vi.mock('../../src/model/model.js', () => ({
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
-  hasCrossedThreshold, maybeRefreshForTask, refreshProjectSummary, runSummaryCatchUp,
-  __resetProjectSummaryState,
+  hasCrossedThreshold, maybeRefreshForTask, refreshProjectSummary, regenerateSummaryOnDemand, runSummaryCatchUp,
+  __resetProjectSummaryState, SUMMARY_REGENERATE_DEADLINE_MS,
 } from '../../src/core/project-summary.js';
 import { addTask, getTask, getProjectMetadata, setProjectMetadata, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
@@ -100,6 +100,12 @@ describe('maybeRefreshForTask', () => {
     const meta = await getProjectMetadata('walnut');
     expect(meta?.summary).toBe('A project about walnut development.');
     expect(meta?.summary_task_count).toBe(1);
+  });
+
+  it('the task-count refresh is a background model call (nobody waits on it)', async () => {
+    const task = await seedTasks(1);
+    expect(await maybeRefreshForTask(task, 'web-api')).toBe(true);
+    expect(sendMessageMock.mock.calls[0][0].purpose).toBe('background');
   });
 
   it('does nothing between thresholds', async () => {
@@ -234,6 +240,8 @@ describe('runSummaryCatchUp', () => {
     expect((await getProjectMetadata('stale'))?.summary).toBe('Caught up.');
     expect((await getProjectMetadata('stale'))?.summary_task_count).toBe(4);
     expect((await getProjectMetadata('naked'))?.summary).toBe('Caught up.');
+    // The boot sweep runs on its own: background.
+    expect(sendMessageMock.mock.calls.map(([o]) => o.purpose)).toEqual(['background', 'background']);
   });
 
   it('regenerates when the summary text vanished even though the count survived', async () => {
@@ -272,12 +280,118 @@ describe('refreshProjectSummary', () => {
     await seedTasks(1);
     sendMessageMock.mockResolvedValue(textResult('not json'));
 
-    expect(await refreshProjectSummary('walnut')).toBe(false);
+    expect(await refreshProjectSummary('walnut', { purpose: 'interactive' })).toBe(false);
     expect(await getProjectMetadata('walnut')).toBeNull();
   });
 
+  it('hands the caller\'s purpose to the model call', async () => {
+    await seedTasks(1);
+    expect(await refreshProjectSummary('walnut', { purpose: 'interactive' })).toBe(true);
+    expect(await refreshProjectSummary('walnut', { purpose: 'background' })).toBe(true);
+    expect(sendMessageMock.mock.calls.map(([o]) => o.purpose)).toEqual(['interactive', 'background']);
+  });
+
   it('returns false for a project with no tasks', async () => {
-    expect(await refreshProjectSummary('ghost')).toBe(false);
+    expect(await refreshProjectSummary('ghost', { purpose: 'interactive' })).toBe(false);
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('regenerateSummaryOnDemand ("Regenerate summary")', () => {
+  type Held = { signal: AbortSignal; answer: () => void };
+  /** Model calls that answer only when told to, or with nothing once their signal aborts. */
+  function holdCalls(): Held[] {
+    const calls: Held[] = [];
+    sendMessageMock.mockImplementation((opts: { signal: AbortSignal }) => new Promise((resolve) => {
+      opts.signal.addEventListener('abort', () => resolve({ content: [], stopReason: null, aborted: true }), { once: true });
+      calls.push({ signal: opts.signal, answer: () => resolve(textResult('{"summary":"Held."}')) });
+    }));
+    return calls;
+  }
+  async function untilCalls(calls: Held[], n: number): Promise<void> {
+    const end = Date.now() + 10_000;
+    while (calls.length < n) {
+      if (Date.now() > end) throw new Error(`expected ${n} model calls, saw ${calls.length}`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  it('a repeat request for the same project joins the run: one model call answers both', async () => {
+    await seedTasks(1);
+    const calls = holdCalls();
+    const first = regenerateSummaryOnDemand('walnut', new AbortController().signal);
+    await untilCalls(calls, 1);
+    const repeat = regenerateSummaryOnDemand('Walnut');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toHaveLength(1);
+    calls[0].answer();
+    expect(await first).toBe(true);
+    expect(await repeat).toBe(true);
+    expect(sendMessageMock).toHaveBeenCalledOnce();
+    expect(sendMessageMock.mock.calls[0][0].purpose).toBe('interactive');
+    expect((await getProjectMetadata('walnut'))?.summary).toBe('Held.');
+  });
+
+  it('stops the model turn once every requester has gone, and the next request starts afresh', async () => {
+    await seedTasks(1);
+    const calls = holdCalls();
+    const one = new AbortController();
+    const two = new AbortController();
+    const a = regenerateSummaryOnDemand('walnut', one.signal);
+    const b = regenerateSummaryOnDemand('walnut', two.signal);
+    await untilCalls(calls, 1);
+    one.abort();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls[0].signal.aborted).toBe(false); // the other one still waits
+    two.abort();
+    expect(calls[0].signal.aborted).toBe(true);
+    // A click right after, while the stopped turn is still winding down, starts
+    // its own instead of joining the one nobody waits for.
+    const again = regenerateSummaryOnDemand('walnut');
+    expect(await a).toBe(false);
+    expect(await b).toBe(false);
+    await untilCalls(calls, 2);
+    expect(calls[1].signal.aborted).toBe(false);
+    calls[1].answer();
+    expect(await again).toBe(true);
+    expect((await getProjectMetadata('walnut'))?.summary).toBe('Held.');
+  });
+
+  it('a request whose signal already aborted starts no model call', async () => {
+    await seedTasks(1);
+    const calls = holdCalls();
+    const gone = new AbortController();
+    gone.abort();
+    expect(await regenerateSummaryOnDemand('walnut', gone.signal)).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('stops the model turn at its deadline', async () => {
+    await seedTasks(1);
+    const calls = holdCalls();
+    const t0 = Date.now();
+    const run = regenerateSummaryOnDemand('walnut', undefined, { deadlineMs: 200 });
+    await untilCalls(calls, 1);
+    expect(await run).toBe(false);
+    expect(calls[0].signal.aborted).toBe(true);
+    // The deadline stopped it, long before the attempt's own 15 s budget.
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+
+  it('without a deadline of its own, a click stops at SUMMARY_REGENERATE_DEADLINE_MS (the direct attempt plus the CLI budget)', async () => {
+    await seedTasks(1);
+    const calls = holdCalls();
+    expect(SUMMARY_REGENERATE_DEADLINE_MS).toBe(15_000 + 60_000);
+    // The deadline timer is the first one a new run arms, before its first await.
+    const spy = vi.spyOn(globalThis, 'setTimeout');
+    const run = regenerateSummaryOnDemand('walnut');
+    const armed = spy.mock.calls.slice();
+    spy.mockRestore();
+    expect(armed[0]?.[1]).toBe(SUMMARY_REGENERATE_DEADLINE_MS);
+    await untilCalls(calls, 1);
+    expect(calls[0].signal.aborted).toBe(false);
+    (armed[0][0] as () => void)();
+    expect(calls[0].signal.aborted).toBe(true);
+    expect(await run).toBe(false);
   });
 });

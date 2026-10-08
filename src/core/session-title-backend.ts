@@ -116,6 +116,8 @@ export async function titleViaBackendModel(
         messages: [{ role: 'user', content: buildTitleQuestion(message, placeholder, requirement) }],
         config: { maxTokens: 128, ...(model ? { model } : {}) },
         signal: controller.signal,
+        // A helper nobody waits on: the utility band when the server was raised.
+        purpose: 'background',
       });
     } finally {
       clearTimeout(timer);

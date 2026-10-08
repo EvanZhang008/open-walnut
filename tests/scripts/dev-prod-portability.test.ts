@@ -71,7 +71,7 @@ describe('dev-prod.sh server log path', () => {
   it('proves appendability before any destructive step', () => {
     const check = script.indexOf('Cannot append to server log')
     const build = script.indexOf('npm run web:build')
-    const launchdRemove = script.indexOf('  remove_launchd_job\n', script.indexOf('  use_launchd=1\n'))
+    const launchdRemove = script.indexOf('  if ! remove_launchd_job; then\n', script.indexOf('  use_launchd=1\n'))
     const killExisting = script.indexOf('kill -15 $existing_pids')
     expect(check).toBeGreaterThan(-1)
     for (const destructive of [build, launchdRemove, killExisting]) {
@@ -257,7 +257,7 @@ describe('dev-prod.sh deploy drain', () => {
 
   it('waits before the kill, not after it', () => {
     const drainCall = script.indexOf('\ndrain_active_turns\n')
-    const launchdRemove = script.indexOf('  remove_launchd_job\n', script.indexOf('  use_launchd=1\n'))
+    const launchdRemove = script.indexOf('  if ! remove_launchd_job; then\n', script.indexOf('  use_launchd=1\n'))
     const killExisting = script.indexOf('kill -15 $existing_pids')
     expect(drainCall).toBeGreaterThan(-1)
     for (const destructive of [launchdRemove, killExisting]) {

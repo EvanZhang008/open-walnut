@@ -2639,7 +2639,10 @@ usual (absent → `general`).
   JSON `null` clears a key. **REPLICA: 501** (registry writes have no
   write-back channel). `POST /api/v1/projects/:name/summary/regenerate` →
   `{ "summary", "summary_task_count" }`; nothing to summarize → `422`.
-  **REPLICA: 501**.
+  It can take up to 75 s (a `claude -p` turn on a CLI-only setup), so a
+  client waits longer than that. A request for a project already
+  regenerating joins that run, and closing the request stops the model turn
+  once no other request waits on it. **REPLICA: 501**.
 
 ### Human inbox replies (additive, 2026-09): `clientId` and a recorded `delivery` per turn
 

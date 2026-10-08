@@ -266,8 +266,14 @@ projectsV1Router.post('/projects/:name/summary/regenerate', async (req: Request,
       sendError(res, 400, 'bad_request', 'Inbox has no AI summary')
       return
     }
-    const { refreshProjectSummary } = await import('../../core/project-summary.js')
-    const ok = await refreshProjectSummary(name)
+    // The user waits on this one (the pane spins), so it is interactive. When
+    // the response closes before it is sent (the tab closed, the client gave up),
+    // nobody waits: the turn stops unless another request joined it.
+    const gone = new AbortController()
+    res.on('close', () => { if (!res.writableFinished) gone.abort() })
+    const { regenerateSummaryOnDemand } = await import('../../core/project-summary.js')
+    const ok = await regenerateSummaryOnDemand(name, gone.signal)
+    if (gone.signal.aborted) return
     if (!ok) {
       sendError(res, 422, 'unprocessable', 'summary generation produced nothing (no tasks, or model unavailable)')
       return

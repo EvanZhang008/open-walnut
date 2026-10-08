@@ -11,7 +11,11 @@
  * have moved up with it and the server would have gained nothing over them.
  * That job, and only that job, sets WALNUT_DAEMON_QOS_CLAMP=1 (in the plist's
  * EnvironmentVariables, so the submit fallback, which stays in the utility
- * band, never carries it).
+ * band, never carries it). The server reads it once at startup and takes it out
+ * of process.env (takeQosClampRequest): it describes how THIS process was
+ * launched, and every child built from a copy of process.env (the in-app
+ * terminal, model turns, plugins) carried it before, so a Walnut started from
+ * one of them would have clamped its own children too.
  *
  * Every other launch leaves children alone: a server started from a terminal
  * (`open-walnut web`) or by the Mac app already runs at priority 31 together
@@ -32,7 +36,8 @@ export const QOS_CLAMP_ENV = 'WALNUT_DAEMON_QOS_CLAMP';
 
 export interface QosClampOptions {
   platform?: NodeJS.Platform;
-  /** Where the clamp request is read (default: this process's env). */
+  /** Where the clamp request is read (default: the request this process took
+   *  from its env at startup, takeQosClampRequest). */
   env?: NodeJS.ProcessEnv;
   /** PATH a bare command name resolves on (default: env.PATH): the child's, when it gets its own env. */
   searchPath?: string;
@@ -40,6 +45,23 @@ export interface QosClampOptions {
 }
 
 let testOverride: { program: string; platform: NodeJS.Platform } | null = null;
+let clampRequest: boolean | undefined;
+
+/**
+ * Read the clamp request once and remove it from `env` (process.env by
+ * default). startServer calls this first thing; the first clamp decision calls
+ * it too, so the answer never depends on who asked first.
+ */
+export function takeQosClampRequest(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (clampRequest === undefined) clampRequest = env[QOS_CLAMP_ENV] === '1';
+  delete env[QOS_CLAMP_ENV];
+  return clampRequest;
+}
+
+/** Tests: forget the request read so far. */
+export function _resetQosClampRequestForTest(): void {
+  clampRequest = undefined;
+}
 
 /** Tests: run the clamp through a stand-in program (it must exec the rest of its argv). */
 export function _setQosClampProgramForTest(program: string | null, platform: NodeJS.Platform = 'darwin'): void {
@@ -53,9 +75,9 @@ function clampProgram(): string {
 /** True when this server was raised to Interactive and asked to keep its background children down. */
 export function backgroundQosClampOn(opts: QosClampOptions = {}): boolean {
   const platform = opts.platform ?? testOverride?.platform ?? process.platform;
-  const env = opts.env ?? process.env;
+  const requested = opts.env ? opts.env[QOS_CLAMP_ENV] === '1' : takeQosClampRequest();
   const exists = opts.exists ?? fs.existsSync;
-  return platform === 'darwin' && env[QOS_CLAMP_ENV] === '1' && exists(clampProgram());
+  return platform === 'darwin' && requested && exists(clampProgram());
 }
 
 // A bare command name is looked up on PATH once per (name, PATH): the git
