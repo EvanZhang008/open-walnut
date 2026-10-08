@@ -36,7 +36,7 @@ import {
   W_RECENCY,
   type KeywordHit,
 } from './query.js';
-import { cosineInt8, createEmbedder, type Embedder } from './embedder.js';
+import { cosineInt8, createEmbedder, embedFailureKind, type Embedder } from './embedder.js';
 import {
   passagesForDoc,
   DEFAULT_PASSAGE_POLICY,
@@ -145,8 +145,19 @@ export interface BackfillVectorsResult {
    *  already-visited docs. Start a fresh pass with null/undefined. */
   cursor: MissingVecCursor | null;
   /** Doc rows the walk examined. Absent on the paths that never scanned (no
-   *  embedder, yielded to a live query). */
+   *  embedder, suspended). */
   scanned?: number;
+  /** Docs the walk handed this call (absent when it handed none). */
+  docs?: number;
+  /** Passage inferences this call ran. */
+  passages?: number;
+  /** Why the call stopped before its docs were done: a live query wanted the
+   *  worker, or the call used up `budgetMs`. The cursor is then the one passed
+   *  in, and the next call resumes where this one stopped. */
+  yielded?: 'query' | 'budget';
+  /** The embed worker is not working (it cannot start, or a probe after a
+   *  failure did not answer). No doc was blamed; try again later. */
+  stalled?: true;
 }
 
 export interface BackfillVectorsOptions {
@@ -162,6 +173,14 @@ export interface BackfillVectorsOptions {
   /** Skip docs with a note longer than this — the light phase of a two-phase
    *  walk, so cheap single-passage docs are not starved behind whales. */
   maxNoteChars?: number;
+  /**
+   * Wall-clock budget for one call. Once it is spent, the call stops between
+   * two passages (after at least one), keeps what it embedded and returns, so
+   * a batch of whales hands control back to its caller's pacing every few
+   * seconds instead of after minutes. The check is a clock read between
+   * awaits: the inference itself runs in the worker process. Omitted: no limit.
+   */
+  budgetMs?: number;
 }
 
 export interface StoredDoc {
@@ -271,9 +290,11 @@ export interface SearchIndex {
   searchSemantic(query: string, options?: SearchOptions): Promise<ScoredHit[]>;
   /** Embed one batch of vector-less docs (chunked kinds get per-passage
    *  vectors). Call repeatedly until drained, passing each result's `cursor`
-   *  back in; safe to interleave with writes. A doc whose embed fails twice
-   *  is quarantined with a zero vector (upsert clears it, so the next content
-   *  change retries). */
+   *  back in; safe to interleave with writes. A doc is quarantined with a zero
+   *  vector only when it is the cause: its passage failed twice in a row, each
+   *  time followed by a probe the worker answered. A failure the probe does
+   *  not explain away is the worker's, and the call returns `stalled`. Each
+   *  quarantine is retried once by the next process (or by a content change). */
   backfillVectors(options?: BackfillVectorsOptions): Promise<BackfillVectorsResult>;
   /** Stored raw text of a doc (snippet extraction, rescoring). */
   getDoc(kind: string, ref: string): StoredDoc | null;
@@ -307,6 +328,10 @@ export interface SearchIndex {
 
 const noopLog: LogFn = () => {};
 
+/** A tiny passage any healthy worker embeds: the control in the backfill's
+ *  blame rule (see backfillVectors). */
+export const EMBED_HEALTH_PROBE_TEXT = 'search index health check';
+
 export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   const log = options.logger ?? noopLog;
   const { db, needsRebuild, needsReindex, vectorsWiped } = openSearchDb({
@@ -326,20 +351,25 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       tokenizerVersion: TOKENIZER_VERSION,
     });
   }
-  const writer: Writer = createWriter(db);
+  const kindWeights: Record<string, number> = {};
+  const kindPolicies = new Map<string, PassagePolicy>();
+  for (const [kind, config] of Object.entries(options.kinds ?? {})) {
+    if (typeof config.weight === 'number') kindWeights[kind] = config.weight;
+    kindPolicies.set(kind, { ...DEFAULT_PASSAGE_POLICY, ...config.passages });
+  }
+  const passagesOf = (doc: { kind: string; title: string; summary: string; note: string }): string[] =>
+    passagesForDoc(doc, kindPolicies.get(doc.kind)).passages;
+
+  // With an embedder, a content change keeps the vectors of the passages whose
+  // text it did not change (vector-reuse.ts), from the same passage function
+  // the backfill embeds with.
+  const writer: Writer = createWriter(db, options.embedder ? { passagesOf } : {});
   if (needsReindex) {
     // Tokenizer/FTS layout bump: doc rows survived, re-tokenize them locally.
     // Synchronous by design — an open index must be queryable-consistent.
     // (~0.5ms/doc; on a huge corpus open the index off the hot path.)
     const { reindexed } = writer.reindexFtsFromDocs();
     log('info', 'hybrid-search: re-tokenized FTS from stored docs', { reindexed });
-  }
-
-  const kindWeights: Record<string, number> = {};
-  const kindPolicies = new Map<string, PassagePolicy>();
-  for (const [kind, config] of Object.entries(options.kinds ?? {})) {
-    if (typeof config.weight === 'number') kindWeights[kind] = config.weight;
-    kindPolicies.set(kind, { ...DEFAULT_PASSAGE_POLICY, ...config.passages });
   }
 
   const embedder: Embedder | null = options.embedder
@@ -351,9 +381,48 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     }, log, { queryIdleMs: options.embedder.queryIdleMs })
     : null;
   let closed = false;
-  /** Per-process embed-failure counts; at 2 the doc is quarantined with a
-   *  zero vector so ONE poison doc can never wedge the whole backfill. */
-  const vecFailures = new Map<number, number>();
+  /** stopEmbedder() was called (the host is shutting down): the workers are
+   *  gone for good, which is no doc's fault. */
+  let embedderStopped = false;
+  /** Docs whose zero marker (quarantine, or no text) THIS process wrote or
+   *  re-checked. Any other zero marker is retried once, so a quarantine lasts
+   *  until the next process: what blamed the doc (a model file, a machine
+   *  short of memory) is usually gone after a restart, and a doc that really
+   *  breaks the worker costs two attempts per restart, not one per pass. */
+  const zeroSettled = new Set<number>();
+  async function workerAnswers(): Promise<boolean> {
+    try {
+      await embedder!.embedPassages([EMBED_HEALTH_PROBE_TEXT]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * One passage, with the blame decision a failure needs. The doc is the cause
+   * only when the SAME passage fails twice in a row and the worker answers a
+   * probe after each failure: a worker that is down, crashing on everything
+   * or unable to load the model fails the probe, and a run that was stopped or
+   * could not start is never a doc's fault. A crash that does not repeat (an
+   * unrelated kill) costs one probe and one retry, and the doc is embedded.
+   */
+  async function embedJudged(
+    text: string,
+  ): Promise<{ vec: Int8Array } | { fault: 'doc' | 'worker'; error: string }> {
+    let error = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const [vec] = await embedder!.embedPassages([text]);
+        return { vec: vec! };
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        const kind = embedFailureKind(err);
+        if (kind !== 'crashed' && kind !== 'replied') return { fault: 'worker', error };
+        if (!(await workerAnswers())) return { fault: 'worker', error };
+      }
+    }
+    return { fault: 'doc', error };
+  }
   /** Last time searchSemantic reached for the worker. The backfill yields the
    *  (single) worker whenever a query ran in the last quiet window — the human
    *  is searching NOW, passages can wait. */
@@ -661,10 +730,12 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     backfillVectors: async (backfillOptions = {}) => {
       if (!embedder || closed) return { embedded: 0, drained: true, cursor: null };
-      // Suspended for memory pressure: hold the walk where it is. Not drained,
-      // and no doc is touched, so nothing is quarantined for a missing worker.
+      // Suspended for memory pressure, or stopped for shutdown: hold the walk
+      // where it is. Not drained, and no doc is touched, so nothing is
+      // quarantined for a missing worker.
       const hold = () => ({ embedded: 0, drained: false, cursor: backfillOptions.cursor ?? null });
-      if (embedder.isSuspended()) return hold();
+      const workerAway = () => embedder.isSuspended() || embedderStopped;
+      if (workerAway()) return hold();
       const batchDocs = backfillOptions.batchDocs ?? 16;
       const { docs, cursor, drained, scanned } = writer.listDocsMissingVectors(
         batchDocs, backfillOptions.cursor, backfillOptions.excludeKinds,
@@ -672,93 +743,117 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           minUpdatedAt: backfillOptions.minUpdatedAt,
           scanLimit: backfillOptions.scanLimit,
           maxNoteChars: backfillOptions.maxNoteChars,
+          retryZero: (docId) => !zeroSettled.has(docId),
         },
       );
       // No docs does NOT mean done: a bounded window may hold only already-
       // vectorized docs (or only excluded kinds) while the walk still has range
       // left. Only the writer's `drained` ends a pass.
       if (docs.length === 0) return { embedded: 0, drained, cursor, scanned };
+      const startedAt = Date.now();
+      const budgetMs = backfillOptions.budgetMs;
       let embedded = 0;
+      let passagesRun = 0;
+      const shape = () => ({ scanned, docs: docs.length, passages: passagesRun });
+      // A yield hands back the INCOMING cursor: the next call re-lists the same
+      // window, where the docs finished here are vectored (the probe skips them)
+      // and a half-done doc resumes from its stored seqs.
+      const yieldNow = (why: 'query' | 'budget') => ({
+        embedded, drained: false, cursor: backfillOptions.cursor ?? null, ...shape(), yielded: why,
+      });
+      /** The worker is not working: stop here, blame no doc. */
+      const stall = (error: string) => {
+        if (workerAway()) return { ...hold(), embedded, ...shape() };
+        log('warn', 'hybrid-search: embed worker not working, backfill paused (no doc blamed)', { error });
+        return {
+          embedded, drained: false, cursor: backfillOptions.cursor ?? null, ...shape(), stalled: true as const,
+        };
+      };
+      /** Checked before every inference: a live query wants the worker, or this
+       *  call has used its budget (after at least one passage, so it always
+       *  moves forward). */
+      const mustYield = (): 'query' | 'budget' | null => {
+        if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) return 'query';
+        if (budgetMs !== undefined && passagesRun > 0 && Date.now() - startedAt >= budgetMs) return 'budget';
+        return null;
+      };
+      const zero = () => new Int8Array(options.embedder!.dims);
+      const quarantine = (doc: (typeof docs)[number], error: string) => {
+        // Zero vector = done, no boost. The next process retries it once, and
+        // a content change clears it (upsert drops it with the old vectors).
+        if (writer.writeVectors(doc.id, [zero()], doc.hash)) zeroSettled.add(doc.id);
+        log('warn', 'hybrid-search: doc quarantined: its passage failed twice on a working embed worker', {
+          kind: doc.kind, ref: doc.ref, error,
+        });
+      };
       for (const doc of docs) {
         if (closed) return { embedded, drained: true, cursor, scanned };
         const { passages } = passagesForDoc(doc, kindPolicies.get(doc.kind));
         if (passages.length === 0) {
           // Mark empty docs done with one zero vector (cosine 0 = no boost);
           // otherwise they reappear in every missing-vectors scan forever.
-          writer.writeVectors(doc.id, [new Int8Array(options.embedder!.dims)]);
+          if (writer.writeVectors(doc.id, [zero()], doc.hash)) zeroSettled.add(doc.id);
           continue;
         }
-        try {
-          // ONE passage per inference call. CPU inference is linear in total
-          // tokens (measured: 1×2KB ≈ 540ms, 32×2KB ≈ 22s), so batching buys
-          // no throughput — it only builds a 22s head-of-line block in the
-          // single worker, behind which every interactive query embed blew its
-          // deadline and silently degraded to keyword order. Between calls,
-          // yield the worker to live queries.
-          if (passages.length === 1) {
-            // Single passage: nothing to resume, keep the simple path.
-            if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) {
-              return { embedded, drained: false, cursor: backfillOptions.cursor ?? null };
-            }
-            const vectors = await embedder.embedPassages([passages[0]]);
-            if (closed) return { embedded, drained: true, cursor, scanned };
-            writer.writeVectors(doc.id, vectors);
-            vecFailures.delete(doc.id);
-            embedded++;
+        // A quarantine from an earlier process: retry it from scratch.
+        if (doc.zeroMarker) writer.clearZeroMarker(doc.id, doc.hash);
+        // ONE passage per inference call. CPU inference is linear in total
+        // tokens (measured: 1×2KB ≈ 540ms, 32×2KB ≈ 22s), so batching buys
+        // no throughput: it only builds a 22s head-of-line block in the
+        // single worker, behind which every interactive query embed blew its
+        // deadline and silently degraded to keyword order. Between calls,
+        // yield the worker to live queries.
+        if (passages.length === 1) {
+          // Single passage: nothing to resume, keep the simple path.
+          const why = mustYield();
+          if (why) return yieldNow(why);
+          const out = await embedJudged(passages[0]);
+          if (closed) return { embedded, drained: true, cursor, scanned };
+          if ('fault' in out) {
+            if (out.fault === 'worker') return stall(out.error);
+            quarantine(doc, out.error);
             continue;
           }
-          // Multi-passage: persist progress on every yield instead of throwing
-          // it away, and write seq 0 LAST so its presence still means "this doc
-          // is fully vectored under the current policy" — the invariant the
-          // missing-vectors probe and the recall lane both rely on.
-          const done = writer.storedVecSeqs(doc.id);
-          const computed = new Map<number, Int8Array>();
-          let yielded = false;
-          // Cover seqs first, digest last.
-          const order = [...passages.keys()].filter((s) => s !== 0).concat(0);
-          for (const seq of order) {
-            if (done.has(seq)) continue;
-            if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) { yielded = true; break; }
-            const [vec] = await embedder.embedPassages([passages[seq]]);
-            computed.set(seq, vec);
-          }
-          if (closed) return { embedded, drained: true, cursor, scanned };
-          const { complete } = writer.writeVectorsResumable(
-            doc.id, computed, passages.length,
-          );
-          if (complete) {
-            vecFailures.delete(doc.id);
-            embedded++;
-          }
-          if (yielded) {
-            return { embedded, drained: false, cursor: backfillOptions.cursor ?? null };
-          }
-        } catch (err) {
-          // The embedder was suspended under this batch (its workers stopped
-          // and failed the run): not the doc's fault, so do not count it.
-          if (embedder.isSuspended()) return { ...hold(), embedded };
-          // One poison doc (worker OOM/crash on its passages) must not stall
-          // the walk: the cursor moves past it either way, and a second
-          // failure quarantines it (zero vector = done, no boost; the next
-          // content change clears it and retries).
-          const fails = (vecFailures.get(doc.id) ?? 0) + 1;
-          vecFailures.set(doc.id, fails);
-          if (fails >= 2) {
-            writer.writeVectors(doc.id, [new Int8Array(options.embedder!.dims)]);
-            vecFailures.delete(doc.id);
-            log('warn', 'hybrid-search: doc quarantined after repeated embed failures', {
-              kind: doc.kind, ref: doc.ref,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          } else {
-            log('warn', 'hybrid-search: embed failed for doc — will retry next pass', {
-              kind: doc.kind, ref: doc.ref,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
+          passagesRun++;
+          // False: an upsert replaced the text meanwhile; its new text is
+          // listed again on its own.
+          if (writer.writeVectors(doc.id, [out.vec], doc.hash)) embedded++;
+          continue;
         }
+        // Multi-passage: persist progress on every yield instead of throwing
+        // it away, and write seq 0 LAST so its presence still means "this doc
+        // is fully vectored under the current policy", the invariant the
+        // missing-vectors probe and the recall lane both rely on. Stored seqs
+        // are skipped: an earlier attempt's, or the ones a content change
+        // kept because their text did not change (vector-reuse.ts).
+        const done = writer.storedVecSeqs(doc.id);
+        const computed = new Map<number, Int8Array>();
+        let yielded: 'query' | 'budget' | null = null;
+        let failure: { fault: 'doc' | 'worker'; error: string } | null = null;
+        // Cover seqs first, digest last.
+        const order = [...passages.keys()].filter((s) => s !== 0).concat(0);
+        for (const seq of order) {
+          if (done.has(seq)) continue;
+          yielded = mustYield();
+          if (yielded) break;
+          const out = await embedJudged(passages[seq]);
+          if ('fault' in out) { failure = out; break; }
+          passagesRun++;
+          computed.set(seq, out.vec);
+        }
+        if (closed) return { embedded, drained: true, cursor, scanned };
+        // Keep what this attempt finished, whatever ended it: a deploy stops
+        // the worker in the middle of a whale, and those minutes of inference
+        // used to be thrown away with the error.
+        const { complete } = writer.writeVectorsResumable(
+          doc.id, computed, passages.length, doc.hash,
+        );
+        if (complete) embedded++;
+        if (yielded) return yieldNow(yielded);
+        if (failure?.fault === 'worker') return stall(failure.error);
+        if (failure) quarantine(doc, failure.error);
       }
-      return { embedded, drained, cursor, scanned };
+      return { embedded, drained, cursor, ...shape() };
     },
     getDoc: (kind, ref) => {
       const row = db.prepare(
@@ -785,7 +880,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     stats: () => collectStats(db),
     optimize: () => optimizeIndex(db),
-    stopEmbedder: async () => { await embedder?.dispose(); },
+    stopEmbedder: async () => { embedderStopped = true; await embedder?.dispose(); },
     suspendEmbedder: async () => { await embedder?.suspend(); },
     releasePassageWorker: async () => (embedder ? embedder.releasePassageWorker() : false),
     resumeEmbedder: () => { embedder?.resume(); },

@@ -40,6 +40,7 @@ import { listSessions } from '../session-tracker.js';
 import { markdownToDoc, sessionToDoc, taskToDoc } from './serializers.js';
 import { semanticLaneDecision, type SemanticLaneDecision } from './semantic-default.js';
 import { iterateAllDocs, readSessionBody } from './build.js';
+import { backfillBatchLogFields, crossedProgressMilestone } from './backfill-log.js';
 
 /**
  * Per-kind scoring weight and passage layout.
@@ -538,6 +539,15 @@ export async function rebuildSearchIndex(): Promise<{ inserted: number }> {
 // ── lifecycle ──
 
 const FILE_SWEEP_INTERVAL_MS = 10 * 60_000;
+/**
+ * Wall-clock budget of one backfill batch (BackfillVectorsOptions.budgetMs).
+ * One 2 KB passage embeds in about 0.5 s on an idle machine and several seconds
+ * on a loaded one, so a batch of 16 whales (40 passages each) used to run for
+ * minutes, once for about 110 minutes at load 150 to 390, and the load-aware
+ * pause below only runs between batches. With the budget, a batch stops between
+ * passages, keeps what it embedded, and the next one starts after that pause.
+ */
+export const VEC_BATCH_BUDGET_MS = 15_000;
 const SESSION_REEMBED_MIN_INTERVAL_MS = 10 * 60_000;
 const DEBOUNCE_MS = 2_000;
 
@@ -678,25 +688,54 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   /** Floor for the pass in flight. Both phases of one pass share it. */
   let vecFloor: number | null = null;
   let vecScanned = 0;
+  /** A pass is in flight. Tracked on its own: a yielded batch hands back a
+   *  null cursor in the light phase too, and that is not a new pass. */
+  let vecPassOpen = false;
+  /** The pass stopped short (an error, or an embed worker that is not
+   *  working): its range was not cleared, so its floor stays unearned and the
+   *  docs it was told about go back on the next pass's account. The next try
+   *  is a sweep interval away, so a dead worker never spins the walk. */
+  const abortPass = () => {
+    vectorPass.passAborted();
+    vecPassOpen = false;
+    vecTotal = 0;
+    vecCursor = null;
+    vecPhase = 'light';
+    void index.releasePassageWorker().catch(() => { /* already gone */ });
+    scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
+  };
   const scheduleVectorBackfill = (delayMs: number) => {
     if (stopped) return;
     vecTimer = setTimeout(() => {
       void (async () => {
         try {
-          // A fresh light phase with no cursor IS the start of a pass.
-          if (vecPhase === 'light' && vecCursor === null) {
+          if (!vecPassOpen) {
             vecFloor = vectorPass.beginPass();
             vecScanned = 0;
+            vecPassOpen = true;
           }
-          const { embedded, drained, cursor, scanned } = await index.backfillVectors({
+          const batchStartedAt = performance.now();
+          const result = await index.backfillVectors({
             batchDocs: 16, cursor: vecCursor,
             maxNoteChars: vecPhase === 'light' ? LIGHT_PHASE_MAX_NOTE_CHARS : undefined,
             minUpdatedAt: vecFloor ?? undefined,
             scanLimit: MISSING_VEC_SCAN_LIMIT,
+            budgetMs: VEC_BATCH_BUDGET_MS,
           });
+          const { embedded, drained, cursor, scanned } = result;
+          const totalBefore = vecTotal;
           vecCursor = cursor;
           vecTotal += embedded;
           vecScanned += scanned ?? 0;
+          const batchLine = backfillBatchLogFields(result, performance.now() - batchStartedAt, {
+            phase: vecPhase, passEmbedded: vecTotal, fullPass: vecFloor === null,
+          });
+          if (batchLine) log.memory.info('search-v2 vector backfill batch', batchLine);
+          // No doc was blamed (the index logged why); try again later.
+          if (result.stalled) {
+            abortPass();
+            return;
+          }
           if (drained) {
             if (vecPhase === 'light') {
               // Short bodies done — move straight on to the whales.
@@ -707,6 +746,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
             }
             const full = vecFloor === null;
             vectorPass.passDrained();
+            vecPassOpen = false;
             if (vecTotal > 0 || full) {
               log.memory.info('search-v2 vector backfill drained', {
                 embedded: vecTotal, docsScanned: vecScanned, fullPass: full,
@@ -722,7 +762,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
             scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
             return;
           }
-          if (vecTotal > 0 && vecTotal % 800 < 16) {
+          if (crossedProgressMilestone(totalBefore, vecTotal)) {
             log.memory.info('search-v2 vector backfill progress', { embedded: vecTotal });
           }
           scheduleVectorBackfill(vecBatchPauseMs());
@@ -730,13 +770,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           log.memory.warn('search-v2 vector backfill failed — retrying next sweep interval', {
             error: err instanceof Error ? err.message : String(err),
           });
-          // The pass never finished its range, so its floor stays unearned and
-          // the docs it was told about go back on the next pass's account.
-          vectorPass.passAborted();
-          vecCursor = null;
-          vecPhase = 'light';
-          void index.releasePassageWorker().catch(() => { /* already gone */ });
-          scheduleVectorBackfill(FILE_SWEEP_INTERVAL_MS);
+          abortPass();
         }
       })();
     }, delayMs);

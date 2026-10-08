@@ -93,6 +93,26 @@ export const WORKER_STOP_GRACE_MS = 10_000;
 /** Environment variable carrying the worker's config (JSON) into the child. */
 export const EMBED_WORKER_CONFIG_ENV = 'HYBRID_SEARCH_EMBED_WORKER_CONFIG';
 
+/**
+ * Why a passage embed failed. Only the last two can be the INPUT's fault, and
+ * even then only if a healthy worker fails on it again (the backfill's blame
+ * rule, index.ts):
+ *  - unavailable  no worker could run it (disposed, suspended, not built, or
+ *                 the lane disabled after repeated crashes)
+ *  - terminated   a stop ended the run (shutdown, memory pressure, idle reap)
+ *  - crashed      the worker process died while the job was in flight
+ *  - replied      the worker answered with an error for this job
+ */
+export type EmbedFailureKind = 'unavailable' | 'terminated' | 'crashed' | 'replied';
+
+function embedError(message: string, kind: EmbedFailureKind): Error {
+  return Object.assign(new Error(message), { embedFailure: kind });
+}
+
+export function embedFailureKind(err: unknown): EmbedFailureKind | undefined {
+  return (err as { embedFailure?: EmbedFailureKind } | null)?.embedFailure;
+}
+
 interface WorkerMessage {
   id: number;
   buf?: ArrayBuffer;
@@ -230,8 +250,8 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
     const closedOf = new WeakMap<ChildProcess, Promise<void>>();
     const pending = new Map<number, Pending>();
 
-    function failAllPending(reason: string): void {
-      for (const [, p] of pending) p.reject(new Error(reason));
+    function failAllPending(reason: string, kind: EmbedFailureKind): void {
+      for (const [, p] of pending) p.reject(embedError(reason, kind));
       pending.clear();
       if (worker) hold(worker, false);
     }
@@ -294,7 +314,11 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         pending.delete(msg.id);
         if (pending.size === 0 && worker === w) hold(w, false);
         if (msg.error !== undefined || !msg.buf || !msg.dims) {
-          p.reject(new Error(msg.error ?? 'embed worker returned no data'));
+          // A worker asked to stop refuses new jobs: that is the stop, not the input.
+          p.reject(embedError(
+            msg.error ?? 'embed worker returned no data',
+            msg.error === 'embed worker stopping' ? 'terminated' : 'replied',
+          ));
           return;
         }
         const flat = new Int8Array(msg.buf);
@@ -313,7 +337,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         if (worker === w) worker = null;
         if (disposed || stopped.has(w)) return;
         crashes++;
-        failAllPending(`embed worker exited (${signal ?? `code ${code}`})`);
+        failAllPending(`embed worker exited (${signal ?? `code ${code}`})`, 'crashed');
         if (crashes >= MAX_CONSECUTIVE_CRASHES) {
           log('error', 'hybrid-search: embed worker crashed repeatedly — semantic lane disabled for this process', {
             role,
@@ -352,7 +376,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
             if (!err || !pending.has(id)) return;
             pending.delete(id);
             if (pending.size === 0 && worker === w) hold(w, false);
-            reject(err);
+            reject(embedError(err.message, 'unavailable'));
           });
         });
         return { id, promise };
@@ -368,7 +392,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         if (!w) return;
         stopped.add(w);
         worker = null;
-        failAllPending('embed worker terminated');
+        failAllPending('embed worker terminated', 'terminated');
         // The worker finishes its run and exits on its own, so a model load or
         // an inference is never cut short for nothing; only a run that outlives
         // the grace is killed, which ends the worker process and nothing else.
@@ -513,7 +537,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
     async embedPassages(texts) {
       const prefixed = texts.map((t) => (config.passagePrefix ?? '') + t.slice(0, MAX_EMBED_CHARS));
       const job = passageLane.submit(prefixed);
-      if (!job) return Promise.reject(new Error('embed worker unavailable'));
+      if (!job) return Promise.reject(embedError('embed worker unavailable', 'unavailable'));
       try {
         return (await job.promise).rows;
       } finally {

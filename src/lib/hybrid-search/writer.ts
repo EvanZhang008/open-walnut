@@ -10,6 +10,8 @@
  *   3. INSERT the tokenized streams into doc_fts at that rowid
  *   4. rewrite ident rows
  *   5. drop doc_vec rows — stale vectors must not rescore new content
+ *      (with an embedder, the vectors of passages whose text did not change
+ *      move to their new seq instead: vector-reuse.ts)
  *
  * A content hash (fields + identifiers, NOT updatedAt) skips unchanged docs;
  * a pure timestamp change costs one UPDATE and no FTS work.
@@ -27,6 +29,7 @@ import { createHash } from 'node:crypto';
 import type { Statement } from 'better-sqlite3';
 import { tokenize } from './tokenizer.js';
 import { FTS_DDL, type SearchDb } from './db.js';
+import { createVectorReuse, type PassagesOf } from './vector-reuse.js';
 
 export interface Doc {
   /** Arbitrary caller-defined kind ('task', 'note', …). Never an enum here. */
@@ -47,6 +50,15 @@ export interface UpsertResult {
   docId: number;
   /** False when the content hash matched and only (at most) updated_at moved. */
   changed: boolean;
+  /** Vectors a content change kept because their passage text did not change. */
+  reusedVectors?: number;
+}
+
+export interface WriterOptions {
+  /** A doc's passage texts in seq order, under the index's passage policy (the
+   *  same function the backfill embeds from). Given: a content change keeps
+   *  the vectors of unchanged passages. Omitted (keyword-only): all dropped. */
+  passagesOf?: PassagesOf;
 }
 
 export interface Writer {
@@ -59,8 +71,10 @@ export interface Writer {
   /** Re-tokenize doc_fts from the stored doc rows (tokenizer/FTS version bump
    *  path — no source re-read needed). Assumes doc_fts is freshly empty. */
   reindexFtsFromDocs(): { reindexed: number };
-  /** Replace a doc's vectors (seq = array index). No-op if the doc vanished. */
-  writeVectors(docId: number, vectors: Int8Array[]): void;
+  /** Replace a doc's vectors (seq = array index). No-op, and false, when the
+   *  doc vanished or its content hash is no longer `expectedHash` (the vectors
+   *  were computed from text an upsert has since replaced). */
+  writeVectors(docId: number, vectors: Int8Array[], expectedHash?: string): boolean;
   /**
    * Resumable write, for docs whose passages cannot all be embedded in one
    * quiet window. `vectors` maps seq -> vec for the seqs computed in THIS
@@ -69,7 +83,8 @@ export interface Writer {
    * Inserts those seqs, then writes seq 0 and drops seq >= total ONLY once every
    * seq in 1..total-1 is present. Until seq 0 lands the doc still answers the
    * `seq = 0` probe as missing, so the walk's predicate keeps its exact meaning
-   * and a half-embedded doc simply re-lists and resumes.
+   * and a half-embedded doc simply re-lists and resumes. With `expectedHash`
+   * set and the doc's hash since moved on, nothing is written (`stale`).
    *
    * This exists because the backfill used to discard every vector computed for
    * the in-flight doc when a query arrived. With one chunked kind that wasted a
@@ -80,9 +95,13 @@ export interface Writer {
     docId: number,
     vectors: Map<number, Int8Array>,
     total: number,
-  ): { complete: boolean };
+    expectedHash?: string,
+  ): { complete: boolean; stale?: boolean };
   /** Seqs already stored for a doc — the resume point. */
   storedVecSeqs(docId: number): Set<number>;
+  /** Drop a doc's zero-vector marker (quarantine or empty-doc sentinel) so the
+   *  doc reads as missing again. No-op when its hash is not `expectedHash`. */
+  clearZeroMarker(docId: number, expectedHash: string): void;
   /** Docs with no vectors yet — the backfill work queue. upsert() drops a
    *  changed doc's vectors, so this walk also self-heals staleness.
    *
@@ -125,11 +144,22 @@ export interface MissingVecOptions {
    * is already materialized for embedding, so no extra read is paid.
    */
   maxNoteChars?: number;
+  /**
+   * A doc whose only vector is the zero marker (seq 0 all zero: a quarantine,
+   * or the sentinel of a doc with no text) counts as vectored, unless this says
+   * to retry it; then it is handed out with `zeroMarker` set. The index retries
+   * each marker once per process, which is how a quarantine expires.
+   */
+  retryZero?: (docId: number) => boolean;
 }
 
 export interface MissingVecPage {
   docs: Array<{
     id: number; kind: string; ref: string; title: string; summary: string; note: string;
+    /** Content hash at listing time: hand it back to the vector write. */
+    hash: string;
+    /** Listed only because `retryZero` asked for its zero marker to be retried. */
+    zeroMarker?: boolean;
   }>;
   cursor: MissingVecCursor | null;
   /** True when the walk reached the end of its range (the floor, or the oldest
@@ -188,7 +218,7 @@ function buildFtsColumns(doc: Pick<Doc, 'title' | 'summary' | 'note' | 'meta'>):
  *  the generic prepare() cannot be spread into. */
 type Stmt = Statement<unknown[]>;
 
-export function createWriter(db: SearchDb): Writer {
+export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer {
   const selectExisting = db.prepare(
     `SELECT id, hash, updated_at FROM doc WHERE kind = ? AND ref = ?`,
   );
@@ -212,6 +242,10 @@ export function createWriter(db: SearchDb): Writer {
   );
   const deleteVec = db.prepare(`DELETE FROM doc_vec WHERE doc_id = ?`);
   const deleteDoc = db.prepare(`DELETE FROM doc WHERE id = ?`);
+  const insertVec = db.prepare(
+    `INSERT OR REPLACE INTO doc_vec (doc_id, seq, vec) VALUES (?, ?, ?)`,
+  );
+  const reuser = options.passagesOf ? createVectorReuse(db, options.passagesOf) : null;
 
   const upsertTx = db.transaction((doc: Doc, hash: string): UpsertResult => {
     const existing = selectExisting.get(doc.kind, doc.ref) as
@@ -225,6 +259,8 @@ export function createWriter(db: SearchDb): Writer {
       return { docId: existing.id, changed: false };
     }
 
+    // Read BEFORE the update: the stored seqs describe the old text.
+    const reuse = existing && reuser ? reuser.collect(existing.id) : null;
     let docId: number;
     if (existing) {
       deleteFts.run(existing.id);
@@ -250,7 +286,8 @@ export function createWriter(db: SearchDb): Writer {
     }
 
     deleteVec.run(docId);
-    return { docId, changed: true };
+    if (!reuse || !reuser) return { docId, changed: true };
+    return { docId, changed: true, reusedVectors: reuser.restore(docId, doc, reuse) };
   });
 
   const removeTx = db.transaction((kind: string, ref: string): boolean => {
@@ -296,17 +333,26 @@ export function createWriter(db: SearchDb): Writer {
     return { inserted };
   }
 
-  const insertVec = db.prepare(
-    `INSERT OR REPLACE INTO doc_vec (doc_id, seq, vec) VALUES (?, ?, ?)`,
+  const docHash = db.prepare(`SELECT hash FROM doc WHERE id = ?`);
+  const clearZero = db.prepare(
+    `DELETE FROM doc_vec WHERE doc_id = ? AND seq = 0 AND vec = zeroblob(length(vec))`,
   );
-  const docExists = db.prepare(`SELECT 1 FROM doc WHERE id = ?`);
-  const writeVectorsTx = db.transaction((docId: number, vectors: Int8Array[]) => {
-    // The doc may have been removed between the embed request and this write.
-    if (!docExists.get(docId)) return;
+  /** The doc as these vectors' caller saw it: 'gone', 'stale' (an upsert
+   *  replaced its text while the passages were embedding) or 'ok'. */
+  function vecTarget(docId: number, expectedHash?: string): 'gone' | 'stale' | 'ok' {
+    const row = docHash.get(docId) as { hash: string } | undefined;
+    if (!row) return 'gone';
+    return expectedHash !== undefined && row.hash !== expectedHash ? 'stale' : 'ok';
+  }
+  const writeVectorsTx = db.transaction((docId: number, vectors: Int8Array[], expectedHash?: string): boolean => {
+    // The doc may have been removed or rewritten between the embed request
+    // and this write; its new text gets its own vectors on the next walk.
+    if (vecTarget(docId, expectedHash) !== 'ok') return false;
     deleteVec.run(docId);
     for (let seq = 0; seq < vectors.length; seq++) {
       insertVec.run(docId, seq, Buffer.from(vectors[seq].buffer, vectors[seq].byteOffset, vectors[seq].byteLength));
     }
+    return true;
   });
 
   const buf = (v: Int8Array): Buffer => Buffer.from(v.buffer, v.byteOffset, v.byteLength);
@@ -316,8 +362,11 @@ export function createWriter(db: SearchDb): Writer {
     docId: number,
     vectors: Map<number, Int8Array>,
     total: number,
-  ): { complete: boolean } => {
-    if (!docExists.get(docId)) return { complete: true };
+    expectedHash?: string,
+  ): { complete: boolean; stale?: boolean } => {
+    const target = vecTarget(docId, expectedHash);
+    if (target === 'gone') return { complete: true };
+    if (target === 'stale') return { complete: false, stale: true };
     // seq 0 is written LAST and only when complete, so it never appears on a
     // partially embedded doc. Stash it until the end.
     const seq0 = vectors.get(0);
@@ -371,15 +420,18 @@ export function createWriter(db: SearchDb): Writer {
   /** One prepared probe per window width (in practice: one). The id list is
    *  padded to a fixed width with 0 (a value no rowid can take) so the statement
    *  shape — and with it the prepared plan — never churns. */
-  const vecProbeStmts = new Map<number, Stmt>();
-  function vecProbeFor(width: number): Stmt {
-    let stmt = vecProbeStmts.get(width);
+  const vecProbeStmts = new Map<string, Stmt>();
+  /** `zero` adds whether seq 0 is the zero marker: the vector is on the leaf
+   *  page the PK seek already reads, so the compare costs no extra I/O. */
+  function vecProbeFor(width: number, zero: boolean): Stmt {
+    const key = `${width}:${zero}`;
+    let stmt = vecProbeStmts.get(key);
     if (!stmt) {
       stmt = db.prepare(
-        `SELECT doc_id FROM doc_vec WHERE seq = 0
+        `SELECT doc_id${zero ? ', vec = zeroblob(length(vec)) AS zero' : ''} FROM doc_vec WHERE seq = 0
          AND doc_id IN (${Array.from({ length: width }, () => '?').join(',')})`,
       );
-      vecProbeStmts.set(width, stmt);
+      vecProbeStmts.set(key, stmt);
     }
     return stmt;
   }
@@ -388,7 +440,7 @@ export function createWriter(db: SearchDb): Writer {
     let stmt = missingBodyStmts.get(count);
     if (!stmt) {
       stmt = db.prepare(
-        `SELECT id, kind, ref, title, summary, note FROM doc
+        `SELECT id, kind, ref, title, summary, note, hash FROM doc
          WHERE id IN (${Array.from({ length: count }, () => '?').join(',')})`,
       );
       missingBodyStmts.set(count, stmt);
@@ -412,10 +464,13 @@ export function createWriter(db: SearchDb): Writer {
     }
     const probeIds: number[] = rows.map((r) => r.id);
     while (probeIds.length < scanLimit) probeIds.push(0);
-    const vectored = new Set(
-      (vecProbeFor(scanLimit).all(...probeIds) as Array<{ doc_id: number }>)
-        .map((r) => r.doc_id),
-    );
+    const retryZero = options?.retryZero;
+    const vectored = new Set<number>();
+    const zeroRetry = new Set<number>();
+    for (const r of vecProbeFor(scanLimit, Boolean(retryZero)).all(...probeIds) as Array<{ doc_id: number; zero?: number }>) {
+      if (r.zero && retryZero?.(r.doc_id)) zeroRetry.add(r.doc_id);
+      else vectored.add(r.doc_id);
+    }
     const missing = rows.filter((r) => !vectored.has(r.id));
     // Only the first `limit` missing docs are handed out, so the cursor stops at
     // the last row this call actually consumed — never past unprocessed work.
@@ -435,7 +490,7 @@ export function createWriter(db: SearchDb): Writer {
         if (!body) continue;
         if (excluded?.has(body.kind)) continue;
         if (maxNote !== undefined && body.note.length > maxNote) continue;
-        docs.push(body);
+        docs.push(zeroRetry.has(row.id) ? { ...body, zeroMarker: true } : body);
       }
     }
     return {
@@ -468,9 +523,12 @@ export function createWriter(db: SearchDb): Writer {
     remove: removeTx,
     rebuildAll,
     reindexFtsFromDocs,
-    writeVectors: (docId, vectors) => writeVectorsTx(docId, vectors),
-    writeVectorsResumable: (docId, vectors, total) =>
-      writeVectorsResumableTx(docId, vectors, total),
+    writeVectors: (docId, vectors, expectedHash) => writeVectorsTx(docId, vectors, expectedHash),
+    writeVectorsResumable: (docId, vectors, total, expectedHash) =>
+      writeVectorsResumableTx(docId, vectors, total, expectedHash),
+    clearZeroMarker: (docId, expectedHash) => {
+      if (vecTarget(docId, expectedHash) === 'ok') clearZero.run(docId);
+    },
     storedVecSeqs: (docId) => {
       const out = new Set<number>();
       for (const row of selectVecSeqs.all(docId) as Array<{ seq: number }>) out.add(row.seq);

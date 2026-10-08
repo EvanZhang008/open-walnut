@@ -297,20 +297,20 @@ describe('searchSemantic degrade ladder', () => {
     index.close();
   });
 
-  it('a doc whose embed keeps failing is quarantined instead of wedging the backfill', async () => {
+  it('a worker that cannot start stalls the backfill and quarantines nothing', async () => {
     const index = createSearchIndex({
       dbPath: ':memory:',
       kinds: KINDS,
       embedder: { modelId: 'no/such-model', dims: 4, workerPath: '/nonexistent.js' },
     });
-    index.upsert({ kind: 'task', ref: 'poison', title: 'never embeds', updatedAt: 1 });
-    // Failure 1: retried next pass; failure 2: quarantined with a zero vector.
-    const first = await index.backfillVectors();
-    expect(first.embedded).toBe(0);
-    const second = await index.backfillVectors();
-    expect(second.embedded).toBe(0);
-    expect(vecCount(index)).toBe(1); // the zero sentinel
-    expect((await index.backfillVectors()).drained).toBe(true);
+    index.upsert({ kind: 'task', ref: 't1', title: 'never embeds here', updatedAt: 1 });
+    // The old rule quarantined the doc on its second failure: a zero vector
+    // nothing retried, for a fault that was the worker's. The real "the doc is
+    // the cause" path is in hybrid-search-quarantine.test.ts.
+    for (let i = 0; i < 3; i++) {
+      expect(await index.backfillVectors()).toMatchObject({ embedded: 0, drained: false, stalled: true });
+    }
+    expect(vecCount(index)).toBe(0);
     index.close();
   });
 });
@@ -465,7 +465,9 @@ describe('rescore guards (fake worker: query always embeds to [127,0,0,0])', () 
     // without embedding and hand back the INCOMING cursor so nothing skips.
     await index.searchSemantic('alpha', { semanticDeadlineMs: 5000 });
     const yielded = await index.backfillVectors();
-    expect(yielded).toEqual({ embedded: 0, drained: false, cursor: null });
+    expect(yielded).toEqual({
+      embedded: 0, drained: false, cursor: null, scanned: 2, docs: 1, passages: 0, yielded: 'query',
+    });
     expect(vecCount(index)).toBe(1); // t2 still waiting, not skipped
     index.close();
   });

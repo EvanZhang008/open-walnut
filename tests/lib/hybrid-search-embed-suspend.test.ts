@@ -109,18 +109,18 @@ describe('search index while the embedder is suspended', () => {
     index.upsert({ kind: 'task', ref: 't1', title: 'retry timeout fix', updatedAt: 1 });
     await index.suspendEmbedder();
 
-    // Without the suspension two failed passes quarantine the doc with a zero
-    // vector (see hybrid-search-semantic.test.ts). Suspended passes are not failures.
+    // Suspended passes hold the walk: not drained, nothing touched.
     for (let i = 0; i < 3; i++) {
       expect(await index.backfillVectors()).toEqual({ embedded: 0, drained: false, cursor: null });
     }
     expect(vecCount(index)).toBe(0);
 
-    // Back to normal: the same broken worker now counts, as before.
+    // Back to normal: the broken worker now stalls the walk, and still no doc
+    // is blamed for it (hybrid-search-quarantine.test.ts).
     index.resumeEmbedder();
-    await index.backfillVectors();
-    await index.backfillVectors();
-    expect(vecCount(index)).toBe(1);
+    expect(await index.backfillVectors()).toMatchObject({ embedded: 0, stalled: true });
+    expect(await index.backfillVectors()).toMatchObject({ embedded: 0, stalled: true });
+    expect(vecCount(index)).toBe(0);
 
     // A query while suspended skips the rescore on purpose (keyword order),
     // reported as skipped rather than as a worker timeout. Last, because a
