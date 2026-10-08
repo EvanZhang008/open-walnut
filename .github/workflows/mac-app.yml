@@ -67,6 +67,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: v${{ inputs.version }}
+      # The checks that judge it come from this workflow's own commit, as the
+      # workflow does: a fix to the smoke must reach every release it checks
+      # (2026-10-07: two smoke fixes on main never ran, the job used v0.6.5's).
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: harness
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -149,7 +156,7 @@ jobs:
         run: |
           app="$RUNNER_TEMP/Applications/Walnut.app"
           [ -d "$app" ] || app="desktop/Walnut.app"
-          node scripts/desktop-smoke.mjs --app "$app" --version "$VERSION" --work "$RUNNER_TEMP/smoke"
+          node harness/scripts/desktop-smoke.mjs --app "$app" --version "$VERSION" --work "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@v4
         if: steps.shape.outputs.app == 'true' && !cancelled()
         with:
