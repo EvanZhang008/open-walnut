@@ -404,7 +404,12 @@ export async function runProjectionSelfHealSweep(): Promise<Record<ProjectionPus
   try {
     const sessions = await readProjectionCache('sessions');
     if (sessions != null) {
-      await push('projection-upsert', { which: 'sessions', data: sessions });
+      // The companion's copy carries the host model catalogs, which the cache
+      // file does not (session-projection.ts sessionsPushPayload).
+      const data = typeof sessions === 'object'
+        ? await import('./session-projection.js').then((m) => m.sessionsPushPayload(sessions), () => sessions)
+        : sessions;
+      await push('projection-upsert', { which: 'sessions', data });
     }
     const tasks = await readProjectionCache('tasks');
     if (tasks != null) {

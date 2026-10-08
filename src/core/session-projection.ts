@@ -393,9 +393,19 @@ export async function exportSessionProjection(): Promise<number> {
   if (await legacyProjectionFilesEnabled()) {
     await writeJsonFile(SESSION_PROJECTION_FILE, projection)
   }
-  const catalogs = await hostCatalogsForCompanion()
-  pushProjectionToCloud('projection-upsert', { which: 'sessions', data: catalogs ? { ...projection, host_model_catalogs: catalogs } : projection })
+  pushProjectionToCloud('projection-upsert', { which: 'sessions', data: await sessionsPushPayload(projection) })
   return projection.sessions.length
+}
+
+/**
+ * The sessions projection as the companion gets it: with each host's model
+ * catalog beside the rows. Every push of the sessions projection goes through
+ * here, the export above and the 5-minute self-heal sweep alike (which re-pushes
+ * the Mac's own cache file, kept without the catalogs).
+ */
+export async function sessionsPushPayload<T extends object>(projection: T): Promise<T | (T & { host_model_catalogs: NonNullable<SessionProjection['host_model_catalogs']> })> {
+  const catalogs = await hostCatalogsForCompanion()
+  return catalogs ? { ...projection, host_model_catalogs: catalogs } : projection
 }
 
 /** The host model catalogs, slimmed for the companion's copy; null when there are none. */
