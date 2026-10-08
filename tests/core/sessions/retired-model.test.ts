@@ -56,6 +56,14 @@ describe('successorForRetiredModel', () => {
     expect(successorForRetiredModel(CATALOG, 'global.anthropic.claude-haiku-4-5-20251001-v1:0')).toBeNull()
   })
 
+  it('moves a Haiku 4.5 session to the haiku row once that row resolves to Haiku 5.5', () => {
+    const rows: SessionModelCatalogEntry[] = [
+      { value: 'haiku', resolvedModel: 'global.anthropic.claude-haiku-5-5[1m]', displayName: 'Haiku' },
+    ]
+    expect(successorForRetiredModel(rows, 'global.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe('haiku')
+    expect(successorForRetiredModel(rows, 'global.anthropic.claude-haiku-5-5[1m]')).toBeNull()
+  })
+
   it('skips disabled rows', () => {
     const disabled: SessionModelCatalogEntry[] = [
       { value: 'global.anthropic.claude-fable-5-1[1m]', displayName: 'Fable', disabled: true },

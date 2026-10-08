@@ -34,6 +34,8 @@ describe('formatModelName', () => {
     expect(formatModelName('claude-opus-4-1')).toBe('Opus 4.1');
     expect(formatModelName('global.anthropic.claude-opus-4-6-v1[1m]')).toBe('Opus 4.6 1M');
     expect(formatModelName('us.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe('Haiku 4.5');
+    expect(formatModelName('global.anthropic.claude-haiku-5-5[1m]')).toBe('Haiku 5.5 1M');
+    expect(formatModelName('claude-haiku-5-5')).toBe('Haiku 5.5');
     expect(formatModelName('claude-sonnet-4-6')).toBe('Sonnet 4.6');
     expect(formatModelName('gpt-5.6-sol')).toBe('GPT-5.6 Sol');
   });

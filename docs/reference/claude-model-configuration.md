@@ -140,6 +140,18 @@ configuration repair, so respawn affected sessions.
   parity with terminal `/model`.
 - Verify a switch with settings read-back and the next assistant message's
   `model` field, never only the acknowledgement.
+- Utility children (the AI search lane, inline subagents) run settings-less
+  (`--setting-sources ""`, `--bare`), so they never read `settings.json`.
+  Walnut re-applies its `env` block and passes its `modelOverrides` through
+  `--settings`. Without the overrides, `--model haiku` and `--model sonnet` ran
+  the CLI's built-in models (Haiku 4.5 and Sonnet 4.5 on Bedrock with CLI
+  2.1.284) while the same user's sessions ran 5.5.
+- The CLI's registry does not know Haiku 5.5, so the `haiku` alias reaches it
+  only through configuration: an override on `claude-haiku-4-5-20251001`, or
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL`. Only the env form with
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES` (for example
+  `effort,xhigh_effort,max_effort,thinking,adaptive_thinking`) makes the CLI
+  send `--effort`; with the override alone it drops the flag silently.
 
 ## Debugging
 

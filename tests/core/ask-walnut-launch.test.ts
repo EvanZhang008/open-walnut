@@ -113,8 +113,9 @@ describe('resolveAskWalnutEffort', () => {
   });
 
   it('falls back when the explicit model cannot take the remembered level', () => {
-    // xhigh arrived after Opus 4.6; max is not a Haiku thing.
+    // xhigh arrived after Opus 4.6; Haiku 4.5 has no effort (Haiku 5.5 does).
     expect(resolveAskWalnutEffort('xhigh', 'claude-opus-4-6', 'medium')).toBe('medium');
-    expect(resolveAskWalnutEffort('max', 'haiku', 'medium')).toBe('medium');
+    expect(resolveAskWalnutEffort('max', 'us.anthropic.claude-haiku-4-5-20251001-v1:0', 'medium')).toBe('medium');
+    expect(resolveAskWalnutEffort('max', 'haiku', 'medium')).toBe('max');
   });
 });

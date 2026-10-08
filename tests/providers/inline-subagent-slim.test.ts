@@ -128,4 +128,27 @@ describe('runInlineSubagent slim preset', () => {
       _resetUserSettingsEnvCacheForTesting();
     }
   });
+
+  it('a settings-less child gets the user modelOverrides through --settings, so --model haiku resolves like the user CLI', async () => {
+    const overrides = { 'claude-haiku-4-5-20251001': 'global.anthropic.claude-haiku-5-5', bad: 7 };
+    settingsJsonRef.value = JSON.stringify({ env: {}, modelOverrides: overrides });
+    try {
+      _resetUserSettingsEnvCacheForTesting();
+      const { args } = await run({ slim: true, model: 'haiku' });
+      const i = args.indexOf('--settings');
+      expect(i).toBeGreaterThan(-1);
+      expect(JSON.parse(args[i + 1])).toEqual({
+        modelOverrides: { 'claude-haiku-4-5-20251001': 'global.anthropic.claude-haiku-5-5' },
+      });
+      // Not slim: the CLI reads settings.json itself, nothing is injected.
+      expect((await run({})).args).not.toContain('--settings');
+      // No overrides configured: no flag at all.
+      settingsJsonRef.value = JSON.stringify({ env: {} });
+      _resetUserSettingsEnvCacheForTesting();
+      expect((await run({ slim: true })).args).not.toContain('--settings');
+    } finally {
+      settingsJsonRef.value = null;
+      _resetUserSettingsEnvCacheForTesting();
+    }
+  });
 });

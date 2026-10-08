@@ -72,8 +72,9 @@ describe('GET /api/v1/sessions/:id/model-options', () => {
     expect(opus).toBeDefined()
     expect(opus!.supportsEffort).toBe(true)
     expect(opus!.supportedEffortLevels).toContain('high')
+    // Haiku 5.5 (what the haiku alias means since 2026-10-07) takes effort.
     const haiku = body.models.find((m) => m.id === 'haiku')
-    if (haiku) expect(haiku.supportsEffort).toBe(false)
+    if (haiku) expect(haiku.supportsEffort).toBe(true)
     // Record has no model → current null; no effort set → null.
     expect(body.current).toBeNull()
     expect(body.currentEffort).toBeNull()
@@ -254,8 +255,8 @@ describe('POST /api/v1/sessions/:id/effort', () => {
       initialProcessStatus: 'stopped',
     })
     const app = createApp()
-    // Haiku: no effort support at all (static family table).
-    expect((await request(app).post('/api/v1/sessions/ctl-effort-2/model').send({ model: 'haiku' })).status).toBe(200)
+    // Haiku 4.5: no effort support at all (static override table).
+    expect((await request(app).post('/api/v1/sessions/ctl-effort-2/model').send({ model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' })).status).toBe(200)
     const res = await request(app).post('/api/v1/sessions/ctl-effort-2/effort').send({ effort: 'high' })
     expect(res.status).toBe(409)
     expect(res.body.error.code).toBe('conflict')

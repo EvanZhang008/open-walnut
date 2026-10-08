@@ -332,13 +332,14 @@ export interface ModelEffortCapability {
  *  - opus:   effort + xhigh + max (4.7/4.8 have all three; 4.6 lacks xhigh — see override).
  *  - sonnet: effort + max, xhigh only on Sonnet 5 (4.6 has max but not xhigh — see override).
  *  - fable:  effort + xhigh + max (Fable 5 has all three).
- *  - haiku:  none (fastest tier; passing --effort errors on the CLI).
+ *  - haiku:  effort + xhigh + max since Haiku 5.5 (2026-10-07: CLI 2.1.284 ran
+ *            --effort low/high/max on it end to end). Haiku 4.5 has none (see override).
  */
 export const MODEL_EFFORT_FAMILY_DEFAULTS: Record<SessionModelFamily, ModelEffortCapability> = {
   opus:   { effort: true,  xhigh: true,  max: true  },
   sonnet: { effort: true,  xhigh: true,  max: true  },
   fable:  { effort: true,  xhigh: true,  max: true  },
-  haiku:  { effort: false, xhigh: false, max: false },
+  haiku:  { effort: true,  xhigh: true,  max: true  },
 };
 
 /**
@@ -362,6 +363,8 @@ export const MODEL_EFFORT_OVERRIDES: ReadonlyArray<{ match: string } & Partial<M
   { match: 'opus-4-0',   xhigh: false, max: false },
   { match: 'sonnet-4-5', xhigh: false, max: false },
   { match: 'sonnet-4-0', xhigh: false, max: false },
+  // Haiku 4.5 predates effort on the Haiku tier.
+  { match: 'haiku-4-5',  effort: false, xhigh: false, max: false },
 ];
 
 /** Resolve a model string/alias to which SessionModelFamily it belongs to. */

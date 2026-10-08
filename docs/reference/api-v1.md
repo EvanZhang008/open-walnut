@@ -1816,7 +1816,7 @@ BOTH boxes:
   - `resolvedModel` (additive, 2026-09): the canonical model id the row
     resolves to, when the catalog knows it. Alias rows only name a real model
     here (`default` and `opus` → `global.anthropic.claude-opus-5-5[1m]`,
-    `haiku` → `global.anthropic.claude-haiku-4-5-20251001-v1:0`). Clients label
+    `haiku` → `global.anthropic.claude-haiku-5-5[1m]`). Clients label
     rows with the web picker's rule (`catalogRowLabel`: the versioned name
     derived from `resolvedModel ?? id`, `Default (…)` for the `default` row,
     else `label`), so the phone reads "Opus 5.5 1M" where the Mac does. Absent

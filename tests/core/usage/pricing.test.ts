@@ -76,6 +76,15 @@ describe('pricing', () => {
       expect(findPricing('global.anthropic.claude-sonnet-4-5-20250929-v1:0')!.input).toBe(3.00);
     });
 
+    it('prices Haiku 5.5 at $0.50 / $2.50 and keeps Haiku 4.5 at $1 / $5', () => {
+      for (const id of ['global.anthropic.claude-haiku-5-5', 'global.anthropic.claude-haiku-5-5[1m]', 'claude-haiku-5-5']) {
+        const h = findPricing(id);
+        expect(h!.pattern).toBe('claude-haiku-5-5');
+        expect([h!.input, h!.output, h!.cacheWrite, h!.cacheRead]).toEqual([0.50, 2.50, 0.625, 0.05]);
+      }
+      expect(findPricing('us.anthropic.claude-haiku-4-5-20251001-v1:0')!.input).toBe(1.00);
+    });
+
     it('prefers more specific patterns (opus-4-6 over opus-4)', () => {
       const entry46 = findPricing('claude-opus-4-6-v1');
       const entry4 = findPricing('claude-opus-4-v1');

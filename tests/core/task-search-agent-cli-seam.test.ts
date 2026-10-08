@@ -60,7 +60,7 @@ describe('claude -p default engine wiring', () => {
     await runTaskSearchAgent('which task adds docx');
     expect(warmMock).toHaveBeenCalledTimes(1);
     const opts = warmMock.mock.calls[0][0];
-    expect(opts.model).toBe('sonnet'); // the quality floor the user set
+    expect(opts.model).toBe('haiku'); // Haiku 5.5 is the engine since 2026-10-07
     expect(opts.timeoutMs).toBe(80_000);
     expect(opts.system).toContain('walnut tools call search');
     expect(opts.system).toContain('type:"session"');

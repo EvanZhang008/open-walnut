@@ -12,12 +12,20 @@ import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnMock, settingsArgRef } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  settingsArgRef: { value: '{"modelOverrides":{"claude-haiku-4-5-20251001":"global.anthropic.claude-haiku-5-5"}}' as string | undefined },
+}));
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-micro-claude-warm'));
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 vi.mock('../../src/core/claude-cli-detect.js', () => ({
   resolveClaudeCliExecutable: () => '/usr/local/bin/claude',
+}));
+// The user's modelOverrides ride --settings (the child loads no settings file).
+vi.mock('../../src/providers/inline-subagent.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/providers/inline-subagent.js')>()),
+  slimChildSettingsArg: () => settingsArgRef.value,
 }));
 
 import { realpathSync } from 'node:fs';
@@ -92,6 +100,7 @@ describe('warm micro-claude pool', () => {
       expect(args[args.indexOf(pair[0]) + 1]).toBe(pair[1]);
     }
     expect(args).toContain('--bare');
+    expect(args[args.indexOf('--settings') + 1]).toBe(settingsArgRef.value);
     expect(opts.cwd).toBe(tmpdir());
     expect(opts.env.CLAUDE_CODE_ENTRYPOINT).toBe('walnut-utility');
     expect(opts.env.MAX_THINKING_TOKENS).toBe('0');

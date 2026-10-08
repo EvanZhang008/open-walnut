@@ -31,11 +31,11 @@ describe('sessionModelsAsCatalog', () => {
     }
   })
 
-  it('derives effort capability: haiku none, fable full, opus-family no-xhigh only where overridden', () => {
+  it('derives effort capability: haiku (5.5) and fable full, opus-family no-xhigh only where overridden', () => {
     const catalog = sessionModelsAsCatalog()
     const byValue = Object.fromEntries(catalog.map(c => [c.value, c]))
-    expect(byValue['haiku'].supportsEffort).toBe(false)
-    expect(byValue['haiku'].supportedEffortLevels).toEqual([])
+    expect(byValue['haiku'].supportsEffort).toBe(true)
+    expect(byValue['haiku'].supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(byValue['fable'].supportsEffort).toBe(true)
     expect(byValue['fable'].supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     // 'opus' alias resolves to family default (flagship: all levels)

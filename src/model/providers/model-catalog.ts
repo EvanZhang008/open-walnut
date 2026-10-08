@@ -58,6 +58,13 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
       model_id: 'global.anthropic.claude-sonnet-4-6',
       label: 'Sonnet 4.6 (1M)', max_tokens: 64_000, context_window: 1_000_000,
       compat: { thinking_format: 'anthropic', supports_adaptive: true } },
+    // Haiku 5.5 (2026-10-07): native 1M, 128K output. It takes adaptive
+    // thinking only, but the row deliberately sets no thinking_format: the
+    // first haiku row is the fast background model (cheap-model.ts), and those
+    // calls want no thinking round, as with Haiku 4.5.
+    { id: 'global.anthropic.claude-haiku-5-5', provider: 'bedrock',
+      label: 'Haiku 5.5', max_tokens: 128_000, context_window: 1_000_000,
+      compat: { native_1m: true } },
     { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', provider: 'bedrock',
       label: 'Haiku 4.5', max_tokens: 64_000, context_window: 200_000 }, // No extended thinking — Haiku 4.5 doesn't support it
   ],
@@ -101,6 +108,10 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
       model_id: 'claude-sonnet-4-6',
       label: 'Sonnet 4.6 (1M)', max_tokens: 64_000, context_window: 1_000_000,
       compat: { thinking_format: 'anthropic', supports_adaptive: true } },
+    // Haiku 5.5: no thinking_format on purpose, see the Bedrock row.
+    { id: 'claude-haiku-5-5', provider: 'anthropic',
+      label: 'Haiku 5.5', max_tokens: 128_000, context_window: 1_000_000,
+      compat: { native_1m: true } },
     { id: 'claude-haiku-4-5', provider: 'anthropic',
       label: 'Haiku 4.5', max_tokens: 64_000, context_window: 200_000 }, // No extended thinking — Haiku 4.5 doesn't support it
   ],

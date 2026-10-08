@@ -29,6 +29,7 @@ import { log } from '../logging/index.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import {
   readUserSettingsEnv,
+  slimChildSettingsArg,
   WALNUT_UTILITY_ENTRYPOINT,
 } from './inline-subagent.js';
 import {
@@ -131,6 +132,9 @@ function spawnStreamChild(spec: WarmSpec): PooledChild | null {
     '--setting-sources', '',
     '--bare',
   ];
+  // The user's modelOverrides, so the alias resolves as their CLI resolves it.
+  const settings = slimChildSettingsArg();
+  if (settings) args.push('--settings', settings);
   const proc = spawn(cli, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: tmpdir(),

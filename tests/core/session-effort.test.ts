@@ -44,10 +44,12 @@ describe('session effort registry', () => {
 })
 
 describe('modelSupportsEffort', () => {
-  it('returns false for haiku (any casing / raw or alias)', () => {
-    expect(modelSupportsEffort('haiku')).toBe(false)
-    expect(modelSupportsEffort('HAIKU')).toBe(false)
+  it('Haiku 5.5 (the haiku alias) takes effort; Haiku 4.5 does not', () => {
+    expect(modelSupportsEffort('haiku')).toBe(true)
+    expect(modelSupportsEffort('HAIKU')).toBe(true)
+    expect(modelSupportsEffort('global.anthropic.claude-haiku-5-5[1m]')).toBe(true)
     expect(modelSupportsEffort('claude-haiku-4-5-20251001')).toBe(false)
+    expect(modelSupportsEffort('us.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(false)
   })
 
   it('returns true for effort-capable Claude 4 families', () => {
@@ -78,8 +80,9 @@ describe('modelSupportsMaxEffort', () => {
     expect(modelSupportsMaxEffort('claude-fable-5')).toBe(true)
   })
 
-  it('is false for models without max (Haiku, legacy Opus/Sonnet, unknown)', () => {
-    expect(modelSupportsMaxEffort('haiku')).toBe(false)
+  it('is false for models without max (Haiku 4.5, legacy Opus/Sonnet, unknown)', () => {
+    expect(modelSupportsMaxEffort('haiku')).toBe(true) // Haiku 5.5
+    expect(modelSupportsMaxEffort('claude-haiku-4-5-20251001')).toBe(false)
     expect(modelSupportsMaxEffort('claude-opus-4-5')).toBe(false)
     expect(modelSupportsMaxEffort('claude-sonnet-4-5')).toBe(false)
     expect(modelSupportsMaxEffort(undefined)).toBe(false)
@@ -99,10 +102,11 @@ describe('modelSupportsXhighEffort', () => {
     expect(modelSupportsXhighEffort('claude-sonnet-5')).toBe(true)
   })
 
-  it('is false where xhigh is unsupported (Opus 4.6, Sonnet 4.6, Haiku, unknown)', () => {
+  it('is false where xhigh is unsupported (Opus 4.6, Sonnet 4.6, Haiku 4.5, unknown)', () => {
     expect(modelSupportsXhighEffort('claude-opus-4-6')).toBe(false)   // has max, NOT xhigh
     expect(modelSupportsXhighEffort('claude-sonnet-4-6')).toBe(false) // has max, NOT xhigh
-    expect(modelSupportsXhighEffort('haiku')).toBe(false)
+    expect(modelSupportsXhighEffort('claude-haiku-4-5-20251001')).toBe(false)
+    expect(modelSupportsXhighEffort('haiku')).toBe(true) // Haiku 5.5
     expect(modelSupportsXhighEffort(undefined)).toBe(false)
     expect(modelSupportsXhighEffort('some-future-model')).toBe(false)
   })
@@ -128,7 +132,8 @@ describe('effort capability map: forward-compatibility (per-family default)', ()
     expect(modelEffortCapability('opus')).toEqual({ effort: true, xhigh: true, max: true })
     expect(modelEffortCapability('sonnet')).toEqual({ effort: true, xhigh: true, max: true })
     expect(modelEffortCapability('fable')).toEqual({ effort: true, xhigh: true, max: true })
-    expect(modelEffortCapability('haiku')).toEqual({ effort: false, xhigh: false, max: false })
+    expect(modelEffortCapability('haiku')).toEqual({ effort: true, xhigh: true, max: true })
+    expect(modelEffortCapability('claude-haiku-4-5')).toEqual({ effort: false, xhigh: false, max: false })
     expect(modelEffortCapability(undefined)).toEqual({ effort: true, xhigh: false, max: false })
   })
 })

@@ -138,23 +138,46 @@ function releaseSemaphore(): void {
  *  re-apply just the env block, exactly the CLI's own semantics (settings
  *  env is assigned OVER process env). */
 let userSettingsEnvCache: Record<string, string> | null = null;
-export function readUserSettingsEnv(): Record<string, string> {
-  if (userSettingsEnvCache) return userSettingsEnvCache;
+let userModelOverridesCache: Record<string, string> | null = null;
+function loadUserSettings(): void {
   try {
     const raw = readFileSync(path.join(homedir(), '.claude', 'settings.json'), 'utf8');
-    const env = (JSON.parse(raw) as { env?: Record<string, unknown> }).env ?? {};
-    userSettingsEnvCache = Object.fromEntries(
-      Object.entries(env).filter(([, v]) => typeof v === 'string'),
+    const parsed = JSON.parse(raw) as { env?: Record<string, unknown>; modelOverrides?: Record<string, unknown> };
+    const strings = (o: Record<string, unknown> | undefined) => Object.fromEntries(
+      Object.entries(o ?? {}).filter(([, v]) => typeof v === 'string'),
     ) as Record<string, string>;
+    userSettingsEnvCache = strings(parsed.env);
+    userModelOverridesCache = strings(parsed.modelOverrides);
   } catch {
     userSettingsEnvCache = {};
+    userModelOverridesCache = {};
   }
-  return userSettingsEnvCache;
+}
+export function readUserSettingsEnv(): Record<string, string> {
+  if (!userSettingsEnvCache) loadUserSettings();
+  return userSettingsEnvCache!;
+}
+
+/**
+ * The `--settings` argument a settings-less child needs so `--model haiku`
+ * resolves the way the user's own CLI resolves it. modelOverrides is not an
+ * env var, so without this a slim child ignores the user's mapping and runs
+ * the CLI's built-in model for the alias: on Bedrock that was Haiku 4.5 and
+ * Sonnet 4.5 while every session of the same user ran the 5.5 models
+ * (2026-10-07). Undefined when the user has no overrides.
+ */
+export function slimChildSettingsArg(): string | undefined {
+  if (!userModelOverridesCache) loadUserSettings();
+  const overrides = userModelOverridesCache!;
+  return Object.keys(overrides).length > 0
+    ? JSON.stringify({ modelOverrides: overrides })
+    : undefined;
 }
 
 /** Test hook. */
 export function _resetUserSettingsEnvCacheForTesting(): void {
   userSettingsEnvCache = null;
+  userModelOverridesCache = null;
 }
 
 // ── Track active processes for cleanup ──
@@ -210,6 +233,10 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   }
   if (settingSources !== undefined) {
     args.push('--setting-sources', settingSources);
+  }
+  if (settingSources === '') {
+    const settings = slimChildSettingsArg();
+    if (settings) args.push('--settings', settings);
   }
   if (bare) {
     args.push('--bare');

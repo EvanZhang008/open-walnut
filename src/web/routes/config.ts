@@ -194,7 +194,7 @@ configRouter.post('/test-connection', async (req: Request, res: Response, next: 
 
     const start = Date.now()
     await client.messages.create({
-      model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      model: 'global.anthropic.claude-haiku-5-5',
       max_tokens: 1,
       messages: [{ role: 'user', content: 'hi' }],
     })
@@ -515,8 +515,8 @@ configRouter.post('/test-provider', async (req: Request, res: Response, next: Ne
     const protocol = resolvedConfig.api
     let testModel: string
     const TEST_MODELS: Record<string, Record<string, string>> = {
-      'bedrock': { '*': 'us.anthropic.claude-haiku-4-5-20251001-v1:0' },
-      'anthropic-messages': { '*': 'claude-haiku-4-5-20251001' },
+      'bedrock': { '*': 'global.anthropic.claude-haiku-5-5' },
+      'anthropic-messages': { '*': 'claude-haiku-5-5' },
       'openai-chat': {
         'openai': 'gpt-4o-mini',
         'openrouter': 'nvidia/nemotron-3-nano-30b-a3b:free', // Uses :free model to test connectivity without requiring paid credits

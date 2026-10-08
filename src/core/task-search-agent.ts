@@ -5,7 +5,7 @@
  * The engine is a claude -p CHILD (user decision 2026-08-28: run on Claude
  * Code so the work can ride the CLI's own credential/subscription), but a SLIM
  * one: replaced system prompt, Bash-only, --bare, neutral cwd (32.5k -> 3.6k
- * tokens vs the stock shell), sonnet, server-side seed search injected into the
+ * tokens vs the stock shell), haiku, server-side seed search injected into the
  * prompt, and its stream translated into live progress events. The seam stays
  * injectable so a test can script an answer without a child process.
  *
@@ -77,11 +77,13 @@ export type AgentSearchEngine = (
   options: AgentSearchEngineOptions,
 ) => Promise<{ response: string; model?: string; costUsd?: number; sessionId?: string; cwd?: string }>;
 
-// Sonnet is the quality floor the user set; the slim shell keeps its cost
-// roughly a tenth of the stock-shell sonnet run ($0.68 measured pre-slim).
-const CLI_ENGINE_MODEL = 'sonnet';
+// Haiku since Haiku 5.5 (user call, 2026-10-07; was sonnet). The alias
+// resolves through the user's own CLI mapping (slimChildSettingsArg), which is
+// how it reaches 5.5 on Bedrock. scripts/search-agent-eval.mjs compares the
+// models on the golden set.
+const CLI_ENGINE_MODEL = 'haiku';
 // 80s: a hard query on the CLI child = seed + a batched variant round + the
-// answer, where every `walnut tools call` is a real process and sonnet
+// answer, where every `walnut tools call` is a real process and model
 // rounds run 10-15s at slow-Bedrock hours — a live hard query was killed at
 // 50s (502). A completed slow answer beats a timeout. Route wall 90s,
 // client wall 95s keep the ordering.
@@ -329,7 +331,7 @@ function recordRun(key: string, run: AgentSearchRun): void {
  * card's lane debounces for a second, so a fast click arrives when NOTHING has
  * run yet — and answering "no session" there sent the user into a fresh agent
  * redoing the search, the exact complaint. Starting the search here is also the
- * cheaper branch (a slim sonnet child vs. a whole session), and runTaskSearchAgent
+ * cheaper branch (a slim haiku child vs. a whole session), and runTaskSearchAgent
  * dedups by the same key, so a lane request already in flight is JOINED rather
  * than duplicated.
  *
