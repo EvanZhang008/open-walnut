@@ -64,6 +64,12 @@ process.stdin.on('data', (chunk) => {
   while ((nl = buf.indexOf('\\n')) !== -1) {
     const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
     let msg; try { msg = JSON.parse(line) } catch { continue }
+    // A settings change (leader.settings): kept for the test, answered as the CLI does.
+    if (msg.type === 'control_request') {
+      fs.appendFileSync(inbox.replace('.inbox.jsonl', '.ctrl.jsonl'), JSON.stringify(msg) + '\\n')
+      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } })
+      continue
+    }
     if (msg.type !== 'user') continue
     fs.appendFileSync(inbox, JSON.stringify({ content: msg.message && msg.message.content }) + '\\n')
   }
@@ -287,6 +293,13 @@ function inboxOf(d: Daemon, sid: string): string[] {
   } catch { return [] }
 }
 
+/** The control requests a session's CLI got (the mock keeps them). */
+function ctrlOf(d: Daemon, sid: string): Array<{ request_id: string; request: { subtype: string; settings: Record<string, string> } }> {
+  try {
+    return fs.readFileSync(path.join(d.dir, `${sid}.ctrl.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+
 function primaryEvents(): Array<Record<string, any>> {
   try { return fs.readFileSync(primaryOut, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] }
 }
@@ -432,6 +445,23 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(far).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
   }, 60_000)
 
+  it('while it leads, the companion changes a live session\'s model or effort on its host, and the host keeps it for the Mac', async () => {
+    const model = await request('oldbox', 'leader.settings', { walnutId: WALNUT, epoch: 2, sid: B, model: 'sonnet[1m]' })
+    expect(model, JSON.stringify(model)).toMatchObject({ ok: true, appliedLive: true })
+    expect(ctrlOf(oldbox, B).map((c) => c.request)).toEqual([{ subtype: 'apply_flag_settings', settings: { model: 'sonnet[1m]' } }])
+    const effort = await request('devbox', 'leader.settings', { walnutId: WALNUT, epoch: 2, sid: A, effort: 'low' })
+    expect(effort, JSON.stringify(effort)).toMatchObject({ ok: true, appliedLive: true })
+    expect(ctrlOf(devbox, A).map((c) => c.request)).toEqual([{ subtype: 'apply_flag_settings', settings: { effortLevel: 'low' } }])
+    // A value the CLI would ACK and ignore never reaches it; nor does another host's session.
+    const bad = await request('oldbox', 'leader.settings', { walnutId: WALNUT, epoch: 2, sid: B, effort: 'turbo' })
+    expect(bad).toMatchObject({ ok: false })
+    expect(String(bad.error)).toMatch(/effort must be one of/)
+    const elsewhere = await request('oldbox', 'leader.settings', { walnutId: WALNUT, epoch: 2, sid: A, model: 'opus' })
+    expect(elsewhere).toMatchObject({ ok: false })
+    expect(String(elsewhere.error)).toMatch(/not a session of this Walnut/)
+    expect(ctrlOf(oldbox, B)).toHaveLength(1)
+  }, 60_000)
+
   it('the Mac wakes on the same sockets: the daemons tell it, it drains, takes the lead back, and the companion lets go', async () => {
     // Still inside the keepalive: the sleeping primary's sockets were never closed.
     expect(daemonLog(devbox, /client silent, closing it/)).toHaveLength(0)
@@ -442,10 +472,14 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(claims.map((c) => [c.host, c.epoch, c.why]).sort()).toEqual([['devbox', 3, 'leader-lost'], ['oldbox', 3, 'leader-lost']])
     // It drained before it claimed: the journal of each host, in order.
     const drained = (host: string) => primaryEvents().filter((e) => e.ev === 'drained' && e.host === host).flatMap((e) => e.records as OfflineRecord[])
-    expect(drained('oldbox').map((r) => (r.kind === 'op' ? `op:${r.op}` : r.kind))).toEqual(['row', 'delivery', 'row', 'op:board_edit'])
+    expect(drained('oldbox').map((r) => (r.kind === 'op' ? `op:${r.op}` : r.kind))).toEqual(['row', 'delivery', 'row', 'op:board_edit', 'settings'])
     expect(drained('oldbox')[0]).toMatchObject({ row: { id: requestId, fromSessionId: A, toSessionId: B, fromHost: 'devbox', status: 'pending' } })
     expect(drained('oldbox')[2]).toMatchObject({ row: { id: requestId, status: 'replied' } })
-    expect(drained('devbox')).toEqual([expect.objectContaining({ kind: 'delivery', fromSessionId: B, toSessionId: A, requestId, reply: true })])
+    expect(drained('oldbox')[4]).toMatchObject({ kind: 'settings', sid: B, cliModel: 'sonnet[1m]' })
+    expect(drained('devbox')).toEqual([
+      expect.objectContaining({ kind: 'delivery', fromSessionId: B, toSessionId: A, requestId, reply: true }),
+      expect.objectContaining({ kind: 'settings', sid: A, effort: 'low' }),
+    ])
     await waitFor(() => !leader.isLeading(), 10_000, 'the companion to let go')
   }, 60_000)
 
@@ -455,6 +489,10 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(r).toMatchObject({ ok: false })
     expect(['stale_epoch', 'not_leader']).toContain(r.errorKind)
     expect(inboxOf(devbox, A)).toHaveLength(before)
+    const settings = await request('devbox', 'leader.settings', { walnutId: WALNUT, epoch: 2, sid: A, effort: 'high' })
+    expect(settings).toMatchObject({ ok: false })
+    expect(['stale_epoch', 'not_leader']).toContain(settings.errorKind)
+    expect(ctrlOf(devbox, A)).toHaveLength(1)
     // And a call between hosts goes to the Mac again.
     const back = await gatewayCall(devbox, A, 'task_send', { to: TASK_B, text: 'status?' })
     expect(back).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })

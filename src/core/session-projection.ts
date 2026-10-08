@@ -75,7 +75,7 @@ import {
   writeProjectionCache,
   writeTranscriptCache,
 } from './projection-cache.js'
-import type { SessionRecord, Task } from './types.js'
+import type { SessionModelCatalogEntry, SessionRecord, Task } from './types.js'
 import { engineCaps } from './agents/engine-registry.js'
 // Per-message text clipping, shared with the cloud twin in
 // web/routes/session-stream-v1.ts: an HTML-bearing reply gets a larger budget and
@@ -162,6 +162,10 @@ export interface ProjectedSession {
   process_status: string
   stopRequest?: SessionRecord['stopRequest']
   model?: string
+  /** The CLI --model the session runs with (additive): the companion's model picker reads it while the Mac is away. */
+  cli_model?: string
+  /** The reasoning effort in effect (additive, same reader). */
+  effort?: string
   mode?: string
   started_at: string
   last_active_at: string
@@ -189,6 +193,12 @@ export interface SessionProjection {
    * as meaningful must check this flag first.
    */
   truncated?: true
+  /**
+   * Each host's model catalog (core/host-model-catalog.ts), keyed as the
+   * session records name hosts ('__local__' = the Mac). Only on the copy pushed
+   * to the companion: its model picker answers from it while the Mac is away.
+   */
+  host_model_catalogs?: Record<string, { models: SessionModelCatalogEntry[]; fetchedAt: string }>
 }
 
 /** Folder id → label. Passed in rather than looked up per row: the registry is
@@ -219,6 +229,8 @@ export function projectSession(
     process_status: s.process_status,
     ...(s.stopRequest ? { stopRequest: s.stopRequest } : {}),
     ...(s.model ? { model: s.model } : {}),
+    ...(s.cliModel ? { cli_model: s.cliModel } : {}),
+    ...(s.effectiveEffort || s.effort ? { effort: s.effectiveEffort || s.effort } : {}),
     ...(s.mode ? { mode: s.mode } : {}),
     started_at: s.startedAt,
     last_active_at: s.lastActiveAt,
@@ -381,8 +393,23 @@ export async function exportSessionProjection(): Promise<number> {
   if (await legacyProjectionFilesEnabled()) {
     await writeJsonFile(SESSION_PROJECTION_FILE, projection)
   }
-  pushProjectionToCloud('projection-upsert', { which: 'sessions', data: projection })
+  const catalogs = await hostCatalogsForCompanion()
+  pushProjectionToCloud('projection-upsert', { which: 'sessions', data: catalogs ? { ...projection, host_model_catalogs: catalogs } : projection })
   return projection.sessions.length
+}
+
+/** The host model catalogs, slimmed for the companion's copy; null when there are none. */
+async function hostCatalogsForCompanion(): Promise<SessionProjection['host_model_catalogs'] | null> {
+  try {
+    const { listHostModelCatalogs } = await import('./host-model-catalog.js')
+    const out: NonNullable<SessionProjection['host_model_catalogs']> = {}
+    for (const [host, c] of Object.entries(await listHostModelCatalogs())) {
+      if (c?.models?.length) out[host] = { models: c.models, fetchedAt: c.fetchedAt }
+    }
+    return Object.keys(out).length > 0 ? out : null
+  } catch {
+    return null
+  }
 }
 
 // ── Transcript tails (the "open session" payload) ──────────────────────────

@@ -120,6 +120,12 @@ export type OfflineRecord =
   | { seq: number; at: number; online?: true; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean }
   /** `base`: the copy's updated_at for that task when the write was queued (the server's clock). */
   | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string }
+  /**
+   * A model or effort the cloud companion applied to a live session here while
+   * it led (leader.settings): the server keeps it on the session's record, so
+   * a cold resume starts with it.
+   */
+  | { seq: number; at: number; online?: true; kind: 'settings'; sid: string; cliModel?: string; effort?: string }
 
 interface Journal { nextSeq: number; records: OfflineRecord[]; rows: Record<string, OfflineRequestRow>; settledCopies: string[] }
 
@@ -360,6 +366,15 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (deps.now() - at < HANDOVER_GRACE_MS) return true
     handingOver.delete(id)
     return false
+  }
+
+  /** The companion, leading, changed a session's model or effort here: the server takes it on its next drain. */
+  function noteSettings(home: string, sid: string, settings: { cliModel?: string; effort?: string }): void {
+    append(home, {
+      kind: 'settings', sid,
+      ...(settings.cliModel ? { cliModel: settings.cliModel } : {}),
+      ...(settings.effort ? { effort: settings.effort } : {}),
+    })
   }
 
   /** The server applied every record up to `upTo`: drop them, and the rows it now owns. */
@@ -1299,7 +1314,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     return !!home && (journals.get(home)?.records.length ?? 0) > 0
   }
 
-  return { configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, handle, handleLocal, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, answersRead, homes: () => [...slices.keys()] }
+  return { configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, handle, handleLocal, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, answersRead, homes: () => [...slices.keys()] }
 }
 
 export type OfflineHost = ReturnType<typeof createOfflineHost>

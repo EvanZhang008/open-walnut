@@ -136,6 +136,36 @@ async function relaysToPrimary(sessionId: string): Promise<boolean> {
   return (await cloudOwnedSession(sessionId)) === null
 }
 
+/** The Mac is away by the companion's view (web/v1-forward/proxy.ts). Never throws. */
+async function primaryAway(): Promise<boolean> {
+  try {
+    const { getV1Forward } = await import('../v1-forward/proxy.js')
+    return await getV1Forward().primaryAway()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The model copy, when this companion leads the host the session runs on: a
+ * model or effort change then goes to that host's daemon, not to the Mac
+ * (core/sessions/model-options-copy.ts). Null otherwise: the relay as before.
+ */
+async function companionLeadsHostOf(sessionId: string) {
+  try {
+    const [{ readSessionProjection }, { getBackupLeader }] = await Promise.all([
+      import('../../core/session-projection.js'),
+      import('../../core/leader/backup-leader.js'),
+    ])
+    const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId)
+    if (!row || !row.host) return null
+    if (!(await getBackupLeader())?.leadFor(row.host)) return null
+    return (await import('../../core/sessions/model-options-copy.js')).getModelCopy()
+  } catch {
+    return null
+  }
+}
+
 /** Shared shape gate: bad sid → 400 without touching the store/bridge. */
 function validSid(req: Request, res: Response): string | null {
   const sessionId = String(req.params.id ?? '')
@@ -154,6 +184,11 @@ sessionControlV1Router.get('/sessions/:id/model-options', async (req: Request, r
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (await relaysToPrimary(sessionId)) {
+      // The Mac away: the picker from the copy it last pushed, at once.
+      if (await primaryAway()) {
+        const fromCopy = await (await import('../../core/sessions/model-options-copy.js')).getModelCopy().modelOptions(sessionId)
+        if (fromCopy) { res.json(fromCopy); return }
+      }
       await relayControlAction(res, 'model-options', sessionId, undefined, 200)
       return
     }
@@ -179,6 +214,13 @@ sessionControlV1Router.post('/sessions/:id/model', async (req: Request, res: Res
     if (!sessionId) return
     const rawModel = (req.body ?? {}).model
     if (await relaysToPrimary(sessionId)) {
+      // While the companion leads the session's host, that host applies it.
+      const viaHost = await companionLeadsHostOf(sessionId)
+      if (viaHost) {
+        const a = await viaHost.changeModel(sessionId, rawModel)
+        res.status(a.status).json(a.body)
+        return
+      }
       await relayControlAction(res, 'model', sessionId, { model: rawModel }, 200)
       return
     }
@@ -204,6 +246,12 @@ sessionControlV1Router.post('/sessions/:id/effort', async (req: Request, res: Re
     if (!sessionId) return
     const rawEffort = (req.body ?? {}).effort
     if (await relaysToPrimary(sessionId)) {
+      const viaHost = await companionLeadsHostOf(sessionId)
+      if (viaHost) {
+        const a = await viaHost.changeEffort(sessionId, rawEffort)
+        res.status(a.status).json(a.body)
+        return
+      }
       await relayControlAction(res, 'effort', sessionId, { effort: rawEffort }, 200)
       return
     }

@@ -447,6 +447,25 @@ describe('offline host: queued writes and the handover', () => {
     expect(next[0].kind === 'row' && next[0].row.status).toBe('replied')
   })
 
+  it('a model or effort the companion applied is journaled for the server, kept across a restart, and drained in order', () => {
+    const h = harness()
+    h.host.configure(slice())
+    h.host.noteSettings(HOME, B, { cliModel: 'sonnet[1m]' })
+    h.host.noteSettings(HOME, B, { effort: 'low', cliModel: '' })
+    expect(h.journalPings).toEqual([HOME, HOME])
+    // Made while the server was away: the gateway answers here until it is taken.
+    expect(h.host.pendingHandover(HOME)).toBe(true)
+    const restarted = harness(h.dir)
+    restarted.host.configure(slice())
+    const { records } = restarted.host.drain(HOME)
+    expect(records.map(({ seq: _s, at: _a, ...r }) => r)).toEqual([
+      { kind: 'settings', sid: B, cliModel: 'sonnet[1m]' },
+      { kind: 'settings', sid: B, effort: 'low' },
+    ])
+    expect(restarted.host.ack(HOME, records.at(-1)!.seq)).toEqual({ remaining: 0 })
+    expect(restarted.host.pendingHandover(HOME)).toBe(false)
+  })
+
   it('a handover that never finishes returns the row to this host after the grace', async () => {
     const h = harness()
     h.host.configure(slice())

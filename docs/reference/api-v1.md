@@ -104,7 +104,7 @@ path on the companion".
 | GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (cloud relays to the primary) |
 | POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (cloud relays to the primary) |
 | PATCH | `/api/v1/tasks/:id` | Update task fields (status/priority/due_date/start_date/end_date/project/title/description) |
-| GET | `/api/v1/sessions/:id/model-options` | Selectable models + current model/effort for the picker (cloud relays to the primary, except a session the cloud runs itself) |
+| GET | `/api/v1/sessions/:id/model-options` | Selectable models + current model/effort for the picker (cloud relays to the primary, except a session the cloud runs itself; from the primary's last push while it is away) |
 | POST | `/api/v1/sessions/:id/model` | Switch the session's model (cloud relays to the primary, except a session the cloud runs itself) |
 | POST | `/api/v1/sessions/:id/effort` | Switch the session's reasoning effort (cloud relays to the primary, except a session the cloud runs itself) |
 | POST | `/api/v1/sessions/:id/fork` | Fork a session to another/new task (cloud relays to the primary) |
@@ -2629,6 +2629,15 @@ A replica asks the primary first for `GET /api/v1/human-inbox`, `GET /api/v1/hum
 - Answers (`answer`, `human-reply`), agent replies and new letters still need the primary and answer `503 bridge_offline` while it is away.
 
 A client treats `queued` like any successful write and needs no change. Relay detail: the primary's `server.human-inbox.{read,pin,archive}` accepts `since` (epoch ms), and its answer also carries `storeUpdatedAt` (the index clock the write stamped) and `superseded: true` for a skipped replay. The replica keeps both for itself: it holds a change on top of its copy until the copy's clock reaches `storeUpdatedAt`, which covers a Mac that sleeps before its next sync.
+
+### Session model and effort on a replica while the primary is away (additive, 2026-10)
+
+While the primary answers, `GET /api/v1/sessions/:id/model-options`, `POST .../model` and `POST .../effort` are the primary's, as before. While it is away (no bridge, silent, a forward since its last beat unanswered, or the replica standing in for a host):
+
+- **model-options** is answered at once from the session list the primary last pushed, in the same shape, plus `"offline": true` and `"asOf"` (when the primary pushed it). The catalog is the session's host's last-known one, else the static registry. A session the copy does not list is asked of the primary as before.
+- **model / effort** for a session on a host the replica stands in for are applied by that host to the live CLI, and answered `200 { "model", "cliModel", "appliedLive", "viaCompanion": true }` and `200 { "effort", "appliedLive", "overridden": false, "viaCompanion": true }`. `appliedLive: false` means the session was not running; the value is kept and the primary writes it into the session when it is back. A session on the primary itself, or a host the replica does not stand in for yet, answers `503 bridge_offline` with a message that says which; a host whose daemon predates this answers `400 session_control_needs_upgrade`.
+
+A client needs no change; `offline` may be shown as the copy's age.
 
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 

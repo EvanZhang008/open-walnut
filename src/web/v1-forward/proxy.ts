@@ -201,6 +201,16 @@ export function createV1Forward(deps: ForwardDeps) {
     middleware: (req: Request, res: Response, next: NextFunction): void => {
       middleware(req, res, next).catch(next)
     },
+    /**
+     * The Mac is away by the companion's own view: no bridge, silent, a forward
+     * since its last beat went unanswered, or the companion leads a host. A
+     * route with a copy answers from it at once rather than wait on the Mac.
+     * Unknown (never heard, no leader) is not away: such a route asks as before.
+     */
+    primaryAway: async (): Promise<boolean> => {
+      const why = macAnswers(await deps.primary(), deps.now(), suspectAt, unsupportedUntil)
+      return why === 'no-bridge' || why === 'primary-silent' || why === 'primary-suspect' || why === 'companion-leads'
+    },
     status: (): ForwardStatus & { suspectAt: number | null; unsupportedUntil: number | null } => ({
       ...status,
       answeredHere: { ...status.answeredHere },

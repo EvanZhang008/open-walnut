@@ -49,6 +49,7 @@ import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-meta
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHost } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
+import { createLiveSettings } from './live-settings-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
@@ -233,6 +234,7 @@ export function getDaemonSource(): string {
     ['__CREATE_ENVELOPE_KIT__', createEnvelopeKit.toString()],
     ['__CREATE_OFFLINE_HOST__', createOfflineHost.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
+    ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
@@ -395,6 +397,12 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const book = createLeader({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', log: () => {}, takeoverMs: 1, bootAt: 0 })
       const r = book.backupClaim('w', 2)
       if (r.ok || r.code !== 'unknown_walnut') throw new Error('leader book did not build')
+    }
+    // Live settings smoke: a reconstructed copy must refuse a value the CLI would ACK and ignore.
+    const createLive = reconstructed['__CREATE_LIVE_SETTINGS__'] as typeof createLiveSettings | undefined
+    if (createLive) {
+      const live = createLive({ writeLine: async () => 'not_found', randomHex: () => '00', now: () => 0, log: () => {} })
+      if (typeof live.apply !== 'function' || live.pending() !== 0) throw new Error('live settings did not build')
     }
     // Host runtime smoke: the spawn gate and the boot PATH ride this text, so a
     // reconstructed copy must classify an npm shebang and keep the user's PATH first.
@@ -2844,6 +2852,8 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // The backup leader (leader-core.ts): each checks for itself what the bridge
   // may do (twin of daemon-standalone.ts).
   'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
+  // Twin of daemon-standalone.ts: a model or effort change while the companion leads.
+  'leader.settings',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
@@ -3075,6 +3085,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'leader.claim': return cmdLeaderClaim(ws, id, cmd);
     case 'leader.witness': return cmdLeaderWitness(ws, id);
     case 'leader.deliver': return daemonCommands.run(function () { return cmdLeaderDeliver(ws, id, cmd); });
+    case 'leader.settings': return daemonCommands.run(function () { return cmdLeaderSettings(ws, id, cmd); });
     // Offline host (offline-host-v1). NOT in BRIDGE_ALLOWED_COMMANDS: a Walnut's
     // copy and journal belong to its trusted SSH-tunneled server only.
     case 'host.slice': return cmdHostSlice(ws, id, cmd);
@@ -3713,6 +3724,14 @@ var leaderBook = (__CREATE_LEADER_BOOK__)({
   bootAt: DAEMON_START_TS,
 });
 
+// Model and effort changes the companion makes while it leads (twin of daemon-standalone.ts).
+var liveSettings = (__CREATE_LIVE_SETTINGS__)({
+  writeLine: writeSessionLine,
+  randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
+  now: function () { return Date.now(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
 function primarySocketOpen(home) {
   for (const client of wsClients) {
     if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) return true;
@@ -3776,6 +3795,21 @@ async function cmdLeaderDeliver(ws, id, cmd) {
   var r = await offlineHost.deliverFromLeader(f.home, cmd.delivery);
   if (r.ok) return sendOk(ws, id, { result: r.result });
   try { ws.send(JSON.stringify({ id: id, ok: false, error: r.error.message, errorKind: r.error.code, detail: r.error.detail })); } catch (e) {}
+}
+
+async function cmdLeaderSettings(ws, id, cmd) {
+  if (ws.origin !== 'bridge') return sendError(ws, id, 'leader.settings: the cloud bridge only');
+  var f = leaderBook.fence(cmd.walnutId, cmd.epoch);
+  if (!f.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })); } catch (e) {} return; }
+  var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+  if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.settings: not a session of this Walnut on this host');
+  var r = await liveSettings.apply(sid, { model: cmd.model, effort: cmd.effort });
+  if (!r.ok) return sendError(ws, id, 'leader.settings: ' + r.error);
+  // The server keeps it on the session's record when it takes this host back.
+  offlineHost.noteSettings(f.home, sid, { cliModel: r.cliModel, effort: r.effort });
+  var out = { appliedLive: r.appliedLive };
+  if (r.reason) out.reason = r.reason;
+  sendOk(ws, id, out);
 }
 
 function cmdHostSlice(ws, id, cmd) {
@@ -6484,6 +6518,8 @@ function ensureWatcher(sid) {
           || line.includes('"control_cancel_request"')) {
           try {
             const parsed = JSON.parse(line);
+            // The CLI's answer to a model or effort change this daemon wrote (leader.settings).
+            if (parsed.type === 'control_response') liveSettings.noteResponse(sid, parsed);
             if (parsed.type === 'control_request' && parsed.request_id
               && parsed.request && parsed.request.subtype === 'can_use_tool') {
               const toolName = parsed.request.tool_name;
@@ -6928,6 +6964,31 @@ async function cmdSendRaw(ws, id, cmd) {
     }
   } catch (err) {
     sendError(ws, id, 'sendRaw failed: ' + err.message);
+  }
+}
+
+// cmdSendRaw's write as a function, for leader.settings (a control_request
+// line, so no pending prompt to clear). Twin of daemon-core.ts handleSendRawCommand.
+async function writeSessionLine(sid, raw) {
+  const session = sessions.get(sid);
+  if (!session) return 'not_found';
+  if (session.state === 'dead') return 'dead';
+  if (session.pid) {
+    try { process.kill(session.pid, 0); } catch {
+      reapSession(sid, -1, 'sendRaw-precheck-dead');
+      return 'dead';
+    }
+  }
+  try {
+    const result = await chainFifoWrite(sid, session, Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n'));
+    if (result === 'ok') return 'ok';
+    if (result === 'dead') return 'dead';
+    if (result === 'ENXIO') { reapSession(sid, -1, 'sendRaw-enxio'); return 'dead'; }
+    if (result === 'EAGAIN') return 'failed';
+    reapSession(sid, -1, 'sendRaw-partial-write');
+    return 'dead';
+  } catch {
+    return 'failed';
   }
 }
 

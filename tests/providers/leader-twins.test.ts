@@ -12,6 +12,7 @@ import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createLeaderBook } from '../../src/providers/leader-core.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
+import { createLiveSettings } from '../../src/providers/live-settings-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
@@ -32,9 +33,11 @@ function fnBody(src: string, name: string): string {
 }
 
 describe('leader protocol: both twins', () => {
-  it('advertise leader-epoch-v1 without requiring it (an old daemon just never lets the companion lead)', () => {
-    expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('leader-epoch-v1')
-    expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain('leader-epoch-v1')
+  it('advertise leader-epoch-v1 and leader-settings-v1 without requiring them (an old daemon just never lets the companion lead)', () => {
+    for (const cap of ['leader-epoch-v1', 'leader-settings-v1']) {
+      expect(ADVERTISED_DAEMON_CAPABILITIES).toContain(cap)
+      expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain(cap)
+    }
   })
 
   for (const [name, src] of Object.entries(twins)) {
@@ -90,6 +93,23 @@ describe('leader protocol: both twins', () => {
       expect(fwd).not.toMatch(/primarySocketOpen/)
     })
 
+    it(`${name}: leader.settings is the bridge's, fenced at the current epoch, for a session of that Walnut, and the CLI's answer settles it`, () => {
+      expect(allowlist(src)).toContain("'leader.settings'")
+      expect(src).toMatch(/case 'leader\.settings': return daemonCommands\.run\(/)
+      const body = fnBody(src, 'cmdLeaderSettings')
+      expect(body).toMatch(/origin !== 'bridge'\) return sendError\(ws, id, 'leader\.settings: the cloud bridge only'\)/)
+      const fence = body.indexOf('leaderBook.fence(cmd.walnutId, cmd.epoch)')
+      const owner = body.indexOf('offlineHost.ownerOf(sid) !== f.home')
+      const apply = body.indexOf('liveSettings.apply(')
+      expect(fence).toBeGreaterThan(-1)
+      expect(owner).toBeGreaterThan(fence)
+      expect(apply).toBeGreaterThan(owner)
+      // Kept for the primary once applied (or not live): it drains a settings record.
+      expect(body.indexOf('offlineHost.noteSettings(f.home, sid')).toBeGreaterThan(apply)
+      // Every control_response line reaches it, not only one answering a pending prompt.
+      expect(src).toMatch(/if \(parsed\.type === 'control_response'\) liveSettings\.noteResponse\(sid, parsed\);?\n\s*if \(parsed\.type === 'control_request' && parsed\.request_id/)
+    })
+
     it(`${name}: the offline host keeps boards and relays answers for another host through the companion`, () => {
       expect(src).toMatch(/boards: (createBoardOffline\(\)|\(__CREATE_BOARD_OFFLINE__\)\(\))/)
       expect(src).toMatch(/forwardToBackup\(home, 'leader\.deliverText'/)
@@ -100,7 +120,7 @@ describe('leader protocol: both twins', () => {
   it('both cores are part of the daemon version hash, in the build script', () => {
     const versionSrc = read('src/providers/daemon-version-check.ts')
     const buildSrc = read('scripts/build-daemon.sh')
-    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts']) {
+    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts']) {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
     }
@@ -112,7 +132,8 @@ describe('the source twin template', () => {
     const rendered = getDaemonSource() // throws if an injected function fails its smoke check
     expect(rendered).not.toContain('__CREATE_LEADER_BOOK__')
     expect(rendered).not.toContain('__CREATE_BOARD_OFFLINE__')
-    for (const fn of [createLeaderBook, createBoardOffline]) {
+    expect(rendered).not.toContain('__CREATE_LIVE_SETTINGS__')
+    for (const fn of [createLeaderBook, createBoardOffline, createLiveSettings]) {
       const text = fn.toString()
       expect(text).not.toMatch(/__name\(|__vite|import\(/)
       expect(rendered).toContain(text)

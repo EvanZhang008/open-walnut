@@ -295,6 +295,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // so it is NOT sidecar-gated. Optional: without it the primary pushes nothing
   // and the companion never leads that host.
   'leader-epoch-v1',
+  // 'leader-settings-v1' (live-settings-core.ts): while the companion leads, it
+  // changes a live session's model or effort here with `leader.settings`
+  // (bridge, current epoch, a session of that Walnut). The daemon writes the
+  // CLI's apply_flag_settings line, waits for its answer, and journals the
+  // values for the primary (a `settings` record in offline.drain). Both twins.
+  // Optional: an older daemon's bridge refuses the command, and the companion
+  // says that host's daemon upgrades on its next connect to the primary.
+  'leader-settings-v1',
   // 'host-replica-v1' (host-replica-core.ts, docs/plan/walnut-control-plane.md):
   // the primary keeps a read copy of its notes, memory and skills on this host
   // with `replica.sync` (a manifest of key + hash; the daemon answers which keys

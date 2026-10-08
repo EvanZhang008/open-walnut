@@ -255,7 +255,51 @@ same.
 
 `GET /api/leader` on the companion shows `forward`: how many calls went to the
 Mac, how many were answered here and why, writes left unanswered, and the last
-decision. `WALNUT_COMPANION_FORWARD=0` turns the forward off.
+decision. `WALNUT_COMPANION_FORWARD=0` turns the forward off. Each box's request
+log says it too: on the Mac a forwarded call carries `origin: remote-http`, on
+the companion every `/api/v1` line carries `answeredBy`.
+
+## Model and effort while the Mac is away
+
+The phone's model picker for a session is a session control
+(`/api/v1/sessions/:id/model-options`, `/model`, `/effort`). While the Mac
+answers, it is the Mac's, as every other call. While the Mac is away the
+companion answers from what it holds (`src/core/sessions/model-options-copy.ts`):
+
+```
+phone ──► companion ──(Mac away)──► the session's row in the Mac's last push
+                                     (cli_model, effort, host) + that host's
+                                     model catalog (host_model_catalogs)
+       change, while it leads the host:
+          companion ──/bridge──► host daemon: leader.settings {walnutId, epoch, sid, model|effort}
+                                  │ fence: this lead's epoch, a session of this Walnut
+                                  ├─ the CLI's own control_request apply_flag_settings,
+                                  │  written into the live session, its answer awaited (10 s)
+                                  └─ journaled as a `settings` record
+          Mac wakes ──► offline.drain ──► the session record keeps the values (cold resume)
+```
+
+- **Away** is the forward's own view: no bridge, the Mac silent, a forward since
+  its last beat unanswered, or the companion leading a host. Unknown (never
+  heard) is not away: the call goes to the Mac as before.
+- **Reading**: the session's row carries its CLI model and the effort in effect;
+  the push to the companion carries each host's catalog beside the rows (only
+  the models and their age; the Mac's own cache and the phone's projection stay
+  without them). A host with no catalog gets the static model list. The answer
+  is the Mac's shape plus `offline: true` and `asOf`. A session the copy does not
+  list is asked of the Mac as before.
+- **Changing**: only while the companion leads the session's host, and only for
+  a session that runs there. A session on the Mac itself, or a host nothing
+  leads yet, gets a 503 that says why and when to try again. A refused epoch lets
+  the lead go. An older daemon (no `leader-settings-v1`) answers "not permitted
+  over bridge", which the phone sees as `session_control_needs_upgrade`. A
+  session that is not running is not woken: the values are journaled and
+  `appliedLive: false` says so. Until the Mac pushes again, the picker shows what
+  the companion applied.
+- **The Mac wakes**: it takes the `settings` records with the rest of the host's
+  journal and writes them into the session record; a live session object on the
+  Mac adopts them without sending anything, so it never writes older values
+  back.
 
 ## Settings
 
@@ -294,6 +338,10 @@ every host and the companion at once.
 | Mac asleep mid-write | 504 that says it may have been applied; never run a second time on the companion |
 | "Cloud companion takes over" off | the companion answers every call itself |
 | An older Mac (no `server.http`) | the companion answers, and asks again 10 minutes later |
+| Mac asleep, the phone opens a session's model picker | the companion answers from the Mac's last push at once, marked `offline` |
+| Mac asleep, the phone switches a remote session's model or effort | the companion has the host apply it to the live CLI; the Mac keeps it when it wakes |
+| Mac asleep, a session on the Mac itself | the picker reads from the copy; a change says the Mac is offline |
+| Mac asleep, the companion not leading yet | a change says it takes over within about a minute |
 
 ## Tests
 
@@ -332,7 +380,19 @@ every host and the companion at once.
   companion's half), and `tests/e2e/companion-forward-live-e2e.test.ts` (a real
   Mac server and daemon, a real cloud-mode companion: usage, a read and a write
   answered by the Mac, a Mac-only op refused, the setting off and on, the Mac
-  asleep and awake).
+  asleep and awake), `tests/web/request-logger-forward-fields.test.ts` (the log
+  fields).
+- Model and effort while the Mac is away: `tests/providers/live-settings-core.test.ts`
+  (the daemon core: the CLI's line, its answer, a session not running, bad
+  values), `tests/core/model-options-copy.test.ts` (reading and changing from
+  the copy), `tests/core/session-projection-model-fields.test.ts` (the push),
+  `tests/web/routes/api-v1-session-control-mac-away.test.ts` (the routes),
+  `tests/core/offline-handover-settings.test.ts` (the Mac keeps them on wake),
+  `tests/providers/leader-twins.test.ts` (both twins),
+  `tests/integration/leader-takeover-twins.test.ts` (real daemon processes: a
+  live session's CLI gets the change, an old epoch is refused), and the live
+  e2e above (the phone's picker and switch on a real companion while the Mac
+  sleeps, the Mac's record after the wake).
 
 ## Not yet
 
@@ -344,8 +404,9 @@ every host and the companion at once.
   "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).
 - Answers the companion gives alone while the Mac is away for what only the Mac
-  holds today (model options, usage, search): copies of those stores, and
-  session controls sent straight to the host's daemon while the companion leads.
+  holds today (usage, search): copies of those stores, and the other session
+  controls (stop, interrupt, permission mode) sent straight to the host's daemon
+  while the companion leads.
 - Search on a host while the Mac is away, over its own copy (keyword first; the
   Mac's vectors and a query embedder for meaning). While the Mac answers, search
   stays on the Mac.

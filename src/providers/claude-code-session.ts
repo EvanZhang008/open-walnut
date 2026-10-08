@@ -7492,6 +7492,16 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * The CLI already runs with these (the cloud companion applied them on the
+   * host while it led): remember them, so this object never writes the older
+   * values back to the record. Sends nothing.
+   */
+  adoptAppliedSettings(settings: { cliModel?: string; effort?: import('../core/types.js').SessionEffort }): void {
+    if (settings.cliModel) this._cliModel = settings.cliModel
+    if (settings.effort) this._effort = settings.effort
+  }
+
+  /**
    * Change the session's PERMISSION MODE mid-session, without respawning — the
    * third member of the live-settings family (model/effort/mode), completing the
    * retirement of the pending-switch respawn paths.

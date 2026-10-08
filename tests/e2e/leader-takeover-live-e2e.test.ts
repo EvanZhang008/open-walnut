@@ -32,6 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
+import Database from 'better-sqlite3'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 
@@ -59,6 +60,12 @@ process.stdin.on('data', (chunk) => {
   while ((nl = buf.indexOf('\\n')) !== -1) {
     const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
     let msg; try { msg = JSON.parse(line) } catch { continue }
+    // A settings change (leader.settings): kept for the test, answered as the CLI does.
+    if (msg.type === 'control_request') {
+      fs.appendFileSync(inbox.replace('.inbox.jsonl', '.ctrl.jsonl'), JSON.stringify(msg) + '\\n')
+      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } })
+      continue
+    }
     if (msg.type !== 'user') continue
     fs.appendFileSync(inbox, JSON.stringify({ content: msg.message && msg.message.content }) + '\\n')
   }
@@ -294,6 +301,23 @@ function inboxOf(d: Daemon, sid: string): string[] {
   } catch { return [] }
 }
 
+/** The control requests a session's CLI got (the mock keeps them). */
+function ctrlOf(d: Daemon, sid: string): Array<{ request_id: string; request: { subtype: string; settings: Record<string, string> } }> {
+  try {
+    return fs.readFileSync(path.join(d.dir, `${sid}.ctrl.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+
+/** A session's CLI model and effort in the primary's own session store, read-only. */
+function primarySettings(sid: string): { cliModel: string | null; effort: string | null } {
+  const db = new Database(path.join(primary.data, 'sessions.sqlite'), { readonly: true, fileMustExist: true })
+  try {
+    const row = db.prepare('SELECT cli_model, payload FROM sessions WHERE claude_session_id = ?').get(sid) as { cli_model: string | null; payload: string | null } | undefined
+    const extra = row?.payload ? JSON.parse(row.payload) as Record<string, unknown> : {}
+    return { cliModel: row?.cli_model ?? null, effort: typeof extra.effort === 'string' ? extra.effort : null }
+  } finally { db.close() }
+}
+
 function pidIn(dir: string): number | null {
   try { const n = Number(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim()); return Number.isInteger(n) && n > 1 ? n : null } catch { return null }
 }
@@ -485,6 +509,31 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     }, 15_000, 'the companion to let go of the Mac\'s row of the far task')
   }, 120_000)
 
+  it('while the Mac sleeps, the phone reads B\'s model picker from the companion and switches its model and effort on oldbox', async () => {
+    const started = Date.now()
+    const options = await api(companion, `/api/v1/sessions/${B}/model-options`)
+    expect(options.status, JSON.stringify(options.json)).toBe(200)
+    expect(options.json).toMatchObject({ offline: true })
+    expect((options.json.models as Array<{ id: string }>).map((m) => m.id)).toContain('sonnet')
+    // From the copy, with no round trip to the sleeping Mac.
+    expect(Date.now() - started).toBeLessThan(3_000)
+
+    const model = await api(companion, `/api/v1/sessions/${B}/model`, { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) })
+    expect(model.status, JSON.stringify(model.json)).toBe(200)
+    expect(model.json).toMatchObject({ model: 'sonnet', cliModel: 'sonnet', appliedLive: true, viaCompanion: true })
+    const effort = await api(companion, `/api/v1/sessions/${B}/effort`, { method: 'POST', body: JSON.stringify({ effort: 'low' }) })
+    expect(effort.status, JSON.stringify(effort.json)).toBe(200)
+    expect(effort.json).toMatchObject({ effort: 'low', appliedLive: true, viaCompanion: true })
+    // B's own CLI got both, as the CLI's own settings lines.
+    expect(ctrlOf(oldbox, B).map((c) => [c.request.subtype, c.request.settings])).toEqual([
+      ['apply_flag_settings', { model: 'sonnet' }],
+      ['apply_flag_settings', { effortLevel: 'low' }],
+    ])
+    // The picker shows what it now runs.
+    const after = await api(companion, `/api/v1/sessions/${B}/model-options`)
+    expect(after.json).toMatchObject({ current: 'sonnet', currentEffort: 'low', offline: true })
+  }, 60_000)
+
   it('the Mac wakes: it takes back what the hosts did, takes the lead back, and the companion lets go', async () => {
     for (const pid of macPids()) process.kill(pid, 'SIGCONT')
     const states = await waitFor(async () => {
@@ -514,6 +563,9 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
       } catch { return null }
     }, 30_000, 'the Board write on the Mac')
     expect(board.version).toBe(2)
+    // The model and effort the companion set on oldbox are B's on the Mac too.
+    const settings = await waitFor(() => { const v = primarySettings(B); return v.cliModel === 'sonnet' ? v : null }, 30_000, 'B\'s model on the Mac')
+    expect(settings.effort).toBe('low')
     // The task the companion changed for A reaches the Mac through the replica's queue.
     await waitFor(async () => {
       const r = await api(primary, `/api/v1/tasks/${primary.ids.far}`)

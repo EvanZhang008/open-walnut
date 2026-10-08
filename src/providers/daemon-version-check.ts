@@ -156,6 +156,8 @@ const DAEMON_SOURCE_FILES = [
   // The leader book (who leads while the primary is away): same rule
   // (docs/plan/walnut-control-plane.md).
   'src/providers/leader-core.ts',
+  // A model or effort change while the companion leads: same rule.
+  'src/providers/live-settings-core.ts',
   'src/providers/offline-board-core.ts',
   'src/providers/host-replica-core.ts',
   'src/core/sessions/open-items-text.ts',

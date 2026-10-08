@@ -23,6 +23,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { OfflineRecord } from '../providers/offline-host-core.js';
 import type { SessionRequest } from './session-requests.js';
+import { VALID_SESSION_EFFORT_IDS, type SessionEffort } from './types.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -297,6 +298,27 @@ async function applyRecord(
       log.session.info('offline handover: queued write applied', { host, op: record.op, taskId: task.id, callerSid: record.callerSid });
       return;
     }
+    case 'settings': {
+      // The companion changed a live session's model or effort while it led.
+      // The CLI already runs with it; the record keeps it for a cold resume.
+      const patch: { cliModel?: string; effort?: SessionEffort } = {};
+      if (typeof record.cliModel === 'string' && record.cliModel) patch.cliModel = record.cliModel;
+      if (typeof record.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(record.effort)) patch.effort = record.effort as SessionEffort;
+      if (!patch.cliModel && !patch.effort) return;
+      const { updateSessionRecord } = await import('./session-tracker.js');
+      await updateSessionRecord(record.sid, patch);
+      // A live session object here would write its own (older) values back; it
+      // also reads back what the CLI now runs, as the Mac's own change does.
+      const { sessionRunner } = await import('../providers/claude-code-session.js');
+      const live = sessionRunner.findByClaudeId(record.sid);
+      if (live) {
+        live.adoptAppliedSettings(patch);
+        void live.refreshAppliedSettings('companion-settings').catch(() => null);
+      }
+      result.replayed++;
+      log.session.info('offline handover: settings the companion applied are kept', { host, sessionId: record.sid, ...patch });
+      return;
+    }
   }
 }
 
@@ -306,6 +328,7 @@ async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string;
     case 'op': return { sessionId: record.callerSid, taskId: String(record.args?.id ?? record.args?.task ?? '') || undefined };
     case 'row': return { sessionId: record.row.fromSessionId };
     case 'delivery': return { sessionId: record.toSessionId };
+    case 'settings': return { sessionId: record.sid };
     case 'settle': {
       const { getSessionRequest } = await import('./session-requests.js');
       const row = await getSessionRequest(record.requestId).catch(() => undefined);

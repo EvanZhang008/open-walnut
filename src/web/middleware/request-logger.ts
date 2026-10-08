@@ -219,6 +219,12 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     if (status === 304 && req.headers['if-none-match']) {
       meta.ifNoneMatch = String(req.headers['if-none-match'])
     }
+    // The companion's forward (web/v1-forward/): on the Mac a forwarded call
+    // carries the lowered origin it runs under; on the companion, which box answered.
+    const origin = req.headers['x-walnut-origin']
+    if (typeof origin === 'string' && origin) meta.origin = origin.slice(0, 64)
+    const answeredBy = res.getHeader('x-walnut-answered-by')
+    if (typeof answeredBy === 'string') meta.answeredBy = answeredBy
 
     const line = `${method} ${url} → ${status} (${duration}ms)`
 

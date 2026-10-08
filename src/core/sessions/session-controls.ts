@@ -70,6 +70,20 @@ export interface EffortChangeResult {
 }
 
 /**
+ * Whether `model` takes `effort`. Authority, most to least trusted: (1) the
+ * catalog row's explicit supportedEffortLevels list, (2) its supportsEffort
+ * boolean (can veto but not grant xhigh/max: those need the static per-family
+ * gate too), (3) the static model tables as last resort (no catalog row anywhere).
+ */
+export function effortSupportedBy(effort: SessionEffort, model: string | undefined, row: SessionModelCatalogEntry | null): boolean {
+  const levels = row?.supportedEffortLevels;
+  if (levels !== undefined) return levels.includes(effort);
+  if (effort === 'xhigh') return row?.supportsEffort !== false && modelSupportsXhighEffort(model);
+  if (effort === 'max') return row?.supportsEffort !== false && modelSupportsMaxEffort(model);
+  return row?.supportsEffort ?? modelSupportsEffort(model);
+}
+
+/**
  * Change a session's reasoning effort. Persists record.effort (cold --resume
  * re-applies --effort) and, when the CLI is live, pushes apply_flag_settings +
  * reads back the CLI's true effort. Capability authority order (do not
@@ -113,19 +127,7 @@ export async function applySessionEffortChange(
     liveRow = matchSessionModelCatalogEntry(hostCatalog?.models ?? [], model);
   }
 
-  // Effort-capability authority, most→least trusted: (1) the catalog row's
-  // explicit supportedEffortLevels list, (2) its supportsEffort boolean (can
-  // veto but not grant xhigh/max — those need the static per-family gate too),
-  // (3) the static model tables as last resort (no catalog row anywhere).
-  const liveLevels = liveRow?.supportedEffortLevels;
-  const supported = liveLevels !== undefined
-    ? liveLevels.includes(effort)
-    : effort === 'xhigh'
-      ? liveRow?.supportsEffort !== false && modelSupportsXhighEffort(model)
-      : effort === 'max'
-        ? liveRow?.supportsEffort !== false && modelSupportsMaxEffort(model)
-        : liveRow?.supportsEffort ?? modelSupportsEffort(model);
-  if (!supported) {
+  if (!effortSupportedBy(effort, model, liveRow)) {
     throw new SessionControlError(
       `Model "${model ?? 'unknown'}" does not support "${effort}" reasoning effort`, 409,
     );
@@ -345,6 +347,25 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
       : sessionModelsAsCatalog();
   }
 
+  // Live truth first (see the field's doc comment); the record is only the
+  // fallback for a session the CLI couldn't answer for.
+  return modelOptionsFromCatalog(
+    entries,
+    liveModel || record.cliModel || record.model || null,
+    liveEffort ?? record.effectiveEffort ?? record.effort ?? null,
+  );
+}
+
+/**
+ * The picker data from a catalog and the session's runtime model and effort.
+ * Shared by the live path above and the companion's copy while the Mac is away
+ * (model-options-copy.ts), so both answer the same shape.
+ */
+export function modelOptionsFromCatalog(
+  entries: SessionModelCatalogEntry[],
+  runtimeModel: string | null,
+  currentEffort: string | null,
+): ModelOptionsResult {
   const models: ModelOption[] = entries
     .filter((e) => !e.disabled)
     .map((e) => ({
@@ -354,19 +375,11 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
       ...(e.supportsEffort !== undefined ? { supportsEffort: e.supportsEffort } : {}),
       ...(e.supportedEffortLevels !== undefined ? { supportedEffortLevels: e.supportedEffortLevels } : {}),
     }));
-
   // Highlight the ACTIVE row: match the runtime model against the catalog so
   // `current` is a valid `id` from `models` whenever possible; fall back to
   // the raw model string so the client can at least display it.
-  const runtimeModel = liveModel || record.cliModel || record.model || null;
   const activeRow = matchSessionModelCatalogEntry(entries, runtimeModel);
-  return {
-    models,
-    current: activeRow?.value ?? runtimeModel,
-    // Live truth first (see the field's doc comment) — the record is only the
-    // fallback for a session the CLI couldn't answer for.
-    currentEffort: liveEffort ?? record.effectiveEffort ?? record.effort ?? null,
-  };
+  return { models, current: activeRow?.value ?? runtimeModel, currentEffort };
 }
 
 // ── Fork ────────────────────────────────────────────────────────────────────

@@ -72,6 +72,25 @@ describe('macAnswers', () => {
     expect(macAnswers(fresh({ lastSeenAt: NOW - 1_000 }), NOW, NOW - 2_000, 0)).toBeNull()
   })
 
+  it('away, for a route with a copy: no bridge, silent, suspect, or the companion leads; not when unknown', async () => {
+    const away = async (snapshot: PrimarySnapshot | null, setup?: (h: ReturnType<typeof harness>) => Promise<void>) => {
+      const h = harness({ primary: () => snapshot, call: async () => ({ ok: false, failure: { kind: 'bridge_offline', message: 'timed out', notSent: false } }) })
+      if (setup) await setup(h)
+      return h.fwd.primaryAway()
+    }
+    expect(await away(fresh({ bridge: false }))).toBe(true)
+    expect(await away(fresh({ lastSeenAt: NOW - 120_000 }))).toBe(true)
+    expect(await away(fresh({ leading: 1 }))).toBe(true)
+    // A read went out and came back unanswered: away until the Mac is heard again.
+    expect(await away(fresh({ lastSeenAt: NOW - 1_000 }), async (h) => { await request(h.app).get('/api/v1/usage/overview') })).toBe(true)
+    // Unknown is not away: the route asks the Mac as it did.
+    expect(await away(null)).toBe(false)
+    expect(await away(fresh({ heard: false }))).toBe(false)
+    // Up, whatever the forward itself may do.
+    expect(await away(fresh())).toBe(false)
+    expect(await away(fresh({ backupAllowed: false }))).toBe(false)
+  })
+
   it('an old Mac rests until its time is up', () => {
     expect(macAnswers(fresh(), NOW, 0, NOW + 1)).toBe('primary-too-old')
     expect(macAnswers(fresh(), NOW, 0, NOW)).toBeNull()

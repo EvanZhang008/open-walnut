@@ -112,6 +112,7 @@ SOURCES=(
   src/providers/offline-host-core.ts
   src/core/peers/envelope-kit.ts
   src/providers/leader-core.ts
+  src/providers/live-settings-core.ts
   src/providers/offline-board-core.ts
   src/providers/host-replica-core.ts
   src/core/sessions/open-items-text.ts

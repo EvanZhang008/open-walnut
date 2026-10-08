@@ -74,6 +74,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createOfflineHost, type HostSlice, type LeaderDelivery } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
+import { createLiveSettings } from './live-settings-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
@@ -745,6 +746,10 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // than `send` already can) only for the current epoch; gateway-result only
   // answers a relay this host sent to the bridge.
   'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
+  // A model or effort change on a live session here, while the companion leads
+  // (current epoch only, a session of that Walnut): the same line the server
+  // writes, its value checked (live-settings-core.ts).
+  'leader.settings',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
@@ -1957,6 +1962,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'leader.claim': return cmdLeaderClaim(ws, id as number, cmd)
     case 'leader.witness': return cmdLeaderWitness(ws, id as number)
     case 'leader.deliver': return daemonCommands.run(() => cmdLeaderDeliver(ws, id as number, cmd))
+    case 'leader.settings': return daemonCommands.run(() => cmdLeaderSettings(ws, id as number, cmd))
     // Offline host ('offline-host-v1', docs/plan/daemon-first-hosts.md). NOT in
     // BRIDGE_ALLOWED_COMMANDS: a Walnut's copy and journal belong to that
     // Walnut's trusted SSH-tunneled server only. Keep in sync with daemon-source.ts.
@@ -2595,6 +2601,19 @@ const leaderBook = createLeaderBook({
   bootAt: DAEMON_START_TS,
 })
 
+// Model and effort changes the companion makes while it leads (live-settings-core.ts).
+const liveSettings = createLiveSettings({
+  writeLine: async (sid, line) => {
+    const r = await core.handleSendRawCommand(sid, line)
+    if ('error' in r) return 'failed'
+    if (r.ok) return 'ok'
+    return r.reason === 'not_found' ? 'not_found' : 'dead'
+  },
+  randomHex: (n) => crypto.randomBytes(n).toString('hex'),
+  now: () => Date.now(),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
 /** A trusted socket of this Walnut's primary is open (heard or not). */
 function primarySocketOpen(home: string): boolean {
   for (const client of wsClients) {
@@ -2671,6 +2690,19 @@ async function cmdLeaderDeliver(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   const r = await offlineHost.deliverFromLeader(f.home, delivery)
   if (r.ok) return sendOk(ws, id, { result: r.result })
   safeSend(ws, JSON.stringify({ id, ok: false, error: r.error.message, errorKind: r.error.code, detail: r.error.detail }))
+}
+
+async function cmdLeaderSettings(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.settings: the cloud bridge only')
+  const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
+  if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.settings: not a session of this Walnut on this host')
+  const r = await liveSettings.apply(sid, { model: cmd.model, effort: cmd.effort })
+  if (!r.ok) return sendError(ws, id, 'leader.settings: ' + r.error)
+  // The server keeps it on the session's record when it takes this host back.
+  offlineHost.noteSettings(f.home, sid, { cliModel: r.cliModel, effort: r.effort })
+  sendOk(ws, id, { appliedLive: r.appliedLive, ...(r.reason ? { reason: r.reason } : {}) })
 }
 
 /** The Walnut a session belongs to: the home whose copy lists it. */
@@ -5066,6 +5098,8 @@ function ensureWatcher(sid: string) {
           || line.includes('"control_cancel_request"')) {
           try {
             const parsed = JSON.parse(line) as Record<string, unknown>
+            // The CLI's answer to a model or effort change this daemon wrote (leader.settings).
+            if (parsed.type === 'control_response') liveSettings.noteResponse(sid, parsed)
             if (parsed.type === 'control_request' && parsed.request_id
               && (parsed.request as Record<string, unknown>)?.subtype === 'can_use_tool') {
               const req = parsed.request as Record<string, unknown>
