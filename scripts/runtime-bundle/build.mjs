@@ -34,6 +34,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { retryRegistryLag, runPassingThrough } from '../npm-registry-lag.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const RUNTIME_MARKER = 'open-walnut-runtime.json'
@@ -260,7 +261,9 @@ async function main() {
     }
     const args = [npmCli, 'install', '-g', '--prefix', runtime, spec]
     args.push(`--allow-scripts=${allow.join(',')}`)
-    execFileSync(node, args, { env, cwd: work, stdio: 'inherit', timeout: 20 * 60_000 })
+    // Again while npm names a dependency it does not serve yet (a publish in flight).
+    const npmInstall = await retryRegistryLag(() => runPassingThrough(node, args, { env, cwd: work, timeoutMs: 20 * 60_000 }))
+    if (npmInstall.code !== 0) throw new Error(`npm install -g ${spec} exited ${npmInstall.code}`)
     const pkgRoot = path.join(runtime, 'lib', 'node_modules', 'open-walnut')
     const version = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version
     if (!updaterKnowsArchive(pkgRoot)) throw new Error(`open-walnut@${version} predates the self-contained archive: its updater would not update one`)

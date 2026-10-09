@@ -51,8 +51,14 @@ steps one after the other, the second finding everything done.
    that has never run Walnut.
 3. **Publish.** It checks out the candidate, installs with `npm ci`, sets the version and
    runs `npm publish --provenance --access public` (`prepublishOnly` builds and checks the
-   tarball as for any publish), tags `vX.Y.Z` on the candidate, and opens the GitHub
-   Release.
+   tarball as for any publish), waits until npm serves the version as `latest`, tags
+   `vX.Y.Z` on the candidate, and opens the GitHub Release. npm holds a version it accepted
+   for minutes before it serves it, and the run queued behind this one reads npm to learn
+   whether the version is out: on 2026-10-09 two runs planned 0.6.7 two minutes apart, the
+   second found nothing at the registry and npm refused its publish with 409 "Cannot
+   publish over previously staged version". So the job ends only once npm serves the
+   version to that same check, and npm's refusal of this very version (held or published) counts as
+   published; the tag step still requires the tag on the candidate.
 4. **Roll main.** A `release: X.Y.Z` commit on `main` moves the released entries from
    Unreleased under `## [X.Y.Z] - date`, keeps the entries written since the candidate, and
    sets the version in `package.json` and `package-lock.json`. A push that loses the race
@@ -107,6 +113,15 @@ Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK
 
 One more suite runs on every push and reports without blocking: the Playwright browser
 suite (eight shards, summary per shard in the run page).
+
+The jobs that install the published package or a packed tarball resolve its dependencies
+fresh from npm, so they meet the registry as a user does, mid-publish of someone else's
+packages included. npm serves a family published together (the AWS SDK, hundreds of
+packages) one package at a time over several minutes, and an install in that window fails
+with ETARGET for a version that is there minutes later (2026-10-09: nine jobs). Those
+installs run through `scripts/npm-registry-lag.mjs`, which runs one again after 1, 2 and 4
+minutes while npm names a version it does not serve yet; any other failure ends at once.
+Ratchet: `tests/scripts/npm-registry-lag.test.ts`.
 
 ### The release rehearsal
 

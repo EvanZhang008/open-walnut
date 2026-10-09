@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { retryRegistryLag } from '../npm-registry-lag.mjs'
 import { stopOwnDaemon } from './own-daemon.mjs'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -76,11 +77,18 @@ export class IsolatedWalnut {
   get bin() { return path.join(this.prefix, 'bin', 'open-walnut') }
   get base() { return `http://127.0.0.1:${this.port}` }
 
-  /** `npm install -g <spec>` into this prefix, as the updater runs it (same --allow-scripts list). */
-  async install(spec, allowScripts) {
-    const code = await runLogged(this.npm, ['install', '-g', spec, `--allow-scripts=${allowScripts.join(',')}`], {
-      env: this.env, cwd: this.dir, logFile: this.logFile, timeoutMs: 15 * 60_000,
-    })
+  /**
+   * `npm install -g <spec>` into this prefix, as the updater runs it (same
+   * --allow-scripts list). `lag` passes waits to retryRegistryLag (tests).
+   */
+  async install(spec, allowScripts, lag = {}) {
+    const argv = ['install', '-g', spec, `--allow-scripts=${allowScripts.join(',')}`]
+    // A dependency npm does not serve yet is a publish in flight, not this install's fault.
+    const { code } = await retryRegistryLag(async () => {
+      const from = fs.existsSync(this.logFile) ? fs.statSync(this.logFile).size : 0
+      const code = await runLogged(this.npm, argv, { env: this.env, cwd: this.dir, logFile: this.logFile, timeoutMs: 15 * 60_000 })
+      return { code, output: code === 0 ? '' : fs.readFileSync(this.logFile).subarray(from).toString() }
+    }, { ...lag, log: (line) => { fs.appendFileSync(this.logFile, `\n${line}\n`); process.stderr.write(`${line}\n`) } })
     if (code !== 0) throw new Error(`npm install -g ${spec} exited ${code} (log: ${this.logFile})`)
     if (!fs.existsSync(this.bin)) throw new Error(`npm install -g ${spec} left no ${this.bin}`)
   }

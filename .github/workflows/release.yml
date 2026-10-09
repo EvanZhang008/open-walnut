@@ -306,7 +306,8 @@ jobs:
         run: |
           allow="$(node scripts/stable-promote.mjs allow-scripts)"
           cd "$RUNNER_TEMP"
-          npm install -g "open-walnut@$NIGHTLY" --allow-scripts="$allow"
+          # Again while npm names a dependency it does not serve yet (a publish in flight).
+          node "$GITHUB_WORKSPACE/scripts/npm-registry-lag.mjs" npm install -g "open-walnut@$NIGHTLY" --allow-scripts="$allow"
           open-walnut --version | tee version.txt
           grep -qF "$NIGHTLY" version.txt || { echo "::error::installed open-walnut does not report $NIGHTLY"; exit 1; }
           mkdir -p home
@@ -371,6 +372,13 @@ jobs:
       # tag, the GitHub Release or main). tests/scripts/release-promote-steps.test.ts
       # runs these three scripts against a scratch repository.
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
+      # npm holds a version it accepted for minutes before it serves it, so the
+      # check below misses a publish still in that state: one this job made before
+      # it stopped, or (before the wait step below) one the run ahead in the queue
+      # made. 2026-10-09: two runs planned 0.6.7 two minutes apart and the second
+      # got 409 "Cannot publish over previously staged version". npm's refusal of
+      # this very version is its word that the version is taken; the tag step still
+      # requires the tag on this release's commit.
       - name: Version it and publish it as latest
         env:
           WALNUT_VERSION_STAMPED: '1'
@@ -380,8 +388,27 @@ jobs:
             echo "open-walnut@$VERSION is already on npm; not publishing it again"
           else
             npm version "$VERSION" --no-git-tag-version
-            npm publish --provenance --access public
+            if ! npm publish --provenance --access public 2>&1 | tee "$RUNNER_TEMP/npm-publish.log"; then
+              if grep -qiF -e "previously staged version \"$VERSION\"" -e "previously published versions: $VERSION" "$RUNNER_TEMP/npm-publish.log"; then
+                echo "npm already holds open-walnut@$VERSION (published, or still being processed); not publishing it again"
+              else
+                exit 1
+              fi
+            fi
           fi
+      # The run queued behind this job asks npm, with the check above, whether the
+      # version is out, so this job ends only once that check would say yes.
+      - name: Wait until npm serves it
+        env:
+          VERSION: ${{ needs.promote-plan.outputs.version }}
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null --max-time 30 -H 'cache-control: no-cache' "https://registry.npmjs.org/open-walnut/$VERSION"; then
+              echo "npm serves open-walnut@$VERSION"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::npm did not serve open-walnut@$VERSION within 30 minutes"; exit 1
       # Pushed with the job's token, so neither the tag nor the commit below starts a
       # workflow: the tag cannot publish a second time through job `stable`.
       - name: Tag it and open the GitHub Release

@@ -97,7 +97,8 @@ const log = (name: string): string[] => {
 }
 
 // `npm version` really rewrites package.json, as the job's does (the roll step
-// must throw that edit away); `npm publish` is only recorded.
+// must throw that edit away); `npm publish` is only recorded, or refused the way
+// npm refuses it when FAKE_NPM_PUBLISH names a refusal.
 const FAKE_NPM = `#!/usr/bin/env node
 const fs = require('fs'), path = require('path')
 fs.appendFileSync(path.join(process.env.FAKE_STATE, 'npm.log'), process.argv.slice(2).join(' ') + '\\n')
@@ -105,6 +106,16 @@ if (process.argv[2] === 'version') {
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
   pkg.version = process.argv[3]
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\\n')
+}
+const refusals = {
+  staged: 'npm error code E409\\nnpm error 409 Conflict - PUT https://registry.npmjs.org/open-walnut - Cannot publish over previously staged version "' + process.env.VERSION + '".',
+  published: 'npm error code E403\\nnpm error 403 403 Forbidden - PUT https://registry.npmjs.org/open-walnut - You cannot publish over the previously published versions: ' + process.env.VERSION + '.',
+  newer: 'npm error code E409\\nnpm error 409 Conflict - PUT https://registry.npmjs.org/open-walnut - Cannot publish over previously staged version "' + process.env.VERSION + '1".',
+  denied: 'npm error code E403\\nnpm error 403 403 Forbidden - PUT https://registry.npmjs.org/open-walnut - You do not have permission to publish "open-walnut".',
+}
+if (process.argv[2] === 'publish' && refusals[process.env.FAKE_NPM_PUBLISH]) {
+  process.stderr.write(refusals[process.env.FAKE_NPM_PUBLISH] + '\\n')
+  process.exit(1)
 }
 `
 // The registry knows the version only when FAKE_REGISTRY_HAS=1.
@@ -272,6 +283,42 @@ describe('release.yml promote steps', { timeout: 120_000 }, () => {
     expect(atOrigin('rev-parse', `refs/tags/v${VERSION}`)).toBe(tagAfter)
     expect(log('gh').filter((l) => l.startsWith('release create'))).toHaveLength(1)
     expect(atOrigin('rev-parse', 'main')).toBe(mainAfter)
+  })
+
+  // 2026-10-09: npm held the first run's 0.6.7 for minutes before it served it, so
+  // the run queued behind it found nothing at the registry check, published, and
+  // npm answered 409. That refusal says the version is taken: the job goes on.
+  it('a version npm already holds, served or not yet, counts as published', async () => {
+    for (const refusal of ['staged', 'published']) {
+      const r = await runStep(PUBLISH, { FAKE_NPM_PUBLISH: refusal })
+      expect(r.code, `${refusal}\n${r.out}`).toBe(0)
+      expect(r.out).toContain(`npm already holds open-walnut@${VERSION}`)
+    }
+    await releaseAll({ FAKE_REGISTRY_HAS: '1' })
+    expect(atOrigin('rev-parse', `v${VERSION}^{commit}`)).toBe(released)
+  })
+
+  it('any other refusal, or one for another version, stops the release', async () => {
+    for (const refusal of ['denied', 'newer']) {
+      const r = await runStep(PUBLISH, { FAKE_NPM_PUBLISH: refusal })
+      expect(r.code, `${refusal}\n${r.out}`).not.toBe(0)
+      expect(r.out).not.toContain('npm already holds')
+    }
+  })
+
+  it('the job ends only once npm serves the version, before the tag', async () => {
+    const steps = workflow.jobs.promote!.steps
+    const WAIT = promoteStep('Wait until npm serves it')
+    expect(steps.indexOf(WAIT)).toBe(steps.indexOf(PUBLISH) + 1)
+    expect(steps.indexOf(TAG)).toBeGreaterThan(steps.indexOf(WAIT))
+    // It asks npm exactly what the publish step's check asks.
+    const check = /curl [^;]*"https:\/\/registry\.npmjs\.org\/open-walnut\/\$VERSION"/
+    expect(WAIT.run!.match(check)?.[0]).toBe(PUBLISH.run!.match(check)?.[0])
+    expect(await runStep(WAIT, { FAKE_REGISTRY_HAS: '1' })).toMatchObject({ code: 0 })
+    const never = await runStep(WAIT)
+    expect(never.code).not.toBe(0)
+    expect(never.out).toContain(`npm did not serve open-walnut@${VERSION}`)
+    expect(log('curl')).toHaveLength(61)
   })
 
   it('a release that stopped at the GitHub Release finishes on a rerun', async () => {

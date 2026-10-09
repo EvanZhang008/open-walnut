@@ -249,7 +249,8 @@ jobs:
       # data the clone route just created.
       - name: npm install -g open-walnut, then require the published package to answer
         run: |
-          npm install -g open-walnut
+          # Again while npm names a dependency it does not serve yet (a publish in flight).
+          node scripts/npm-registry-lag.mjs npm install -g open-walnut
           command -v open-walnut
           mkdir -p /tmp/walnut-npm-home
           HOME=/tmp/walnut-npm-home open-walnut web --port 3457 > /tmp/walnut-npm-start.log 2>&1 &

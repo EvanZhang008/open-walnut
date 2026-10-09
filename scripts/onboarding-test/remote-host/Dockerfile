@@ -22,7 +22,11 @@
 # Pinned to the multi-arch index digest (amd64 for CI, arm64 for Apple Silicon)
 # so a re-tagged ubuntu:24.04 cannot change the fixture under a PR. To bump:
 #   docker buildx imagetools inspect ubuntu:24.04    # the "Digest:" line
-FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+# The digest names the bytes, so any registry that holds it gives the same image:
+# run.sh moves to a public mirror of Docker Hub's library when Docker Hub refuses
+# (its anonymous pull limit counts a hosted runner's shared address).
+ARG BASE_REGISTRY=docker.io/library
+FROM ${BASE_REGISTRY}/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 ENV DEBIAN_FRONTEND=noninteractive
 

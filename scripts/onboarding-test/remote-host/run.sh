@@ -94,7 +94,23 @@ trap cleanup EXIT
 
 t0=$(date +%s)
 echo "remote-host: building $IMAGE"
-if ! docker build -t "$IMAGE" "$HERE" > "$WORK/docker-build.log" 2>&1; then
+# The base image is pinned by digest (see the Dockerfile), so every registry
+# below hands out the same bytes. Docker Hub limits anonymous pulls per address
+# and a hosted runner shares its address with other jobs: 2026-10-09 both
+# attempts got 429 Too Many Requests. A base image a registry would not hand out
+# moves to the next one; any other build failure is reported as it is.
+BASE_REGISTRIES="docker.io/library mirror.gcr.io/library public.ecr.aws/docker/library"
+BASE_REFUSED_PATTERN='failed to resolve source metadata|toomanyrequests|429 Too Many Requests'
+built=0
+for registry in $BASE_REGISTRIES; do
+  if docker build --build-arg "BASE_REGISTRY=$registry" -t "$IMAGE" "$HERE" > "$WORK/docker-build.log" 2>&1; then
+    built=1
+    break
+  fi
+  grep -Eiq "$BASE_REFUSED_PATTERN" "$WORK/docker-build.log" || break
+  echo "remote-host: $registry did not hand out the base image: $(grep -Eim1 "$BASE_REFUSED_PATTERN" "$WORK/docker-build.log" | cut -c1-200)" >&2
+done
+if [ "$built" != 1 ]; then
   tail -n 40 "$WORK/docker-build.log" >&2
   # A failed pull or apt fetch is the network, not the fixture; say which, so
   # CI's summary tells a registry hiccup from a broken Dockerfile.

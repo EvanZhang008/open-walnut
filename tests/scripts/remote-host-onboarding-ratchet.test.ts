@@ -45,8 +45,26 @@ const BANNED_PACKAGE = /^(gcc|g\+\+|cpp|clang|llvm|tcc|cc|build-essential|nodejs
 
 describe('remote-host fixture · the container stays the dev box it copies', () => {
   it('starts from a stock image pinned by digest, with the bump command next to it', () => {
-    expect(dockerfile).toMatch(/^FROM (ubuntu:24\.04|debian:bookworm-slim)@sha256:[0-9a-f]{64}$/m)
+    expect(dockerfile).toMatch(/^FROM \$\{BASE_REGISTRY\}\/(ubuntu:24\.04|debian:bookworm-slim)@sha256:[0-9a-f]{64}$/m)
+    expect(dockerfile).toMatch(/^ARG BASE_REGISTRY=docker\.io\/library$/m)
     expect(dockerfile).toContain('docker buildx imagetools inspect')
+  })
+
+  // 2026-10-09: Docker Hub answered both attempts with 429 (its anonymous limit
+  // counts the hosted runner's shared address). The digest pins the bytes, so a
+  // mirror of the library is the same image.
+  it('takes the pinned base image from a mirror when Docker Hub refuses it, and only then', () => {
+    const registries = /^BASE_REGISTRIES="([^"]+)"$/m.exec(runSh)?.[1].split(' ')
+    expect(registries).toEqual(['docker.io/library', 'mirror.gcr.io/library', 'public.ecr.aws/docker/library'])
+    expect(runSh).toContain('docker build --build-arg "BASE_REGISTRY=$registry" -t "$IMAGE" "$HERE"')
+    const refused = new RegExp(/^BASE_REFUSED_PATTERN='([^']+)'$/m.exec(runSh)![1]!, 'i')
+    // The line Docker printed that day, and the shape of a registry that cannot be reached.
+    expect(refused.test('#3 ERROR: failed to copy: httpReadSeeker: failed open: unexpected status code https://registry-1.docker.io/v2/library/ubuntu/manifests/sha256:0081: 429 Too Many Requests - Server message: toomanyrequests')).toBe(true)
+    expect(refused.test('ERROR: failed to solve: ubuntu:24.04@sha256:0081: failed to resolve source metadata for docker.io/library/ubuntu:24.04@sha256:0081: dial tcp: lookup registry-1.docker.io: no such host')).toBe(true)
+    // An apt mirror or a broken RUN line is not the base image: no other registry would help.
+    expect(refused.test('E: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/noble/InRelease  Could not resolve archive.ubuntu.com')).toBe(false)
+    expect(refused.test('ERROR: failed to solve: process "/bin/sh -c apt-get install -y nope" did not complete successfully: exit code: 100')).toBe(false)
+    expect(runSh).toMatch(/grep -Eiq "\$BASE_REFUSED_PATTERN" "\$WORK\/docker-build\.log" \|\| break/)
   })
 
   it('installs exactly what sshd, the Bun installer and the daemon need, without recommends', () => {
