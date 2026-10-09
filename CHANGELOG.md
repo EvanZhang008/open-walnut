@@ -6,6 +6,21 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-09
+
+### Added
+
+- While the Mac is away, a host and the companion search what they hold
+- While the Mac is away, the phone's model picker answers from the companion and a switch reaches the session's host
+- While the Mac answers, a phone's call to the companion is answered by the Mac
+- A message between two sessions on one host is delivered by that host, also while the server answers
+
+### Fixed
+
+- The 5-minute projection sweep keeps the host model catalogs on the companion's copy
+- The Mac app job runs its checks from its own commit, not the tag
+- The Mac app smoke waits for the server and every holder of its dir
+
 ## [0.6.6] - 2026-10-08
 
 ### Added
