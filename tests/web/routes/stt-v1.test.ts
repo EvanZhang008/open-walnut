@@ -13,8 +13,14 @@ vi.mock('../../../src/core/stt/index.js', () => ({
   transcribeAudio: (...args: unknown[]) => transcribeAudio(...args),
 }));
 
+const hostedTranscribe = vi.fn();
+vi.mock('../../../src/core/stt/engine-openai.js', () => ({
+  createOpenAiEngine: () => ({ name: 'openai', transcribe: (...args: unknown[]) => hostedTranscribe(...args) }),
+}));
+
 import express from 'express';
 import request from 'supertest';
+import { updateConfig } from '../../../src/core/config-manager.js';
 import {
   sttV1Router, sttPayloadTooLargeHandler, sttEngineNotice, sttEngineFailure, noKeyNotice,
 } from '../../../src/web/routes/stt-v1.js';
@@ -31,8 +37,31 @@ function makeApp() {
 }
 
 describe('POST /api/v1/stt/transcribe', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     transcribeAudio.mockReset();
+    hostedTranscribe.mockReset();
+    await updateConfig({ stt: {} });
+  });
+
+  it('a primary whose engine fails uses the hosted API only with a key the person gave it', async () => {
+    transcribeAudio.mockRejectedValue(new Error('The speech model is still loading'));
+    hostedTranscribe.mockResolvedValue({ text: 'hosted words', durationMs: 7 });
+    const noKey = await request(makeApp()).post('/api/v1/stt/transcribe').send({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(noKey.status).toBe(503);
+    expect(hostedTranscribe).not.toHaveBeenCalled();
+
+    await updateConfig({ stt: { engine: 'mlx', openai_api_key: 'test-key' } });
+    const res = await request(makeApp()).post('/api/v1/stt/transcribe').send({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ text: 'hosted words', via: 'openai' });
+  });
+
+  it('a primary whose engine IS the hosted API does not call it twice', async () => {
+    await updateConfig({ stt: { engine: 'openai', openai_api_key: 'test-key' } });
+    transcribeAudio.mockRejectedValue(new Error('The hosted service is busy right now'));
+    const res = await request(makeApp()).post('/api/v1/stt/transcribe').send({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(503);
+    expect(hostedTranscribe).not.toHaveBeenCalled();
   });
 
   it('rejects missing audio', async () => {

@@ -1628,6 +1628,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/ui-prefs', uiPrefsRouter)
   app.use('/api/devices/tailscale', devicesTailscaleRouter)
   app.use('/api/devices', deviceAdoptionRouter)
+  // The browser sign-in code, and this server's tunnel (docs/plan/walnut-servers-everywhere.md).
+  {
+    const [{ browserCodeRouter }, { exposeRouter }] = await Promise.all([
+      import('./routes/browser-pair.js'),
+      import('./routes/expose.js'),
+    ])
+    app.use('/api/devices', browserCodeRouter)
+    app.use('/api/expose', exposeRouter)
+  }
   app.use('/api/devices', devicesRouter)
   app.use('/api/focus', focusRouter)
   app.use('/api/ordering', orderingRouter)
@@ -1830,6 +1839,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { getV1Forward } = await import('./v1-forward/proxy.js')
     app.use('/api/v1', getV1Forward().middleware)
   }
+  // A browser trading its one-time sign-in code for a device token (public, see auth.ts).
+  app.use('/api/v1', (await import('./routes/browser-pair.js')).browserPairV1Router)
   // Frozen REST+SSE facade for mobile clients (see docs/reference/api-v1.md).
   app.use('/api/v1', apiV1Router)
   // Session talk endpoints (additive): send into + stream out of CC sessions.
@@ -2211,6 +2222,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       setSelfApiRoot(selfRoot, { credential: CLOUD_MODE })
       process.env.OPEN_WALNUT_API_URL = selfRoot
     }
+  }
+
+  // -- The tunnel port and the tunnel in front of it (off unless config.yaml's expose says so) --
+  try {
+    const { startExposeRuntime } = await import('./expose-runtime.js')
+    const exposeRuntime = startExposeRuntime({ app, mainServer: httpServer })
+    void exposeRuntime.reconcile().catch((err) => log.web.warn('expose: start failed', { error: err instanceof Error ? err.message : String(err) }))
+  } catch (err) {
+    log.web.warn('expose runtime did not start', { error: err instanceof Error ? err.message : String(err) })
   }
 
   // -- Cloud mode: first-boot claim banner --
@@ -5634,6 +5654,8 @@ export async function stopServer(): Promise<void> {
     const { stopStallRecorder } = await import('../core/stall-recorder.js')
     await stopStallRecorder()
   } catch { /* never started */ }
+  // The tunnel this server runs, and its port (bounded: the child gets 6 s at most).
+  try { await (await import('./expose-runtime.js')).getExposeRuntime()?.stop() } catch { /* never started */ }
   try {
     unsubscribeMemoryPressure?.()
     unsubscribeMemoryPressure = null

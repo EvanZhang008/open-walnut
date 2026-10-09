@@ -28,7 +28,9 @@
  *
  * Limit: a local reverse proxy that adds none of the proxy headers below (a
  * bare nginx proxy_pass, socat, `ssh -R`) is indistinguishable from a local
- * client. The docs tell anyone putting a proxy in front to send X-Forwarded-For.
+ * client. The docs tell anyone putting a proxy in front to send X-Forwarded-For,
+ * and the tunnels Walnut runs itself connect to the tunnel port, where loopback
+ * is never trusted (markTunnelPort below).
  *
  * Zero imports on purpose: the HTTP middleware and the WS upgrade share it.
  */
@@ -90,7 +92,27 @@ export function isOwnOrigin(origin: string | undefined, ownPort?: number): boole
 
 export type LocalTrust =
   | { trusted: true }
-  | { trusted: false; reason: 'not-loopback' | 'proxied' | 'foreign-host' | 'foreign-origin' }
+  | { trusted: false; reason: 'not-loopback' | 'proxied' | 'tunnel-port' | 'foreign-host' | 'foreign-origin' }
+
+/**
+ * Loopback ports that only tunnels and reverse proxies connect to (the tunnel
+ * port, docs/plan/walnut-servers-everywhere.md). A tunnel connects from loopback
+ * and may add no proxy header at all, so on these ports loopback proves nothing:
+ * every request needs a credential, whatever its headers say.
+ */
+const tunnelPorts = new Set<number>()
+
+export function markTunnelPort(port: number): void {
+  tunnelPorts.add(port)
+}
+
+export function unmarkTunnelPort(port: number): void {
+  tunnelPorts.delete(port)
+}
+
+export function isTunnelPort(port: number | undefined): boolean {
+  return port !== undefined && tunnelPorts.has(port)
+}
 
 interface RequestLike {
   socket?: { remoteAddress?: string; localPort?: number }
@@ -102,6 +124,7 @@ const PROXY_HEADERS = ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded
 
 export function classifyLocalRequest(req: RequestLike): LocalTrust {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) return { trusted: false, reason: 'not-loopback' }
+  if (isTunnelPort(req.socket?.localPort)) return { trusted: false, reason: 'tunnel-port' }
   const h = req.headers
   if (PROXY_HEADERS.some((name) => h[name] !== undefined)) return { trusted: false, reason: 'proxied' }
   // A browser always sends Host; a missing one is a raw local client.

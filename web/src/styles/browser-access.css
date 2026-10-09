@@ -1,0 +1,55 @@
+/* Settings > Phones & Cloud > Open from a browser (BrowserAccessGroup). */
+
+.browser-access-state {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.browser-access-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  opacity: 0.55;
+  /* Sits on the first line of the sentence. */
+  transform: translateY(-1px);
+}
+
+.browser-access-dot[data-dot='action'] { background: var(--warning); opacity: 1; }
+.browser-access-dot[data-dot='done'] { background: var(--success); opacity: 1; }
+.browser-access-dot[data-dot='error'] { background: var(--error); opacity: 1; }
+
+.browser-access-url {
+  word-break: break-all;
+}
+
+.browser-access-code-row {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.browser-access-code {
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--fg);
+  user-select: all;
+}
+
+.browser-access-qr {
+  border-radius: 8px;
+  background: #fff;
+}
+
+.browser-access-link-row {
+  max-width: 100%;
+}
+
+.browser-access-link {
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

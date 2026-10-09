@@ -20,7 +20,10 @@ another site or another local port gets `403`. Private-network callers are not
 exempt: a phone on the same Wi-Fi sends the device token its pairing QR carried.
 Same policy as the rest of `/api` and the `/ws` upgrade. A reverse proxy in
 front of the server must send `X-Forwarded-For`; one that adds no proxy header
-looks like a local client.
+looks like a local client. The tunnel port (2026-10) is the exception: while a
+tunnel runs (Settings > Phones & Cloud > Open from a browser), the server opens
+a second loopback listener for it, and nothing that arrives there counts as
+this machine, whatever its headers say.
 
 Primary-mode refusals carry a `code`: `not_paired` (no credential) or
 `token_refused` (a credential that is wrong, revoked, or a daemon machine token).
@@ -32,6 +35,17 @@ Primary-mode refusals carry a `code`: `not_paired` (no credential) or
 - **Primary mode**: a device token minted on this machine (Settings > Phones &
   Cloud, or `walnut device add <name>`) or a config.yaml `api_keys[]` entry.
   Apple Health (`/health/*`) is the exception: it takes a device token only.
+- **A browser sign-in code** (primary mode, 2026-10):
+  `POST /api/v1/browser-pair` `{ code }` → `{ token, name }` (public). The
+  person at this machine mints the code (`POST /api/devices/browser-code` →
+  `{ code, expiresAt, url?, link? }`; anyone else gets
+  `403 person_at_this_machine`): 8 characters shown as `XXXX-XXXX`, any case,
+  the hyphen optional, good once and for 10 minutes. `link` is the tunnel's
+  address with `#pair=<code>`, which the web console trades on open. A wrong or
+  expired code is `400 { error: { code: "invalid_code", message } }`; 10 wrong
+  codes a minute from one address are `429 rate_limited`, counted apart from
+  token failures. The token is a device token named `browser-<6 hex>`, listed
+  and removable like any other.
 
 Auth failures return `401`; repeated failures are rate-limited per IP (`429`).
 
@@ -259,7 +273,7 @@ path on the companion".
 | POST | `/api/v1/notes/tags/rename` | Rename a tag across carrying notes |
 | GET | `/api/v1/memory/telemetry` | Memory-entry write-path evidence |
 | POST | `/api/v1/memory/daily-log/compact` | Manual extractive daily-log compaction |
-| POST | `/api/v1/stt/transcribe` | Transcribe base64 audio (primary engine, or cloud relay/OpenAI fallback) |
+| POST | `/api/v1/stt/transcribe` | Transcribe base64 audio (the primary's engine; on the companion the relay, its own engine, then OpenAI) |
 | GET/POST | `/api/v1/stt/vocab` | Read / add custom STT vocabulary words |
 | POST | `/api/v1/files/record-dir` | Record an "@"-picker folder |
 | GET | `/api/v1/files/recent-dirs` | Union of session + "@"-picker recents |
@@ -2593,7 +2607,7 @@ usual (absent → `general`).
   `POST /api/v1/memory/daily-log/compact` body `{ "date"?, "threshold"?,
   "summarizer": "extract" }` → compaction result; no log for the date →
   `404`; missing/unknown summarizer above threshold → `400`. Class A.
-- `POST /api/v1/stt/transcribe` body `{ "audio" (base64), "format", "language"? }` → `{ "text", "durationMs", "via": "primary" | "bridge" | "openai" }`. `format` is one of `webm`/`wav`/`mp3`/`ogg`/`mp4`/`m4a`/`flac`. Body cap 35 MB, audio string cap 25 MB base64 (both answer `413 too_large` in the frozen shape). On the cloud companion the audio is relayed to the primary box over the daemon bridge, falling back to the companion's own OpenAI key; audio too big for one bridge frame skips the relay entirely. Failures are `422 bad_audio` (the recording itself is undecodable) or `503 stt_unavailable` (try later). `error.message` is safe to show a user verbatim: an engine string is passed through only when it is provably plain prose (bounded length, ordinary sentence characters, no paths, URLs, JSON, hex, host:port, errno or pid tokens), and anything else is replaced by a generic sentence. Treat it as human copy, not as a diagnostic: the full engine text stays in the server log.
+- `POST /api/v1/stt/transcribe` body `{ "audio" (base64), "format", "language"? }` → `{ "text", "durationMs", "via": "primary" | "bridge" | "local" | "openai" }` (`local` additive, 2026-10). `format` is one of `webm`/`wav`/`mp3`/`ogg`/`mp4`/`m4a`/`flac`. Body cap 35 MB, audio string cap 25 MB base64 (both answer `413 too_large` in the frozen shape). Engines are tried in order until one answers. On the cloud companion: the primary box over the daemon bridge (`bridge`), then an engine set up on the companion itself (`local`), then the companion's own OpenAI key (`openai`); audio too big for one bridge frame skips the relay entirely. On the primary: its engine (`primary`), then the OpenAI API only when `stt.openai_api_key` is set and the engine is a different one. An engine that calls the recording undecodable ends the list. Failures are `422 bad_audio` (the recording itself is undecodable) or `503 stt_unavailable` (try later). `error.message` is safe to show a user verbatim: an engine string is passed through only when it is provably plain prose (bounded length, ordinary sentence characters, no paths, URLs, JSON, hex, host:port, errno or pid tokens), and anything else is replaced by a generic sentence. Treat it as human copy, not as a diagnostic: the full engine text stays in the server log.
 - `GET /api/v1/stt/vocab` → `{ "words" }` (the internal route's absolute
   `path` field is deliberately dropped); `POST /api/v1/stt/vocab` body
   `{ "word" }` → `{ "added", "word", "reason"? }` (case-insensitive dedup).

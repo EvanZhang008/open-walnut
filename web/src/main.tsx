@@ -26,9 +26,13 @@ import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-ass
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
+import { consumePairFragment } from './api/browser-pair';
 import './styles/globals.css';
 import './styles/home-navigation.css';
 
+// A `#pair=<code>` sign-in link: the code leaves the address bar before anything
+// else runs, and a right one reloads the page with this browser's new token.
+consumePairFragment();
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
 initBrowserLogger();
 installPluginHostRuntime();

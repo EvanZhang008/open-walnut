@@ -239,8 +239,10 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     // identically read as "3 phones I don't own" (reported 2026-07-29).
     const selfName = await getSelfCloudDeviceName()
     const tailscale = CLOUD_MODE ? null : await tailscaleSummary()
+    // A browser signed in with a code (routes/browser-pair.ts) is named browser-<6 hex>.
     const classify = (name: string) =>
-      name === selfName ? 'self' : /(^|-)sim(-|$)|simulator/i.test(name) ? 'simulator' : 'phone'
+      name === selfName ? 'self' : /(^|-)sim(-|$)|simulator/i.test(name) ? 'simulator'
+        : /^browser-[0-9a-f]{6}$/.test(name) ? 'browser' : 'phone'
     res.json({
       devices: devices.map((d) => ({ ...d, role: classify(d.name) })),
       cloudDevices: cloudDevices.map((d) => ({ ...d, role: classify(d.name) })),

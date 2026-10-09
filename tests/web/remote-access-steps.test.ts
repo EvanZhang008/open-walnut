@@ -126,6 +126,7 @@ describe('step 3: pair the phone', () => {
     expect(hasPairedPhone([{ name: 'p', platform: 'ios' }])).toBe(true)
     expect(hasPairedPhone([{ name: 'p', info: { os: 'Android 15' } }])).toBe(true)
     expect(hasPairedPhone([{ name: 'Kitchen-tablet', role: 'phone' }])).toBe(true)
+    expect(hasPairedPhone([{ name: 'browser-1a2b3c', role: 'browser' }])).toBe(false)
     expect(hasPairedPhone([{ name: 'p' }])).toBe(true)
     expect(hasPairedPhone([{ name: 'this-mac-sync', role: 'self' }, { name: 'dev-sim', role: 'simulator', info: { os: 'iOS 26.0' } }])).toBe(false)
     expect(hasPairedPhone([{ name: 'laptop', role: 'phone', platform: 'macos', info: { os: 'macOS 26' } }])).toBe(false)

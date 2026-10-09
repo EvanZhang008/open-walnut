@@ -31,3 +31,59 @@
   font-size: 12px;
   white-space: nowrap;
 }
+
+.unpaired-notice-more {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.unpaired-notice-pair {
+  margin: 10px 0 0;
+}
+
+.unpaired-notice-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.unpaired-notice-pair-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.unpaired-notice-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  /* 16px keeps iOS Safari from zooming the page when the field takes focus. */
+  font-size: 16px;
+  line-height: 20px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.unpaired-notice-input::placeholder {
+  color: var(--fg-muted);
+  letter-spacing: 0.06em;
+}
+
+.unpaired-notice-pair-row .btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.unpaired-notice-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--error);
+}

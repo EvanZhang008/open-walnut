@@ -111,11 +111,11 @@ export function isPhonePeer(peer: TailscalePeerInfo): boolean {
 /**
  * Whether a paired phone exists. An entry counts when its self-report or
  * platform says iOS (or Android); with no platform at all, any real device
- * does. This Mac's own sync credential and simulators never count.
+ * does. This Mac's own sync credential, simulators and signed-in browsers never count.
  */
 export function hasPairedPhone(devices: readonly PairedDeviceLike[]): boolean {
   return devices.some((d) => {
-    if (d.role === 'self' || d.role === 'simulator') return false;
+    if (d.role === 'self' || d.role === 'simulator' || d.role === 'browser') return false;
     const said = `${d.platform ?? ''} ${d.info?.os ?? ''} ${d.info?.model ?? ''}`.trim();
     if (!said) return true;
     return /\b(ios|ipados|iphone|ipad|android)/i.test(said);

@@ -19,6 +19,7 @@ import type {
   McpCallResult,
   McpServerDefinition,
   McpServerStatus,
+  ExposeProviderDefinition,
   McpToolInfo,
   TaskFilingInput,
   TaskFilingResult,
@@ -111,6 +112,8 @@ export interface FakeWalnutResult {
   api: WalnutServerApi
   /** Every server the plugin registered with `mcp.register` and has not disposed. */
   mcpRegistrations: McpServerDefinition[]
+  /** Every tunnel provider the plugin registered with `expose.register` and has not disposed. */
+  exposeRegistrations: ExposeProviderDefinition[]
   /** Every `mcp.client(name).call`, in order. */
   mcpCalls: Array<{ server: string; tool: string; args: Record<string, unknown> }>
   /** Live notices: a reminder re-fire replaces its key, `dismiss` removes it. */
@@ -170,6 +173,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const fullDiskAccessUses: FullDiskAccessUse[] = []
   const protectedReads: string[] = []
   const mcpRegistrations: McpServerDefinition[] = []
+  const exposeRegistrations: ExposeProviderDefinition[] = []
   const mcpCalls: Array<{ server: string; tool: string; args: Record<string, unknown> }> = []
   const mcpUnavailable = (name: string) => Object.assign(
     new Error(`No MCP server named "${name}" is registered. Install or turn on the plugin that provides it.`),
@@ -517,6 +521,20 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       },
       async fullDiskAccessTarget() { return options.fullDiskAccessTarget ?? null },
     },
+    expose: {
+      register(definition) {
+        // The host's rule for ONE plugin: registering an id again replaces its own registration.
+        const previous = exposeRegistrations.findIndex((one) => one.id === definition.id)
+        if (previous >= 0) exposeRegistrations.splice(previous, 1)
+        const entry = structuredClone(definition)
+        exposeRegistrations.push(entry)
+        return disposable(() => {
+          const at = exposeRegistrations.indexOf(entry)
+          if (at >= 0) exposeRegistrations.splice(at, 1)
+        })
+      },
+      status() { return { enabled: false, provider: null, state: 'off', since: 0 } },
+    },
     mcp: {
       register(definition) {
         // The host's rule for ONE plugin: registering a name again replaces its own registration.
@@ -791,5 +809,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, mcpCalls }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
 }

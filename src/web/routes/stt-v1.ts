@@ -2,12 +2,15 @@
  * /api/v1 speech-to-text — one endpoint the phone can call from anywhere.
  *
  *   POST /stt/transcribe  { audio: base64, format, language? }
- *     → 200 { text, durationMs, via: 'primary' | 'bridge' | 'openai' }
+ *     → 200 { text, durationMs, via: 'primary' | 'bridge' | 'local' | 'openai' }
  *   GET  /stt/vocab             → { words }            (Wave 3, A)
  *   POST /stt/vocab { word }    → { added, word, reason? }
  *
+ * The engines are tried in order (sttEngines, src/core/feature-route.ts).
+ *
  * Primary box (!CLOUD_MODE): run the configured local engine directly
- * (whisper-server / whisper-cpp / sherpa / openai — src/core/stt).
+ * (whisper-server / whisper-cpp / sherpa / openai, in src/core/stt), then the
+ * hosted API when the person gave it a key of its own (stt.openai_api_key).
  *
  * Error codes: `bad_request` (400), `too_large` (413), `bad_audio` (422 — this
  * recording is undecodable, so retrying the same bytes cannot help), and
@@ -15,12 +18,12 @@
  * `bad_audio` is additive: an older server answers 503 for the same case and the
  * client's attempt ceiling still retires it, just more slowly.
  *
- * Cloud box: the companion has no local engine. Relay the audio over the
- * daemon bridge to the primary box ('__local__' dials out from the Mac) and
- * let its engine transcribe; when the Mac is unreachable (bridge down, relay
- * error, or audio too big for a bridge frame) fall back to the OpenAI
- * Whisper API using the companion's own key. Neither available → 503 with a
- * clear message, so the phone can tell the user why voice input is offline.
+ * Cloud box: relay the audio over the daemon bridge to the primary box
+ * ('__local__' dials out from the Mac) and let its engine transcribe; when the
+ * Mac is unreachable (bridge down, relay error, or audio too big for a bridge
+ * frame) use an engine set up on the companion itself, then the OpenAI Whisper
+ * API with the companion's own key. None available → 503 with a clear message,
+ * so the phone can tell the user why voice input is offline.
  *
  * Frozen-contract note: additive (docs/reference/api-v1.md).
  */
@@ -28,6 +31,9 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import type { Config } from '../../core/types.js'
+import type { FeatureAttempt, FeatureEngine } from '../../core/feature-route.js'
+import { resolveSecret } from '../../model/providers/secret.js'
 
 export const sttV1Router = Router()
 
@@ -180,6 +186,85 @@ export function noKeyNotice(
   }
 }
 
+interface SttInput { audio: string; format: string; language?: string }
+interface SttOutput { text: string; durationMs?: number }
+
+/** The leader was asked: it could not be reached, or it answered and could not transcribe. */
+class SttRelayError extends Error {
+  constructor(readonly outcome: 'unreachable' | 'declined', message: string) {
+    super(message)
+  }
+}
+
+/**
+ * The engines this server tries, in order (docs/plan/walnut-servers-everywhere.md,
+ * "Feature with fallbacks"). `id` is the `via` the phone gets.
+ *
+ *   follower (the companion): the leader over the bridge (`bridge`), then an engine
+ *     set up on this box (`local`, config.stt, never the Mac's: config.yaml is
+ *     machine-local), then the hosted API with this box's key (`openai`);
+ *   primary: its own engine (`primary`), then the hosted API, only when the person
+ *     gave stt.openai_api_key and the engine is a different one.
+ */
+export function sttEngines(config: Config, follower: boolean): Array<FeatureEngine<SttInput, SttOutput>> {
+  const stt = config.stt
+  const engines: Array<FeatureEngine<SttInput, SttOutput>> = []
+  if (follower) {
+    engines.push({
+      id: 'bridge',
+      // Bigger audio skips the relay: one bridge frame could not carry it.
+      unavailable: (input) => (input.audio.length > BRIDGE_MAX_AUDIO_B64 ? 'too-big' : null),
+      async run(input) {
+        let relayed: { ok?: unknown; text?: unknown; durationMs?: unknown; error?: unknown }
+        try {
+          const { bridgeRequest } = await import('../ws/bridge-registry.js')
+          relayed = await bridgeRequest('__local__', 'stt', { ...input }, BRIDGE_STT_TIMEOUT_MS)
+        } catch (err) {
+          // BridgeOfflineError / timeout: expected while the Mac sleeps.
+          throw new SttRelayError('unreachable', err instanceof Error ? err.message : String(err))
+        }
+        if (relayed.ok === true && typeof relayed.text === 'string') {
+          return { text: relayed.text, durationMs: typeof relayed.durationMs === 'number' ? relayed.durationMs : 0 }
+        }
+        // The Mac answered and said no. Its words travel as they are, so a verdict
+        // about the audio stays one: the relay is transport, not a relabel.
+        throw new SttRelayError('declined', typeof relayed.error === 'string' ? relayed.error : 'The Mac could not transcribe it')
+      },
+    })
+  }
+  engines.push({
+    id: follower ? 'local' : 'primary',
+    // A primary always asks its engine (its "not set up" is the sentence to show).
+    unavailable: () => (!follower ? null : !stt?.engine ? 'not-set-up' : stt.engine === 'openai' ? 'hosted' : null),
+    async run(input) {
+      const { transcribeAudio } = await import('../../core/stt/index.js')
+      return transcribeAudio(config, input)
+    },
+  })
+  const key = resolveSecret(stt?.openai_api_key) ?? (follower ? process.env.OPENAI_API_KEY : undefined) ?? ''
+  engines.push({
+    id: 'openai',
+    unavailable: () => (!key ? 'no-key' : !follower && stt?.engine === 'openai' ? 'already-tried' : null),
+    async run(input) {
+      const { createOpenAiEngine } = await import('../../core/stt/engine-openai.js')
+      return createOpenAiEngine({ apiKey: key, baseUrl: stt?.openai_base_url, model: stt?.openai_model }).transcribe(input)
+    },
+  })
+  return engines
+}
+
+/**
+ * The sentence when no engine answered. An engine that really ran and failed
+ * speaks for itself; otherwise only what the relay showed is claimed (noKeyNotice).
+ */
+function unavailableNotice(attempts: FeatureAttempt[]): string {
+  const failed = attempts.find((a) => a.outcome === 'failed' && !(a.error instanceof SttRelayError))
+  if (failed) return sttEngineNotice(failed.reason)
+  const relay = attempts.find((a) => a.id === 'bridge')
+  const outcome = relay?.error instanceof SttRelayError ? relay.error.outcome : 'not-attempted'
+  return noKeyNotice(outcome)
+}
+
 sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { audio, format, language } = (req.body ?? {}) as {
@@ -199,104 +284,29 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
     }
     const lang = typeof language === 'string' && language !== '' ? language : undefined
 
-    if (!CLOUD_MODE) {
-      const { getConfig } = await import('../../core/config-manager.js')
-      const { transcribeAudio } = await import('../../core/stt/index.js')
-      try {
-        const result = await transcribeAudio(await getConfig(), { audio, format, language: lang })
-        res.json({ text: result.text, durationMs: result.durationMs, via: 'primary' })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        // Raw text to the log (where the ffmpeg command line is worth having),
-        // one readable sentence to the phone — and a 4xx when the audio itself is
-        // the problem, so the phone stops retrying a file we just called damaged.
-        const failure = sttEngineFailure(message)
-        log.web.warn('stt transcribe failed (primary)', { message, code: failure.code })
-        sendError(res, failure.status, failure.code, failure.message)
-      }
-      return
-    }
-
-    // ── Cloud: bridge relay first, OpenAI fallback second ──
-    //
-    // WHY the outcome is remembered: the no-key branch below has to explain
-    // itself to a phone user, and "your Mac is offline" is a claim about
-    // reachability. Asserting it after the bridge REACHED the Mac and the Mac's
-    // engine refused the audio is simply false, and it was: both paths fell
-    // through to the same sentence. The server must only state what it knows.
-    let relayOutcome: 'not-attempted' | 'unreachable' | 'declined' = 'not-attempted'
-    if (audio.length <= BRIDGE_MAX_AUDIO_B64) {
-      try {
-        const { bridgeRequest } = await import('../ws/bridge-registry.js')
-        const relayed = await bridgeRequest(
-          '__local__', 'stt', { audio, format, language: lang }, BRIDGE_STT_TIMEOUT_MS,
-        )
-        if (relayed.ok === true && typeof relayed.text === 'string') {
-          log.web.info('stt transcribed via bridge', { chars: relayed.text.length })
-          res.json({ text: relayed.text, durationMs: relayed.durationMs ?? 0, via: 'bridge' })
-          return
-        }
-        // The Mac answered and said no. If it said the audio is undecodable, that
-        // is a verdict and it travels as one (422) rather than as an outage — the
-        // relay is transport, not an excuse to relabel the Mac's diagnosis.
-        relayOutcome = 'declined'
-        log.web.warn('stt bridge relay declined, falling back', { error: relayed.error })
-        if (typeof relayed.error === 'string' && isUndecodableAudio(relayed.error)) {
-          const failure = sttEngineFailure(relayed.error)
-          sendError(res, failure.status, failure.code, failure.message)
-          return
-        }
-      } catch (err) {
-        // BridgeOfflineError / timeout — expected when the Mac sleeps.
-        relayOutcome = 'unreachable'
-        log.web.info('stt bridge unavailable, falling back to OpenAI', {
-          message: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-
+    // The engines in order (routeFeature): the leader's, this server's own, a hosted API.
     const { getConfig } = await import('../../core/config-manager.js')
-    const { resolveSecret } = await import('../../model/providers/secret.js')
+    const { routeFeature } = await import('../../core/feature-route.js')
     const config = await getConfig()
-    const apiKey = resolveSecret(config.stt?.openai_api_key) ?? process.env.OPENAI_API_KEY ?? ''
-    if (!apiKey) {
-      // Written FOR THE PHONE USER: the iOS app renders this string verbatim
-      // inside a voice notice (`APIError.voiceNotice` → "Voice unavailable:
-      // <message>"), two lines of caption text next to a recording it is keeping
-      // on disk. The old copy ("Primary box unreachable and no OpenAI API key
-      // configured on the companion") stated two internal facts, named no
-      // recovery, and read as a permanent dead end.
-      //
-      // Deliberately does NOT say "recording saved": the app appends that
-      // itself, and the duplicate ate the width that the recovery condition
-      // needs. The owner-side remedy (put an OpenAI key on the companion so
-      // voice works while the Mac sleeps) is a config action for the person who
-      // deployed the companion, not something the phone user can do from this
-      // notice, so it stays in the docs rather than in 60 characters of toast.
-      //
-      // Three outcomes, three sentences, because there are three different truths
-      // here and one of them is a reachability claim. Saying "your Mac is
-      // offline" when the Mac just answered and refused the audio is a lie the
-      // user cannot act on.
-      sendError(res, 503, 'stt_unavailable', noKeyNotice(relayOutcome))
+    const result = await routeFeature(sttEngines(config, CLOUD_MODE), { audio, format, language: lang },
+      (err) => isUndecodableAudio(err instanceof Error ? err.message : String(err)))
+    const tried = result.attempts.map((a) => `${a.id}:${a.outcome}`)
+    if (result.ok) {
+      log.web.info('stt transcribed', { via: result.via, chars: result.output.text.length, tried })
+      res.json({ text: result.output.text, durationMs: result.output.durationMs ?? 0, via: result.via })
       return
     }
-    const { createOpenAiEngine } = await import('../../core/stt/engine-openai.js')
-    const engine = createOpenAiEngine({
-      apiKey,
-      baseUrl: config.stt?.openai_base_url,
-      model: config.stt?.openai_model,
-    })
-    try {
-      const result = await engine.transcribe({ audio, format, language: lang })
-      log.web.info('stt transcribed via openai fallback', { chars: result.text.length })
-      res.json({ text: result.text, durationMs: result.durationMs, via: 'openai' })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      const failure = sttEngineFailure(message)
-      log.web.warn('stt openai fallback failed', { message, code: failure.code })
+    // Raw text to the log (where the ffmpeg command line is worth having), one
+    // readable sentence to the phone, and a 4xx when the audio itself is the
+    // problem, so the phone stops retrying a file an engine just called damaged.
+    if (result.verdict) {
+      const failure = sttEngineFailure(result.verdict.reason)
+      log.web.warn('stt transcribe: the audio is undecodable', { via: result.verdict.id, message: result.verdict.reason, tried })
       sendError(res, failure.status, failure.code, failure.message)
+      return
     }
+    log.web.warn('stt transcribe failed', { attempts: result.attempts.map(({ id, outcome, reason }) => ({ id, outcome, reason })) })
+    sendError(res, 503, 'stt_unavailable', unavailableNotice(result.attempts))
   } catch (err) {
     next(err)
   }

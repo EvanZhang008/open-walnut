@@ -14,6 +14,7 @@ import { autoDetectApiKey } from '../../model/providers/secret.js'
 import { getModelsForProvider } from '../../model/providers/model-catalog.js'
 import { KNOWN_PROVIDERS, DEFAULT_BASE_URLS } from '../../model/providers/defaults.js'
 import type { ModelEntry } from '../../model/providers/types.js'
+import { isPersonAtThisMachine } from './expose.js'
 
 export const configRouter = Router()
 
@@ -581,6 +582,15 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         res.status(400).json({ error: 'external_session_import.excluded_cwds must map host names to absolute non-root directories' })
         return
       }
+    }
+
+    // The tunnel puts this server one address away from the internet, and its command runs
+    // here: only the person at this machine changes it (routes/expose.ts). A write that
+    // carries the section back unchanged (a whole-config round trip) is fine.
+    if (body.expose !== undefined && !isPersonAtThisMachine(req)
+      && JSON.stringify(body.expose) !== JSON.stringify((await getConfig()).expose ?? {})) {
+      res.status(403).json({ error: 'Only you, at this computer, can change how Walnut is reached from outside (Settings, Phones & Cloud).', code: 'person_at_this_machine' })
+      return
     }
 
     await updateConfig(body)

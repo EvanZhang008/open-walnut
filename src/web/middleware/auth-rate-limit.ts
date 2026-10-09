@@ -35,6 +35,11 @@ export function isAuthRateLimited(ip: string): boolean {
   return list.length >= MAX_FAILURES
 }
 
+/** Forget this key's failures: a sign-in that just succeeded proved who is there. */
+export function clearAuthFailures(ip: string): void {
+  failures.delete(ip)
+}
+
 /** Test-only: clear limiter state. */
 export function _resetAuthRateLimitForTesting(): void {
   failures.clear()

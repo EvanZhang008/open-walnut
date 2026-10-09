@@ -18,9 +18,20 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: (...args: unknown[]) => bridgeRequest(...args),
 }));
 
+// An engine set up on the companion itself, and the hosted API: both stand-ins.
+const transcribeAudio = vi.fn();
+vi.mock('../../../src/core/stt/index.js', () => ({
+  transcribeAudio: (...args: unknown[]) => transcribeAudio(...args),
+}));
+const hostedTranscribe = vi.fn();
+vi.mock('../../../src/core/stt/engine-openai.js', () => ({
+  createOpenAiEngine: () => ({ name: 'openai', transcribe: (...args: unknown[]) => hostedTranscribe(...args) }),
+}));
+
 import express from 'express';
 import request from 'supertest';
 import { sttV1Router } from '../../../src/web/routes/stt-v1.js';
+import { updateConfig } from '../../../src/core/config-manager.js';
 
 function makeApp() {
   const app = express();
@@ -34,8 +45,11 @@ function post(body: Record<string, unknown>) {
 }
 
 describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     bridgeRequest.mockReset();
+    transcribeAudio.mockReset();
+    hostedTranscribe.mockReset();
+    await updateConfig({ stt: {} });
     // The fallback leg must be reached deterministically. A real key in the
     // developer's environment would silently turn every no-key assertion below
     // into a live OpenAI call.
@@ -92,4 +106,51 @@ describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
     expect(res.body.error.message).not.toContain('offline');
     expect(bridgeRequest).not.toHaveBeenCalled();
   }, 30_000);
+
+  it('with the Mac away, an engine set up on the companion answers as via=local', async () => {
+    await updateConfig({ stt: { engine: 'whisper-cpp' } });
+    bridgeRequest.mockRejectedValue(new Error('bridge offline: no live connection for __local__'));
+    transcribeAudio.mockResolvedValue({ text: 'local words', durationMs: 80 });
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ text: 'local words', via: 'local' });
+    expect(hostedTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('the Mac first: a companion engine is not used while the Mac answers', async () => {
+    await updateConfig({ stt: { engine: 'whisper-cpp' } });
+    bridgeRequest.mockResolvedValue({ ok: true, text: 'mac words', durationMs: 50 });
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.body).toMatchObject({ text: 'mac words', via: 'bridge' });
+    expect(transcribeAudio).not.toHaveBeenCalled();
+  });
+
+  it('a companion engine that fails hands the audio to the hosted API', async () => {
+    await updateConfig({ stt: { engine: 'whisper-cpp', openai_api_key: 'test-key' } });
+    bridgeRequest.mockRejectedValue(new Error('bridge offline'));
+    transcribeAudio.mockRejectedValue(new Error('whisper-cli not found'));
+    hostedTranscribe.mockResolvedValue({ text: 'hosted words', durationMs: 90 });
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ text: 'hosted words', via: 'openai' });
+  });
+
+  it('a companion engine that calls the audio damaged is the verdict: nothing else is tried', async () => {
+    await updateConfig({ stt: { engine: 'whisper-cpp', openai_api_key: 'test-key' } });
+    bridgeRequest.mockRejectedValue(new Error('bridge offline'));
+    transcribeAudio.mockRejectedValue(new Error('[mov,mp4 @ 0x1] moov atom not found'));
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('bad_audio');
+    expect(hostedTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('a companion engine that failed, with no key, says what failed rather than blaming the Mac', async () => {
+    await updateConfig({ stt: { engine: 'whisper-cpp' } });
+    bridgeRequest.mockRejectedValue(new Error('bridge offline'));
+    transcribeAudio.mockRejectedValue(new Error('The speech model is still loading'));
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(503);
+    expect(res.body.error.message).toBe('The speech model is still loading');
+  });
 });

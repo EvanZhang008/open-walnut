@@ -18,7 +18,8 @@
  *   outside the /api mount, so they are inherently exempt.
  * - Auth failures are rate-limited in-app (10/min per IP → 429).
  *
- * Both modes: `GET /api/v1/instance` is public (PUBLIC_GET_PATHS below).
+ * Both modes: `GET /api/v1/instance` is public (PUBLIC_GET_PATHS below). Primary
+ * mode: `POST /api/v1/browser-pair` too (PUBLIC_POST_PATHS).
  */
 
 import type { Request, Response, NextFunction } from 'express'
@@ -45,9 +46,19 @@ function isCloudExemptPath(mountRelativePath: string): boolean {
 // - /v1/instance: which box this is ({ instance, mode }), so a client can check an
 //   address before it sends its token there. It answers nothing else.
 const PUBLIC_GET_PATHS = new Set(['/v1/instance'])
+// POSTs public on a PRIMARY only:
+// - /v1/browser-pair: a browser trades a one-time sign-in code for its device
+//   token (routes/browser-pair.ts); it has nothing else to present yet. Wrong
+//   codes are rate limited there, per caller address. Never on a replica: its
+//   /api/v1 forward would hand the internet a way to try the primary's codes.
+const PUBLIC_POST_PATHS = new Set(['/v1/browser-pair'])
 
 function isPublicGet(req: Request): boolean {
   return req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path)
+}
+
+function isPublicRequest(req: Request): boolean {
+  return isPublicGet(req) || (req.method === 'POST' && PUBLIC_POST_PATHS.has(req.path))
 }
 
 function requestIp(req: Request): string {
@@ -105,7 +116,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return
   }
 
-  if (isPublicGet(req)) {
+  if (isPublicRequest(req)) {
     next()
     return
   }

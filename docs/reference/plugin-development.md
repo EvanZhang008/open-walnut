@@ -167,6 +167,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (over ssh for a remote host). |
 | `walnut.macos` | Read a file macOS keeps behind Full Disk Access through Walnut's one grant for it, after saying why. Mac only. |
 | `walnut.mcp` | Run a stdio MCP server Walnut keeps alive for you, call any registered server's tools, and choose what Walnut sessions may call on it. |
+| `walnut.expose` | Add a tunnel provider: the command that puts this server one address away from a browser anywhere, which Walnut runs and keeps connected. |
 | `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, and a way to keep its lifecycle on tasks you file elsewhere. |
 | `walnut.tags` | Say how your plugin's tags show on tasks: a tag or a `<namespace>:*` can default to hidden (searchable and filterable still, just no pill). |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
@@ -239,6 +240,31 @@ export async function searchDocs(walnut: WalnutServerApi, query: string): Promis
 `call` hands back the server's answer as sent (`content`, `structuredContent`, `isError`), and throws an error with `failure` (`unavailable`, `timeout`, `closed`, `aborted`, `refused`) and `stage`. The stage is what matters before you retry a write: `before-call` means nothing reached the tool, `after-call` (a timeout, the process dying mid-call) means the tool may have run. `tools()` lists the server's tools with `readOnly` and `destructive` taken from its annotations; `status()` and `onStatus()` report `idle`, `starting`, `ready` or `failed` with the reason. Settings shows the same state under your plugin, with Start and Restart.
 
 `sessions` decides what Walnut sessions may call through `walnut mcp <server> tools call` and the `mcp_read` / `mcp_call` ops. `read-only` (the default) exposes only the tools the server marks read-only, so a write your plugin keeps behind the user's approval (posting a message) stays behind it. `all` also lets sessions on this Mac call the other tools. `none` keeps the server for your plugin alone.
+
+#### Tunnel providers
+
+A tunnel puts this server one HTTPS address away from a browser anywhere. A provider is data, not code: the command, the lines it prints, and the sentences to show. Walnut does the rest. It opens a second loopback port for the tunnel, starts the command with that port filled in, reads the public address from its output, keeps the process alive (waits of 5 s growing to 5 minutes after an exit), checks the address answers every minute, and stops it with SIGTERM, then SIGKILL after 5 s. The person picks the provider and turns it on in Settings, Phones & Cloud, Open from a browser; nothing runs until they do. Nothing that arrives through the tunnel port counts as this machine, so every request needs a device token, and the same Settings group makes the one-time code that signs a browser in.
+
+```ts compile=expose
+import type { Disposable, WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export function useAcmeTunnel(walnut: WalnutServerApi): Disposable {
+  return walnut.expose.register({
+    id: 'acme-tunnel',
+    title: 'Acme Tunnel',
+    command: '~/.acme/bin/tunnel',
+    args: ['http', '{port}', '--name', '{name}'],
+    options: [{ key: 'name', label: 'Tunnel name', default: 'walnut', pattern: '[a-z0-9-]{1,40}' }],
+    urlPattern: 'https://[a-z0-9.-]+\\.acme-tunnel\\.example',
+    readyPattern: 'tunnel is live',
+    signInPatterns: ['session expired', 'please log in'],
+    signInHint: 'Run acme login on this computer; the tunnel reconnects by itself.',
+    installHint: 'Install the Acme tunnel CLI first.',
+  })
+}
+```
+
+`{port}` in `args` is the tunnel port; `{<key>}` is an option's value, which the person sets in Settings and which must match its `pattern` in full (a value that does not is refused before anything runs, so a name never becomes a shell word). The first `urlPattern` match in the output is the address. With `readyPattern`, the provider counts as connected only once it printed both the address and a ready line, in either order, for a CLI that prints its address before the connection is up. A `signInPatterns` line (case-insensitive) moves the state to `needs-sign-in` with your hint, connected or not, and the next address or ready line brings it back. A command that is not installed is `missing` with `installHint`, and both states retry slowly on their own, so signing in again or installing the tool is all the person does. The process gets the same allowlisted environment as an MCP server plus your `env`. A replica never runs a tunnel: check `walnut.replica` before you register. `walnut.expose.status()` reports the state (`off`, `starting`, `connected`, `retrying`, `needs-sign-in`, `missing`, `unavailable`) with the address and the reason.
 
 #### Outside sessions
 

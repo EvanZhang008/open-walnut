@@ -16,6 +16,7 @@ import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
+import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
 import type { Config } from '@open-walnut/core';
 
 import '@/styles/settings-sections-addons.css';
@@ -34,7 +35,7 @@ interface DeviceEntry {
   createdAt: string;
   lastUsedAt?: string;
   /** What this credential actually is: not everything in the list is a phone. */
-  role?: 'phone' | 'simulator' | 'self';
+  role?: 'phone' | 'simulator' | 'self' | 'browser';
   info?: DeviceSelfInfo;
 }
 
@@ -57,9 +58,10 @@ export function describeDevice(info?: DeviceSelfInfo): string | null {
   return parts.length > 0 ? parts.join(', ') : null;
 }
 
-const ROLE_NOTE: Record<'simulator' | 'self', string> = {
+const ROLE_NOTE: Record<'simulator' | 'self' | 'browser', string> = {
   self: 'This computer, used for cloud sync; removing it breaks sync.',
   simulator: 'iOS Simulator on this computer (development).',
+  browser: 'A browser you signed in with a code; removing it signs that browser out.',
 };
 
 /**
@@ -299,7 +301,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             <SettingsDisclosure
               id="devices-others"
               label="Other entries"
-              help="This computer and simulators."
+              help="This computer, simulators and signed-in browsers."
               summary={String(others.length)}
             >
               {others.map(renderRow)}
@@ -315,6 +317,9 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             onTailnetChange={refresh}
           />
         )}
+
+        {/* A tunnel and browser codes: a companion is reached through its own address. */}
+        {!replica && <BrowserAccessGroup />}
 
         {/* Only with a cloud companion to take over, and only on the Mac it would stand in for. */}
         {!replica && config && onSave && targets.some((t) => t.kind === 'cloud') && (

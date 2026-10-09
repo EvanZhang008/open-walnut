@@ -1307,6 +1307,71 @@ export interface McpService {
   onStatus(handler: (change: { name: string; status: McpServerStatus | null }) => void | Promise<void>): Disposable
 }
 
+/** One value the person sets for a tunnel provider (a tunnel name, say). Filled into `args` as `{key}`. */
+export interface ExposeProviderOption {
+  key: string
+  label: string
+  default?: string
+  help?: string
+  /** A regular expression (source text) the value must match in full. */
+  pattern?: string
+}
+
+/**
+ * A tunnel or reverse proxy that makes this Walnut reachable from a browser anywhere. It is data,
+ * not code: Walnut runs the command with the tunnel port filled in, reads its output for the public
+ * URL, restarts it after an exit and stops it on shutdown. Everything that arrives through it needs
+ * a device token.
+ */
+export interface ExposeProviderDefinition {
+  /** Unique across Walnut: lowercase letters, digits, `.`, `_`, `-`. `command` is taken. */
+  id: string
+  title: string
+  description?: string
+  /** Absolute, `~/`-relative, or a name on PATH. */
+  command: string
+  /** `{port}` is the tunnel port; `{<option key>}` an option's value. */
+  args?: string[]
+  /** Added to the allowlisted environment the command starts with (never the server's own). */
+  env?: Record<string, string>
+  options?: ExposeProviderOption[]
+  /** A regular expression (source text); its first match in the output is the public URL. */
+  urlPattern: string
+  /**
+   * A line that says the tunnel is ready (a regular expression, case-insensitive). When set, the
+   * provider is connected once it printed both the URL and this; when not, the URL line is enough.
+   */
+  readyPattern?: string
+  /** Lines that mean the sign-in expired (regular expressions, case-insensitive). */
+  signInPatterns?: string[]
+  /** One sentence for the person when a sign-in line shows up. */
+  signInHint?: string
+  /** One sentence for the person when the command is not installed. */
+  installHint?: string
+  /** Check the URL answers every minute while connected and restart a silent tunnel. Default true. */
+  probe?: boolean
+}
+
+export interface ExposeStatus {
+  enabled: boolean
+  provider: string | null
+  providerTitle?: string
+  state: 'off' | 'starting' | 'connected' | 'retrying' | 'needs-sign-in' | 'missing' | 'unavailable'
+  since: number
+  url?: string
+  port?: number
+  lastError?: string
+  hint?: string
+  nextRetryAt?: number
+}
+
+export interface ExposeService {
+  /** Registered until disposed or the plugin stops. An id another plugin holds throws. */
+  register(definition: ExposeProviderDefinition): Disposable
+  /** This server's tunnel right now. */
+  status(): ExposeStatus
+}
+
 export interface WalnutServerApi {
   readonly pluginId: string
   readonly pluginName: string
@@ -1326,6 +1391,7 @@ export interface WalnutServerApi {
   readonly hosts: HostService
   readonly macos: MacosService
   readonly mcp: McpService
+  readonly expose: ExposeService
   readonly sessionImports: SessionImportsService
   readonly tags: TagService
   readonly config: ConfigService

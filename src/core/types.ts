@@ -1543,6 +1543,22 @@ export interface Config {
      *  See docs/plan/walnut-control-plane.md. */
     backup_leader?: boolean;
   };
+  /** Open this server from a browser anywhere through a tunnel it runs
+   *  (docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
+  expose?: {
+    enabled?: boolean;
+    /** `command`, or a provider a plugin registered. */
+    provider?: string;
+    /** Values for the provider's options (a tunnel name, say). */
+    options?: Record<string, string>;
+    /** The loopback port tunnels connect to. Default: a free port picked at start. */
+    port?: number;
+    /**
+     * The built-in `command` provider: `{port}` in args is the tunnel port; `url_pattern` finds the
+     * address in its output, `ready_pattern` (optional) the line that says it is up.
+     */
+    command?: { command?: string; args?: string[]; url_pattern?: string; ready_pattern?: string };
+  };
   /** Cloud-companion-only settings (ignored on the primary box). */
   cloud?: {
     /** Let the cloud companion RUN sessions itself instead of only relaying
