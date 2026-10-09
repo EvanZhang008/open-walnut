@@ -72,7 +72,7 @@
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
-.thread-map-count[data-all-done="true"] { color: color-mix(in srgb, var(--success) 70%, var(--fg)); }
+.thread-map-count[data-all-done="true"] { color: var(--fg-muted); }
 .thread-map-head-actions { display: inline-flex; gap: 1px; margin-left: auto; flex: none; }
 .thread-map-icon {
   display: inline-grid;

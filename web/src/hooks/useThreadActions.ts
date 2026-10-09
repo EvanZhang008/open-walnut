@@ -37,7 +37,7 @@ export interface UseThreadActionsArgs {
 
 /** Verbatim failure and toast copy (spec 10). */
 export const THREAD_ACTION_TEXT = {
-  doneFailed: "Couldn't mark done. Try again.",
+  doneFailed: "Couldn't archive. Try again.",
   removeFailed: "Couldn't remove. Try again.",
   undoFailed: "Couldn't undo. Try again.",
   renameFailed: "Couldn't rename. Try again.",
@@ -53,13 +53,13 @@ export const TOAST_MS = { done: 6000, remove: 8000, info: 4000, failure: 6000 } 
 export const DOUBLE_FIRE_MS = 400;
 
 export const doneToastText = (title: string, above = 0): string =>
-  (above > 0 ? `Done: ${title} and ${above} above` : `Done: ${title}`);
-export const reopenToastText = (title: string): string => `Reopened “${title}”`;
+  (above > 0 ? `Archived: ${title} and ${above} above` : `Archived: ${title}`);
+export const reopenToastText = (title: string): string => `Unarchived “${title}”`;
 export const removeToastText = (title: string, descendants = 0): string =>
   (descendants > 0
     ? `Removed “${title}” and ${pluralFollowUps(descendants)}. The messages stay in the transcript.`
     : `Removed “${title}”. The messages stay in the transcript.`);
-export const olderDoneToastText = (n: number): string => `Marked ${pluralQuestions(n).replace('question', 'older question')} done`;
+export const olderDoneToastText = (n: number): string => `Archived ${pluralQuestions(n).replace('question', 'older question')}`;
 
 /** Pure guard shared by every action: true = this fire is a duplicate. */
 export function isDoubleFire(last: Map<string, number>, id: string, nowMs: number, windowMs = DOUBLE_FIRE_MS): boolean {

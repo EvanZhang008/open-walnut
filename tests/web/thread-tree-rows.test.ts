@@ -72,9 +72,9 @@ describe('flattenTree: All', () => {
     const { tree, index, pins, keyOf } = dense();
     const { rows } = flattenTree(tree, index, pins, undefined, base());
     const rootGroup = rows.find((r) => r.id === 'g:')!;
-    expect(rootGroup).toMatchObject({ kind: 'done-group', title: '3 done', expanded: false, depth: 1 });
+    expect(rootGroup).toMatchObject({ kind: 'done-group', title: '3 archived', expanded: false, depth: 1 });
     for (const q of ['Q2', 'Q3', 'Q10', 'Q12']) expect(rowOf(rows, keyOf(q))).toBeUndefined();
-    expect(rows.find((r) => r.id === `g:${keyOf('Q1')}`)?.title).toBe('1 done');
+    expect(rows.find((r) => r.id === `g:${keyOf('Q1')}`)?.title).toBe('1 archived');
   });
 
   it('opens a group on request and when the current page is inside it', () => {
@@ -83,7 +83,7 @@ describe('flattenTree: All', () => {
     expect(rowOf(opened, keyOf('Q2'))).toBeDefined();
     // Q14 is a resolved child of the resolved Q3: it folds into Q3's own group.
     expect(rowOf(opened, keyOf('Q14'))).toBeUndefined();
-    expect(opened.find((r) => r.id === `g:${keyOf('Q3')}`)?.title).toBe('1 done');
+    expect(opened.find((r) => r.id === `g:${keyOf('Q3')}`)?.title).toBe('1 archived');
     const auto = flattenTree(tree, index, pins, undefined, base({ currentKey: keyOf('Q12') })).rows;
     expect(auto.find((r) => r.id === `g:${keyOf('Q1')}`)?.expanded).toBe(true);
     expect(rowOf(auto, keyOf('Q12'))).toMatchObject({ current: true, status: 'resolved' });

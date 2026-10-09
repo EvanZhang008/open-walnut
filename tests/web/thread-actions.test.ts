@@ -64,7 +64,7 @@ describe('planDone', () => {
 });
 
 describe('chain and follow-up plans', () => {
-  it('Done, back to start: this and every open ancestor through depth 1, in one plan', () => {
+  it('Archive, back to start: this and every open ancestor through depth 1, in one plan', () => {
     const { tree, index, keyOf, answerOf } = dense();
     const p = planDoneChain(tree, index, keyOf('Q26'), { lastAnswerOf: answerOf });
     expect(p.keys).toEqual([keyOf('Q26'), keyOf('Q21'), keyOf('Q11'), keyOf('Q1')]);
@@ -77,7 +77,7 @@ describe('chain and follow-up plans', () => {
     expect(p.keys).toEqual([keyOf('Q21'), keyOf('Q1')]);
     expect(p.above).toBe(1);
   });
-  it('Mark all done: this plus visible open descendants', () => {
+  it('Archive all: this plus visible open descendants', () => {
     const { tree, index, keyOf, answerOf } = dense();
     const p = planDoneWithFollowUps(tree, index, keyOf('Q6'), { lastAnswerOf: answerOf });
     expect(p.keys).toEqual([keyOf('Q6'), keyOf('Q17'), keyOf('Q24'), keyOf('Q28')]);
@@ -122,7 +122,7 @@ describe('remove / restore / rename / takeaway / reopen plans', () => {
     const p = planEditTakeaway(tree, index, keyOf('Q2'), 't'.repeat(300));
     expect(p.patches[0]).toMatchObject({ takeaway: 't'.repeat(280), takeawaySource: 'user', takeawayState: 'done' });
   });
-  it('Reopen keeps the takeaway; Not yet also dismisses the suggestion', () => {
+  it('Unarchive keeps the takeaway; Not yet also dismisses the suggestion', () => {
     const { tree, index, keyOf } = dense();
     expect(planReopen(tree, index, keyOf('Q2')).patches[0]).toEqual({ headId: tree.byKey.get(keyOf('Q2'))!.headId, status: 'open' });
     expect(planReopen(tree, index, keyOf('Q6'), { notYet: true }).patches[0]).toMatchObject({ status: 'open', suggestDismissed: true });
@@ -147,15 +147,15 @@ describe('useThreadActions pure parts', () => {
     expect(visibleLandingOf(tree, keyOf('Q1'), hidden)).toBe(ROOT_THREAD_KEY);
   });
   it('toast and failure copy is verbatim (spec 10)', () => {
-    expect(doneToastText('Buffer flush order')).toBe('Done: Buffer flush order');
-    expect(doneToastText('Buffer flush order', 2)).toBe('Done: Buffer flush order and 2 above');
-    expect(reopenToastText('Late flush risk')).toBe('Reopened “Late flush risk”');
+    expect(doneToastText('Buffer flush order')).toBe('Archived: Buffer flush order');
+    expect(doneToastText('Buffer flush order', 2)).toBe('Archived: Buffer flush order and 2 above');
+    expect(reopenToastText('Late flush risk')).toBe('Unarchived “Late flush risk”');
     expect(removeToastText('X')).toBe('Removed “X”. The messages stay in the transcript.');
     expect(removeToastText('X', 1)).toBe('Removed “X” and 1 follow-up. The messages stay in the transcript.');
     expect(removeToastText('X', 3)).toBe('Removed “X” and 3 follow-ups. The messages stay in the transcript.');
-    expect(olderDoneToastText(5)).toBe('Marked 5 older questions done');
-    expect(olderDoneToastText(1)).toBe('Marked 1 older question done');
-    expect(THREAD_ACTION_TEXT.doneFailed).toBe("Couldn't mark done. Try again.");
+    expect(olderDoneToastText(5)).toBe('Archived 5 older questions');
+    expect(olderDoneToastText(1)).toBe('Archived 1 older question');
+    expect(THREAD_ACTION_TEXT.doneFailed).toBe("Couldn't archive. Try again.");
     expect(THREAD_ACTION_TEXT.removeFailed).toBe("Couldn't remove. Try again.");
     expect(THREAD_ACTION_TEXT.undoFailed).toBe("Couldn't undo. Try again.");
     expect(THREAD_ACTION_TEXT.renameFailed).toBe("Couldn't rename. Try again.");

@@ -190,9 +190,9 @@ test.describe('Question map', () => {
     await expect(map.locator('.thread-map-count')).toHaveText('5 open')
     await expect(rowNamed(map, 'Main conversation')).toHaveAttribute('aria-current', 'page')
     for (const t of [MAP_TITLES.Q1, MAP_TITLES.Q1a, MAP_TITLES.Q2, MAP_TITLES.Q4, MAP_TITLES.Q4a]) await expect(rowNamed(map, t)).toBeVisible()
-    // Hidden questions never show; the done one folds into `1 done`.
+    // Hidden questions never show; the done one folds into `1 archived`.
     await expect(rowNamed(map, MAP_TITLES.Q5)).toHaveCount(0)
-    await expect(map.locator('.thread-map-row[data-kind="done-group"]')).toHaveText('1 done')
+    await expect(map.locator('.thread-map-row[data-kind="done-group"]')).toHaveText('1 archived')
     await expect(map.locator('.thread-map-row[data-kind="pin"]')).toHaveCount(2)
     await shot(page, 'wide-root')
 

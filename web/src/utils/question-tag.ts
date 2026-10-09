@@ -20,7 +20,7 @@
  * Pure: unit tested in tests/web/question-tag.test.ts.
  */
 import type { SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
-import { ROOT_THREAD_KEY, type ThreadTree, type ThreadTreeMessage } from '@/utils/thread-tree';
+import { ROOT_THREAD_KEY, threadIdOf, type ThreadTree, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 
 /** `[Q4]` at the very start of a reply (blank lines and bold markers allowed). */
@@ -70,14 +70,29 @@ export function withQuestionBanner(text: string, seq: number): string {
   return `${questionBanner(seq)}\n\n${text}`;
 }
 
+const BANNER_IN_TEXT = /^\[Question Q(\d{1,5})\]\n[\s\S]*?^\[\/Question Q\1\]/m;
+
+/** The number a sent message's banner gave it, or null (no banner). */
+export function bannerSeqOf(text: string | undefined): number | null {
+  const m = text ? BANNER_IN_TEXT.exec(text) : null;
+  return m ? Number(m[1]) : null;
+}
+
 /**
  * Number per question key. A stored `seq` wins; questions from before the
  * field are numbered 1.. in transcript order, so a session keeps the numbers it
  * had (new questions always get `nextQuestionSeq`, above all of these).
+ *
+ * A legacy number never reuses a stored one: two questions with one number
+ * send the same banner, and the model's `[Qn]` then files the answer under the
+ * other one (2026-10-08: a question whose meta was not found was given 1, which
+ * the first question held, and its follow-up landed there).
  */
 export function questionNumbers(tree: ThreadTree, index: ThreadMetaIndex): Map<string, number> {
   const out = new Map<string, number>();
   const legacy: Array<{ key: string; at: number }> = [];
+  const taken = new Set<number>();
+  for (const m of index.values()) if (typeof m.seq === 'number' && m.seq > 0) taken.add(m.seq);
   for (const node of tree.threads) {
     if (node.key === ROOT_THREAD_KEY) continue;
     const seq = index.get(node.headId)?.seq;
@@ -85,7 +100,11 @@ export function questionNumbers(tree: ThreadTree, index: ThreadMetaIndex): Map<s
     else legacy.push({ key: node.key, at: node.at });
   }
   legacy.sort((a, b) => a.at - b.at);
-  legacy.forEach((l, i) => out.set(l.key, i + 1));
+  let n = 0;
+  for (const l of legacy) {
+    do n += 1; while (taken.has(n));
+    out.set(l.key, n);
+  }
   return out;
 }
 
@@ -125,12 +144,14 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
   for (const a of anchors) if (a?.msgId && a.parent) anchorFor.set(a.msgId, a);
   const extra: SessionThreadAnchor[] = [];
   let headId: string | undefined;
+  let headText: string | undefined;
   let headIndex = -1;
   let decided = false;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role === 'user') {
-      headId = m.msgId ?? m.userUuid ?? m.walnutMessageId;
+      headId = threadIdOf(m);
+      headText = m.text;
       headIndex = i;
       decided = false;
       continue;
@@ -146,7 +167,11 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
     if (!target) continue;
     const own = anchorFor.get(headId);
     if (own && own.parent === target.parent && (own.quote?.exact ?? '') === (target.quote?.exact ?? '')) continue;
-    const targetAt = messages.findIndex((x) => (x.msgId ?? x.userUuid ?? x.walnutMessageId) === targetHead);
+    // A tag that only repeats the row's own banner says nothing the anchor does
+    // not: the banner is what WE numbered the send, so when they disagree the
+    // number was wrong and the anchor (what the user replied in) is right.
+    if (own && bannerSeqOf(headText) === tag.seq) continue;
+    const targetAt = messages.findIndex((x) => threadIdOf(x) === targetHead);
     if (targetAt >= 0 && targetAt > headIndex) continue;
     extra.push({
       msgId: headId,

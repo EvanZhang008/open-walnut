@@ -99,7 +99,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     const second = rowTitled(drawer, 'Point 26:')
     await second.scrollIntoViewIfNeeded()
     await first.hover()
-    const check = (await first.getByRole('button', { name: 'Mark done' }).boundingBox())!
+    const check = (await first.getByRole('button', { name: 'Archive' }).boundingBox())!
     await page.mouse.click(check.x + check.width / 2, check.y + check.height / 2)
     await page.waitForTimeout(gap)
     const box = (await second.boundingBox())!
@@ -215,7 +215,7 @@ test.describe('Slice 1 fixes, round 3', () => {
   })
 
   for (const width of [480, 720]) {
-    test(`drawer rows at ${width}px: no clipped control or label, one Mark done per row, readable triangles (N11, N10, N26, N43)`, async ({ page }) => {
+    test(`drawer rows at ${width}px: no clipped control or label, one Archive per row, readable triangles (N11, N10, N26, N43)`, async ({ page }) => {
       const panel = await openDense(page, width)
       const drawer = await openDrawer(panel)
       await expect(chip(drawer, 'Open')).toHaveAttribute('aria-pressed', 'true')
@@ -229,7 +229,7 @@ test.describe('Slice 1 fixes, round 3', () => {
         expect(lines, `segment ${await seg.textContent()} on one line`).toBe(1)
       }
       // N11: every suggested row keeps its verdict whole, and hovering it shows
-      // exactly one Mark done and one Not yet, both whole buttons.
+      // exactly one Archive and one Not yet, both whole buttons.
       const suggested = drawer.locator('.thread-tree-row[data-status="suggested"]')
       expect(await suggested.count()).toBeGreaterThan(0)
       for (const row of await suggested.all()) {
@@ -237,9 +237,9 @@ test.describe('Slice 1 fixes, round 3', () => {
         const cut = await row.evaluate((el) => Array.from(el.querySelectorAll<HTMLElement>('.thread-tree-verdict, button'))
           .filter((b) => b.offsetParent !== null && b.scrollWidth > b.clientWidth + 0.5).map((b) => b.textContent))
         expect(cut, 'clipped in a suggested row').toEqual([])
-        await expect(row.getByRole('button', { name: 'Mark done' })).toHaveCount(1)
+        await expect(row.getByRole('button', { name: 'Archive' })).toHaveCount(1)
         await expect(row.getByRole('button', { name: 'Not yet' })).toHaveCount(1)
-        await expect(row.getByRole('button', { name: 'Mark done' })).toBeVisible()
+        await expect(row.getByRole('button', { name: 'Archive' })).toBeVisible()
         await expect(row.getByRole('button', { name: 'Not yet' })).toBeVisible()
       }
       // N26: disclosure triangles as painted (opacity included) keep 3:1.
@@ -289,9 +289,9 @@ test.describe('Slice 1 fixes, round 3', () => {
       const drawer = await openDrawer(panel)
       const row = rowTitled(drawer, 'Point 22:')
       await row.hover()
-      await row.getByRole('button', { name: 'Mark done' }).click()
+      await row.getByRole('button', { name: 'Archive' }).click()
       const toast = page.locator('.thread-toast')
-      await expect(toast).toContainText(/^Done: /)
+      await expect(toast).toContainText(/^Archived: /)
       await page.waitForTimeout(600) // the re-measure after the rows settle
       const t = await rectOf(toast)
       // It holds still (a spot that narrows it must not flip it to another).
@@ -373,7 +373,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     await row.focus()
     await page.keyboard.press(' ')
     const confirm = page.locator('.thread-confirm')
-    await expect(confirm).toContainText(/follow-ups done\?/)
+    await expect(confirm).toContainText(/^Also archive \d+ follow-ups\?/)
     const ring = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement
       const cs = getComputedStyle(el)

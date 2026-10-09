@@ -20,6 +20,9 @@
  *  - pw-threads-tagged-session: replies that carry the `[Qn]` question tag,
  *    including two turns the anchors file wrongly or not at all (a lost uuid,
  *    a merged send) that the tag has to put right.
+ *  - pw-threads-queued-session: a question the CLI took MID-TURN (no user line,
+ *    only a queued_command attachment holding the sent uuid) whose reply was the
+ *    tag and tool calls, beside an archived question 1.
  * All text is invented, neutral filler.
  */
 
@@ -43,6 +46,10 @@ export interface FixtureRow {
   /** The line's content blocks as the CLI writes them (thinking, tool_use, a
    *  tool_result line), when it is more than one text block. */
   content?: unknown[];
+  /** A user line sent while a turn ran: the CLI writes no user line for it, only
+   *  `queue-operation` enqueue / remove and a `queued_command` attachment (whose
+   *  uuid is `uuid`) carrying the uuid it was sent under (`source_uuid`). */
+  queuedAs?: string;
 }
 
 export interface ThreadsFixtureSession {
@@ -517,29 +524,109 @@ export function buildTaggedSession(nowMs: number): ThreadsFixtureSession & { ids
 
 // ── Output shapes test-server.ts writes ──
 
+export const QUEUED_SESSION = 'pw-threads-queued-session';
+export const QUEUED_TASK = 'pw-task-threads-queued';
+export const QUEUED_READY = 'Walk me through the retry budget.';
+export const QUEUED_PASSAGES = {
+  Q1: 'Each worker gets its own budget of five retries per minute.',
+  Q2: 'The cap stays at fifty retries for the whole pool.',
+} as const;
+export const QUEUED_TITLES = { Q1: 'Budget scope', Q2: 'Cap after change' } as const;
+export const QUEUED_QUESTION = 'Is the cap still right after this change?';
+
+/**
+ * The 2026-10-08 incident, neutral text. Question 1 is archived. Question 2 was
+ * asked while a turn ran: its transcript row is a synthetic `queue-<ts>` one,
+ * the uuid its anchor and meta are keyed by lives only on the attachment, and
+ * the reply was `[Q2]` and tool calls, no words. Before the fix the question
+ * read as number 1 (question 1's), its follow-up went out as `[Question Q1]`
+ * and the answer was filed under the archived question 1.
+ */
+export function buildQueuedSession(): ThreadsFixtureSession & { ids: Record<string, { u: string; a: string }>; sentUuid: string } {
+  const P = 'c4d5e6';
+  const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
+  const ids = { R1: t(1), Q1: t(2), ROOT: t(3), STEP: t(4), Q2: t(5), ROOT2: t(6) };
+  const sentUuid = fxUuid(P, 9, 'u');
+  const P1 = QUEUED_PASSAGES.Q1;
+  const P2 = QUEUED_PASSAGES.Q2;
+  // The banner question-tag.ts puts on a question's send (questionBanner(2)).
+  const banner2 = '[Question Q2]\nThis message is question 2 of this conversation. Begin your reply with the line "[Q2]" (nothing else on that line) so the reply is filed under question 2.\n[/Question Q2]';
+  const rows: FixtureRow[] = [
+    { role: 'user', uuid: ids.R1.u, text: QUEUED_READY },
+    { role: 'assistant', uuid: ids.R1.a, text: `${filler(301, 50)}\n\n${P1} ${filler(302, 40)}\n\n${P2} ${filler(303, 40)}` },
+    { role: 'user', uuid: ids.Q1.u, text: `> ${P1}\n\nIs the budget per worker?` },
+    { role: 'assistant', uuid: ids.Q1.a, text: `[Q1]\nYes, each worker counts its own retries. ${filler(304, 30)}` },
+    { role: 'user', uuid: ids.ROOT.u, text: 'Now update the design note to match.' },
+    {
+      role: 'assistant', uuid: ids.STEP.a, text: 'Updating the note.', content: [
+        { type: 'text', text: 'Updating the note.' },
+        { type: 'tool_use', id: 'toolu_fx_queued_1', name: 'Edit', input: { file_path: '/repo/design-note.md' } },
+      ],
+    },
+    // Sent mid-turn: the CLI keeps it only as an attachment with the sent uuid.
+    { role: 'user', uuid: ids.Q2.u, text: `${banner2}\n\n> ${P2}\n\n${QUEUED_QUESTION}`, queuedAs: sentUuid },
+    { role: 'user', uuid: ids.STEP.u, text: '', content: [{ type: 'tool_result', tool_use_id: 'toolu_fx_queued_1', content: 'ok' }] },
+    {
+      role: 'assistant', uuid: ids.Q2.a, text: '[Q2]', content: [
+        { type: 'text', text: '[Q2]' },
+        { type: 'tool_use', id: 'toolu_fx_queued_2', name: 'Edit', input: { file_path: '/repo/design-note.md' } },
+      ],
+    },
+    { role: 'user', uuid: fxUuid(P, 10, 'u'), text: '', content: [{ type: 'tool_result', tool_use_id: 'toolu_fx_queued_2', content: 'ok' }] },
+    { role: 'user', uuid: ids.ROOT2.u, text: 'Thanks, that is all for now.' },
+    { role: 'assistant', uuid: ids.ROOT2.a, text: 'Glad it helped.' },
+  ];
+  const at = '2026-10-07T01:27:00.000Z';
+  return {
+    sessionId: QUEUED_SESSION, taskId: QUEUED_TASK, title: 'Threads queued fixture session',
+    rows, parked: [], pinnedMessages: [], ids, sentUuid,
+    threadAnchors: [
+      { msgId: ids.Q1.u, parent: ids.R1.a, quote: { exact: P1 }, source: 'selection', at },
+      { msgId: sentUuid, parent: ids.R1.a, quote: { exact: P2 }, source: 'selection', at },
+    ],
+    threadMeta: [
+      { headId: ids.Q1.u, status: 'resolved', title: QUEUED_TITLES.Q1, titleSource: 'ai', titleState: 'done', seq: 1, updatedAt: at },
+      { headId: sentUuid, status: 'open', title: QUEUED_TITLES.Q2, titleSource: 'ai', titleState: 'done', question: QUEUED_QUESTION, seq: 2, updatedAt: at },
+    ],
+  };
+}
+
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(),
   ];
 }
 
 /** The CLI transcript JSONL: one parentUuid chain, like a real transcript. */
 export function fixtureJsonl(s: ThreadsFixtureSession, nowMs: number): string {
   const start = nowMs - 3_600_000;
-  const lines = s.rows.map((r, i) => JSON.stringify({
-    type: r.role,
-    uuid: r.uuid,
-    parentUuid: i === 0 ? null : s.rows[i - 1].uuid,
-    sessionId: s.sessionId,
-    timestamp: new Date(start + i * 2000).toISOString(),
-    ...(r.isApiError ? { isApiErrorMessage: true } : {}),
-    message: r.content
-      ? { role: r.role, content: r.content }
-      : r.role === 'user'
-        ? { role: 'user', content: r.text }
-        : { role: 'assistant', content: [{ type: 'text', text: r.text }] },
-  }));
+  const lines = s.rows.flatMap((r, i) => {
+    const base = {
+      uuid: r.uuid,
+      parentUuid: i === 0 ? null : s.rows[i - 1].uuid,
+      sessionId: s.sessionId,
+      timestamp: new Date(start + i * 2000).toISOString(),
+    };
+    if (r.queuedAs) {
+      const op = (operation: string) => JSON.stringify({ type: 'queue-operation', operation, timestamp: base.timestamp, sessionId: s.sessionId, content: r.text });
+      return [
+        op('enqueue'),
+        JSON.stringify({ ...base, type: 'attachment', attachment: { type: 'queued_command', prompt: r.text, commandMode: 'prompt', source_uuid: r.queuedAs } }),
+        op('remove'),
+      ];
+    }
+    return [JSON.stringify({
+      ...base,
+      type: r.role,
+      ...(r.isApiError ? { isApiErrorMessage: true } : {}),
+      message: r.content
+        ? { role: r.role, content: r.content }
+        : r.role === 'user'
+          ? { role: 'user', content: r.text }
+          : { role: 'assistant', content: [{ type: 'text', text: r.text }] },
+    })];
+  });
   return `${lines.join('\n')}\n`;
 }
 

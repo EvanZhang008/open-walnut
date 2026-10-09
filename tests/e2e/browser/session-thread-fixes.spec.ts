@@ -85,13 +85,13 @@ test.describe('Slice 1 layout fixes', () => {
   }
 
   for (const width of [480, 720]) {
-    test(`the Done toast leaves the resolved row visible at ${width}px (N14)`, async ({ page }) => {
+    test(`the Archive toast leaves the archived row visible at ${width}px (N14)`, async ({ page }) => {
       const panel = await openDense(page, width)
       await goTo(panel, 'point 22 change', /^Point 22:/)
       await panel.locator('.thread-stack-header .thread-stack-done').click()
       await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2')
       const toast = page.locator('.thread-toast')
-      await expect(toast).toContainText(/^Done: /)
+      await expect(toast).toContainText(/^Archived: /)
       const row = panel.locator('.thread-asked-row.is-resolved', { hasText: /Point 22/ }).first()
       await expect(row).toBeVisible()
       // Let the re-measure after the pop land (one frame + 300ms).

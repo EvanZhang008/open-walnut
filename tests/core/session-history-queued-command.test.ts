@@ -163,6 +163,29 @@ describe('mid-turn sends the CLI consumed as queued_command attachments', () => 
     expect(timeline(later).filter((r) => r === `user:${B}`)).toHaveLength(1);
   });
 
+  it('carries the uuid the line was sent under (source_uuid) on the queue row, and only there', () => {
+    // A question sent mid-turn is anchored under the uuid Walnut pre-assigned;
+    // the CLI keeps that uuid only on its attachment (2026-10-08: the question
+    // lost its number and title, and its follow-up was filed under another one).
+    const lines = [
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      enqueue(B, 3),
+      user('tr1', 'a1', toolResult('toolu_1'), 5),
+      queuedCommand('q1', 'tr1', B, 3),
+      remove(B, 5),
+      enqueue(C, 6),
+      assistant('a2', 'q1', 'msg_2', [{ type: 'text', text: 'Done.' }], 7),
+    ];
+    const rows = parse(lines);
+    const queued = rows.find((m) => m.text === B);
+    expect(queued?.msgId).toBe(`queue-${T(3)}`);
+    expect(queued?.sourceUuid).toBe('src-q1');
+    // Not consumed by an attachment (still waiting): no uuid to report.
+    expect(rows.find((m) => m.text === C)?.sourceUuid).toBeUndefined();
+    expect(rows.find((m) => m.text === A)?.sourceUuid).toBeUndefined();
+  });
+
   it('keeps a consumed task notification hidden', () => {
     const note = '<task-notification><tool-use-id>toolu_9</tool-use-id><status>completed</status></task-notification>';
     const rows = timeline([

@@ -11,7 +11,7 @@
 import { memo, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
 import {
-  ThreadCheckIcon, ThreadChevronIcon, ThreadNotYetIcon, ThreadPinIcon, ThreadReopenIcon, ThreadTrashIcon,
+  ThreadArchiveIcon, ThreadChevronIcon, ThreadNotYetIcon, ThreadPinIcon, ThreadReopenIcon, ThreadTrashIcon,
 } from '@/components/sessions/ThreadIcons';
 import { ThreadInlineRename } from '@/components/sessions/ThreadInlineRename';
 import { openBelowTitle, segmentsOf, type MatchRange, type TreeRow } from '@/utils/thread-tree-rows';
@@ -83,22 +83,22 @@ function trailing(p: ThreadTreeRowProps): ReactNode {
     </span>
   ) : null;
   const resolved = row.status === 'resolved';
-  // A suggested row's `Mark done` / `Not yet` live HERE, as whole icon buttons
+  // A suggested row's `Archive` / `Not yet` live HERE, as whole icon buttons
   // (N11): a 300px drawer has no room for two text buttons beside `Looks
-  // answered` on a nested row, and a clipped `Mark d…` is not a control.
+  // answered` on a nested row, and a clipped `Arch…` is not a control.
   const suggested = row.kind === 'thread' && row.status === 'suggested';
   return (
     <>
       {pill}
       <span className="thread-tree-actions">
         {row.kind === 'thread' && !resolved && (
-          <ActionButton label="Mark done" onPress={act('done')}><ThreadCheckIcon size={13} /></ActionButton>
+          <ActionButton label="Archive" onPress={act('done')}><ThreadArchiveIcon size={13} /></ActionButton>
         )}
         {suggested && (
           <ActionButton label="Not yet" onPress={act('not-yet')}><ThreadNotYetIcon size={12} /></ActionButton>
         )}
         {row.kind === 'thread' && resolved && (
-          <ActionButton label="Reopen" onPress={act('reopen')}><ThreadReopenIcon size={13} /></ActionButton>
+          <ActionButton label="Unarchive" onPress={act('reopen')}><ThreadReopenIcon size={13} /></ActionButton>
         )}
         <ActionButton
           label={row.kind === 'pin' ? 'Remove pin (Undo available)' : 'Remove (Undo available)'}

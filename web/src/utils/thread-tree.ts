@@ -81,8 +81,12 @@ export interface ThreadNode {
   hue: number;
   /** Index of the depth-1 ancestor among top-level threads (-1 for root). */
   topIndex: number;
-  /** Row id of the thread's FIRST user message. */
+  /** Id of the thread's FIRST user message: what its anchor and meta are keyed by. */
   headId: string;
+  /** That row's own id in the transcript, when it differs from `headId` (a
+   *  mid-turn send the CLI kept only as a `queue-…` row, see `threadIdOf`). What
+   *  a DOM or row-index lookup of the head uses. */
+  headRowId?: string;
   /** Transcript index of that first turn — what the outline orders on. */
   at: number;
   /** First non-empty line of the first question. */
@@ -134,6 +138,13 @@ export interface ThreadTreeMessage {
    */
   userUuid?: string;
   walnutMessageId?: string;
+  /**
+   * A user line sent while a turn ran: the CLI hands it to the model as a
+   * `queued_command` attachment and writes no user line, so the transcript row
+   * is a synthetic `queue-…` one, and the uuid we pre-assigned survives only as
+   * the attachment's `source_uuid`, which the server copies here.
+   */
+  sourceUuid?: string;
 }
 
 /** Row identity: the transcript uuid when the line has persisted, else the uuid
@@ -144,9 +155,22 @@ function rowIdOf(m: ThreadTreeMessage): string | undefined {
   return m.msgId ?? m.userUuid ?? m.walnutMessageId;
 }
 
+/**
+ * The id a question knows this row by: the uuid it was sent under when the
+ * transcript kept it under another (`sourceUuid`), else its row id. Anchors and
+ * meta are written under the sent uuid, so a queued question read by its
+ * `queue-…` id lost its anchor, its number and its title (2026-10-08: its
+ * follow-up went out as another question's number and was filed there).
+ */
+export function threadIdOf(m: ThreadTreeMessage): string | undefined {
+  return (m.role === 'user' ? m.sourceUuid : undefined) ?? rowIdOf(m);
+}
+
 interface Turn {
   /** '' when the user row carries no id (it can never be anchored). */
   headId: string;
+  /** The row's own id when the question knows it by another (`threadIdOf`). */
+  rowId?: string;
   start: number;
   text?: string;
   /** Ids of the rows after the head, up to the next user row. */
@@ -198,6 +222,8 @@ function computeThreadTree(
   for (let i = 0; i < messages.length; i++) {
     const id = rowIdOf(messages[i]);
     if (id && !indexOf.has(id)) indexOf.set(id, i);
+    const sent = threadIdOf(messages[i]);
+    if (sent && !indexOf.has(sent)) indexOf.set(sent, i);
   }
 
   // ── Turn segmentation ──
@@ -209,7 +235,8 @@ function computeThreadTree(
     const m = messages[i];
     const id = rowIdOf(m);
     if (m.role === 'user') {
-      turns.push({ headId: id ?? '', start: i, text: m.text, memberIds: [] });
+      const headId = threadIdOf(m) ?? '';
+      turns.push({ headId, ...(id && id !== headId ? { rowId: id } : {}), start: i, text: m.text, memberIds: [] });
       continue;
     }
     if (turns.length === 0) {
@@ -264,6 +291,7 @@ function computeThreadTree(
           hue: THREAD_HUES[((topIndex % THREAD_HUES.length) + THREAD_HUES.length) % THREAD_HUES.length],
           topIndex,
           headId: turn.headId,
+          ...(turn.rowId ? { headRowId: turn.rowId } : {}),
           at: turn.start,
           label: pinLabelFor(turn.text, 'This thread'),
           ...(anchor.quote ? { quoteLabel: pinLabelFor(anchor.quote.exact, 'this passage') } : {}),
@@ -277,6 +305,8 @@ function computeThreadTree(
     if (turn.headId) {
       node.turnIds.push(turn.headId);
       assign(turn.headId, node, node.headId === turn.headId);
+      // The timeline looks the row up by its own id.
+      if (turn.rowId) assign(turn.rowId, node, node.headId === turn.headId);
     }
     for (const id of turn.memberIds) assign(id, node, false);
     latestKey = node.key;
@@ -320,7 +350,10 @@ export function withPendingUserRows<T extends ThreadTreeMessage>(
   // An absorbed row is already in `messages` under that same uuid; adding it twice
   // would open a second turn and double the thread's count.
   const known = new Set<string>();
-  for (const m of messages) if (m.msgId) known.add(m.msgId);
+  for (const m of messages) {
+    if (m.msgId) known.add(m.msgId);
+    if (m.sourceUuid) known.add(m.sourceUuid);
+  }
   const extra = pending.filter((m) => !known.has(m.userUuid as string));
   return extra.length === 0 ? messages : [...messages, ...extra];
 }

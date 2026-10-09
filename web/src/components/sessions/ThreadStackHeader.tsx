@@ -3,7 +3,7 @@
  * header, plus a 20px subtitle line only when the panel is >= 600px, so the
  * stack's own chrome stays <= 56px at every depth (C70).
  *
- *   [back] [path at depth >= 2] [title · Naming…] [Done | caret] [More]
+ *   [back] [path at depth >= 2] [title · Naming…] [Archive | caret] [More]
  *
  * - back: `Main` or the parent title (max 34%, a short label under 560px, like an
  *   iOS back label), where a 500ms long press or a right click opens every
@@ -11,15 +11,16 @@
  * - subtitle: the question, indented to the title block's left edge (N16).
  * - title: `Naming…` is a flex:none sibling OUTSIDE the ellipsis span, so a
  *   long title is cut and `Naming…` never is (C74). Double-click renames inline.
- * - Done: open follow-ups ask `Also mark <N> follow-ups done?` first (default
- *   focus `Only this one`, Esc cancels the Done); at depth >= 2 a split caret
- *   (or Alt+click) offers `Done, back to start`.
+ * - Archive: open follow-ups ask `Also archive <N> follow-ups?` first (default
+ *   focus `Only this one`, Esc cancels it); at depth >= 2 a split caret
+ *   (or Alt+click) offers `Archive, back to start`. The word is never Done
+ *   (2026-10-08, the user: "let's not have it done, just archived").
  */
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useSubtitleIndent } from '@/hooks/useSubtitleIndent';
 import type { ThreadStackHeaderProps } from '@/components/sessions/thread-ui-contract';
 import { ThreadConfirm } from '@/components/sessions/ThreadConfirm';
-import { ThreadCheckIcon, ThreadChevronIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
+import { ThreadArchiveIcon, ThreadChevronIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
 import { ThreadInlineRename } from '@/components/sessions/ThreadInlineRename';
 import { ThreadPathMenu, ThreadStackCrumbs, pathItems } from '@/components/sessions/ThreadStackCrumbs';
 import { ThreadStackMenu } from '@/components/sessions/ThreadStackMenu';
@@ -32,7 +33,7 @@ export const BACK_ICON_ONLY_WIDTH = 560;
 /** The subtitle shows at every width (N7): 36px row + 20px line keeps C70's 56px. */
 export const SUBTITLE_MIN_WIDTH = 0;
 const LONG_PRESS_MS = 500;
-export const alsoDoneTitle = (n: number): string => `Also mark ${pluralFollowUps(n)} done?`;
+export const alsoDoneTitle = (n: number): string => `Also archive ${pluralFollowUps(n)}?`;
 
 type PathMenu = { kind: 'path' } | { kind: 'done' } | null;
 
@@ -100,15 +101,18 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
     setMenu({ kind: 'path' });
   };
 
-  const doneButton = (label: string) => (
+  // `iconOnly`: the narrow verdict row, where `Archive` (longer than the old
+  // `Done`) pushed More out of a 480px row; the word stays the name and tooltip.
+  const doneButton = (label: string, iconOnly = false) => (
     <span className="thread-stack-done-split" data-split={depth >= 2 ? 'true' : undefined}>
-      <button ref={doneRef} type="button" className="thread-stack-done" title="Mark done and go back" onClick={(e) => runDone(e)}>
-        <ThreadCheckIcon size={13} />
-        <span className="thread-stack-done-label">{label}</span>
+      <button ref={doneRef} type="button" className="thread-stack-done" title="Archive and go back"
+        aria-label={iconOnly ? label : undefined} data-icon-only={iconOnly ? 'true' : undefined} onClick={(e) => runDone(e)}>
+        <ThreadArchiveIcon size={13} />
+        {!iconOnly && <span className="thread-stack-done-label">{label}</span>}
       </button>
       {depth >= 2 && (
         <button ref={caretRef} type="button" className="thread-stack-done-caret" aria-haspopup="menu"
-          aria-expanded={menu?.kind === 'done'} aria-label="Done, back to start" title="Done, back to start"
+          aria-expanded={menu?.kind === 'done'} aria-label="Archive, back to start" title="Archive, back to start"
           onClick={() => setMenu(menu?.kind === 'done' ? null : { kind: 'done' })}>
           <ThreadChevronIcon size={10} className="thread-icon--down" />
         </button>
@@ -119,9 +123,9 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
   let action = null;
   if (key && status === 'resolved') {
     action = (
-      <button type="button" className="thread-stack-reopen" title="Reopen this question" onClick={() => { void actions.reopen(key); }}>
+      <button type="button" className="thread-stack-reopen" title="Unarchive this question" onClick={() => { void actions.reopen(key); }}>
         <ThreadReopenIcon size={13} />
-        <span>Reopen</span>
+        <span>Unarchive</span>
       </button>
     );
   } else if (key && status === 'suggested') {
@@ -129,14 +133,14 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
       <span className="thread-stack-suggested">
         {/* The same words for the same state everywhere (N42): drawer, Asked-from, here. */}
         <span className="thread-stack-suggested-label">Looks answered</span>
-        {/* Narrow: the verdict keeps its words, the button says `Done` like on
-            any other page, so the row fits 480px (N42). */}
-        {doneButton(narrow ? 'Done' : 'Mark done')}
+        {/* The verdict keeps its words (N42); narrow, the button is its icon
+            so the row still fits 480px. */}
+        {doneButton('Archive', narrow)}
         <button type="button" className="thread-stack-not-yet" onClick={() => { void actions.notYet(key); }}>Not yet</button>
       </span>
     );
   } else if (key) {
-    action = doneButton('Done');
+    action = doneButton('Archive');
   }
 
   // Narrow with the three verdict controls: the back label would be cut to one
@@ -192,14 +196,14 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
           onPick={p.onPopTo} onClose={() => setMenu(null)} />
       )}
       {menu?.kind === 'done' && key && (
-        <ThreadPathMenu anchorEl={caretRef.current} label="Done options" items={[{ key: 'chain', label: 'Done, back to start' }]}
+        <ThreadPathMenu anchorEl={caretRef.current} label="Archive options" items={[{ key: 'chain', label: 'Archive, back to start' }]}
           onPick={() => { void actions.doneChain(key); }} onClose={() => setMenu(null)} />
       )}
       {confirmDone > 0 && key && (
         <ThreadConfirm
           anchorEl={doneRef.current}
           title={alsoDoneTitle(confirmDone)}
-          confirmLabel="Mark all done"
+          confirmLabel="Archive all"
           cancelLabel="Only this one"
           neutral
           onConfirm={() => { setConfirmDone(0); void actions.doneWithFollowUps(key); }}

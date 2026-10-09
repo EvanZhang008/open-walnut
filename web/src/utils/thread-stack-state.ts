@@ -8,6 +8,7 @@
 import type { SessionPinnedQuote } from '@/types/session';
 import { QUOTE_CONTEXT_CHARS } from '@/utils/text-quote-anchor';
 import { ROOT_THREAD_KEY, THREAD_HUES, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
+import { stripQuestionTag } from '@/utils/question-tag';
 import {
   displayTitleOf, metaOf, openBelow, viewStatusOf,
   type ThreadLiveState, type ThreadMetaIndex, type ThreadViewStatus,
@@ -406,6 +407,8 @@ export interface StatsRow {
   text?: string;
   msgId?: string;
   walnutMessageId?: string;
+  /** The uuid a `queue-…` user row was sent under (its thread id, threadIdOf). */
+  sourceUuid?: string;
   timestamp?: string;
   systemVariant?: 'compact' | 'error' | 'info';
 }
@@ -417,16 +420,20 @@ export interface ThreadStats {
   lastAnswer: Map<string, string>;
   /** Thread key to its newest question's text (what Retry sends again). */
   lastQuestion: Map<string, string>;
-  /** User row id to how its turn ended, when it did not end in an answer. */
-  turnEnds: Map<string, 'error' | 'interrupted'>;
-  /** User row ids with assistant text after them, inside their turn. */
+  /** User row id to how its turn ended, when it did not end in an answer.
+   *  `silent`: the reply is there, but as tool calls and a `[Qn]` tag only. */
+  turnEnds: Map<string, 'error' | 'interrupted' | 'silent'>;
+  /** User row ids with assistant words after them, inside their turn. */
   answered: Set<string>;
 }
 
 const INTERRUPT_RE = /^\[Request interrupted/;
 
 /** One pass over the loaded rows: answers, questions and failed turn ends per
- *  question (spec 5.10). A turn is a user row and everything up to the next one. */
+ *  question (spec 5.10). A turn is a user row and everything up to the next one.
+ *  Answer words are the text left without the `[Qn]` tag: a reply of the tag and
+ *  tool calls answered nothing (2026-10-08: such a question read `Answered` and
+ *  its card was empty). */
 export function deriveThreadStats(
   rows: readonly StatsRow[],
   keyOfRow: (rowId: string | undefined) => string,
@@ -437,15 +444,14 @@ export function deriveThreadStats(
   let turnHead: string | undefined;
   let turnKey = '';
   for (const r of rows) {
-    const id = r.msgId ?? r.walnutMessageId;
     const text = r.text ?? '';
     if (r.role === 'user') {
       if (INTERRUPT_RE.test(text.trim())) {
         if (turnHead && !out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'interrupted');
         continue;
       }
-      turnHead = id;
-      turnKey = keyOfRow(id);
+      turnHead = r.sourceUuid ?? r.msgId ?? r.walnutMessageId;
+      turnKey = keyOfRow(turnHead);
       out.lastQuestion.set(turnKey, text);
       continue;
     }
@@ -455,12 +461,15 @@ export function deriveThreadStats(
       if (!out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'error');
       continue;
     }
-    if (r.role === 'assistant' && text.trim()) {
+    if (r.role !== 'assistant') continue;
+    if (/\S/.test(stripQuestionTag(text))) {
       out.answered.add(turnHead);
       out.turnEnds.delete(turnHead);
       out.lastAnswer.set(turnKey, text);
       const at = r.timestamp ? Date.parse(r.timestamp) : NaN;
       if (Number.isFinite(at)) out.answeredAt.set(turnKey, at);
+    } else if (!out.answered.has(turnHead) && !out.turnEnds.has(turnHead)) {
+      out.turnEnds.set(turnHead, 'silent');
     }
   }
   return out;

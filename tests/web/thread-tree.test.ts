@@ -419,6 +419,20 @@ describe('withPendingUserRows', () => {
     ]);
     expect(tree.byKey.get(tree.latestKey)?.turnIds).toEqual(['new-uuid']);
   });
+
+  it('a mid-turn send absorbed as a queue-… row (sourceUuid) is absorbed too, not a second turn', () => {
+    const queued: ThreadTreeMessage = { role: 'user', msgId: 'queue-2026-10-07T01:27:29.115Z', sourceUuid: 'new-uuid', text: 'just asked' };
+    const rows = [user('u1'), reply('r1'), queued];
+    expect(withPendingUserRows(rows, [pending('new-uuid')])).toBe(rows);
+    const tree = buildThreadTree(rows, [
+      { msgId: 'new-uuid', parent: 'r1', source: 'selection', at: 't' } as SessionThreadAnchor,
+    ]);
+    const node = tree.byKey.get(tree.latestKey)!;
+    expect(node.turnIds).toEqual(['new-uuid']);
+    expect(node.headRowId).toBe(queued.msgId);
+    expect(tree.byRow.get(queued.msgId!)?.key).toBe(node.key);
+    expect(tree.byRow.get('new-uuid')?.key).toBe(node.key);
+  });
 });
 
 describe('the head row leads with its quote block (the page hides it in CSS)', () => {

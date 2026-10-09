@@ -110,7 +110,7 @@ export interface ThreadTreeRowsProps {
 
 interface ConfirmState {
   /** Remove with visible follow-ups, or Done with open ones (N20: the same
-   *  question the page header asks, `Also mark <N> follow-ups done?`). */
+   *  question the page header asks, `Also archive <N> follow-ups?`). */
   kind: 'remove' | 'done';
   row: TreeRow;
   anchor: HTMLElement;
@@ -429,7 +429,7 @@ export const ThreadTreeRows = forwardRef<ThreadTreeRowsHandle, ThreadTreeRowsPro
         <ThreadConfirm
           anchorEl={confirm.anchor}
           title={alsoDoneTitle(confirm.count)}
-          confirmLabel="Mark all done"
+          confirmLabel="Archive all"
           cancelLabel="Only this one"
           neutral
           onConfirm={() => { const r = confirm.row; setConfirm(null); markDone(r, null, true); focusRow(r.id); }}

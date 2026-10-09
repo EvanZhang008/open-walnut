@@ -91,6 +91,18 @@ describe('questionNumbers / nextQuestionSeq / keysBySeq', () => {
     expect(keysBySeq(numbers).get(7)).toBe(threadKeyOf({ parent: 'r2' }));
   });
 
+  it('a legacy number never reuses a stored one (two questions, one banner)', () => {
+    const anchors = [anchor('u2', 'r1'), anchor('u3', 'r2'), anchor('u4', 'r3')];
+    const tree = buildThreadTree(messages, anchors);
+    // u3 holds 1 and u4 holds 3; u2 has no number of its own.
+    const index = indexMeta([meta('u3', { seq: 1 }), meta('u4', { seq: 3 })]);
+    const numbers = questionNumbers(tree, index);
+    expect(numbers.get(threadKeyOf({ parent: 'r2' }))).toBe(1);
+    expect(numbers.get(threadKeyOf({ parent: 'r1' }))).toBe(2);
+    expect(numbers.get(threadKeyOf({ parent: 'r3' }))).toBe(3);
+    expect(new Set(numbers.values()).size).toBe(3);
+  });
+
   it('the next number clears every stored seq, including one whose question is outside the window', () => {
     const tree = buildThreadTree(messages, [anchor('u2', 'r1')]);
     const list = [meta('u2', { seq: 3 }), meta('gone-head', { seq: 11 })];
@@ -155,6 +167,23 @@ describe('withTagAnchors', () => {
     expect(out.find((a) => a.msgId === 'u3')).toMatchObject({ parent: 'r1' });
   });
 
+  it('a tag that only echoes the row\'s own (wrong) banner leaves the row with its own anchor', () => {
+    // The follow-up was typed in question 3's card, but went out numbered 1;
+    // the model echoed [Q1]. The anchor is what the user replied in.
+    const q3 = anchor('u3', 'r2', { quote: { exact: 'third' } });
+    const follow = anchor('f1', 'r2', { quote: { exact: 'third' }, source: 'manual' });
+    const messages = [
+      user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3'),
+      user('f1', withQuestionBanner('so is that fine?', 1)), reply('fr', '[Q1]\nyes, it is fine'),
+    ];
+    const heads = headsBySeq([meta('u2', { seq: 1 }), meta('u3', { seq: 3 })]);
+    const anchors = [q1, q3, follow];
+    expect(withTagAnchors(messages, anchors, heads)).toBe(anchors);
+    // Without its own anchor (uuid lost), the tag still files the turn.
+    const lost = [q1, q3];
+    expect(withTagAnchors(messages, lost, heads).find((a) => a.msgId === 'f1')).toMatchObject({ parent: 'r1' });
+  });
+
   it('a synthetic anchor never reaches the tree twice: the tagged turn keeps one row entry', () => {
     const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q1]\nx')];
     const out = withTagAnchors(messages, [q1], headsBySeq([meta('u2', { seq: 1 })]));
@@ -163,6 +192,52 @@ describe('withTagAnchors', () => {
     expect(tree.threads.filter((t) => t.key !== ROOT_THREAD_KEY)).toHaveLength(1);
     expect(tree.threads[1].turnIds).toEqual(['u2', 'u3']);
     expect(tree.byRow.get('r3')?.key).toBe(tree.threads[1].key);
+  });
+});
+
+describe('a question the CLI took mid-turn (a queue-… row with the sent uuid)', () => {
+  // 2026-10-08 incident shape, neutral text: question 3 was sent while a turn
+  // ran, so its row is `queue-<ts>` and the uuid it was anchored under survives
+  // only as `sourceUuid`. Its reply was the tag and tool calls.
+  const QUEUE = 'queue-2026-10-07T01:27:29.115Z';
+  const q1 = anchor('u2', 'r1', { quote: { exact: 'first' } });
+  const q3 = anchor('q3', 'r2', { quote: { exact: 'third' } });
+  const messages: ThreadTreeMessage[] = [
+    user('u1'), reply('r1'), user('u2', withQuestionBanner('first?', 1)), reply('r2', '[Q1]\nanswer one'),
+    { role: 'user', msgId: QUEUE, sourceUuid: 'q3', text: withQuestionBanner('third?', 3) },
+    reply('t1', '[Q3]'), { role: 'assistant', msgId: 't2', text: '' },
+  ];
+  const list = [meta('u2', { seq: 1, status: 'resolved', title: 'First' }), meta('q3', { seq: 3, title: 'Third' }), meta(QUEUE)];
+  const index = indexMeta(list);
+  const heads = headsBySeq(list);
+
+  it('finds its anchor, number and meta through the sent uuid', () => {
+    const anchors = withTagAnchors(messages, [q1, q3], heads);
+    // The tag agrees with the row's own anchor: nothing synthetic.
+    expect(anchors).toHaveLength(2);
+    const tree = buildThreadTree(messages, anchors);
+    const key = threadKeyOf(q3);
+    const node = tree.byKey.get(key)!;
+    expect(node.headId).toBe('q3');
+    expect(node.headRowId).toBe(QUEUE);
+    expect(node.turnIds).toEqual(['q3']);
+    // The timeline asks by the row's own id.
+    expect(tree.byRow.get(QUEUE)).toMatchObject({ key, isHead: true });
+    expect(tree.byRow.get('t1')?.key).toBe(key);
+    const numbers = questionNumbers(tree, index);
+    expect(numbers.get(key)).toBe(3);
+    expect(numbers.get(threadKeyOf(q1))).toBe(1);
+    expect(index.get(node.headId)?.title).toBe('Third');
+  });
+
+  it('before the fix shape (no sourceUuid) the number collided; it no longer can', () => {
+    const bare = messages.map((m) => (m.msgId === QUEUE ? { role: m.role, msgId: m.msgId, text: m.text } : m));
+    const tree = buildThreadTree(bare, withTagAnchors(bare, [q1, q3], heads));
+    const numbers = questionNumbers(tree, index);
+    // Filed by its tag, headed by the queue row (no seq of its own): it gets a
+    // free number, never question 1's.
+    expect(numbers.get(threadKeyOf(q3))).not.toBe(1);
+    expect(new Set(numbers.values()).size).toBe(numbers.size);
   });
 });
 

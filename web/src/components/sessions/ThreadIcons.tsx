@@ -31,6 +31,11 @@ export function ThreadCheckIcon(p: ThreadIconProps) {
   return <Svg {...p} name="check"><path d="M3 8.5l3.2 3.2L13 4.8" /></Svg>;
 }
 
+/** A box with a lid: archive a question (it folds away; its passage stays marked). */
+export function ThreadArchiveIcon(p: ThreadIconProps) {
+  return <Svg {...p} name="archive"><path d="M2.5 3.5h11v2.6h-11zM3.5 6.1v6.1a.8.8 0 0 0 .8.8h7.4a.8.8 0 0 0 .8-.8V6.1M6.6 8.6h2.8" /></Svg>;
+}
+
 /** Counter-clockwise loop: back to open. */
 export function ThreadReopenIcon(p: ThreadIconProps) {
   return <Svg {...p} name="reopen"><path d="M3.5 6.5A5 5 0 1 1 3 9.5" /><path d="M3.2 2.8v3.9h3.9" /></Svg>;

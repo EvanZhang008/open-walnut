@@ -122,7 +122,7 @@ test.describe('Question AI on the fixture server', () => {
     await expect(history).toContainText('processed your message', { timeout: 90_000 })
   })
 
-  test('refine says looks answered on the open page; Mark done writes the AI takeaway without a reload (C53, C11, C57)', async ({ page, request }) => {
+  test('refine says looks answered on the open page; Archive writes the AI takeaway without a reload (C53, C11, C57)', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, READY)
     const history = panel.locator('.session-history')

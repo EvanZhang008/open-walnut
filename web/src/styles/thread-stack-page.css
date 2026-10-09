@@ -149,7 +149,7 @@
   white-space: nowrap;
 }
 .thread-asked-state--failed { color: var(--error); }
-.thread-asked-done { color: var(--success); font-weight: 600; }
+.thread-asked-done { color: var(--fg-muted); font-weight: 500; }
 .thread-asked-inline-btn {
   padding: 1px 6px;
   border: 0;
@@ -197,14 +197,15 @@
 ::highlight(thread-mark-done-188) { background-color: hsl(188 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(188 45% 50% / 0.75); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-214) { background-color: hsl(214 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(214 45% 50% / 0.75); text-underline-offset: 3px; }
 /* Conversation Mode paints every asked passage the same way (no hue tells the
-   questions apart; the number does): a faint grey wash and a grey underline.
-   A done question keeps its line in green (the map folds it away, the passage
-   still says it was asked); the wash carries the color too, for WebKit, which
-   may not draw a highlight's underline. The comment card opens on a click. */
-::highlight(thread-mark-neutral) { background-color: hsl(0 0% 50% / 0.14); text-decoration: underline 1.5px hsl(0 0% 45% / 0.8); text-underline-offset: 3px; }
-::highlight(thread-mark-done-neutral) { background-color: hsl(145 40% 45% / 0.13); text-decoration: underline 1.5px hsl(145 45% 36% / 0.75); text-underline-offset: 3px; }
-[data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(0 0% 70% / 0.18); text-decoration-color: hsl(0 0% 72% / 0.85); }
-[data-theme="dark"] ::highlight(thread-mark-done-neutral) { background-color: hsl(145 35% 55% / 0.16); text-decoration-color: hsl(145 45% 62% / 0.75); }
+   questions apart; the number does): an amber wash and underline, the color of a
+   comment in a document, so an open question is easy to find in a long answer.
+   An archived question keeps its line in grey (the map folds it away, the
+   passage still says it was asked). The wash differs too, for WebKit, which may
+   not draw a highlight's underline. The comment card opens on a click. */
+::highlight(thread-mark-neutral) { background-color: hsl(42 95% 55% / 0.28); text-decoration: underline 2px hsl(34 85% 45% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
+[data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(42 85% 55% / 0.26); text-decoration-color: hsl(40 90% 62% / 0.9); }
+[data-theme="dark"] ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 70% / 0.12); text-decoration-color: hsl(0 0% 62% / 0.6); }
 [data-theme="dark"] ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
 [data-theme="dark"] ::highlight(thread-mark-152) { background-color: hsl(152 70% 62% / 0.34); text-decoration-color: hsl(152 85% 70%); }
@@ -218,6 +219,8 @@
 [data-theme="dark"] ::highlight(thread-mark-214) { background-color: hsl(214 70% 62% / 0.34); text-decoration-color: hsl(214 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-214) { background-color: hsl(214 10% 68% / 0.2); text-decoration-color: hsl(214 40% 68% / 0.8); }
 @media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(thread-mark-neutral) { background-color: hsl(42 85% 55% / 0.26); text-decoration-color: hsl(40 90% 62% / 0.9); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 70% / 0.12); text-decoration-color: hsl(0 0% 62% / 0.6); }
   :root:not([data-theme]) ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
   :root:not([data-theme]) ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
   :root:not([data-theme]) ::highlight(thread-mark-152) { background-color: hsl(152 70% 62% / 0.34); text-decoration-color: hsl(152 85% 70%); }
@@ -238,14 +241,14 @@
    working indicator's light band sweeping along the passage until the answer
    ends. A highlight cannot animate a gradient, so the line is an element per
    line of text, in a layer that scrolls with the timeline's content. */
-::highlight(thread-mark-live-neutral) { background-color: hsl(0 0% 50% / 0.14); }
+::highlight(thread-mark-live-neutral) { background-color: hsl(42 95% 55% / 0.28); }
 ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 60% / 0.22); }
 ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 60% / 0.22); }
 ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 60% / 0.22); }
 ::highlight(thread-mark-live-330) { background-color: hsl(330 70% 60% / 0.22); }
 ::highlight(thread-mark-live-188) { background-color: hsl(188 70% 60% / 0.22); }
 ::highlight(thread-mark-live-214) { background-color: hsl(214 70% 60% / 0.22); }
-[data-theme="dark"] ::highlight(thread-mark-live-neutral) { background-color: hsl(0 0% 70% / 0.18); }
+[data-theme="dark"] ::highlight(thread-mark-live-neutral) { background-color: hsl(42 85% 55% / 0.26); }
 [data-theme="dark"] ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 62% / 0.34); }
 [data-theme="dark"] ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 62% / 0.34); }
 [data-theme="dark"] ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 62% / 0.34); }

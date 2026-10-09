@@ -311,7 +311,7 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
           <div className="thread-drawer-older">
             <span>{pluralQuestions(olderKeys.length).replace(/question/, 'older question')}</span>
             <button type="button" className="thread-tree-text-btn" onClick={() => { void p.actions.markOlderDone(olderKeys); }}>
-              Mark older questions done
+              Archive older questions
             </button>
           </div>
         )}

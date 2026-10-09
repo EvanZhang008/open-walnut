@@ -191,15 +191,15 @@ test.describe('stack chrome', () => {
     expect(await title.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
   })
 
-  test('Done with open follow-ups asks first; `Mark all done` is one PATCH (C52)', async ({ page, request }) => {
+  test('Archive with open follow-ups asks first; `Archive all` is one PATCH (C52)', async ({ page, request }) => {
     const panel = await openDense(page)
     const header = await goTo(panel, 'point 1 change', 'Buffer flush order')
     await header.locator('.thread-stack-done').click()
     const confirm = page.locator('.thread-confirm')
-    await expect(confirm.locator('.thread-confirm-title')).toHaveText(/^Also mark \d+ follow-ups done\?$/)
+    await expect(confirm.locator('.thread-confirm-title')).toHaveText(/^Also archive \d+ follow-ups\?$/)
     // Soft: default focus is ThreadConfirm's (P1) job; the steps after it still run.
     await expect.soft(confirm.getByRole('button', { name: 'Only this one' })).toBeFocused()
-    await expect(confirm.getByRole('button', { name: 'Mark all done' })).toBeVisible()
+    await expect(confirm.getByRole('button', { name: 'Archive all' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(confirm).toHaveCount(0)
     await expect(header.locator('.thread-stack-title')).toHaveText('Buffer flush order')
@@ -208,9 +208,9 @@ test.describe('stack chrome', () => {
       if (r.method() === 'PATCH' && r.url().includes(DENSE_SESSION)) patches.push((r.postDataJSON() as { thread_meta?: [] }).thread_meta ?? [])
     })
     await header.locator('.thread-stack-done').click()
-    await confirm.getByRole('button', { name: 'Mark all done' }).click()
+    await confirm.getByRole('button', { name: 'Archive all' }).click()
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
-    await expect(page.locator('.thread-toast')).toContainText('Done: Buffer flush order')
+    await expect(page.locator('.thread-toast')).toContainText('Archived: Buffer flush order')
     await expect.poll(() => patches.filter((p) => p.length > 1).length).toBe(1)
     expect(patches.find((p) => p.length > 1)!.every((e) => e.status === 'resolved')).toBe(true)
     const meta = (await readRecord(request, DENSE_SESSION)).threadMeta!
@@ -218,16 +218,16 @@ test.describe('stack chrome', () => {
     expect(meta.find((m) => m.headId === headOf('Q26'))?.status).toBe('resolved')
   })
 
-  test('`Done, back to start` resolves the chain in one PATCH, lands on root, Undo restores all (C52)', async ({ page, request }) => {
+  test('`Archive, back to start` resolves the chain in one PATCH, lands on root, Undo restores all (C52)', async ({ page, request }) => {
     const panel = await openDense(page)
     const header = await goTo(panel, 'point 26 change', /^Point 26:/)
     await header.locator('.thread-stack-done-caret').click()
     const menu = page.locator('.thread-path-menu')
     await fitsViewport(page, menu)
-    await menu.locator('[role="menuitem"]', { hasText: 'Done, back to start' }).click()
+    await menu.locator('[role="menuitem"]', { hasText: 'Archive, back to start' }).click()
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     const toast = page.locator('.thread-toast')
-    await expect(toast).toContainText(/^Done: Point 26:.* and 3 above/)
+    await expect(toast).toContainText(/^Archived: Point 26:.* and 3 above/)
     const chain = ['Q26', 'Q21', 'Q11', 'Q1'].map(headOf)
     await expect.poll(async () => (await readRecord(request, DENSE_SESSION)).threadMeta!
       .filter((m) => chain.includes(m.headId) && m.status === 'resolved').length).toBe(4)
@@ -244,7 +244,7 @@ test.describe('stack chrome', () => {
     await expect(more).toHaveAttribute('title', 'More')
     await more.click()
     const menu = page.locator('.thread-menu[role="menu"]')
-    await expect(menu.locator('[role="menuitem"]')).toHaveText(['Rename…', 'Mark done', 'Show in tree', 'Conversation Mode', 'Remove question…'])
+    await expect(menu.locator('[role="menuitem"]')).toHaveText(['Rename…', 'Archive', 'Show in tree', 'Conversation Mode', 'Remove question…'])
     await fitsViewport(page, menu)
     await expect(menu.locator('select')).toHaveCount(0)
     await expect(menu.locator('[data-item="remove"] svg[data-thread-icon="trash"]')).toHaveCount(1)
@@ -281,7 +281,7 @@ test.describe('stack chrome', () => {
   test('the takeaway edits inline and saves as the user takeaway (C46)', async ({ page, request }) => {
     const panel = await openDense(page)
     const header = await goTo(panel, 'point 2 change', 'Checksum per page')
-    await expect(header.locator('.thread-stack-reopen')).toHaveAttribute('title', 'Reopen this question')
+    await expect(header.locator('.thread-stack-reopen')).toHaveAttribute('title', 'Unarchive this question')
     const strip = panel.locator('.thread-strip--resolved')
     await expect(strip.locator('.thread-strip-label')).toHaveText('Takeaway')
     const text = strip.locator('.thread-strip-text')

@@ -68,7 +68,7 @@ test.describe('question stack visual fixes', () => {
     await expect(page.locator('.thread-hover-tip', { hasText: /^Back to Point 11:/ })).toHaveCount(0)
   })
 
-  test('a new question keeps its subtitle under its title; the Done toast stays under the session header', async ({ page }) => {
+  test('a new question keeps its subtitle under its title; the Archive toast stays under the session header', async ({ page }) => {
     const panel = await openDense(page)
     const phrase = await panel.evaluate((root) => {
       const rows = Array.from(root.querySelectorAll('.session-history .session-msg-assistant .markdown-body p'))
@@ -97,7 +97,7 @@ test.describe('question stack visual fixes', () => {
     await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
     const toast = panel.locator('.thread-toast')
     await expect(toast).toBeVisible()
-    await expect(toast).toContainText('Done:')
+    await expect(toast).toContainText('Archived:')
     const sessionHeader = await rectOf(panel.locator('.session-panel-header'))
     const t = await rectOf(toast)
     expect(t.top, 'the toast sits below the session header').toBeGreaterThanOrEqual(sessionHeader.bottom)

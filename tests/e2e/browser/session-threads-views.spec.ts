@@ -307,7 +307,7 @@ test.describe('Question stack views', () => {
     const second = groups.nth(4).locator('.thread-asked-row')
     await expect(second.nth(0)).toContainText('Version skip rule')
     await expect(second.nth(1)).toContainText('Batching writes')
-    await expect(second.nth(1).locator('.thread-asked-done')).toHaveText('Done')
+    await expect(second.nth(1).locator('.thread-asked-done')).toHaveText('Archived')
     await expect(second.nth(1).locator('.thread-asked-takeaway')).toHaveText('Point 10 keeps reads ordered before writes land.')
     await expect(second.nth(1)).toHaveClass(/is-resolved/)
     await shot(page, 'c25-asked-from')
@@ -328,7 +328,7 @@ test.describe('Question stack views', () => {
     await expect(panel.locator('.thread-stack-title')).toHaveText('Batching writes')
   })
 
-  test('Done pops to the passage and persists; Undo after leaving keeps the page, Undo in place returns', async ({ page, request }) => {
+  test('Archive pops to the passage and persists; Undo after leaving keeps the page, Undo in place returns', async ({ page, request }) => {
     await boot(page)
     // Wide enough for the labelled map: the count lives there now (the header
     // holds the mode pill alone).
@@ -345,7 +345,7 @@ test.describe('Question stack views', () => {
     await expect(count).toContainText('2 open')
     const b = panel.locator('.thread-asked-row', { hasText: 'Deeper about reply twenty one' })
     await expect(b).toHaveClass(/is-resolved/)
-    await expect(b.locator('.thread-asked-done')).toHaveText('Done')
+    await expect(b.locator('.thread-asked-done')).toHaveText('Archived')
     await expect(b.locator('.thread-asked-takeaway')).toHaveText('outline filler reply 23')
     await expect.poll(async () => (await metaOf(request, askUuid(23)))?.status).toBe('resolved')
     const saved = await metaOf(request, askUuid(23))
@@ -380,7 +380,7 @@ test.describe('Question stack views', () => {
     await expect.poll(async () => (await metaOf(request, askUuid(21)))?.status).toBe('open')
   })
 
-  test('a Done the server refuses rolls back with a toast and pushes nothing twice', async ({ page, request }) => {
+  test('an Archive the server refuses rolls back with a toast and pushes nothing twice', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, WRITE_SESSION, WRITE_TASK, WRITE_READY)
     await openAsked(page, panel, 'Side note on reply nineteen', 1)
@@ -390,7 +390,7 @@ test.describe('Question stack views', () => {
     await panel.locator('.thread-stack-done').first().click()
     await expectDepth(panel, 0)
     // C12: the failure says so and the row goes back to open.
-    await expect(panel.locator('.thread-toast')).toContainText("Couldn't mark done. Try again.")
+    await expect(panel.locator('.thread-toast')).toContainText("Couldn't archive. Try again.")
     const row = panel.locator('.thread-asked-row', { hasText: 'Side note on reply nineteen' })
     await expect(row).not.toHaveClass(/is-resolved/)
     await page.waitForTimeout(1200)

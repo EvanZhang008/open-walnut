@@ -312,10 +312,24 @@ show inline after the open ones, other completed hits that show the query fold i
   stack view only): a map row or a turn label picks the question the next message replies in.
   **Questions are told apart by NUMBER and status word, never by colour.** `SessionThreadMeta.seq`
   is given once at Ask (`nextQuestionSeq`; the server keeps it write-once and the AI writer may
-  not set it), questions from before the field are numbered by transcript order
-  (`utils/question-tag.ts` `questionNumbers`). Status words: Waiting / Answering… / New / Answered
-  / To check / Done / No answer / Draft (`ThreadStatusWord`); a streaming answer already counts as
-  present. The user's words on the hue-per-question design: "I don't know which one is which".
+  not set it), questions from before the field are numbered by transcript order, skipping every
+  stored seq (`utils/question-tag.ts` `questionNumbers`: two questions with one number send one
+  banner, and the model's tag then files the answer under the other). Status words: Waiting /
+  Answering… / New / Answered / To check / Archived / No answer / Draft (`ThreadStatusWord`); a
+  streaming answer already counts as present, and a reply of the `[Qn]` tag and tool calls is NO
+  answer (`deriveThreadStats` ends that turn `silent`, the card writes `No answer` under it). The
+  resolved state is called Archived everywhere a person reads it (`Archive`, `Unarchive`, `N
+  archived`; 2026-10-08, the user: "let's not have it done, just archived"); code keeps `done` /
+  `resolved`. The user's words on the hue-per-question design: "I don't know which one is which".
+  **A question sent mid-turn is known by the uuid it was SENT under.** The CLI writes no user
+  line for it, only a `queued_command` attachment whose `source_uuid` is Walnut's pre-assigned
+  uuid; the parser's row is a synthetic `queue-<ts>` one and carries that uuid as `sourceUuid`
+  (`src/core/session-history.ts`). The tree heads the question with it (`threadIdOf`; the node's
+  `headRowId` is the row's own id, for DOM and index lookups, and `byRow` answers both). Without it
+  the question lost its anchor, number and title, took question 1's number, and its follow-up was
+  filed there (2026-10-08). A reply tag that only echoes the row's OWN banner never overrides the
+  row's own anchor (`bannerSeqOf` in `withTagAnchors`): the banner is what Walnut numbered, so when
+  they disagree the number was wrong.
   **The reply tag files the answer.** A question's send (and every follow-up) opens with the
   `[Question Q<n>]…[/Question Q<n>]` banner asking the model to begin with the line `[Q<n>]`; the
   bubble hides that banner (`QUESTION_BANNER_RE`), `SessionMessage` and `StreamingBlockView` strip
@@ -360,10 +374,11 @@ show inline after the open ones, other completed hits that show the query fold i
   path as the panel's composer). It lives in `.thread-card-layer`, a zero-height positioned box at
   the top of the scroll content, so `top` is a content coordinate and the card scrolls with its
   passage; `placeCard` puts it below the passage's last line, right edges aligned, clamped to the
-  layer. Every asked passage wears ONE neutral grey mark (`allPassageMarks`, highlight
-  `thread-mark-neutral`), never a hue; a done one keeps its line in green
-  (`thread-mark-done-neutral`, the fill tinted too for WebKit) while the map folds it into
-  `N done`, the row that shows it again. **A live turn belongs to its NEWEST `[Qn]` tag**
+  layer. Every asked passage wears ONE amber mark (`allPassageMarks`, highlight
+  `thread-mark-neutral`, the color of a comment in a document), never a per-question hue; an
+  archived one keeps its line in grey (`thread-mark-done-neutral`; the fill differs too, for
+  WebKit, which may not draw a highlight's underline) while the map folds it into `N archived`,
+  the row that shows it again. **A live turn belongs to its NEWEST `[Qn]` tag**
   (`tagKeyAtBlock`, each block to the newest tag at or before it): a turn that moved on to another
   question is answering that one, and the question it left is answered. The server keeps a question
   row out of a running turn on every path (`processNextNow` passes `midTurn` from the session's

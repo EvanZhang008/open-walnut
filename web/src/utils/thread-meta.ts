@@ -69,7 +69,7 @@ export interface DeriveLiveInput {
   /** Thread key the CLI is currently answering, or null when idle. */
   streamingKey: string | null;
   /** How the turn opened by each user row ended, when it ended. */
-  turnEnds: ReadonlyMap<string, 'ok' | 'error' | 'interrupted' | 'parked'>;
+  turnEnds: ReadonlyMap<string, 'ok' | 'error' | 'interrupted' | 'parked' | 'silent'>;
   /** Is there assistant text after this user row (within its turn)? */
   hasAnswerAfter: (rowId: string) => boolean;
 }
@@ -78,8 +78,8 @@ export interface DeriveLiveInput {
  * Live states per thread key (spec 5.4 queued, 5.10 failed):
  *  - answering: the key the stream is on;
  *  - queued: a thread whose uuid-carrying send is waiting in the queue;
- *  - failed: the thread's LAST turn ended in error / interrupted / parked with
- *    no answer text after it.
+ *  - failed: the thread's LAST turn ended in error / interrupted / parked, or
+ *    replied with tool calls and no words (silent), with no answer text after it.
  * Answering wins over queued (a follow-up queued behind its own answer is still
  * being answered), queued wins over failed (a retry is on its way).
  */
@@ -457,7 +457,7 @@ export function planDoneChain(tree: ThreadTree, index: ThreadMetaIndex, key: str
   return { ...p, above: Math.max(0, p.keys.length - 1) };
 }
 
-/** `Mark all done`: this question plus its visible open descendants. */
+/** `Archive all`: this question plus its visible open descendants. */
 export function planDoneWithFollowUps(tree: ThreadTree, index: ThreadMetaIndex, key: string, input: DonePlanInput): MetaPlan & { below: number } {
   const down = descendantsOf(tree, key, { visibleOnly: true, index })
     .filter((k) => isOpenish(statusOf(tree.byKey.get(k), index)));

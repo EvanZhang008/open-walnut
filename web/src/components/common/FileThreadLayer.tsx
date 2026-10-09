@@ -64,9 +64,9 @@ const FRAME_STYLE_ID = 'walnut-file-marks';
 const FRAME_LIVE_ID = 'walnut-live-lines';
 /** The frame's copy of the mark paint (thread-stack-page.css), live line included. */
 const FRAME_STYLE = `
-::highlight(thread-mark-neutral) { background-color: hsl(0 0% 50% / 0.14); text-decoration: underline 1.5px hsl(0 0% 45% / 0.8); text-underline-offset: 3px; }
-::highlight(thread-mark-done-neutral) { background-color: hsl(145 40% 45% / 0.13); text-decoration: underline 1.5px hsl(145 45% 36% / 0.75); text-underline-offset: 3px; }
-::highlight(thread-mark-live-neutral) { background-color: hsl(0 0% 50% / 0.14); }
+::highlight(thread-mark-neutral) { background-color: hsl(42 95% 55% / 0.28); text-decoration: underline 2px hsl(34 85% 45% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
+::highlight(thread-mark-live-neutral) { background-color: hsl(42 95% 55% / 0.28); }
 body[data-thread-mark-hover] { cursor: pointer; }
 #${FRAME_LIVE_ID} { position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 2147483000; }
 .${LIVE_LINE_CLASS} { position: absolute; height: ${LIVE_BAR_HEIGHT}px; border-radius: 1px; pointer-events: none;

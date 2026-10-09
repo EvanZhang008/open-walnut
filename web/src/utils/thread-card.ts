@@ -9,14 +9,23 @@ import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
 import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY } from '@/utils/thread-tree';
+import { stripQuestionTag } from '@/utils/question-tag';
 
 /** The rows the tree reads (`SessionHistoryMessage` fits). */
 export interface CardRowLike {
   role: string;
   msgId?: string;
   walnutMessageId?: string;
+  sourceUuid?: string;
   text?: string;
   tools?: readonly unknown[];
+}
+
+/** An assistant row says something: text left once the `[Qn]` tag is gone. A
+ *  reply that is the tag and tool calls has no answer in it. */
+export function hasWords(text: string | undefined): boolean {
+  // A test, not a trim: the timeline asks this of every live text block per render.
+  return !!text && /\S/.test(stripQuestionTag(text));
 }
 
 /** One turn of the question: its user row and the reply's final message. */
@@ -39,12 +48,12 @@ export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node:
   const out: CardTurn<M>[] = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
-    const id = m.msgId ?? m.walnutMessageId;
+    const id = m.sourceUuid ?? m.msgId ?? m.walnutMessageId;
     if (m.role !== 'user' || !id || !want.has(id)) continue;
     let last: M | undefined;
     for (let j = i + 1; j < messages.length && messages[j].role !== 'user'; j++) {
       const r = messages[j];
-      if (r.role === 'assistant' && (r.text ?? '').trim()) last = r;
+      if (r.role === 'assistant' && hasWords(r.text)) last = r;
     }
     out.push({ user: m, replies: last ? [last] : [] });
   }

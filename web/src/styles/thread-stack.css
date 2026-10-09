@@ -79,7 +79,8 @@
   animation: thread-dot-breathe 1s ease-in-out infinite alternate;
 }
 .thread-status-dot[data-status="resolved"] {
-  background: color-mix(in srgb, var(--success) 55%, transparent);
+  /* Archived reads grey, never green (2026-10-08). */
+  background: color-mix(in srgb, var(--fg-muted) 55%, transparent);
   border-color: transparent;
 }
 .thread-status-dot[data-status="suggested"] {

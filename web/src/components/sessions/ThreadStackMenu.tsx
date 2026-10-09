@@ -5,7 +5,7 @@
  * select, no submenus, and the outside-click closer exempts the drawer, the
  * toast, the confirm layer and the crumb menu.
  *
- * Page rows: `Rename…`, `Mark done` / `Reopen`, `Show in tree`, `Show all in
+ * Page rows: `Rename…`, `Archive` / `Unarchive`, `Show in tree`, `Show all in
  * order` / `Back to questions`, red `Remove question…` (confirm follows) or
  * `Remove question` (no follow-ups, no confirm). Root rows: `Show all in
  * order` and `Show hidden questions (<n>)`. The only verb is Remove (C78).
@@ -25,9 +25,9 @@ export const removeQuestionTitle = (n: number): string => `Remove this question 
 export const THREAD_MENU_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .thread-drawer, .thread-menu`;
 
 export interface ThreadStackMenuExtraProps {
-  /** The page's question is resolved (`Reopen` instead of `Mark done`). */
+  /** The page's question is archived (`Unarchive` instead of `Archive`). */
   resolved?: boolean;
-  /** Done as the header button does it (confirm when follow-ups are open). */
+  /** Archive as the header button does it (confirm when follow-ups are open). */
   onDone?: () => void;
   className?: string;
 }
@@ -57,11 +57,12 @@ export function ThreadStackMenu(props: ThreadStackMenuProps & ThreadStackMenuExt
   if (variant === 'page' && threadKey !== undefined) {
     if (props.onRename) items.push({ id: 'rename', label: 'Rename…', run: props.onRename });
     items.push(props.resolved
-      ? { id: 'reopen', label: 'Reopen', icon: <ThreadReopenIcon size={13} />, run: () => { void actions.reopen(threadKey); } }
+      ? { id: 'reopen', label: 'Unarchive', icon: <ThreadReopenIcon size={13} />, run: () => { void actions.reopen(threadKey); } }
       // No check glyph: in a menu a leading check reads as "this is on", so the
       // action looked already done (2026-10-06, the user: "why it already shows
-      // mark as done when I click?").
-      : { id: 'done', label: 'Mark done', run: props.onDone ?? (() => { void actions.done(threadKey); }) });
+      // mark as done when I click?"). The word is Archive, never Done
+      // (2026-10-08, the user: "let's not have it done, just archived").
+      : { id: 'done', label: 'Archive', run: props.onDone ?? (() => { void actions.done(threadKey); }) });
     items.push({ id: 'show-in-tree', label: 'Show in tree', run: props.onShowInTree });
     items.push(orderItem);
     items.push({

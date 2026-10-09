@@ -84,12 +84,12 @@ export function openChipTitle(c: ThreadCounts): string | undefined {
 
 /**
  * The drawer toggle's text (the list icon is an SVG sibling, not part of this):
- * `3 open`, `3 open · 2 to check`, `All done`. Narrow keeps a word on its
+ * `3 open`, `3 open · 2 to check`, `None open`. Narrow keeps a word on its
  * one number (bare `3 · 2` said nothing, N28): `3 open`, or `2 to check` when
  * every open question looks answered; the tooltip carries the full text.
  */
 export function toggleLabel(c: ThreadCounts, opts: { narrow?: boolean } = {}): string {
-  if (c.open + c.suggested === 0) return 'All done';
+  if (c.open + c.suggested === 0) return 'None open';
   if (c.suggested === 0) return `${c.open} open`;
   if (opts.narrow) return c.open > 0 ? `${c.open} open` : `${c.suggested} to check`;
   return `${c.open} open · ${c.suggested} to check`;
@@ -109,13 +109,13 @@ export function toggleTitle(c: ThreadCounts, opts: { mac?: boolean; narrow?: boo
   return dropped ? `${toggleLabel(c)}. All questions (${key})` : `All questions (${key})`;
 }
 
-/** Drawer summary: `3 open · 2 to check · 5 done · 4 pinned`, zero
+/** Drawer summary: `3 open · 2 to check · 5 archived · 4 pinned`, zero
  *  segments omitted; empty string when every segment is zero. */
 export function summaryText(c: ThreadCounts): string {
   const parts: string[] = [];
   if (c.open) parts.push(`${c.open} open`);
   if (c.suggested) parts.push(`${c.suggested} to check`);
-  if (c.done) parts.push(`${c.done} done`);
+  if (c.done) parts.push(`${c.done} archived`);
   if (c.pinned) parts.push(`${c.pinned} pinned`);
   return parts.join(' · ');
 }

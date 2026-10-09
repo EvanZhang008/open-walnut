@@ -104,9 +104,9 @@ export interface ThreadMetaStore {
 export interface ThreadActions {
   /** Resolve; pops when `key` is the page on screen. Undo in the toast. */
   done: (key: string) => Promise<boolean>;
-  /** `Done, back to start`: this and every open ancestor through depth 1. */
+  /** `Archive, back to start`: this and every open ancestor through depth 1. */
   doneChain: (key: string) => Promise<boolean>;
-  /** `Mark all done`: this and its visible open descendants. */
+  /** `Archive all`: this and its visible open descendants. */
   doneWithFollowUps: (key: string) => Promise<boolean>;
   reopen: (key: string) => Promise<boolean>;
   /** `Not yet` on a suggested question: back to open, never suggested again. */
@@ -118,9 +118,9 @@ export interface ThreadActions {
   rename: (key: string, text: string) => Promise<boolean>;
   /** Capped at 280 chars; the AI never overwrites it after this. */
   editTakeaway: (key: string, text: string) => Promise<boolean>;
-  /** `Mark older questions done`: one PATCH, Undo back to older. */
+  /** `Archive older questions`: one PATCH, Undo back to older. */
   markOlderDone: (keys: string[]) => Promise<boolean>;
-  /** Visible open (or suggested) descendants: `Also mark <N> follow-ups done?`. */
+  /** Visible open (or suggested) descendants: `Also archive <N> follow-ups?`. */
   openBelowCount: (key: string) => number;
   /** Visible descendants: `Remove this question and <N> follow-ups?`. */
   visibleDescendantCount: (key: string) => number;

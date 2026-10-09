@@ -58,7 +58,7 @@ describe('counts (the one count function, spec 7.3)', () => {
     // N29: the tooltip is the spec text; only a narrow label that dropped a count leads with the full text.
     expect(toggleTitle(c, { mac: true })).toBe('All questions (Cmd+Shift+E)');
     expect(toggleTitle(c, { mac: true, narrow: true })).toBe(`${c.open} open · ${c.suggested} to check. All questions (Cmd+Shift+E)`);
-    expect(summaryText(c)).toBe(`${c.open} open · ${c.suggested} to check · ${c.done} done · ${c.pinned} pinned`);
+    expect(summaryText(c)).toBe(`${c.open} open · ${c.suggested} to check · ${c.done} archived · ${c.pinned} pinned`);
     // N43: the Open chip counts the same `open` as the toggle and the summary;
     // its tooltip names both numbers.
     expect(chipCounts(c)).toEqual({ all: c.all, open: c.open, pinned: c.pinned });
@@ -81,10 +81,10 @@ describe('counts (the one count function, spec 7.3)', () => {
     expect(statusOf(tree.byKey.get(keyOf('Q4')), index)).toBe('older');
   });
 
-  it('labels: All done, zero segments omitted, shortcut spelled out', () => {
+  it('labels: None open, zero segments omitted, shortcut spelled out', () => {
     const zero = { open: 0, suggested: 0, done: 3, older: 1, all: 4, pinned: 0 };
-    expect(toggleLabel(zero)).toBe('All done');
-    expect(summaryText(zero)).toBe('3 done');
+    expect(toggleLabel(zero)).toBe('None open');
+    expect(summaryText(zero)).toBe('3 archived');
     expect(toggleLabel({ ...zero, open: 2 })).toBe('2 open');
     expect(toggleTitle(zero, { mac: true })).toBe('All questions (Cmd+Shift+E)');
     expect(toggleTitle(zero, { mac: false })).toBe('All questions (Ctrl+Shift+E)');

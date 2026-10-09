@@ -43,7 +43,7 @@ import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { ThreadCommentCard } from './ThreadCommentCard';
 import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
-import { allPassageMarks, cardTurnsOf, questionBodyOf } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, hasWords, questionBodyOf } from '@/utils/thread-card';
 import { blockTagKeys, headsBySeq, keysBySeq, questionNumbers, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
@@ -1280,7 +1280,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEffect(() => {
     if (!stackMode) return;
     const wanted: number[] = [];
-    for (const rowId of [currentNode?.headId, pagePending?.parentMsgId]) {
+    for (const rowId of [currentNode?.headRowId ?? currentNode?.headId, pagePending?.parentMsgId]) {
       const at = rowId ? rowIndexOf.get(rowId) : undefined;
       if (at !== undefined) wanted.push(at);
     }
@@ -2883,11 +2883,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       .join('|')
     : '';
   const liveLeftSig = JSON.stringify(liveLeftKeys);
+  const liveSpokeKeys: string[] = [];
+  if (hasQuestions) {
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (b.type !== 'text' || b.parentToolUseId || hiddenBlocks.has(i) || !hasWords(b.content)) continue;
+      const key = pageKeyOfBlock(i);
+      if (!liveSpokeKeys.includes(key)) liveSpokeKeys.push(key);
+    }
+  }
+  const liveSpokeSig = JSON.stringify(liveSpokeKeys);
   const threadDerived = useMemo(() => {
     if (!threadStats) return EMPTY_DERIVED;
     const queued: Array<{ rowId: string; status: 'pending' | 'processing' }> = [];
     const leftKeys = new Set<string>(JSON.parse(liveLeftSig));
-    const turnEnds = new Map<string, 'ok' | 'error' | 'interrupted' | 'parked'>(threadStats.turnEnds);
+    const turnEnds = new Map<string, 'ok' | 'error' | 'interrupted' | 'parked' | 'silent'>(threadStats.turnEnds);
+    // Words still on screen as live blocks (the transcript has not absorbed them
+    // yet) answer their question: no `No answer` flash between turn end and refetch.
+    const spoke = new Set<string>(JSON.parse(liveSpokeSig));
     for (const entry of queuedSig ? queuedSig.split('|') : []) {
       const at = entry.lastIndexOf(':');
       const rowId = entry.slice(0, at);
@@ -2903,14 +2916,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const streamingKey = isStreaming ? liveStreamKey : null;
     return {
       live: deriveThreadLiveStates({
-        tree: threadTree, queued, streamingKey, turnEnds, hasAnswerAfter: (id) => threadStats.answered.has(id),
+        tree: threadTree, queued, streamingKey, turnEnds,
+        hasAnswerAfter: (id) => threadStats.answered.has(id) || spoke.has(threadTree.byRow.get(id)?.key ?? ROOT_THREAD_KEY),
       }),
       answeredAt,
       lastAnswer: threadStats.lastAnswer,
       lastQuestion: threadStats.lastQuestion,
       answering: new Set(streamingKey && streamingKey !== ROOT_THREAD_KEY ? [streamingKey] : []),
     };
-  }, [threadStats, queuedSig, isStreaming, liveStreamKey, threadTree, streamEnds, liveLeftSig]);
+  }, [threadStats, queuedSig, isStreaming, liveStreamKey, threadTree, streamEnds, liveLeftSig, liveSpokeSig]);
   const publishDerived = threadsApi.publishDerived;
   useEffect(() => { publishDerived(threadDerived); }, [publishDerived, threadDerived]);
 
@@ -3233,7 +3247,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (range) return range;
       }
       const esc = (id: string) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&'));
-      for (const id of [passage?.msgId, cardNode?.headId]) {
+      for (const id of [passage?.msgId, cardNode?.headRowId ?? cardNode?.headId]) {
         if (!id) continue;
         const row = el.querySelector<HTMLElement>(`[data-message-id="${esc(id)}"]`);
         if (row) return row;
@@ -3283,18 +3297,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }
   const cardLastReply = cardTurns[cardTurns.length - 1]?.replies[0];
   const cardReplySuperseded = !!cardLive && !!cardLastReply && messages.indexOf(cardLastReply) >= turnWatermark.current;
+  // Sent, not yet in the transcript: the question as typed, then the answer as it arrives.
+  const cardOptimistic = cardKey
+    ? deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey) : [];
+  // The newest turn may still be answering (unless a newer send of this question
+  // follows it); any other turn without words got none.
+  const cardLiveState = cardKey ? threadDerived.live.get(cardKey) : undefined;
+  const cardLastLive = cardOptimistic.length === 0
+    && (!!cardLive || cardLiveState === 'answering' || cardLiveState === 'queued');
   const cardBody = cardKey ? (
     <>
-      {cardTurns.map((t) => (
+      {cardTurns.map((t, i) => (
         <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
           <p className="thread-card-q">{questionBodyOf(typedUserText(t.user.text ?? ''))}</p>
           {t.replies.map((r) => (r === cardLastReply && cardReplySuperseded ? null : (
             <SessionMessage key={r.msgId ?? r.walnutMessageId} message={r} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} answerOnly onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
           )))}
+          {t.replies.length === 0 && !(i === cardTurns.length - 1 && cardLastLive) && (
+            <div className="thread-card-noanswer">No answer</div>
+          )}
         </div>
       ))}
-      {/* Sent, not yet in the transcript: the question as typed, then the answer as it arrives. */}
-      {deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey).map((m) => (
+      {cardOptimistic.map((m) => (
         <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
           <p className="thread-card-q">{questionBodyOf(typedUserText(m.text))}</p>
         </div>

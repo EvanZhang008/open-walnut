@@ -485,9 +485,15 @@ export function registerSessionChatRpc(): void {
       if (record && (record.process_status === 'idle' || record.process_status === 'stopped' || record.process_status === 'error')) {
         correctedIsStreaming = false
       } else if (record && record.process_status === 'running') {
-        const lastChangeMs = record.last_status_change
-          ? Date.parse(record.last_status_change)
-          : 0
+        // The newer of the two clocks. `last_status_change` is stamped only by a
+        // classification verdict, so a resume (idle → running through the
+        // runner's un-stamped write) left it at the previous turn's end, and the
+        // first turn after five quiet minutes read as stale: no `Answering…`
+        // until the first delta. `statusUpdatedAt` moves on every status change.
+        const lastChangeMs = Math.max(
+          record.last_status_change ? Date.parse(record.last_status_change) || 0 : 0,
+          record.statusUpdatedAt ? Date.parse(record.statusUpdatedAt) || 0 : 0,
+        )
         if (lastChangeMs > 0 && Date.now() - lastChangeMs > STALE_RUNNING_MS) {
           // A turn blocked on a permission prompt / AskUserQuestion is live for
           // as long as the human takes to answer: hours, not minutes. The

@@ -108,7 +108,7 @@ export const NEW_QUESTION_DRAFT = 'New question (draft)';
 export const HIDDEN_GROUP = 'Hidden';
 
 export const noResultsText = (q: string): string => `No questions match “${q}”.`;
-export const doneGroupText = (n: number): string => `${n} done`;
+export const doneGroupText = (n: number): string => `${n} archived`;
 export const openBelowTitle = (n: number): string => `${n} open below`;
 
 /** The first filter the drawer opens on: `Open` when anything is open or

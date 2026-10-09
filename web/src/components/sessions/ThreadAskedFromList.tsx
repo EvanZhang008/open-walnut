@@ -48,11 +48,11 @@ function StatusLabel({ row, onRetry, onMarkDone, onNotYet }: { row: AskedFromRow
       return (
         <span className="thread-asked-state thread-asked-state--suggested">
           Looks answered
-          <button type="button" className="thread-asked-inline-btn" onClick={stop(() => onMarkDone(row.key))}>Mark done</button>
+          <button type="button" className="thread-asked-inline-btn" onClick={stop(() => onMarkDone(row.key))}>Archive</button>
           <button type="button" className="thread-asked-inline-btn" onClick={stop(() => onNotYet(row.key))}>Not yet</button>
         </span>
       );
-    case 'resolved': return <span className="thread-asked-done">Done</span>;
+    case 'resolved': return <span className="thread-asked-done">Archived</span>;
     default:
       return row.openBelow > 0 ? <span className="thread-asked-state">{row.openBelow} open below</span> : null;
   }

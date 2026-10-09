@@ -641,6 +641,11 @@ export interface SessionHistoryMessage {
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages.
    *  Present on synthetic user events written by writeSyntheticUserEvent(). */
   walnutMessageId?: string;
+  /** A `queue-<ts>` user row that ran mid-turn: the uuid it was SENT under, which the
+   *  CLI records only on its `queued_command` attachment (`source_uuid`), never as a
+   *  line uuid. A question's anchor and meta are keyed by that uuid, so this is how
+   *  the row is found again. Not a transcript line id: `msgId` stays `queue-…`. */
+  sourceUuid?: string;
   /** Set by the /history route (never by the parser): this row's CONTENT can still
    *  change — an Agent/Task row awaiting its late `bgTaskFinished`, or a tool row
    *  awaiting its result. The client re-asks for these ids on its next delta, which
@@ -690,8 +695,9 @@ interface RawJsonlLine {
   // queue-operation fields (FIFO-injected user messages)
   operation?: string;
   content?: string;
-  /** type='attachment' lines; `queued_command` carries a mid-turn send as the model saw it. */
-  attachment?: { type?: string; prompt?: unknown };
+  /** type='attachment' lines; `queued_command` carries a mid-turn send as the model saw it,
+   *  and `source_uuid` is the uuid the line was sent under (the CLI writes no user line). */
+  attachment?: { type?: string; prompt?: unknown; source_uuid?: unknown };
   message?: {
     id?: string;
     role?: string;
@@ -959,6 +965,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     usage?: { input_tokens: number; output_tokens: number };
     parentToolUseId?: string;
     walnutMessageId?: string;
+    sourceUuid?: string;
     injected?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
     systemDetail?: string;
@@ -1042,6 +1049,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   const claimedAttachments = new Set<number>();
   /** Enqueues whose twin is their attachment: they must not claim a user line. */
   const ranMidTurn = new Set<number>();
+  /** Enqueue index to the uuid its attachment says it was sent under. */
+  const sourceUuidOf = new Map<number, string>();
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'remove' || !raw.content) continue;
@@ -1066,6 +1075,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (queuedCommandText(e.attachment.prompt)?.trim() === wanted) {
         claimedAttachments.add(k);
         ran = true;
+        const src = e.attachment.source_uuid;
+        if (typeof src === 'string' && src) sourceUuidOf.set(j, src);
         break;
       }
     }
@@ -1260,9 +1271,11 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (raw.operation === 'enqueue' && raw.content && !skipEnqueueIndices.has(i)
         && !(queueDeadKeys.size > 0 && queueDeadKeys.has(queueEnqueueKey(raw)))) {
         const syntheticId = `queue-${raw.timestamp ?? i}`;
+        const sourceUuid = sourceUuidOf.get(i);
         messageMap.set(syntheticId, {
           role: 'user',
           timestamp: raw.timestamp ?? new Date().toISOString(),
+          ...(sourceUuid ? { sourceUuid } : {}),
           contentBlocks: [{ type: 'text' as const, text: raw.content }],
         });
       }
@@ -1563,6 +1576,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.model ? { model: msg.model } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
+      ...(msg.sourceUuid ? { sourceUuid: msg.sourceUuid } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),

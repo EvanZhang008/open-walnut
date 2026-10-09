@@ -237,7 +237,7 @@ test.describe('tree drawer', () => {
     await drawer.locator('.thread-drawer-search-input').fill('point')
     await expect(await chip(drawer, 'Pinned')).toHaveText(`Pinned ${c.pinned}`)
     await expect(await chip(drawer, 'All')).toHaveText(`All ${c.all}`)
-    await expect(drawer.locator('.thread-drawer-summary')).toHaveText(`${c.open} open · ${c.suggested} to check · ${c.done} done · ${c.pinned} pinned`)
+    await expect(drawer.locator('.thread-drawer-summary')).toHaveText(`${c.open} open · ${c.suggested} to check · ${c.done} archived · ${c.pinned} pinned`)
   })
 
   test('first open lands on Open, the choice is remembered, done rows fold per parent (C67)', async ({ page }) => {
@@ -249,7 +249,7 @@ test.describe('tree drawer', () => {
     await expect(drawer).toHaveCount(0)
     drawer = await openDrawer(panel)
     await expect(await chip(drawer, 'All')).toHaveAttribute('aria-pressed', 'true')
-    const group = drawer.locator('.thread-tree-row[data-kind="done-group"]', { hasText: '3 done' })
+    const group = drawer.locator('.thread-tree-row[data-kind="done-group"]', { hasText: '3 archived' })
     await expect(group).toHaveCount(1)
     await expect(group).toHaveAttribute('aria-expanded', 'false')
     await expect(rowTitled(drawer, 'Checksum per page')).toHaveCount(0)
@@ -337,7 +337,7 @@ test.describe('tree drawer', () => {
     expect(perKey).toBeLessThan(16)
   })
 
-  test('older questions: not counted open, lazily named, `Mark older questions done` with Undo (C56)', async ({ page, request }) => {
+  test('older questions: not counted open, lazily named, `Archive older questions` with Undo (C56)', async ({ page, request }) => {
     const inFlight = { now: 0, max: 0 }
     const metaWrites: Array<Array<Record<string, unknown>>> = []
     page.on('request', (r) => {
@@ -360,16 +360,16 @@ test.describe('tree drawer', () => {
     expect(metaWrites.flat().length).toBeLessThanOrEqual(10)
     for (const e of metaWrites.flat()) expect(e.status).toBe('older')
     await expect(drawer.locator('.thread-drawer-older')).toContainText(`${c.older} older questions`)
-    await drawer.getByRole('button', { name: 'Mark older questions done' }).click()
+    await drawer.getByRole('button', { name: 'Archive older questions' }).click()
     const toast = panel.page().locator('.thread-toast')
-    await expect(toast).toContainText(`Marked ${c.older} older questions done`)
+    await expect(toast).toContainText(`Archived ${c.older} older questions`)
     await expect.poll(async () => (await readRecord(request, DENSE_SESSION)).threadMeta!.filter((m) => m.status === 'older').length).toBe(0)
     await toast.getByRole('button', { name: 'Undo' }).click()
     await expect.poll(async () => (await readRecord(request, DENSE_SESSION)).threadMeta!.filter((m) => m.status === 'older').length)
       .toBeGreaterThanOrEqual(1)
   })
 
-  test('`1 open` to `All done` moves nothing in the header (C75)', async ({ page }) => {
+  test('`1 open` to `None open` moves nothing in the header (C75)', async ({ page }) => {
     const panel = await openDense(page, { sessionId: REWRITTEN_SESSION, taskId: 'pw-task-threads-rewritten', width: 900 })
     const pill = modePill(panel)
     const count = panel.locator('.thread-map .thread-map-count')
@@ -380,9 +380,9 @@ test.describe('tree drawer', () => {
     const drawer = await openDrawer(panel)
     const row = rowTitled(drawer, 'Cache expiry claim')
     await row.hover()
-    await row.getByRole('button', { name: 'Mark done' }).click()
+    await row.getByRole('button', { name: 'Archive' }).click()
     // The count changes in the map; the header keeps every button where it was.
-    await expect(count).toHaveText('All done')
+    await expect(count).toHaveText('None open')
     await expect(count).toHaveAttribute('data-all-done', 'true')
     expect((await box(pill)).width).toBe(before.pill.width)
     expect(await xs()).toEqual(before.xs)

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildThreadTree, quoteBlockOf, type ThreadTreeMessage } from '@/utils/thread-tree';
-import { allPassageMarks, cardTurnsOf, placeCard, questionBodyOf, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, hasWords, placeCard, questionBodyOf, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
 import type { SessionThreadAnchor } from '@/types/session';
 
 const quote = { exact: 'the flush order', prefix: '', suffix: '' };
@@ -46,6 +46,22 @@ describe('cardTurnsOf', () => {
     const tree = buildThreadTree(stepped, anchors.slice(0, 1));
     const turns = cardTurnsOf(stepped, tree.byKey.get(tree.byRow.get('q1')!.key));
     expect(turns[0].replies.map((r) => r.msgId)).toEqual(['s3']);
+  });
+
+  it('a reply that is only the [Qn] tag has no message; a queued row is found by its sent uuid', () => {
+    const queued: Array<ThreadTreeMessage & { tools?: unknown[] }> = [
+      ...rows.slice(0, 2),
+      { role: 'user', msgId: 'queue-2026-10-07T01:27:29.115Z', sourceUuid: 'q1', text: 'Why that order?' },
+      { role: 'assistant', msgId: 't1', text: '[Q3]', tools: [{ name: 'Edit' }] },
+      { role: 'assistant', msgId: 't2', text: '', tools: [{ name: 'Bash' }] },
+    ];
+    const tree = buildThreadTree(queued, anchors.slice(0, 1));
+    const turns = cardTurnsOf(queued, tree.byKey.get(tree.byRow.get('queue-2026-10-07T01:27:29.115Z')!.key));
+    expect(turns.map((t) => t.user.msgId)).toEqual(['queue-2026-10-07T01:27:29.115Z']);
+    expect(turns[0].replies).toEqual([]);
+    expect(hasWords('[Q3]')).toBe(false);
+    expect(hasWords('**[Q3]**\n\n')).toBe(false);
+    expect(hasWords('[Q3]\nYes.')).toBe(true);
   });
 
   it('is empty for no node and for a node whose rows are not loaded', () => {

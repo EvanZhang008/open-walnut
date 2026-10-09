@@ -76,6 +76,18 @@ function rpcCall(ws: WebSocket, method: string, payload: unknown): Promise<unkno
   })
 }
 
+/** Runs `fn` with the clock `agoMs` in the past, so the writes it makes carry
+ *  that age on every status clock (`statusUpdatedAt` is stamped from `Date`). */
+async function inThePast<T>(agoMs: number, fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(Date.now() - agoMs)
+  try {
+    return await fn()
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
 async function openWs(): Promise<WebSocket> {
   const ws = new WebSocket(`ws://localhost:${port}/ws`)
   await new Promise<void>((resolve, reject) => {
@@ -173,10 +185,12 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     const taskId = 'task-stale-run-1'
     await seedTask(taskId)
 
-    await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass' })
-    // Ancient last_status_change — simulates orphaned running session.
-    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString()
-    await updateSessionRecord(sid, { process_status: 'running', last_status_change: tenMinAgo })
+    // Running since ten minutes ago on both status clocks, nothing since: an
+    // orphaned running record.
+    await inThePast(10 * 60 * 1000, async () => {
+      await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass', initialProcessStatus: 'idle' })
+      await updateSessionRecord(sid, { process_status: 'running', last_status_change: new Date().toISOString() })
+    })
 
     sessionStreamBuffer.markStreaming(sid)
     expect((sessionStreamBuffer as unknown as { streaming: Set<string> }).streaming.has(sid)).toBe(true)
@@ -206,18 +220,20 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     const taskId = 'task-stale-run-pending-1'
     await seedTask(taskId)
 
-    await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass' })
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
-    await updateSessionRecord(sid, {
-      process_status: 'running',
-      last_status_change: twoHoursAgo,
-      pendingPermission: {
-        requestId: 'req-stale-ask',
-        subtype: 'can_use_tool',
-        toolName: 'AskUserQuestion',
-        input: { questions: [{ question: 'Which one?', options: [] }] },
-        receivedAt: twoHoursAgo,
-      },
+    await inThePast(2 * 60 * 60 * 1000, async () => {
+      const twoHoursAgo = new Date().toISOString()
+      await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass', initialProcessStatus: 'idle' })
+      await updateSessionRecord(sid, {
+        process_status: 'running',
+        last_status_change: twoHoursAgo,
+        pendingPermission: {
+          requestId: 'req-stale-ask',
+          subtype: 'can_use_tool',
+          toolName: 'AskUserQuestion',
+          input: { questions: [{ question: 'Which one?', options: [] }] },
+          receivedAt: twoHoursAgo,
+        },
+      })
     })
 
     sessionStreamBuffer.markStreaming(sid)
@@ -230,6 +246,35 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
       expect(snapshot.isStreaming).toBe(true)
       expect(snapshot.blocks.some((b) => b.type === 'permission')).toBe(true)
       expect((sessionStreamBuffer as unknown as { streaming: Set<string> }).streaming.has(sid)).toBe(true)
+    } finally {
+      ws.close()
+    }
+  })
+
+  it('a turn resumed after five quiet minutes is live: the un-stamped running write moved statusUpdatedAt', async () => {
+    // 2026-10-08: a resume (CLI gone, `--resume` spawn) flips idle to running
+    // through the runner's un-stamped status write, which leaves
+    // last_status_change at the previous turn's end. Ten minutes later every
+    // subscribe of the new turn read as stale-running, so the question's card
+    // never said `Answering…` before the first delta.
+    const sid = 'sid-resumed-after-quiet-1'
+    const taskId = 'task-resumed-quiet-1'
+    await seedTask(taskId)
+
+    await inThePast(10 * 60 * 1000, async () => {
+      await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass' })
+      await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date().toISOString() })
+    })
+    const resumed = await updateSessionRecord(sid, { process_status: 'running', activity: 'Processing follow-up...' })
+    expect(Date.now() - Date.parse(resumed.last_status_change!)).toBeGreaterThan(5 * 60 * 1000)
+
+    sessionStreamBuffer.markStreaming(sid)
+
+    const ws = await openWs()
+    try {
+      const resp = await rpcCall(ws, 'session:stream-subscribe', { sessionId: sid })
+      const snapshot = resp as { blocks: unknown[]; isStreaming: boolean }
+      expect(snapshot.isStreaming).toBe(true)
     } finally {
       ws.close()
     }

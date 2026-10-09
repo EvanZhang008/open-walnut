@@ -36,7 +36,7 @@ export const STATUS_WORDS: Record<StatusWordKind, string> = {
   new: 'New',
   answered: 'Answered',
   check: 'To check',
-  done: 'Done',
+  done: 'Archived',
   failed: 'No answer',
   draft: 'Draft',
   none: '',
@@ -55,7 +55,8 @@ function Glyph({ kind }: { kind: StatusWordKind }) {
     case 'check':
       return <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="6" cy="6" r="4.8" /><path d="M3.8 6.2l1.5 1.5 3-3.2" /></svg>;
     case 'done':
-      return <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5.4" fill="currentColor" /><path d="M3.7 6.2l1.6 1.6 3.2-3.4" fill="none" stroke="var(--bg-elevated, #fff)" strokeWidth="1.6" /></svg>;
+      // A box with a lid: archived, not "done" (2026-10-08).
+      return <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"><path d="M1.6 2.4h8.8v2.1H1.6zM2.4 4.5v4.8c0 .4.3.7.7.7h5.8c.4 0 .7-.3.7-.7V4.5M4.9 6.5h2.2" /></svg>;
     case 'failed':
       return <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="6" cy="6" r="4.8" /><path d="M6 3.4v3.2M6 8.6v.1" /></svg>;
     default:

@@ -182,6 +182,25 @@ describe('deriveThreadStats', () => {
     expect(stats.turnEnds.get('u1')).toBe('interrupted');
     expect(stats.turnEnds.has('u2')).toBe(false);
   });
+
+  it('a reply of the [Qn] tag and tool calls answered nothing (silent); words later in the turn do', () => {
+    const stats = deriveThreadStats([
+      { role: 'user', msgId: 'queue-1', sourceUuid: 'q3', text: '[Question Q3]\n…\n[/Question Q3]\n\nthird?' },
+      { role: 'assistant', msgId: 't1', text: '[Q3]' },
+      { role: 'assistant', msgId: 't2', text: '' },
+      { role: 'user', msgId: 'u4', text: 'fourth?' },
+      { role: 'assistant', msgId: 't3', text: '**[Q4]**' },
+      { role: 'assistant', msgId: 't4', text: 'Here is the answer.' },
+    ], (id) => (id === 'q3' ? 'Q3' : id === 'u4' ? 'Q4' : ''));
+    // The queued row is known by the uuid it was sent under.
+    expect(stats.turnEnds.get('q3')).toBe('silent');
+    expect(stats.answered.has('q3')).toBe(false);
+    expect(stats.lastAnswer.has('Q3')).toBe(false);
+    expect(stats.lastQuestion.has('Q3')).toBe(true);
+    expect(stats.turnEnds.has('u4')).toBe(false);
+    expect(stats.answered.has('u4')).toBe(true);
+    expect(stats.lastAnswer.get('Q4')).toBe('Here is the answer.');
+  });
 });
 
 describe('live blocks keep the page of the turn that wrote them', () => {
