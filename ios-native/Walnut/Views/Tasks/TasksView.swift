@@ -95,6 +95,10 @@ struct TasksView: View {
     /// off the view graph (never `@Observable`): a body pass that changes nothing the
     /// bands read must not pay for a rebuild. See `BoardBandsCache`.
     @State private var bandsCache = BoardBandsCache()
+    /// The "Recently opened" drawer (top-left clock, or a swipe in from the left edge).
+    /// A reference model, and nothing in this body reads its fraction: a drag must
+    /// re-render the drawer shell, never the board. See `LeadingDrawerModel`.
+    @State private var recentsDrawer = LeadingDrawerModel()
 
     // MARK: - Board state (the default filter's bands)
     //
@@ -303,6 +307,18 @@ struct TasksView: View {
             .toolbarColorScheme(colorScheme, for: .navigationBar)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
+                // Top-left, where the Chat tab keeps its own drawer: everything opened
+                // from here, newest first. A clock rather than the chat's three lines,
+                // because what it holds is history, not a menu.
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        recentsDrawer.setOpen(!recentsDrawer.isOpen)
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .accessibilityLabel("Recently opened")
+                    .accessibilityIdentifier("tasks.recents")
+                }
                 // No server-mode pill here: Live/Replica is plumbing the person adding
                 // a task neither needs nor wants (2026-10-03). Offline still says so,
                 // through the OfflineBanner in the list; Settings keeps the pill.
@@ -383,6 +399,44 @@ struct TasksView: View {
             .navigationDestination(for: WalnutSession.self) { session in
                 SessionConversationView(session: session)
             }
+        }
+        .leadingDrawer(
+            recentsDrawer,
+            canOpen: Self.recentsEdgeSwipeOpens(
+                pushed: !navPath.isEmpty, editing: isEditing, filter: activeFilter
+            ),
+            edgeZone: Self.recentsEdgeZone,
+            identifier: "tasks.recents"
+        ) {
+            TasksRecentsDrawer(model: recentsDrawer) { destination in
+                openRecent(destination)
+            }
+        }
+    }
+
+    // MARK: - Recently opened
+
+    /// How far in from the left edge a swipe may start to open the drawer. The List's
+    /// rows begin 16pt in, and a row's own leading swipe completes its task, so the
+    /// drawer only claims the margin beside them and never a drag that starts on a row.
+    static let recentsEdgeZone: CGFloat = 16
+
+    /// May a left-edge swipe open the drawer? Not over a pushed page (that edge is the
+    /// page's back swipe), not mid-selection, and not on the calendar, whose day and
+    /// week pagers swipe sideways from edge to edge. The clock button still opens it
+    /// from the calendar.
+    static func recentsEdgeSwipeOpens(pushed: Bool, editing: Bool, filter: TaskFilter) -> Bool {
+        !pushed && !editing && filter != .calendar
+    }
+
+    /// A row of the drawer: go back to what it names.
+    private func openRecent(_ destination: RecentDestination) {
+        recentsDrawer.setOpen(false)
+        switch destination {
+        case .session(let session):
+            navPath.append(session)
+        case .task(let task):
+            selected = task
         }
     }
 

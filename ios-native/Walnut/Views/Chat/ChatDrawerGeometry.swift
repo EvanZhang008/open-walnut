@@ -41,7 +41,12 @@ enum ChatDrawerGeometry {
     /// that began on the leading edge; an open one answers to any leftward drag,
     /// so it can be pushed back from the scrim, from its own rows, or from the
     /// sliver of chat.
-    static func tracksDrag(startX: CGFloat, translation: CGSize, isOpen: Bool) -> Bool {
+    ///
+    /// `edgeZone` is the host's: the Tasks drawer passes a narrower one, because its
+    /// list rows start 16pt in and a row's leading swipe completes the task.
+    static func tracksDrag(
+        startX: CGFloat, translation: CGSize, isOpen: Bool, edgeZone: CGFloat = edgeZone
+    ) -> Bool {
         guard abs(translation.width) > abs(translation.height) * dominance else { return false }
         if isOpen { return translation.width < 0 }
         return startX <= edgeZone && translation.width > 0

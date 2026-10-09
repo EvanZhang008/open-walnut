@@ -252,6 +252,11 @@ struct SessionConversationView: View {
         // view is mounted", so visibility is published rather than inferred. See
         // `ComposerSurfaceID`.
         .composerSurface(.session(session.id))
+        // The Tasks drawer's "Recently opened". Here rather than at each push site, so
+        // every route that opens a conversation is remembered. `onAppear`, not the
+        // `.task` below: a task re-arms whenever its subtree is re-evaluated, and each
+        // arm would be another write.
+        .onAppear { tasksStore?.recents.recordSession(session) }
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id

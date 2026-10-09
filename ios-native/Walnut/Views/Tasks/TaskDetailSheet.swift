@@ -99,6 +99,8 @@ struct TaskDetailSheet: View {
             }
             .sheet(isPresented: $showDuePicker) { duePickerSheet }
         }
+        // The Tasks drawer's "Recently opened", from every surface that shows this sheet.
+        .onAppear { tasks.recents.recordTask(current) }
     }
 
     private var properties: some View {

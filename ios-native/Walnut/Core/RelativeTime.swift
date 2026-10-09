@@ -14,10 +14,14 @@ enum RelativeTime {
 
     static func short(_ iso: String) -> String {
         guard let date = WalnutTask.parseISO(iso) else { return "" }
+        return short(date: date)
+    }
+
+    static func short(date: Date, relativeTo now: Date = .now) -> String {
         // A just-touched row's timestamp can be ~now or slightly ahead (server
         // clock skew) — RelativeDateTimeFormatter renders that as the future
         // tense "in 0s". Clamp anything under a minute to "now".
-        if abs(date.timeIntervalSinceNow) < 60 { return "now" }
-        return formatter.localizedString(for: date, relativeTo: .now)
+        if abs(date.timeIntervalSince(now)) < 60 { return "now" }
+        return formatter.localizedString(for: date, relativeTo: now)
     }
 }

@@ -17,6 +17,10 @@ final class TasksStore {
     /// machines run without a network.
     @ObservationIgnored let transport: WalnutTaskTransport
     weak var connection: ConnectionStore?
+    /// What the user opened from the Tasks tab (the drawer's "Recently opened").
+    /// Its own observable object, so recording a visit never invalidates a view
+    /// that only reads the task lists.
+    @ObservationIgnored let recents = RecentOpens()
 
     /// False while backgrounded — every completion re-checks it before touching
     /// observed state, so a fetch that lands during suspension cannot drive
@@ -476,6 +480,7 @@ final class TasksStore {
         // all. Offline without it, every pinned task fell into Satellite (measured: All
         // 96, Satellite 96, no Focus/Backlog/Wait).
         await adoptCachedFocusSplit()
+        await recents.hydrate()
         // Live feed + one REST refresh in parallel: the feed's snapshot frame
         // usually lands first, and the REST answers are then no-ops.
         connectFeed()
@@ -1449,5 +1454,6 @@ extension TasksStore {
         transientNotice = nil
         notSyncedYet = false
         sessionsNotSyncedYet = false
+        recents.eraseAll()
     }
 }
