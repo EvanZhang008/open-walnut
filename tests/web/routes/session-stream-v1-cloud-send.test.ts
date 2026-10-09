@@ -66,19 +66,26 @@ function createApp() {
   return app
 }
 
+// A held send from the test before may still be writing into the queue dir:
+// retry the removal (ENOTEMPTY) instead of failing the next test's setup.
+const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 50 } as const
+
 beforeEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  await fs.rm(WALNUT_HOME, RM)
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   bridgeRequestMock.mockReset()
   stopRequest = undefined
 })
 
 afterEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(WALNUT_HOME, RM).catch(() => {})
 })
 
+/** The bridge commands the route sent, in order. Without the host liveness
+ *  probe (`ping`): it only starts when a relay is still unanswered after 3 s,
+ *  which a loaded machine can reach, and it delivers nothing. */
 function callsByCmd(): string[] {
-  return bridgeRequestMock.mock.calls.map((c) => c[1] as string)
+  return bridgeRequestMock.mock.calls.map((c) => c[1] as string).filter((cmd) => cmd !== 'ping')
 }
 
 describe('durable relay path', () => {
@@ -102,14 +109,20 @@ describe('durable relay path', () => {
   })
 
   it('keeps the first fence for a retried id and gives only new input the new fence', async () => {
+    // The first relay's answer is lost (it may have reached the primary), so
+    // the retry relays again, and must carry the fence the first attempt had.
+    bridgeRequestMock.mockRejectedValueOnce(new Error('socket hang up'))
     bridgeRequestMock.mockResolvedValue({ ok: true })
     const app = createApp()
-    expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old', messageId: 'qm-before-stop' })).status).toBe(202)
+    expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old', messageId: 'qm-before-stop' })).status).toBe(503)
     stopRequest = { id: 'stop-1', state: 'confirmed' }
     expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old', messageId: 'qm-before-stop' })).status).toBe(202)
     expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'new', messageId: 'qm-after-stop' })).status).toBe(202)
     const sends = bridgeRequestMock.mock.calls.filter((call) => call[1] === 'session.message')
     expect(sends.map((call) => call[2].stopFence)).toEqual([null, null, 'stop-1'])
+    // A retry of an id whose relay answered ok is answered from the ledger: never relayed again.
+    expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'new', messageId: 'qm-after-stop' })).status).toBe(202)
+    expect(bridgeRequestMock.mock.calls.filter((call) => call[1] === 'session.message')).toHaveLength(3)
   })
 
   it('concurrent callers bind the same message id only once', async () => {
@@ -202,9 +215,10 @@ describe('durable relay path', () => {
     expect(res.body.queued).toBe(true)
   })
 
-  it('an IMAGE send with no bridge still 503s — never a turn whose pictures vanished', async () => {
+  it('an IMAGE send with no bridge is held WITH its pictures, never as the text alone', async () => {
     // The attachments only exist as host-side files created THROUGH the bridge,
-    // so banking the text alone would silently drop them.
+    // so the bank keeps the pictures and the drain saves them on the host before
+    // the text naming them goes (core/sessions/cloud-images.ts).
     bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
     const res = await request(createApp())
       .post(`/api/v1/sessions/${SID}/messages`)
@@ -215,8 +229,9 @@ describe('durable relay path', () => {
           mediaType: 'image/png',
         }],
       })
-    expect(res.status).toBe(503)
-    expect(res.body.error.code).toBe('bridge_offline')
+    expect(res.status).toBe(202)
+    expect(res.body.queued).toBe(true)
+    expect(bridgeRequestMock.mock.calls.some((c) => c[1] === 'session.message')).toBe(false)
   })
 })
 
@@ -250,7 +265,10 @@ describe('direct fallback (old daemon / primary down)', () => {
       .send({ text: 'fallback live' })
     expect(res.status).toBe(202)
     const cmds = callsByCmd()
-    expect(cmds).toEqual(['session.message', 'status', 'send', 'appendUserMarker'])
+    // The Mac is asked first whether an earlier message of the session waits
+    // in its queue (the order rule); it cannot answer here, and nothing earlier
+    // was relayed, so the message goes.
+    expect(cmds).toEqual(['session.message', 'session.control', 'status', 'send', 'appendUserMarker'])
     // Loss-safe order is the ghost-bubble fix: marker strictly AFTER send.
     expect(cmds.indexOf('send')).toBeLessThan(cmds.indexOf('appendUserMarker'))
   })
@@ -272,7 +290,7 @@ describe('direct fallback (old daemon / primary down)', () => {
       .send({ text: 'fallback resume' })
     expect(res.status).toBe(202)
     const cmds = callsByCmd()
-    expect(cmds).toEqual(['session.message', 'status', 'bridgeResume', 'appendUserMarker'])
+    expect(cmds).toEqual(['session.message', 'session.control', 'status', 'bridgeResume', 'appendUserMarker'])
     expect(cmds.indexOf('bridgeResume')).toBeLessThan(cmds.indexOf('appendUserMarker'))
   })
 

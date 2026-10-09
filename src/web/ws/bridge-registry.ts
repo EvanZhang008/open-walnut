@@ -403,6 +403,16 @@ export function addPrimaryBridgeConnectedHandler(handler: () => void): () => voi
   return () => primaryBridgeConnectedHandlers.delete(handler)
 }
 
+/** Same hook for ANY host's bridge (the primary's included), with the alias that
+ *  connected. A phone send held while a remote host was off the bridge drains on
+ *  that host's return, not only on the primary's (core/send-queue.ts). */
+const hostBridgeConnectedHandlers = new Set<(hostAlias: string) => void>()
+
+export function addBridgeConnectedHandler(handler: (hostAlias: string) => void): () => void {
+  hostBridgeConnectedHandlers.add(handler)
+  return () => hostBridgeConnectedHandlers.delete(handler)
+}
+
 /**
  * Wire an authenticated /bridge socket. Registration completes when the
  * daemon's hello arrives (carries the hostAlias).
@@ -548,6 +558,15 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
           error: err instanceof Error ? err.message : String(err),
         })
       }
+    }
+  }
+  for (const handler of hostBridgeConnectedHandlers) {
+    try {
+      handler(hostAlias)
+    } catch (err) {
+      log.ws.warn('bridge: host-connected handler threw', {
+        hostAlias, error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 }

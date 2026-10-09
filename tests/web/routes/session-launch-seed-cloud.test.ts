@@ -53,7 +53,11 @@ let server: HttpServer
 let port: number
 let deviceToken: string
 
-const SID = 'launch-seed-sid-0001'
+// A fresh session id per case: a message an earlier case relayed for the same
+// id is one nobody has seen delivered, and the order rule then (rightly) holds
+// a later direct send of that session behind it (send-direct-gate.ts).
+let SID = 'launch-seed-sid-0001'
+let caseNo = 0
 const HOST = 'devbox'
 
 function authHeaders(): Record<string, string> {
@@ -113,6 +117,8 @@ afterAll(async () => {
 beforeEach(() => {
   bridgeRequestMock.mockReset()
   _resetLaunchSeedsForTesting()
+  caseNo += 1
+  SID = `launch-seed-sid-${String(caseNo).padStart(4, '0')}`
 })
 
 describe('mobile launch through the replica → immediate use (projection gap)', () => {

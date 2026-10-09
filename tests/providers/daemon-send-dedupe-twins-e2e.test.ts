@@ -7,8 +7,10 @@
  * round 1 survived them): a resend with `dedupe` into the process that already
  * has the whole line is not written again; a marker with no write record (a
  * write cut short) or from an older daemon is no proof, so the line IS written;
- * the CLI's own lifecycle word settles it; and the write record survives a
- * daemon restart, so the new daemon still answers for the CLI it adopted.
+ * the CLI's own lifecycle word settles it; the write record survives a daemon
+ * restart, so the new daemon still answers for the CLI it adopted; and a copy
+ * of a line cut short with its body still in the pipe ends that line first
+ * (runner gate r3, probe r3-torn), so the CLI never reads the two merged.
  *
  * Also the two halves of the 2026-10-05 fix: send-lost-line-v1 (a line the CLI
  * read past is written again once, after a lone newline, never glued onto a
@@ -50,6 +52,8 @@ const cliPids = new Set<number>()
  * another reader of the pipe had taken it; --dedupe-uuid skips a uuid it already
  * took, silently, as Claude Code does; a line that does not parse is recorded as
  * such (Claude Code exits on one), and a blank line is skipped (as Claude Code does).
+ * --count-blank still skips a blank line but records that it read one, so a test
+ * can say how many lines the CLI read, not only which ones it ran.
  */
 const FAKE_CLI = `
 const fs = require('fs')
@@ -65,7 +69,10 @@ process.stdin.on('data', (chunk) => {
   let i
   while ((i = buf.indexOf('\\n')) !== -1) {
     const line = buf.slice(0, i); buf = buf.slice(i + 1)
-    if (!line.trim()) continue
+    if (!line.trim()) {
+      if (modes.includes('--count-blank')) fs.appendFileSync(received, JSON.stringify({ pid: process.pid, blank: true }) + '\\n')
+      continue
+    }
     let msg; try { msg = JSON.parse(line) } catch {
       fs.appendFileSync(received, JSON.stringify({ pid: process.pid, parseError: line.slice(0, 200) }) + '\\n')
       continue
@@ -158,7 +165,7 @@ async function waitFor(check: () => boolean, ms = 10_000): Promise<boolean> {
   return check()
 }
 
-const received = (dirs: Dirs): Array<{ pid: number; uuid: string | null; content: string; parseError?: string }> =>
+const received = (dirs: Dirs): Array<{ pid: number; uuid?: string | null; content?: string; parseError?: string; blank?: true }> =>
   fs.existsSync(dirs.received) ? fs.readFileSync(dirs.received, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 
 /** The daemon reply minus the envelope id. */
@@ -245,6 +252,27 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     expect(received(dirs).map((r) => r.content)).toEqual(['torn', 'old'])
   }, 60_000)
 
+  it('r3-torn: a write cut short with its body still in the pipe is ended first; the copy never merges with it', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const cli = await start(dirs, 'dd-cut', false)
+    const uuid = 'aaaaaaaa-0000-4000-8000-000000000006'
+    // The previous daemon wrote the whole body and its marker, then died before the newline.
+    const marker = { type: 'user', subtype: 'walnut-injected', message: { role: 'user', content: 'cut' }, walnutMessageId: 'qm-cut', walnutDelivery: 'ordered', walnutPid: cli.pid }
+    fs.appendFileSync(cli.outputFile, JSON.stringify(marker) + '\n')
+    const w = fs.openSync(path.join(dirs.streams, 'dd-cut.pipe'), fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    fs.writeSync(w, JSON.stringify({ type: 'user', message: { role: 'user', content: 'cut' }, uuid }))
+    fs.closeSync(w)
+    expect(body(await send('dd-cut', 'cut', uuid, ['qm-cut'], true))).toEqual({ ok: true })
+    expect(await waitFor(() => received(dirs).length >= 2)).toBe(true)
+    await new Promise((r) => setTimeout(r, 300))
+    // Two whole lines under one uuid: the real CLI runs the first and drops the copy by it.
+    expect(received(dirs)).toEqual([
+      { pid: cli.pid, uuid, content: 'cut' },
+      { pid: cli.pid, uuid, content: 'cut' },
+    ])
+  }, 60_000)
+
   it('the CLI\'s lifecycle word and the write record settle a resend, also after a daemon restart', async () => {
     const dirs = makeDirs()
     await boot(twin, dirs)
@@ -302,6 +330,28 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     await new Promise((r) => setTimeout(r, 300))
     // Once, and no line that failed to parse (Claude Code would have exited on it).
     expect(received(dirs).map((r) => r.parseError ?? r.content)).toEqual(['lost once', 'held'])
+  }, 60_000)
+
+  // The torn-line newline needs this process's own marker in the stream (the
+  // narrowed rule): a first write into a CLI has nothing of its own in the pipe to
+  // end. The wide rule (any uuid line nothing proves in) put a blank line first.
+  // Told apart by what the CLI reads: exactly one line, the whole message.
+  it('a first line into a CLI is read as one whole line, with nothing ahead of it (r3-torn, narrowed)', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const resend = await start(dirs, 'dd-first', ['--count-blank'])
+    const lost = await start(dirs, 'dd-first-lost', ['--count-blank'])
+    const a = 'aaaaaaaa-0000-4000-8000-000000000008'
+    const b = 'aaaaaaaa-0000-4000-8000-000000000009'
+    // A resend whose first attempt never arrived (dedupe, no record, no marker),
+    // and one that also names a lost line of an earlier process (lostPid).
+    expect(body(await send('dd-first', 'first', a, ['qm-8'], true))).toEqual({ ok: true })
+    expect(body(await send('dd-first-lost', 'first lost', b, ['qm-9'], true, resend.pid))).toEqual({ ok: true })
+    expect(await waitFor(() => received(dirs).length >= 2)).toBe(true)
+    await new Promise((r) => setTimeout(r, 300))
+    const of = (pid: number) => received(dirs).filter((r) => r.pid === pid)
+    expect(of(resend.pid)).toEqual([{ pid: resend.pid, uuid: a, content: 'first' }])
+    expect(of(lost.pid)).toEqual([{ pid: lost.pid, uuid: b, content: 'first lost' }])
   }, 60_000)
 
   // A FIFO has one byte stream and any reader takes from it. On 2026-10-05 an

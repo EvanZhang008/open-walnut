@@ -401,12 +401,29 @@ sessionExtrasV1Router.post('/sessions/:id/execute-compact', async (req: Request,
 // ── Queued-message management (WS RPC → REST twins) ──────────────────────────
 
 // GET /api/v1/sessions/:id/queue — pending/processing queued messages.
+// On the companion, the sends it holds for the session come too (status
+// 'held'), so a phone that relaunched still sees them: they live here, not in
+// the Mac's queue, and a list without them said "everything was delivered"
+// while two were waiting (iOS gate r1, B1).
 sessionExtrasV1Router.get('/sessions/:id/queue', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'queue', sessionId, undefined, 200)
+      const held = await companionHeldRows(sessionId)
+      if (held.length === 0) {
+        await relayControlAction(res, 'queue', sessionId, undefined, 200)
+        return
+      }
+      // The Mac's own queue as well, when it answers in time; without it the
+      // list still shows what the companion holds, and says it is partial.
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      const theirs = await callPrimaryControl('queue', sessionId, undefined, QUEUE_PRIMARY_TIMEOUT_MS)
+      const ids = new Set(held.map((row) => row.id))
+      const macRows = theirs.ok && Array.isArray(theirs.result.messages)
+        ? (theirs.result.messages as Array<{ id?: unknown }>).filter((m) => !ids.has(String(m?.id)))
+        : []
+      res.json({ messages: [...macRows, ...held], ...(theirs.ok ? {} : { partial: true }) })
       return
     }
     const { getSessionQueuePayload } = await import('../../core/sessions/session-extras.js')
@@ -415,6 +432,25 @@ sessionExtrasV1Router.get('/sessions/:id/queue', async (req: Request, res: Respo
     next(err)
   }
 })
+
+/** How long the companion's queue list waits for the Mac's half. */
+const QUEUE_PRIMARY_TIMEOUT_MS = 8_000
+
+/**
+ * The sends the companion holds for a session, as queue rows: `status: 'held'`
+ * (never editable or withdrawable here), with who it waits on (send-queue.ts
+ * heldFor), oldest first.
+ */
+async function companionHeldRows(sessionId: string): Promise<Array<Record<string, unknown>>> {
+  const { listBankedSends, heldFor } = await import('../../core/send-queue.js')
+  const rows = (await listBankedSends()).filter((op) => op.sessionId === sessionId)
+  if (rows.length === 0) return []
+  const why = await heldFor(sessionId)
+  return rows.map((op) => ({
+    id: op.messageId, sessionId, message: op.message, status: 'held', enqueuedAt: op.at, held: true,
+    ...(why ? { waitingForName: why.waitingForName, heldNote: why.heldNote } : {}),
+  }))
+}
 
 // PATCH /api/v1/sessions/:id/queue/:messageId { text } — edit a queued message.
 // 409 conflict when the message already started processing / is gone.

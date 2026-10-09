@@ -132,6 +132,69 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     } finally { fs.closeSync(s.readerFd) }
   })
 
+  /** Bytes the old daemon left in the pipe: the whole body, no newline after it. */
+  function tearInto(name: string, uuid?: string): void {
+    const pipe = (ctx.sessions.get('sid') as { pipePath: string }).pipePath
+    const w = fs.openSync(pipe, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    fs.writeSync(w, JSON.stringify({ type: 'user', message: { role: 'user', content: name }, ...(uuid ? { uuid } : {}) }))
+    fs.closeSync(w)
+  }
+
+  // Runner gate r3, probe r3-torn: with the body still in the pipe, the copy
+  // used to be written straight after it, `{...u-1}{...u-1}`, and the CLI exits
+  // on a malformed line. The resend now ends the torn line first.
+  it('r3-torn: a copy never merges with a torn line still in the pipe; the CLI reads two whole lines, one uuid', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const s = session('torn-body', 915, `${marker('qm-1', 915)}\n`)
+    tearInto('hello', 'u-1')
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })).toEqual({ ok: true })
+      const lines = drain(s.readerFd)
+      const parsed = lines.map((l) => { try { return JSON.parse(l) as { uuid?: string } } catch { return 'MALFORMED' } })
+      expect(parsed).toHaveLength(2)
+      // Whole JSON lines under one uuid: the CLI runs the first and drops the copy by its uuid.
+      expect(parsed.map((p) => (typeof p === 'object' ? p.uuid : p))).toEqual(['u-1', 'u-1'])
+    } finally { fs.closeSync(s.readerFd) }
+  })
+
+  it('r3-torn: no marker of this process: the CLI reads one whole line, nothing ahead of it', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const s = session('torn-early', 918)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })).toEqual({ ok: true })
+      // The writer stamps the marker in the same tick the body's last byte goes in, so a
+      // body with no marker needs a kill between two calls: the named residual.
+      expect(cliReads(s.readerFd)).toEqual({ lines: [lineOf('hello', 'u-1')], held: '' })
+    } finally { fs.closeSync(s.readerFd) }
+  })
+
+  it('r3-torn: a line whose newline did go in (record lost) gets an empty line before its copy, which the CLI skips', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const s = session('torn-whole', 916, `${marker('qm-1', 916)}\n`)
+    tearInto('hello', 'u-1')
+    const pipe = (ctx.sessions.get('sid') as { pipePath: string }).pipePath
+    const w = fs.openSync(pipe, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    fs.writeSync(w, '\n')
+    fs.closeSync(w)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })).toEqual({ ok: true })
+      const raw = drain(s.readerFd)
+      expect(raw.map((l) => (JSON.parse(l) as { uuid?: string }).uuid)).toEqual(['u-1', 'u-1'])
+    } finally { fs.closeSync(s.readerFd) }
+  })
+
+  it('r3-torn: a line without a uuid is written as before, with nothing ahead of it (the accepted residual)', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const s = session('torn-plain', 917, `${marker('qm-1', 917)}\n`)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', undefined, batch, { dedupe: true })).toEqual({ ok: true })
+      const bytes = Buffer.alloc(64 * 1024)
+      const n = fs.readSync(s.readerFd, bytes, 0, bytes.length, null)
+      // No uuid: the CLI cannot drop a copy, so no newline is put ahead of the line.
+      expect(bytes.subarray(0, n).toString('utf8')).toBe(`${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } })}\n`)
+    } finally { fs.closeSync(s.readerFd) }
+  })
+
   it('a marker from an older daemon (no pid) never counts', async () => {
     const core = createDaemonCore(ctx.deps)
     const s = session('old', 905, `${marker('qm-1')}\n${lifecycle('u-1', 'queued')}\n`)
@@ -264,6 +327,18 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     return Buffer.concat(chunks).toString('utf-8')
   }
   const records = (jsonlPath: string) => fs.readFileSync(`${jsonlPath}.lines`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  /**
+   * What the CLI's line reader gets from the pipe: every line a newline ended,
+   * blank ones included (the CLI skips them, but it read them), and the bytes
+   * still waiting for their newline. A rule that put a newline ahead of a line
+   * shows here as a blank line read first, whatever the bytes look like.
+   */
+  function cliReads(readerFd: number): { lines: Array<Record<string, unknown> | ''>; held: string } {
+    const parts = drainRaw(readerFd).split('\n')
+    const held = parts.pop() ?? ''
+    return { lines: parts.map((l) => (l === '' ? '' : JSON.parse(l) as Record<string, unknown>)), held }
+  }
+  const lineOf = (content: string, uuid: string) => ({ type: 'user', message: { role: 'user', content }, uuid })
 
   it('send-lost-line-v1: a line the CLI read past is written again under its uuid, after a lone newline', async () => {
     const core = createDaemonCore(ctx.deps)
@@ -315,11 +390,12 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
         .toEqual({ ok: true, duplicate: true, fate: 'waiting' })
       expect(drainRaw(s.readerFd)).toBe('')
     } finally { fs.closeSync(s.readerFd) }
-    // A first write into a new process carries no leading newline: no fragment can be there.
+    // A first write into a new process puts nothing ahead of its line (no fragment can
+    // be there): the CLI reads exactly one line, the whole message.
     const fresh = session('lost-fresh', 918)
     try {
       expect(await core.handleSendCommand('sid', 'hello', 'u-2', batch, { dedupe: true, lostPid: 900 })).toEqual({ ok: true })
-      expect(drainRaw(fresh.readerFd).startsWith('{')).toBe(true)
+      expect(cliReads(fresh.readerFd)).toEqual({ lines: [lineOf('hello', 'u-2')], held: '' })
     } finally { fs.closeSync(fresh.readerFd) }
   })
 
@@ -346,11 +422,13 @@ describe('send-dedupe-v1 twins', () => {
 
   it('the JS twin runs the very same scan and verdict text (behavior: daemon-send-dedupe-twins-e2e.test.ts)', async () => {
     const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-    const { lineFateScan, lineFateVerdict } = await import('../../src/providers/line-fate-core.js')
+    const { lineFateScan, lineFateVerdict, lineTornEnd } = await import('../../src/providers/line-fate-core.js')
     const src = getDaemonSource()
     expect(src).not.toContain('__LINE_FATE_')
+    expect(src).not.toContain('__LINE_TORN_END__')
     expect(src).toContain(`const lineFateScan = (${lineFateScan.toString()});`)
     expect(src).toContain(`const lineFateVerdict = (${lineFateVerdict.toString()});`)
+    expect(src).toContain(`const lineTornEnd = (${lineTornEnd.toString()});`)
   })
 
   it('both twins ask piece by piece and await the answer inside the write chain', () => {
@@ -358,6 +436,16 @@ describe('send-dedupe-v1 twins', () => {
       expect(src).toContain('await line.fate()')
       expect(src).toContain('DEDUPE_SCAN_CHUNK_BYTES')
       expect(src).toContain('await fs.promises.open(filePath, \'r\')')
+    }
+  })
+
+  it('both twins end a torn line before its copy, by the same rule (r3-torn; behavior: the twins e2e)', () => {
+    for (const src of [template, fs.readFileSync(path.join(ROOT, 'src/providers/daemon-core.ts'), 'utf-8')]) {
+      expect(src).toMatch(/torn\.end = lineTornEnd\(verdict, q, scan\)/)
+      expect(src).toMatch(/const out = tornEnd \? Buffer\.concat\(\[Buffer\.from\('\\{1,2}n'\), buf\]\) : buf/)
+      expect(src).toMatch(/writeFifoFullyAsync\(session\.pipePath, out, deadline/)
+      // A send-lost-line-v1 rewrite already starts with its newline: never a second one.
+      expect(src).toMatch(/tornEnd: (\(\) => |function \(\) \{ return )torn\.end && !rewrite/)
     }
   })
 

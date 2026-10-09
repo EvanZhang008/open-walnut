@@ -77,7 +77,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `host_unreachable` | 409 | `POST /sessions`: a fresh connect attempt to the host just failed; `kind`, `headline` and `hint` describe that attempt |
 | `host_off` | 409 | `POST /sessions`: remote hosts are off on this test server (never dialled) |
 | `host_removed` | 409 | `POST /sessions`: the `host` alias is not an enabled host in Settings (removed, disabled, or never configured) |
-| `host_reconnecting` | 503 | `GET /sessions/:id/history`, `GET /sessions/:id/changes` and `GET /sessions/list-dirs`: the host is still connecting, or did not connect within 5 s of this request starting the dial. Nothing was read. Retry in a few seconds; the dial goes on without the request |
+| `host_reconnecting` | 503 | `GET /sessions/:id/history`, `GET /sessions/:id/changes` and `GET /sessions/list-dirs`: the host is still connecting, or did not connect within 5 s of this request starting the dial. Nothing was read. Retry in a few seconds; the dial goes on without the request. Also `POST /sessions/:id/model` and `POST /sessions/:id/effort` when the record says a CLI runs and its host cannot be asked now (`message`: "Can't reach <host> right now"; nothing changed). A stopped session's pick needs no host and is saved for its next start. Through the cloud companion the code and status arrive as the primary sent them |
 | `task_has_no_session` | 409 | `POST /messages` named a task with nothing running; start one with `POST /tasks/:id/start` |
 | `ambiguous_target` | 400 | `POST /messages` handle matched several sessions/tasks (`candidates`); use a longer id |
 | `unknown_target` | 404 | `POST /messages` handle matched no session, task, or title |
@@ -218,6 +218,7 @@ path on the companion".
 | GET | `/api/v1/sessions/:id/plan` | Plan content for a plan session (cloud relays) |
 | GET | `/api/v1/sessions/:id/subagent/:agentId/history` | One subagent lane's history (cloud relays) |
 | POST | `/api/v1/sessions/:id/execute-compact` | Execute a plan after a compact boundary (cloud relays) |
+| GET | `/api/v1/sessions/:id/messages/:messageId` | What became of a message the companion held (`queued`); cloud only |
 | GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays) |
 | PATCH | `/api/v1/sessions/:id/queue/:messageId` | Edit a queued message (cloud relays) |
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
@@ -1577,6 +1578,150 @@ primary box the same endpoints serve directly — no bridge involved.
     A text send made while the bridge is down is banked instead:
     `202 { "messageId", "queued": true }`, delivered when the bridge returns.
     A `queued` 202 is therefore not proof the bridge is up.
+  - Held (additive, cloud only): `202 { "messageId", "queued": true, "waitingFor", "waitingForName", "heldNote" }`
+    when the companion accepted the message but the hop it needs is down. The
+    companion delivers it once, in order, when it can (through the primary's
+    queue, or the host's own path when no primary is behind it). Show it as
+    held, not failed, and ask `GET /sessions/:id/messages/:messageId` what
+    became of it. The fields name the hop actually waited on:
+    - the session's host (off the companion, or it could not take the message):
+      `waitingFor` = its alias, `waitingForName` = its label (else the alias),
+      `heldNote` = "Can't reach <host> right now.";
+    - the Mac (a relay already carried this message, so only the primary's
+      queue may deliver it, and the host is answering): `waitingFor` = `""`
+      (the primary box, as in `host`), `waitingForName` = "your Mac",
+      `heldNote` = "Your Mac can't reach <host> right now.";
+    - the host again, when its link to the companion came up after the message
+      was held (within the last minute): it just restarted or redialed and the
+      Mac's link to it is coming back with it: `waitingFor` = its alias,
+      `waitingForName` = its label, `heldNote` = "<host> is reconnecting.".
+    A relay still unanswered after 3 s gets a ping to the host's daemon over
+    the same bridge: a host that does not answer is the hop named (a link to
+    it that only looks connected), not the Mac behind it.
+    A message held behind an earlier one waits on what that one waits on, and
+    one held behind a message that waits on the Mac still names the Mac after
+    that one has gone (it goes through the same queue).
+    `heldNote` is a full sentence ("Your Mac isn't connected right now." when
+    the Mac is off the companion too); a client without it can say "Waiting for
+    <waitingForName>". The companion answers held at the latest 8 s after the
+    send arrives (was 22 s), so a client can show the held state promptly.
+    A message held for the Mac does not wait for the Mac's link to come back:
+    once the host answers that no Mac is behind it, the companion asks the Mac
+    over the Mac's own connection whether its queue holds the message
+    (`session.control` action `message.withdraw`, Mac side
+    `core/sessions/mobile-relay-ledger.ts`). A pending copy with nothing of the
+    session queued ahead of it is removed there (`withdrawn`), and a message
+    the Mac never saw is `not-received`. Either way the Mac FENCES the id: a
+    relay of it that reaches the Mac later (one still on its way) is refused,
+    and the companion never relays that id again, so the host's own path
+    delivers it once. The Mac's answer and the removal are one durable write.
+    A message the Mac's queue already ran is reported `delivered`; one a person
+    removed on the Mac settles `not_sent` (`removed_on_mac`), also when an
+    older Mac took it without a record of its fate; one a stop on the Mac
+    parked (`stopped`) settles `not_sent` (`session_stopped`), and the Mac
+    names that stop, so the session's other held messages sent before it are
+    settled the same way and a new send carries it as its fence; one it is
+    delivering, one parked there for a person to retry (`parked`), one with an
+    earlier message of the session still queued there (`behind`), or a Mac
+    that cannot be asked, keeps it held for the Mac. (`stopped` and `parked`
+    are new in this round; a companion that predates them reads them as hold.)
+    A relay of a message whose delivery is recorded on the companion before
+    the relay's first byte leaves it (relay-only on disk, named in the
+    session's relay index), so a companion that restarts with the relay out
+    never delivers it another way without asking the Mac. A relay the host's
+    daemon handed to a link that then closed goes to the Mac's next live link
+    at once, or is answered at once as a timeout when none is left (it may
+    have arrived; the companion asks the Mac).
+    When the Mac cannot be asked, the host searches its own session stream
+    for earlier messages' delivery markers (daemon command `markers.find`,
+    capability `marker-find-v1`: bounded ids and bytes, only the ids found come
+    back); an older daemon gets the previous read of the stream's newest 2 MB.
+    A direct delivery to a host whose daemon writes the marker inside the send
+    (`send-markers-v1`, its `status` reply says `sendMarkers: true`) that a
+    companion restart interrupted is sent again once a minute has passed with
+    no marker anywhere in the stream (the CLI provably never got it); on an
+    older daemon such a message settles `unknown` (it may have run).
+  - Order (cloud): messages of one session reach the CLI in the order they
+    reached the companion, whatever path each takes. A send that arrives while
+    an earlier one of the session is still being handed over waits for that
+    one's answer (each still answers within its own 8 s), and is held behind
+    one still out at its deadline; the held ones then go oldest first. No path
+    starts a delivery while an earlier message of the session may still wait
+    anywhere: held on the companion, in the Mac's queue (the Mac answers
+    `behind`), or relayed with its answer lost. When the Mac cannot be asked,
+    a send whose session has relayed messages nobody has seen delivered (their
+    delivery markers on the host) is held for the Mac.
+  - Stops (cloud): a send while a stop of the session is pending, on the
+    session list or in the Mac's answer to a stop asked through the companion,
+    is `409 stop_pending`. After a stop asked through the companion that the
+    Mac did not answer (it was off the companion, or its answer was lost), the
+    stop may still have landed, so a send is held for the Mac and never goes
+    by the host's own path: the Mac applies its own stop to it. That lasts
+    until a stop recorded since the ask shows on the session list, or a later
+    stop is answered, and at most 24 hours (the bank's own horizon: every
+    message it could hold back has expired by then). A stop that provably
+    never left (no bridge to the Mac) or that the Mac provably did not record
+    (it refused it, or no Mac was behind the daemon) holds nothing: the
+    phone was told it failed, and later sends go as usual.
+  - Image sends are held like text ones (cloud): when the host cannot take the
+    pictures now (no bridge, a save still out at the 8 s deadline), the answer
+    is the held 202 and the companion keeps the pictures (at most 256 MB held
+    in all) and saves them on the host before the text naming them goes. A
+    host that turns a picture down at that point settles the message
+    `not_sent` with the reason (`images_need_daemon_upgrade`,
+    `image_upload_failed`). Past the cap, a send the host cannot take now
+    answers `503 bridge_offline`.
+  - When held messages go (cloud): at once when the hop they wait on returns,
+    each host on its own (one host's stuck relay never holds back another's):
+    the Mac's or the host's bridge connecting, and the Mac reaching a host's
+    daemon (or its own restarted daemon) again, which the Mac announces over
+    its bridge (mobile event `send-path-ready { host }`, never shown to
+    phones). A pass that leaves messages waiting on a hop expected back in
+    seconds tries again after 2, 5, 10 and 20 s; a 60 s sweep is the floor.
+  - A retry of a messageId whose earlier try was relayed (the primary's queue
+    took it) answers `202 { "messageId" }` and is never delivered again, by
+    any path. A retry of one whose relay answer was lost (a host-side timeout,
+    a transport failure) is relay-only from then on: it is held for the Mac
+    (text and images alike) rather than sent by the host's own path. A retry
+    that reaches its own 8 s deadline while an earlier try of the same id is
+    still working answers the held 202 when that try held it, else
+    `503 bridge_offline` ("An earlier try of this message is still being
+    handed to <host>. Try again shortly.").
+  - A direct delivery (the host's own path) writes down its intent before its
+    first request that can start a turn. A companion that restarts before it
+    recorded the end asks the host whether the message reached the CLI (its
+    delivery marker in the session's stream there): found is `delivered`,
+    otherwise `delivery_unknown`; it is never sent again blind. One still out
+    at the 8 s deadline is answered held and keeps going.
+  - Error codes on this route (cloud), each with one plain sentence naming the
+    hop that failed, in the host's own name, never an internal host key or a
+    lower layer's error string:
+
+    | Status | `code` | Meaning |
+    |---|---|---|
+    | 503 | `bridge_offline` | Retryable with the same `messageId`. "<Host> isn't connected to the companion right now." (no bridge to it), "Your Mac can't reach <host> right now." (the host answered for the Mac behind it), "Your Mac isn't answering right now." / "Your Mac didn't answer in time." (a Mac session), "<Host> didn't answer in time." (nothing came back over the companion's link to it), each followed by "Try again shortly."; otherwise "Couldn't hand the message to <host> (<reason>). Try again shortly." A session the companion cannot look up because the Mac is unreachable reads "Your Mac couldn't be reached to look up this session. Try again when it reconnects." |
+    | 503 | `send_state_unavailable` | The companion could not write the message down (its stop fence, or the held copy), so it took nothing. Retryable. |
+    | 409 | `stop_pending` | A stop of this session is not confirmed by its host yet; nothing was taken. Send again once the stop completes. |
+    | 409 | `session_stopped` | Settled: a stop came after this message, it never runs. |
+    | 409 | `send_expired` | Settled: it waited more than a day for its host. |
+    | 409 | `removed_on_mac` | Settled: a person removed it on the Mac before it ran. |
+    | 409 | `delivery_unknown` | Settled: it may already have run (an answer was lost). Do not resend on your own: show the sentence and let the person check the conversation first. |
+    | 409 | `session_dead` | The CLI process is not running and could not be resumed. |
+    | 404 | `not_found` | Unknown session (the primary's verdict). |
+    | 400 | `images_need_daemon_upgrade`, `image_upload_failed`, `bad_request` | As above. |
+
+    A settled messageId is never taken again; to send the text, send it as a
+    NEW message (new `messageId`).
+- `GET /api/v1/sessions/:id/messages/:messageId` (additive, cloud only; the
+  primary answers `404`, it never holds a message) → `200 { "messageId", "state", … }`.
+  Read-only, safe to ask repeatedly. `state`: `held` (`waitingFor`,
+  `waitingForName`, `heldNote`, as in the held 202), `delivered`, `not_sent`
+  (`code`: `session_stopped`, `send_expired`, `removed_on_mac`, or the refusal's own code;
+  `message`: show it; the id is settled as above), or `unknown` (`message`: it
+  may have run, or the companion no longer remembers it after 24 hours).
+- Every session row and the session detail carry `host_label` (additive) when
+  the primary's config gives the host a label. Name the host by it everywhere
+  (else by `host`); the server's own sentences already do.
 - `GET /api/v1/sessions/:id/stream` — SSE (same framing as conversation
   streams: monotonic `id:`, `Last-Event-ID` replay, `:` pings). Events:
   - `snapshot { blocks, isStreaming, completedLen, processStatus }` — sent
@@ -1803,7 +1948,14 @@ BOTH boxes:
   relay (self-heals on the next primary reconnect via auto-deploy);
   `503 bridge_offline` — no live bridge, or the primary's server is
   disconnected from its daemon; validation errors from the primary surface
-  verbatim with their original code/status.
+  verbatim with their original code/status. That includes the primary's
+  `502`/`503`/`504` answers (for example `503 host_reconnecting`, the session's
+  host not answering the primary), which the companion used to turn into
+  `400` with codes `bad_gateway`/`unavailable`/`gateway_timeout`. A 400 told the
+  client its request was wrong and not to retry; the failure is a hop past the
+  primary and a retry is the right move, so the status is the primary's own
+  and the code is the primary's code (`host_reconnecting`) when it sent one,
+  else the kind as before.
 
 - `GET /api/v1/sessions/:id/model-options` →
   `{ "models": [ { "id", "label", "resolvedModel"?, "supportsEffort"?, "supportedEffortLevels"? } ],
@@ -1828,6 +1980,14 @@ BOTH boxes:
     string when it isn't in the catalog); `null` when unknown.
   - `currentEffort`: the record's requested effort (`low|medium|high|xhigh|max`)
     or `null`.
+  - `hostNote` (additive, 2026-10): the record says a CLI runs, but the
+    session's host cannot be asked now, so `current`/`currentEffort` are the
+    record's and a pick cannot reach the CLI until it answers. A sentence in the
+    host's own name (its label, else its alias): "Can't reach <host> right
+    now", "Reconnecting to <host>", "<host> did not answer in time". Show it
+    with the menu. Absent when the host answered, when no CLI runs (a stopped
+    session's pick needs no host), and for the Mac's own sessions. The menu
+    itself never waits on the host.
   - `404 not_found` for an unknown session id.
 - `POST /api/v1/sessions/:id/model` body `{ "model" }` →
   `200 { "model", "cliModel", "appliedLive", "effectiveModel"? }`
@@ -1839,6 +1999,9 @@ BOTH boxes:
     truth when available (may differ if the CLI substituted the value).
   - Codex/ACP sessions answer `{ "applied": true, "model" }` instead
     (`409 conflict` when the switch fails).
+  - `503 host_reconnecting` (2026-10): the record says a CLI runs and its host
+    cannot be asked now. Nothing changed; the message names the host. Retry
+    when it answers (the menu's `hostNote` says the same).
 - `POST /api/v1/sessions/:id/effort` body `{ "effort" }` →
   `200 { "effort", "appliedLive", "effectiveEffort"?, "overridden" }`
   - `effort`: `low|medium|high|xhigh|max`. A level the model doesn't support →
@@ -1846,6 +2009,7 @@ BOTH boxes:
     `supportedEffortLevels` from `model-options`).
   - `overridden: true` = the CLI is actually using a DIFFERENT level than
     requested (env override / model downgrade), per the read-back.
+  - `503 host_reconnecting`: as for `/model`.
 - `POST /api/v1/sessions/:id/fork` body `{ "task_id"?, "create_child_task"?,
   "child_title"?, "message"?, "title"?, "model"? }` →
   `201 { "status": "pending", "sourceSessionId", "sessionId", "taskId",
@@ -1913,8 +2077,12 @@ an id outside `[A-Za-z0-9_-]`.
     nothing. When anchors and meta ride one body, the anchors apply first. An
     entry whose `headId` has no anchor is dropped once it is 10 minutes old.
 - `POST /api/v1/sessions/:id/terminate` body `{ "force"? }` →
-  `200 { "status": "terminated", "sessionId", "tookMs"? }` — kills the running
-  CLI, no respawn, pending queue preserved. If the session owns armed
+  `200 { "status": "terminated", "sessionId", "tookMs"?, "stopRequest"? }`: kills the running
+  CLI, no respawn, pending queue preserved. `stopRequest` (additive,
+  `{ "id", "requestedAt", "state" }`) is the stop this call recorded; the cloud
+  companion fences the next phone message by it at once, so a message sent
+  after the stop finished is taken even while the companion's copy of the
+  session list still shows an older stop (it lags by a few seconds). If the session owns armed
   recurring crons → `409` `{ "error": { "code": "cron_owner", … } }` unless
   `force: true` (killing it would NOT stop the crons — they'd fire into any
   other session sharing the directory).
@@ -2293,6 +2461,16 @@ needed; an old primary answers `400 session_control_needs_upgrade`).
     attempt it again. Parked rows carry `parkedAt` and a human-readable
     `parkedReason`; they stay listed so a client can offer Retry (re-send with
     the same id, which un-parks it) or Discard (`DELETE` below).
+    On the cloud companion (additive, 2026-10) the list also carries the sends
+    the companion itself holds for the session (see the held `202` of
+    `POST /sessions/:id/messages`), after the Mac's own rows: `status: "held"`,
+    `held: true`, `waitingForName`, `heldNote`, `enqueuedAt` = when it was
+    held. They are not in the Mac's queue, so `PATCH`/`DELETE` do not apply to
+    them. A message both hold is listed once, as the companion's. When the Mac
+    cannot be asked, the answer is still `200` with the held rows and
+    `"partial": true`. This list is what a client rebuilds held bubbles from
+    after a relaunch; an empty list means nothing is waiting (it says nothing
+    about messages that were settled as not sent).
   - `PATCH /api/v1/sessions/:id/queue/:messageId` body `{ "text" }` →
     `{ "ok" }`; already processing/gone → `409 conflict`.
   - `DELETE /api/v1/sessions/:id/queue/:messageId` → `{ "ok" }`; works for a

@@ -66,6 +66,7 @@ import {
   LIVE_FIFO_MODE,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
@@ -751,6 +752,10 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // (current epoch only, a session of that Walnut): the same line the server
   // writes, its value checked (live-settings-core.ts).
   'leader.settings',
+  // Narrow delivery-marker lookup (marker-find-v1): which of the given phone
+  // message ids have a delivery marker in one session's stream. Read-only,
+  // bounded (ids and bytes), and the answer is ids the caller already holds.
+  'markers.find',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
@@ -1138,6 +1143,62 @@ function heardFrom(ws: ServerWebSocket<WsData>): void {
     ws.data.leaderNudgedAt = Date.now()
     sendEvent(ws, 'leader-lost', { home })
   }
+}
+
+// Which trusted (non-bridge) client a relay goes to. Keep in sync with
+// daemon-source.ts. A trusted client is a walnut server, normally over an SSH
+// port forward. When that forward dies on the far side (a Mac asleep, a network
+// that changed under it), the host's sshd keeps the forwarded socket to this
+// daemon open for many minutes: nothing ever closes it, nothing ever comes back
+// on it. Picking "the first trusted client" handed every phone send to that
+// socket (2026-10-01: each relay timed out, the companion held the sends, and the
+// Mac's fresh link opened later sat behind the dead one in insertion order).
+// So every client stamps when it was last HEARD from (any frame, ping or pong).
+// A live walnut server is heard at least every beat (it pings every 15s). The
+// pick, in connect order:
+//   fresh   (heard within one beat plus slack): the first one wins, so with two
+//           live servers the relay keeps going to the one that came first;
+//   suspect (missed a beat, not yet quiet): only when no client is fresh, so a
+//           redial beats the socket it replaces at once;
+//   quiet   (three beats with nothing): never a target. With none left the relay
+//           answers at once that no primary server is connected (it forwarded
+//           nothing, which is what lets the companion take its direct path).
+const TRUSTED_CLIENT_FRESH_MS = Math.round(TRUSTED_CLIENT_BEAT_MS * 4 / 3)
+const TRUSTED_CLIENT_QUIET_MS = TRUSTED_CLIENT_BEAT_MS * 3
+function isQuietTrustedClient(client: ServerWebSocket<WsData>): boolean {
+  const at = client.data?.lastHeardAt
+  return typeof at === 'number' && Date.now() - at > TRUSTED_CLIENT_QUIET_MS
+}
+function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: number; quietForMs: number | null } {
+  const now = Date.now()
+  let fresh: ServerWebSocket<WsData> | null = null
+  let suspect: ServerWebSocket<WsData> | null = null
+  let quietAt: number | null = null
+  let quiet = 0
+  for (const client of wsClients) {
+    if (client.data?.origin === 'bridge') continue
+    const at = typeof client.data?.lastHeardAt === 'number' ? client.data.lastHeardAt : now
+    const silentMs = now - at
+    if (silentMs > TRUSTED_CLIENT_QUIET_MS) {
+      quiet += 1
+      if (quietAt === null || at > quietAt) quietAt = at
+    } else if (silentMs <= TRUSTED_CLIENT_FRESH_MS) {
+      if (!fresh) fresh = client
+    } else if (!suspect) {
+      suspect = client
+    }
+  }
+  return { client: fresh ?? suspect, quiet, quietForMs: quietAt === null ? null : now - quietAt }
+}
+/** The error a relay answers when no trusted client can take it: the caller's
+ *  contract text ("<cmd>: no primary server connected", which companions key on
+ *  as provably unsent), plus why when a quiet client was skipped. */
+function noPrimaryError(contract: string, picked: ReturnType<typeof pickTrustedClient>): string {
+  const why = picked.quietForMs !== null ? ` (the last one went quiet ${Math.round(picked.quietForMs / 1000)}s ago)` : ''
+  if (picked.quiet > 0) {
+    logMsg('warn', 'relay: every trusted client is quiet, none is a target', { what: contract, quiet: picked.quiet, quietForMs: picked.quietForMs })
+  }
+  return contract + why
 }
 
 let cronMetadataConfig: Awaited<ReturnType<typeof readCronCliConfig>> | null = null
@@ -1846,6 +1907,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'cron.supervision': return daemonCommands.run(() => cmdCronSupervision(ws, id, cmd))
     case 'rename': return cmdRename(ws, id as number, cmd)
     case 'read-history': return cmdReadHistory(ws, id as number, cmd)
+    case 'markers.find': return cmdMarkersFind(ws, id as number, cmd)
     case 'subscribe-agent': return cmdSubscribeAgent(ws, id as number, cmd)
     case 'unsubscribe-agent': return cmdUnsubscribeAgent(ws, id as number, cmd)
     case 'write-inbox': return cmdWriteInbox(ws, id as number, cmd)
@@ -2200,10 +2262,7 @@ function cmdSttRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  let target: ServerWebSocket<WsData> | null = null
-  for (const client of wsClients) {
-    if (client.data?.origin !== 'bridge') { target = client; break }
-  }
+  const target = pickTrustedClient().client
   if (!target) {
     return sendError(ws, id, 'stt: no transcription host connected')
   }
@@ -2261,12 +2320,10 @@ function cmdLaunchRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  let target: ServerWebSocket<WsData> | null = null
-  for (const client of wsClients) {
-    if (client.data?.origin !== 'bridge') { target = client; break }
-  }
+  const picked = pickTrustedClient()
+  const target = picked.client
   if (!target) {
-    return sendError(ws, id, 'session.launch: no primary server connected')
+    return sendError(ws, id, noPrimaryError('session.launch: no primary server connected', picked))
   }
   const relayId = ++launchRelayCounter
   const timer = setTimeout(() => {
@@ -2332,12 +2389,10 @@ function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  let target: ServerWebSocket<WsData> | null = null
-  for (const client of wsClients) {
-    if (client.data?.origin !== 'bridge') { target = client; break }
-  }
+  const picked = pickTrustedClient()
+  const target = picked.client
   if (!target) {
-    return sendError(ws, id, 'session.control: no primary server connected')
+    return sendError(ws, id, noPrimaryError('session.control: no primary server connected', picked))
   }
   const relayId = ++controlRelayCounter
   const timer = setTimeout(() => {
@@ -2388,7 +2443,43 @@ const MESSAGE_RELAY_TIMEOUT_MS = 45_000
 let messageRelayCounter = 0
 const messageRelayPending = new Map<number, {
   ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+  /** The trusted client it was handed to, the request as sent, and how often it moved. */
+  target: ServerWebSocket<WsData>; request: Record<string, unknown>; hops: number
 }>()
+/** How many times one relay may move to another client after its target closed. */
+const MESSAGE_RELAY_MAX_HOPS = 4
+/** Its target closed and no other client can take it. Worded as a timeout on
+ *  purpose: the request was written, so it may have arrived, and the companion
+ *  must ask the Mac before it sends the message any other way. */
+const MESSAGE_RELAY_TARGET_LOST = 'session.message: primary server timed out (its link closed with the message on it)'
+
+/**
+ * A trusted client closed: each phone send handed to it and not answered yet
+ * goes to the next client at once, the same request (the walnut server's queue
+ * takes a message id once, so a second copy is answered as the first was). A
+ * dead forward the daemon had not noticed yet closes the moment a relay is
+ * written to it, and each such relay used to wait out its whole 45s timeout
+ * (matrix L5, 2026-10-03: three in a row, while the Mac's fresh links sat
+ * idle). With no client left it answers at once. Keep in sync with
+ * daemon-source.ts.
+ */
+function rerouteMessageRelays(closed: ServerWebSocket<WsData>): void {
+  for (const [relayId, pending] of messageRelayPending) {
+    if (pending.target !== closed) continue
+    const next = pending.hops < MESSAGE_RELAY_MAX_HOPS ? pickTrustedClient().client : null
+    if (next) {
+      pending.target = next
+      pending.hops += 1
+      logMsg('info', 'session.message: its target closed, relaying again', { relayId, from: wsId(closed), to: wsId(next), hops: pending.hops })
+      sendEvent(next, 'message-request', pending.request)
+      continue
+    }
+    messageRelayPending.delete(relayId)
+    clearTimeout(pending.timer)
+    logMsg('warn', 'session.message: its target closed and no other client can take it', { relayId, from: wsId(closed), hops: pending.hops })
+    sendError(pending.ws, pending.id, MESSAGE_RELAY_TARGET_LOST)
+  }
+}
 
 function cmdMessageRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, sessionId, message, messageId } = cmd as {
@@ -2401,21 +2492,20 @@ function cmdMessageRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  let target: ServerWebSocket<WsData> | null = null
-  for (const client of wsClients) {
-    if (client.data?.origin !== 'bridge') { target = client; break }
-  }
+  const picked = pickTrustedClient()
+  const target = picked.client
   if (!target) {
-    return sendError(ws, id, 'session.message: no primary server connected')
+    return sendError(ws, id, noPrimaryError('session.message: no primary server connected', picked))
   }
   const relayId = ++messageRelayCounter
   const timer = setTimeout(() => {
     messageRelayPending.delete(relayId)
     sendError(ws, id, 'session.message: primary server timed out')
   }, MESSAGE_RELAY_TIMEOUT_MS)
-  messageRelayPending.set(relayId, { ws, id, timer })
-  logMsg('info', 'session.message: relaying to primary server', { relayId, sid: targetSid, messageId })
-  sendEvent(target, 'message-request', { relayId, sessionId: targetSid, message, messageId, stopFence: cmd.stopFence ?? null })
+  const request = { relayId, sessionId: targetSid, message, messageId, stopFence: cmd.stopFence ?? null }
+  messageRelayPending.set(relayId, { ws, id, timer, target, request, hops: 0 })
+  logMsg('info', 'session.message: relaying to primary server', { relayId, sid: targetSid, messageId, to: wsId(target) })
+  sendEvent(target, 'message-request', request)
 }
 
 function cmdMessageResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -2762,7 +2852,8 @@ function sendGatewayRequest(
   let target: ServerWebSocket<WsData> | null = null
   let untagged: ServerWebSocket<WsData> | null = null
   for (const client of wsClients) {
-    if (client.data?.origin === 'bridge') continue
+    // A quiet client is a dead forward (see pickTrustedClient): never a target.
+    if (client.data?.origin === 'bridge' || isQuietTrustedClient(client)) continue
     const clientHome = gatewayClientHomes.get(client)
     if (home && clientHome === home) target = client
     else if (!clientHome && !untagged) untagged = client
@@ -5847,6 +5938,9 @@ function cmdStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     pid: session.pid,
     mtime,
     size,
+    // send-markers-v1: a send's markers are written inside its delivery, so a
+    // caller may hand them over with the send (direct-host-send.ts).
+    sendMarkers: true,
     state: session.state,
     exitCode: session.exitCode,
     exitReason: session.exitReason,
@@ -6181,6 +6275,28 @@ function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     sendOk(ws, id, { main: mainContent, subagents })
   } catch (err: unknown) {
     sendError(ws, id, 'read-history failed: ' + (err as Error).message)
+  }
+}
+
+// ── Delivery-marker lookup (marker-find-v1) ──
+// Which of a session's phone messages reached its CLI: each delivery writes a
+// marker carrying the message id into the session's stream. The search runs
+// here, newest bytes first, so only the ids found cross the bridge
+// (marker-find-core.ts). `ordered`: this daemon writes a send's markers inside
+// the delivery (send-markers-v1). Keep in sync with daemon-source.ts.
+async function cmdMarkersFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid
+  if (typeof sid !== 'string' || !sid || sid.includes('/') || sid.includes('\\') || sid.includes('..')) {
+    return sendError(ws, id, 'markers.find: missing or invalid sid')
+  }
+  const ids = validMarkerIds(cmd.ids)
+  if (typeof ids === 'string') return sendError(ws, id, ids)
+  const file = sessions.get(sid)?.jsonlPath || path.join(STREAMS_DIR, sid + '.jsonl')
+  try {
+    const result = await findDeliveryMarkers(file, ids)
+    sendOk(ws, id, { ...result, ordered: true })
+  } catch (err) {
+    sendError(ws, id, 'markers.find failed: ' + (err as Error).message)
   }
 }
 
@@ -8317,6 +8433,8 @@ function cleanup() {
 function handleDisconnect(ws: ServerWebSocket<WsData>) {
   wsClients.delete(ws)
   acp.removeSubscriber(ws)
+  // Phone sends handed to it and not answered move to the next client now.
+  rerouteMessageRelays(ws)
 
   // DUP-DEBUG: count subscriber entries removed across all sessions for this
   // ws. If a subscriber leak shows up, this number tells us how many sids

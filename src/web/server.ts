@@ -646,6 +646,8 @@ let claudeSettingsWatcherStop: (() => void) | null = null
 let unsubscribeHostRecovery: (() => void) | null = null
 /** Unhooks the local daemon's ready → recovery listener (the singleton outlives an in-process restart). */
 let unsubscribeLocalDaemonReady: (() => void) | null = null
+/** The Mac telling the companion a delivery path for held phone sends came up (send-path-announce.ts). */
+let unsubscribeSendPathAnnounce: (() => void) | null = null
 /** Daily error-notification reconcile (expiry + settled-receipt prune). */
 let notificationReconcileTimer: ReturnType<typeof setInterval> | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
@@ -3359,6 +3361,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (hostKey === '__local__') return
       void publishRecovery([hostCauseKey(hostKey)])
     })
+    unsubscribeSendPathAnnounce?.()
+    const { startSendPathAnnouncements } = await import('../core/send-path-announce.js')
+    unsubscribeSendPathAnnounce = startSendPathAnnouncements(addOnDaemonHostConnected)
     setOnDaemonStatusChange(async () => {
       try {
         const config = await getConfig()
@@ -5735,6 +5740,8 @@ export async function stopServer(): Promise<void> {
     const { stopMemoryPressureMonitor } = await import('../core/memory-pressure.js')
     stopMemoryPressureMonitor()
   } catch { /* never started */ }
+  unsubscribeSendPathAnnounce?.()
+  unsubscribeSendPathAnnounce = null
   if (unsubscribeHostRecovery) {
     unsubscribeHostRecovery()
     unsubscribeHostRecovery = null

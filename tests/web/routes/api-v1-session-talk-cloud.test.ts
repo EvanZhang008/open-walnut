@@ -10,7 +10,7 @@
  * host, referenced by path in the augmented text (same "[Images attached …]"
  * format as the primary box) — plus the failure ladder: old daemon → 400
  * images_need_daemon_upgrade, save refused → 400 image_upload_failed, bridge
- * down → 503 bridge_offline. Never a silent drop.
+ * down → held with its pictures (202 queued). Never a silent drop.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -169,7 +169,13 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
   })
 
   it('old daemon fallback: image send delivers via the direct sequence, marker AFTER send (ghost-bubble fix)', async () => {
-    oldDaemonAnswers()
+    // The Mac, asked over its own bridge before a direct delivery (the order
+    // rule), says its queue holds nothing of the session: the test above
+    // relayed one message into it, which may otherwise still be waiting there.
+    daemonAnswers({
+      'session.message': () => ({ ok: false, error: 'unknown command: session.message' }),
+      'session.control': () => ({ ok: true, result: { state: 'not-received' } }),
+    })
     const res = await postMessage({
       text: 'look at these on an old daemon',
       images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
@@ -220,7 +226,7 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
     expect(bridgeRequestMock.mock.calls.some((c) => c[1] === 'send')).toBe(false)
   })
 
-  it('bridge down → 503 bridge_offline (clean error, not a crash)', async () => {
+  it('bridge down → held with its pictures (202 queued), nothing sent without them', async () => {
     bridgeRequestMock.mockImplementation(async (host: string) => {
       throw new BridgeOfflineError(host)
     })
@@ -228,9 +234,13 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
       text: 'picture with no bridge',
       images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
     })
-    expect(res.status).toBe(503)
-    const body = await res.json() as { error: { code: string } }
-    expect(body.error.code).toBe('bridge_offline')
+    expect(res.status).toBe(202)
+    const body = await res.json() as { queued?: boolean; messageId: string }
+    expect(body.queued).toBe(true)
+    expect(bridgeRequestMock.mock.calls.some((c) => c[1] === 'session.message')).toBe(false)
+    // The cases below share this session: a held send would hold theirs behind it.
+    const { dropBankedSend } = await import('../../../src/core/send-queue.js')
+    expect(await dropBankedSend(body.messageId)).toBe(true)
   })
 
   it('a text-only send never touches image.save (unchanged path)', async () => {
@@ -278,7 +288,7 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
     expect(res.status).toBe(503)
     const body = await res.json() as { error: { code: string; message: string } }
     expect(body.error.code).toBe('bridge_offline')
-    expect(body.error.message).toMatch(/primary/i)
+    expect(body.error.message).toMatch(/your Mac/i)
     expect(body.error.message).not.toMatch(/not found/i)
   })
 })

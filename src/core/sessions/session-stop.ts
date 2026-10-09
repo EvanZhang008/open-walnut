@@ -129,8 +129,9 @@ export const sessionStops = new SessionStopCoordinator({
   pending: async (host) => (await import('../session-tracker.js')).listPendingSessionStops(host),
   park: async (sid) => {
     const { getQueue, parkMessages } = await import('../session-message-queue.js')
+    const { STOP_PARKED_REASON } = await import('../relay-fates.js')
     const queue = (await getQueue(sid)).filter((message) => message.status !== 'parked')
-    if (queue.length) await parkMessages(queue, 'Session stopped by user; retry explicitly to send', true)
+    if (queue.length) await parkMessages(queue, STOP_PARKED_REASON, true)
   },
   connection: async (host) => (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(host),
   changed: (record) => {

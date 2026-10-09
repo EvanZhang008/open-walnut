@@ -28,169 +28,30 @@
 
 import fs from 'node:fs/promises';
 import { withFileLock } from '../utils/file-lock.js';
-import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { lineUuidFor, splitBatchAtUuid } from '../providers/batch-uuid.js';
+import {
+  fateOf, isPhoneMessageId, noteDelivered, setFate, withdrawIn, STOP_PARKED_REASON,
+  type RelayFate, type WithdrawState,
+} from './relay-fates.js';
+import {
+  compareEnqueueOrder, generateId, getStore, mutateStore, nextEnqueueSeq, resetCache,
+  type QueuedMessage, type QueueStore,
+} from './session-queue-store.js';
+import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 
-// ── Types ──
+// ── Types and store (session-queue-store.ts) ──
 
-export type MessageStatus = 'pending' | 'processing' | 'parked';
-
-export interface QueuedMessage {
-  id: string;
-  sessionId: string;
-  message: string;
-  status: MessageStatus;
-  enqueuedAt: string;
-  /** When the row was parked (dead-lettered). Set only for status 'parked'. */
-  parkedAt?: string;
-  /** Why it was parked — shown to the human, e.g. the cwd pre-flight error. */
-  parkedReason?: string;
-  /**
-   * Process-monotonic enqueue counter — the tiebreaker for messages that share
-   * an `enqueuedAt` millisecond. Optional: rows persisted before this field
-   * existed don't have it. See compareEnqueueOrder.
-   */
-  seq?: number;
-  /**
-   * Pre-assigned v4 uuid for the CLI's own user line. The harness contract: a
-   * stream-json user message may carry `uuid` and the CLI persists the user line
-   * under exactly that uuid, so a client can key metadata (a thread anchor) to a
-   * transcript line BEFORE the line exists — no text matching.
-   *
-   * Optional everywhere. Absent ⇒ the envelope carries no `uuid` key at all and
-   * the CLI mints its own, i.e. byte-identical to the pre-feature behaviour. The
-   * drain sends ONE uuid per batch (the LAST row's — mirrors the CLI's own
-   * `batch.findLast(c => c.uuid)`); see providers/batch-uuid.ts.
-   */
-  userUuid?: string;
-  stopFence?: string;
-  /**
-   * The uuid of the stdin line that carries this row, fixed the first time the
-   * row is picked for delivery and never changed after. Every later attempt
-   * (a redelivery after a crash, a restart, an unanswered send, a Retry) sends
-   * the same line under the same uuid, so the CLI and the daemon can both
-   * recognise it. Rows of one line share it and are never merged with others.
-   */
-  lineUuid?: string;
-  /** How many deliveries took this row. Above one, its line may already be in a CLI. */
-  lineTries?: number;
-  /**
-   * Its line went to a CLI that reports its command queue (command_lifecycle).
-   * Kept across a restart, so the server that resends the line also waits for
-   * the CLI's word on it, as the one that first wrote it did.
-   */
-  lineTracked?: true;
-}
-
-interface QueueStore {
-  version: 1;
-  queues: Record<string, QueuedMessage[]>;
-  /** Row id → uuid of the line it went out in, for rows that left the queue (bounded, oldest first). */
-  settled?: Record<string, string>;
-}
-
-// ── In-memory cache (backed by disk) ──
-
-let store: QueueStore | null = null;
-let writeLock: Promise<void> = Promise.resolve();
-
-function generateId(): string {
-  const ts = Date.now();
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `qm-${ts}-${rand}`;
-}
-
-/**
- * Monotonic tiebreaker for the enqueue order.
- *
- * `enqueuedAt` is an ISO string with MILLISECOND resolution, and enqueues are
- * fast enough to collide inside one millisecond (measured: two consecutive
- * enqueues, each with an atomic write, share a ms ~57% of the time). Every
- * `.sort((a,b) => a.enqueuedAt.localeCompare(b.enqueuedAt))` below is therefore
- * a sort on EQUAL keys for such pairs, and Array#sort being stable only
- * preserves the *input* order — which for migrateSessionQueue is
- * `[...target, ...moved]`, i.e. the target queue's messages first. So a message
- * enqueued LAST on the target could sort ahead of an older migrated one: user
- * messages redelivered out of order (the queue's whole point is FIFO).
- *
- * `seq` restores a total order: it's process-monotonic, so it breaks intra-ms
- * ties by real enqueue order. Rows written before this field existed have no
- * `seq`; those fall back to `enqueuedAt` alone (see compareEnqueueOrder).
- */
-let enqueueSeq = 0;
-
-/**
- * Total order over queued messages: timestamp first (correct across restarts,
- * where `seq` resets), then `seq` to break intra-millisecond ties.
- */
-function compareEnqueueOrder(a: QueuedMessage, b: QueuedMessage): number {
-  const byTime = a.enqueuedAt.localeCompare(b.enqueuedAt);
-  if (byTime !== 0) return byTime;
-  // Legacy rows (persisted before `seq`) keep their relative input order.
-  if (a.seq === undefined || b.seq === undefined) return 0;
-  return a.seq - b.seq;
-}
-
-/** Ensure a valid store shape (corrupt/legacy rows → fresh empty store). */
-function normalizeShape(s: QueueStore): QueueStore {
-  if (!s || !s.queues || typeof s.queues !== 'object') {
-    return { version: 1, queues: {} };
-  }
-  if (s.settled !== undefined && (typeof s.settled !== 'object' || s.settled === null)) delete s.settled;
-  return s;
-}
-
-async function getStore(): Promise<QueueStore> {
-  if (store) return store;
-  store = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
-  return store;
-}
-
-/**
- * Locked read-modify-write over the queue file.
- *
- * The queue has TWO writer processes (the server + the `walnut start` CLI,
- * which enqueues via sendMessageToSession), so persisting the in-memory cache
- * blindly could revert the other process's enqueue. Every mutation therefore
- * runs against a FRESH read under the cross-process file lock (updateJsonFile)
- * and the cache is refreshed to the persisted result. The in-process chain on
- * `writeLock` keeps same-process mutations FIFO (mkdir-lock polling is not).
- *
- * strict=false preserves the old best-effort contract: on a disk failure the
- * mutation is still applied to the in-memory cache (logged, not thrown).
- */
-async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false): Promise<R> {
-  let result!: R;
-  const prev = writeLock;
-  let release!: () => void;
-  writeLock = new Promise<void>((r) => { release = r; });
-  await prev.catch(() => {});
-  try {
-    store = await updateJsonFile<QueueStore>(
-      SESSION_QUEUE_FILE,
-      { version: 1, queues: {} },
-      (current) => {
-        const s = normalizeShape(current);
-        result = fn(s);
-        return s;
-      },
-    );
-  } catch (err) {
-    log.session.error('failed to persist session message queue', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    if (strict) throw err;
-    // Disk write (or lock) failed — apply to the cache anyway so the message
-    // isn't lost in-process (matches the previous mutate-cache-then-persist
-    // behavior). It re-persists with the next successful mutation.
-    result = fn(await getStore());
-  } finally {
-    release();
-  }
-  return result;
-}
+export type { MessageStatus, QueuedMessage } from './session-queue-store.js';
+export { resetCache } from './session-queue-store.js';
+// The dead-letter API and the identity move (session-queue-park.ts), re-exported: callers know one module.
+export {
+  MAX_PENDING_AGE_MS, parkIfQueued, parkMessages, parkStalePending, unparkMessage,
+  migrateSessionQueue, rollbackSessionQueueMigration, type SessionQueueMigration,
+} from './session-queue-park.js';
+// The lines that went out (session-queue-lines.ts): rows the CLI took, rows put back unconfirmed.
+export { removeTaken, revertIfQueued, settledLineUuid } from './session-queue-lines.js';
 
 // ── Public API ──
 
@@ -202,13 +63,15 @@ async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false): Promise
  * is not written to it again.
  */
 export async function loadQueue(): Promise<void> {
-  store = null; // force re-read from disk
+  resetCache(); // force re-read from disk
   const changed = await mutateStore((s) => {
     let dirty = false;
     for (const [, msgs] of Object.entries(s.queues)) {
       for (const msg of msgs) {
         if (msg.status === 'processing') {
           msg.status = 'pending';
+          // The server died mid-delivery: the line may be in a CLI (QueuedMessage.lineInDoubt).
+          if (msg.lineUuid) msg.lineInDoubt = true;
           dirty = true;
         }
       }
@@ -235,7 +98,7 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null; lineUuid?: string },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string },
 ): Promise<QueuedMessage> {
   const { sessionStops, SessionStopSupersededError } = await import('./sessions/session-stop.js');
   const stopFence = await sessionStops.fence(sessionId);
@@ -252,7 +115,7 @@ export async function enqueueMessage(
     message,
     status: 'pending',
     enqueuedAt: new Date().toISOString(),
-    seq: ++enqueueSeq,
+    seq: nextEnqueueSeq(),
     // Additive: absent ⇒ the key never lands on the row, so an old-shaped row and
     // a new-shaped one are byte-identical on disk.
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
@@ -262,13 +125,15 @@ export async function enqueueMessage(
     if (!s.queues[sessionId]) {
       s.queues[sessionId] = [];
     }
+    // A phone message the companion relayed: its fate is written with its row.
+    if (opts?.relayTaken && opts.id) setFate(s, opts.id, 'taken');
     if (opts?.id) {
       const existing = s.queues[sessionId].find((m) => m.id === opts.id);
       if (existing) return { queueDepth: s.queues[sessionId].length, existing };
     }
     s.queues[sessionId].push(msg);
     return { queueDepth: s.queues[sessionId].length, existing: null };
-  });
+  }, false, opts?.relayTaken === true);
   if (outcome.existing) {
     log.session.info('message enqueue deduped by id (already queued)', {
       sessionId, messageId: outcome.existing.id, queueDepth: outcome.queueDepth,
@@ -308,6 +173,8 @@ export async function sendMessageToSession(
     messageId?: string;
     userUuid?: string;
     stopFence?: string | null;
+    /** A phone message relayed by the companion (DaemonConnection): its fate goes with its row. */
+    relayTaken?: boolean;
     /** A resend of a line that already went out keeps its uuid (see QueuedMessage.lineUuid). */
     lineUuid?: string;
   },
@@ -317,6 +184,7 @@ export async function sendMessageToSession(
     id: opts?.messageId,
     ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+    ...(opts?.relayTaken ? { relayTaken: true } : {}),
     ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
   });
   const source = opts?.source ?? 'unknown';
@@ -386,7 +254,7 @@ export async function markProcessing(
         if (message.status !== 'pending' || (message.stopFence ?? null) === stopFence) continue;
         message.status = 'parked';
         message.parkedAt = new Date().toISOString();
-        message.parkedReason = 'Session stopped by user; retry explicitly to send';
+        message.parkedReason = STOP_PARKED_REASON;
       }
     }
     const pendingRows = queue.filter((m) => m.status === 'pending');
@@ -466,11 +334,12 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
     if (!queue) return false;
 
     const idSet = ids ? new Set(ids) : null;
-    s.queues[sessionId] = queue.filter((m) => {
-      const keep = m.status !== 'processing' || (idSet !== null && !idSet.has(m.id));
-      if (!keep) noteSettledLine(s, m);
-      return keep;
-    });
+    const gone = (m: QueuedMessage) => m.status === 'processing' && (idSet === null || idSet.has(m.id));
+    // A phone message among them ran here: recorded in the same write (relay-fates.ts).
+    const removed = queue.filter(gone);
+    noteDelivered(s, removed);
+    for (const m of removed) noteSettledLine(s, m);
+    s.queues[sessionId] = queue.filter((m) => !gone(m));
     // Clean up empty queues
     if (s.queues[sessionId].length === 0) {
       delete s.queues[sessionId];
@@ -478,100 +347,6 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
     return true;
   });
   if (found) log.session.debug('message queue drained', { sessionId, scoped: !!ids });
-}
-
-/**
- * Remove rows the CLI itself reported taking (or a Stop cancelling), whatever
- * their state: a row put back to pending while its delivery was unconfirmed
- * must not be delivered again once the CLI says it has it. `ran: false` (a
- * cancelled line): a resend of the row is a new line, not this one again.
- */
-export async function removeTaken(sessionId: string, ids: string[], opts?: { ran?: boolean }): Promise<void> {
-  if (ids.length === 0) return;
-  const idSet = new Set(ids);
-  const ran = opts?.ran !== false;
-  const found = await mutateStore((s) => {
-    const queue = s.queues[sessionId];
-    if (!queue) return false;
-    s.queues[sessionId] = queue.filter((m) => {
-      if (!idSet.has(m.id)) return true;
-      // A cancelled line never ran: sending its text again is a new line.
-      if (ran) noteSettledLine(s, m);
-      return false;
-    });
-    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
-    return queue.length !== (s.queues[sessionId]?.length ?? 0);
-  });
-  if (found) log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
-}
-
-/**
- * Put rows still in the queue back to pending, and nothing else: unlike
- * revertToPending it never re-inserts a missing row, because a row whose line
- * may be in a CLI is missing exactly when the CLI said it took it (removeTaken).
- */
-export async function revertIfQueued(messages: QueuedMessage[]): Promise<void> {
-  if (messages.length === 0) return;
-  await mutateStore((s) => {
-    for (const m of messages) {
-      const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
-      if (row?.status === 'processing') row.status = 'pending';
-    }
-  });
-}
-
-/**
- * Park the rows still in the queue (never re-inserting a missing one: the CLI
- * took it). `freshLine`: the CLI dropped the line for good, so a Retry must go
- * out as a new line (the old uuid would be skipped as already seen). Returns
- * the rows it parked.
- */
-export async function parkIfQueued(
-  messages: QueuedMessage[],
-  reason: string,
-  opts?: { freshLine?: boolean },
-): Promise<QueuedMessage[]> {
-  if (messages.length === 0) return [];
-  const parkedAt = new Date().toISOString();
-  const parked = await mutateStore((s) => {
-    const done: QueuedMessage[] = [];
-    for (const m of messages) {
-      const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
-      if (!row || row.status === 'parked') continue;
-      row.status = 'parked';
-      row.parkedAt = parkedAt;
-      row.parkedReason = reason;
-      if (opts?.freshLine) { delete row.lineUuid; delete row.lineTries; delete row.lineTracked; }
-      done.push({ ...row });
-    }
-    return done;
-  });
-  logParked(parked, reason);
-  return parked;
-}
-
-// ── Lines that settled ──
-//
-// A row leaves the queue once its line ran. If the user (or the phone) sends
-// it again, the new row must go out under the SAME uuid so the CLI skips it.
-// Kept in the queue file, so a Retry after a server restart still finds it.
-// Bounded: the file is read and written whole on every queue change, and a
-// Retry follows its failure closely.
-
-const MAX_SETTLED_LINES = 256;
-
-function noteSettledLine(s: QueueStore, m: QueuedMessage): void {
-  if (!m.lineUuid) return;
-  const settled = s.settled ?? (s.settled = {});
-  delete settled[m.id];
-  settled[m.id] = m.lineUuid;
-  const ids = Object.keys(settled);
-  for (let i = 0; i < ids.length - MAX_SETTLED_LINES; i++) delete settled[ids[i]];
-}
-
-/** The uuid of the line a removed row went out in. */
-export async function settledLineUuid(messageId: string): Promise<string | undefined> {
-  return (await getStore()).settled?.[messageId];
 }
 
 /**
@@ -609,8 +384,27 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (queue.length === 0) {
       delete s.queues[sessionId];
     }
+    // A relayed phone message a person removed: the companion is told so, never
+    // "delivered", and never "not received" either (gate r3, M6: a row an older
+    // Mac took carries no fate, and "not received" let the companion run it).
+    if (fateOf(s, messageId) || isPhoneMessageId(messageId)) setFate(s, messageId, 'removed');
     return true;
-  });
+  }, false, true);
+}
+
+/**
+ * The companion's question for one phone message it relayed here: answered,
+ * and the row removed when it may go another way, in ONE durable write
+ * (relay-fates.ts withdrawIn). Throws when the write fails, so the companion
+ * hears no answer and keeps waiting rather than acting on one never recorded.
+ */
+export async function withdrawRelayedMessage(sessionId: string, messageId: string): Promise<WithdrawState> {
+  return mutateStore((s) => withdrawIn(s, sessionId, messageId), true, true);
+}
+
+/** What became of a relayed phone message here (undefined: never seen, or past the horizon). */
+export async function relayFateOf(messageId: string): Promise<RelayFate | undefined> {
+  return fateOf(await getStore(), messageId);
 }
 
 /**
@@ -650,129 +444,6 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
       }
     }
   });
-}
-
-/**
- * Age backstop for the parking policy: a pending row this old is parked instead
- * of redelivered, whatever the failure that stranded it looked like.
- *
- * The classifier (providers/delivery-failure.ts) only recognizes the permanent
- * failures we've SEEN. This catches the ones we haven't: a week is far longer
- * than any real outage (the worst measured was ~7 minutes) and far shorter than
- * the 12 days a doomed row actually survived.
- */
-export const MAX_PENDING_AGE_MS = 7 * 24 * 60 * 60_000;
-
-/** One greppable line per parked row, shared by both park paths. */
-function logParked(rows: QueuedMessage[], reason: string): void {
-  for (const m of rows) {
-    log.session.warn('message parked — permanent delivery failure', {
-      sessionId: m.sessionId, messageId: m.id, reason,
-    });
-  }
-}
-
-/**
- * Dead-letter a batch: 'processing' | 'pending' → 'parked'.
- *
- * Called INSTEAD of revertToPending when delivery failed for a reason that
- * retrying cannot fix (deleted working directory, deleted session record). One
- * structured line per row so the park is greppable.
- *
- * Same NO-LOSS re-insert as revertToPending: a row a concurrent cleanup removed
- * while the batch was in flight is re-inserted (parked), never silently dropped.
- * Note revertToPending only un-sticks rows whose stored status is 'processing',
- * so a later transient revert can never resurrect a parked row.
- */
-export async function parkMessages(messages: QueuedMessage[], reason: string, strict = false): Promise<number> {
-  if (messages.length === 0) return 0;
-  const parkedAt = new Date().toISOString();
-  const parked = await mutateStore((s) => {
-    const done: QueuedMessage[] = [];
-    for (const m of messages) {
-      const queue = s.queues[m.sessionId] ?? (s.queues[m.sessionId] = []);
-      const existing = queue.find((q) => q.id === m.id);
-      const row = existing ?? { ...m };
-      if (!existing) {
-        queue.push(row);
-        queue.sort(compareEnqueueOrder);
-      }
-      if (row.status === 'parked') continue;
-      row.status = 'parked';
-      row.parkedAt = parkedAt;
-      row.parkedReason = reason;
-      done.push(row);
-    }
-    return done;
-  }, strict);
-  logParked(parked, reason);
-  return parked.length;
-}
-
-/**
- * Park every pending row older than maxAgeMs. Run before the two automatic
- * redelivery triggers (startup recovery, daemon reconnect) so a stale row is
- * retired rather than retried; returns the rows it parked.
- *
- * A row whose `enqueuedAt` won't parse is left alone: its age is unknowable, and
- * guessing "ancient" could retire a message that was written seconds ago.
- */
-export async function parkStalePending(maxAgeMs = MAX_PENDING_AGE_MS): Promise<QueuedMessage[]> {
-  const cutoff = Date.now() - maxAgeMs;
-  const isStale = (m: QueuedMessage): boolean => {
-    if (m.status !== 'pending') return false;
-    const at = Date.parse(m.enqueuedAt);
-    return !Number.isNaN(at) && at <= cutoff;
-  };
-  // Cheap fresh read first. This runs on every boot AND every daemon reconnect,
-  // and the answer is almost always "nothing stale" — no file lock, no rewrite.
-  const peek = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
-  if (!Object.values(peek.queues).some((msgs) => msgs.some(isStale))) return [];
-
-  const reason = `undelivered for over ${Math.round(maxAgeMs / 86_400_000)} days`;
-  const parkedAt = new Date().toISOString();
-  // One atomic pass that flips IN PLACE — deliberately not parkMessages(), whose
-  // no-loss re-insert would resurrect a row that got delivered since the peek.
-  const parked = await mutateStore((s) => {
-    const done: QueuedMessage[] = [];
-    for (const msgs of Object.values(s.queues)) {
-      for (const m of msgs) {
-        if (!isStale(m)) continue;
-        m.status = 'parked';
-        m.parkedAt = parkedAt;
-        m.parkedReason = reason;
-        done.push(m);
-      }
-    }
-    return done;
-  });
-  logParked(parked, reason);
-  return parked;
-}
-
-/**
- * Put a parked row back in line — EXPLICIT HUMAN ACTION ONLY (the Retry
- * affordance). Returns true when a parked row was un-parked; false when the row
- * is absent or in a status the caller shouldn't disturb.
- *
- * The caller still has to trigger a delivery attempt (processNext); this only
- * makes the row eligible again.
- */
-export async function unparkMessage(sessionId: string, messageId: string): Promise<boolean> {
-  const { sessionStops } = await import('./sessions/session-stop.js');
-  const stopFence = await sessionStops.fence(sessionId);
-  const ok = await mutateStore((s) => {
-    const msg = s.queues[sessionId]?.find((m) => m.id === messageId);
-    if (!msg || msg.status !== 'parked') return false;
-    if (stopFence) msg.stopFence = stopFence;
-    else delete msg.stopFence;
-    msg.status = 'pending';
-    delete msg.parkedAt;
-    delete msg.parkedReason;
-    return true;
-  });
-  if (ok) log.session.info('parked message un-parked by user action', { sessionId, messageId });
-  return ok;
 }
 
 /**
@@ -822,6 +493,16 @@ export async function isMessageQueued(sessionId: string, messageId: string): Pro
   return queue.some((m) => m.id === messageId);
 }
 
+/** The queued row with this id in any session's queue (a migration moves rows between ids), or null. */
+export async function findQueuedMessage(messageId: string): Promise<QueuedMessage | null> {
+  const s = await getStore();
+  for (const queue of Object.values(s.queues)) {
+    const row = queue.find((m) => m.id === messageId);
+    if (row) return row;
+  }
+  return null;
+}
+
 /**
  * Get all session IDs that have pending messages (for startup recovery and
  * daemon-reconnect redelivery). 'parked' rows are deliberately invisible here —
@@ -837,85 +518,4 @@ export async function getAllSessionsWithPending(): Promise<string[]> {
     }
   }
   return result;
-}
-
-export interface SessionQueueMigration {
-  movedIds: string[];
-}
-
-/**
- * Move every durable queue row to a replacement provider identity.
- *
- * The queue write must commit before an ACP identity redirect is deleted.
- * Stable message IDs survive the move, so worker command-id dedup still gives
- * exactly-once provider submission after a crash resets `processing` rows.
- */
-export async function migrateSessionQueue(
-  oldSessionId: string,
-  newSessionId: string,
-): Promise<SessionQueueMigration> {
-  if (oldSessionId === newSessionId) return { movedIds: [] };
-  // strict mutateStore: a failed persist throws WITHOUT committing the fresh
-  // copy or the cache, so no in-memory compensation is needed on error.
-  const movedIds = await mutateStore((s) => {
-    const source = s.queues[oldSessionId] ?? [];
-    if (source.length === 0) return [];
-
-    const target = s.queues[newSessionId] ?? [];
-    const existingIds = new Set(target.map((message) => message.id));
-    const moved = source
-      .filter((message) => !existingIds.has(message.id))
-      .map((message) => ({ ...message, sessionId: newSessionId }));
-
-    s.queues[newSessionId] = [...target, ...moved]
-      .sort(compareEnqueueOrder);
-    delete s.queues[oldSessionId];
-    return moved.map((message) => message.id);
-  }, true);
-  if (movedIds.length === 0) return { movedIds: [] };
-  log.session.info('session message queue identity migrated', {
-    oldSessionId,
-    newSessionId,
-    movedCount: movedIds.length,
-  });
-  return { movedIds };
-}
-
-/**
- * Compensate a staged identity migration that failed after its queue move.
- * Target messages that predated the migration are left untouched.
- */
-export async function rollbackSessionQueueMigration(
-  oldSessionId: string,
-  newSessionId: string,
-  movedIds: string[],
-): Promise<void> {
-  if (oldSessionId === newSessionId || movedIds.length === 0) return;
-  // strict mutateStore: a failed persist throws without committing anywhere,
-  // so the old hand-rolled in-memory compensation is no longer needed.
-  await mutateStore((s) => {
-    const target = s.queues[newSessionId] ?? [];
-    const movedSet = new Set(movedIds);
-    const returning = target
-      .filter((message) => movedSet.has(message.id))
-      .map((message) => ({ ...message, sessionId: oldSessionId }));
-    if (returning.length === 0) return;
-
-    const source = s.queues[oldSessionId] ?? [];
-    const sourceIds = new Set(source.map((message) => message.id));
-    s.queues[oldSessionId] = [
-      ...source,
-      ...returning.filter((message) => !sourceIds.has(message.id)),
-    ].sort(compareEnqueueOrder);
-    const remaining = target.filter((message) => !movedSet.has(message.id));
-    if (remaining.length > 0) s.queues[newSessionId] = remaining;
-    else delete s.queues[newSessionId];
-  }, true);
-}
-
-/**
- * Reset the in-memory cache. Useful for testing.
- */
-export function resetCache(): void {
-  store = null;
 }

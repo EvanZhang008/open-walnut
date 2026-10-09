@@ -2951,13 +2951,13 @@ async function resolveCallerSessionRow(
   const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
   const caller = await resolveCaller(sid).catch(() => null)
   if (caller?.kind !== 'session') return null
-  const { projectSession } = await import('../../core/session-projection.js')
+  const { projectSession, configuredHostLabels } = await import('../../core/session-projection.js')
   const { getTask, listFolderLabels } = await import('../../core/task-manager.js')
   const task = caller.record.taskId
     ? await getTask(caller.record.taskId).catch(() => undefined)
     : undefined
   const labels = await listFolderLabels().catch(() => new Map<string, string>())
-  return projectSession(caller.record, task, labels) as unknown as Record<string, unknown>
+  return projectSession(caller.record, task, labels, await configuredHostLabels()) as unknown as Record<string, unknown>
 }
 
 // GET /api/v1/sessions — slim session list for mobile (read-only, additive).

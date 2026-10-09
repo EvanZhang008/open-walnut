@@ -34,13 +34,26 @@
  */
 
 import type { SessionRecord } from '../types.js';
+import { hostDisplayName } from '../hosts/host-display-name.js';
 
 export interface CloudSessionHost {
   /** Bridge host alias. '__local__' = the primary box's own daemon. */
   host: string;
+  /** The host's label from the primary's config, when it has one (the companion has no config of its own). */
+  hostLabel?: string;
   cwd?: string;
   model?: string;
   stopRequest?: SessionRecord['stopRequest'];
+}
+
+/**
+ * The name a person knows this session's host by, for every sentence about it:
+ * its label, else its alias; the primary's own daemon is "your Mac" (the phone's
+ * word for it, SessionConversationStore.hostLabel).
+ */
+export function cloudSessionHostName(resolved: Pick<CloudSessionHost, 'host' | 'hostLabel'>): string {
+  if (resolved.host === PRIMARY_BRIDGE_ALIAS) return 'your Mac';
+  return hostDisplayName(resolved.host, resolved.hostLabel);
 }
 
 /**
@@ -51,7 +64,7 @@ export interface CloudSessionHost {
  */
 export class PrimaryUnreachableError extends Error {
   constructor(public readonly reason: string) {
-    super('Your primary box (Mac) could not be reached to look up this session — retry when it reconnects');
+    super("Your Mac couldn't be reached to look up this session. Try again when it reconnects.");
     this.name = 'PrimaryUnreachableError';
   }
 }
@@ -86,7 +99,10 @@ export async function resolveCloudSessionHost(sessionId: string): Promise<CloudS
   const { readSessionProjection } = await import('../session-projection.js');
   const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId);
   if (row) {
-    return { host: hostAlias(row.host), cwd: row.cwd, model: row.model, stopRequest: row.stopRequest };
+    return {
+      host: hostAlias(row.host), cwd: row.cwd, model: row.model, stopRequest: row.stopRequest,
+      ...(row.host_label ? { hostLabel: row.host_label } : {}),
+    };
   }
 
   const { getLaunchSeed } = await import('./launch-seed.js');
@@ -114,6 +130,7 @@ async function askPrimary(sessionId: string): Promise<CloudSessionHost | null> {
     const s = session as Record<string, unknown>;
     return {
       host: hostAlias(s.host),
+      ...(typeof s.host_label === 'string' && s.host_label ? { hostLabel: s.host_label } : {}),
       ...(typeof s.cwd === 'string' && s.cwd ? { cwd: s.cwd } : {}),
       ...(typeof s.model === 'string' && s.model ? { model: s.model } : {}),
       ...(s.stopRequest && typeof s.stopRequest === 'object'

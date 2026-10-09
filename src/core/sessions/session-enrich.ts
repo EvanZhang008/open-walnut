@@ -108,17 +108,19 @@ export async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<S
 
 /** Resolve host aliases to full hostnames from config (for tooltip display). */
 export async function enrichWithHostnames(sessions: SessionRecord[]): Promise<SessionRecord[]> {
-  const hostsNeeded = sessions.some((s) => s.host && !s.hostname);
+  const hostsNeeded = sessions.some((s) => s.host && (!s.hostname || !s.host_label));
   if (!hostsNeeded) return sessions;
   try {
     const config = await getConfig();
     const hosts = config.hosts;
     if (!hosts) return sessions;
     for (const s of sessions) {
-      if (s.host && !s.hostname) {
-        const def = hosts[s.host];
+      if (s.host) {
+        const def = hosts[s.host] as (typeof hosts)[string] & { label?: unknown } | undefined;
         if (def) {
-          s.hostname = def.hostname;
+          if (!s.hostname) s.hostname = def.hostname;
+          // The name every sentence about this host uses (host-display-name.ts).
+          if (!s.host_label && typeof def.label === 'string' && def.label.trim()) s.host_label = def.label.trim();
         }
       }
     }

@@ -569,7 +569,15 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
 
 // ── Terminate ────────────────────────────────────────────────────────────────
 
-export interface TerminateResult { status: 'terminated' | 'pending'; sessionId: string; tookMs?: number }
+export interface TerminateResult {
+  status: 'terminated' | 'pending'; sessionId: string; tookMs?: number
+  /**
+   * The stop this call recorded (CLI sessions). The cloud companion fences the
+   * next phone message by it at once, rather than by the older stop its copy
+   * of the session list shows for a few seconds more.
+   */
+  stopRequest?: { id: string; requestedAt: string; state: string }
+}
 
 /**
  * Close the CLI process, full stop. No respawn, no queue drain, no error
@@ -623,7 +631,10 @@ export async function terminateSession(
         live?.detach();
         sessionRunner.settleInFlightTurn(sessionId);
       }
-      return { status: confirmed ? 'terminated' : 'pending', sessionId, tookMs: Date.now() - startedAt };
+      return {
+        status: confirmed ? 'terminated' : 'pending', sessionId, tookMs: Date.now() - startedAt,
+        stopRequest: { id: request.id, requestedAt: request.requestedAt, state: request.state },
+      };
     } finally {
       if (!confirmed) undoTeardown?.();
     }

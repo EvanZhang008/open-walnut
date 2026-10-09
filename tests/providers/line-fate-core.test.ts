@@ -4,7 +4,7 @@
  * every rule is pinned here; the twins run the same function text.
  */
 import { describe, it, expect } from 'vitest'
-import { lineFate, lineFateScan, lineFateVerdict } from '../../src/providers/line-fate-core.js'
+import { lineFate, lineFateScan, lineFateVerdict, lineTornEnd } from '../../src/providers/line-fate-core.js'
 
 const marker = (id: string, pid?: number) => JSON.stringify({
   type: 'user', subtype: 'walnut-injected', message: { role: 'user', content: 'x' },
@@ -136,6 +136,26 @@ describe('lineFateScan / lineFateVerdict: the daemons scan a long tail piece by 
   })
 })
 
+describe('lineTornEnd: a resend ends what a dead write may have left (runner gate r3, r3-torn)', () => {
+  const q = { uuid: 'u-1', messageIds: ['qm-1'], pid: 7 }
+  const seen = lineFateScan(marker('qm-1', 7), q, null)
+  it('a uuid line nothing proves in, with this process\'s marker in, gets a newline ahead of it', () => {
+    expect(lineTornEnd(null, q, seen)).toBe(true)
+  })
+  it('no marker of this process (none, an older daemon\'s, another pid\'s): nothing ahead of it', () => {
+    expect(lineTornEnd(null, q, null)).toBe(false)
+    expect(lineTornEnd(null, q, lineFateScan('', q, null))).toBe(false)
+    expect(lineTornEnd(null, q, lineFateScan(marker('qm-1'), q, null))).toBe(false)
+    expect(lineTornEnd(null, q, lineFateScan(marker('qm-1', 8), q, null))).toBe(false)
+  })
+  it('a line proven in is not written at all, so it gets nothing', () => {
+    for (const fate of ['ran', 'cancelled', 'dropped', 'waiting'] as const) expect(lineTornEnd({ fate }, q, seen)).toBe(false)
+  })
+  it('a line without a uuid is written as before: the CLI could not drop a copy of it', () => {
+    expect(lineTornEnd(null, { ...q, uuid: '' }, seen)).toBe(false)
+  })
+})
+
 describe('the inlined text survives a bundler that keeps names', () => {
   it('scan and verdict hold no named inner function, so no name helper lands inside them', async () => {
     // esbuild with keepNames (as tsx runs the server) wraps every NAMED function
@@ -144,7 +164,7 @@ describe('the inlined text survives a bundler that keeps names', () => {
     const src = (await import('node:fs')).readFileSync(new URL('../../src/providers/line-fate-core.ts', import.meta.url), 'utf8')
     const out = transformSync(src, { loader: 'ts', keepNames: true, format: 'esm' }).code
     const wrapped = [...out.matchAll(/__name\(([^,]+),/g)].map((m) => m[1].trim())
-    expect(wrapped.every((name) => ['lineFateScan', 'lineFateVerdict', 'lineFate'].includes(name))).toBe(true)
-    for (const fn of [lineFateScan, lineFateVerdict]) expect(fn.toString()).not.toContain('__name(')
+    expect(wrapped.every((name) => ['lineFateScan', 'lineFateVerdict', 'lineTornEnd', 'lineFate'].includes(name))).toBe(true)
+    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd]) expect(fn.toString()).not.toContain('__name(')
   })
 })

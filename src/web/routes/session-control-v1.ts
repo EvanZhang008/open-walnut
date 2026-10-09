@@ -58,6 +58,12 @@ function relayErrorStatus(errorKind: string): number {
   if (errorKind === 'not_found') return 404
   if (errorKind === 'conflict') return 409
   if (errorKind === 'internal') return 500
+  // The primary answered, and its answer is that something past it is not
+  // answering (the session's host: 503 host_reconnecting). Mapped to 400 before,
+  // so the phone read a host outage as a bad request.
+  if (errorKind === 'bad_gateway') return 502
+  if (errorKind === 'unavailable') return 503
+  if (errorKind === 'gateway_timeout') return 504
   return 400
 }
 
@@ -121,7 +127,10 @@ async function relayControlAction(
     return
   }
   const errorKind = typeof reply.errorKind === 'string' ? reply.errorKind : 'bad_request'
-  sendError(res, relayErrorStatus(errorKind), errorKind, reason)
+  // The primary's own code when it sent one (host_reconnecting names the hop
+  // that failed, and the phone keys its wording on it), else the kind.
+  const code = typeof reply.errorCode === 'string' && reply.errorCode ? reply.errorCode : errorKind
+  sendError(res, relayErrorStatus(errorKind), code, reason)
 }
 
 /**
@@ -197,7 +206,7 @@ sessionControlV1Router.get('/sessions/:id/model-options', async (req: Request, r
       res.json(await computeModelOptions(sessionId))
     } catch (err) {
       if (err instanceof SessionControlError) {
-        sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
+        sendControlError(res, err)
         return
       }
       throw err
@@ -229,7 +238,7 @@ sessionControlV1Router.post('/sessions/:id/model', async (req: Request, res: Res
       res.json(await applySessionModelChange(sessionId, rawModel))
     } catch (err) {
       if (err instanceof SessionControlError) {
-        sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
+        sendControlError(res, err)
         return
       }
       throw err
@@ -260,7 +269,7 @@ sessionControlV1Router.post('/sessions/:id/effort', async (req: Request, res: Re
       res.json(await applySessionEffortChange(sessionId, rawEffort))
     } catch (err) {
       if (err instanceof SessionControlError) {
-        sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
+        sendControlError(res, err)
         return
       }
       throw err
@@ -297,7 +306,7 @@ sessionControlV1Router.post('/sessions/:id/fork', async (req: Request, res: Resp
       res.status(201).json(await forkSessionToTask(sessionId, params, 'api-v1'))
     } catch (err) {
       if (err instanceof SessionControlError) {
-        sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
+        sendControlError(res, err)
         return
       }
       throw err
@@ -327,7 +336,7 @@ sessionControlV1Router.post('/sessions/:id/background-tasks/:taskId/stop', async
       res.json(await stopSessionBackgroundTask(sessionId, taskId))
     } catch (err) {
       if (err instanceof SessionControlError) {
-        sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
+        sendControlError(res, err)
         return
       }
       throw err
@@ -343,6 +352,21 @@ function v1ErrorCode(status: number): string {
   if (status === 409) return 'conflict'
   if (status >= 500) return 'internal'
   return 'bad_request'
+}
+
+/**
+ * A SessionControlError in the frozen v1 shape. The one error that carries its
+ * own code is the session's host being unreachable (503 host_reconnecting, same
+ * check as session-extras-v1): the phone keys its wording on that code, and the
+ * message names the host. Every other error keeps the status-derived code and
+ * its extra fields exactly as before (e.g. a fork's top-level ACP code).
+ */
+function sendControlError(res: Response, err: { statusCode: number; message: string; extra?: Record<string, unknown> }): void {
+  if (err.extra?.code === 'host_reconnecting') {
+    sendError(res, err.statusCode, 'host_reconnecting', err.message)
+    return
+  }
+  sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
 }
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.

@@ -40,6 +40,7 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { attachSse, emitSse, sseConnCount } from '../sse-channels.js'
 import { CHAT_TURN_FRAME_KIND, handleBridgeChatTurnFrame } from './chat-turn-relay.js'
 import { LEADER_HEARTBEAT_KIND } from '../../core/leader/protocol.js'
+import { SEND_PATH_READY_KIND } from '../../core/send-path-announce.js'
 import { log } from '../../logging/index.js'
 import type { Task } from '../../core/types.js'
 
@@ -80,7 +81,11 @@ async function projectSessionRow(sessionId: string): Promise<Record<string, unkn
     // an update must not arrive missing a field the list row carried.
     if (task?.group_id) labels = await listFolderLabels().catch(() => undefined)
   }
-  return projectSession(record, task, labels) as unknown as Record<string, unknown>
+  // The host's label too (same reason): only a remote session reads the config.
+  const hostLabels = record.host
+    ? await (await import('../../core/session-projection.js')).configuredHostLabels()
+    : undefined
+  return projectSession(record, task, labels, hostLabels) as unknown as Record<string, unknown>
 }
 
 /** Push one slim event to all local SSE subscribers.
@@ -274,6 +279,15 @@ export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   // feed — the relay module owns their validation, watchdog and fan-out.
   if (kind === CHAT_TURN_FRAME_KIND) {
     handleBridgeChatTurnFrame(data)
+    return
+  }
+  // The Mac reached a host's daemon (or its own) again: drain the phone sends
+  // held for that host now (core/send-path-announce.ts). Never fanned out.
+  if (kind === SEND_PATH_READY_KIND) {
+    const host = (data as { host?: unknown } | null)?.host
+    if (typeof host === 'string' && host) {
+      void import('../../core/send-queue.js').then((q) => q.noteSendPathReady(host)).catch(() => {})
+    }
     return
   }
   // Only the three known event kinds — a compromised/buggy sender must not

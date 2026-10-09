@@ -171,6 +171,9 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/workspace-core.ts',
   // What became of a line (send-dedupe-v1): same import-or-inline rule.
   'src/providers/line-fate-core.ts',
+  // markers.find (the delivery-marker lookup): imported by the binary,
+  // hand-inlined in the source twin.
+  'src/providers/marker-find-core.ts',
 ] as const
 
 /**

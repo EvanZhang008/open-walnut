@@ -8,11 +8,15 @@ import { selfHealDataDirJson } from './json-conflict-recovery.js';
 
 /**
  * Atomically write JSON to a file (write to tmp, then rename).
+ *
+ * `durable`: the bytes and the rename reach the disk before this resolves
+ * (fsync of the file, then of its directory), for a record a power loss must
+ * not roll back (a fence that keeps a message from running twice).
  */
 export async function writeJsonFile(
   filePath: string,
   data: unknown,
-  options: { mode?: number } = {},
+  options: { mode?: number; durable?: boolean } = {},
 ): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
@@ -24,12 +28,25 @@ export async function writeJsonFile(
     `.open-walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
   );
   try {
-    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', {
-      encoding: 'utf-8',
-      ...(options.mode === undefined ? {} : { mode: options.mode }),
-    });
+    const text = JSON.stringify(data, null, 2) + '\n';
+    if (options.durable) {
+      const file = await fs.open(tmpFile, 'w', options.mode);
+      try {
+        await file.writeFile(text, 'utf-8');
+        await file.sync();
+      } finally { await file.close(); }
+    } else {
+      await fs.writeFile(tmpFile, text, {
+        encoding: 'utf-8',
+        ...(options.mode === undefined ? {} : { mode: options.mode }),
+      });
+    }
     await fs.rename(tmpFile, filePath);
     if (options.mode !== undefined) await fs.chmod(filePath, options.mode);
+    if (options.durable) {
+      const handle = await fs.open(dir, 'r');
+      try { await handle.sync(); } catch { /* a filesystem that refuses a directory fsync */ } finally { await handle.close(); }
+    }
   } catch (err) {
     await fs.rm(tmpFile, { force: true }).catch(() => {});
     throw err;
@@ -155,7 +172,7 @@ export async function updateJsonFile<T>(
   filePath: string,
   fallback: T,
   mutate: (current: T) => T | Promise<T> | undefined | Promise<undefined>,
-  options: { mode?: number } = {},
+  options: { mode?: number; durable?: boolean } = {},
 ): Promise<T> {
   return withFileLock(filePath, async () => {
     const current = await readJsonFile<T>(filePath, fallback);

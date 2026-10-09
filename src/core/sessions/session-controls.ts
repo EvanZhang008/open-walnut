@@ -46,6 +46,110 @@ export class SessionControlError extends Error {
   }
 }
 
+// ── The live CLI, without letting an unreachable host hold the request ──────
+
+type LiveSession = NonNullable<Awaited<ReturnType<
+  typeof import('../../providers/claude-code-session.js')['sessionRunner']['getOrAttachLiveSession']
+>>>;
+
+/**
+ * A control's view of the session's CLI. `session`: a CLI answered for it.
+ * Neither field: no CLI runs. `hostError`: the session's host cannot be asked
+ * right now, so whether a CLI runs there is UNKNOWN; the error names the host
+ * (503 host_reconnecting).
+ *
+ * Why (2026-10-01): the phone's model menu on a stopped session waited on a
+ * liveness probe over the Mac's link to the host. That link had gone silent
+ * while still counted as connected, the probe rode the daemon command's 30s
+ * timeout, the companion's 30s relay budget ran out first, and the phone said
+ * "Can't reach your Mac right now" about a Mac that was answering. A stopped
+ * session's model and effort live in its record, and only a live CLI needs the
+ * host. So: no link now = unreachable at once (never wait on a dial this request
+ * did not start); a link = the host-read bound (core/hosts/remote-read-bound.ts),
+ * within the control's cap: CONTROL_READ_CAP_MS when the record says a CLI runs,
+ * STOPPED_CHECK_CAP_MS when it does not (the host is only asked whether a CLI the
+ * record does not know about runs there; past that the record answers).
+ */
+async function liveSessionForControl(
+  sessionId: string,
+  record: { host?: string; process_status?: string },
+): Promise<{ session?: LiveSession; hostError?: SessionControlError }> {
+  const host = record.host;
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  const attach = () => sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
+  const bound = await import('../hosts/remote-read-bound.js');
+  if (!bound.isRemoteHost(host)) return { session: await attach() };
+  const { isDaemonConnected } = await import('../../providers/daemon-connection.js');
+  if (!isDaemonConnected(host)) return { hostError: await hostUnreachableError(host) };
+  try {
+    const capMs = recordSaysLive(record) ? CONTROL_READ_CAP_MS : STOPPED_CHECK_CAP_MS;
+    return { session: await cappedControlRead(host, attach, capMs) };
+  } catch (err) {
+    if (err instanceof bound.HostReconnectingError) return { hostError: err };
+    throw err;
+  }
+}
+
+/**
+ * A control's whole budget for a read on a connected host, whatever the read
+ * bound itself does (a quiet-link probe there answers sooner): under the
+ * companion's 30s relay budget, so the phone hears the host's name, never a
+ * relay timeout. Without it a link that is connected but silent held the
+ * request for the daemon command's own 30s timeout.
+ */
+const CONTROL_READ_CAP_MS = 20_000;
+/**
+ * The check for a CLI on a session whose record says none runs. A host that
+ * answers does so in well under a second; a link that is connected but silent
+ * (the Mac has not noticed yet) must not hold a stopped session's menu or pick,
+ * which its record answers.
+ */
+const STOPPED_CHECK_CAP_MS = 3_000;
+
+async function cappedControlRead<T>(
+  host: string | undefined, read: () => Promise<T>, capMs = CONTROL_READ_CAP_MS,
+): Promise<T> {
+  const bound = await import('../hosts/remote-read-bound.js');
+  if (!bound.isRemoteHost(host)) return read();
+  const work = bound.boundHostRead(host, read);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), capMs); });
+  try {
+    const first = await Promise.race([work.then((value) => ({ value })), late]);
+    if (first !== 'late') return first.value;
+  } finally {
+    clearTimeout(timer);
+  }
+  work.catch(() => { /* answered degraded; the link's own timeout ends it */ });
+  const { hostDisplayNameFor } = await import('../hosts/host-display-name.js');
+  throw new bound.HostReconnectingError(host, await hostDisplayNameFor(host));
+}
+
+/** The pool has no link to `host` now: the answer, in the host's name. */
+async function hostUnreachableError(host: string): Promise<SessionControlError> {
+  const [{ HostReconnectingError }, { hostDisplayNameFor }] = await Promise.all([
+    import('../hosts/remote-read-bound.js'), import('../hosts/host-display-name.js'),
+  ]);
+  const name = await hostDisplayNameFor(host);
+  // No link at all (not a dial in progress, whose default sentence is "Reconnecting to <host>").
+  const err = new HostReconnectingError(host, name);
+  err.message = `Can't reach ${name} right now`;
+  return err;
+}
+
+/** `read` (which needs the session's host) within the host-read bound. */
+async function boundSessionHostRead<T>(sessionId: string, read: () => Promise<T>): Promise<T> {
+  const [{ getSessionByClaudeId }, { boundHostRead }] = await Promise.all([
+    import('../session-tracker.js'), import('../hosts/remote-read-bound.js'),
+  ]);
+  return boundHostRead((await getSessionByClaudeId(sessionId))?.host, read);
+}
+
+/** Does the record say a CLI is running? (The host is the authority; this is the fallback.) */
+function recordSaysLive(record: { process_status?: string }): boolean {
+  return record.process_status === 'running' || record.process_status === 'idle';
+}
+
 /** HTTP status → relay errorKind (same vocabulary as mobile-launch.ts). */
 export function controlErrorKind(status: number): string {
   if (status === 404) return 'not_found';
@@ -107,7 +211,12 @@ export async function applySessionEffortChange(
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
 
-  const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
+  const live = await liveSessionForControl(sessionId, record);
+  // A live CLI needs its host. Unreachable while the record says a CLI runs: the
+  // change could not reach it, so nothing changes (the error names the host). A
+  // stopped session's pick is its record's, and applies at the next start.
+  if (live.hostError && recordSaysLive(record)) throw live.hostError;
+  const session = live.session;
   const recordModel = record.cliModel || record.model;
   let model = recordModel;
   let liveRow: SessionModelCatalogEntry | null = null;
@@ -218,6 +327,12 @@ export async function applySessionModelChange(
     );
   }
 
+  // Which CLI the change is for, BEFORE anything is written: a live CLI whose
+  // host can't be reached must not end up with a record that says a model it is
+  // not running (same rule as effort above).
+  const live = await liveSessionForControl(sessionId, record);
+  if (live.hostError && recordSaysLive(record)) throw live.hostError;
+
   // Persist first — the durable cold-resume fallback (apply_flag_settings is
   // in-memory only).
   await updateSessionRecord(sessionId, { cliModel });
@@ -225,7 +340,7 @@ export async function applySessionModelChange(
   let applied = false;
   let effectiveModel: string | undefined;
   let rejectedByCli = false;
-  const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
+  const session = live.session;
   if (session) {
     try {
       applied = await session.applyModel(cliModel);
@@ -302,6 +417,11 @@ export interface ModelOptionsResult {
    *  lives in the CLI's own settings.json, so `record.effort` is undefined and
    *  reading it alone made the sheet show a different level than the session runs. */
   currentEffort: string | null;
+  /** Additive: the record says a CLI runs, but its host can't be asked now, so
+   *  `current` is the record's and a change can't reach the CLI. The sentence
+   *  names the host ("Can't reach <label> right now"). Absent when the host
+   *  answered, or when no CLI runs (a stopped session's pick needs no host). */
+  hostNote?: string;
 }
 
 /**
@@ -311,7 +431,6 @@ export interface ModelOptionsResult {
  */
 export async function computeModelOptions(sessionId: string): Promise<ModelOptionsResult> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
-  const { sessionRunner } = await import('../../providers/claude-code-session.js');
   const { getHostModelCatalog } = await import('../host-model-catalog.js');
 
   const record = await getSessionByClaudeId(sessionId);
@@ -320,12 +439,25 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
   let entries: SessionModelCatalogEntry[] | null = null;
   let liveModel: string | null = null;
   let liveEffort: string | null = null;
-  const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
+  // The menu is the record's and the host catalog's to answer: an unreachable
+  // host only means no live read-back (never a failed menu, see liveSessionForControl).
+  const live = await liveSessionForControl(sessionId, record);
+  let hostNote: string | undefined;
+  if (live.hostError && recordSaysLive(record)) hostNote = live.hostError.message;
+  const session = live.session;
   if (session) {
-    const [settings, catalog] = await Promise.all([
+    const liveReads = () => Promise.all([
       session.getSettingsSnapshot().catch(() => null),
       session.getModelCatalog().catch(() => null),
     ]);
+    // The reads ride the same link: bounded the same way, and a host that stops
+    // answering halfway means no read-back rather than a held menu.
+    const bound = await import('../hosts/remote-read-bound.js');
+    const [settings, catalog] = await cappedControlRead(record.host, liveReads).catch((err: unknown) => {
+      if (!(err instanceof bound.HostReconnectingError)) throw err;
+      hostNote = err.message;
+      return [null, null] as const;
+    });
     liveModel = settings?.applied.model ?? null;
     // applied.effort is the CLI's runtime truth (already reflects env overrides
     // and unsupported-level downgrades). Validate before trusting it so an
@@ -349,11 +481,12 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
 
   // Live truth first (see the field's doc comment); the record is only the
   // fallback for a session the CLI couldn't answer for.
-  return modelOptionsFromCatalog(
+  const options = modelOptionsFromCatalog(
     entries,
     liveModel || record.cliModel || record.model || null,
     liveEffort ?? record.effectiveEffort ?? record.effort ?? null,
   );
+  return hostNote ? { ...options, hostNote } : options;
 }
 
 /**
@@ -768,6 +901,9 @@ export type SessionControlAction =
   | 'side-questions' | 'side-question.ask' | 'side-question.promote' | 'side-question.delete'
   | 'workflow' | 'plan' | 'subagent-history' | 'execute-compact'
   | 'queue' | 'queue.edit' | 'queue.delete'
+  // The companion asks whether this Mac's queue holds a phone message it
+  // relayed, removing a pending one (core/sessions/mobile-relay-ledger.ts).
+  | 'message.withdraw'
   // Box-level family (sessionId ignored):
   | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss'
   // Global search: the search index lives on the primary only, so a
@@ -1051,18 +1187,22 @@ export async function handleSessionControlRelay(
         result = await executeContinueSession(sessionId) as unknown as Record<string, unknown>;
         break;
       }
+      // Reads that need the session's host ride the same bound as the primary's
+      // own v1 routes (session-lifecycle-v1 boundSessionRead): a host that is not
+      // answering is a 503 host_reconnecting in the host's name, never a relay
+      // that outlives the companion's budget and reads as "the Mac is offline".
       case 'changes': {
         const { getSessionChanges } = await import('./session-lifecycle.js');
-        result = await getSessionChanges(sessionId, {
+        result = await boundSessionHostRead(sessionId, () => getSessionChanges(sessionId, {
           base: p.base, scope: p.scope,
           light: p.light === true, refresh: p.refresh === true,
-        });
+        }));
         break;
       }
       case 'history': {
         const { readSessionRichHistory } = await import('./session-lifecycle.js');
         const tail = typeof p.tail === 'number' && p.tail > 0 ? Math.floor(p.tail) : undefined;
-        result = await readSessionRichHistory(sessionId, tail) as unknown as Record<string, unknown>;
+        result = await boundSessionHostRead(sessionId, () => readSessionRichHistory(sessionId, tail)) as unknown as Record<string, unknown>;
         break;
       }
       case 'detail': {
@@ -1148,6 +1288,13 @@ export async function handleSessionControlRelay(
       case 'queue.edit': {
         const { editSessionQueuedMessage } = await import('./session-extras.js');
         result = await editSessionQueuedMessage(sessionId, String(p.messageId ?? ''), p.text) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'message.withdraw': {
+        const messageId = typeof p.messageId === 'string' ? p.messageId : '';
+        if (!/^qm-[A-Za-z0-9-]{1,64}$/.test(messageId)) throw new SessionControlError('messageId is required', 400);
+        const { withdrawMobileMessage } = await import('./mobile-relay-ledger.js');
+        result = await withdrawMobileMessage(sessionId, messageId);
         break;
       }
       case 'queue.delete': {

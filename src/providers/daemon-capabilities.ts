@@ -376,6 +376,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the CLI holds is ended on its own (line-fate-core.ts). Optional: without it
   // the server cannot rewrite such a line and shows it as failed instead.
   'send-lost-line-v1',
+  // 'marker-find-v1': markers.find answers which of a session's phone message
+  // ids have a delivery marker in its stream, searched host-side newest first
+  // (marker-find-core.ts; both twins inline, not sidecar-gated). Bridge-
+  // reachable, read-only, bounded. Optional: the companion falls back to a
+  // read-history tail when the command is unknown or not permitted.
+  'marker-find-v1',
   // 'agent-commands-v1' — unified agent.* command family (engine-routed aliases
   // over the legacy start/send/... and acp* families). Optional: without it the
   // server keeps speaking the legacy families directly.

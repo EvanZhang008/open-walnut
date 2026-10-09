@@ -122,6 +122,26 @@ export function lineFateVerdict(scan: LineFateScan | null, writesText: string, q
   return null
 }
 
+/**
+ * Must a resend that writes its line put a newline ahead of it? Yes for a line
+ * with a uuid that nothing proves in (verdict null) whose delivery marker for
+ * the process running now is in the stream. The write then went into this
+ * process's stdin at least up to its marker, which sits between the body and
+ * the newline, and may have died before the newline (the write record comes
+ * only after it, and the newline is the write that waits on a full pipe). The
+ * copy written straight after that body would merge with it into one malformed
+ * line, and the CLI exits on a malformed line. A lone newline ends it, so the
+ * CLI reads it whole and runs it, then drops the copy by its uuid; where the
+ * newline did go in, the extra one is an empty line, which the CLI skips.
+ * Without this process's marker nothing was written into it (the writer stamps
+ * the marker in the same tick the body's last byte goes in), so no newline:
+ * a first write into a process carries none (send-lost-line-v1 keeps that rule).
+ * Without a uuid the CLI could run both, so such a line is written as before.
+ */
+export function lineTornEnd(verdict: LineFate | null, q: LineFateQuery, scan: LineFateScan | null): boolean {
+  return !!q.uuid && verdict === null && !!scan && scan.markerSeen
+}
+
 /** The whole stream text at once (tests and smoke checks; the daemons scan piece by piece). */
 export function lineFate(streamText: string, writesText: string, q: LineFateQuery): LineFate | null {
   return lineFateVerdict(lineFateScan(streamText, q, null), writesText, q)

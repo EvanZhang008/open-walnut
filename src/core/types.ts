@@ -2298,6 +2298,9 @@ export interface SessionRecord {
   host?: string;
   /** Full hostname resolved from config.hosts (for display tooltips). Not persisted. */
   hostname?: string;
+  /** The host's label from config.hosts, for every sentence about the host
+   *  (a companion has no config to read it from). Not persisted. */
+  host_label?: string;
   title?: string;
   description?: string;
   pid?: number;

@@ -64,7 +64,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
-import { lineFateScan, lineFateVerdict } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd } from './line-fate-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -259,6 +259,7 @@ export function getDaemonSource(): string {
     ['__CREATE_WORKSPACE_CORE__', createWorkspaceCore.toString()],
     ['__LINE_FATE_SCAN__', lineFateScan.toString()],
     ['__LINE_FATE_VERDICT__', lineFateVerdict.toString()],
+    ['__LINE_TORN_END__', lineTornEnd.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -457,6 +458,14 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       // Two pieces fold like one: the daemon scans a long tail piece by piece.
       if (verdictOf(scanOf(started, q, scanOf(marker + '\n', q, null)), '', q)?.fate !== 'ran') throw new Error('line fate missed a started line')
       if (verdictOf(null, JSON.stringify({ pid: 7, ids: ['m'] }), q)?.fate !== 'waiting') throw new Error('line fate missed a write record')
+      // A resend of a uuid line nothing proves in, with this process's marker in, ends what a dead
+      // write left first; one with no marker of this process, or without a uuid, does not.
+      const tornOf = reconstructed['__LINE_TORN_END__'] as typeof lineTornEnd | undefined
+      const seen = scanOf(marker, q, null)
+      if (!tornOf || !tornOf(null, q, seen) || tornOf(null, q, scanOf('', q, null)) || tornOf(null, q, null)
+        || tornOf(null, { ...q, uuid: '' }, seen) || tornOf({ fate: 'waiting' }, q, seen)) {
+        throw new Error('line fate did not end a torn line by the rule')
+      }
     }
     const createDrift = reconstructed['__CREATE_LOOP_DRIFT_PROBE__'] as typeof createLoopDriftProbe | undefined
     if (createDrift) {
@@ -2549,6 +2558,60 @@ function heardFrom(client) {
   }
 }
 
+// Which trusted (non-bridge) client a relay goes to. Keep in sync with
+// daemon-standalone.ts. A trusted client is a walnut server, normally over an
+// SSH port forward. When that forward dies on the far side (a Mac asleep, a
+// network that changed under it), the host's sshd keeps the forwarded socket to
+// this daemon open for many minutes: nothing ever closes it, nothing ever comes
+// back on it. Picking "the first trusted client" handed every phone send to that
+// socket (2026-10-01: each relay timed out, the companion held the sends, and the
+// Mac's fresh link opened later sat behind the dead one in insertion order).
+// So every client stamps when it was last HEARD from (any frame, ping or pong).
+// A live walnut server is heard at least every beat: it pings every 15s and this
+// daemon pings it on the same beat. The pick, in connect order:
+//   fresh   (heard within one beat plus slack): the first one wins, so with two
+//           live servers the relay keeps going to the one that came first;
+//   suspect (missed a beat, not yet quiet): only when no client is fresh, so a
+//           redial beats the socket it replaces at once;
+//   quiet   (three beats with nothing): never a target. With none left the relay
+//           answers at once that no primary server is connected (it forwarded
+//           nothing, which is what lets the companion take its direct path).
+var TRUSTED_CLIENT_FRESH_MS = Math.round(TRUSTED_CLIENT_BEAT_MS * 4 / 3);
+var TRUSTED_CLIENT_QUIET_MS = TRUSTED_CLIENT_BEAT_MS * 3;
+function isQuietTrustedClient(client) {
+  return typeof client.lastHeardAt === 'number' && Date.now() - client.lastHeardAt > TRUSTED_CLIENT_QUIET_MS;
+}
+function pickTrustedClient() {
+  var now = Date.now();
+  var fresh = null, suspect = null, quietAt = null, quiet = 0;
+  for (const client of wsClients) {
+    if (client.origin === 'bridge') continue;
+    var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
+    var silentMs = now - at;
+    if (silentMs > TRUSTED_CLIENT_QUIET_MS) {
+      quiet += 1;
+      if (quietAt === null || at > quietAt) quietAt = at;
+    } else if (silentMs <= TRUSTED_CLIENT_FRESH_MS) {
+      if (!fresh) fresh = client;
+    } else if (!suspect) {
+      suspect = client;
+    }
+  }
+  return { client: fresh || suspect, quiet: quiet, quietForMs: quietAt === null ? null : now - quietAt };
+}
+// The error a relay answers when no trusted client can take it: the caller's
+// contract text ("<cmd>: no primary server connected", which companions key on
+// as provably unsent), plus why when a quiet client was skipped.
+function noPrimaryError(contract, picked) {
+  var why = picked && picked.quietForMs !== null
+    ? ' (the last one went quiet ' + Math.round(picked.quietForMs / 1000) + 's ago)'
+    : '';
+  if (picked && picked.quiet > 0) {
+    logMsg('warn', 'relay: every trusted client is quiet, none is a target', { what: contract, quiet: picked.quiet, quietForMs: picked.quietForMs });
+  }
+  return contract + why;
+}
+
 let cronMetadataConfig = null;
 let cronMetadataReplay = Promise.resolve();
 const cronMetadata = (__CREATE_CRON_METADATA__)({
@@ -2862,6 +2925,10 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
   // Twin of daemon-standalone.ts: a model or effort change while the companion leads.
   'leader.settings',
+  // Narrow delivery-marker lookup (marker-find-v1): which of the given phone
+  // message ids have a delivery marker in one session's stream. Read-only,
+  // bounded (ids and bytes), and the answer is ids the caller already holds.
+  'markers.find',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
@@ -2980,6 +3047,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'cron.supervision': return daemonCommands.run(function () { return cmdCronSupervision(ws, id, cmd); });
     case 'rename': return cmdRename(ws, id, cmd);
     case 'read-history': return cmdReadHistory(ws, id, cmd);
+    case 'markers.find': return cmdMarkersFind(ws, id, cmd);
     case 'subscribe-agent': return cmdSubscribeAgent(ws, id, cmd);
     case 'unsubscribe-agent': return cmdUnsubscribeAgent(ws, id, cmd);
     case 'write-inbox': return cmdWriteInbox(ws, id, cmd);
@@ -3325,10 +3393,7 @@ function cmdSttRelay(ws, id, cmd) {
   if (!audio || !format) {
     return sendError(ws, id, 'stt: missing audio or format');
   }
-  var target = null;
-  for (const client of wsClients) {
-    if (client.origin !== 'bridge') { target = client; break; }
-  }
+  var target = pickTrustedClient().client;
   if (!target) {
     return sendError(ws, id, 'stt: no transcription host connected');
   }
@@ -3379,12 +3444,10 @@ function cmdLaunchRelay(ws, id, cmd) {
   if (!action) {
     return sendError(ws, id, 'session.launch: missing action');
   }
-  var target = null;
-  for (const client of wsClients) {
-    if (client.origin !== 'bridge') { target = client; break; }
-  }
+  var picked = pickTrustedClient();
+  var target = picked.client;
   if (!target) {
-    return sendError(ws, id, 'session.launch: no primary server connected');
+    return sendError(ws, id, noPrimaryError('session.launch: no primary server connected', picked));
   }
   launchRelayCounter += 1;
   var relayId = launchRelayCounter;
@@ -3441,12 +3504,10 @@ function cmdControlRelay(ws, id, cmd) {
   if (!targetSid) {
     return sendError(ws, id, 'session.control: missing sessionId');
   }
-  var target = null;
-  for (const client of wsClients) {
-    if (client.origin !== 'bridge') { target = client; break; }
-  }
+  var picked = pickTrustedClient();
+  var target = picked.client;
   if (!target) {
-    return sendError(ws, id, 'session.control: no primary server connected');
+    return sendError(ws, id, noPrimaryError('session.control: no primary server connected', picked));
   }
   controlRelayCounter += 1;
   var relayId = controlRelayCounter;
@@ -3498,6 +3559,46 @@ function cmdControlResult(ws, id, cmd) {
 var MESSAGE_RELAY_TIMEOUT_MS = 45000;
 var messageRelayCounter = 0;
 var messageRelayPending = new Map();
+// How many times one relay may move to another client after its target closed.
+var MESSAGE_RELAY_MAX_HOPS = 4;
+// Its target closed and no other client can take it. Worded as a timeout on
+// purpose: the request was written, so it may have arrived, and the companion
+// must ask the Mac before it sends the message any other way.
+var MESSAGE_RELAY_TARGET_LOST = 'session.message: primary server timed out (its link closed with the message on it)';
+// A per-client number for the relay log lines (which client a relay went to).
+var relayTargetIds = new WeakMap();
+var relayTargetSeq = 0;
+function relayTargetId(client) {
+  var n = relayTargetIds.get(client);
+  if (n === undefined) { relayTargetSeq += 1; n = relayTargetSeq; relayTargetIds.set(client, n); }
+  return n;
+}
+
+// A trusted client closed: each phone send handed to it and not answered yet
+// goes to the next client at once, the same request (the walnut server's queue
+// takes a message id once, so a second copy is answered as the first was). A
+// dead forward the daemon had not noticed yet closes the moment a relay is
+// written to it, and each such relay used to wait out its whole 45s timeout
+// (matrix L5, 2026-10-03: three in a row, while the Mac's fresh links sat
+// idle). With no client left it answers at once. Keep in sync with
+// daemon-standalone.ts.
+function rerouteMessageRelays(closed) {
+  for (const [relayId, pending] of messageRelayPending) {
+    if (pending.target !== closed) continue;
+    var next = pending.hops < MESSAGE_RELAY_MAX_HOPS ? pickTrustedClient().client : null;
+    if (next) {
+      pending.target = next;
+      pending.hops += 1;
+      logMsg('info', 'session.message: its target closed, relaying again', { relayId: relayId, from: relayTargetId(closed), to: relayTargetId(next), hops: pending.hops });
+      sendEvent(next, 'message-request', pending.request);
+      continue;
+    }
+    messageRelayPending.delete(relayId);
+    clearTimeout(pending.timer);
+    logMsg('warn', 'session.message: its target closed and no other client can take it', { relayId: relayId, from: relayTargetId(closed), hops: pending.hops });
+    sendError(pending.ws, pending.id, MESSAGE_RELAY_TARGET_LOST);
+  }
+}
 
 function cmdMessageRelay(ws, id, cmd) {
   var message = cmd.message, messageId = cmd.messageId;
@@ -3505,12 +3606,10 @@ function cmdMessageRelay(ws, id, cmd) {
   if (!targetSid || typeof message !== 'string' || message === '' || !messageId) {
     return sendError(ws, id, 'session.message: missing sessionId, message, or messageId');
   }
-  var target = null;
-  for (const client of wsClients) {
-    if (client.origin !== 'bridge') { target = client; break; }
-  }
+  var picked = pickTrustedClient();
+  var target = picked.client;
   if (!target) {
-    return sendError(ws, id, 'session.message: no primary server connected');
+    return sendError(ws, id, noPrimaryError('session.message: no primary server connected', picked));
   }
   messageRelayCounter += 1;
   var relayId = messageRelayCounter;
@@ -3518,9 +3617,10 @@ function cmdMessageRelay(ws, id, cmd) {
     messageRelayPending.delete(relayId);
     sendError(ws, id, 'session.message: primary server timed out');
   }, MESSAGE_RELAY_TIMEOUT_MS);
-  messageRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
-  logMsg('info', 'session.message: relaying to primary server', { relayId: relayId, sid: targetSid, messageId: messageId });
-  sendEvent(target, 'message-request', { relayId: relayId, sessionId: targetSid, message: message, messageId: messageId, stopFence: cmd.stopFence == null ? null : cmd.stopFence });
+  var request = { relayId: relayId, sessionId: targetSid, message: message, messageId: messageId, stopFence: cmd.stopFence == null ? null : cmd.stopFence };
+  messageRelayPending.set(relayId, { ws: ws, id: id, timer: timer, target: target, request: request, hops: 0 });
+  logMsg('info', 'session.message: relaying to primary server', { relayId: relayId, sid: targetSid, messageId: messageId, to: relayTargetId(target) });
+  sendEvent(target, 'message-request', request);
 }
 
 function cmdMessageResult(ws, id, cmd) {
@@ -3865,7 +3965,8 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   var target = null;
   var untagged = null;
   for (const client of wsClients) {
-    if (client.origin === 'bridge') continue;
+    // A quiet client is a dead forward (see pickTrustedClient): never a target.
+    if (client.origin === 'bridge' || isQuietTrustedClient(client)) continue;
     var clientHome = gatewayClientHomes.get(client);
     if (home && clientHome === home) target = client;
     else if (!clientHome && !untagged) untagged = client;
@@ -4900,7 +5001,11 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line) {
     // line written is recorded before the next write may ask.
     const known = line && line.fate ? await line.fate() : null;
     if (known) return known;
-    const written = await writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline);
+    // A first attempt that died after its body and marker may have left it in the pipe: a newline first ends it (lineTornEnd).
+    const tornEnd = !!(line && line.tornEnd && line.tornEnd());
+    if (tornEnd) logMsg('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid: sid, pid: session.pid });
+    const out = tornEnd ? Buffer.concat([Buffer.from('\\n'), buf]) : buf;
+    const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline);
     if (written === 'ok' && line && line.written) line.written();
     return written;
   });
@@ -6902,9 +7007,12 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       ? function () { for (const m of markers.list) appendUserMarkerLine(sid, session, m.message, m.messageId, true); }
       : undefined;
     const ids = markers.list.map(function (m) { return m.messageId; });
+    const torn = { end: false };
     const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
-      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid); } : undefined,
+      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid, torn); } : undefined,
       written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
+      // A rewrite already starts with its newline: one is enough.
+      tornEnd: function () { return torn.end && !rewrite; },
     });
     if (result && typeof result === 'object') {
       logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null });
@@ -7039,6 +7147,7 @@ const DEDUPE_SCAN_CHUNK_BYTES = 256 * 1024;
 const LINE_RECORD_SCAN_BYTES = 256 * 1024;
 const lineFateScan = (__LINE_FATE_SCAN__);
 const lineFateVerdict = (__LINE_FATE_VERDICT__);
+const lineTornEnd = (__LINE_TORN_END__);
 async function scanTail(filePath, max, onText) {
   let fh;
   try { fh = await fs.promises.open(filePath, 'r'); } catch { return; }
@@ -7062,13 +7171,16 @@ async function scanTail(filePath, max, onText) {
     await fh.close().catch(() => {});
   }
 }
-async function lineFateInProcess(session, uuid, messageIds, lostPid) {
+async function lineFateInProcess(session, uuid, messageIds, lostPid, torn) {
   const q = { uuid: typeof uuid === 'string' ? uuid : '', messageIds: messageIds, pid: session.pid, lostPid: typeof lostPid === 'number' ? lostPid : null };
   let scan = null;
   await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan); });
   let records = '';
   await scanTail(session.jsonlPath + '.lines', LINE_RECORD_SCAN_BYTES, (text) => { records += text; });
-  return lineFateVerdict(scan, records, q);
+  const verdict = lineFateVerdict(scan, records, q);
+  // A first attempt that died after its body and marker: end what it left first (lineTornEnd).
+  if (torn) torn.end = lineTornEnd(verdict, q, scan);
+  return verdict;
 }
 function recordLineWritten(session, uuid, messageIds) {
   if (!session.pid) return;
@@ -7360,6 +7472,9 @@ function cmdStatus(ws, id, cmd) {
     pid: session.pid,
     mtime,
     size,
+    // send-markers-v1: a send's markers are written inside its delivery, so a
+    // caller may hand them over with the send (direct-host-send.ts).
+    sendMarkers: true,
     state: session.state,
     exitCode: session.exitCode,
     exitReason: session.exitReason,
@@ -7686,6 +7801,58 @@ function cmdReadHistory(ws, id, cmd) {
     sendOk(ws, id, { main: mainContent, subagents });
   } catch (err) {
     sendError(ws, id, 'read-history failed: ' + err.message);
+  }
+}
+
+// ── Delivery-marker lookup (marker-find-v1) ──
+// Hand-inlined copy of marker-find-core.ts (this template cannot import); keep
+// the two in sync, and with daemon-standalone.ts cmdMarkersFind. The search runs
+// here, newest bytes first, so only the ids found cross the bridge. 'ordered':
+// this daemon writes a send's markers inside the delivery (send-markers-v1).
+var MARKER_FIND_MAX_IDS = 200;
+var MARKER_FIND_MAX_ID_LEN = 200;
+var MARKER_FIND_MAX_BYTES = 256 * 1024 * 1024;
+var MARKER_FIND_CHUNK_BYTES = 4 * 1024 * 1024;
+async function cmdMarkersFind(ws, id, cmd) {
+  var sid = cmd.sid, ids = cmd.ids;
+  if (typeof sid !== 'string' || !sid || path.basename(sid) !== sid || sid.indexOf('..') !== -1 || sid.indexOf(String.fromCharCode(92)) !== -1) {
+    return sendError(ws, id, 'markers.find: missing or invalid sid');
+  }
+  if (!Array.isArray(ids)) return sendError(ws, id, 'markers.find: ids must be an array');
+  if (ids.length > MARKER_FIND_MAX_IDS) return sendError(ws, id, 'markers.find: too many ids');
+  for (var i = 0; i < ids.length; i++) {
+    if (typeof ids[i] !== 'string' || ids[i].length === 0 || ids[i].length > MARKER_FIND_MAX_ID_LEN) {
+      return sendError(ws, id, 'markers.find: invalid id');
+    }
+  }
+  var session = sessions.get(sid);
+  var file = (session && session.jsonlPath) || path.join(STREAMS_DIR, sid + '.jsonl');
+  var handle;
+  try { handle = await fs.promises.open(file, 'r'); } catch (err) {
+    if (err && err.code === 'ENOENT') return sendOk(ws, id, { found: [], complete: true, size: 0, scanned: 0, ordered: true });
+    return sendError(ws, id, 'markers.find failed: ' + err.message);
+  }
+  try {
+    var needles = ids.map(function (mid) { return [mid, Buffer.from('"walnutMessageId":' + JSON.stringify(mid))]; });
+    var overlap = 0;
+    needles.forEach(function (n) { overlap = Math.max(overlap, n[1].length); });
+    var found = new Set();
+    var size = (await handle.stat()).size;
+    var end = size, scanned = 0;
+    while (end > 0 && found.size < needles.length && scanned < MARKER_FIND_MAX_BYTES) {
+      var start = Math.max(0, end - MARKER_FIND_CHUNK_BYTES);
+      var readEnd = Math.min(size, end + overlap);
+      var buf = Buffer.alloc(readEnd - start);
+      await handle.read(buf, 0, buf.length, start);
+      needles.forEach(function (n) { if (!found.has(n[0]) && buf.indexOf(n[1]) !== -1) found.add(n[0]); });
+      scanned += end - start;
+      end = start;
+    }
+    sendOk(ws, id, { found: Array.from(found), complete: end === 0, size: size, scanned: scanned, ordered: true });
+  } catch (err) {
+    sendError(ws, id, 'markers.find failed: ' + err.message);
+  } finally {
+    try { await handle.close(); } catch (e) {}
   }
 }
 
@@ -10789,6 +10956,8 @@ async function startDaemon() {
         }
       }
 
+      // Phone sends handed to it and not answered move to the next client now.
+      rerouteMessageRelays(ws);
       logMsg('info', 'client disconnected', { clients: wsClients.size });
     });
 

@@ -148,19 +148,27 @@ interface PendingCommand {
 // ── Mobile-relay enqueue ledger (post-delivery idempotency) ──
 // The durable queue dedupes by messageId only while the row is still queued;
 // once delivered+drained, a phone retry (lost ack) would re-enqueue the same
-// turn. This bounded in-memory ledger of recently accepted qm-mobile ids
-// closes that window. Module-scope on purpose: reconnects create fresh
-// DaemonConnection instances but replays must still dedupe. Restart loses it —
-// acceptable, since the retry window (phone tap) is minutes, not days.
-const MOBILE_ENQUEUE_LEDGER_MAX = 500
-const recentMobileEnqueues = new Set<string>()
-function rememberMobileEnqueue(messageId: string): void {
-  recentMobileEnqueues.add(messageId)
-  if (recentMobileEnqueues.size > MOBILE_ENQUEUE_LEDGER_MAX) {
-    // Set iteration is insertion-ordered — drop the oldest.
-    const oldest = recentMobileEnqueues.values().next().value
-    if (oldest !== undefined) recentMobileEnqueues.delete(oldest)
-  }
+// turn. The fate of every relayed qm-mobile id closes that window. It lives in
+// the queue file, written with the row (core/relay-fates.ts): the companion
+// also asks it whether a message may go to its host another way, and a fate a
+// restart lost would answer "never seen" for a message that already ran.
+const mobileRelayLedger = () => import('../core/sessions/mobile-relay-ledger.js')
+
+/**
+ * A relayed phone message this queue took: is its row still here, unrun, and
+ * will it never run because a stop overtook it? (Parked by the stop, or still
+ * waiting, pending or parked, under a fence older than the session's latest
+ * stop.) A row that is gone ran, and one being delivered is running: both are
+ * acknowledged, never answered as stopped.
+ */
+async function relayedRowOvertakenByStop(messageId: string): Promise<boolean> {
+  const { findQueuedMessage } = await import('../core/session-message-queue.js')
+  const row = await findQueuedMessage(messageId)
+  if (!row || (row.status !== 'pending' && row.status !== 'parked')) return false
+  const { STOP_PARKED_REASON } = await import('../core/relay-fates.js')
+  if (row.status === 'parked' && row.parkedReason === STOP_PARKED_REASON) return true
+  const { sessionStops } = await import('../core/sessions/session-stop.js')
+  return (row.stopFence ?? null) !== await sessionStops.fence(row.sessionId)
 }
 
 // ── OS-service takeover on a remote host ──
@@ -1582,47 +1590,11 @@ export class DaemonConnection {
         || typeof messageId !== 'string' || messageId === ''
         || (stopFence !== null && typeof stopFence !== 'string')) {
         reply = { relayId, error: 'invalid message relay payload', errorKind: 'bad_request' }
-      } else if (recentMobileEnqueues.has(messageId)) {
-        const { sessionStops, SessionStopSupersededError } = await import('../core/sessions/session-stop.js')
-        if (await sessionStops.fence(sessionId) !== stopFence) {
-          throw new SessionStopSupersededError('Message predates the latest stop; send a new message to continue')
-        }
-        // Post-delivery idempotency: the queue-level dedupe only sees rows
-        // still IN the queue. A phone retry after a lost ack, arriving after
-        // the message was delivered and drained, would re-enqueue a duplicate
-        // turn — this ledger closes that window.
-        log.session.info('DaemonConnection: message relay replay deduped (ledger)', {
-          host: this.hostKey, relayId, sessionId, messageId,
-        })
-        reply = { relayId, result: { messageId } }
       } else {
-        const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-        const record = await getSessionByClaudeId(sessionId)
-        if (!record) {
-          reply = { relayId, error: `Session not found: ${sessionId}`, errorKind: 'not_found' }
-        } else {
-          // Output mode: this is the phone's send arriving over the cloud bridge,
-          // so it owes the model the same instruction/reminder a console send
-          // does — the replica has no session record to resolve it from, and the
-          // edge marker lives here on the primary, which is why the wrapping
-          // happens at the enqueue rather than back on the EC2 box.
-          const { prepareOutputModeSend } = await import('../core/sessions/output-mode-send.js')
-          const outputMode = await prepareOutputModeSend(sessionId, record, message)
-          const { sendMessageToSession } = await import('../core/session-message-queue.js')
-          const msg = await sendMessageToSession(sessionId, message, {
-            source: 'mobile',
-            taskId: record.taskId,
-            messageId,
-            stopFence,
-            ...(outputMode.changed ? { enqueueMessage: outputMode.enqueueText } : {}),
-          })
-          await outputMode.commit()
-          rememberMobileEnqueue(messageId)
-          log.session.info('DaemonConnection: message relay enqueued (durable)', {
-            host: this.hostKey, relayId, sessionId, messageId: msg.id,
-          })
-          reply = { relayId, result: { messageId: msg.id } }
-        }
+        // One message at a time: the companion's withdraw of this id (below,
+        // mobile-relay-ledger.ts) never interleaves with its enqueue.
+        const ledger = await mobileRelayLedger()
+        reply = await ledger.withMobileMessageLock(messageId, () => this.enqueueRelayedMessage(relayId, sessionId, message, messageId, stopFence as string | null))
       }
     } catch (err) {
       const message2 = err instanceof Error ? err.message : String(err)
@@ -1640,6 +1612,71 @@ export class DaemonConnection {
         host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  /** The decision for one valid relayed message (the caller holds its lock and answers errors). */
+  private async enqueueRelayedMessage(
+    relayId: number, sessionId: string, message: string, messageId: string, stopFence: string | null,
+  ): Promise<Record<string, unknown>> {
+    let reply: Record<string, unknown>
+    const fate = await (await mobileRelayLedger()).relayFate(messageId)
+    if (fate === 'withdrawn' || fate === 'fenced') {
+      // The companion asked for this id back (or about it before any relay of
+      // it arrived) and delivers it another way: a frame of it that lands now
+      // was still on its way, and taking it would be a second delivery.
+      log.session.warn('DaemonConnection: message relay refused (the companion took it back)', {
+        host: this.hostKey, relayId, sessionId, messageId, fate,
+      })
+      reply = { relayId, error: 'the companion took this message back before it arrived', errorKind: 'withdrawn' }
+    } else if (fate === 'removed') {
+      reply = { relayId, error: 'it was removed on the Mac before it ran', errorKind: 'removed' }
+    } else if (fate === 'taken') {
+      // Post-delivery idempotency: the queue-level dedupe only sees rows
+      // still IN the queue. A phone retry after a lost ack, arriving after
+      // the message was delivered and drained, would re-enqueue a duplicate
+      // turn. This ledger closes that window. The answer is what became of
+      // the row: one that ran (gone from the queue) was delivered, whatever
+      // stop came since; only a row still here that a stop overtook never runs.
+      if (await relayedRowOvertakenByStop(messageId)) {
+        const { SessionStopSupersededError } = await import('../core/sessions/session-stop.js')
+        throw new SessionStopSupersededError('Message predates the latest stop; send a new message to continue')
+      }
+      log.session.info('DaemonConnection: message relay replay deduped (ledger)', {
+        host: this.hostKey, relayId, sessionId, messageId,
+      })
+      reply = { relayId, result: { messageId } }
+    } else {
+      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      if (!record) {
+        reply = { relayId, error: `Session not found: ${sessionId}`, errorKind: 'not_found' }
+      } else {
+        // Output mode: this is the phone's send arriving over the cloud bridge,
+        // so it owes the model the same instruction/reminder a console send
+        // does: the replica has no session record to resolve it from, and the
+        // edge marker lives here on the primary, which is why the wrapping
+        // happens at the enqueue rather than back on the EC2 box.
+        const { prepareOutputModeSend } = await import('../core/sessions/output-mode-send.js')
+        const outputMode = await prepareOutputModeSend(sessionId, record, message)
+        const { sendMessageToSession } = await import('../core/session-message-queue.js')
+        // The row and the id's fate are one write (relay-fates.ts): no crash
+        // point leaves a queued message the companion would be told is unseen.
+        const msg = await sendMessageToSession(sessionId, message, {
+          source: 'mobile',
+          taskId: record.taskId,
+          messageId,
+          stopFence,
+          relayTaken: true,
+          ...(outputMode.changed ? { enqueueMessage: outputMode.enqueueText } : {}),
+        })
+        await outputMode.commit()
+        log.session.info('DaemonConnection: message relay enqueued (durable)', {
+          host: this.hostKey, relayId, sessionId, messageId: msg.id,
+        })
+        reply = { relayId, result: { messageId: msg.id } }
+      }
+    }
+    return reply
   }
 
   /**
@@ -3535,6 +3572,30 @@ export class DaemonConnection {
    */
   async connectDirect(wsUrl: string): Promise<void> {
     if (this._connected) return
+    // One dial per connection (runner gate r3, section 4). The reconnect loop
+    // owns a local connection it is dialling or waiting to re-dial: join it.
+    // It dials the local daemon's CURRENT address; `wsUrl` is the caller's,
+    // which a daemon restart on another port has made stale.
+    if (this.hostKey === '__local__' && (this._reconnectInFlight || this.reconnectTimer)) {
+      await this.reconnectNow()
+      if (!this._connected) throw new Error(`Connection to ${this.hostKey} is still reconnecting`)
+      return
+    }
+    if (this._directDial) return this._directDial
+    // Under _connecting, a reconnect timer that fires waits a step (scheduleReconnect).
+    this._connecting = true
+    const dial: Promise<void> = this.dialDirect(wsUrl).finally(() => {
+      this._connecting = false
+      if (this._directDial === dial) this._directDial = null
+    })
+    this._directDial = dial
+    return dial
+  }
+
+  /** The connectDirect dial running now: callers and reconnectNow join it, never dial beside it. */
+  private _directDial: Promise<void> | null = null
+
+  private async dialDirect(wsUrl: string): Promise<void> {
     this._dialledDirect = true
     await this.connectWebSocket(wsUrl)
     const ok = await this.verifyCapabilities()
@@ -3658,7 +3719,9 @@ export class DaemonConnection {
       })
 
       ws.on('close', () => {
-        if (this._connected) {
+        // Only the socket in use speaks for the link: a socket some other dial
+        // replaced must never tear the live one down.
+        if (this._connected && this.ws === ws) {
           let localDaemonPidAlive: boolean | null = null
           if (this.hostKey === '__local__') {
             try {
@@ -4106,6 +4169,7 @@ export class DaemonConnection {
    */
   reconnectNow(): Promise<void> {
     if (this._reconnectInFlight) return this._reconnectInFlight
+    if (this._directDial) return this._directDial
     if (this._connected) return Promise.resolve()
     if (this._destroyed) return Promise.reject(new Error(`Connection to ${this.hostKey} was closed`))
     this.cancelReconnectTimer()

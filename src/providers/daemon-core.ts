@@ -17,7 +17,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
-import { lineFateScan, lineFateVerdict, type LineFate, type LineFateKind, type LineFateScan } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, type LineFate, type LineFateKind, type LineFateScan } from './line-fate-core.js'
 
 // ── Shared types ──
 
@@ -897,9 +897,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         ? () => { for (const m of pending) appendUserMarkerLine(sid, session, m.message, m.messageId, true) }
         : undefined
       const ids = pending.map((m) => m.messageId)
+      const torn = { end: false }
       const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
-        fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid) : undefined,
+        fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid, torn) : undefined,
         written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
+        // A rewrite already starts with its newline: one is enough.
+        tornEnd: () => torn.end && !rewrite,
       })
       if (typeof result === 'object') {
         logger('info', 'send: the line was not written again', {
@@ -1070,13 +1073,17 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    */
   async function lineFateInProcess(
     session: S, uuid: string | undefined, messageIds: string[], lostPid: number | null = null,
+    torn?: { end: boolean },
   ): Promise<LineFate | null> {
     const q = { uuid: uuid ?? '', messageIds, pid: session.pid, lostPid }
     let scan: LineFateScan | null = null
     await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan) })
     let records = ''
     await scanTail(lineRecordPath(session.jsonlPath), LINE_RECORD_SCAN_BYTES, (text) => { records += text })
-    return lineFateVerdict(scan, records, q)
+    const verdict = lineFateVerdict(scan, records, q)
+    // A first attempt that died after its body and marker: end what it left first (lineTornEnd).
+    if (torn) torn.end = lineTornEnd(verdict, q, scan)
+    return verdict
   }
 
   /** The whole line, newline included, is in the pipe of process `session.pid`. */
@@ -1147,8 +1154,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     buf: Buffer,
     beforeNewline?: () => void,
     /** send-dedupe-v1, run inside the chain: `fate` before the write (non-null = do not
-     *  write), `written` right after a whole line went in (before the next write may ask). */
-    line?: { fate?: () => Promise<LineFate | null>; written?: () => void },
+     *  write), `written` right after a whole line went in (before the next write may ask),
+     *  `tornEnd` (asked after `fate`): a newline goes in before the line (lineTornEnd). */
+    line?: { fate?: () => Promise<LineFate | null>; written?: () => void; tornEnd?: () => boolean },
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
@@ -1161,7 +1169,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead' as const
       const known = line?.fate ? await line.fate() : null
       if (known) return known
-      const written = await writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline)
+      const tornEnd = line?.tornEnd?.() === true
+      if (tornEnd) logger('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid, pid: session.pid })
+      const out = tornEnd ? Buffer.concat([Buffer.from('\n'), buf]) : buf
+      const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline)
       if (written === 'ok') line?.written?.()
       return written
     })

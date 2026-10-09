@@ -174,6 +174,12 @@ let onInterrupt = null;
 // under `cancelled`, one without lists them under `still_queued` and they still run
 // (live probe, CLI 2.1.280).
 const queuedUserLines = [];
+// A clean turn is "thinking" between its user line and its output. The real CLI
+// queues a user line that lands then and runs it next; this mock used to drop
+// it. Opt-in (MOCK_CLAUDE_QUEUE_MIDTURN=1) so suites written against the old
+// behavior are unchanged: an E2E that sends twice in quick succession sets it.
+const QUEUE_MIDTURN = process.env.MOCK_CLAUDE_QUEUE_MIDTURN === '1';
+let cleanTurnThinking = false;
 // The partial answer a long turn has streamed so far. On an interrupt the real CLI
 // consolidates it into an `assistant` message before its interrupted marker.
 let streamedPartial = null;
@@ -345,7 +351,7 @@ if (inputFormat === 'stream-json') {
           const resolve = pendingUserResolve;
           pendingUserResolve = null;
           resolve(typeof c === 'string' ? c : JSON.stringify(c));
-        } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onInterrupt) {
+        } else if (parsed.type === 'user' && parsed.message?.content !== undefined && (onInterrupt || (QUEUE_MIDTURN && cleanTurnThinking))) {
           queuedUserLines.push(parsed);
           if (parsed.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state: 'queued', session_id: outputSessionId }) + '\n');
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onUserLine) {
@@ -924,6 +930,7 @@ if (outputFormat === 'stream-json') {
         process.stdout.write(JSON.stringify(line) + '\n');
       };
       const body = () => {
+        cleanTurnThinking = false;
         // Unique per process as a real API id is: a resumed process restarts
         // the counter, and its turns share one transcript with the old ones.
         emit({ type: 'assistant', message: { id: 'msg_snap_clean_' + (++snapshotTurnSeq) + '_' + process.pid, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
@@ -944,7 +951,7 @@ if (outputFormat === 'stream-json') {
       // record projects 'running' with the CLI idle. Measured on the stress
       // suite: all 6 concurrent sessions wedged at 'running' this way.
       const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
-      if (THINK_MS > 0) setTimeout(body, THINK_MS);
+      if (THINK_MS > 0) { cleanTurnThinking = true; setTimeout(body, THINK_MS); }
       else body();
       // Do NOT exit: stream-json FIFO mode stays alive between turns.
       return;

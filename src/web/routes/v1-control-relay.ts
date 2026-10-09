@@ -188,9 +188,12 @@ export async function driveControlRelay(
   sessionId: string,
   params: Record<string, unknown> | undefined,
   timeoutMs = CONTROL_RELAY_TIMEOUT_MS,
+  /** Filled when the answer is null: `notSent` = provably never reached a socket. */
+  fate?: { notSent?: boolean },
 ): Promise<Record<string, unknown> | null> {
   const sent = await sendControlToPrimary(action, sessionId, params, timeoutMs)
   if (sent.ok) return sent.reply
+  if (fate) fate.notSent = sent.offline
   if (sent.offline) {
     // Same sentence as session-launch-v1.ts. The duration is strictly diagnostic
     // (an unreadable loss clock means the plain wording, never a different

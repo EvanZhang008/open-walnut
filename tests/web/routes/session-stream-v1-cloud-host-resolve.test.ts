@@ -205,7 +205,8 @@ describe('send: a session outside the projection window', () => {
     expect(res.status).toBe(503)
     expect(res.body.error.code).toBe('bridge_offline')
     // Never "session not found": the session's existence was never in doubt.
-    expect(res.body.error.message).toMatch(/primary/i)
+    // The primary, by the name the phone uses for it.
+    expect(res.body.error.message).toMatch(/your Mac/i)
     expect(res.body.error.message).not.toContain(SID)
     expect(res.body.error.message).not.toMatch(/not found/i)
   })

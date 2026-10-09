@@ -165,6 +165,10 @@ describe('phone send during a bridge outage (CLOUD_MODE)', () => {
     expect((await postMessage({ text: 'first', messageId: 'qm-mobile-000000000001' })).status).toBe(202)
     expect((await postMessage({ text: 'second', messageId: 'qm-mobile-000000000002' })).status).toBe(202)
     expect(await queuedSessionSendCount()).toBe(2)
+    // The second send was held behind the first and kicked a drain of its own;
+    // let it finish (the bridge is still down) before the rows are rewritten
+    // below, or it reads a half-written file.
+    await flushSendQueue()
 
     // ~7 real minutes of outage compressed: nothing in the queue is time-gated
     // below the 24h expiry, so age is simulated by rewriting `at`.
@@ -211,8 +215,9 @@ describe('phone send during a bridge outage (CLOUD_MODE)', () => {
     const elapsed = Date.now() - started
     expect(res.status).toBe(202)
     expect((await res.json() as Record<string, unknown>).queued).toBe(true)
-    // Under the phone's 30s URLSession ceiling, with real margin.
-    expect(elapsed).toBeLessThan(28_000)
+    // Under the phone's 30s URLSession ceiling, with real margin, and soon
+    // enough that the phone shows it held instead of a long faded "sending".
+    expect(elapsed).toBeLessThan(12_000)
     expect(await queuedSessionSendCount()).toBe(1)
   }, 40_000)
 
@@ -242,9 +247,11 @@ describe('phone send during a bridge outage (CLOUD_MODE)', () => {
     expect(await queuedSessionSendCount()).toBe(0)
   })
 
-  it('an IMAGE send is never banked — it keeps the honest 503', async () => {
-    // The attachments only exist as host-side files created THROUGH the bridge;
-    // banking the text alone would deliver a turn whose pictures vanished.
+  it('an IMAGE send is banked WITH its pictures (never the text alone)', async () => {
+    // The attachments only exist as host-side files created THROUGH the bridge,
+    // so the bank keeps the pictures beside the row and the drain saves them on
+    // the host before the text naming them goes (core/sessions/cloud-images.ts).
+    // It used to keep the 503, and the phone waited out its own ladder.
     bridgeDown()
     const res = await postMessage({
       text: 'look',
@@ -254,9 +261,9 @@ describe('phone send during a bridge outage (CLOUD_MODE)', () => {
         mediaType: 'image/png',
       }],
     })
-    expect(res.status).toBe(503)
-    expect((await res.json() as { error: { code: string } }).error.code).toBe('bridge_offline')
-    expect(await queuedSessionSendCount()).toBe(0)
+    expect(res.status).toBe(202)
+    expect((await res.json() as { queued?: boolean }).queued).toBe(true)
+    expect(await queuedSessionSendCount()).toBe(1)
   })
 
   it('a domain rejection from the primary drops the row instead of wedging the queue', async () => {

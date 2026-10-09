@@ -32,10 +32,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import {
-  driveControlRelay, relayControlAction, sendRelayReplyError,
-  sendV1Error as sendError, v1ErrorCode,
-} from './v1-control-relay.js'
+import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 
 export const sessionLifecycleV1Router = Router()
 
@@ -89,13 +86,6 @@ async function boundSessionRead<T>(sessionId: string, read: () => Promise<T>): P
   return boundHostRead((await getSessionByClaudeId(sessionId))?.host, read)
 }
 
-// Existing clients treat every 2xx as stopped, so a pending confirmation must go through the error branch.
-function sendStopPending(res: Response): void {
-  sendError(res, 503, 'stop_pending',
-    'Stop request saved, but the session host has not confirmed it yet. '
-    + 'The session may still be running. Retry to check.')
-}
-
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 /**
@@ -147,6 +137,8 @@ async function degradedSessionDetail(sessionId: string): Promise<Record<string, 
       session: {
         claudeSessionId: sessionId,
         process_status: processStatus,
+        ...(row.host ? { host: row.host } : {}),
+        ...(row.host_label ? { host_label: row.host_label } : {}),
         ...(row.title ? { title: row.title } : {}),
         ...(row.mode ? { mode: row.mode } : {}),
       },
@@ -301,25 +293,16 @@ sessionLifecycleV1Router.post('/sessions/:id/terminate', async (req: Request, re
     if (!sessionId) return
     const force = (req.body ?? {}).force === true
     if (CLOUD_MODE) {
-      const reply = await driveControlRelay(res, 'terminate', sessionId, { force })
-      if (!reply) return
-      if (reply.ok === true && reply.result && typeof reply.result === 'object') {
-        const result = reply.result as Record<string, unknown>
-        if (result.status === 'pending') {
-          sendStopPending(res)
-          return
-        }
-        res.status(200).json(result)
-        return
-      }
-      sendRelayReplyError(res, reply)
+      const { cloudTerminate } = await import('./session-stop-v1.js')
+      await cloudTerminate(res, sessionId, force)
       return
     }
     const { terminateSession } = await import('../../core/sessions/session-lifecycle.js')
+    const { sendStopPending } = await import('./session-stop-v1.js')
     try {
       const result = await terminateSession(sessionId, { force })
       if (result.status === 'pending') {
-        sendStopPending(res)
+        await sendStopPending(res, sessionId)
         return
       }
       res.status(200).json(result)

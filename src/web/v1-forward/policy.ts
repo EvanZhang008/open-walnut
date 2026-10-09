@@ -51,6 +51,14 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   { re: /^\/events(\/|$)/, why: 'stream' },
   { re: /^\/(sessions|conversations)\/[^/]+\/stream$/, why: 'stream' },
   { methods: ['POST'], re: /^\/(sessions|conversations)\/[^/]+\/messages$/, why: 'send' },
+  // The phone messages the companion holds are its own state (send-queue.ts), so
+  // what reads or fences them stays here too: a held send's status (the Mac
+  // holds none and answers 404), the queue list that shows held sends beside
+  // the Mac's rows, and a stop, which is noted here before it is relayed so a
+  // held send never runs past it (session-stop-v1.ts, cloud-stop-fence.ts).
+  { methods: ['GET'], re: /^\/sessions\/[^/]+\/messages\/[^/]+$/, why: 'send' },
+  { methods: ['GET'], re: /^\/sessions\/[^/]+\/queue$/, why: 'send' },
+  { methods: ['POST'], re: /^\/sessions\/[^/]+\/terminate$/, why: 'send' },
   // The Personal AI chat has its own relay to the Mac, and its message list
   // carries the turns the companion answered alone, so the Mac adopts them.
   { re: /^\/conversations(\/|$)/, why: 'chat' },

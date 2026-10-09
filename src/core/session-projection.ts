@@ -159,6 +159,10 @@ export interface ProjectedSession {
   group_label?: string
   /** '' = the primary box itself; otherwise the remote host alias. */
   host: string
+  /** Additive: the host's label from the primary's config (config.yaml never
+   *  syncs, so a companion and a phone know a host by its alias alone without
+   *  it). Every sentence about the host says this name. Absent: no label set. */
+  host_label?: string
   process_status: string
   stopRequest?: SessionRecord['stopRequest']
   model?: string
@@ -210,6 +214,7 @@ export function projectSession(
   s: SessionRecord,
   task: Task | undefined,
   folderLabels?: FolderLabels,
+  hostLabels?: ReadonlyMap<string, string>,
 ): ProjectedSession {
   const description = (s.description || '').trim()
   // Folder membership lives on the TASK (local-only, never synced), so a session
@@ -226,6 +231,7 @@ export function projectSession(
     ...(groupId ? { group_id: groupId } : {}),
     ...(groupLabel ? { group_label: groupLabel } : {}),
     host: s.host ?? '',
+    ...(s.host && hostLabels?.get(s.host) ? { host_label: hostLabels.get(s.host) } : {}),
     process_status: s.process_status,
     ...(s.stopRequest ? { stopRequest: s.stopRequest } : {}),
     ...(s.model ? { model: s.model } : {}),
@@ -245,6 +251,23 @@ export function projectSession(
       ? { description: description.length > DESCRIPTION_MAX ? description.slice(0, cutEnd(description, DESCRIPTION_MAX)) + '…' : description }
       : {}),
   }
+}
+
+/**
+ * Each configured host's label, by alias (the hosts with one). Read from the
+ * primary's config, which is the only place a label lives. Never throws: a
+ * config that can't be read leaves the rows with their aliases, as before.
+ */
+export async function configuredHostLabels(): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  try {
+    const { getConfig } = await import('./config-manager.js')
+    for (const [alias, def] of Object.entries((await getConfig()).hosts ?? {})) {
+      const label = (def as { label?: unknown } | undefined)?.label
+      if (typeof label === 'string' && label.trim()) out.set(alias, label.trim())
+    }
+  } catch { /* aliases only */ }
+  return out
 }
 
 /**
@@ -277,8 +300,8 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
   // listFolderLabels is a one-table SELECT, deliberately not listGroups(): this
   // runs inline on routes the phone polls and a second whole-store read to learn
   // a handful of folder names would be the most expensive field on the row.
-  const [allSessions, allTasks, folderLabels] = await Promise.all([
-    listSessions(), listTasks(), listFolderLabels(),
+  const [allSessions, allTasks, folderLabels, hostLabels] = await Promise.all([
+    listSessions(), listTasks(), listFolderLabels(), configuredHostLabels(),
   ])
   const taskById = new Map(allTasks.map((t) => [t.id, t]))
   const cutoff = Date.now() - STOPPED_RETENTION_DAYS * 24 * 60 * 60 * 1000
@@ -306,7 +329,7 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
   // projectSession stamps `pinned` from the owning task, so the rows carry
   // everything the priority order below needs — no second task lookup, and the
   // priority can never disagree with the stamped flag.
-  const rows = eligible.map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined, folderLabels))
+  const rows = eligible.map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined, folderLabels, hostLabels))
   const exportedAt = () => new Date().toISOString()
 
   // FAST PATH — prove no budget can bite, then skip the ordered fill entirely.
