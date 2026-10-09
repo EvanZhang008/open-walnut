@@ -1,6 +1,7 @@
 import { log } from '../logging/index.js';
 import { count, observe, timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
+import { companionSearchReady } from './search/companion-ready.js';
 import { contentQueryTerms, countTermsInText, termHitsInText, termInText, termUnitsInText } from './cjk.js';
 import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
@@ -877,12 +878,13 @@ async function searchInner(
       onSemantic: (state) => { if (INCOMPLETE_SEMANTIC.has(state)) run.semanticIncomplete = true; },
     });
   };
-  // WALNUT_DISABLE_SEARCH=1 (and cloud replicas): no index exists — the task
-  // and session lanes degrade to the in-process BM25 scorers, memory is
-  // skipped. Keyword-only, but never a dead end.
+  // WALNUT_DISABLE_SEARCH=1 (and a cloud replica without its copy of the
+  // primary's index): no index exists — the task and session lanes degrade to
+  // the in-process BM25 scorers, memory is skipped. Keyword-only, but never a
+  // dead end. A replica whose copy is ready searches it like the primary.
   const searchEnabled =
     process.env.WALNUT_DISABLE_SEARCH !== '1'
-    && !CLOUD_MODE;
+    && (!CLOUD_MODE || companionSearchReady());
   // v2's coverage component is a share of ITS tokenization of the query, each
   // term weighted by rarity; the merge below counts in contentQueryTerms units.
   // Scale the share to that count, unrounded: rounding first would bucket a
@@ -1155,6 +1157,16 @@ async function searchInner(
       const taskBySession = new Map(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
+      // A session this box holds no record of (the cloud companion searching
+      // its copy of the primary's index) still names its task: the task copy
+      // lists every session of every task. The record wins where there is one.
+      if (CLOUD_MODE) {
+        for (const t of await getTasks()) {
+          for (const sid of [t.session_id, ...(t.session_ids ?? []), t.plan_session_id, t.exec_session_id]) {
+            if (sid && !taskBySession.get(sid)) taskBySession.set(sid, t.id);
+          }
+        }
+      }
       const keptSessionRows = new Map(
         results.filter((r) => r.type === 'session' && r.sessionId).map((r) => [r.sessionId!, r]),
       );

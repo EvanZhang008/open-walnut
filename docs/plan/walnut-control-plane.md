@@ -305,24 +305,78 @@ phone ──► companion ──(Mac away)──► the session's row in the Mac
 
 While the Mac answers, search is the Mac's, for a phone and for a session on
 any host: its index has the semantic ranking and every transcript. While it is
-away, each side searches what it holds, by keyword:
+away, each side searches what it holds; the companion by meaning when it keeps
+its copy of the Mac's index (next section), everything else by keyword:
 
 | Who asks | The Mac answers | The Mac away, the companion leads | The Mac away, nobody leads |
 |---|---|---|---|
 | A session on a host (`search`) | the Mac | the companion's copy of every task (its `search` op on its own store) | this host's copy: its tasks (with the writes made here), its sessions, its memory copy (`offline-search-core.ts`) |
-| The phone (`GET /api/v1/search`) | the Mac (the forward) | the companion's copy of every task, at once | the same |
+| The phone (`GET /api/v1/search`) | the Mac (the forward) | the companion's copy of the Mac's index (tasks, sessions, notes, memory, skills, by meaning), else its task copy by keyword, at once | the same |
 
 - On a host, `search` goes to the companion first while it leads, and is
   answered from the host's own copy when the companion cannot. A Mac that is
   heard but does not answer gets the read from the copy at the timeout, as
   every read does. Notes keep their own `note_search`, from the host's copy.
 - On the companion, a phone's search while the Mac is away (or when the relay
-  cannot serve) is a keyword search of its task copy, marked `offline` and
-  `degraded: 'offline-keyword'`, no longer a 501. Its session lane holds only
-  the sessions the companion runs itself.
+  cannot serve) runs the Mac's own hybrid search over the companion's copy of
+  the Mac's index, marked `offline` with the copy's `asOf`. Without that copy it
+  is a keyword search of its task copy, marked `offline` and
+  `degraded: 'offline-keyword'`, whose session lane holds only the sessions the
+  companion runs itself. The notes search's semantic leg follows the same rule.
 - Ranking on a host follows `note_search`: every word first, then the rows with
   the most words; a title hit over a body hit, the whole phrase over scattered
   words; a finished task below an open one.
+
+## The companion's copy of the search index
+
+The Mac embeds every passage once (about 0.4 to 0.6 s each; days of work on a
+fresh index). The companion takes the Mac's docs and vectors as they are and
+only ever embeds a query, with the same model, so what the phone finds while
+the Mac is away is what it would find on the Mac. Code:
+`core/replication/search-replica.ts` (the Mac), `search-replica-store.ts` (the
+companion), `search-replica-wire.ts` (the steps and the on/off rule), and the
+library's index-to-index copy (`lib/hybrid-search/replica.ts`).
+
+- **Rounds**, every 2 minutes and a few seconds after the setting changes,
+  over `POST /bridge/replica` with kind `search`: `status` (the setting, the
+  Mac's model and its digest) → `sync` (keys and values; once both sides
+  matched, only what changed since and the keys removed since) → `put` (those
+  docs with their vectors, about 1 MB per request; the last one carries the
+  digest). A round with nothing new is one small status step.
+- **A doc's key** is its id for tasks and sessions, and its place under the data
+  home for notes, memory and skills (`note:~/notes/a.md`), so each side maps it
+  to its own path. A file outside the data home is not copied. Its value is the
+  first 16 hex of its content hash and its vector state; the digest is the count
+  and the sum of a hash of every entry, kept current one doc at a time from the
+  index's change listener, so the Mac reads no index row for a quiet round.
+- **Vectors**: a doc whose text did not change keeps the vectors it has when
+  the Mac sends it with fewer (a Mac re-embedding after a rebuild does not blind
+  the copy for hours); a complete set always wins.
+- **On or off**: `search.companion_semantic`. Auto (default) turns the copy on
+  only when the companion has the memory for the model (2.6 GB of footprint plus
+  3 GB of headroom: 5.6 GB total); On turns it on anyway, after a warning in
+  Settings; Off closes it and stops its model. A companion with another model
+  keeps it off. While the kernel reports memory pressure, the model is released
+  and the copy ranks by keyword.
+- **The copy** lives in `cache/search-replica.sqlite` (machine-local, like the
+  model cache) and survives a restart: it is opened at boot, before any round,
+  and the first round finds it level. The model loads once after the first
+  match (so the first search while away does not wait for a 600 MB download)
+  and stays loaded while the Mac is away.
+- **Writes on the companion**: while the Mac is away, a task written there goes
+  into the copy at once (by keyword; the Mac embeds it later), unstamped, so the
+  Mac's own version replaces it after the write reaches the Mac. While the Mac
+  answers, its rounds bring every change.
+- **Guards**: a manifest that would remove more than half of a copy of 200 docs
+  or more is refused (a damaged Mac index must not empty the only other copy);
+  an older companion (no kind `search`) rests the lane for 30 minutes; only the
+  Mac's machine credential reaches the route.
+
+Measured on the companion (t4g.large, 2 Graviton2 cores, 2026-10-09): model
+load 2.1 s from the local cache (7.7 s with the first download), query embed
+p50 122 ms / p90 147 ms / max 155 ms, worker RSS 2.3 to 2.6 GB. The same
+benchmark on the Mac: 42 ms / 47 ms. A passage costs 1.4 s there against 0.4 s
+on the Mac, which is why the copy never embeds one.
 
 ## Settings
 
@@ -330,6 +384,11 @@ away, each side searches what it holds, by keyword:
 over"), default on. Off: every host keeps to what it can do alone while the Mac
 is away, and the companion answers every phone call itself. A change reaches
 every host and the companion at once.
+
+`search.companion_semantic` (Settings, Search, "Search by meaning while this Mac
+is away"): Auto, On, Off; shown once the Mac has a companion, with the copy's
+state in one sentence. Choosing On warns unless the companion is known to have
+the memory Auto asks for.
 
 ## Scenarios
 
@@ -367,7 +426,12 @@ every host and the companion at once.
 | Mac asleep, the companion not leading yet | a change says it takes over within about a minute |
 | Mac asleep, a session searches, the companion leads | the companion's copy of every task answers |
 | Mac asleep, a session searches, no companion | its host's copy answers by keyword: its tasks, sessions and memory |
-| Mac asleep, the phone searches | the companion's task copy answers at once, marked offline |
+| Mac asleep, the phone searches | the companion's copy of the Mac's index answers by meaning at once, marked offline; without the copy, its task copy by keyword |
+| The Mac edits a task or a note | the next round sends that doc alone; the companion's copy matches again |
+| A companion with too little memory, Auto | nothing is copied; Settings says how much Auto needs |
+| The user chooses On anyway | a warning first; then the copy is filled and Settings says it runs with little memory |
+| The Mac's index is damaged and comes up empty | the companion refuses the manifest and keeps its copy |
+| The companion restarts | its copy is searchable at boot; the first round sends nothing |
 
 ## Tests
 
@@ -429,6 +493,15 @@ every host and the companion at once.
   `tests/web/routes/api-v1-search-memory-cloud.test.ts` (the phone's route),
   and the live e2e above (a session's search and the phone's reach the
   companion's copy of a task no host holds).
+- The copy of the search index: `tests/lib/hybrid-search-replica.test.ts` (the
+  library: a copy answers keyword and semantic searches without embedding a
+  passage, stamps, the vector rule), `tests/core/search-replica.test.ts` (the
+  Mac's rounds against the real companion store: every doc, the delta, memory
+  and the setting, restart, local writes, the refusal, an older companion),
+  `tests/web/routes/bridge-replica-search-cloud.test.ts` (the route on a real
+  cloud-mode server over the real client, and the phone's search from the copy),
+  `tests/web/companion-search-copy.test.ts` (the Settings wording and warning).
+- A git backend never outlives its request: `tests/web/routes/git-http-backend-lifetime.test.ts`.
 
 ## Not yet
 
@@ -443,9 +516,9 @@ every host and the companion at once.
   holds today (usage): a copy of that store, and the other session
   controls (stop, interrupt, permission mode) sent straight to the host's daemon
   while the companion leads.
-- Search by meaning while the Mac is away (the Mac's vectors on the host and the
-  companion, and a query embedder there), and the Mac's sessions in the
-  companion's search.
+- Search by meaning on a host while the Mac is away (the companion has it; a
+  host still searches its own copy by keyword), and notes written on the
+  companion while the Mac is away in its search copy before the Mac is back.
 - Calls the forward cannot carry yet: a device's own identity (`devices/self`,
   `instance`, `routes` stay the companion's), replies over 256 KB, and non-JSON
   bodies.

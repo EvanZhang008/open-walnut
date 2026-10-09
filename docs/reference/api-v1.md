@@ -2020,10 +2020,15 @@ like the other conversation endpoints (absent → `general`).
   `200 { "results": [ { type, id?, title, snippet?, score, … } ] }` — the
   console's global search (string + semantic legs). **REPLICA**: relayed to
   the primary (the semantic index lives there). While the primary is away, or
-  the relay cannot serve (2026-10), a keyword search of the replica's own task
-  copy answers instead, with `"offline": true` and
-  `"degraded": "offline-keyword"`; its session lane holds only the sessions the
-  replica runs itself. Before 2026-10 that case was `501 not_supported_cloud`.
+  the relay cannot serve (2026-10), the replica answers itself. When it keeps
+  its copy of the primary's index (2026-10-09, setting
+  `search.companion_semantic`), the same hybrid search runs over that copy:
+  tasks, sessions, notes, memory and skills, by meaning, with `"offline": true`
+  and `"asOf"` (ISO, when the copy last matched the primary); memory rows carry
+  the replica's own paths. Without the copy, a keyword search of its own task
+  copy answers, with `"offline": true` and `"degraded": "offline-keyword"`; its
+  session lane holds only the sessions the replica runs itself. Before 2026-10
+  that case was `501 not_supported_cloud`.
 - `GET /api/v1/search` phone extras (additive, 2026-10-08), both opt-in:
   `tasks=1` adds `"tasks": [ProjectedTask]`, the task each task or session row
   names (once each, in row order, completed ones of any age included; memory rows
@@ -2038,7 +2043,8 @@ like the other conversation endpoints (absent → `general`).
 - `GET /api/v1/notes/search?q=&mode=hybrid|string|semantic&limit=&all=1` →
   `200 { "results": [ { id, path, title, snippet, matchType, … } ],
   "folders"?, "degraded"? }` — the notes panel's hybrid search. Works on BOTH
-  boxes: the semantic leg self-disables on a REPLICA (string/FTS answers;
+  boxes: on a REPLICA the semantic leg runs only while it keeps its copy of the
+  primary's index (otherwise string/FTS answers;
   `degraded: "semantic-unavailable"` may appear). Snippets carry
   `<mark>…</mark>` highlights.
 - Memory (Class A — files ride git-sync, so a REPLICA reads/writes its local

@@ -11,6 +11,8 @@
  *            seq 0 is written LAST so its presence means "fully vectored"
  *   ident    exact-identifier lane (ids, ticket numbers, SHAs, URLs)
  *   meta     version stamps; mismatch forces a rebuild
+ *   replica_tag  on an index fed from another index (replica.ts): the source's
+ *            stamp for each doc as it arrived; empty on a source index
  *
  * The FTS tokenizer is unicode61 with `tokenchars '-_.'` so the orig stream's
  * joined tokens (`acme-gateway-dev`, `v1.2.3`) survive as single FTS tokens.
@@ -82,6 +84,11 @@ CREATE TABLE IF NOT EXISTS ident (
 CREATE INDEX IF NOT EXISTS ident_doc ON ident(doc_id);
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS replica_tag (
+  doc_id INTEGER PRIMARY KEY REFERENCES doc(id) ON DELETE CASCADE,
+  tag    TEXT NOT NULL
+);
 `;
 
 export interface OpenOptions {
@@ -131,9 +138,16 @@ function wipeIndex(db: SearchDb): void {
     DROP TABLE IF EXISTS doc_fts;
     DELETE FROM ident;
     DELETE FROM doc_vec;
+    DELETE FROM replica_tag;
     DELETE FROM doc;
   `);
   db.exec(DDL); // recreate doc_fts
+}
+
+/** Vectors went away (model swap, passage-policy bump): a replica's stamps
+ *  said "this doc arrived with its vectors", so every doc must come again. */
+function dropVectors(db: SearchDb): void {
+  db.exec(`DELETE FROM doc_vec; DELETE FROM replica_tag;`);
 }
 
 export function openSearchDb(options: OpenOptions): OpenResult {
@@ -182,7 +196,7 @@ export function openSearchDb(options: OpenOptions): OpenResult {
   if (options.embedModel !== undefined) {
     const storedModel = getMeta(db, 'embed_model');
     if (storedModel !== undefined && storedModel !== options.embedModel) {
-      db.exec(`DELETE FROM doc_vec;`); // keyword index survives a model swap
+      dropVectors(db); // keyword index survives a model swap
       vectorsWiped = true;
     }
     setMeta(db, 'embed_model', options.embedModel);
@@ -205,7 +219,7 @@ export function openSearchDb(options: OpenOptions): OpenResult {
     ?? (hasDocs ? '1' : undefined);
   const wantPolicy = String(options.passagePolicyVersion ?? PASSAGE_POLICY_VERSION);
   if (storedPolicy !== undefined && storedPolicy !== wantPolicy) {
-    db.exec(`DELETE FROM doc_vec;`);
+    dropVectors(db);
     vectorsWiped = true;
   }
   setMeta(db, 'passage_policy_version', wantPolicy);

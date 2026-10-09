@@ -7,6 +7,10 @@
  *   {op:'put',  kind:'tasks', rows:[Task]}                        → {ok, stored, held}
  *   {op:'put',  kind:'registry', registry:{...}}                  → {ok, stored}
  *
+ * Kind 'search' is the copy of the search index (core/replication/
+ * search-replica-store.ts; the steps are listed in search-replica-wire.ts):
+ *   {op:'status'|'sync'|'put', kind:'search', …}
+ *
  * Same door as /bridge/ingest: only the primary's own machine credential, auth
  * before the body is read, gzip bodies, the limit on the inflated body.
  */
@@ -16,17 +20,27 @@ import { log } from '../../logging/index.js'
 import { authenticate, parseErrors } from './bridge-ingest.js'
 
 export const BRIDGE_REPLICA_PATH = '/bridge/replica'
-/** A put batch is at most 512 KB of rows; a manifest of 10k tasks is ~400 KB. */
+/** A put batch is at most 512 KB of rows (1 MB of search docs); a manifest of
+ *  10k tasks is ~400 KB, of 12k search docs under 1 MB. */
 const BODY_LIMIT = '8mb'
+
+async function searchStep(body: Record<string, unknown>) {
+  const store = await import('../../core/replication/search-replica-store.js')
+  return body.op === 'status' ? store.searchReplicaStatus(body)
+    : body.op === 'sync' ? store.searchReplicaSync(body)
+      : body.op === 'put' ? store.searchReplicaPut(body)
+        : { ok: false as const, status: 400 as const, error: 'unknown_op' }
+}
 
 async function replica(req: Request, res: Response): Promise<void> {
   const started = Date.now()
   const body = (req.body ?? {}) as { op?: unknown; kind?: unknown }
   const store = await import('../../core/replication/task-replica-store.js')
   try {
-    const result = body.op === 'sync' ? await store.replicaSync(body)
-      : body.op === 'put' ? await store.replicaPut(body)
-        : { ok: false as const, status: 400 as const, error: 'unknown_op' }
+    const result = body.kind === 'search' ? await searchStep(body)
+      : body.op === 'sync' ? await store.replicaSync(body)
+        : body.op === 'put' ? await store.replicaPut(body)
+          : { ok: false as const, status: 400 as const, error: 'unknown_op' }
     if (!result.ok) {
       res.status(result.status).json({ ok: false, error: result.error })
       return

@@ -1897,7 +1897,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A task write on this box holds its row against the primary's copy until the primary has it.
     const { startTaskReplicaLocalWrites } = await import('../core/replication/task-replica-store.js')
     const localWrites = startTaskReplicaLocalWrites()
-    leaderLoopHandle = { stop: () => { backup?.stop(); localWrites.stop() } }
+    // The copy of the primary's search index, searched by meaning while it is away.
+    const [{ startSearchReplicaStore }, { getV1Forward }] = await Promise.all([
+      import('../core/replication/search-replica-store.js'),
+      import('./v1-forward/proxy.js'),
+    ])
+    const searchCopy = startSearchReplicaStore({ macAway: () => getV1Forward().primaryAway() })
+    leaderLoopHandle = { stop: () => { backup?.stop(); localWrites.stop(); void searchCopy.stop() } }
   } else {
     const { startLeaderHeartbeat, watchBackupLeaderSetting } = await import('../core/leader/primary-leader.js')
     const { startHostReplicaSync } = await import('../core/host-replica-sync.js')
@@ -1908,7 +1914,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The companion's copy of the task store (core/replication/task-replica.ts).
     const { startTaskReplicaSync } = await import('../core/replication/task-replica.js')
     const taskReplica = startTaskReplicaSync()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop() } }
+    // And of the search index, vectors included (core/replication/search-replica.ts).
+    const { startSearchReplicaSync } = await import('../core/replication/search-replica.js')
+    const searchReplica = startSearchReplicaSync()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop() } }
   }
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
@@ -5826,6 +5835,12 @@ export async function stopServer(): Promise<void> {
   if (searchV2WiringHandle) {
     await searchV2WiringHandle.stop().catch(() => {})
     searchV2WiringHandle = null
+  }
+  // The companion's copy has no wiring, but the same rule: an embed run still
+  // in flight at exit aborts the process (libc++abi, exit 134).
+  if (CLOUD_MODE) {
+    const { closeSearchV2Index } = await import('../core/search/wiring.js')
+    await closeSearchV2Index().catch(() => {})
   }
   bus.unsubscribe('task-ledger')
   if (notesWatcherHandle) {

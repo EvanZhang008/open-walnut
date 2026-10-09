@@ -45,6 +45,66 @@ const HUB_REPO_NAME = 'walnut-data.git'
 /** Max bytes of CGI header block we are willing to buffer before bailing. */
 const MAX_CGI_HEADER_BYTES = 64 * 1024
 
+/**
+ * The longest one backend may live. A backend outlives its request only by
+ * being orphaned (see reapLiveBackends), and on 2026-10-09 four orphaned
+ * receive-packs had spun both of the companion's cores for four days. An hour
+ * is far past any real push or fetch of the data repo (big pushes go through
+ * the chunked bundle channel).
+ */
+export const BACKEND_MAX_SECONDS = 3600
+
+/** coreutils `timeout`, where the box has it (Linux; not macOS). Looked up once. */
+const TIMEOUT_BIN = ['/usr/bin/timeout', '/bin/timeout'].find((p) => fs.existsSync(p)) ?? null
+
+/**
+ * How a backend is started: under `timeout` when there is one, which ends the
+ * whole process group at the limit (it runs as the group's leader) and SIGKILLs
+ * it 10 s later if a SIGTERM was not enough.
+ */
+export function backendCommand(timeoutBin: string | null = TIMEOUT_BIN): { cmd: string; args: string[] } {
+  return timeoutBin
+    ? { cmd: timeoutBin, args: ['-k', '10', String(BACKEND_MAX_SECONDS), 'git', 'http-backend'] }
+    : { cmd: 'git', args: ['http-backend'] }
+}
+
+/** Process groups of the backends in flight. */
+const liveBackends = new Set<number>()
+let exitReapArmed = false
+
+/**
+ * SIGKILL every backend still in flight. Runs when this server exits: the
+ * backends are detached (their own group, so a request can reap its whole
+ * tree), so nothing else ends them, and systemd keeps a stopped unit's
+ * leftover processes. A deploy restart is exactly when that happened.
+ */
+export function reapLiveBackends(): number {
+  let n = 0
+  for (const pid of liveBackends) if (killBackendGroup(pid)) n++
+  liveBackends.clear()
+  return n
+}
+
+/** SIGKILL one backend's process group (one this module spawned). */
+function killBackendGroup(pid: number | undefined): boolean {
+  if (!isSafeGroupPid(pid)) return false
+  try { process.kill(-pid, 'SIGKILL'); return true } catch { return false }
+}
+
+function trackBackend(pid: number | undefined): void {
+  if (!isSafeGroupPid(pid)) return
+  liveBackends.add(pid)
+  if (!exitReapArmed) {
+    exitReapArmed = true
+    process.once('exit', () => { reapLiveBackends() })
+  }
+}
+
+/** Tests only. */
+export function _liveBackendsForTesting(): Set<number> {
+  return liveBackends
+}
+
 /** Directory containing the bare hub repo. Read per-request (test-friendly). */
 function hubDir(): string {
   return process.env.WALNUT_GIT_HUB_DIR ?? '/var/lib/walnut/git'
@@ -180,12 +240,15 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
   // 60s tick, orphans stacked until the box sat at 99.85% CPU for a week and
   // the kernel OOM-killed random gits (2026-08 incident — the phone app showed
   // "offline" because TLS handshakes starved).
-  const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+  const { cmd, args } = backendCommand()
+  const child = spawn(cmd, args, { env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+  trackBackend(child.pid)
 
   /** SIGKILL the backend's whole process group (falls back to the child alone). */
   const killTree = (): void => {
     if (!isSafeGroupPid(child.pid)) return
-    try { process.kill(-child.pid, 'SIGKILL') } catch { child.kill('SIGKILL') }
+    liveBackends.delete(child.pid)
+    if (!killBackendGroup(child.pid)) child.kill('SIGKILL')
   }
 
   let finished = false
@@ -266,6 +329,7 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
   })
 
   child.on('close', (code) => {
+    if (child.pid !== undefined) liveBackends.delete(child.pid)
     if (finished) return
     finished = true
     if (!headersDone) {

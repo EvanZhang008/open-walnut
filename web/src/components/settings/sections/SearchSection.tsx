@@ -5,7 +5,12 @@ import {
 } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
+import {
+  companionSearchHelp, memoryWarningMessage, onNeedsMemoryWarning, showCompanionSearchRow,
+  type CompanionSearchMode, type CompanionSearchStatus,
+} from './companion-search-copy';
 import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -67,7 +72,15 @@ interface IndexStatus {
   stores: Record<string, StoreStats | null>;
   status: 'ready' | 'indexing' | 'error';
   error: string | null;
+  /** The cloud companion's copy of this index; null before the first round. */
+  companion?: CompanionSearchStatus | null;
 }
+
+const COMPANION_MODE_OPTIONS: Array<{ value: CompanionSearchMode; label: string; testId: string }> = [
+  { value: 'auto', label: 'Auto', testId: 'companion-search-auto' },
+  { value: 'on', label: 'On', testId: 'companion-search-on' },
+  { value: 'off', label: 'Off', testId: 'companion-search-off' },
+];
 
 const STORE_LABELS: Array<[string, string]> = [
   ['tasks', 'Tasks'],
@@ -108,6 +121,11 @@ export function SearchSection({ config, onSave }: Props) {
     (next) => save((c) => ({ search: { ...c.search, excluded_folders: next.length > 0 ? next : undefined } }), { rowKey: 'search.excluded' }),
     { rowKey: 'search.excluded' },
   );
+  const companionMode = useOptimisticSetting<CompanionSearchMode>(
+    config.search?.companion_semantic ?? 'auto',
+    (next) => save((c) => ({ search: { ...c.search, companion_semantic: next === 'auto' ? undefined : next } }), { rowKey: 'search.companion' }),
+    { rowKey: 'search.companion' },
+  );
 
   const fetchStatus = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -134,12 +152,30 @@ export function SearchSection({ config, onSave }: Props) {
     return () => ac.abort();
   }, [fetchStatus]);
 
-  // Poll while indexing; visibleInterval skips hidden tabs (a rebuild takes minutes).
+  // Poll while indexing or while the companion's copy fills; visibleInterval
+  // skips hidden tabs (a rebuild, or a first copy, takes minutes).
+  const polling = indexStatus?.status === 'indexing' || indexStatus?.companion?.state === 'syncing';
   useEffect(() => {
     pollRef.current?.();
-    if (indexStatus?.status === 'indexing') pollRef.current = visibleInterval(fetchStatus, 5000);
+    if (polling) pollRef.current = visibleInterval(fetchStatus, 5000);
     return () => { pollRef.current?.(); };
-  }, [indexStatus?.status, fetchStatus]);
+  }, [polling, fetchStatus]);
+
+  // A new mode reaches the companion in the Mac's next round (a few seconds
+  // after the save); look again a few times so the row says what it did.
+  const followUps = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  useEffect(() => () => { for (const t of followUps.current) clearTimeout(t); }, []);
+  const chooseCompanionMode = async (next: CompanionSearchMode) => {
+    if (next === companionMode.value) return;
+    if (onNeedsMemoryWarning(next, indexStatus?.companion) && !(await confirm({
+      title: 'Turn on search by meaning on the companion?',
+      message: memoryWarningMessage(indexStatus?.companion),
+      confirmLabel: 'Turn on',
+    }))) return;
+    companionMode.set(next);
+    for (const t of followUps.current) clearTimeout(t);
+    followUps.current = [5_000, 12_000, 25_000].map((ms) => setTimeout(() => { void fetchStatus(); }, ms));
+  };
 
   const handleReindex = async () => {
     if (!(await confirm({
@@ -171,6 +207,8 @@ export function SearchSection({ config, onSave }: Props) {
   const isBusy = indexStatus?.status === 'indexing';
   const tag = indexStatus ? STATUS_TAG[indexStatus.status] : null;
   const summary = indexStatus ? indexedSummary(indexStatus.stores ?? {}) : '';
+  const companion = indexStatus?.companion;
+  const companionHelp = showCompanionSearchRow(companion) ? companionSearchHelp(companion) : null;
 
   return (
     <SettingsSection id="search" title="Search">
@@ -208,6 +246,26 @@ export function SearchSection({ config, onSave }: Props) {
           </SettingsNotice>
         )}
       </SettingsGroup>
+
+      {companionHelp && (
+        <SettingsGroup heading="Cloud companion" data-testid="companion-search-group">
+          <SettingsRow
+            label="Search by meaning while this Mac is away"
+            help={companionHelp.text || undefined}
+            state={companionHelp.warning ? 'warning' : undefined}
+            error={companionMode.error ?? undefined}
+            data-testid="companion-search-row"
+            control={
+              <SegmentedControl<CompanionSearchMode>
+                aria-label="Search by meaning on the companion"
+                value={companionMode.value}
+                options={COMPANION_MODE_OPTIONS}
+                onChange={(v) => { void chooseCompanionMode(v); }}
+              />
+            }
+          />
+        </SettingsGroup>
+      )}
 
       <SettingsGroup
         heading="Excluded folders"

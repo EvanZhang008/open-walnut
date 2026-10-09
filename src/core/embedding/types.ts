@@ -15,4 +15,9 @@ export interface EmbeddingConfig {
    *  Content stays indexed — exclusion is applied at query time, so toggling
    *  the setting needs no reindex. */
   excluded_folders?: string[];
+  /** Whether the cloud companion keeps a copy of this index and searches it by
+   *  meaning while this Mac is away (core/replication/search-replica.ts).
+   *  'auto' (default): only when the companion has the memory for the model;
+   *  'on': even without it; 'off': never. */
+  companion_semantic?: 'auto' | 'on' | 'off';
 }

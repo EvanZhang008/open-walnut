@@ -59,7 +59,13 @@ export interface WriterOptions {
    *  same function the backfill embeds from). Given: a content change keeps
    *  the vectors of unchanged passages. Omitted (keyword-only): all dropped. */
   passagesOf?: PassagesOf;
+  /** Told the id of every doc whose text or vectors a write changed (null: any
+   *  doc may have, after a rebuild). Called inside the write's transaction, so
+   *  it must only take note; a rolled-back write leaves a harmless extra note. */
+  onChange?: DocChangeListener;
 }
+
+export type DocChangeListener = (docId: number | null) => void;
 
 export interface Writer {
   upsert(doc: Doc): UpsertResult;
@@ -202,7 +208,7 @@ function contentHash(doc: Doc): string {
 /** Tokenize the four text fields into the 8 FTS column payloads: orig stream
  *  per field + sub stream per field (per-field sub keeps title-weight for
  *  subword hits and makes cross-field phrase chaining impossible). */
-function buildFtsColumns(doc: Pick<Doc, 'title' | 'summary' | 'note' | 'meta'>): string[] {
+export function buildFtsColumns(doc: Pick<Doc, 'title' | 'summary' | 'note' | 'meta'>): string[] {
   const fields = [doc.title, doc.summary ?? '', doc.note ?? '', doc.meta ?? ''];
   const origCols: string[] = [];
   const subCols: string[] = [];
@@ -245,7 +251,10 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
   const insertVec = db.prepare(
     `INSERT OR REPLACE INTO doc_vec (doc_id, seq, vec) VALUES (?, ?, ?)`,
   );
+  // A doc written here is no longer the copy its source sent (replica.ts).
+  const deleteTag = db.prepare(`DELETE FROM replica_tag WHERE doc_id = ?`);
   const reuser = options.passagesOf ? createVectorReuse(db, options.passagesOf) : null;
+  const changed = options.onChange ?? (() => {});
 
   const upsertTx = db.transaction((doc: Doc, hash: string): UpsertResult => {
     const existing = selectExisting.get(doc.kind, doc.ref) as
@@ -286,6 +295,8 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
     }
 
     deleteVec.run(docId);
+    deleteTag.run(docId);
+    changed(docId);
     if (!reuse || !reuser) return { docId, changed: true };
     return { docId, changed: true, reusedVectors: reuser.restore(docId, doc, reuse) };
   });
@@ -294,7 +305,8 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
     const existing = selectExisting.get(kind, ref) as { id: number } | undefined;
     if (!existing) return false;
     deleteFts.run(existing.id);
-    deleteDoc.run(existing.id); // doc_vec + ident cascade (foreign_keys=ON)
+    deleteDoc.run(existing.id); // doc_vec + ident + replica_tag cascade (foreign_keys=ON)
+    changed(existing.id);
     return true;
   });
 
@@ -310,10 +322,12 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
     db.exec(`
       DELETE FROM ident;
       DELETE FROM doc_vec;
+      DELETE FROM replica_tag;
       DELETE FROM doc;
       DROP TABLE IF EXISTS doc_fts;
     `);
     db.exec(FTS_DDL);
+    changed(null);
     let inserted = 0;
     let batch: Doc[] = [];
     const insertBatch = db.transaction((items: Doc[]) => {
@@ -352,6 +366,7 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
     for (let seq = 0; seq < vectors.length; seq++) {
       insertVec.run(docId, seq, Buffer.from(vectors[seq].buffer, vectors[seq].byteOffset, vectors[seq].byteLength));
     }
+    changed(docId);
     return true;
   });
 
@@ -374,6 +389,7 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
       if (seq === 0) continue;
       insertVec.run(docId, seq, buf(vec));
     }
+    if (vectors.size > 0) changed(docId);
     const present = new Set<number>();
     for (const row of selectVecSeqs.all(docId) as Array<{ seq: number }>) present.add(row.seq);
     for (let seq = 1; seq < total; seq++) {
@@ -527,7 +543,7 @@ export function createWriter(db: SearchDb, options: WriterOptions = {}): Writer 
     writeVectorsResumable: (docId, vectors, total, expectedHash) =>
       writeVectorsResumableTx(docId, vectors, total, expectedHash),
     clearZeroMarker: (docId, expectedHash) => {
-      if (vecTarget(docId, expectedHash) === 'ok') clearZero.run(docId);
+      if (vecTarget(docId, expectedHash) === 'ok' && clearZero.run(docId).changes > 0) changed(docId);
     },
     storedVecSeqs: (docId) => {
       const out = new Set<number>();

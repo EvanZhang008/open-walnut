@@ -24,10 +24,23 @@ import {
   createWriter,
   MISSING_VEC_SCAN_LIMIT,
   type Doc,
+  type DocChangeListener,
   type MissingVecCursor,
   type UpsertResult,
   type Writer,
 } from './writer.js';
+import {
+  createReplicaWriter,
+  exportReplicaDocs,
+  replicaStates,
+  replicaStatesOf,
+  replicaTags,
+  replicaTagsOf,
+  type ReplicaDoc,
+  type ReplicaImportResult,
+  type ReplicaStateRow,
+  type ReplicaTagRow,
+} from './replica.js';
 import { TOKENIZER_VERSION, tokenize, type TokenStreams } from './tokenizer.js';
 import {
   searchKeyword,
@@ -44,7 +57,8 @@ import {
   type PassagePolicy,
 } from './chunk.js';
 
-export type { Doc, MissingVecCursor, UpsertResult, IndexStats, TokenStreams };
+export type { Doc, DocChangeListener, MissingVecCursor, UpsertResult, IndexStats, TokenStreams };
+export type { ReplicaDoc, ReplicaImportResult, ReplicaStateRow, ReplicaTagRow, ReplicaVecState } from './replica.js';
 export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD, MISSING_VEC_SCAN_LIMIT };
 export { cosineInt8, createEmbedder } from './embedder.js';
 export {
@@ -123,6 +137,10 @@ export interface SearchIndexOptions {
    *  excluded from the OR recall lane (kept in the AND lane). Default 0.15. */
   dfThreshold?: number;
   logger?: LogFn;
+  /** Told the id of each doc whose text or vectors a write changed (null after
+   *  a rebuild: any doc may have). Only take note here; it runs inside the
+   *  write's transaction. Replicating hosts use it to keep a manifest current. */
+  onDocChange?: DocChangeListener;
 }
 
 export interface SearchOptions {
@@ -315,6 +333,21 @@ export interface SearchIndex {
   /** Stop the passage worker now if it has no run in flight (a backfill pass
    *  just drained and the next one is minutes away). True when it stopped. */
   releasePassageWorker(): Promise<boolean>;
+  /** Have the query worker loaded (its model read, downloaded on first use)
+   *  and restart its idle clock, so the next search does not pay for the load.
+   *  False when there is no embedder, it is suspended, or it did not answer
+   *  within `deadlineMs` (default 60 s). */
+  warmQueryWorker(deadlineMs?: number): Promise<boolean>;
+  /** Index-to-index copy (replica.ts): the source's states and exports, the
+   *  copy's import and stamps. Writes go through the same change listener. */
+  readonly replica: {
+    states(afterId: number, limit: number): ReplicaStateRow[];
+    statesOf(ids: number[]): ReplicaStateRow[];
+    exportDocs(keys: Array<{ kind: string; ref: string }>): ReplicaDoc[];
+    importDocs(docs: Array<ReplicaDoc & { tag: string }>): ReplicaImportResult;
+    tags(afterId: number, limit: number): ReplicaTagRow[];
+    tagsOf(ids: number[]): ReplicaTagRow[];
+  };
   /** Escape hatch for the embedding worker and tests; not part of the
    *  stable surface. */
   readonly db: SearchDb;
@@ -363,7 +396,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   // With an embedder, a content change keeps the vectors of the passages whose
   // text it did not change (vector-reuse.ts), from the same passage function
   // the backfill embeds with.
-  const writer: Writer = createWriter(db, options.embedder ? { passagesOf } : {});
+  const writer: Writer = createWriter(db, {
+    ...(options.embedder ? { passagesOf } : {}),
+    ...(options.onDocChange ? { onChange: options.onDocChange } : {}),
+  });
+  const replicaWriter = createReplicaWriter(db, options.onDocChange);
   if (needsReindex) {
     // Tokenizer/FTS layout bump: doc rows survived, re-tokenize them locally.
     // Synchronous by design — an open index must be queryable-consistent.
@@ -884,6 +921,21 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     suspendEmbedder: async () => { await embedder?.suspend(); },
     releasePassageWorker: async () => (embedder ? embedder.releasePassageWorker() : false),
     resumeEmbedder: () => { embedder?.resume(); },
+    warmQueryWorker: async (deadlineMs = 60_000) => {
+      if (!embedder || closed || embedder.isSuspended()) return false;
+      // A query cache entry older than its freshness window goes back to the
+      // worker, so a periodic warm restarts the idle clock every time.
+      const reply = await embedder.embedQuery(EMBED_HEALTH_PROBE_TEXT, deadlineMs);
+      return reply?.source === 'worker' || reply?.source === 'cache';
+    },
+    replica: {
+      states: (afterId, limit) => replicaStates(db, afterId, limit),
+      statesOf: (ids) => replicaStatesOf(db, ids),
+      exportDocs: (keys) => exportReplicaDocs(db, keys),
+      importDocs: (docs) => replicaWriter.importDocs(docs),
+      tags: (afterId, limit) => replicaTags(db, afterId, limit),
+      tagsOf: (ids) => replicaTagsOf(db, ids),
+    },
     close: () => {
       closed = true; // in-flight backfill/searches bail instead of touching a closed handle
       void embedder?.dispose();

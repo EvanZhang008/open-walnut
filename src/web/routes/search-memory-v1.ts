@@ -22,13 +22,14 @@
  *   POST /notes/move { from, to }     → { ok }
  *   POST /notes/folder { path }       → { ok }
  *
- * Replica classes: /search needs the search index, which never
- * initializes on the cloud box (would pin the small instance) → relayed to
- * the primary over `server.search`; while the primary is away (or the relay
- * can't serve), a keyword search of the replica's own task copy, marked
- * `offline`. Notes search degrades
+ * Replica classes: /search needs the search index, which lives on the primary
+ * → relayed to it over `server.search`; while the primary is away (or the
+ * relay can't serve), the replica's copy of that index when it keeps one
+ * (marked `offline`), else a keyword search of its task copy (`offline`,
+ * `degraded: 'offline-keyword'`). Notes search degrades
  * gracefully to its string leg
- * (performNotesSearch already gates the semantic leg on !CLOUD_MODE). Memory,
+ * (performNotesSearch runs the semantic leg on a replica only while that copy
+ * is ready). Memory,
  * favorites, and notes ride the git-synced data dir (Class A — local files on
  * both boxes). Notifications live in the primary's store only → Class B relay
  * over the `session.control` bridge command's `server.*` action family
@@ -118,8 +119,18 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
         }
         log.web.info('v1 search: the Mac did not answer, searching this box\'s copy', { error: outcome.failure.message })
       }
-      // The Mac away: a keyword search of this box's own copies (the task copy
-      // holds every task; the semantic index and the transcripts stay on the Mac).
+      // The Mac away: this box's own copies. With its copy of the Mac's search
+      // index (core/replication/search-replica-store.ts), the same hybrid
+      // search the Mac runs; without it, a keyword search of the task copy.
+      const ready = await import('../../core/search/companion-ready.js')
+      if (ready.companionSearchReady()) {
+        const asOf = ready.companionSearchAsOf()
+        res.json({
+          ...(await withTasks(await search(q, { types, limit, semanticDeadlineMs }))),
+          offline: true, ...(asOf ? { asOf: new Date(asOf).toISOString() } : {}),
+        })
+        return
+      }
       res.json({ ...(await withTasks(await search(q, { types, limit }))), offline: true, degraded: 'offline-keyword' })
       return
     }

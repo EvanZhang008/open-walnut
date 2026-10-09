@@ -24,6 +24,7 @@ import {
   MISSING_VEC_SCAN_LIMIT,
   PASSAGE_MAX_CHARS,
   type Doc,
+  type DocChangeListener,
   type EmbedderConfig,
   type MissingVecCursor,
   type ScoredHit,
@@ -74,8 +75,9 @@ export const SEARCH_V2_KIND_WEIGHTS = {
 
 export function isSearchV2Enabled(): boolean {
   // WALNUT_DISABLE_SEARCH=1 means "don't index, don't download a model" —
-  // callers degrade to in-process keyword scoring. Cloud replicas stay off:
-  // the embed model would pin the small instance.
+  // callers degrade to in-process keyword scoring. A cloud replica never
+  // indexes or embeds passages itself: its index, when it has one, is a copy
+  // of the primary's (core/replication/search-replica-store.ts).
   return process.env.WALNUT_DISABLE_SEARCH !== '1'
     && !CLOUD_MODE;
 }
@@ -199,15 +201,44 @@ export function embedModelCacheDir(home = WALNUT_HOME): string {
   return dir;
 }
 
+/** The model id this server's semantic lane embeds with; null when it has none. */
+export function currentEmbedModelId(): string | null {
+  if (!currentSemanticLaneDecision().on) return null;
+  return EMBED_MODELS[process.env.WALNUT_SEARCH_V2_EMBED_MODEL ?? DEFAULT_EMBED_MODEL]?.modelId ?? null;
+}
+
 let handle: SearchIndex | null = null;
+
+/** Writes that moved a doc's text or vectors, for the index copy's manifest
+ *  (core/replication/search-replica*.ts). Called inside the write: take note only. */
+const docChangeListeners = new Set<DocChangeListener>();
+
+export function onSearchIndexDocChange(listener: DocChangeListener): () => void {
+  docChangeListeners.add(listener);
+  return () => { docChangeListeners.delete(listener); };
+}
+
+/**
+ * The primary's own index, or, on the cloud companion, its copy of it
+ * (core/replication/search-replica-store.ts opens it only while the copy is
+ * on). The copy is machine-local like the model cache, so it sits in cache/.
+ */
+export function searchV2IndexPath(): string {
+  return CLOUD_MODE ? path.join(WALNUT_HOME, 'cache', 'search-replica.sqlite') : path.join(WALNUT_HOME, 'search.sqlite');
+}
+
+export function searchV2IndexOpen(): boolean {
+  return handle !== null;
+}
 
 export function getSearchV2Index(): SearchIndex {
   if (!handle) {
     handle = createSearchIndex({
-      dbPath: path.join(WALNUT_HOME, 'search.sqlite'),
+      dbPath: searchV2IndexPath(),
       kinds: SEARCH_V2_KIND_WEIGHTS,
       embedder: buildEmbedderConfig(),
       logger: (level, msg, data) => log.memory[level](msg, data),
+      onDocChange: (docId) => { for (const listener of docChangeListeners) listener(docId); },
     });
     // A version gate emptied doc_vec (embed-model swap or passage-policy bump).
     // Arm a FULL pass now: the periodic self-heal would otherwise take up to an
@@ -215,6 +246,16 @@ export function getSearchV2Index(): SearchIndex {
     if (handle.vectorsWiped) vectorPass.requireFullPass();
   }
   return handle;
+}
+
+/** Close the index and stop its embedding workers (the companion turning its
+ *  copy off). The next getSearchV2Index() opens it again. */
+export async function closeSearchV2Index(): Promise<void> {
+  const h = handle;
+  handle = null;
+  if (!h) return;
+  await h.stopEmbedder().catch(() => { /* already gone */ });
+  try { h.close(); } catch { /* already closed */ }
 }
 
 /** Test hook: drop the singleton so a fresh WALNUT_HOME gets a fresh index. */
