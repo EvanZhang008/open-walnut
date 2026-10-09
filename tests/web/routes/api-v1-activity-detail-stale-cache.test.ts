@@ -168,7 +168,7 @@ describe('activity detail vs. a stale parse cache', () => {
       const rewritten = JSON.parse(await fs.readFile(path.join(HISTORY_CACHE_DIR, `${sid}.json`), 'utf-8')) as {
         schema?: number; messages: Array<{ tools?: Array<{ resultChars?: number }> }>
       }
-      expect(rewritten.schema).toBe(2)
+      expect(rewritten.schema).toBe(3)
       expect(rewritten.messages.some((m) => m.tools?.some((t) => t.resultChars === RESULT.length))).toBe(true)
     }, { timeout: 10_000, interval: 100 })
   })
@@ -181,7 +181,7 @@ describe('activity detail vs. a stale parse cache', () => {
     // exactly like a message that has slid out of a whale's bounded window. The
     // version check cannot help here, which is why part 2 exists.
     await writeCacheEntry(sid, {
-      schema: 2,
+      schema: 3,
       messages: cachedRow('toolu_not_in_transcript'),
       cachedAt: '2026-09-12T15:17:26.000Z',
       mtimeMs,
@@ -209,7 +209,7 @@ describe('activity detail vs. a stale parse cache', () => {
     const shortRef = activityRef(sid, 'msg_short', { kind: 'tool', index: 0 })
     expect(shortRef).toBeDefined()
     await writeCacheEntry(sid, {
-      schema: 2,
+      schema: 3,
       messages: [{
         role: 'assistant', text: '', msgId: 'msg_short', timestamp: at(),
         tools: [{ name: 'Read', input: { file_path: '/tmp/x.ts' }, toolUseId: 'toolu_short', result: 'export const x = 1' }],

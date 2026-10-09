@@ -36,8 +36,12 @@ import type { SessionHistoryMessage } from './session-history.js';
  * change kept answering "complete" with a 5,000-character prefix of a 17,781-
  * character result: 18 of 54 real rows across 5 sessions. Version 1 is therefore
  * "written before `resultChars` was load-bearing", i.e. any file with no stamp.
+ *
+ * 3 (2026-10-08): `sourceUuid` on a mid-turn `queue-…` user row. Without it a
+ * question sent while a turn ran has no anchor, number or title, and an idle
+ * session kept serving its version-2 parse after the deploy that added it.
  */
-const HISTORY_CACHE_SCHEMA = 2;
+const HISTORY_CACHE_SCHEMA = 3;
 
 let dirEnsured = false;
 
