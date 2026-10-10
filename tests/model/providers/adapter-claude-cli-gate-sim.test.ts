@@ -10,7 +10,9 @@
  * per 5 s, and random interactive turns waited 65 s at the median. The rules
  * pinned here: interactive turns always keep a slot of their own (aging is off
  * with one slot, and at most one aged background turn runs ahead of them), yet
- * every background turn still runs, in the order it was queued.
+ * every background turn still runs, in the order it was queued. With one slot
+ * a background turn never goes ahead of a queued interactive turn, however
+ * long it has waited: it runs when no interactive turn is queued.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -213,5 +215,71 @@ describe('claude-cli process gate under load (fake clock)', () => {
     await h.end('ia')
     await h.end('ib')
     expect(h.order).toEqual(['b1', 'ia', 'ib', 'b2'])
+  })
+
+  it('one slot: a background turn queued for a week still waits for every queued interactive turn', async () => {
+    // Default options: no aging of any length applies with one slot.
+    const m = await load(1)
+    const adapter = new m.ClaudeCliAdapter()
+    const h = held(adapter)
+    h.run('ia', 'interactive')
+    h.run('bg', 'background')
+    h.run('ib', 'interactive')
+    await h.flush()
+    vi.setSystemTime(7 * 24 * 3_600_000)
+    await h.end('ia')
+    expect(h.order).toEqual(['ia', 'ib'])
+    h.run('ic', 'interactive')
+    await h.end('ib')
+    expect(h.order).toEqual(['ia', 'ib', 'ic'])
+    // Nobody queued ahead of it any more: the background turn runs next.
+    await h.end('ic')
+    expect(h.order).toEqual(['ia', 'ib', 'ic', 'bg'])
+    await h.end('bg')
+    expect(adapter._gateStateForTesting()).toEqual({ inFlight: 0, waiting: 0, backgroundInFlight: 0, backgroundWaiting: 0 })
+  })
+
+  it('one slot: a steady interactive stream holds the backlog until it stops, then every background turn runs in order', async () => {
+    const m = await load(1)
+    const adapter = new m.ClaudeCliAdapter()
+    const rec = recorder(adapter)
+    const loops = Array.from({ length: 4 }, (_, i) => (async () => {
+      for (let k = 0; Date.now() < 200_000; k++) await rec.submit(`i${i}k${k}`, 'interactive', 400)
+    })())
+    await vi.advanceTimersByTimeAsync(200)
+    const bgs = Array.from({ length: 12 }, (_, i) => rec.submit(`b${String(i).padStart(2, '0')}`, 'background', 3000))
+    await vi.advanceTimersByTimeAsync(300_000)
+    await Promise.all([...loops, ...bgs])
+
+    const bg = rec.turns.filter((t) => t.purpose === 'background')
+    expect(wentAhead(rec.turns).map((t) => t.id)).toEqual([])
+    expect(Math.min(...bg.map((t) => t.start!))).toBeGreaterThanOrEqual(200_000)
+    expect(bg.every((t) => t.end !== undefined)).toBe(true)
+    expect(outOfOrder(rec.turns, 'background')).toEqual([])
+    // An interactive turn waits only for the interactive turns ahead of it.
+    const waits = rec.turns.filter((t) => t.purpose === 'interactive').map((t) => t.start! - t.submit)
+    expect(Math.max(...waits)).toBeLessThanOrEqual(3 * 400)
+    expect(rec.max().running).toBe(1)
+    expect(adapter._gateStateForTesting()).toEqual({ inFlight: 0, waiting: 0, backgroundInFlight: 0, backgroundWaiting: 0 })
+  })
+
+  it.each([[2], [3]])('%i slots: a freed slot goes to the queued interactive turn while background turns hold all theirs', async (slots) => {
+    // The slot an interactive turn frees is the one background turns may not
+    // take: checking it against the background cap (G07 in the 2026-10-07
+    // gate) left it idle and raised the gate sim's interactive p50 from 24.7 s
+    // to 89.8 s with two slots.
+    const m = await load(slots)
+    const adapter = new m.ClaudeCliAdapter()
+    const h = held(adapter)
+    const bgs = Array.from({ length: slots - 1 }, (_, i) => `b${i + 1}`)
+    for (const id of bgs) h.run(id, 'background')
+    h.run('ia', 'interactive')
+    h.run('ib', 'interactive')
+    await h.flush()
+    expect(h.order).toEqual([...bgs, 'ia'])
+    expect(adapter._gateStateForTesting()).toEqual({ inFlight: slots, waiting: 1, backgroundInFlight: slots - 1, backgroundWaiting: 0 })
+    await h.end('ia')
+    expect(h.order).toEqual([...bgs, 'ia', 'ib'])
+    expect(adapter._gateStateForTesting()).toEqual({ inFlight: slots, waiting: 0, backgroundInFlight: slots - 1, backgroundWaiting: 0 })
   })
 })
