@@ -231,7 +231,11 @@ describe('durable relay path', () => {
       })
     expect(res.status).toBe(202)
     expect(res.body.queued).toBe(true)
-    expect(bridgeRequestMock.mock.calls.some((c) => c[1] === 'session.message')).toBe(false)
+    // Only this message's relays: the test before banked a text send, and the
+    // drain each send starts after its answer can still be relaying that row
+    // into this test's mock (CI 2026-10-10, quick 3/3).
+    const relaysOfThis = bridgeRequestMock.mock.calls.filter((c) => c[1] === 'session.message' && c[2]?.messageId === res.body.messageId)
+    expect(relaysOfThis).toEqual([])
   })
 })
 
