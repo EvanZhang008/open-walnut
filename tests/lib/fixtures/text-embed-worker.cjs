@@ -11,6 +11,9 @@
  *   crashJobs with jobFile: jobs number crashFrom+1 .. crashFrom+crashJobs,
  *            counted across worker processes, exit the process whatever their
  *            text (a worker that is unhealthy, not a bad doc)
+ *   poisonFile while this file exists, a job whose text contains its content
+ *            exits the process, as crashOn does. Deleting it fixes the cause
+ *            without a knob change: a changed model id wipes doc_vec at open.
  */
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -31,6 +34,10 @@ process.on('message', (msg) => {
   const { id, texts } = msg;
   if (stopping) { send({ id, error: 'embed worker stopping' }); return; }
   if (opts.crashOn && texts.some((t) => t.includes(opts.crashOn))) process.exit(1);
+  if (opts.poisonFile && fs.existsSync(opts.poisonFile)) {
+    const poison = fs.readFileSync(opts.poisonFile, 'utf8').trim();
+    if (poison && texts.some((t) => t.includes(poison))) process.exit(1);
+  }
   if (opts.errorOn && texts.some((t) => t.includes(opts.errorOn))) { send({ id, error: 'input rejected' }); return; }
   if (opts.stoppingOn && texts.some((t) => t.includes(opts.stoppingOn))) { send({ id, error: 'embed worker stopping' }); return; }
   if (opts.jobFile) {

@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  createSearchIndex, passagesForDoc, PASSAGE_MAX_CHARS, type KindConfig, type SearchIndex,
+  createSearchIndex, passagesForDoc, PASSAGE_MAX_CHARS, type KindConfig, type LogFn, type SearchIndex,
 } from '../../src/lib/hybrid-search/index.js';
 import { passageKey } from '../../src/lib/hybrid-search/vector-reuse.js';
 
@@ -33,6 +33,7 @@ export interface TextKnobs {
   crashFrom?: number;
   crashJobs?: number;
   jobFile?: string;
+  poisonFile?: string;
 }
 
 export interface TextIndexHandle {
@@ -50,12 +51,13 @@ export function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-export function openTextIndex(dir: string, firstKnobs: TextKnobs = {}): TextIndexHandle {
+export function openTextIndex(dir: string, firstKnobs: TextKnobs = {}, logger?: LogFn): TextIndexHandle {
   const dbPath = path.join(dir, 'search.sqlite');
   const logFile = path.join(dir, 'embedded.log');
   const open = (knobs: TextKnobs) => createSearchIndex({
     dbPath,
     kinds: TEXT_KINDS,
+    logger,
     embedder: {
       modelId: 'fake/text:' + JSON.stringify({ logFile, ...knobs }),
       dims: 4,

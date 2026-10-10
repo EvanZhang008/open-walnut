@@ -22,6 +22,13 @@
  * that vector at its new seq. seq 0 is restored only when EVERY new seq got
  * one, so seq 0 still means "fully vectored" and the backfill's resume path
  * (storedVecSeqs) embeds exactly the passages that are missing.
+ *
+ * Splitting runs on the host thread, inside the upsert's transaction, so a
+ * change splits once: the passage keys a doc was last split into (the new text
+ * of its previous change, or the text the backfill embedded) are kept by doc id
+ * and content hash for the most recent KEY_CACHE_DOCS docs, and the old side is
+ * split again only when they are not there (the first change of a doc in a
+ * process).
  */
 
 import { createHash } from 'node:crypto';
@@ -30,13 +37,20 @@ import type { SearchDb } from './db.js';
 /**
  * Docs longer than this (title + summary + note) skip the reuse and lose their
  * vectors as before. The upsert runs on the host's event loop, and the reuse
- * splits the old AND the new text into passages (0.8 ms per side at 50 KB) and
- * copies the kept rows. Measured on one changed session upsert: p50 0.9 ms
- * without the reuse, 2.9 ms with it at 50 KB, 6.7 ms at 95 KB. A session body
- * is capped at 50 KB, so this bound covers sessions; very large notes keep
- * losing all their vectors on a change, as before.
+ * splits the new text into passages (and the old one when its keys are not
+ * kept) and copies the kept rows. Measured on one changed session upsert: p50
+ * 0.9 ms without the reuse, 2.9 ms with it at 50 KB, 6.7 ms at 95 KB. The worst
+ * shape under the bound, a 63.9k-character note of 3-character paragraphs, took
+ * 141 ms an upsert with the old splitter and takes 4.4 ms, 2.9 to 3.5 ms when
+ * its keys are kept (measured 2026-10-09, load 16 to 20). A session body is
+ * capped at 50 KB, so this bound covers sessions; very large notes keep losing
+ * all their vectors on a change, as before.
  */
 export const REUSE_MAX_TEXT_CHARS = 64_000;
+
+/** Docs whose last passage keys are kept (about 40 keys of 40 hex chars each
+ *  at most): the ones a sync is changing now. */
+export const KEY_CACHE_DOCS = 256;
 
 export interface StoredVecRow {
   seq: number;
@@ -79,14 +93,22 @@ export function reusableVectors(
   oldPassages: string[],
   rows: StoredVecRow[],
 ): Map<string, Buffer> | null {
-  const n = oldPassages.length;
+  return reusableVectorsByKey(oldPassages.map(passageKey), rows);
+}
+
+/** reusableVectors, from the old passages' keys. */
+export function reusableVectorsByKey(
+  oldKeys: string[],
+  rows: StoredVecRow[],
+): Map<string, Buffer> | null {
+  const n = oldKeys.length;
   if (n === 0 || rows.length === 0) return null;
   if (rows.some((r) => r.seq < 0 || r.seq >= n)) return null;
   if (rows.some((r) => r.seq === 0) && rows.length !== n) return null;
   const out = new Map<string, Buffer>();
   for (const row of rows) {
     if (isZeroVector(row.vec)) continue;
-    out.set(passageKey(oldPassages[row.seq]!), row.vec);
+    out.set(oldKeys[row.seq]!, row.vec);
   }
   return out.size > 0 ? out : null;
 }
@@ -99,14 +121,19 @@ export interface RemapPlan {
 
 /** The new doc's vector rows built from reusable ones (see the header). */
 export function remapVectors(newPassages: string[], reuse: Map<string, Buffer>): RemapPlan {
+  return remapVectorsByKey(newPassages.map(passageKey), reuse);
+}
+
+/** remapVectors, from the new passages' keys. */
+export function remapVectorsByKey(newKeys: string[], reuse: Map<string, Buffer>): RemapPlan {
   const rows: StoredVecRow[] = [];
-  let covered = newPassages.length > 0;
-  for (let seq = 1; seq < newPassages.length; seq++) {
-    const vec = reuse.get(passageKey(newPassages[seq]!));
+  let covered = newKeys.length > 0;
+  for (let seq = 1; seq < newKeys.length; seq++) {
+    const vec = reuse.get(newKeys[seq]!);
     if (vec) rows.push({ seq, vec });
     else covered = false;
   }
-  const digest = newPassages.length > 0 ? reuse.get(passageKey(newPassages[0]!)) : undefined;
+  const digest = newKeys.length > 0 ? reuse.get(newKeys[0]!) : undefined;
   const complete = covered && digest !== undefined;
   if (complete) rows.push({ seq: 0, vec: digest });
   return { rows, complete };
@@ -117,33 +144,56 @@ export interface VectorReuse {
    *  updated: the stored seqs describe the old text. */
   collect(docId: number): Map<string, Buffer> | null;
   /** Write the reusable rows at the new text's seqs (after the doc's vectors
-   *  were dropped). Returns how many vectors were kept. */
+   *  were dropped). `hash` is the doc's new content hash. Returns how many
+   *  vectors were kept. */
   restore(
     docId: number,
     doc: { kind: string; title: string; summary?: string; note?: string },
+    hash: string,
     reuse: Map<string, Buffer>,
   ): number;
+  /** The passages of a doc's text at `hash`, split elsewhere (the backfill):
+   *  kept so its next change does not split that text again. */
+  remember(docId: number, kind: string, hash: string, passages: string[]): void;
 }
 
 /** The writer's side of the reuse, inside its upsert transaction. */
 export function createVectorReuse(db: SearchDb, passagesOf: PassagesOf): VectorReuse {
   const selectRows = db.prepare(`SELECT seq, vec FROM doc_vec WHERE doc_id = ?`);
-  const selectText = db.prepare(`SELECT kind, title, summary, note FROM doc WHERE id = ?`);
+  const selectText = db.prepare(`SELECT kind, title, summary, note, hash FROM doc WHERE id = ?`);
   const insertVec = db.prepare(`INSERT OR REPLACE INTO doc_vec (doc_id, seq, vec) VALUES (?, ?, ?)`);
+  // Insertion order is recency: a hit or a write moves the doc to the end.
+  const keyCache = new Map<number, { kind: string; hash: string; keys: string[] }>();
+  const keep = (docId: number, kind: string, hash: string, keys: string[]): void => {
+    keyCache.delete(docId);
+    keyCache.set(docId, { kind, hash, keys });
+    if (keyCache.size > KEY_CACHE_DOCS) keyCache.delete(keyCache.keys().next().value!);
+  };
   return {
     collect(docId) {
       const rows = selectRows.all(docId) as StoredVecRow[];
       if (rows.length === 0) return null;
-      const old = selectText.get(docId) as (DocText & { kind: string }) | undefined;
+      const old = selectText.get(docId) as (DocText & { kind: string; hash: string }) | undefined;
       if (!old || docTextChars(old) > REUSE_MAX_TEXT_CHARS) return null;
-      return reusableVectors(passagesOf(old), rows);
+      // The hash covers every text field, and the kind picks the policy: the
+      // same pair is the same passages.
+      const kept = keyCache.get(docId);
+      const oldKeys = kept && kept.hash === old.hash && kept.kind === old.kind
+        ? kept.keys
+        : passagesOf(old).map(passageKey);
+      return reusableVectorsByKey(oldKeys, rows);
     },
-    restore(docId, doc, reuse) {
+    restore(docId, doc, hash, reuse) {
       const text = { kind: doc.kind, title: doc.title, summary: doc.summary ?? '', note: doc.note ?? '' };
       if (docTextChars(text) > REUSE_MAX_TEXT_CHARS) return 0;
-      const plan = remapVectors(passagesOf(text), reuse);
+      const newKeys = passagesOf(text).map(passageKey);
+      keep(docId, doc.kind, hash, newKeys);
+      const plan = remapVectorsByKey(newKeys, reuse);
       for (const row of plan.rows) insertVec.run(docId, row.seq, row.vec);
       return plan.rows.length;
+    },
+    remember(docId, kind, hash, passages) {
+      keep(docId, kind, hash, passages.map(passageKey));
     },
   };
 }

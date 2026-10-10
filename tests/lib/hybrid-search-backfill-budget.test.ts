@@ -11,15 +11,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import {
-  expectedRows, makeTempDir, openTextIndex, paragraphs, passagesOfDoc, vecRows, type TextIndexHandle,
+  expectedRows, makeTempDir, openTextIndex, paragraphs, passagesOfDoc, vecRows, type TextIndexHandle, type TextKnobs,
 } from './text-embed-index.js';
 
 const dirs: string[] = [];
 const handles: TextIndexHandle[] = [];
-function open(holdMs: number): TextIndexHandle {
+function open(holdMs: number, knobs: TextKnobs = {}): TextIndexHandle {
   const dir = makeTempDir('wn-vec-budget-');
   dirs.push(dir);
-  const h = openTextIndex(dir, { holdMs });
+  const h = openTextIndex(dir, { holdMs, ...knobs });
   handles.push(h);
   return h;
 }
@@ -90,6 +90,28 @@ describe('backfill batch budget', () => {
     expect(r.drained).toBe(true);
     expect(calls).toBeGreaterThanOrEqual(n);
     expect(vecRows(h.index, docId)).toEqual(expectedRows(passagesOfDoc(doc)));
+  });
+
+  it('a batch whose docs all fail still stops at the budget', async () => {
+    // The r1 gate: the budget counted only embedded passages, so 16 docs whose
+    // passage failed twice each (two probes of 100 ms per doc) ran 2.5 to 2.8 s
+    // past a 200 ms budget. It counts every passage tried now.
+    const h = open(100, { errorOn: 'POISON' });
+    for (let i = 0; i < 6; i++) {
+      h.index.upsert({ kind: 'note', ref: `bad-${i}`, title: `note ${i}`, note: `POISON body ${i}`, updatedAt: 10 - i });
+    }
+    const zeros = () => (h.index.db.prepare(
+      'SELECT COUNT(*) AS n FROM doc_vec WHERE seq = 0 AND vec = zeroblob(length(vec))',
+    ).get() as { n: number }).n;
+    const first = await h.index.backfillVectors({ batchDocs: 16, budgetMs: 150 });
+    expect(first.yielded).toBe('budget');
+    expect(first.passages).toBe(0);
+    expect(zeros()).toBe(1); // one doc judged (two attempts, two probes), then the yield
+    expect(h.embedded()).toHaveLength(2); // the two probes
+    // The next call goes on with the rest, one judged doc per call.
+    const second = await h.index.backfillVectors({ batchDocs: 16, budgetMs: 150, cursor: first.cursor });
+    expect(second.yielded).toBe('budget');
+    expect(zeros()).toBe(2);
   });
 
   it('no budget: the batch runs to its end, as before', async () => {

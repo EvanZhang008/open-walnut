@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { createSearchIndex } from '../../src/lib/hybrid-search/index.js';
 import { createWriter } from '../../src/lib/hybrid-search/writer.js';
 import {
-  remapVectors, reusableVectors, passageKey, REUSE_MAX_TEXT_CHARS,
+  remapVectors, reusableVectors, passageKey,
 } from '../../src/lib/hybrid-search/vector-reuse.js';
 import {
   drainBackfill, expectedRows, keysOf, makeTempDir, openTextIndex, paragraphs, passagesOfDoc,
@@ -145,9 +145,29 @@ describe('content change on a real index', () => {
     index.close();
   });
 
+  // The bound as a literal (REUSE_MAX_TEXT_CHARS): a test that reads the
+  // constant moves with it, so a 640,000-char bound passed it (the r1 gate's C4).
+  const BOUND = 64_000;
+
+  it('the size bound is 64,000 characters of title, summary and note, inclusive', async () => {
+    const h = open();
+    const sized = (ref: string, chars: number) =>
+      ({ kind: 'task', ref, title: ref, note: paragraphs(ref, 80).slice(0, chars - ref.length), updatedAt: 1 });
+    const at = sized('at-bound', BOUND);
+    const over = sized('past-bound', BOUND + 1);
+    expect(at.title.length + at.note.length).toBe(BOUND);
+    expect(over.title.length + over.note.length).toBe(BOUND + 1);
+    h.index.upsert(at);
+    h.index.upsert(over);
+    await drainBackfill(h.index);
+    // A change to meta only: every vector of the doc at the bound stays.
+    expect(h.index.upsert({ ...at, meta: 'Tags: x', updatedAt: 2 }).reusedVectors).toBe(passagesOfDoc(at).length);
+    expect(h.index.upsert({ ...over, meta: 'Tags: x', updatedAt: 2 }).reusedVectors).toBeUndefined();
+  });
+
   it('a doc past the size bound skips the reuse (its upsert stays cheap)', async () => {
     const h = open();
-    const big = { kind: 'task', ref: 'big', title: 'big', note: paragraphs('wide', Math.ceil(REUSE_MAX_TEXT_CHARS / 900) + 2), updatedAt: 1 };
+    const big = { kind: 'task', ref: 'big', title: 'big', note: paragraphs('wide', Math.ceil(BOUND / 900) + 2), updatedAt: 1 };
     const { docId } = h.index.upsert(big);
     await drainBackfill(h.index);
     expect(h.index.upsert({ ...big, meta: 'Tags: x', updatedAt: 2 }).reusedVectors).toBeUndefined();
@@ -158,9 +178,123 @@ describe('content change on a real index', () => {
     const grows = h.index.upsert(small).docId;
     await drainBackfill(h.index);
     expect(vecRows(h.index, grows).length).toBeGreaterThan(1);
-    const huge = { ...small, note: small.note + '\n\n' + paragraphs('more', Math.ceil(REUSE_MAX_TEXT_CHARS / 900)), updatedAt: 2 };
+    const huge = { ...small, note: small.note + '\n\n' + paragraphs('more', Math.ceil(BOUND / 900)), updatedAt: 2 };
     expect(h.index.upsert(huge).reusedVectors).toBe(0);
     expect(vecRows(h.index, grows)).toEqual([]);
+  });
+});
+
+describe('a changed upsert splits the doc once', () => {
+  // The r1 gate: the reuse split the old AND the new text inside the upsert's
+  // transaction, on the host thread. The keys of a doc's last split are kept.
+  it('reads the old side from the keys its last split kept, for the 256 most recent docs', () => {
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: TEXT_KINDS });
+    let splits = 0;
+    const writer = createWriter(index.db, {
+      passagesOf: (d) => { splits++; return passagesOfDoc(d); },
+    });
+    const hashOf = (id: number) => (index.db.prepare('SELECT hash FROM doc WHERE id = ?').get(id) as { hash: string }).hash;
+    type Text = { kind: string; ref: string; title: string; note: string; updatedAt: number };
+    const vectorize = (id: number, d: Text) =>
+      writer.writeVectors(id, expectedRows(passagesOfDoc(d)).map((r) => Int8Array.from(r.vec)));
+    const grow = (d: Text, label: string): Text => ({ ...d, note: `${d.note}\n\n${paragraphs(label, 1)}`, updatedAt: d.updatedAt + 1 });
+    const change = (d: Text) => { const before = splits; const r = writer.upsert(d); vectorize(r.docId, d); return { ...r, splits: splits - before }; };
+
+    let v = { kind: 'task', ref: 'once', title: 'grows', note: paragraphs('s', 6), updatedAt: 1 };
+    const id = writer.upsert(v).docId;
+    expect(splits).toBe(0); // a new doc has no vectors to keep
+    vectorize(id, v);
+    // First change in this writer: both sides are split.
+    v = grow(v, 'a');
+    const first = change(v);
+    expect(first.splits).toBe(2);
+    expect(first.reusedVectors).toBeGreaterThan(0);
+    // Every later one: only the new text.
+    v = grow(v, 'b');
+    expect(change(v).splits).toBe(1);
+
+    // What the backfill split is kept too.
+    let w = { kind: 'session', ref: 'kept', title: 'session', note: paragraphs('w', 6), updatedAt: 1 };
+    const wid = writer.upsert(w).docId;
+    vectorize(wid, w);
+    writer.notePassages(wid, w.kind, hashOf(wid), passagesOfDoc(w));
+    w = grow(w, 'c');
+    expect(change(w).splits).toBe(1);
+
+    // 255 other docs since: still kept. Each change moves the doc to the
+    // newest end, so the next one evicted is another doc; 256 more evict it.
+    const others = (from: number, n: number) => {
+      for (let i = 0; i < n; i++) writer.notePassages(1_000_000 + from + i, 'task', 'h', ['x']);
+    };
+    others(0, 255);
+    w = grow(w, 'd');
+    expect(change(w).splits).toBe(1);
+    others(1_000, 1);
+    w = grow(w, 'd2');
+    expect(change(w).splits).toBe(1);
+    others(2_000, 256);
+    w = grow(w, 'e');
+    expect(change(w).splits).toBe(2);
+
+    // Keys are trusted only for the text and kind they were split from. A
+    // change that found no vectors kept nothing (no reuse ran), so the keys
+    // held for the doc are of an older text: the next change splits it again,
+    // and maps the right vectors.
+    index.db.prepare('DELETE FROM doc_vec WHERE doc_id = ?').run(wid);
+    w = grow(w, 'f');
+    expect(writer.upsert(w).reusedVectors).toBeUndefined();
+    vectorize(wid, w);
+    const g = grow(w, 'g');
+    const afterGap = change(g);
+    expect(afterGap.splits).toBe(2);
+    expect(afterGap.reusedVectors).toBe(passagesOfDoc(w).length - 1); // all but the digest
+    // Keys noted under another kind (another policy) are not used.
+    writer.notePassages(wid, 'task', hashOf(wid), passagesOfDoc({ ...g, kind: 'task' }));
+    expect(change(grow(g, 'h')).splits).toBe(2);
+    index.close();
+  });
+});
+
+describe('the values a change reuses through the keys it kept', () => {
+  // The r2 gate's NE7: restore() keeping the right keys in reversed order
+  // passed every count above, and search would then match text the doc no
+  // longer has. So each reused row is checked against a fresh embedding of
+  // the passage now at its seq, computed here from the text.
+  it('every reused vector is the embedding of the passage at its seq, across three changes', () => {
+    const index = createSearchIndex({ dbPath: ':memory:', kinds: TEXT_KINDS });
+    let splits = 0;
+    const writer = createWriter(index.db, { passagesOf: (d) => { splits++; return passagesOfDoc(d); } });
+    type Text = { kind: string; ref: string; title: string; note: string; updatedAt: number };
+    const vectorize = (id: number, d: Text) =>
+      writer.writeVectors(id, expectedRows(passagesOfDoc(d)).map((r) => Int8Array.from(r.vec)));
+    const change = (d: Text) => {
+      const before = splits;
+      const r = writer.upsert(d);
+      const fresh = new Map(expectedRows(passagesOfDoc(d)).map((x) => [x.seq, JSON.stringify(x.vec)]));
+      const rows = vecRows(index, r.docId);
+      const wrong = rows.filter((row) => fresh.get(row.seq) !== JSON.stringify(row.vec)).map((row) => row.seq);
+      vectorize(r.docId, d);
+      return { splits: splits - before, reused: r.reusedVectors ?? 0, rows: rows.length, wrong };
+    };
+    let v: Text = { kind: 'task', ref: 'values', title: 'moves', note: paragraphs('s', 6), updatedAt: 1 };
+    const id = writer.upsert(v).docId;
+    vectorize(id, v);
+    // A paragraph in front moves every passage one seq; the first change splits both sides.
+    v = { ...v, note: `${paragraphs('front', 1)}\n\n${v.note}`, updatedAt: 2 };
+    const first = change(v);
+    expect(first).toMatchObject({ splits: 2, wrong: [] });
+    expect(first.rows).toBeGreaterThan(3);
+    // The next two read the old side from the keys restore() kept: one split each.
+    v = { ...v, note: `${v.note}\n\n${paragraphs('tail', 1)}`, updatedAt: 3 };
+    const second = change(v);
+    expect(second).toMatchObject({ splits: 1, wrong: [] });
+    expect(second.rows).toBeGreaterThan(3);
+    v = { ...v, note: `${paragraphs('head', 1)}\n\n${v.note}`, updatedAt: 4 };
+    const third = change(v);
+    expect(third).toMatchObject({ splits: 1, wrong: [] });
+    expect(third.rows).toBeGreaterThan(3);
+    expect([first.reused, second.reused, third.reused]).toEqual([first.rows, second.rows, third.rows]);
+    index.close();
   });
 });
 

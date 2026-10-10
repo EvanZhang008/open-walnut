@@ -106,13 +106,24 @@ export interface PassageSet {
  * requirement is that it does not UNDER-estimate.
  */
 export function estimateTokens(text: string): number {
+  return tokensOf(charCounts(text));
+}
+
+/** The two counts estimateTokens reads: CJK code points and every other one. */
+interface CharCounts { cjk: number; other: number }
+
+function charCounts(text: string): CharCounts {
   let cjk = 0;
   let other = 0;
   for (const ch of text) {
     if (isCjkCodePoint(ch.codePointAt(0)!)) cjk++;
     else other++;
   }
-  return cjk * CHARS_PER_TOKEN_CJK + Math.ceil(other / CHARS_PER_TOKEN_OTHER);
+  return { cjk, other };
+}
+
+function tokensOf(c: CharCounts): number {
+  return c.cjk * CHARS_PER_TOKEN_CJK + Math.ceil(c.other / CHARS_PER_TOKEN_OTHER);
 }
 
 function nonWhitespaceCount(text: string): number {
@@ -187,16 +198,24 @@ export function clipToTokenBudget(
 export function splitToBudget(text: string): string[] {
   const chunks: string[] = [];
   let current = '';
+  // charCounts(current), kept as paragraphs join it. Estimating the joined text
+  // again for every paragraph was quadratic in the paragraph count: a 63.9k-char
+  // note of 3-char paragraphs took about 250 ms per split on a loaded machine,
+  // and a changed upsert of a doc with vectors splits on the host thread
+  // (vector-reuse.ts). The joiner adds two non-CJK characters, and the estimate
+  // of a join is the estimate of its summed counts.
+  let counts: CharCounts = { cjk: 0, other: 0 };
   const flush = (): void => {
     if (current) chunks.push(current);
     current = '';
+    counts = { cjk: 0, other: 0 };
   };
   for (const para of text.split(/\n{2,}/)) {
     if (!para.trim()) continue;
-    const paraTokens = estimateTokens(para);
-    // A paragraph past the budget splits hard — transcripts and tool output
+    const paraCounts = charCounts(para);
+    // A paragraph past the budget splits hard: transcripts and tool output
     // contain unbroken walls with no paragraph boundary to use.
-    if (paraTokens > PASSAGE_TOKEN_BUDGET || para.length > PASSAGE_MAX_CHARS) {
+    if (tokensOf(paraCounts) > PASSAGE_TOKEN_BUDGET || para.length > PASSAGE_MAX_CHARS) {
       flush();
       let at = 0;
       while (at < para.length) {
@@ -208,15 +227,19 @@ export function splitToBudget(text: string): string[] {
       }
       continue;
     }
-    const joined = current ? `${current}\n\n${para}` : para;
-    if (
-      current
-      && (estimateTokens(joined) > PASSAGE_TOKEN_BUDGET || joined.length > PASSAGE_MAX_CHARS)
-    ) {
+    if (!current) {
+      current = para;
+      counts = paraCounts;
+      continue;
+    }
+    const joined: CharCounts = { cjk: counts.cjk + paraCounts.cjk, other: counts.other + 2 + paraCounts.other };
+    if (tokensOf(joined) > PASSAGE_TOKEN_BUDGET || current.length + 2 + para.length > PASSAGE_MAX_CHARS) {
       flush();
       current = para;
+      counts = paraCounts;
     } else {
-      current = joined;
+      current = `${current}\n\n${para}`;
+      counts = joined;
     }
   }
   flush();

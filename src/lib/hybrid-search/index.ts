@@ -791,6 +791,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       const budgetMs = backfillOptions.budgetMs;
       let embedded = 0;
       let passagesRun = 0;
+      /** Passages handed to the worker in this call, embedded or not: what
+       *  the budget counts, so a batch whose docs all fail still stops. */
+      let judged = 0;
       const shape = () => ({ scanned, docs: docs.length, passages: passagesRun });
       // A yield hands back the INCOMING cursor: the next call re-lists the same
       // window, where the docs finished here are vectored (the probe skips them)
@@ -807,18 +810,28 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         };
       };
       /** Checked before every inference: a live query wants the worker, or this
-       *  call has used its budget (after at least one passage, so it always
-       *  moves forward). */
+       *  call has used its budget (after at least one passage was tried, so it
+       *  always moves forward). Measured by the r1 gate: a batch whose docs all
+       *  failed ran 2.5 to 2.8 s past a 200 ms budget while the budget counted
+       *  only embedded passages. */
       const mustYield = (): 'query' | 'budget' | null => {
         if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) return 'query';
-        if (budgetMs !== undefined && passagesRun > 0 && Date.now() - startedAt >= budgetMs) return 'budget';
+        if (budgetMs !== undefined && judged > 0 && Date.now() - startedAt >= budgetMs) return 'budget';
         return null;
       };
       const zero = () => new Int8Array(options.embedder!.dims);
       const quarantine = (doc: (typeof docs)[number], error: string) => {
         // Zero vector = done, no boost. The next process retries it once, and
         // a content change clears it (upsert drops it with the old vectors).
-        if (writer.writeVectors(doc.id, [zero()], doc.hash)) zeroSettled.add(doc.id);
+        // Refused when the doc changed while its passage was judged: the new
+        // text is listed again on its own, and nothing was quarantined.
+        if (!writer.writeVectors(doc.id, [zero()], doc.hash)) {
+          log('info', 'hybrid-search: a failing passage\'s doc changed while it was judged: not quarantined', {
+            kind: doc.kind, ref: doc.ref, error,
+          });
+          return;
+        }
+        zeroSettled.add(doc.id);
         log('warn', 'hybrid-search: doc quarantined: its passage failed twice on a working embed worker', {
           kind: doc.kind, ref: doc.ref, error,
         });
@@ -834,6 +847,9 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         }
         // A quarantine from an earlier process: retry it from scratch.
         if (doc.zeroMarker) writer.clearZeroMarker(doc.id, doc.hash);
+        // Its next change reads these instead of splitting this text again
+        // (one-passage docs are cheap to split and would only crowd them out).
+        if (passages.length > 1) writer.notePassages(doc.id, doc.kind, doc.hash, passages);
         // ONE passage per inference call. CPU inference is linear in total
         // tokens (measured: 1×2KB ≈ 540ms, 32×2KB ≈ 22s), so batching buys
         // no throughput: it only builds a 22s head-of-line block in the
@@ -844,6 +860,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           // Single passage: nothing to resume, keep the simple path.
           const why = mustYield();
           if (why) return yieldNow(why);
+          judged++;
           const out = await embedJudged(passages[0]);
           if (closed) return { embedded, drained: true, cursor, scanned };
           if ('fault' in out) {
@@ -873,6 +890,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           if (done.has(seq)) continue;
           yielded = mustYield();
           if (yielded) break;
+          judged++;
           const out = await embedJudged(passages[seq]);
           if ('fault' in out) { failure = out; break; }
           passagesRun++;
