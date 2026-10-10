@@ -23,6 +23,7 @@ import { tokenKind, tokenPrefix, tokenTag } from './send.js'
 import { ACTIVE_LEASE_MS, parseMode, type LetterPushMode } from './letter-push-policy.js'
 import { LETTER_TYPES } from '../human-inbox/types.js'
 import type { PushTokenEntry } from '../types.js'
+import { CLAIM_RE, MAX_LIVE_CLAIMS, TOKEN_SHA_RE, mergeClaims, pushTokenSha } from './claims.js'
 
 /**
  * A caller-fixable registry error. Carries the HTTP status so both the local
@@ -73,11 +74,11 @@ function cleanLetterTypes(raw: unknown): string[] | undefined {
 export type PushTokenOrigin = 'local' | 'relay'
 
 /** Absent = `local`: rows written before the relay existed came from this box. */
-function parsePushOrigin(raw: unknown): PushTokenOrigin {
+export function parsePushOrigin(raw: unknown): PushTokenOrigin {
   return raw === 'relay' ? 'relay' : 'local'
 }
 
-const ANON_DEVICE_KEY_NAME = 'localhost'
+export const ANON_DEVICE_KEY_NAME = 'localhost'
 
 /**
  * Which row is "this device's" — the ONE identity rule, shared by every entry
@@ -128,6 +129,8 @@ export interface RegisterPushInput {
   keyName?: string | null
   /** Which box authenticated `keyName`. Defaults to `local`. */
   origin?: unknown
+  /** Relayed writes: the registration's claim (core/push/claims.ts). Ignored on a local write. */
+  claim?: unknown
 }
 
 export interface RegisterPushResult {
@@ -161,6 +164,7 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
   const origin = parsePushOrigin(input.origin)
   const kind = tokenKind({ token })
   const environment = input.environment === 'sandbox' ? 'sandbox' : 'production'
+  const claim = origin === 'relay' && typeof input.claim === 'string' && CLAIM_RE.test(input.claim) ? input.claim : null
 
   let entry!: PushTokenEntry
   let swept = 0
@@ -199,6 +203,12 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
     }
     const requestedTypes = cleanLetterTypes(input.letterTypes)
     if (requestedTypes && requestedTypes.length > 0) entry.letter_types = requestedTypes
+    // A row the same device already held keeps the claims of the writes before
+    // this one: a take-back by one of them must not drop the others' row.
+    if (claim) {
+      const sameRow = previous !== undefined && ownedBy(previous, keyName, origin)
+      entry.claims = mergeClaims(sameRow ? previous.claims : undefined, claim)
+    }
     return [...filtered, entry]
   })
 
@@ -230,6 +240,49 @@ export async function unregisterPushToken(rawToken: unknown): Promise<{ ok: true
   })
   log.notif.info('push: token unregistered', { tokenTag: tokenTag(token), removed })
   return { ok: true, removed }
+}
+
+/**
+ * Undo a relayed registration whose pairing went on the way (core/push/claims.ts).
+ * `liveClaims` are the claims of the name's pairings that still hold on the
+ * companion. The device's relayed row of that token stays only when one of them
+ * is on it, and keeps only those, so a revoked pairing's claim never keeps the
+ * row again; otherwise the row goes. Idempotent.
+ */
+export async function takeBackPushToken(
+  device: string,
+  tokenSha: unknown,
+  liveClaims: unknown,
+): Promise<{ removed: number; kept: number }> {
+  if (typeof tokenSha !== 'string' || !TOKEN_SHA_RE.test(tokenSha) || !Array.isArray(liveClaims)
+    || liveClaims.length > MAX_LIVE_CLAIMS || !liveClaims.every((c) => typeof c === 'string' && CLAIM_RE.test(c))) {
+    throw new PushRegistryError('take-back needs a token sha256 and the live claims', 'bad_request', 400)
+  }
+  const live = new Set(liveClaims as string[])
+  let removed = 0
+  let kept = 0
+  let dropped = 0
+  await updatePushTokens((tokens) => {
+    const i = tokens.findIndex((t) => ownedBy(t, device, 'relay') && pushTokenSha(t.token) === tokenSha)
+    if (i < 0) return null
+    const row = tokens[i]
+    const claims = row.claims ?? []
+    const held = claims.filter((c) => CLAIM_RE.test(c) && live.has(c))
+    if (held.length > 0) {
+      kept = 1
+      dropped = claims.length - held.length
+      if (dropped === 0) return null
+      const next = [...tokens]
+      next[i] = { ...row, claims: held }
+      return next
+    }
+    removed = 1
+    return tokens.filter((_, j) => j !== i)
+  })
+  log.notif.info('push: relayed registration taken back', {
+    device, removed, ...(kept > 0 ? { keptForALivePairing: kept, staleClaimsDropped: dropped } : {}),
+  })
+  return { removed, kept }
 }
 
 export interface PreferencesResult {
@@ -350,18 +403,38 @@ export async function reportDeviceActive(
  * the same non-atomic shape `pruneDead` in letter-push.ts warns about: a
  * registration landing between that read and its write was silently reinstated,
  * or dropped, depending on which one won.
+ *
+ * `registeredBefore` (epoch ms, this box's clock) is when the pairing was
+ * revoked. A row registered after it is a NEW pairing's: the name was paired
+ * again before this ran (a revoke queued during an outage, the drain after a
+ * re-pair), and that phone keeps its row. A row from the very same millisecond,
+ * or with no readable time, is taken as old. Absent = every row of the device.
  */
 export async function revokeDevicePushTokens(
   device: string,
   origin: PushTokenOrigin = 'local',
+  opts: { registeredBefore?: number } = {},
 ): Promise<{ removed: number }> {
+  const cutoff = opts.registeredBefore
+  const newer = (t: PushTokenEntry): boolean => {
+    if (cutoff === undefined) return false
+    const at = Date.parse(t.registered_at)
+    return Number.isFinite(at) && at > cutoff
+  }
   let removed = 0
+  let kept = 0
   await updatePushTokens((tokens) => {
-    const keep = tokens.filter((t) => !ownedBy(t, device, origin))
+    const mine = tokens.filter((t) => ownedBy(t, device, origin))
+    const keep = tokens.filter((t) => !ownedBy(t, device, origin) || newer(t))
     removed = tokens.length - keep.length
+    kept = mine.length - removed
     return removed === 0 ? null : keep
   })
-  if (removed > 0) log.notif.info('push: tokens revoked with the device', { device, origin, removed })
+  if (removed > 0 || kept > 0) {
+    log.notif.info('push: tokens revoked with the device', {
+      device, origin, removed, ...(kept > 0 ? { keptNewerPairing: kept } : {}),
+    })
+  }
   return { removed }
 }
 

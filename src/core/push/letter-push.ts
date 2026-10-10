@@ -259,6 +259,7 @@ async function attemptLetterPush(
     {
       devices: tokens.length, targeted: chosen.length,
       ...(out.deadTokens.length > 0 ? { deadTokensPruned: out.deadTokens.length } : {}),
+      ...(out.unpaired > 0 ? { unpairedSkipped: out.unpaired } : {}),
     },
   )
 }

@@ -60,6 +60,7 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
   log.web.info('push: delivery', {
     title, apns: out.apns, expo: out.expo, sent: out.sent, failed: out.failed,
     ...(out.reason ? { reason: out.reason } : {}),
+    ...(out.unpaired > 0 ? { unpairedSkipped: out.unpaired } : {}),
   })
 }
 

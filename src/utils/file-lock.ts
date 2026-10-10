@@ -18,6 +18,14 @@ const STALE_AGE_MS = 30_000;  // Age-based fallback: lock older than 30s is stal
 const TIMEOUT_MS = 10_000;    // Give up (throw) after 10s
 const POLL_MS = 15;           // Poll interval
 
+/** The lock was not had within the wait; `fn` never ran. */
+export class FileLockTimeoutError extends Error {
+  constructor(lock: string, waitMs: number) {
+    super(`File lock timeout after ${waitMs}ms: ${lock}`);
+    this.name = 'FileLockTimeoutError';
+  }
+}
+
 function lockDir(filePath: string): string {
   return filePath + '.lock';
 }
@@ -141,11 +149,14 @@ function trackHeldLock(lock: string): void {
 /**
  * Acquire a file lock asynchronously, run fn, release.
  * Uses setTimeout polling — non-blocking for the event loop.
- * Throws if the lock cannot be acquired within TIMEOUT_MS.
+ * Throws FileLockTimeoutError if the lock cannot be acquired within
+ * `timeoutMs` (default TIMEOUT_MS). A caller that can come back later passes a
+ * short one rather than wait on a holder that may be waiting on it.
  */
-export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+export async function withFileLock<T>(filePath: string, fn: () => Promise<T>, opts: { timeoutMs?: number } = {}): Promise<T> {
   const lock = lockDir(filePath);
-  const deadline = Date.now() + TIMEOUT_MS;
+  const waitMs = opts.timeoutMs ?? TIMEOUT_MS;
+  const deadline = Date.now() + waitMs;
 
   // Ensure parent directory exists
   await fsp.mkdir(path.dirname(lock), { recursive: true });
@@ -167,7 +178,7 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
       }
 
       if (Date.now() > deadline) {
-        throw new Error(`File lock timeout after ${TIMEOUT_MS}ms: ${lock}`);
+        throw new FileLockTimeoutError(lock, waitMs);
       }
 
       await new Promise(resolve => setTimeout(resolve, POLL_MS));

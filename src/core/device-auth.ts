@@ -19,11 +19,13 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
-import { withFileLock } from '../utils/file-lock.js'
+import { FileLockTimeoutError, withFileLock } from '../utils/file-lock.js'
 import { log } from '../logging/index.js'
 import { CLOUD_MODE } from '../constants.js'
+import { getSelfApiRoot } from '../lib/self-api-root.js'
+import type { PushRevokeOutcome } from './push/device-revoke.js'
 import {
-  DeviceChangeRefused, LOCAL_ACTOR, deviceChangeDecision, liveOwnerOf, newDeviceId, platformFromInfo,
+  DeviceChangeRefused, LOCAL_ACTOR, deviceChangeDecision, liveOwnerOf, newDeviceId, ownsMachineCredentials, platformFromInfo,
   type DeviceActor, type DevicePlatform,
 } from './device-actor.js'
 
@@ -100,10 +102,29 @@ interface AuthFile {
   devices: DeviceRecord[]
   /** This box's identity (getInstanceId). Here because auth.json is machine-local and never synced. */
   instanceId?: string
+  /**
+   * Token hashes of every pairing revoked or replaced here, written in the same
+   * locked write that removes it. Such a token never authenticates here again,
+   * and the other box's copy of it is never adopted back (device-adoption.ts):
+   * that box may still hold it when its removal was refused or given up on.
+   */
+  revokedHashes?: string[]
 }
 
 const INSTANCE_ID_RE = /^[0-9a-f]{32}$/
+const TOKEN_HASH_RE = /^[0-9a-f]{64}$/
 const keptInstanceId = (raw: unknown) => (typeof raw === 'string' && INSTANCE_ID_RE.test(raw) ? { instanceId: raw } : {})
+const keptRevoked = (raw: unknown) => {
+  const hashes = Array.isArray(raw) ? raw.filter((h): h is string => typeof h === 'string' && TOKEN_HASH_RE.test(h)) : []
+  return hashes.length > 0 ? { revokedHashes: hashes } : {}
+}
+
+/** Record `hashes` as revoked here, inside the locked write that removes their pairings. */
+function tombstone(auth: AuthFile, hashes: readonly string[]): void {
+  const known = new Set(auth.revokedHashes ?? [])
+  const added = hashes.filter((h) => TOKEN_HASH_RE.test(h) && !known.has(h))
+  if (added.length > 0) auth.revokedHashes = [...(auth.revokedHashes ?? []), ...added]
+}
 
 /** Public device info — never includes hashes. */
 export interface DeviceInfo {
@@ -185,7 +206,10 @@ async function loadAuth(): Promise<AuthFile> {
   try {
     const parsed = JSON.parse(raw) as AuthFile
     if (!Array.isArray(parsed.devices)) throw new Error('devices is not an array')
-    return { ...keptInstanceId(parsed.instanceId), devices: parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string') }
+    return {
+      ...keptInstanceId(parsed.instanceId), ...keptRevoked(parsed.revokedHashes),
+      devices: parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string'),
+    }
   } catch (err) {
     log.web.error('auth.json is corrupt — treating as zero devices (claim flow reopens)', {
       file,
@@ -205,14 +229,20 @@ function authBackupPath(): string {
   return `${authFilePath()}.bak`
 }
 
-/** Read the sidecar. Returns null when absent, empty, or unparseable. */
+/**
+ * Read the sidecar. Returns null when absent, unparseable, or holding nothing:
+ * no pairing and no revoked hash. One with revoked hashes alone (every pairing
+ * on this box was revoked) still counts: losing it would let the other box's
+ * copy of a revoked pairing be adopted back (device-adoption.ts).
+ */
 async function readAuthBackup(): Promise<AuthFile | null> {
   try {
     const raw = await fs.readFile(authBackupPath(), 'utf-8')
     const parsed = JSON.parse(raw) as AuthFile
     if (!Array.isArray(parsed.devices)) return null
     const devices = parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string')
-    return devices.length > 0 ? { ...keptInstanceId(parsed.instanceId), devices } : null
+    const backup: AuthFile = { ...keptInstanceId(parsed.instanceId), ...keptRevoked(parsed.revokedHashes), devices }
+    return devices.length > 0 || backup.revokedHashes ? backup : null
   } catch {
     return null
   }
@@ -243,16 +273,30 @@ async function saveAuth(auth: AuthFile): Promise<void> {
  * saveAuth (mode 0600 + .bak sidecar) instead of the generic updateJsonFile,
  * but take the same cross-process file lock around the read→mutate→write
  * cycle. `mutate` returns `persist: false` to skip the write (no-op outcome).
+ * `afterSave` runs after a persisted write, still inside the lock, so nobody
+ * else reads auth.json before it is done. It must not throw.
+ * `onFailure` runs when `mutate` or the write throws, also still inside the
+ * lock, before the error goes on: what `mutate` wrote ahead is taken back
+ * before another writer can reuse it. It must not throw.
  */
 async function updateAuth<R>(
   mutate: (auth: AuthFile) => { persist: boolean; result: R } | Promise<{ persist: boolean; result: R }>,
+  afterSave?: () => Promise<void>,
+  onFailure?: () => Promise<void>,
 ): Promise<R> {
   return withFileLock(authFilePath(), async () => {
-    const auth = await loadAuth()
-    const normalized = normalizeDevices(auth.devices)
-    const { persist, result } = await mutate(auth)
-    if (persist || normalized) await saveAuth(auth)
-    return result
+    let outcome: { persist: boolean; result: R }
+    try {
+      const auth = await loadAuth()
+      const normalized = normalizeDevices(auth.devices)
+      outcome = await mutate(auth)
+      if (outcome.persist || normalized) await saveAuth(auth)
+    } catch (err) {
+      if (onFailure) await onFailure()
+      throw err
+    }
+    if (outcome.persist && afterSave) await afterSave()
+    return outcome.result
   })
 }
 
@@ -326,25 +370,240 @@ export async function rotateDevice(
   opts: { by: DeviceActor },
 ): Promise<{ name: string; token: string; createdAt: string; replaced: boolean }> {
   validateDeviceName(name)
-  const out = await updateAuth((auth) => {
+  const intent: { plan: RevokePlan | null } = { plan: null }
+  const out = await updateAuth(async (auth) => {
     const target = auth.devices.find((d) => d.name === name)
     const decision = deviceChangeDecision(auth.devices, opts.by, target ? 'rotate' : 'create', name, CLOUD_MODE)
     if (!decision.ok) throw decision.refusal
     if (target?.kind === 'machine') throw new Error(`Device "${name}" is a machine credential`)
     const fresh = freshRecord(name)
+    // The old token's copy on the other box must stop working too, whoever rotates.
+    const oldTwins = target ? pairingsOf(auth.devices, [target]).map((d) => d.tokenHash) : []
     if (target && decision.by === 'self') {
+      intent.plan = await writeRevokeIntent([], oldTwins)
+      tombstone(auth, [target.tokenHash])
       target.tokenHash = fresh.record.tokenHash
       delete target.lastUsedAt
       return { persist: true, result: { name, token: fresh.token, createdAt: target.createdAt, replaced: true, gone: [name], by: decision.by } }
     }
     const gone = target ? revokedWith(auth.devices, target) : []
+    intent.plan = await writeRevokeIntent(pairingsOf(auth.devices, gone), oldTwins)
+    tombstone(auth, gone.map((d) => d.tokenHash))
     auth.devices = [...auth.devices.filter((d) => !gone.includes(d)), fresh.record]
     return { persist: true, result: { name, token: fresh.token, createdAt: fresh.record.createdAt, replaced: !!target, gone: gone.map((d) => d.name), by: decision.by } }
-  })
+  }, () => stampRevokeTime(intent), () => dropRevokeIntent(intent))
   for (const n of out.gone) lastUsedWriteAt.delete(n)
   notifyRevoked(out.gone)
-  log.web.info('device-auth: device rotated', { name, by: out.by, replaced: out.replaced, ...(out.gone.length > 1 ? { ownedCredentials: out.gone.filter((n) => n !== name) } : {}) })
+  log.web.info('device-auth: device rotated', {
+    name, by: out.by, replaced: out.replaced,
+    ...(out.gone.length > 1 ? { ownedCredentials: out.gone.filter((n) => n !== name) } : {}),
+  })
+  // A re-pair by anyone but the device itself ends the old pairing, so its phone
+  // stops getting pushes like any revoked one, and the old token's copy goes.
+  // Not awaited: the new QR must not wait on a relay to the primary (up to 30 s
+  // on the companion). Nothing is lost by not waiting: every part is in the
+  // revoke queue already, and the push part removes only rows registered before
+  // the revoke, so the new pairing's own rows are safe whenever it runs.
+  const plan = intent.plan
+  if (plan && (plan.push.length > 0 || plan.twins.length > 0)) trackRevokeWork(finishRevoke(plan, `device ${name} rotated`))
   return { name: out.name, token: out.token, createdAt: out.createdAt, replaced: out.replaced }
+}
+
+/**
+ * The phone and computer pairings among `gone`: what holds push rows and what
+ * the other box may hold a copy of. Not machine credentials, and not the Mac
+ * that owns them (a Mac registers no pushes, and its pairing is never copied:
+ * device-twins.ts). Called on the records BEFORE they leave `devices`.
+ */
+function pairingsOf(devices: readonly DeviceRecord[], gone: readonly DeviceRecord[]): DeviceRecord[] {
+  return gone.filter((d) => d.kind !== 'machine' && !ownsMachineCredentials(devices, d))
+}
+
+/** How the other box's copy of a revoked pairing fared (`dropTwins`). */
+export type TwinRemoval = 'done' | 'background' | 'queued' | 'failed'
+
+/**
+ * A revoke's parts on the other box, each with its revoke-queue entry (null =
+ * the entry could not be written; the part still runs, with no fallback).
+ */
+interface RevokePlan {
+  /**
+   * The push part's cutoff: rows registered before it go. Taken AFTER the
+   * auth.json write (stampRevokeTime): a phone's registration that its token
+   * authenticated just before that write can still land after it, and a cutoff
+   * from before the write would keep that row. Until then, the write-ahead time.
+   */
+  revokedAt: string
+  push: Array<{ name: string; opId: string | null }>
+  twins: Array<{ tokenHash: string; opId: string | null }>
+}
+
+/**
+ * Write ahead: every part a revoke must finish (the revoked pairings' push rows,
+ * their copies on the other box) goes into the revoke queue BEFORE auth.json
+ * loses the pairing, inside the auth lock. A process killed after the auth.json
+ * write leaves the server a queue to finish instead of an orphaned row or copy;
+ * one killed before it leaves entries for a pairing that is still here, which
+ * the drain drops (revoke-queue.ts, judged under this same lock, so it never
+ * sees a revoke in between). Each entry is cleared when its part finishes.
+ */
+async function writeRevokeIntent(pairings: DeviceRecord[], twinHashes: string[]): Promise<RevokePlan> {
+  const revokedAt = new Date().toISOString()
+  const plan: RevokePlan = { revokedAt, push: [], twins: [] }
+  if (pairings.length === 0 && twinHashes.length === 0) return plan
+  const { enqueueRevokeStep } = await import('./devices/revoke-queue.js')
+  for (const d of pairings) {
+    plan.push.push({ name: d.name, opId: await enqueueRevokeStep({ step: 'push', name: d.name, revokedAt, pairingHash: d.tokenHash }) })
+  }
+  for (const h of twinHashes) plan.twins.push({ tokenHash: h, opId: await enqueueRevokeStep({ step: 'twin', tokenHash: h }) })
+  return plan
+}
+
+/**
+ * Right after the auth.json write, inside its lock: the revoke time becomes
+ * now, in the plan and in each queued push part. A registration that lands
+ * before it is older than the cutoff. One after it sees the pairing gone
+ * (web/routes/push.ts: the Mac checks and writes under this lock, so it never
+ * writes; a companion checks again after its relayed write and takes that
+ * write back). Never throws: an entry it could not stamp keeps the write-ahead time.
+ */
+async function stampRevokeTime(intent: { plan: RevokePlan | null }): Promise<void> {
+  const plan = intent.plan
+  if (!plan || plan.push.length === 0) return
+  plan.revokedAt = new Date().toISOString()
+  try {
+    const { stampRevokedAt } = await import('./devices/revoke-queue.js')
+    for (const { opId } of plan.push) if (opId) await stampRevokedAt(opId, plan.revokedAt)
+  } catch (err) {
+    log.web.warn('device-auth: could not stamp the revoke time on its queued push parts', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
+ * The revoke's auth.json write failed after its intent was written (the pairing
+ * stayed): take the intent back. Runs inside the auth lock (updateAuth's
+ * `onFailure`): enqueueRevokeStep hands a second revoke of the same pairing the
+ * entry already queued, so a take-back after the lock could remove the entry
+ * that revoke reported as queued. Never throws.
+ */
+async function dropRevokeIntent(intent: { plan: RevokePlan | null }): Promise<void> {
+  const written = intent.plan
+  if (!written) return
+  try {
+    const { clearRevokeStep } = await import('./devices/revoke-queue.js')
+    for (const s of [...written.push, ...written.twins]) if (s.opId) await clearRevokeStep(s.opId)
+  } catch (err) {
+    log.web.warn('device-auth: could not take back the queued parts of a revoke that did not land', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+const revokeWork = new Set<Promise<unknown>>()
+function trackRevokeWork(p: Promise<unknown>): void {
+  revokeWork.add(p)
+  void p.finally(() => revokeWork.delete(p))
+}
+
+/** Tests: wait for the parts a rotation started in the background. */
+export async function _settleRevokeWorkForTesting(): Promise<void> {
+  while (revokeWork.size > 0) await Promise.allSettled([...revokeWork])
+}
+
+/** Run a revoke's parts now; each finished part's queue entry is cleared. Never throws. */
+async function finishRevoke(plan: RevokePlan, what: string): Promise<{ push: PushRevokeOutcome | null; twin: TwinRemoval | null }> {
+  // The other box's copy first: a server only starts it, and it should be on its
+  // way before the rows (the two do not depend on each other).
+  const twinRemoval = dropTwins(plan.twins)
+  const push = plan.push.length > 0 ? await dropPushRows(plan) : null
+  const twin = await twinRemoval
+  if (push?.pending || (twin && twin !== 'done' && twin !== 'background')) {
+    log.web.warn('device-auth: a revoke\'s parts did not all finish where it ran', {
+      what, ...(push ? { pushRevokePending: push.pending, pushRevokeQueued: !!push.queued, pushRevokePendingWhere: push.pendingWhere } : {}), ...(twin ? { twin } : {}),
+    })
+  }
+  return { push, twin }
+}
+
+/**
+ * The other box's copy of a revoked pairing goes too (device-twins.ts), or the
+ * revoked token keeps working there and the phone can register for pushes
+ * again through it. Its revoke-queue entry is already written (write ahead). A
+ * running server tries at once, in process, and leaves the entry for its drain
+ * ('background': its own retries end with the process). Any other process
+ * (`walnut device revoke`) tries once and clears the entry when that worked
+ * ('done'), else leaves it to the server ('queued'). Never throws.
+ */
+async function dropTwins(twinSteps: RevokePlan['twins']): Promise<TwinRemoval | null> {
+  if (twinSteps.length === 0) return null
+  try {
+    const twins = await import('../web/routes/device-twins.js')
+    const { clearRevokeStep } = await import('./devices/revoke-queue.js')
+    if (getSelfApiRoot() !== null) {
+      let result: TwinRemoval = 'background'
+      for (const { tokenHash, opId } of twinSteps) {
+        // At once, with the tombstone that stops an adoption already in flight
+        // from bringing the copy back. A drain that finds the copy gone clears the entry.
+        void twins.revokeAdoptionTwin(tokenHash)
+        if (!opId) result = 'failed'
+      }
+      return result
+    }
+    let result: TwinRemoval = 'done'
+    for (const { tokenHash, opId } of twinSteps) {
+      if (await twins.removeTwinOnce(tokenHash)) {
+        if (opId) await clearRevokeStep(opId)
+        continue
+      }
+      if (opId) {
+        if (result === 'done') result = 'queued'
+      } else {
+        result = 'failed'
+      }
+    }
+    return result
+  } catch (err) {
+    log.web.warn('device-auth: the other box\'s copy of a revoked pairing was not removed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return 'failed'
+  }
+}
+
+/**
+ * The push half of a revoke: the revoked devices' push rows registered before
+ * the revoke go, wherever they live (core/push/device-revoke.ts, which relays to
+ * the primary on a replica). Each finished part's queue entry is cleared; a part
+ * that can still land keeps it ('queued'). Never throws: the pairing is already
+ * gone, and a failure is reported in `pending` instead.
+ */
+async function dropPushRows(plan: RevokePlan): Promise<PushRevokeOutcome> {
+  try {
+    const { revokePushTokensForDevice } = await import('./push/device-revoke.js')
+    const { clearRevokeStep } = await import('./devices/revoke-queue.js')
+    const outcomes = await Promise.all(plan.push.map(async ({ name, opId }) => {
+      const o = await revokePushTokensForDevice(name, { queue: false, revokedAt: plan.revokedAt })
+      const keep = !!o.pending && !!o.retry
+      if (!keep && opId) await clearRevokeStep(opId)
+      return keep ? { ...o, queued: opId !== null } : o
+    }))
+    const unfinished = outcomes.filter((o) => o.pending)
+    const where = new Set<NonNullable<PushRevokeOutcome['pendingWhere']>>()
+    for (const o of unfinished) if (o.pendingWhere) where.add(o.pendingWhere)
+    const pendingWhere = where.size === 0 ? undefined : where.has('both') || where.size > 1 ? 'both' : [...where][0]
+    return {
+      removed: outcomes.reduce((sum, o) => sum + o.removed, 0),
+      relayed: outcomes.length > 0 && outcomes.every((o) => o.relayed),
+      ...(unfinished.length > 0 ? {
+        pending: unfinished.map((o) => o.pending).join('; '),
+        retry: unfinished.every((o) => o.retry),
+        queued: unfinished.every((o) => o.queued),
+        ...(pendingWhere ? { pendingWhere } : {}),
+      } : {}),
+    }
+  } catch (err) {
+    const pending = err instanceof Error ? err.message : String(err)
+    log.web.warn('device-auth: push rows of a revoked device not removed, it may still receive letters', { devices: plan.push.map((p) => p.name), error: pending })
+    return { removed: 0, relayed: false, pending, queued: plan.push.every((p) => p.opId !== null), retry: true }
+  }
 }
 
 /**
@@ -375,6 +634,11 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
     if (hashesEqual(candidateHash, device.tokenHash)) matched = device
   }
   if (!matched) return null
+  // A token revoked here never authenticates again, even if a record of it came back.
+  if (auth.revokedHashes?.includes(candidateHash)) {
+    log.web.warn('device-auth: a revoked token was presented, and its record is back; refused', { name: matched.name })
+    return null
+  }
 
   const now = Date.now()
   const lastWrite = lastUsedWriteAt.get(matched.name) ?? 0
@@ -412,11 +676,50 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
  * Mac disconnected from this companion), and so do the unowned ones from
  * before ownership was recorded (revokedWith).
  */
-export async function revokeDevice(name: string, opts: { by?: DeviceActor; tokenHash?: string } = {}): Promise<boolean> {
-  const removed = await updateAuth((auth) => {
-    // `tokenHash`: only this pairing of the name, never one that replaced it meanwhile.
+export async function revokeDevice(name: string, opts: RevokeOptions = {}): Promise<boolean> {
+  return (await revokePairing(name, opts)).revoked
+}
+
+export interface RevokeOptions {
+  by?: DeviceActor
+  /** Only this pairing of the name, never one that replaced it meanwhile. */
+  tokenHash?: string
+  /**
+   * The revoke came FROM the other box's copy of this pairing (a revoke by hash,
+   * device-adoption.ts): that box already removed its own, so asking it again
+   * would only bounce the request back.
+   */
+  fromTwin?: boolean
+}
+
+export interface DeviceRevokeOutcome {
+  revoked: boolean
+  /** What happened to the revoked devices' push rows; null when nothing was revoked. */
+  push: PushRevokeOutcome | null
+  /** What happened to the other box's copy of the pairing; null when there is none to remove. */
+  twin: TwinRemoval | null
+}
+
+/**
+ * `revokeDevice`, with the outcome for a caller that reports it.
+ *
+ * This is the one revoke path, and it owns everything a revoke has to stop:
+ * the device's push rows (wherever they live) and the other box's copy of the
+ * pairing (or the revoked token keeps working there, and the phone can
+ * register for pushes again through it). The console route, `walnut device
+ * revoke`, a twin revoked by hash and anything added later all come through
+ * here, so none of them can forget either. (The CLI used to revoke only the
+ * pairing, so a lost phone kept getting letter subjects on its lock screen.)
+ * Both parts are written to the revoke queue (core/devices/revoke-queue.ts)
+ * before the pairing leaves auth.json, so a kill at any point leaves them for
+ * the server. They run before this returns; an entry whose part finished is
+ * cleared, and what could not finish stays queued for the server.
+ */
+export async function revokePairing(name: string, opts: RevokeOptions = {}): Promise<DeviceRevokeOutcome> {
+  const intent: { plan: RevokePlan | null } = { plan: null }
+  const out = await updateAuth(async (auth) => {
     const target = auth.devices.find((d) => d.name === name && (opts.tokenHash === undefined || d.tokenHash === opts.tokenHash))
-    if (!target) return { persist: false, result: [] as string[] }
+    if (!target) return { persist: false, result: { names: [] as string[] } }
     const by = opts.by ?? LOCAL_ACTOR
     // A machine credential through this path: only this machine itself (the
     // routes send a paired device's request to machine-credentials.ts).
@@ -425,14 +728,25 @@ export async function revokeDevice(name: string, opts: { by?: DeviceActor; token
       : deviceChangeDecision(auth.devices, by, 'revoke', name, CLOUD_MODE)
     if (!decision.ok) throw decision.refusal
     const gone = revokedWith(auth.devices, target)
+    const pairings = pairingsOf(auth.devices, gone)
+    intent.plan = await writeRevokeIntent(pairings, opts.fromTwin ? [] : pairings.map((d) => d.tokenHash))
     auth.devices = auth.devices.filter((d) => !gone.includes(d))
-    return { persist: true, result: gone.map((d) => d.name) }
-  })
-  if (!removed.includes(name)) return false
+    tombstone(auth, gone.map((d) => d.tokenHash))
+    return { persist: true, result: { names: gone.map((d) => d.name) } }
+  }, () => stampRevokeTime(intent), () => dropRevokeIntent(intent))
+  const removed = out.names
+  if (!removed.includes(name) || !intent.plan) return { revoked: false, push: null, twin: null }
   for (const n of removed) lastUsedWriteAt.delete(n)
-  log.web.info('device-auth: device revoked', { name, ...(removed.length > 1 ? { ownedCredentials: removed.filter((n) => n !== name) } : {}) })
   notifyRevoked(removed)
-  return true
+  const { push, twin } = await finishRevoke(intent.plan, `device ${name} revoked`)
+  const pushOut = push ?? { removed: 0, relayed: false }
+  log.web.info('device-auth: device revoked', {
+    name, ...(removed.length > 1 ? { ownedCredentials: removed.filter((n) => n !== name) } : {}),
+    pushTokensRevoked: pushOut.removed,
+    ...(pushOut.pending ? { pushRevokePending: pushOut.pending, pushRevokeQueued: !!pushOut.queued } : {}),
+    ...(twin ? { twin } : {}),
+  })
+  return { revoked: true, push: pushOut, twin }
 }
 
 type RevokeListener = (names: string[]) => void
@@ -456,12 +770,16 @@ export function notifyRevoked(names: string[]): void {
   }
 }
 
-/** Locked read-modify-write for machine-credentials.ts (same lock as every other auth.json writer). */
+/**
+ * Locked read-modify-write for machine-credentials.ts and device-adoption.ts
+ * (same lock as every other auth.json writer). `revoked`: the token hashes
+ * revoked here, which must never come back.
+ */
 export async function mutateDeviceRecords<R>(
-  mutate: (devices: DeviceRecord[]) => { devices?: DeviceRecord[]; result: R },
+  mutate: (devices: DeviceRecord[], revoked: ReadonlySet<string>) => { devices?: DeviceRecord[]; result: R },
 ): Promise<R> {
   return updateAuth((auth) => {
-    const { devices, result } = mutate(auth.devices)
+    const { devices, result } = mutate(auth.devices, new Set(auth.revokedHashes ?? []))
     if (devices) auth.devices = devices
     return { persist: devices !== undefined, result }
   })
@@ -544,6 +862,118 @@ export async function setDeviceInfo(name: string, info: DeviceSelfInfo): Promise
  */
 export async function listDeviceRecords(): Promise<DeviceRecord[]> {
   return (await loadAuth()).devices
+}
+
+export interface PairedDevices {
+  /** Every name a pairing here can authenticate as. */
+  names: Set<string>
+  /** Every pairing's token hash. */
+  hashes: Set<string>
+  /** The token hashes revoked here (AuthFile.revokedHashes). */
+  revoked: Set<string>
+  /**
+   * `auth` = auth.json itself. `backup` = its sidecar, read because auth.json
+   * could not be (missing, unreadable, corrupt): good enough to judge by, never
+   * to delete by, since it can lag the real file.
+   */
+  from: 'auth' | 'backup'
+}
+
+/**
+ * The pairings on this box, for the push sender's send-time check
+ * (core/push/paired-rows.ts) and the revoke queue (core/devices/revoke-queue.ts).
+ * Read-only and async, never a sync read on the event loop.
+ *
+ * auth.json first; when it cannot be read or parsed, auth.json.bak. Null only
+ * when neither can: `loadAuth` reads that as zero devices, and a caller judging
+ * rows must not, or one bad read would silence every phone.
+ */
+export async function readPairedDevices(): Promise<PairedDevices | null> {
+  const of = (auth: AuthFile, from: PairedDevices['from']): PairedDevices => ({
+    names: new Set(auth.devices.map((d) => d.name)), hashes: new Set(auth.devices.map((d) => d.tokenHash)),
+    revoked: new Set(auth.revokedHashes ?? []), from,
+  })
+  try {
+    const parsed = JSON.parse(await fs.readFile(authFilePath(), 'utf-8')) as AuthFile
+    if (Array.isArray(parsed.devices)) {
+      return of({
+        ...keptRevoked(parsed.revokedHashes),
+        devices: parsed.devices.filter((d) => d && typeof d.name === 'string' && typeof d.tokenHash === 'string'),
+      }, 'auth')
+    }
+  } catch { /* missing, unreadable or corrupt: the sidecar, below */ }
+  const backup = await readAuthBackup()
+  return backup ? of(backup, 'backup') : null
+}
+
+/**
+ * Run `fn` holding the auth lock, with the pairings as auth.json has them then
+ * (readPairedDevices), for the revoke queue's drain: every revoke holds this
+ * lock from its write-ahead to its auth.json write, so under it no revoke is
+ * between the two. Waits at most `waitMs` for the lock; null = busy, try later
+ * (the holder may be the very revoke the caller is judging).
+ */
+export async function withPairingsLocked<R>(
+  fn: (paired: PairedDevices | null) => Promise<R>,
+  waitMs: number,
+): Promise<{ value: R } | null> {
+  try {
+    return { value: await withFileLock(authFilePath(), async () => fn(await readPairedDevices()), { timeoutMs: waitMs }) }
+  } catch (err) {
+    if (err instanceof FileLockTimeoutError) return null
+    throw err
+  }
+}
+
+/** Which pairing a request's token authenticated as, in a form that survives the device rotating its own token. */
+export interface PairingRef {
+  name: string
+  /** The pairing's id (a self-rotation keeps it); absent on a record from before ids. */
+  id?: string
+  tokenHash: string
+}
+
+/** The pairing `token` authenticates as right now, or null (unknown or revoked). */
+export async function pairingRefOf(token: string): Promise<PairingRef | null> {
+  const auth = await loadAuth()
+  const hash = sha256Hex(token)
+  if (auth.revokedHashes?.includes(hash)) return null
+  const d = auth.devices.find((x) => x.kind !== 'machine' && hashesEqual(hash, x.tokenHash))
+  return d ? { name: d.name, ...(d.id ? { id: d.id } : {}), tokenHash: d.tokenHash } : null
+}
+
+function refHoldsIn(auth: AuthFile, ref: PairingRef): boolean {
+  const revoked = new Set(auth.revokedHashes ?? [])
+  return auth.devices.some((d) => d.name === ref.name && !revoked.has(d.tokenHash)
+    && (ref.id !== undefined ? d.id === ref.id : d.tokenHash === ref.tokenHash))
+}
+
+/** Is that pairing still here (the same one, or the device's own rotation of it)? */
+export async function pairingRefHolds(ref: PairingRef): Promise<boolean> {
+  return refHoldsIn(await loadAuth(), ref)
+}
+
+/** The token hashes of `name`'s pairings that authenticate right now (no machine credentials, nothing revoked). */
+export async function livePairingHashesOf(name: string): Promise<string[]> {
+  const auth = await loadAuth()
+  const revoked = new Set(auth.revokedHashes ?? [])
+  return auth.devices.filter((d) => d.name === name && d.kind !== 'machine' && !revoked.has(d.tokenHash)).map((d) => d.tokenHash)
+}
+
+/**
+ * Run `fn` only if `ref` still holds, inside the auth lock, so no revoke of it
+ * lands while `fn` runs. A revoke holds this lock from its write-ahead to its
+ * auth.json write and the revoke time it takes right after, so what `fn`
+ * writes is older than that cutoff, or `fn` sees the pairing gone and never
+ * runs. 'gone' = not run; null = the lock stayed busy (the default wait).
+ */
+export async function whilePairingHolds<R>(ref: PairingRef, fn: () => Promise<R>): Promise<{ value: R } | 'gone' | null> {
+  try {
+    return await withFileLock(authFilePath(), async () => (refHoldsIn(await loadAuth(), ref) ? { value: await fn() } : 'gone' as const))
+  } catch (err) {
+    if (err instanceof FileLockTimeoutError) return null
+    throw err
+  }
 }
 
 let volatileInstanceId: string | null = null

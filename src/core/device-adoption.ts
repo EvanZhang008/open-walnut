@@ -14,22 +14,26 @@
  *    `name-3`, ... (the device-name rule allows no spaces or brackets). An
  *    existing record is never replaced, rotated or renamed;
  *  - never a machine credential, and a phone cannot adopt (the same rule as
- *    pairing a new device: deviceChangeDecision 'create').
+ *    pairing a new device: deviceChangeDecision 'create');
+ *  - never a hash revoked here (auth.json `revokedHashes`), however long ago.
  *
  * Revoking works by hash in the other direction: a revoke on one box removes
- * the twin on the other, so "remove this phone" holds everywhere.
+ * the twin on the other, so "remove this phone" holds everywhere. Each box
+ * records the hash as revoked in the same write, so neither ever takes it back.
  */
 
 import { CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
 import {
-  listDeviceRecords, mutateDeviceRecords, revokeDevice, validateDeviceName,
+  listDeviceRecords, mutateDeviceRecords, revokePairing, validateDeviceName,
   type DeviceRecord, type DeviceSelfInfo,
 } from './device-auth.js'
 import {
   LOCAL_ACTOR, deviceChangeDecision, newDeviceId, ownsMachineCredentials, platformFromInfo,
   type DeviceActor, type DevicePlatform,
 } from './device-actor.js'
+import type { PushRevokeOutcome } from './push/device-revoke.js'
+import { twinRemovalPending } from './devices/revoke-queue.js'
 
 /** A request the adoption rules cannot take as given. */
 export class AdoptionError extends Error {
@@ -118,11 +122,25 @@ export async function adoptDeviceRecord(
   const info = cleanInfo(input.info)
   // The source's platform, else what its report says: a phone stays a phone here.
   const platform = cleanPlatform(input.platform) ?? platformFromInfo(info)
+  // Revoked here, and the copy on the asking box is not removed yet: that box
+  // still takes the revoked token, so the phone's routes call there would copy
+  // the pairing straight back. Refused until the removal lands; after that the
+  // asking box holds no copy to send.
+  if (await twinRemovalPending(tokenHash)) {
+    log.web.warn('device-adoption: refused to adopt back a pairing revoked here', { name, from: input.adoptedFrom })
+    throw new AdoptionError('this pairing was revoked here')
+  }
 
-  const out = await mutateDeviceRecords((devices) => {
+  const out = await mutateDeviceRecords((devices, revoked) => {
     if (opts.by) {
       const decision = deviceChangeDecision(devices, opts.by, 'create', name, CLOUD_MODE)
       if (!decision.ok) throw decision.refusal
+    }
+    // Revoked here for good: the other box may still hold its copy (its removal
+    // was refused, or given up on after 7 days), and would copy it straight back.
+    if (revoked.has(tokenHash)) {
+      log.web.warn('device-adoption: refused to adopt back a pairing revoked here', { name, from: input.adoptedFrom })
+      throw new AdoptionError('this pairing was revoked here')
     }
     const existing = devices.find((d) => d.tokenHash === tokenHash)
     if (existing) return { result: { name: existing.name, adopted: false } }
@@ -150,18 +168,25 @@ export async function adoptDeviceRecord(
 
 /**
  * Revoke the pairing whose token hashes to `tokenHash`, the way any revoke
- * does (revokeDevice: its listeners run). Never a machine credential, and
- * never the pairing that owns them (on a companion that is the Mac itself:
- * removing it would cut the Mac's git sync and bridge). Returns the revoked
- * name, or null when no such pairing is here (already gone counts as done).
+ * does (revokePairing: its listeners run and its push rows go). Never a
+ * machine credential, and never the pairing that owns them (on a companion
+ * that is the Mac itself: removing it would cut the Mac's git sync and
+ * bridge). Returns the revoked name, or null when no such pairing is here
+ * (already gone counts as done).
  */
 export async function revokeAdoptedByHash(tokenHash: unknown): Promise<string | null> {
+  return (await revokeAdopted(tokenHash)).name
+}
+
+/** `revokeAdoptedByHash`, with the push outcome for a caller that reports it. */
+export async function revokeAdopted(tokenHash: unknown): Promise<{ name: string | null; push: PushRevokeOutcome | null }> {
   if (!isTokenHash(tokenHash)) throw new AdoptionError('token_hash must be 64 lowercase hex characters')
   const devices = await listDeviceRecords()
   const record = devices.find((d) => d.tokenHash === tokenHash)
-  if (!record || record.kind === 'machine' || ownsMachineCredentials(devices, record)) return null
+  if (!record || record.kind === 'machine' || ownsMachineCredentials(devices, record)) return { name: null, push: null }
   // Hash-guarded: a re-pairing of the same name in between is a different pairing.
-  const removed = await revokeDevice(record.name, { by: LOCAL_ACTOR, tokenHash })
-  if (removed) log.web.info('device-adoption: twin pairing revoked', { name: record.name, adoptedFrom: record.adoptedFrom ?? null })
-  return removed ? record.name : null
+  // `fromTwin`: the box asking is the one holding the other copy, and it removed its own.
+  const out = await revokePairing(record.name, { by: LOCAL_ACTOR, tokenHash, fromTwin: true })
+  if (out.revoked) log.web.info('device-adoption: twin pairing revoked', { name: record.name, adoptedFrom: record.adoptedFrom ?? null })
+  return out.revoked ? { name: record.name, push: out.push } : { name: null, push: null }
 }

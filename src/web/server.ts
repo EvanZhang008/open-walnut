@@ -628,6 +628,8 @@ let projectionSelfHealHandle: { stop: () => void } | null = null
 let taskQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/control-queue/ (see core/control-queue.ts). */
 let controlQueueFlushHandle: { stop: () => void } | null = null
+/** Both boxes: finishes revoke steps left unfinished (see core/devices/revoke-queue.ts). */
+let revokeQueueHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/send-queue/ (see core/send-queue.ts). */
 let sendQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: hands self-answered chat turns to the primary (core/cloud-chat-outbox.ts). */
@@ -2664,6 +2666,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startThreadTakeaways } = await import('../core/sessions/thread-takeaway.js')
     for (const h of threadAiHandles) h.stop()
     threadAiHandles = [startThreadTitler(), startThreadTakeaways()]
+  }
+
+  // Revoke steps another process (`walnut device revoke`) or a bridge outage
+  // left unfinished: a device's push rows on the primary, its pairing's copy on
+  // the other box. Both boxes; drained at start, every 60s and on reconnect
+  // (core/devices/revoke-queue.ts).
+  {
+    const { startRevokeQueue } = await import('../core/devices/revoke-queue.js')
+    revokeQueueHandle = startRevokeQueue()
   }
 
   // -- Git auto-commit polling (30s interval) --
@@ -5976,6 +5987,10 @@ export async function stopServer(): Promise<void> {
   if (controlQueueFlushHandle) {
     controlQueueFlushHandle.stop()
     controlQueueFlushHandle = null
+  }
+  if (revokeQueueHandle) {
+    revokeQueueHandle.stop()
+    revokeQueueHandle = null
   }
   if (sendQueueFlushHandle) {
     sendQueueFlushHandle.stop()

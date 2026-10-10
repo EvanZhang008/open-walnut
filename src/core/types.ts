@@ -1647,6 +1647,11 @@ export interface PushTokenEntry {
    * chatty `info` letter can be muted without the server guessing.
    */
   letter_types?: string[];
+  /**
+   * Relayed rows only: one-way markers of the registrations that wrote this row,
+   * so the companion can take back exactly its own write. See core/push/claims.ts.
+   */
+  claims?: string[];
 }
 
 export interface AgentMessage {

@@ -219,6 +219,24 @@ async function writeConfigWithBackup(content: string): Promise<void> {
 }
 
 /**
+ * config.yaml as stored (after the sidecar fallback), or null when it cannot be
+ * read and parsed: missing with no backup, empty, or not a YAML mapping. For a
+ * caller that must decide NOTHING on a broken file: getConfig never throws and
+ * answers DEFAULT_CONFIG then, which reads as "no API keys, no rows". Unmerged
+ * (no discovered hosts, no cloud box).
+ */
+export async function readStoredConfig(): Promise<Partial<Config> | null> {
+  try {
+    const content = await readRawConfigContent();
+    if (content === null) return null;
+    const parsed = yaml.load(content);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Partial<Config> : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Read config.yaml. Returns default config if file doesn't exist.
  * Also merges auto-discovered SSH hosts.
  */

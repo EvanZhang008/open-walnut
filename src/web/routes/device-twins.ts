@@ -289,6 +289,21 @@ export async function revokeAdoptionTwin(tokenHash: string): Promise<void> {
   }
 }
 
+/**
+ * One try at removing the other box's copy, for a caller that cannot retry on a
+ * timer: `walnut device revoke` exits right after, and the revoke queue
+ * (core/devices/revoke-queue.ts) runs its own clock. True = done (removed,
+ * nothing there, or the other box will never hold one); false = try again.
+ */
+export async function removeTwinOnce(tokenHash: string): Promise<boolean> {
+  try {
+    return CLOUD_MODE ? await revokeOnPrimary(tokenHash) : await unadoptOnCloud(tokenHash)
+  } catch (err) {
+    log.web.warn('devices: removing the other box\'s copy of a pairing failed', { error: errorText(err) })
+    return false
+  }
+}
+
 /** Test seam: forget every cached twin, in-flight call, tombstone, retry and warning clock. */
 export function _resetDeviceTwinsForTesting(opts: { retryMs?: number } = {}): void {
   for (const t of retryTimers) clearTimeout(t)

@@ -129,7 +129,7 @@ describe('POST /api/devices/adopt and /unadopt on the companion', () => {
     expect(await find('mac-phone')).toBeUndefined()
     expect((await call('GET', '/api/v1/tasks', phoneToken)).status).toBe(401)
     // Its pushes stop too: the companion relays the device revoke to the primary.
-    expect(frames('server.push.revoke-device').map((f) => f.params)).toEqual([{ keyName: 'mac-phone' }])
+    expect(frames('server.push.revoke-device').map((f) => f.params)).toEqual([{ keyName: 'mac-phone', revokedMsAgo: expect.any(Number) }])
     // Again: nothing there, still a 200.
     expect(await call('POST', '/api/devices/unadopt', T.mac, { token_hash: sha(phoneToken) })).toEqual({ status: 200, body: { name: null, instance, revoked: false } })
   })

@@ -26,6 +26,7 @@ import {
   reportDeviceActive,
   revokeDevicePushTokens,
   setDevicePushPreferences,
+  takeBackPushToken,
   unregisterPushToken,
 } from './registry.js'
 
@@ -71,7 +72,13 @@ export async function handlePushRelayAction(
         ...(p.letterTypes !== undefined ? { letterTypes: p.letterTypes } : {}),
         keyName: deviceOf(p),
         origin: 'relay',
+        ...(p.claim !== undefined ? { claim: p.claim } : {}),
       }) as unknown as Record<string, unknown>
+    // The replica found the phone's pairing gone after relaying its
+    // registration: undo that write (core/push/claims.ts), and leave a row a
+    // pairing of the name that still holds there has registered.
+    case 'take-back':
+      return await takeBackPushToken(requireDevice(p), p.tokenSha, p.liveClaims)
     case 'unregister':
       return await unregisterPushToken(p.token) as unknown as Record<string, unknown>
     // The pairing was revoked on the replica, so the rows it forwarded here have
@@ -79,8 +86,17 @@ export async function handlePushRelayAction(
     // previews on its lock screen. Only that device's RELAYED rows are touched —
     // a phone paired directly to this box keeps its own row even if the two
     // pairings happen to share a name.
-    case 'revoke-device':
-      return await revokeDevicePushTokens(requireDevice(p), 'relay')
+    //
+    // `revokedMsAgo` is how long ago the replica revoked it: a step it queued
+    // during an outage can arrive after the name was paired again there, and
+    // that new pairing's row must stay. An age, not a time, so the two boxes'
+    // clocks are never compared. Absent or unusable (an older replica) = every
+    // relayed row of the name, as before.
+    case 'revoke-device': {
+      const ago = p.revokedMsAgo
+      const usable = typeof ago === 'number' && Number.isFinite(ago) && ago >= 0
+      return await revokeDevicePushTokens(requireDevice(p), 'relay', usable ? { registeredBefore: Date.now() - ago } : {})
+    }
     case 'preferences':
       return await setDevicePushPreferences(requireDevice(p), {
         mode: p.mode,

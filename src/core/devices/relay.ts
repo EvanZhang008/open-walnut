@@ -14,7 +14,6 @@
  */
 
 import { CLOUD_MODE } from '../../constants.js'
-import { log } from '../../logging/index.js'
 import { getInstanceId } from '../device-auth.js'
 import { AdoptionError, adoptDeviceRecord, revokeAdoptedByHash } from '../device-adoption.js'
 import { directRoutes, listeningPort } from './routes.js'
@@ -52,18 +51,9 @@ export async function handleDevicesRelayAction(
         return { name: out.name, adopted: out.adopted, instance, routes, tailscale }
       }
       case 'revoke-by-hash': {
+        // The revoke removes the push rows the phone registered here as itself
+        // (over the LAN route) too: revokePairing owns that for every revoke.
         const name = await revokeAdoptedByHash(p.tokenHash)
-        if (name) {
-          // A phone that used the LAN route registered its push rows here as itself.
-          try {
-            const { revokeDevicePushTokens } = await import('../push/registry.js')
-            await revokeDevicePushTokens(name, 'local')
-          } catch (err) {
-            log.notif.warn('device-adoption: push rows of a revoked twin could not be removed', {
-              device: name, error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
         return { name, revoked: name !== null }
       }
       default:

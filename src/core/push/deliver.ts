@@ -17,6 +17,7 @@ import { updatePushTokens } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
 import { sendApns, type ApnsTarget } from './apns.js'
+import { partitionByPairing, pruneUnpairedRows } from './paired-rows.js'
 import { apnsPayload, expoMessages, tokenKind, tokenTag, withoutTokens, type PushContent } from './send.js'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
@@ -36,6 +37,8 @@ export interface PushDeliveryOutcome {
   expo: number
   /** Tokens a service reported dead. They are pruned from config here. */
   deadTokens: string[]
+  /** Rows skipped because their device is no longer paired (paired-rows.ts); pruned here too, unless judged by auth.json.bak. */
+  unpaired: number
 }
 
 /** Split rows by service, one target per distinct token. */
@@ -63,10 +66,13 @@ export async function deliverPush(
   entries: PushTokenEntry[],
   content: PushContent,
 ): Promise<PushDeliveryOutcome> {
-  const targets = routeTargets(entries)
+  // A row whose device was revoked is never sent, whatever path missed it.
+  const { live, unpaired, prune } = await partitionByPairing(entries)
+  const targets = routeTargets(live)
   const outcome: PushDeliveryOutcome = {
     attempted: false, sent: 0, failed: 0,
     apns: targets.apns.length, expo: targets.expo.length, deadTokens: [],
+    unpaired: unpaired.length,
   }
 
   if (targets.apns.length > 0) {
@@ -91,6 +97,8 @@ export async function deliverPush(
   }
 
   if (outcome.deadTokens.length > 0) await pruneDead(outcome.deadTokens)
+  // Judged by auth.json.bak only: held back, never deleted (paired-rows.ts).
+  if (unpaired.length > 0 && prune) await pruneUnpairedRows(unpaired)
   return outcome
 }
 

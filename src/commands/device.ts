@@ -7,7 +7,7 @@
  */
 
 import chalk from 'chalk';
-import { createDevice, revokeDevice, listDevices } from '../core/device-auth.js';
+import { createDevice, revokePairing, listDevices } from '../core/device-auth.js';
 import { detectLanAddress, detectTailnetAddress } from '../core/pairing-targets.js';
 import { outputJson } from '../utils/json-output.js';
 import type { GlobalOptions } from '../core/types.js';
@@ -52,17 +52,42 @@ export async function runDeviceAdd(name: string, globals: GlobalOptions): Promis
 }
 
 export async function runDeviceRevoke(name: string, globals: GlobalOptions): Promise<void> {
-  const removed = await revokeDevice(name);
+  // revokePairing also removes the device's push rows and its pairing's copy on
+  // the other box, so a lost phone stops getting letter subjects on its lock
+  // screen (the console route does the same). What it cannot finish from this
+  // process (no bridge here) is queued for the running server.
+  const { revoked, push, twin } = await revokePairing(name);
+  const pushQueued = !!push?.pending && !!push.queued;
+  const pushStuck = !!push?.pending && !push.queued;
+  const twinQueued = twin === 'queued';
+  const twinStuck = twin === 'failed';
+  // Which push rows are still there: this machine's own (its config write
+  // failed), the primary's (not reached from here), or both.
+  const where = push?.pendingWhere;
+  const rowsHere = pushQueued && (where === 'here' || where === 'both');
+  const rowsOnPrimary = pushQueued && (where === 'primary' || where === 'both' || where === undefined);
   if (globals.json) {
-    outputJson({ name, revoked: removed });
+    outputJson({
+      name, revoked,
+      ...(push ? { pushTokensRevoked: push.removed, ...(push.pending ? { pushRevokePending: true, pushRevokeQueued: pushQueued, ...(where ? { pushRevokePendingWhere: where } : {}) } : {}) } : {}),
+      ...(twin ? { otherBoxCopy: twin } : {}),
+    });
+    if (revoked && (pushStuck || twinStuck)) process.exitCode = 1;
     return;
   }
-  if (removed) {
-    console.log(chalk.green(`Device "${name}" revoked.`));
-  } else {
+  if (!revoked) {
     console.error(chalk.red(`Device "${name}" not found.`));
     process.exitCode = 1;
+    return;
   }
+  console.log(chalk.green(`Device "${name}" revoked.`));
+  if (rowsHere) console.log(chalk.yellow('  Its push rows on this machine could not be removed yet (writing the config failed).'));
+  if (rowsOnPrimary) console.log(chalk.yellow('  The primary could not be reached from here to remove its push rows there.'));
+  if (twinQueued) console.log(chalk.yellow('  Its copy on the other box could not be removed from here.'));
+  if (pushQueued || twinQueued) console.log(chalk.yellow('  The running Walnut server finishes the rest as soon as it can.'));
+  if (pushStuck) console.error(chalk.red(`  Its push notifications may not have stopped: ${push?.pending}`));
+  if (twinStuck) console.error(chalk.red('  Its copy on the other box was not removed, so its token may still work there.'));
+  if (pushStuck || twinStuck) process.exitCode = 1;
 }
 
 export async function runDeviceList(globals: GlobalOptions): Promise<void> {

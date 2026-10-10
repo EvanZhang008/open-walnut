@@ -151,17 +151,95 @@ want to avoid that.
 
 ### Revoking a device
 
-`DELETE /api/devices/:name` (and `DELETE /api/auth/keys/:name`) drop that device's
-push rows as part of the revoke, relaying to the primary when run on a replica.
-This is a privacy operation, not housekeeping: a revoked or lost phone that keeps
-its row keeps showing letter subjects and up to 300 characters of preview on its
-lock screen, even though it can no longer log in.
+Every way a pairing ends drops that device's push rows: the console's
+`DELETE /api/devices/:name`, `walnut device revoke <name>` in a terminal, a revoke
+the other box asks for by hash, and re-pairing the name from another device (a new
+pairing replaces the old one). They all go through one function, `revokePairing`
+in `src/core/device-auth.ts`, so a new revoke path cannot forget it.
+`DELETE /api/auth/keys/:name` does the same for an API key. This is a privacy
+operation, not housekeeping: a revoked or lost phone that keeps its row keeps
+showing letter subjects and up to 300 characters of preview on its lock screen,
+even though it can no longer log in.
 
-The revoke itself never fails on this: the pairing is already gone, so if the
-bridge is down the response carries `pushRevokePending: true` and the log says
-`push: could not revoke this device's tokens on the primary`. Re-run the revoke,
-or delete the row from the primary's `push_tokens` by hand, once the primary is
-reachable.
+A revoke also removes the pairing's copy on the other box (a phone paired with
+the Mac can use the replica too, and the other way round). Otherwise the revoked
+token keeps working there, and the phone could register for pushes again through
+it.
+
+Both parts can live on the other box: the rows on the primary, the copy on
+whichever box did not run the revoke. So both are written to
+`cache/revoke-queue/` before the pairing leaves `auth.json`, and each entry is
+cleared when its part finishes. A process killed at any point leaves the server
+a queue to finish, never a row or a copy nobody will remove; one killed before
+its `auth.json` write leaves entries for a pairing that is still there, which
+the drain drops unrun. The drain judges that under the `auth.json` lock, which a
+revoke holds from its queue write to its `auth.json` write, so it never takes a
+revoke in progress for one that will not land; when the lock is busy, it leaves
+the entry to the next drain. When the other box cannot be reached (the bridge is down,
+the replica is offline, or the revoke ran in `walnut device revoke`, which has no
+bridge at all), or this box's own config write fails, the part stays queued and
+the running server finishes it: at start, every minute, and when the primary
+bridge reconnects. The console response then carries `pushRevokePending: true`,
+the CLI says which part is left (this machine's rows, the primary's, or the other
+box's copy) and that the server finishes it, and the revoke itself never fails
+on it: the pairing is already gone here. A re-pair hands out the new token
+without waiting for any of this (on the companion, the relay to the primary can
+take up to 30 seconds).
+
+A server keeps the copy's entry until its drain finds the copy gone, even when
+its first try works, because its own retries live in memory and a restart ends
+them. While that removal is queued, the box refuses to adopt the revoked token's hash
+back: the other box still accepts the revoked token, and the phone asking it for
+its routes would otherwise copy the pairing straight back. The refusal outlives
+the queue: the same `auth.json` write that removes a pairing records its token
+hash in `revokedHashes`, on each box that removes it. That token never
+authenticates there again, and the hash is never adopted back, even when the
+other box kept its copy (its removal was refused, or given up on after seven days).
+The sidecar `auth.json.bak` carries the list too, and a lost `auth.json` is
+recovered from it even when no pairing is left on the box.
+
+A queued push part removes only the rows registered before the revoke. The revoke
+time is taken right after the `auth.json` write, not before it: a registration
+the phone's token authenticated a moment earlier can still land, and it has to be
+older than the cutoff. One that would land later still is caught by
+`POST /api/push/register` itself, which answers 401 when the pairing is gone:
+
+- On the Mac, it checks the pairing and writes the row under that same lock, so
+  the row is older than the cutoff or is never written.
+- A replica relays the write, so it checks again afterwards, also when the
+  primary's answer was lost on the way (a timeout, a dropped link). It also
+  checks before relaying, which matters only when the revoke lands after the
+  auth middleware let the request in: a retry with a token revoked before it
+  arrived is refused by the middleware and never reaches this route. Each
+  relayed write carries a claim, a one-way marker of the pairing that made it,
+  derived from the pairing's token hash (`claims` on the row). Undoing the write
+  sends the claims of the name's pairings that still hold on the replica, read
+  when the undo runs: the row stays only when one of them is on it and keeps
+  only those, otherwise it goes. So when the same phone was paired again under
+  its name and registered the same APNs token, its row stays, and the claim of
+  a revoked pairing never keeps a row. The undo is queued when the primary
+  cannot be reached; it names the row by the token's sha256, so no push token
+  is stored on the replica.
+
+The name
+may be paired again before the part runs (the same name, re-paired during the
+outage), and the rows the new pairing registers since then are its own. The
+replica sends how long ago it revoked (`revokedMsAgo`), not a time, so the
+primary judges `registered_at` on its own clock. A primary too old to read it
+removes every relayed row of the name, the new phone's too; that phone registers
+again at its next launch, when the status check no longer finds its row.
+
+The sender checks again at send time. Right before a push, every row registered
+on this box (`origin: local`) whose name is neither a paired device nor an API key
+is skipped and removed, so a row that outlived its pairing (an `auth.json` edited
+or restored by hand, a revoke that raced another config write) never reaches a
+lock screen. If `auth.json` cannot be read (missing, unreadable, corrupt), its
+sidecar `auth.json.bak` judges instead, and the rows it finds unpaired are held
+back but not removed: the sidecar can lag the real file. If neither can be read,
+or `config.yaml` cannot be (its API keys are unknown then), nothing is judged and
+the server logs `push: device registry unreadable`. A row registered through the
+replica (`origin: relay`) cannot be judged on the primary, which does not hold the
+replica's pairings; its revoke relays to the primary as described above.
 
 ## The two modes
 

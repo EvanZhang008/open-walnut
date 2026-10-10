@@ -945,7 +945,7 @@ export type SessionControlAction =
   // phone's token locally put it on the one box that can never push. A replica
   // relays every /api/push route here — see core/push/relay.ts.
   | 'server.push.register' | 'server.push.unregister' | 'server.push.preferences'
-  | 'server.push.active' | 'server.push.status' | 'server.push.revoke-device'
+  | 'server.push.active' | 'server.push.status' | 'server.push.revoke-device' | 'server.push.take-back'
   // Device adoption: a phone paired with the replica gets its pairing copied
   // into the primary's registry (and removed again on revoke), so the same
   // token reaches the Mac directly. See core/devices/relay.ts.
@@ -1658,7 +1658,8 @@ export async function handleSessionControlRelay(
       case 'server.push.preferences':
       case 'server.push.active':
       case 'server.push.status':
-      case 'server.push.revoke-device': {
+      case 'server.push.revoke-device':
+      case 'server.push.take-back': {
         const { handlePushRelayAction, PushRegistryError } = await import('../push/relay.js');
         const sub = action.slice('server.push.'.length);
         try {

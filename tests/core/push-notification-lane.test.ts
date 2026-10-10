@@ -15,8 +15,14 @@
  * Transport is stubbed at `fetch` (the Expo HTTP call), so nothing leaves the
  * process; `clientCount()` is forced to 0 because a push is skipped whenever a
  * WS client is connected.
+ *
+ * Its own data dir, with the row's device paired in it: the sender checks every
+ * row against auth.json (core/push/paired-rows.ts). In the worker's shared home
+ * this file failed whenever an earlier file had left an auth.json without that
+ * device there.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+import { createMockConstants } from '../helpers/mock-constants.js'
 
 /** Session records the fake tracker will answer with, by session id. */
 const records = new Map<string, { claudeSessionId: string; lane?: string }>()
@@ -29,10 +35,13 @@ const getConfig = vi.hoisted(() => vi.fn())
 
 vi.mock('../../src/core/session-tracker.js', () => ({ getSessionByClaudeId }))
 vi.mock('../../src/web/ws/handler.js', () => ({ clientCount }))
-vi.mock('../../src/core/config-manager.js', () => ({ getConfig }))
+// The send-time check reads API keys from the stored file; here it is the same object.
+vi.mock('../../src/core/config-manager.js', () => ({ getConfig, readStoredConfig: getConfig }))
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-push-lane'))
 
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { initPushNotifications } from '../../src/core/push-notification.js'
+import { createDevice } from '../../src/core/device-auth.js'
 // Statically imported ONLY to warm the module cache: the handler reaches it via a
 // dynamic import, and a cold resolve inside the first push added ~700ms of
 // latency that made a time-bounded assertion flaky.
@@ -70,6 +79,10 @@ async function emitAndSettle(
     await new Promise((r) => setTimeout(r, 15))
   }
 }
+
+beforeAll(async () => {
+  await createDevice('test') // the device the push row below is registered under
+})
 
 beforeEach(() => {
   bus.clear()

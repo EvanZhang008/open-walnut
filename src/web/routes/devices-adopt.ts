@@ -19,9 +19,8 @@ import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { getInstanceId, listDeviceRecords } from '../../core/device-auth.js'
 import { deviceChangeDecision } from '../../core/device-actor.js'
-import { AdoptionError, adoptDeviceRecord, revokeAdoptedByHash } from '../../core/device-adoption.js'
+import { AdoptionError, adoptDeviceRecord, revokeAdopted } from '../../core/device-adoption.js'
 import { actorOf, sendRefusal } from './devices.js'
-import { revokePushTokensForDevice } from './push.js'
 
 export const deviceAdoptionRouter = Router()
 
@@ -57,9 +56,8 @@ deviceAdoptionRouter.post('/unadopt', async (req: Request, res: Response, next: 
   try {
     const decision = deviceChangeDecision(await listDeviceRecords(), actorOf(req), 'create', '', CLOUD_MODE)
     if (!decision.ok) throw decision.refusal
-    const name = await revokeAdoptedByHash((req.body as Record<string, unknown> | undefined)?.token_hash)
     // Same as any revoke: the pushes stop too (they may live on the primary).
-    const push = name ? await revokePushTokensForDevice(name) : null
+    const { name, push } = await revokeAdopted((req.body as Record<string, unknown> | undefined)?.token_hash)
     if (name) log.web.info('devices: pairing removed by hash', { name, ...(push?.pending ? { pushRevokePending: push.pending } : {}) })
     res.json({ name, instance: await getInstanceId(), revoked: name !== null, ...(push?.pending ? { pushRevokePending: true } : {}) })
   } catch (err) {

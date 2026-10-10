@@ -29,11 +29,13 @@ import {
   pushRegistrationStatus,
   registerPushToken,
   reportDeviceActive,
-  revokeDevicePushTokens,
   setDevicePushPreferences,
   unregisterPushToken,
 } from '../../core/push/registry.js'
-import { callPrimaryControl } from './v1-control-relay.js'
+import { pairingRefHolds, pairingRefOf, whilePairingHolds, type PairingRef } from '../../core/device-auth.js'
+import { revokePushTokensForDevice, takeBackPushRegistration } from '../../core/push/device-revoke.js'
+import { pushClaimOf, pushTokenSha } from '../../core/push/claims.js'
+import { callPrimaryControl, type RelayFailure } from './v1-control-relay.js'
 import type { SessionControlAction } from '../../core/sessions/session-controls.js'
 
 export const pushRouter = Router()
@@ -110,74 +112,123 @@ async function relayToPrimary(
   await warnOrphanReplicaTokens()
   const outcome = await callPrimaryControl(action, SERVER_RELAY_SID, params)
   if (outcome.ok) return outcome.result
-  const failure = outcome.failure
+  answerRelayFailure(res, action, outcome.failure)
+  return null
+}
+
+function answerRelayFailure(res: Response, action: SessionControlAction, failure: RelayFailure): void {
   if (failure.kind === 'bridge_offline') {
     log.notif.warn('push: relay to primary failed — bridge offline', { action, error: failure.message })
     sendPushError(res, 503, 'bridge_offline',
       'Your primary box is offline, so the push token could not be stored yet — it will be sent again', true)
-    return null
+    return
   }
   if (failure.kind === 'needs_upgrade') {
     log.notif.warn('push: primary predates the push relay', { action, error: failure.message })
     sendPushError(res, 503, 'primary_needs_upgrade',
       'The primary box predates push relay — it upgrades on its next deploy, and the token will be sent again then', true)
-    return null
+    return
   }
   log.notif.warn('push: relay to primary rejected', { action, status: failure.status, error: failure.message })
   sendPushError(res, failure.status, failure.code, failure.message)
-  return null
+}
+
+// The revoke-a-device helper lives in core (core/push/device-revoke.ts): every
+// revoke path, the CLI included, runs it through device-auth's revokePairing.
+export { revokePushTokensForDevice }
+
+/**
+ * The pairing a request authenticated as, for a paired device's bearer token;
+ * null for anything else (an API key, a trusted-LAN request with no token).
+ * 'gone' = revoked since the auth middleware let it in.
+ */
+async function callerPairing(req: Request): Promise<PairingRef | 'gone' | null> {
+  const name = (req as Request & { deviceName?: string }).deviceName
+  const bearer = bearerOf(req)
+  if (!name || !bearer) return null
+  const ref = await pairingRefOf(bearer)
+  return ref && ref.name === name ? ref : 'gone'
+}
+
+function bearerOf(req: Request): string | null {
+  const header = req.headers.authorization
+  return header?.startsWith('Bearer ') ? header.slice(7) : null
+}
+
+const unpaired = (res: Response) => sendPushError(res, 401, 'token_refused', 'This device was unpaired, so its push token was not kept')
+
+/**
+ * The Mac: check the pairing and write the row under the auth lock
+ * (whilePairingHolds). A revoke holds that lock from its write-ahead until its
+ * auth.json write and the revoke time it takes right after, so the row is
+ * older than that cutoff and the revoke removes it, or the write sees the
+ * pairing gone and never happens. Nothing to take back afterwards.
+ */
+async function registerOnThisBox(res: Response, params: Record<string, unknown>, pairing: PairingRef | null): Promise<void> {
+  const write = async () => await registerPushToken({ ...params, origin: 'local' }) as unknown as Record<string, unknown>
+  if (!pairing) {
+    res.json(await write())
+    return
+  }
+  const out = await whilePairingHolds(pairing, write)
+  if (out === null) {
+    sendPushError(res, 503, 'pairings_busy', 'This box is busy updating its pairings, so the push token was not stored yet. It will be sent again', true)
+    return
+  }
+  if (out === 'gone') {
+    log.notif.warn('push: the device was unpaired while it registered; nothing was stored', { device: pairing.name })
+    unpaired(res)
+    return
+  }
+  res.json(out.value)
 }
 
 /**
- * A pairing was revoked — drop that device's push rows, wherever they live.
- *
- * Called by BOTH revoke routes (`DELETE /api/devices/:name` and
- * `DELETE /api/auth/keys/:name`), which is the point: this is a privacy
- * operation. A revoked or lost phone whose row survives keeps receiving letter
- * subjects and up to 300 characters of preview on its lock screen, and the row
- * now lives on the PRIMARY, so the box handling the revoke is usually not the box
- * holding the row.
- *
- * Never throws and never fails the revoke: the pairing itself is already gone
- * (the device's token no longer authenticates), so a bridge outage must not leave
- * the device paired. It reports `pending` instead, loudly, so the console and the
- * log say the pushes may not have stopped yet.
+ * A companion relays the write to the primary, so it cannot hold its own lock
+ * across it. Each relayed write carries the claim of the pairing that made it
+ * (core/push/claims.ts), and whenever the write may have landed for a pairing
+ * that is gone by now, that write is taken back on the primary (queued when the
+ * primary cannot take it now):
+ *  - the pairing went while the write was on its way, whether the primary's
+ *    answer came back or was lost on the way (a timeout, a dropped link);
+ *  - the pairing went between the auth check that let the request in and the
+ *    check here. A retry with a token revoked before it arrived never gets
+ *    here: the auth middleware refuses it.
+ * The row stays when a pairing of the name that still holds has registered it
+ * (the same phone, paired again under its name).
  */
-export async function revokePushTokensForDevice(
-  name: string,
-): Promise<{ removed: number; relayed: boolean; pending?: string }> {
-  // Local rows first, on every box. On the primary these are the device's own
-  // rows; on a replica they can only be orphans from before the relay existed,
-  // and a revoke is exactly the right moment to stop carrying them.
-  let removed = 0
-  let localFailure: string | undefined
-  try {
-    removed = (await revokeDevicePushTokens(name, 'local')).removed
-  } catch (err) {
-    // A swallowed write failure here answered `removed: 0` with no `pending` —
-    // byte-identical to "that device had no rows" while the row survived and kept
-    // pushing. Reporting fine while nothing happened is the whole failure mode
-    // this file exists to remove, so the failure travels with the result.
-    localFailure = err instanceof Error ? err.message : String(err)
-    log.notif.warn('push: local token revoke failed — this device may still receive letters', {
-      device: name, error: localFailure,
-    })
+async function registerThroughPrimary(
+  req: Request, res: Response, params: Record<string, unknown>, pairing: PairingRef | 'gone' | null,
+): Promise<void> {
+  const name = (req as Request & { deviceName?: string }).deviceName
+  const bearer = bearerOf(req)
+  const claim = bearer ? pushClaimOf(bearer) : null
+  const takeBack = async (device: string) => {
+    if (!bearer || typeof params.token !== 'string' || !params.token) return
+    await takeBackPushRegistration({ name: device, tokenSha: pushTokenSha(params.token) })
   }
-  if (!CLOUD_MODE) {
-    return { removed, relayed: false, ...(localFailure ? { pending: localFailure } : {}) }
+  if (pairing === 'gone') {
+    if (name) await takeBack(name)
+    unpaired(res)
+    return
   }
-
-  const outcome = await callPrimaryControl('server.push.revoke-device', SERVER_RELAY_SID, { keyName: name })
-  if (outcome.ok) {
-    const relayedRemoved = typeof outcome.result.removed === 'number' ? outcome.result.removed : 0
-    log.notif.info('push: relayed device revoke to the primary', { device: name, removed: relayedRemoved })
-    return { removed: removed + relayedRemoved, relayed: true }
+  await warnOrphanReplicaTokens()
+  // The primary stamps `origin: 'relay'` itself (core/push/relay.ts): a
+  // replica cannot be trusted to label its own rows, and the label is what
+  // keeps two boxes' identically-named devices apart.
+  const outcome = await callPrimaryControl('server.push.register', SERVER_RELAY_SID, { ...params, ...(pairing && claim ? { claim } : {}) })
+  const mayHaveLanded = outcome.ok || (outcome.failure.kind === 'bridge_offline' && outcome.failure.notSent !== true)
+  if (pairing && mayHaveLanded && !(await pairingRefHolds(pairing))) {
+    log.notif.warn('push: the device was unpaired while it registered; its row is taken back', { device: pairing.name, answered: outcome.ok })
+    await takeBack(pairing.name)
+    unpaired(res)
+    return
   }
-  // The device is unpaired but its phone may still buzz until this lands. Say so.
-  log.notif.warn('push: could not revoke this device\'s tokens on the primary — it may still receive letters', {
-    device: name, reason: outcome.failure.message, kind: outcome.failure.kind,
-  })
-  return { removed, relayed: false, pending: outcome.failure.message }
+  if (!outcome.ok) {
+    answerRelayFailure(res, 'server.push.register', outcome.failure)
+    return
+  }
+  res.json(outcome.result)
 }
 
 // POST /api/push/register — register a device push token
@@ -192,15 +243,19 @@ pushRouter.post('/register', async (req, res, next) => {
       ...(body.letterTypes !== undefined ? { letterTypes: body.letterTypes } : {}),
       keyName: deviceOf(req),
     }
+    // The pairing the bearer token authenticated as. A revoke can land while
+    // the registration is on its way, after the auth middleware let it in, and
+    // a row written for a revoked pairing would push letters to the revoked phone.
+    const pairing = await callerPairing(req)
     if (CLOUD_MODE) {
-      // The primary stamps `origin: 'relay'` itself (core/push/relay.ts) — a
-      // replica cannot be trusted to label its own rows, and the label is what
-      // keeps two boxes' identically-named devices apart.
-      const result = await relayToPrimary(res, 'server.push.register', params)
-      if (result) res.json(result)
+      await registerThroughPrimary(req, res, params, pairing)
       return
     }
-    res.json(await registerPushToken({ ...params, origin: 'local' }))
+    if (pairing === 'gone') {
+      unpaired(res)
+      return
+    }
+    await registerOnThisBox(res, params, pairing)
   } catch (err) {
     if (reportRegistryError(res, err)) return
     next(err)

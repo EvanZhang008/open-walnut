@@ -20,16 +20,14 @@
 
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { createDevice, revokeDevice, rotateDevice, listDevices, listDeviceRecords, type DeviceInfo } from '../../core/device-auth.js'
+import { createDevice, revokePairing, rotateDevice, listDevices, listDeviceRecords, type DeviceInfo } from '../../core/device-auth.js'
 import { DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecision, type DeviceActor, type DeviceChange } from '../../core/device-actor.js'
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
 import { tailscaleSummary } from '../../core/tailnet.js'
-import { revokeAdoptionTwin } from './device-twins.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
-import { revokePushTokensForDevice } from './push.js'
 import {
   MACHINE_PROOF_HEADER, MachineCredentialRefused, adoptMachineCredential, mintMachineCredential, revokeMachineCredential,
 } from '../../core/machine-credentials.js'
@@ -317,11 +315,9 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
       res.status(201).json({ name, token: minted.token, pairingURI: buildPairingURI(name, minted.token, target?.origin), createdAt: minted.createdAt, target: target?.kind ?? null, server: target?.origin ?? null })
       return
     }
-    // A re-pair is one locked step with the rules in it (device-auth.ts rotateDevice).
-    const oldHash = replace ? (await listDeviceRecords()).find((d) => d.name === name)?.tokenHash : undefined
+    // A re-pair is one locked step with the rules in it (device-auth.ts
+    // rotateDevice), and it removes the old token's copy on the other box too.
     const { token, createdAt } = replace ? await rotateDevice(name, { by }) : await createDevice(name, { kind, by })
-    // The old token's copy on the other box must stop working too (best effort, not awaited).
-    if (oldHash) void revokeAdoptionTwin(oldHash)
     const pairingURI = buildPairingURI(name, token, target?.origin)
     log.web.info('devices: created via console', { name, kind: kind ?? 'device', target: target?.kind ?? 'none', replace })
     res.status(201).json({
@@ -415,27 +411,23 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
     // A paired device: revoking it also revokes the machine credentials it
     // minted (that Mac is disconnected from this companion). Only that device,
     // the Mac this companion serves, or this machine itself may.
-    const twinHash = (await listDeviceRecords()).find((d) => d.name === name)?.tokenHash
-    let removed: boolean
+    let outcome: Awaited<ReturnType<typeof revokePairing>>
     try {
-      removed = await revokeDevice(name, { by })
+      // The revoke also stops the device's PUSHES and removes its copy on the
+      // other box (revokePairing owns both), or a lost phone keeps showing letter
+      // subjects and previews on its lock screen. Best effort by design: the
+      // pairing is gone either way, so a bridge outage reports
+      // `pushRevokePending` (and queues the rest) instead of leaving it paired.
+      outcome = await revokePairing(name, { by })
     } catch (err) {
       if (sendRefusal(res, err)) return
       throw err
     }
-    if (!removed) {
+    if (!outcome.revoked) {
       res.status(404).json({ error: `Device "${name}" not found` })
       return
     }
-    // Its copy on the other box goes too (device-twins.ts), in the background.
-    if (twinHash) void revokeAdoptionTwin(twinHash)
-    // Revoking the pairing has to stop the PUSHES too, or a lost phone keeps
-    // showing letter subjects and previews on its lock screen with no way to log
-    // in. The rows usually live on the primary (a replica relays registrations),
-    // so this is delegated rather than done inline. Best-effort by design: the
-    // pairing is already gone, so a bridge outage reports `pushRevokePending`
-    // instead of failing the revoke and leaving the device paired.
-    const push = await revokePushTokensForDevice(name)
+    const push = outcome.push ?? { removed: 0, relayed: false }
     log.web.info('devices: revoked via console', {
       name, pushTokensRevoked: push.removed,
       ...(push.pending ? { pushRevokePending: push.pending } : {}),
