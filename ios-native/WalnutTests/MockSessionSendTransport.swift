@@ -74,6 +74,18 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
         return SessionSendReceipt(messageId: messageId ?? "qm-mobile-serverminted", queued: queued)
     }
 
+    /// The voice flag of every attempt, in order (voice mode's sends).
+    private(set) var voiceFlags: [Bool] = []
+
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool
+    ) async throws -> SessionSendReceipt {
+        lock.lock()
+        voiceFlags.append(voice)
+        lock.unlock()
+        return try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId)
+    }
+
     func sessionTranscript(id: String, fresh: Bool, rich: Bool) async throws -> SessionTranscript {
         lock.lock()
         reads.append(TranscriptRead(fresh: fresh, rich: rich))

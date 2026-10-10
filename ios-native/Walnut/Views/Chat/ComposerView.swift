@@ -112,6 +112,10 @@ struct ComposerBar: View {
     /// uses it to make sure the MAIN agent is selected, so the transcript can
     /// never land on whichever subagent the user last browsed.
     var prepareVoiceQuickAction: (() -> Void)? = nil
+    /// Turn on voice mode (talk, hear the answer). Shown in the send seat while
+    /// there is nothing to send, the way the chat apps put their voice button.
+    /// Absent = this composer has no voice mode.
+    var voiceModeAction: (() -> Void)? = nil
     /// Where the switchable model lives for this composer (a session, or a chat
     /// conversation's lane session). Absent = no model pill.
     var modelSource: ComposerControlsModel.Source? = nil
@@ -851,6 +855,7 @@ struct ComposerBar: View {
         static let mic = "mic.fill"
         static let send = "arrow.up"
         static let stop = "stop.fill"
+        static let voiceMode = "waveform"
         /// Stop a recording that lands in the draft (vs `send`, which auto-sends).
         static let confirm = "checkmark"
         static let cancel = "xmark"
@@ -867,7 +872,7 @@ struct ComposerBar: View {
         // The voice notices' glyphs are `VoiceNoticeRows`' own (VoiceInputControls.swift).
 
         static let all = [
-            plus, photo, camera, mic, send, stop, confirm, cancel, removeImage,
+            plus, photo, camera, mic, send, stop, voiceMode, confirm, cancel, removeImage,
             offlineNotice, imageNotice, cameraDeniedNotice, queueFullNotice,
         ]
     }
@@ -971,9 +976,12 @@ struct ComposerBar: View {
             // The send button joins it once there's something to send.
             micButton
             // ONE trailing seat: send, or stop while a turn runs. Never both, so
-            // a turn starting cannot shuffle the row's buttons sideways.
+            // a turn starting cannot shuffle the row's buttons sideways. With
+            // nothing to send, the seat offers voice mode where there is one.
             if hasContent || primaryAction == .stop {
                 primaryButton
+            } else if let voiceModeAction, voice.state == .idle {
+                voiceModeButton(voiceModeAction)
             }
         }
         .padding(.horizontal, 8)
@@ -1252,6 +1260,19 @@ struct ComposerBar: View {
         }
         .disabled(voice.state != .idle)
         .accessibilityIdentifier("chat.mic")
+    }
+
+    private func voiceModeButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: Symbol.voiceMode)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.onTint)
+                .frame(width: 32, height: 32)
+                .background(Theme.tint, in: Circle())
+        }
+        .disabled(disabled)
+        .accessibilityLabel("Voice mode")
+        .accessibilityIdentifier("chat.voiceMode")
     }
 
     @ViewBuilder
@@ -1833,6 +1854,8 @@ private struct RecordingIndicator: View {
 struct ComposerView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(ConnectionStore.self) private var connection
+    /// "Talk to Walnut": a voice conversation, opened from the send seat.
+    @State private var showVoiceAsk = false
 
     var body: some View {
         ComposerBar(
@@ -1875,6 +1898,7 @@ struct ComposerView: View {
                 // when already there).
                 chat.switchAgent(ChatStore.mainAgentID)
             },
+            voiceModeAction: { showVoiceAsk = true },
             // The MAIN AGENT gets a model pill too. On the lane engine its turn
             // runs inside a real CLI session, so the model is a genuine per-
             // conversation property (GET /chat/engine resolves which session);
@@ -1891,6 +1915,11 @@ struct ComposerView: View {
             hostProvenance: .chat(status: connection.status, online: connection.online)
         ) { text, images in
             await Self.sendKeepingWords(chat, text, images)
+        }
+        .sheet(isPresented: $showVoiceAsk) {
+            NavigationStack {
+                VoiceAskPage(agentID: chat.activeAgentID, agentName: chat.activeAgentName)
+            }
         }
     }
 

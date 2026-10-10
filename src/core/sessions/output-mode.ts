@@ -34,6 +34,7 @@
 
 import type { Config, SessionOutputMode, SessionRecord } from '../types.js';
 import { DEFAULT_SESSION_OUTPUT_MODE } from '../types.js';
+import { VOICE_REPLY_MARKER, isVoiceReplyLine } from './voice-reply.js';
 
 /** Opening literal shared by both edge instructions. The client peels the line
  *  off a rehydrated queue row by exactly this marker (useSessionSend.ts), so
@@ -172,6 +173,9 @@ export function applyOutputModeDirective(directive: OutputModeDirective, message
 function isOutputModeLine(line: string): boolean {
   const t = line.trim();
   if (t.startsWith(OUTPUT_MODE_INSTRUCTION_MARKER)) return true;
+  // The phone's voice-reply line rides the same way (voice-reply.ts), so the one
+  // display choke point strips it too.
+  if (isVoiceReplyLine(t)) return true;
   return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
 }
 
@@ -191,7 +195,11 @@ function isOutputModeLine(line: string): boolean {
 export function stripOutputModeWrappers(text: string): string {
   // Fast path: the overwhelming majority of lines have neither marker, and this
   // runs per user message of every parse (a whale JSONL has thousands).
-  if (!text.includes(OUTPUT_MODE_INSTRUCTION_MARKER) && !text.includes(OUTPUT_MODE_REMINDER_MARKER)) {
+  if (
+    !text.includes(OUTPUT_MODE_INSTRUCTION_MARKER)
+    && !text.includes(OUTPUT_MODE_REMINDER_MARKER)
+    && !text.includes(VOICE_REPLY_MARKER)
+  ) {
     return text;
   }
 

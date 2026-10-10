@@ -284,10 +284,10 @@ final class VoiceRecorder: NSObject {
     /// `'!pri'` is arbitration by a higher-priority app; mixability is not the
     /// lever that wins it. See the -50 minefield note above.
     private func activateSession() async throws {
-        // A take that just ended may still be switching the session off (see
-        // `deactivateSessionOffMain`): let it finish, or it would switch off
-        // the session this take is about to use.
-        await deactivation?.value
+        // A take that just ended, or voice mode's speaker, may still be switching
+        // the session off (see `AudioSessionHandoff`): let it finish, or it would
+        // switch off the session this take is about to use.
+        await AudioSessionHandoff.settle()
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         let wantBuiltIn = Self.micRoute == .builtInMic
@@ -824,21 +824,14 @@ final class VoiceRecorder: NSObject {
         deactivateSessionOffMain()
     }
 
-    /// The pending `setActive(false)`, awaited by the next activation.
-    @ObservationIgnored private var deactivation: Task<Void, Never>?
-
     /// `setActive(false)` blocks until the audio server answers. On the main
     /// thread it froze the recording row on "Recording…" with a stopped timer
     /// for about 2.9s after Stop or Cancel, because the state change that swaps
     /// the row could not draw until it returned. So the row changes first and
     /// the session is switched off on a background thread, one switch-off at a
-    /// time.
+    /// time, in the queue the speaker shares (`AudioSessionHandoff`).
     private func deactivateSessionOffMain() {
-        let previous = deactivation
-        deactivation = Task.detached(priority: .userInitiated) {
-            await previous?.value
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        }
+        AudioSessionHandoff.deactivateOffMain()
     }
 
     /// Elapsed-time ticker for the recording row. Display only — there is NO

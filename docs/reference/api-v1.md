@@ -1538,9 +1538,15 @@ Each execution host's daemon dials OUT to the cloud companion over
 can talk to live sessions even when the primary box is asleep. On the
 primary box the same endpoints serve directly — no bridge involved.
 
-- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"? }` →
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
+  - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
+    will hear the answer read aloud (the phone's voice mode). The CLI also
+    receives one `[Voice reply: …]` line after the text, asking for a short
+    spoken answer first and any detail below a line holding only `---`. Every
+    display surface strips the line, like the output-mode lines. Not a boolean:
+    `400 bad_request`. Absent or `false`: unchanged.
   - `messageId` (additive) — a client-supplied stable id (`qm-…`, ≤64 chars of
     `[A-Za-z0-9-]`) that makes the send IDEMPOTENT: a retry after a lost 202
     reuses the original id and collapses onto the already-queued/delivered
@@ -1922,6 +1928,9 @@ host's SSH daemon). Works on BOTH boxes:
     that memory; `"default"` clears it.
   - `taskId`: continue an existing ask; its own agent stamp decides the persona.
   - A client `cwd` is ignored (the server owns an ask's folder).
+  - `voice` (additive, 2026-10, any launch, not only an ask): the first message
+    was spoken, and carries the same voice-reply line as a `voice` send above.
+    Never part of the task or session title. Not a boolean: `400 bad_request`.
   - `400 bad_request`, before anything is written: `agentId` without
     `walnutAgent`, an unknown agent, a `walnutAgent` that is not a boolean, or
     any `host` (an ask runs where the server runs).

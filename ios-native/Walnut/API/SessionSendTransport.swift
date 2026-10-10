@@ -33,6 +33,20 @@ protocol SessionSendTransport {
     /// `WalnutAPI.sessionTranscriptPagePath`). Always fresh and rich.
     func sessionTranscriptPage(id: String, before: String?, since: String?,
                                visible: Int) async throws -> SessionTranscript
+    /// The same send, spoken: `voice: true` asks the session for an answer made
+    /// to be heard (voice mode). See `WalnutAPI.sendSessionMessage(…voice:)`.
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool
+    ) async throws -> SessionSendReceipt
+}
+
+extension SessionSendTransport {
+    /// A transport with no voice channel sends the words plainly.
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool
+    ) async throws -> SessionSendReceipt {
+        try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId)
+    }
 }
 
 extension WalnutAPI: SessionSendTransport {}

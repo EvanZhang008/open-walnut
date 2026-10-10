@@ -75,6 +75,8 @@ final class SessionConversationStore {
     /// bubble). Cancelled on suspend/close and re-armed on resume, which is how
     /// "pause in the background, continue in the foreground" is implemented.
     @ObservationIgnored private var retryTasks: [String: Task<Void, Never>] = [:]
+    /// Bubbles that were spoken in voice mode: their sends carry `voice: true`.
+    @ObservationIgnored private var voiceBubbleIDs: Set<String> = []
     private var isActive = true
     /// Set by close() (view gone), cleared by open(). Blocks LifecycleHub
     /// resumeAll from reviving a store whose screen was dismissed.
@@ -782,7 +784,7 @@ final class SessionConversationStore {
     /// lost ack collapses onto the original row instead of delivering the turn
     /// twice. See SendRetryPolicy.
     @discardableResult
-    func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
+    func send(_ text: String, images: [SelectedImage] = [], voice: Bool = false) async -> Bool {
         guard isActive, canSend else { return false }
         errorMessage = nil
         let jpegDatas = images.map(\.jpegData)
@@ -793,6 +795,9 @@ final class SessionConversationStore {
         )
         optimistic.pending = true
         optimistic.clientMessageId = SendRetryPolicy.newMessageId()
+        // Spoken (voice mode): every attempt of this bubble, retries included,
+        // goes out with `voice: true`.
+        if voice { voiceBubbleIDs.insert(optimistic.id) }
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
@@ -827,8 +832,10 @@ final class SessionConversationStore {
         }
         do {
             let receipt = try await api.sendSessionMessage(
-                id: sessionId, text: text, images: payloads, messageId: messageId
+                id: sessionId, text: text, images: payloads, messageId: messageId,
+                voice: voiceBubbleIDs.contains(bubbleID)
             )
+            voiceBubbleIDs.remove(bubbleID)
             guard isActive, !Task.isCancelled else { return true }
             if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
                 pendingUser[idx].pending = false
@@ -1012,6 +1019,7 @@ final class SessionConversationStore {
         // timer would re-deliver text the user just threw away.
         retryTasks[message.id]?.cancel()
         retryTasks[message.id] = nil
+        voiceBubbleIDs.remove(message.id)
         pendingUser.removeAll { $0.id == message.id }
     }
 

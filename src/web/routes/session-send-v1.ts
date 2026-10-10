@@ -2,7 +2,7 @@
  * /api/v1 session send endpoints, on sessionStreamV1Router (session-stream-v1.ts
  * registers them, so the API is unchanged):
  *
- *   POST /sessions/:id/messages             { text, images?, messageId? } → 202
+ *   POST /sessions/:id/messages             { text, images?, messageId?, voice? } → 202
  *   GET  /sessions/:id/messages/:messageId  what became of a held message
  *
  * Primary box: the durable message queue (sendMessageToSession). Cloud box: a
@@ -14,6 +14,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import { applyVoiceReply } from '../../core/sessions/voice-reply.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { cloudSend } from './cloud-session-send.js'
 import { sendError } from './cloud-send-words.js'
@@ -59,6 +60,15 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       sendError(res, 400, 'bad_request', 'text (non-empty string) is required')
       return
     }
+    // Additive: `voice: true` = the person spoke this and will HEAR the answer
+    // (the phone's voice mode). The CLI gets the voice-reply line after the
+    // text; every display surface strips it (core/sessions/voice-reply.ts).
+    const rawVoice = req.body?.voice
+    if (rawVoice !== undefined && typeof rawVoice !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'voice must be a boolean')
+      return
+    }
+    const voice = rawVoice === true
 
     // Cloud-owned session (cloud.exec): the CLI is on THIS box, so it takes the
     // primary-box path below: same durable queue, same session-runner delivery,
@@ -81,7 +91,9 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       const rawMid = req.body?.messageId
       const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
         ? rawMid : undefined
-      await cloudSend(res, sessionId, text, images, clientMessageId)
+      // The voice line rides IN the relayed text: the primary applies output mode
+      // to it again and its display projection strips the line like any other.
+      await cloudSend(res, sessionId, voice ? applyVoiceReply(text) : text, images, clientMessageId)
       return
     }
 
@@ -129,15 +141,18 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // text the CLI receives, leave what the human sees alone, advance the edge
     // only after the enqueue.
     const outputMode = await prepareOutputModeSend(sessionId, record, enqueueText ?? text)
+    // Voice goes LAST, after the output-mode tail: it overrides that style for
+    // this one reply, and the line nearest the end is the one the model weighs.
+    const cliText = voice ? applyVoiceReply(outputMode.enqueueText) : outputMode.enqueueText
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'mobile',
       taskId: record.taskId,
-      ...(outputMode.enqueueText !== text ? { enqueueMessage: outputMode.enqueueText } : {}),
+      ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
     })
     await outputMode.commit()
-    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length })
+    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice })
     res.status(202).json({ messageId: msg.id })
   } catch (err) {
     next(err)

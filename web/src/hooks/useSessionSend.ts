@@ -96,10 +96,13 @@ function stripImageRefPrefix(message: string): string {
  */
 const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
 const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
+/** The phone's voice-reply line (src/core/sessions/voice-reply.ts), stripped the same way. */
+const VOICE_REPLY_MARKER = '[Voice reply: ';
 
 function isOutputModeLine(line: string): boolean {
   const t = line.trim();
   if (t.startsWith(OUTPUT_MODE_INSTRUCTION_MARKER)) return true;
+  if (t.startsWith(VOICE_REPLY_MARKER) && t.endsWith(']')) return true;
   return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
 }
 
@@ -107,7 +110,11 @@ function isOutputModeLine(line: string): boolean {
  *  kept (the server strips exactly this much). This is therefore the dedup basis
  *  for a rehydrated row — see OptimisticMessage.dedupText. */
 export function stripOutputModeWrappers(message: string): string {
-  if (!message.includes(OUTPUT_MODE_INSTRUCTION_MARKER) && !message.includes(OUTPUT_MODE_REMINDER_MARKER)) {
+  if (
+    !message.includes(OUTPUT_MODE_INSTRUCTION_MARKER)
+    && !message.includes(OUTPUT_MODE_REMINDER_MARKER)
+    && !message.includes(VOICE_REPLY_MARKER)
+  ) {
     return message;
   }
   const lines = message.split('\n');

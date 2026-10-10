@@ -291,6 +291,78 @@ describe('POST /api/v1/sessions/:id/messages — output mode', () => {
   })
 })
 
+/**
+ * `voice: true` — the phone's voice mode. The person spoke the message and will
+ * HEAR the answer, so the CLI also gets the voice-reply line, LAST (after the
+ * output-mode tail it overrides for this reply), and every display strips it.
+ *
+ * Would-fail-if-reverted: drop the applyVoiceReply call in session-send-v1.ts and
+ * the first case breaks; put it before prepareOutputModeSend and the ordering
+ * assertion breaks; drop the marker from stripOutputModeWrappers and the history
+ * case shows the machine line in the bubble.
+ */
+describe('POST /api/v1/sessions/:id/messages — voice', () => {
+  async function post(id: string, body: Record<string, unknown>): Promise<Response> {
+    return fetch(apiUrl(`/api/v1/sessions/${id}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+  async function enqueued(id: string, messageId: string): Promise<string> {
+    const { getQueue } = await import('../../../src/core/session-message-queue.js')
+    return (await getQueue(id)).find((m) => m.id === messageId)?.message ?? ''
+  }
+
+  it('appends the voice line after the text and after the output-mode tail', async () => {
+    const sid = 'talk-voice-01'
+    await createSessionRecord(sid, `task-${sid}`, 'test-project', '/tmp', { title: sid })
+    const { VOICE_REPLY_INSTRUCTION } = await import('../../../src/core/sessions/voice-reply.js')
+    const { RICH_OUTPUT_MODE_ON_INSTRUCTION } = await import('../../../src/core/sessions/output-mode.js')
+    const res = await post(sid, { text: '把测试跑一下', voice: true })
+    expect(res.status).toBe(202)
+    const text = await enqueued(sid, ((await res.json()) as { messageId: string }).messageId)
+    expect(text.startsWith('把测试跑一下')).toBe(true)
+    expect(text.endsWith(VOICE_REPLY_INSTRUCTION)).toBe(true)
+    expect(text.indexOf(RICH_OUTPUT_MODE_ON_INSTRUCTION)).toBeLessThan(text.indexOf(VOICE_REPLY_INSTRUCTION))
+  })
+
+  it('voice:false and absent leave the send as it was; a non-boolean is a 400', async () => {
+    const sid = 'talk-voice-02'
+    await createSessionRecord(sid, `task-${sid}`, 'test-project', '/tmp', { title: sid })
+    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    await updateSessionRecord(sid, { output_mode: 'markdown', output_mode_injected: 'markdown' })
+    const off = await post(sid, { text: 'typed', voice: false })
+    expect(off.status).toBe(202)
+    expect(await enqueued(sid, ((await off.json()) as { messageId: string }).messageId)).toBe('typed')
+    const bad = await post(sid, { text: 'typed', voice: 'yes' })
+    expect(bad.status).toBe(400)
+    expect(((await bad.json()) as { error: { code: string } }).error.code).toBe('bad_request')
+  })
+
+  it('a spoken slash command still reaches the CLI byte-exact', async () => {
+    const sid = 'talk-voice-03'
+    await createSessionRecord(sid, `task-${sid}`, 'test-project', '/tmp', { title: sid })
+    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    await updateSessionRecord(sid, { output_mode: 'markdown', output_mode_injected: 'markdown' })
+    const res = await post(sid, { text: '/compact', voice: true })
+    expect(await enqueued(sid, ((await res.json()) as { messageId: string }).messageId)).toBe('/compact')
+  })
+
+  it('history shows only what the person said', async () => {
+    const { VOICE_REPLY_INSTRUCTION } = await import('../../../src/core/sessions/voice-reply.js')
+    const { RICH_OUTPUT_MODE_REMINDER } = await import('../../../src/core/sessions/output-mode.js')
+    const { toDisplayedUserText } = await import('../../../src/core/sessions/reference-cards.js')
+    const { stripOutputModeWrappers: clientStrip } = await import('../../../web/src/hooks/useSessionSend')
+    const sent = `run the tests\n\n${RICH_OUTPUT_MODE_REMINDER}\n\n${VOICE_REPLY_INSTRUCTION}`
+    expect(toDisplayedUserText(sent)).toBe('run the tests')
+    expect(clientStrip(sent)).toBe('run the tests')
+    // A person merely quoting the marker mid-sentence keeps their words.
+    const quoted = 'what does [Voice reply: x] mean in the log'
+    expect(toDisplayedUserText(quoted)).toBe(quoted)
+  })
+})
+
 describe('GET /api/v1/sessions/:id/stream', () => {
   it('404 for an unknown session', async () => {
     const res = await fetch(apiUrl('/api/v1/sessions/does-not-exist/stream'))

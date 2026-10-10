@@ -33,6 +33,7 @@ import {
   rememberedAskModel,
   resolveLaunchAskAgent,
 } from './ask-launch-plan.js';
+import { VOICE_REPLY_INSTRUCTION } from './voice-reply.js';
 import { log } from '../../logging/index.js';
 
 /** Launch-time permission modes — the full registry set (core/types.ts). */
@@ -70,6 +71,9 @@ export interface MobileLaunchInput {
   agentId?: string;
   /** The body's `model` as sent, kept for an ask's launch memory (absent = not named). */
   rawModel?: string;
+  /** The first message was spoken (the phone's voice mode): the CLI also gets the
+   *  voice-reply line after it (voice-reply.ts). */
+  voice?: true;
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -89,7 +93,7 @@ export function launchErrorCode(status: number): string {
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
     cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, overrideReadiness,
-    walnutAgent, agentId,
+    walnutAgent, agentId, voice,
   } = (body ?? {}) as {
     cwd?: unknown;
     host?: unknown;
@@ -102,6 +106,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     overrideReadiness?: unknown;
     walnutAgent?: unknown;
     agentId?: unknown;
+    voice?: unknown;
   };
 
   // An ask: the same rule as the web quick-start (agentId only with walnutAgent;
@@ -109,6 +114,9 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
   // client cwd is ignored rather than checked).
   if (walnutAgent !== undefined && typeof walnutAgent !== 'boolean') {
     throw new QuickStartError('walnutAgent must be a boolean', 400);
+  }
+  if (voice !== undefined && typeof voice !== 'boolean') {
+    throw new QuickStartError('voice must be a boolean', 400);
   }
   const isAsk = walnutAgent === true;
   if (agentId !== undefined && (typeof agentId !== 'string' || !agentId.trim() || agentId.length > 128 || !isAsk)) {
@@ -186,6 +194,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     ...(isAsk ? { walnutAgent: true as const } : {}),
     ...(isAsk && typeof agentId === 'string' ? { agentId: agentId.trim() } : {}),
     ...(isAsk && typeof rawModel === 'string' ? { rawModel } : {}),
+    ...(voice === true ? { voice: true as const } : {}),
   };
 }
 
@@ -302,6 +311,7 @@ export async function performMobileLaunch(
   const wsPlace = input.taskId && !ask ? await mobileWorkspacePlace(input.taskId, input.cwd, input.host) : null;
   const task = await quickStartSession({
     message: input.message,
+    ...(input.voice ? { messageSuffix: VOICE_REPLY_INSTRUCTION } : {}),
     cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd,
     host: wsPlace ? wsPlace.host : input.host,
     model: ask ? ask.model : input.model,

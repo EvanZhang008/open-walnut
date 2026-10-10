@@ -191,6 +191,32 @@ describe('POST /api/v1/sessions', () => {
     expect(record?.process_status).toBe('idle');
   });
 
+  // The phone's voice mode launches with a spoken first message: the CLI also gets
+  // the voice-reply line after it, and nothing that NAMES the work reads it.
+  it('voice:true appends the voice-reply line to the first message only', async () => {
+    const { VOICE_REPLY_INSTRUCTION } = await import('../../../src/core/sessions/voice-reply.js');
+    const res = await request(createApp())
+      .post('/api/v1/sessions')
+      .send({ cwd: '/tmp/voice-proj', message: 'what is still open today', voice: true });
+    expect(res.status).toBe(201);
+    const data = starts[0].data as Record<string, unknown>;
+    expect(data.message).toBe(`what is still open today\n\n${VOICE_REPLY_INSTRUCTION}`);
+    expect(res.body.title).not.toContain('Voice reply');
+
+    const bad = await request(createApp())
+      .post('/api/v1/sessions')
+      .send({ cwd: '/tmp/voice-proj', message: 'x', voice: 1 });
+    expect(bad.status).toBe(400);
+    expect(starts.length).toBe(1);
+
+    // An empty launch carries nothing at all (no first turn to answer).
+    const empty = await request(createApp())
+      .post('/api/v1/sessions')
+      .send({ cwd: '/tmp/voice-proj', message: '', voice: true });
+    expect(empty.status).toBe(201);
+    expect((starts[1].data as Record<string, unknown>).message).toBe('');
+  });
+
   // The phone's New Session page has no tier control, like the web draft column,
   // so its task is born where the web draft's is: Focus. The launch core's own
   // default (Satellite) put every phone session out of the user's first view.

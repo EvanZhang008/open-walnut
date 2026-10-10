@@ -9,7 +9,16 @@ import SwiftUI
 /// safeAreaInset composer. The info button opens SessionInfoSheet with the
 /// session's Details / Task / About metadata.
 struct SessionConversationView: View {
+    /// How the page opens: with the composer, or in voice mode waiting for the
+    /// answer to the words that launched the session (`VoiceAskPage`). A new
+    /// session has nothing older on the page, so its first answer is read.
+    enum VoiceModeOnOpen {
+        case off
+        case awaitingAnswer
+    }
+
     let session: WalnutSession
+    private let voiceModeOnOpen: VoiceModeOnOpen
 
     /// Optional on purpose: WalnutTests host this page without the app
     /// environment; task affordances just hide there (fixture has no taskId).
@@ -44,9 +53,15 @@ struct SessionConversationView: View {
     /// Extra scroll-to-bottom pulses (keyboard repins) fed into the timeline
     /// engine alongside the store's own scrollToBottomSignal.
     @State private var repinSignal = 0
+    /// Voice mode, while it is on: its bar takes the composer's place.
+    @State private var voiceMode: VoiceModeController?
+    /// `voiceModeOnOpen` is honoured once: a page shown again keeps the mode the
+    /// person left it in.
+    @State private var voiceModeOnOpenDone = false
 
-    init(session: WalnutSession) {
+    init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off) {
         self.session = session
+        self.voiceModeOnOpen = voiceModeOnOpen
         _store = State(initialValue: SessionConversationStore(session: session))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
     }
@@ -56,6 +71,7 @@ struct SessionConversationView: View {
     /// code always uses init(session:).
     init(session: WalnutSession, store: SessionConversationStore) {
         self.session = session
+        self.voiceModeOnOpen = .off
         _store = State(initialValue: store)
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
     }
@@ -118,28 +134,26 @@ struct SessionConversationView: View {
         // under the predictive bar. See `KeyboardSafeComposerContent`.
         .keyboardSafeComposerContent()
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ComposerBar(
-                placeholder: "Message this session",
-                disabled: !store.canSend,
-                disabledNotice: store.composerNotice,
-                draftKey: "session:\(session.id)",
-                // The SCREEN this composer is on, for the file-preview dock's
-                // clearance. Paired with the `.composerSurface(...)` claim below: the
-                // claim says "this page is on top of its tab", this says "the composer
-                // registered here is mine". The dock crosses the two so a composer on a
-                // retained tab behind this page cannot move the seat (2026-08-30 P1).
-                surface: .session(session.id),
-                // The model pill switches THIS session's model/effort live.
-                modelSource: .session(id: session.id),
-                fallbackModel: session.model,
-                plusActions: plusActions,
-                modelRevalidateToken: store.streamConnects,
-                // A live session's exec host is a fact, not a choice (the CLI is
-                // already running there), so it shows as provenance in the `+`.
-                // Picking a host happens at CREATION (NewSessionChatView).
-                hostProvenance: .session(hostAlias: session.host, cwd: session.cwd),
-                onSend: { text, images in await store.send(text, images: images) }
-            )
+            if let voiceMode {
+                VoiceModeBar(
+                    voice: voiceMode, activity: store.activity, working: store.streaming,
+                    needsAnswer: !lifecycle.pendingPermissions.isEmpty,
+                    onExit: { stopVoiceMode() }
+                )
+            } else {
+                composer
+            }
+        }
+        // Voice mode hears each turn end and each new row. A cheap key, not the
+        // rows: comparing a whole transcript on every body pass would cost the
+        // page's busiest moments, and nothing here is needed while it is off.
+        .onChange(of: voiceTurnKey) { _, key in
+            guard key != nil else { return }
+            voiceMode?.observe(rows: store.messages, streaming: store.streaming)
+        }
+        .onChange(of: lifecycle.pendingPermissions.map(\.requestId)) { _, ids in
+            guard let voiceMode, !ids.isEmpty else { return }
+            Task { await voiceMode.announceWaitingOnYou(requestIDs: ids) }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -267,6 +281,10 @@ struct SessionConversationView: View {
             // stream gives none (a companion stream attaches without one).
             lifecycle.statusSink = store
             lifecycle.start()
+            if voiceModeOnOpen == .awaitingAnswer, !voiceModeOnOpenDone {
+                voiceModeOnOpenDone = true
+                startVoiceMode(awaitingAnswer: true)
+            }
             await store.open()
         }
         .onDisappear {
@@ -280,7 +298,68 @@ struct SessionConversationView: View {
             programmaticGeometryFrozen = false
             lifecycle.stop()
             store.close()
+            stopVoiceMode()
         }
+    }
+
+    private var composer: some View {
+        ComposerBar(
+            placeholder: "Message this session",
+            disabled: !store.canSend,
+            disabledNotice: store.composerNotice,
+            draftKey: "session:\(session.id)",
+            // The SCREEN this composer is on, for the file-preview dock's
+            // clearance. Paired with the `.composerSurface(...)` claim below: the
+            // claim says "this page is on top of its tab", this says "the composer
+            // registered here is mine". The dock crosses the two so a composer on a
+            // retained tab behind this page cannot move the seat (2026-08-30 P1).
+            surface: .session(session.id),
+            voiceModeAction: { startVoiceMode(awaitingAnswer: false) },
+            // The model pill switches THIS session's model/effort live.
+            modelSource: .session(id: session.id),
+            fallbackModel: session.model,
+            plusActions: plusActions,
+            modelRevalidateToken: store.streamConnects,
+            // A live session's exec host is a fact, not a choice (the CLI is
+            // already running there), so it shows as provenance in the `+`.
+            // Picking a host happens at CREATION (NewSessionChatView).
+            hostProvenance: .session(hostAlias: session.host, cwd: session.cwd),
+            onSend: { text, images in await store.send(text, images: images) }
+        )
+    }
+
+    private struct VoiceTurnKey: Equatable {
+        let rows: Int
+        let lastID: String?
+        let lastLength: Int
+        let streaming: Bool
+    }
+
+    private var voiceTurnKey: VoiceTurnKey? {
+        guard voiceMode != nil else { return nil }
+        let last = store.historyMessages.last
+        return VoiceTurnKey(
+            rows: store.historyMessages.count, lastID: last?.id,
+            lastLength: last?.text.utf8.count ?? 0, streaming: store.streaming
+        )
+    }
+
+    /// Voice mode on: what is on the page now is never read, only what comes next.
+    private func startVoiceMode(awaitingAnswer: Bool) {
+        let store = store
+        voiceMode = VoiceModeController(
+            sessionID: session.id, rows: store.messages, awaitingAnswer: awaitingAnswer
+        ) { text in
+            await store.send(text, voice: true)
+        }
+        AppLog.info("voice-mode", "voice mode on", ["sessionId": session.id])
+    }
+
+    private func stopVoiceMode() {
+        guard let voiceMode else { return }
+        voiceMode.shutDown()
+        self.voiceMode = nil
+        AppLog.info("voice-mode", "voice mode off", ["sessionId": session.id])
     }
 
     /// The composer's `+` rows for this session, in the web's order: the side

@@ -46,6 +46,12 @@ export interface QuickStartParams {
    * the original handler's order: spill first, then prefix.
    */
   messagePrefix?: string;
+  /**
+   * One machine line appended AFTER the message the CLI receives (the phone's
+   * voice-reply line, voice-reply.ts). Never part of any name, and skipped for an
+   * empty launch or a slash command, which must reach the CLI byte-exact.
+   */
+  messageSuffix?: string;
   cwd: string;
   host?: string;
   model?: string;
@@ -315,6 +321,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const { buildReferenceCards, appendReferenceCards } = await import('./reference-cards.js');
     const refCards = await buildReferenceCards(message);
     if (refCards) sessionMessage = appendReferenceCards(sessionMessage, refCards);
+    // Last of the human-side text, after the cards: a reply-style line is read
+    // best nearest the end (the same placement the send path uses).
+    if (params.messageSuffix && message.trim()) sessionMessage = `${sessionMessage}\n\n${params.messageSuffix}`;
   }
   if (messagePrefix) {
     sessionMessage = messagePrefix + sessionMessage;
