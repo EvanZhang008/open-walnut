@@ -168,7 +168,7 @@ export function SearchSection({ config, onSave }: Props) {
   const chooseCompanionMode = async (next: CompanionSearchMode) => {
     if (next === companionMode.value) return;
     if (onNeedsMemoryWarning(next, indexStatus?.companion) && !(await confirm({
-      title: 'Turn on search by meaning on the companion?',
+      title: 'Turn on semantic search on the companion?',
       message: memoryWarningMessage(indexStatus?.companion),
       confirmLabel: 'Turn on',
     }))) return;
@@ -250,14 +250,14 @@ export function SearchSection({ config, onSave }: Props) {
       {companionHelp && (
         <SettingsGroup heading="Cloud companion" data-testid="companion-search-group">
           <SettingsRow
-            label="Search by meaning while this Mac is away"
+            label="Semantic search while this Mac is away"
             help={companionHelp.text || undefined}
             state={companionHelp.warning ? 'warning' : undefined}
             error={companionMode.error ?? undefined}
             data-testid="companion-search-row"
             control={
               <SegmentedControl<CompanionSearchMode>
-                aria-label="Search by meaning on the companion"
+                aria-label="Semantic search on the companion"
                 value={companionMode.value}
                 options={COMPANION_MODE_OPTIONS}
                 onChange={(v) => { void chooseCompanionMode(v); }}

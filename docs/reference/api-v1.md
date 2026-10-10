@@ -2191,7 +2191,7 @@ like the other conversation endpoints (absent → `general`).
   the relay cannot serve (2026-10), the replica answers itself. When it keeps
   its copy of the primary's index (2026-10-09, setting
   `search.companion_semantic`), the same hybrid search runs over that copy:
-  tasks, sessions, notes, memory and skills, by meaning, with `"offline": true`
+  tasks, sessions, notes, memory and skills, semantic included, with `"offline": true`
   and `"asOf"` (ISO, when the copy last matched the primary); memory rows carry
   the replica's own paths. Without the copy, a keyword search of its own task
   copy answers, with `"offline": true` and `"degraded": "offline-keyword"`; its

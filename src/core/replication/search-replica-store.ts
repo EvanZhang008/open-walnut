@@ -6,7 +6,7 @@
  *
  * The primary embeds every passage once; this box takes its docs and vectors
  * as they are and only ever embeds a query, so while the Mac is away the phone
- * still searches by meaning: tasks, sessions, notes, memory and skills.
+ * still runs semantic search: tasks, sessions, notes, memory and skills.
  *
  * On or off is the primary's setting (`search.companion_semantic`, sent in
  * every status step) and this box's memory (companionSearchDecision). Off, the
@@ -358,7 +358,7 @@ export function startSearchReplicaStore(options: Partial<SearchReplicaStoreDeps>
   let stopped = false
   const name = 'search-replica-local-tasks'
   const unsubs: Array<() => void> = []
-  // A restart opens the copy at once when it was on, so search by meaning
+  // A restart opens the copy at once when it was on, so semantic search
   // answers before the primary's next round (if the Mac is away, there is none).
   void (async () => {
     const s = await loadState()

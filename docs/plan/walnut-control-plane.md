@@ -305,13 +305,14 @@ phone ──► companion ──(Mac away)──► the session's row in the Mac
 
 While the Mac answers, search is the Mac's, for a phone and for a session on
 any host: its index has the semantic ranking and every transcript. While it is
-away, each side searches what it holds; the companion by meaning when it keeps
-its copy of the Mac's index (next section), everything else by keyword:
+away, each side searches what it holds; the companion with semantic search
+when it keeps its copy of the Mac's index (next section), everything else by
+keyword:
 
 | Who asks | The Mac answers | The Mac away, the companion leads | The Mac away, nobody leads |
 |---|---|---|---|
 | A session on a host (`search`) | the Mac | the companion's copy of every task (its `search` op on its own store) | this host's copy: its tasks (with the writes made here), its sessions, its memory copy (`offline-search-core.ts`) |
-| The phone (`GET /api/v1/search`) | the Mac (the forward) | the companion's copy of the Mac's index (tasks, sessions, notes, memory, skills, by meaning), else its task copy by keyword, at once | the same |
+| The phone (`GET /api/v1/search`) | the Mac (the forward) | the companion's copy of the Mac's index (tasks, sessions, notes, memory, skills, semantic search included), else its task copy by keyword, at once | the same |
 
 - On a host, `search` goes to the companion first while it leads, and is
   answered from the host's own copy when the companion cannot. A Mac that is
@@ -385,7 +386,7 @@ over"), default on. Off: every host keeps to what it can do alone while the Mac
 is away, and the companion answers every phone call itself. A change reaches
 every host and the companion at once.
 
-`search.companion_semantic` (Settings, Search, "Search by meaning while this Mac
+`search.companion_semantic` (Settings, Search, "Semantic search while this Mac
 is away"): Auto, On, Off; shown once the Mac has a companion, with the copy's
 state in one sentence. Choosing On warns unless the companion is known to have
 the memory Auto asks for.
@@ -426,7 +427,7 @@ the memory Auto asks for.
 | Mac asleep, the companion not leading yet | a change says it takes over within about a minute |
 | Mac asleep, a session searches, the companion leads | the companion's copy of every task answers |
 | Mac asleep, a session searches, no companion | its host's copy answers by keyword: its tasks, sessions and memory |
-| Mac asleep, the phone searches | the companion's copy of the Mac's index answers by meaning at once, marked offline; without the copy, its task copy by keyword |
+| Mac asleep, the phone searches | the companion's copy of the Mac's index answers at once with semantic search, marked offline; without the copy, its task copy by keyword |
 | The Mac edits a task or a note | the next round sends that doc alone; the companion's copy matches again |
 | A companion with too little memory, Auto | nothing is copied; Settings says how much Auto needs |
 | The user chooses On anyway | a warning first; then the copy is filled and Settings says it runs with little memory |
@@ -516,7 +517,7 @@ the memory Auto asks for.
   holds today (usage): a copy of that store, and the other session
   controls (stop, interrupt, permission mode) sent straight to the host's daemon
   while the companion leads.
-- Search by meaning on a host while the Mac is away (the companion has it; a
+- Semantic search on a host while the Mac is away (the companion has it; a
   host still searches its own copy by keyword), and notes written on the
   companion while the Mac is away in its search copy before the Mac is back.
 - Calls the forward cannot carry yet: a device's own identity (`devices/self`,

@@ -20,7 +20,7 @@ describe('companion search row', () => {
   })
 
   it('says one sentence per state, a warning where something is wrong', () => {
-    expect(companionSearchHelp(at({ state: 'ready', docs: 12_342 }))).toEqual({ text: 'Ready: the companion searches 12,342 items by meaning while this Mac is away.' })
+    expect(companionSearchHelp(at({ state: 'ready', docs: 12_342 }))).toEqual({ text: 'Ready: the companion runs semantic search over 12,342 items while this Mac is away.' })
     expect(companionSearchHelp(at({ state: 'ready', reason: 'forced', totalMb: 3_900, needMb: 2_600 }))).toEqual({
       text: 'On with little memory: the model takes about 2.5 GB of the companion\'s 3.8 GB.', warning: true,
     })

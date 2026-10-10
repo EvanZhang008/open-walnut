@@ -45,7 +45,7 @@ export function companionSearchHelp(s: CompanionSearchStatus): { text: string; w
       if (s.reason === 'forced' && s.totalMb) {
         return { text: `On with little memory: the model takes about ${gb(need)} of the companion's ${gb(s.totalMb)}.`, warning: true };
       }
-      return { text: s.docs ? `Ready: the companion searches ${count(s.docs)} items by meaning while this Mac is away.` : 'Ready: the companion searches by meaning while this Mac is away.' };
+      return { text: s.docs ? `Ready: the companion runs semantic search over ${count(s.docs)} items while this Mac is away.` : 'Ready: the companion runs semantic search while this Mac is away.' };
     case 'syncing':
       return { text: s.pending ? `Copying this index to the companion: ${count(s.pending)} items left.` : 'Copying this index to the companion.' };
     case 'memory':

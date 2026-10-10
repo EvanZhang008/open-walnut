@@ -1,5 +1,5 @@
 /**
- * Settings → Search: "Search by meaning while this Mac is away"
+ * Settings → Search: "Semantic search while this Mac is away"
  * (`search.companion_semantic`, the companion's copy of the search index).
  *
  * The row shows only once the Mac has talked to a companion. Auto/On/Off save
@@ -81,7 +81,7 @@ async function shot(page: Page, name: string) {
 const READY = { mode: 'auto', state: 'ready', reason: 'auto', totalMb: 7_900, needMb: 2_600, autoMinMb: 5_600, docs: 12_345, syncedAt: Date.now(), checkedAt: Date.now() }
 const MEMORY = { mode: 'auto', state: 'memory', reason: 'memory', totalMb: 3_900, needMb: 2_600, autoMinMb: 5_600, syncedAt: null, checkedAt: Date.now() }
 
-test.describe('Settings → Search: the companion searches by meaning', () => {
+test.describe('Settings → Search: the companion runs semantic search', () => {
   // One fixture server, one config: these tests write it, so they take turns.
   test.describe.configure({ mode: 'serial' })
   let saved: Record<string, unknown> | undefined
@@ -117,8 +117,8 @@ test.describe('Settings → Search: the companion searches by meaning', () => {
     await mockStatus(page, () => READY)
     await openSearch(page)
     const row = page.getByTestId('companion-search-row')
-    await expect(row).toContainText('Search by meaning while this Mac is away')
-    await expect(row).toContainText('Ready: the companion searches 12,345 items by meaning while this Mac is away.')
+    await expect(row).toContainText('Semantic search while this Mac is away')
+    await expect(row).toContainText('Ready: the companion runs semantic search over 12,345 items while this Mac is away.')
     await expect(page.getByTestId('companion-search-auto')).toHaveAttribute('aria-checked', 'true')
     await shot(page, 'ready')
 
@@ -148,7 +148,7 @@ test.describe('Settings → Search: the companion searches by meaning', () => {
     await shot(page, 'memory')
 
     await page.getByTestId('companion-search-on').click()
-    const dialog = page.getByRole('dialog', { name: 'Turn on search by meaning on the companion?' })
+    const dialog = page.getByRole('dialog', { name: 'Turn on semantic search on the companion?' })
     await expect(dialog).toBeVisible()
     await expect(dialog).toContainText('The companion has 3.8 GB of memory. The search model takes about 2.5 GB')
     mkdirSync(SHOTS, { recursive: true })
@@ -192,7 +192,7 @@ test.describe('Settings → Search: the companion searches by meaning', () => {
     pending = 1_100
     await expect(row).toContainText('1,100 items left.', { timeout: 15_000 })
     pending = 0
-    await expect(row).toContainText('Ready: the companion searches 12,345 items', { timeout: 15_000 })
+    await expect(row).toContainText('Ready: the companion runs semantic search over 12,345 items', { timeout: 15_000 })
     expect(status.count()).toBeGreaterThan(before)
   })
 

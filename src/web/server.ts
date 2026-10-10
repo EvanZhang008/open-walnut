@@ -1937,7 +1937,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A task write on this box holds its row against the primary's copy until the primary has it.
     const { startTaskReplicaLocalWrites } = await import('../core/replication/task-replica-store.js')
     const localWrites = startTaskReplicaLocalWrites()
-    // The copy of the primary's search index, searched by meaning while it is away.
+    // The copy of the primary's search index: semantic search while it is away.
     const [{ startSearchReplicaStore }, { getV1Forward }] = await Promise.all([
       import('../core/replication/search-replica-store.js'),
       import('./v1-forward/proxy.js'),
