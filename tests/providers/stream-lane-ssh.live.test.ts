@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { sshLaneForward } from '../../src/providers/stream-lane.js'
+import { sshLaneForward, STOPPED } from '../../src/providers/stream-lane.js'
 import { controlSocketPath, exitControlMaster, probeControlMaster, startControlMaster } from '../../src/providers/ssh-control-master.js'
 
 const SSHD = '/usr/sbin/sshd'
@@ -108,6 +108,28 @@ describe.skipIf(!enabled)('the stream lane\'s own SSH forward, on real OpenSSH',
     fwd.onExit((why) => { exited = why })
     fwd.stop()
     await until('the forward to end', async () => exited !== '' && !(await listening(fwd.port)))
+    // A stop of ours is no news.
+    expect(exited).toBe(STOPPED)
+
+    // The far end drops the connection (what sshd does on a bad MAC): ssh's last word is the reason.
+    const cut = await sshLaneForward(muxed, host, echoPort)
+    expect(await roundTrip(cut.port, 'x')).toBe('x')
+    let why = ''
+    cut.onExit((w) => { why = w })
+    // Every process under this test's sshd (a session is a monitor and its child; both hold the socket).
+    const table = spawnSync('ps', ['-axo', 'pid=,ppid=']).stdout.toString().trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number))
+    const sessions: number[] = []
+    for (let grew = true; grew;) {
+      grew = false
+      for (const [pid, ppid] of table) {
+        if ((ppid === sshd!.pid || sessions.includes(ppid!)) && !sessions.includes(pid!)) { sessions.push(pid!); grew = true }
+      }
+    }
+    expect(sessions.length).toBeGreaterThan(0)
+    for (const pid of sessions) if (pid > 1) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    await until('the cut forward to end', async () => why !== '', 15_000)
+    expect(why).not.toBe(STOPPED)
+    expect(why).toMatch(/closed|reset|broken|code 255/i)
 
     // With the credential gone, the master would still serve; the lane needs its own login and says so.
     await startControlMaster(socket, sshArgs, host)

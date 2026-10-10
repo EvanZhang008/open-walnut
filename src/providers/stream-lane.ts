@@ -17,10 +17,13 @@ import { WebSocket } from 'ws'
 import { createStreamEndpoint, type StreamEndpoint, type StreamEndpointOptions, type StreamPeer } from '../lib/link-stream.js'
 import { log } from '../logging/index.js'
 
+/** What a forward that this side stopped says when it ends. */
+export const STOPPED = 'stopped'
+
 /** A local port that reaches the daemon's port on the host. */
 export interface LaneForward {
   port: number
-  /** Called once when the forward ends on its own. */
+  /** Called once when the forward ends: why (ssh's last word), or STOPPED. */
   onExit(cb: (why: string) => void): void
   stop(): void
 }
@@ -96,7 +99,11 @@ export class StreamLane {
       const fwd = await this.opts.forward()
       if (gen !== this.gen || !this.wanted) { fwd.stop(); return }
       this.fwd = fwd
-      fwd.onExit((why) => { if (this.fwd === fwd) this.dropped(`its SSH connection ended (${why})`) })
+      fwd.onExit((why) => {
+        if (this.fwd === fwd) this.dropped(`its SSH connection ended (${why})`)
+        // The socket often closes first; why the connection ended is still worth a line.
+        else if (why !== STOPPED) log.session.warn('stream lane: its SSH connection ended', { host: this.opts.hostKey, why })
+      })
       await this.connect(fwd.port, gen)
     } catch (err) {
       if (gen === this.gen) this.dropped(err instanceof Error ? err.message : String(err))
@@ -271,19 +278,24 @@ export async function sshLaneForward(sshArgs: string[], sshHost: string, remoteP
   proc.stdin?.on('error', () => { /* ssh is gone; exit follows */ })
   let exited: string | null = null
   const exitCbs: Array<(why: string) => void> = []
+  let stopping = false
   proc.on('exit', (code, signal) => {
-    exited = `${signal ?? `code ${code}`}${stderr.trim() ? `: ${stderr.trim().split('\n').pop()}` : ''}`
+    // What ssh said wins: a connection a bad packet ended may close its socket before ssh exits.
+    const said = stderr.trim().split('\n').filter((l) => !/^Killed by signal/.test(l)).pop()
+    exited = said ? `${signal ?? `code ${code}`}: ${said}` : stopping ? STOPPED : `${signal ?? `code ${code}`}`
     for (const cb of exitCbs.splice(0)) cb(exited)
   })
   proc.on('error', (err) => {
     exited = err.message
     for (const cb of exitCbs.splice(0)) cb(exited)
   })
-  const stop = () => { if (exited === null) { try { proc.kill('SIGTERM') } catch { /* gone */ } } }
+  const stop = () => { if (exited === null) { stopping = true; try { proc.kill('SIGTERM') } catch { /* gone */ } } }
   if (!(await accepting(port, 10_000, () => exited !== null))) {
     stop()
     throw new Error(`its SSH forward did not open${exited ? ` (${exited})` : stderr.trim() ? ` (${stderr.trim().split('\n').pop()})` : ''}`)
   }
+  // From here on, what ssh says is about the connection (not a known-hosts note from the login).
+  stderr = ''
   return {
     port,
     onExit: (cb) => { if (exited !== null) cb(exited); else exitCbs.push(cb) },
