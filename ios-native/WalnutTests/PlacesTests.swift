@@ -290,6 +290,19 @@ final class PlacesTests: XCTestCase {
         XCTAssertEqual(PlacesAccessDecision.decide(s), .nothing)
     }
 
+    /// The Places screen offers iOS's own question while iOS can still show one,
+    /// and Settings once it can't (an answer iOS keeps, or Always already asked).
+    func testIOSCanAsk() {
+        XCTAssertTrue(PlacesAccessDecision.iosCanAsk(access: .notDetermined, askedAlways: false))
+        // An Allow Once ran out: iOS asks from the start again.
+        XCTAssertTrue(PlacesAccessDecision.iosCanAsk(access: .notDetermined, askedAlways: true))
+        XCTAssertTrue(PlacesAccessDecision.iosCanAsk(access: .whenInUse, askedAlways: false))
+        XCTAssertFalse(PlacesAccessDecision.iosCanAsk(access: .whenInUse, askedAlways: true))
+        for access in [PlacesPhoneState.Access.denied, .restricted, .always] {
+            XCTAssertFalse(PlacesAccessDecision.iosCanAsk(access: access, askedAlways: false), access.rawValue)
+        }
+    }
+
     func testPlacesReadDetection() {
         XCTAssertTrue(PlacesAccessDecision.isPlacesRead(name: "mcp__walnut__places_visits", detail: nil))
         XCTAssertTrue(PlacesAccessDecision.isPlacesRead(name: "Bash", detail: "walnut tools call places_status '{}'"))
@@ -351,4 +364,101 @@ final class FakePlacesTransport: PlacesTransport, @unchecked Sendable {
 
 extension PlacesSyncReply {
     static let stored = PlacesSyncReply.ok(try! JSONDecoder().decode(PlacesSyncResult.self, from: Data("{\"accepted\":1}".utf8)))
+}
+
+/// When the Always question is put: after Walnut has stayed active for the hold,
+/// and one attempt at a time, with a waiting caller asking only if the attempt
+/// before it could not. Simulators cannot leave Walnut inside that one second, so
+/// the timing is pinned here with a fake clock.
+@MainActor
+final class PlacesAlwaysTimingTests: XCTestCase {
+    private final class Clock {
+        var t: TimeInterval = 0
+        var now: Date { Date(timeIntervalSince1970: t) }
+    }
+
+    func testSettleNeedsTheWholeHoldActive() async {
+        let clock = Clock()
+        // Closing question (inactive), a brief active blink, inactive again, then active for good.
+        // Steps of 1/8 s add up exactly, so the moment it settles is exact too.
+        let ok = await PlacesSettle.wait(
+            isActive: { clock.t >= 1.0 || (clock.t >= 0.25 && clock.t < 0.75) },
+            now: { clock.now }, sleep: { _ in clock.t += 0.125 }
+        )
+        XCTAssertTrue(ok)
+        XCTAssertEqual(clock.t, 2.0, "the blink from 0.25 to 0.75 is not a settled second")
+    }
+
+    func testSettleGivesUpWhenWalnutStaysAway() async {
+        let clock = Clock()
+        let ok = await PlacesSettle.wait(isActive: { false }, now: { clock.now }, sleep: { _ in clock.t += 0.125 })
+        XCTAssertFalse(ok)
+        XCTAssertEqual(clock.t, 6.0)
+    }
+
+    /// Suspended in the background, the wait wakes long past its limit: it ends at
+    /// once, active or not, and the return to the foreground asks again.
+    func testSettleEndsAfterASuspension() async {
+        let clock = Clock()
+        var checks = 0
+        let ok = await PlacesSettle.wait(
+            isActive: { checks += 1; return clock.t > 0 },
+            now: { clock.now }, sleep: { _ in clock.t += 30 }
+        )
+        XCTAssertFalse(ok)
+        XCTAssertEqual(checks, 1)
+    }
+
+    private final class Box {
+        var wanted = true
+        var attempts = 0
+        var release: CheckedContinuation<Void, Never>?
+    }
+
+    /// The first attempt could not ask (Walnut was not open): the caller waiting
+    /// behind it asks. Once asked, no later caller asks again.
+    func testAWaiterAsksWhenTheAttemptBeforeItCouldNot() async {
+        let gate = PlacesOneAtATime()
+        let box = Box()
+        let first = Task { @MainActor in
+            await gate.run(stillWanted: { box.wanted }) {
+                box.attempts += 1
+                await withCheckedContinuation { box.release = $0 }
+            }
+        }
+        while box.release == nil { await Task.yield() }
+        let second = Task { @MainActor in
+            await gate.run(stillWanted: { box.wanted }) { box.attempts += 1; box.wanted = false }
+        }
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(box.attempts, 1, "the second waits while the first runs")
+        box.release?.resume()
+        await first.value
+        await second.value
+        XCTAssertEqual(box.attempts, 2)
+        await gate.run(stillWanted: { box.wanted }) { box.attempts += 1 }
+        XCTAssertEqual(box.attempts, 2)
+    }
+
+    /// The first attempt asked: the caller that waited behind it does not ask twice.
+    func testAWaiterDoesNotAskAgainAfterTheQuestionWasPut() async {
+        let gate = PlacesOneAtATime()
+        let box = Box()
+        let first = Task { @MainActor in
+            await gate.run(stillWanted: { box.wanted }) {
+                box.attempts += 1
+                box.wanted = false
+                await withCheckedContinuation { box.release = $0 }
+            }
+        }
+        while box.release == nil { await Task.yield() }
+        let second = Task { @MainActor in
+            await gate.run(stillWanted: { box.wanted }) { box.attempts += 1 }
+        }
+        for _ in 0..<5 { await Task.yield() }
+        box.release?.resume()
+        await first.value
+        await second.value
+        XCTAssertEqual(box.attempts, 1)
+    }
 }

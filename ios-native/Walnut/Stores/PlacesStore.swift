@@ -13,6 +13,8 @@ final class PlacesStore {
     private(set) var isEnabled = false
     private(set) var access: PlacesPhoneState.Access = .notDetermined
     private(set) var preciseOff = false
+    /// iOS can still ask the user itself, so the screen offers that before Settings.
+    private(set) var iosCanAsk = false
     /// The latest visits kept on this iPhone, newest first.
     private(set) var recent: [PlaceVisitRecord] = []
     private(set) var unsent = 0
@@ -41,6 +43,7 @@ final class PlacesStore {
         isEnabled = PlacesSettings.isEnabled
         access = PlacesRecorder.shared.access
         preciseOff = isEnabled && PlacesRecorder.shared.preciseOff
+        iosCanAsk = PlacesAccessDecision.iosCanAsk(access: access, askedAlways: PlacesSettings.askedAlways)
         let snapshot = PlacesQueueStore.shared.read()
         recent = Array(snapshot.visits.sorted { $0.lastMoment > $1.lastMoment }.prefix(10))
         unsent = snapshot.visits.filter(\.needsSend).count

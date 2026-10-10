@@ -31,8 +31,15 @@ enum PlacesAccessDecision {
         if let quiet = s.quietUntil, s.now < quiet { return .nothing }
         if !s.enabled { return .offerTurnOn }
         // The user turned Places on and iOS still has its question to ask.
-        if s.access == .notDetermined || (s.access == .whenInUse && !s.askedAlways) { return .askIOS }
+        if iosCanAsk(access: s.access, askedAlways: s.askedAlways) { return .askIOS }
         return .showAccessNote
+    }
+
+    /// iOS can still ask the user itself: it has no answer (never asked, or an
+    /// Allow Once ran out), or the answer is While Using and Walnut has not asked
+    /// for Always yet. Otherwise only Settings can change it.
+    static func iosCanAsk(access: PlacesPhoneState.Access, askedAlways: Bool) -> Bool {
+        access == .notDetermined || (access == .whenInUse && !askedAlways)
     }
 
     static let placesOps: Set<String> = ["places_status", "places_visits"]

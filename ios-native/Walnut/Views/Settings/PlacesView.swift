@@ -118,8 +118,23 @@ struct PlacesView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("places.accessNote")
-                Button("Open Settings") { PlacesRecorder.shared.openSettings() }
-                    .accessibilityIdentifier("places.openSettings")
+                if store.iosCanAsk {
+                    // iOS can still ask, so it asks here; Settings only once it can't.
+                    Button {
+                        Task { await store.turnOn() }
+                    } label: {
+                        HStack {
+                            Text(store.busy == .turningOn ? "Asking…" : "Allow Always")
+                            Spacer()
+                            if store.busy == .turningOn { ProgressView() }
+                        }
+                    }
+                    .disabled(store.busy != nil)
+                    .accessibilityIdentifier("places.askIOS")
+                } else {
+                    Button("Open Settings") { PlacesRecorder.shared.openSettings() }
+                        .accessibilityIdentifier("places.openSettings")
+                }
             } else if store.preciseOff {
                 Label("Precise Location is off for Walnut, so iOS may record fewer visits.", systemImage: "info.circle")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -201,6 +216,8 @@ struct PlacesView: View {
         switch store.access {
         case .restricted:
             return "Location is restricted on this iPhone, so iOS records no visits for Walnut."
+        case _ where store.iosCanAsk:
+            return "iOS records visits for Walnut only with location access set to Always. Tap Allow Always and iOS asks you."
         default:
             return "iOS records visits for Walnut only with location access set to Always. In Settings, tap Location, then Always."
         }
