@@ -207,8 +207,16 @@ that happened.
   the question. Then the evidence.
 - Plain lists, not tables: the user often reads on the phone.
 - Name the window and the work hours you used.
-- Round: minutes under an hour, hours with one decimal above. Say "about" for
-  inferred minutes.
+- Report time in hours with one decimal ("Ops 12.1 h", "0.4 h"), never as a
+  minute total: people do not think in hundreds of minutes. Say "about" for
+  inferred time.
+- Go one level below each bucket: the themes inside it with their top tasks and
+  hours; for chat apps, the channels, the kind of messages and how many
+  half-hours of the day they touched; for meetings, the recurring ones versus
+  the one-offs, each with hours; for the browser, the sites.
+- When the user keeps goals (a goals note), close with advice tied to them:
+  each item names the hours it would save and, where it helps, the free slots
+  on the calendar.
 - End with what needs the user: a decision, a question about a gap, a task to
   hand off. Keep it to the few that matter.
 
