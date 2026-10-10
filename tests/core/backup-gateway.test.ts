@@ -62,6 +62,19 @@ describe('backup gateway', () => {
     expect(h.answer()!.result.outcome).toContain('"Fix the build" on oldbox')
   })
 
+  it('a task\'s current session gets the message over a newer one, as on the server, unless it is stopped', async () => {
+    const withSlot = (sessionId: string) => harness({
+      findTask: async (ref) => (ref === 'mtaskbbb-0002' ? { id: 'mtaskbbb-0002', title: 'Fix the build', sessionId } : null),
+    })
+    const h = withSlot('bbbbbbbb-0000-4000-8000-000000000001')
+    await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb-0002', text: 'status?' } }))
+    expect(h.delivers[0].delivery.to).toBe('bbbbbbbb-0000-4000-8000-000000000001')
+    // A current session that is stopped: the newest live one.
+    const stopped = withSlot('bbbbbbbb-0000-4000-8000-000000000003')
+    await stopped.gw.handle('devbox', stopped.frame({ name: 'task_send', args: { to: 'mtaskbbb-0002', text: 'status?' } }))
+    expect(stopped.delivers[0].delivery.to).toBe('bbbbbbbb-0000-4000-8000-000000000002')
+  })
+
   it('answers every refusal back to the host with gateway-result, never silence', async () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ name: 'task_send', args: { to: 'mtaskdup', text: 'x' } }, 'ambiguous_peer'],

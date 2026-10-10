@@ -266,6 +266,8 @@ const far = (await tm.addTask({ title: 'Far task: release notes', project: 'Othe
 const st = await import(${src('src/core/session-tracker.ts')})
 await st.createSessionRecord(${JSON.stringify(A)}, lead.id, 'Acme', ${JSON.stringify(dev.dir)}, { host: 'devbox', title: 'Leader', initialProcessStatus: 'idle' })
 await st.createSessionRecord(${JSON.stringify(B)}, worker.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker', initialProcessStatus: 'idle' })
+// C is newer than B by a clear margin: only the task's current session (B) makes B the address.
+await new Promise((r) => setTimeout(r, 20))
 await st.createSessionRecord(${JSON.stringify(C)}, worker.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker, second try', initialProcessStatus: 'idle' })
 // B is the worker's session, as task_start links it: a message to the task goes to B, never to C.
 await tm.linkSession(worker.id, ${JSON.stringify(B)})

@@ -38,8 +38,8 @@ export interface BackupGatewayDeps {
   request: (host: string, cmd: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
   /** This box's sessions as the primary last pushed them. */
   sessions: () => Promise<Array<{ id: string; host: string; task_id?: string; title?: string; task_title?: string; process_status: string; last_active_at?: string }>>
-  /** A task of this box's replica by id or unique prefix. */
-  findTask: (ref: string) => Promise<{ id: string; title: string } | { ambiguous: number } | null>
+  /** A task of this box's replica by id or unique prefix, with its current session (`sessionId`). */
+  findTask: (ref: string) => Promise<{ id: string; title: string; sessionId?: string } | { ambiguous: number } | null>
   executeOp: (name: string, args: Record<string, unknown>, ctx: { callerSid: string; callerHost: string }) => Promise<{ ok: boolean; result?: unknown; message?: string }>
 }
 
@@ -107,17 +107,20 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     const all = await deps.sessions()
     let candidates = all.filter((s) => s.id === to || (to.length >= 8 && s.id.startsWith(to)))
     let targetTitle: string | undefined
+    let current: string | undefined
     if (candidates.length !== 1) {
       const task = await deps.findTask(to)
       if (task && 'ambiguous' in task) return { ok: false, code: 'ambiguous_peer', message: `"${to}" matches ${task.ambiguous} tasks` }
       if (!task) return { ok: false, code: 'unknown_peer', message: `no task or session "${to}"` }
       targetTitle = task.title
+      current = task.sessionId
       candidates = all.filter((s) => s.task_id === task.id)
     }
     const live = candidates
       .filter((s) => LIVE_STATUSES.has(s.process_status))
       .sort((a, b) => (b.last_active_at ?? '').localeCompare(a.last_active_at ?? ''))
-    const target = live[0]
+    // As the server picks (session-send-core.ts): the task's current session, else the newest.
+    const target = live.find((s) => s.id === current) ?? live[0]
     if (!target) return needsPrimary(`"${to}" has no running session; starting one`)
     if (target.id === callerSid) return { ok: false, code: 'self_send', message: 'target resolves to the calling session itself' }
     const caller = asRecord(frame.caller)
@@ -230,7 +233,8 @@ export async function handleBackupGatewayFrame(host: string, frame: GatewayReque
       const { getTask } = await import('../task-manager.js')
       try {
         const t = await getTask(ref)
-        return { id: t.id, title: t.title }
+        const sessionId = t.session_id || t.exec_session_id
+        return { id: t.id, title: t.title, ...(sessionId ? { sessionId } : {}) }
       } catch (err) {
         // getTask resolves a unique prefix and names an ambiguous one.
         const m = /matches (\d+) tasks/.exec(err instanceof Error ? err.message : '')
