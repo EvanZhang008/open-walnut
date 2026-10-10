@@ -3,11 +3,13 @@
  * real stores (2026-10-07, the shape of a review whose call ran past its slot):
  * a 15:15-16:00 meeting whose Zoom call ran to 16:44, with Chrome and Walnut in
  * front for part of it, leases whose 60 s tails ran on into Zoom, and the Mac idle
- * at the end.
+ * at the end. In the evening a cloud game ran in Chrome, whose WebRTC connection
+ * macOS logs like a call's.
  *
- * Two bugs this pins: the meeting stopped at its calendar end, so the 44 minutes of
+ * Three bugs this pins: the meeting stopped at its calendar end, so the 44 minutes of
  * overrun read as an ad-hoc call; and a lease's tail over Zoom counted as Walnut,
- * so the time on the call with nothing else on screen came out far too low.
+ * so the time on the call with nothing else on screen came out far too low; and
+ * the game's 102 minutes read as an ad-hoc call.
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -53,6 +55,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(tt, 'outside', 'calls', `${D}.jsonl`), [
     { t: 'cov', start: iso(at(0, 0)), end: iso(at(23, 59)), src: 'log' },
     { t: 'call', app: 'zoom.us', start: iso(at(15, 15)), end: iso(at(16, 44)), src: 'log' },
+    { t: 'call', app: 'Google Chrome', start: iso(at(22, 1)), end: iso(at(23, 43)), src: 'log' },
   ].map((l) => JSON.stringify(l)).join('\n') + '\n')
   await fs.writeFile(path.join(tt, 'outside', `${D}.jsonl`), [
     ...front(at(15, 15), at(15, 20), 'zoom.us', 'us.zoom.xos'),
@@ -62,6 +65,8 @@ beforeAll(async () => {
     ...front(at(16, 20), at(16, 30), 'Walnut', WALNUT_DESKTOP_BUNDLE_ID),
     ...front(at(16, 30), at(16, 41), 'zoom.us', 'us.zoom.xos'),
     // 16:41-16:44: the Mac idle, the call still on.
+    ...front(at(22, 1), at(22, 4), 'Google Chrome', 'com.google.Chrome', 'discord.com'),
+    ...front(at(22, 4), at(23, 43), 'Google Chrome', 'com.google.Chrome', 'play.geforcenow.com'),
   ].join('\n') + '\n')
   const clicks = [
     ...Array.from({ length: 12 }, (_, i) => at(15, 47 + i)), at(15, 59, 30), // the last tail runs 30 s into Zoom
@@ -90,6 +95,18 @@ describe('a meeting whose call ran past its slot, second by second', () => {
     // The rest is Zoom in front (36) and the idle Mac (3): 39.
     expect(review).toMatchObject({ otherWorkMin: 50, meetingMin: 39 })
     expect(d.summary).toMatchObject({ callMin: 89, adHocCallMin: 0, attendedMeetingMin: 89, meetingMin: 39 })
+  })
+
+  it('the evening game stream is not a call: the calls source names it, the site keeps the screen time', async () => {
+    const answer = await buildTimeline(D, D, {
+      workHours: DEFAULT_WORK_HOURS, workHoursSource: 'default', tz: systemTz(), nowMs: at(23, 59),
+      meetings: (range) => loadMeetingContext(range, calendar, []),
+    })
+    const d = answer.days[0]!
+    expect(d.summary).toMatchObject({ callMin: 89, adHocCallMin: 0 })
+    expect(answer.sources.find((s) => s.id === 'calls')?.note).toContain('play.geforcenow.com 102 min')
+    const evening = d.blocks.filter((b) => b.kind === 'screen' && Date.parse(b.start) >= at(22, 0))
+    expect(evening.reduce((s, b) => s + (b.top ?? []).filter((t) => t.label.startsWith('play.geforcenow.com')).reduce((x, t) => x + t.min, 0), 0)).toBeGreaterThanOrEqual(95)
   })
 
   it('a lease tail that ran on into Zoom is Zoom\'s, not Walnut\'s', async () => {

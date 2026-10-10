@@ -322,23 +322,28 @@ export function callAppLabel(app: string): string {
 
 async function callSegments(range: TimelineRange): Promise<TimelineSourceResult> {
   const { readCalls } = await import('../calls-store.js')
-  const { calls, coverage } = await readCalls(range.startMs, range.endMs)
+  const { calls, coverage, notCalls } = await readCalls(range.startMs, range.endMs)
   const segments: TimelineSegmentInput[] = calls.map((c) => ({
     start: c.startMs, end: c.endMs, kind: 'call', label: `${callAppLabel(c.app)} call`, confidence: 'measured', detail: { app: c.app },
   }))
+  // A browser connection that was not a call is the site's time, already on screen.
+  const left = notCalls.length
+    ? [`not calls, a browser WebRTC connection while another site was in front: ${notCalls.map((n) => `${n.host} ${Math.round((n.endMs - n.startMs) / 60_000)} min from ${new Date(n.startMs).toISOString()}`).join(', ')}`]
+    : []
+  const withLeft = (note?: string): string | undefined => [note, ...left].filter(Boolean).join('; ') || undefined
   if (coverage.length === 0) {
     return {
       segments,
       coverage: {
         available: segments.length > 0,
-        note: segments.length > 0
+        note: withLeft(segments.length > 0
           ? 'these calls were seen, but the stretch watched is unknown, so no call elsewhere proves nothing'
-          : 'calls are recorded on this Mac while outside activity is on; none were watched in this range',
+          : 'calls are recorded on this Mac while outside activity is on; none were watched in this range'),
       },
     }
   }
   const first = coverage[0]![0]
-  const note = first > range.startMs + 3_600_000 ? `calls were watched from ${new Date(first).toISOString()}` : undefined
+  const note = withLeft(first > range.startMs + 3_600_000 ? `calls were watched from ${new Date(first).toISOString()}` : undefined)
   return { segments, coverage: { available: true, ...(note ? { note } : {}) } }
 }
 

@@ -145,6 +145,12 @@ to that call; if they say these are their hours, save them with
   in `time.calls.apps`) held a call on this Mac, to the second, from macOS power
   assertions; also a browser or chat app holding a WebRTC call (labelled
   "… WebRTC call": it can also be a real-time web app that is not a call).
+  A browser connection is checked against that browser's tabs in front: with no
+  call site in front at any point (a video site, a web app), or with a cloud game
+  or remote desktop filling at least half of it, it is not a call. It stays out
+  of `callMin` and `adHocCallMin`, its time is that site's screen time, and the
+  `calls` source note names the site. A tab never read stays a call. A user's own
+  call sites go in `time.calls.sites`.
   Recorded while outside activity is on; the first run recovers the week macOS
   still keeps.
 - A call in progress is not attention to it. `callMin` overlaps screen time:

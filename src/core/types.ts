@@ -1340,6 +1340,8 @@ export interface Config {
       enabled?: boolean;
       /** More call apps, by process name as macOS shows it (`pmset -g assertions`). */
       apps?: string[];
+      /** More call sites (hosts, subdomains included) for calls in a browser tab. */
+      sites?: string[];
     };
     /** Meetings the time review leaves out of plan checks: title words or phrases, case-insensitive. */
     meetings?: {

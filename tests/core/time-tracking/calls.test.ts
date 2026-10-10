@@ -6,7 +6,8 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  callAppSet, callSessions, coveredMs, createLogFolder, isCallAssertion, mergeCalls, mergeSpans, parseAssertionsNow, uncovered,
+  callAppSet, callSessions, callSiteSet, coveredMs, createLogFolder, isCallAssertion, mergeCalls, mergeSpans, notACallHost,
+  parseAssertionsNow, uncovered,
   MAX_CALL_MS,
 } from '../../../src/core/time-tracking/calls.js'
 import {
@@ -123,6 +124,37 @@ describe('callSessions', () => {
     ])
     // mergeCalls welds them into one, which is right for "time on calls" and wrong for "which meeting".
     expect(mergeCalls(sessions).filter((c) => c.app === 'zoom.us')).toHaveLength(1)
+  })
+})
+
+describe('notACallHost', () => {
+  const SITES = callSiteSet()
+  const conn = { app: 'Google Chrome', startMs: 0, endMs: 100 * MIN }
+  const tab = (from: number, to: number, host?: string, app = 'Google Chrome') => ({ app, startMs: from * MIN, endMs: to * MIN, ...(host ? { host } : {}) })
+
+  it('a game stream in front for most of the connection is not a call, a chat tab glanced at notwithstanding', () => {
+    expect(notACallHost(conn, [tab(0, 3, 'discord.com'), tab(3, 98, 'play.geforcenow.com'), tab(98, 100, 'example.org')], SITES)).toBe('play.geforcenow.com')
+  })
+  it('a call joined from its page and then left for a doc is still a call', () => {
+    expect(notACallHost(conn, [tab(-1, 2, 'meet.google.com'), tab(2, 90, 'docs.example.org')], SITES)).toBeNull()
+  })
+  it('with no call site in front, the site seen most is what it was for, the Mac idle after it included', () => {
+    expect(notACallHost(conn, [tab(0, 60, 'board.example.org')], SITES)).toBe('board.example.org')
+    // A video site that streams peer to peer, its tab left playing while the Mac sat idle.
+    expect(notACallHost(conn, [tab(-2, 1, 'video.example.org'), tab(1, 2, 'other.example.org')], SITES)).toBe('video.example.org')
+  })
+  it('a call site in front, an unreadable tab, another browser, or a real-time site under half: a call', () => {
+    expect(notACallHost(conn, [tab(0, 100, 'app.zoom.us')], SITES)).toBeNull()
+    expect(notACallHost(conn, [tab(0, 100)], SITES)).toBeNull()
+    expect(notACallHost(conn, [tab(0, 100, 'play.geforcenow.com', 'Safari')], SITES)).toBeNull()
+    expect(notACallHost(conn, [tab(-1, 1, 'meet.google.com'), tab(1, 49, 'play.geforcenow.com')], SITES)).toBeNull()
+    // Samples from before the lead are not this connection's.
+    expect(notACallHost(conn, [tab(-10, -3, 'video.example.org')], SITES)).toBeNull()
+  })
+  it('a user\'s own call site counts, subdomains included', () => {
+    const own = callSiteSet(['*.meet.example.org', 42])
+    expect(notACallHost(conn, [tab(0, 100, 'room1.meet.example.org')], SITES)).toBe('room1.meet.example.org')
+    expect(notACallHost(conn, [tab(0, 100, 'room1.meet.example.org')], own)).toBeNull()
   })
 })
 

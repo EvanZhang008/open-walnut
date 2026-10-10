@@ -12,7 +12,9 @@
  * leaves out.
  *
  * What it cannot know: that the user was listening. A call app holding a call is
- * a call in progress on this Mac, not attention to it.
+ * a call in progress on this Mac, not attention to it. A browser's WebRTC
+ * connection is checked against the tab in front (notACallHost): a game stream
+ * holds one too.
  */
 
 /** Process names (as macOS reports them) that count as call apps out of the box. */
@@ -197,6 +199,74 @@ export function callSessions(calls: readonly CallInterval[]): CallInterval[] {
     else out.push(c)
   }
   return out.sort((a, b) => a.startMs - b.startMs)
+}
+
+/** Public meeting and call sites. A user's own go in `time.calls.sites`. */
+export const DEFAULT_CALL_SITES: readonly string[] = [
+  'meet.google.com', 'zoom.us', 'zoom.com', 'teams.microsoft.com', 'teams.live.com', 'teams.cloud.microsoft',
+  'webex.com', 'whereby.com', 'meet.jit.si', '8x8.vc', 'discord.com', 'app.slack.com', 'facetime.apple.com',
+  'gather.town', 'web.skype.com', 'messenger.com', 'web.whatsapp.com', 'gotomeeting.com', 'goto.com',
+]
+/** Sites that hold a peer connection for as long as they are used and are never a call: cloud gaming, remote desktops. */
+const REALTIME_SITES: readonly string[] = ['geforcenow.com', 'xbox.com', 'boosteroid.com', 'remotedesktop.google.com', 'shadow.tech']
+const REALTIME_SITE_SET = new Set(REALTIME_SITES)
+/** A call site in front this long before the connection opened is the user joining it. */
+const CALL_SITE_LEAD_MS = 120_000
+/** A real-time site in front this share of the connection is what it was for, a call site glanced at notwithstanding. */
+const NOT_A_CALL_SHARE = 0.5
+
+/** Normalise the user's extra call sites (config time.calls.sites) onto the defaults. */
+export function callSiteSet(extra?: readonly unknown[]): Set<string> {
+  const out = new Set(DEFAULT_CALL_SITES)
+  for (const s of extra ?? []) if (typeof s === 'string' && s.trim() && s.length <= 120) out.add(s.trim().toLowerCase().replace(/^\*?\./, ''))
+  return out
+}
+
+function onSite(host: string, sites: ReadonlySet<string>): boolean {
+  for (let h = host; h; h = h.slice(h.indexOf('.') + 1)) {
+    if (sites.has(h)) return true
+    if (!h.includes('.')) break
+  }
+  return false
+}
+
+/** A stretch one app was frontmost (a foreground sample), with the browser tab's host when one was read. */
+export interface FrontSample { app: string; startMs: number; endMs: number; host?: string }
+
+/**
+ * Was this WebRTC connection a call? A browser holds a peer connection for any
+ * real-time page: a cloud game for the whole session (2026-10-07: 103 minutes of
+ * a game stream read as an ad-hoc call), a video site that streams peer to peer
+ * while the Mac sits idle. Answers the host the connection was for when it was
+ * not a call, otherwise null. Only the same browser's tabs count, from just
+ * before the connection opened to its end.
+ *
+ * A call is joined from its page, which is often left for a doc later: so a call
+ * site in front at any point keeps it a call, unless a known real-time site filled
+ * at least half of the connection (a game stream with a chat tab glanced at). With
+ * no call site in front, the site seen most is what the connection was for. A tab
+ * that was never read stays a call: nothing else explains the connection.
+ */
+export function notACallHost(c: CallInterval, front: readonly FrontSample[], sites: ReadonlySet<string>): string | null {
+  const app = c.app.toLowerCase()
+  const seen = new Map<string, number>()
+  const inside = new Map<string, number>()
+  let callSiteSeen = false
+  for (const f of front) {
+    const from = c.startMs - CALL_SITE_LEAD_MS
+    if (!f.host || f.app.toLowerCase() !== app || f.endMs <= from || f.startMs >= c.endMs) continue
+    const host = f.host.toLowerCase()
+    if (onSite(host, sites)) callSiteSeen = true
+    seen.set(host, (seen.get(host) ?? 0) + Math.min(f.endMs, c.endMs) - Math.max(f.startMs, from))
+    const ms = Math.min(f.endMs, c.endMs) - Math.max(f.startMs, c.startMs)
+    if (ms > 0) inside.set(host, (inside.get(host) ?? 0) + ms)
+  }
+  let top: string | null = null
+  for (const [host, ms] of seen) if (top === null || ms > seen.get(top)!) top = host
+  if (top === null || onSite(top, sites)) return null
+  if (!callSiteSeen) return top
+  const realtime = (inside.get(top) ?? 0) >= (c.endMs - c.startMs) * NOT_A_CALL_SHARE && onSite(top, REALTIME_SITE_SET)
+  return realtime ? top : null
 }
 
 /** Union of spans, joining pieces closer than `joinMs`. */

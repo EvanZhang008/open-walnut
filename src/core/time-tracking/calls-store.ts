@@ -20,7 +20,11 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { callSessions, mergeCalls, mergeSpans, COVERAGE_JOIN_MS, type CallInterval, type Span } from './calls.js'
+import {
+  callAppSet, callSessions, callSiteSet, mergeCalls, mergeSpans, notACallHost, COVERAGE_JOIN_MS,
+  type CallInterval, type FrontSample, type Span,
+} from './calls.js'
+import { outsideDayRecords } from './outside-store.js'
 import { localDateKey, shiftDateKey } from './rollup.js'
 
 export type CallSource = 'live' | 'log'
@@ -113,6 +117,8 @@ export interface CallsRead {
   calls: CallInterval[]
   /** One per call, never joined to the next (callSessions): which meeting a call was. */
   sessions: CallInterval[]
+  /** WebRTC connections that were not calls, with the site in front (notACallHost). Left out of the two above. */
+  notCalls: Array<CallInterval & { host: string }>
   /** Merged stretches this Mac was watching for calls. */
   coverage: Array<[number, number]>
 }
@@ -129,24 +135,84 @@ function parseLine(line: string, calls: CallInterval[], cov: Span[]): void {
 }
 
 /** Calls and coverage that touch [fromMs, toMs). The day files from the day before `fromMs` on are read. */
-export function readCalls(fromMs: number, toMs: number): Promise<CallsRead> {
-  return chained(async () => {
+export async function readCalls(fromMs: number, toMs: number): Promise<CallsRead> {
+  const { calls, cov } = await chained(async () => {
     const calls: CallInterval[] = []
     const cov: Span[] = []
     const last = localDateKey(new Date(toMs))
     for (let d = shiftDateKey(localDateKey(new Date(fromMs)), -1), guard = 0; d <= last && guard < 120; d = shiftDateKey(d, 1), guard++) {
       for (const line of (await readText(dayFile(d))).split('\n')) parseLine(line, calls, cov)
     }
-    const touches = (a: number, b: number): boolean => b > fromMs && a < toMs
-    return {
-      calls: mergeCalls(calls).filter((c) => touches(c.startMs, c.endMs)),
-      sessions: callSessions(calls).filter((c) => touches(c.startMs, c.endMs)),
-      coverage: mergeSpans(cov, COVERAGE_JOIN_MS).filter(([a, b]) => touches(a, b)),
-    }
+    return { calls, cov }
   })
+  const touches = (c: CallInterval): boolean => c.endMs > fromMs && c.startMs < toMs
+  const { kept, notCalls } = await settleWebCalls(callSessions(calls), touches)
+  return {
+    calls: mergeCalls(kept).filter(touches),
+    sessions: kept.filter(touches),
+    notCalls: notCalls.filter(touches),
+    coverage: mergeSpans(cov, COVERAGE_JOIN_MS).filter(([a, b]) => b > fromMs && a < toMs),
+  }
+}
+
+/** Verdicts on connections that ended a while ago, so a polled timeline reads each day once. */
+const verdicts = new Map<string, string | null>()
+const MAX_VERDICTS = 2_000
+/** Foreground samples land within seconds; a connection this long over is settled. */
+const SETTLED_MS = 5 * 60_000
+
+/**
+ * Split off the WebRTC connections (any process that is not a call app) that were
+ * not calls, judged against the foreground samples of their days. Only those
+ * connections cost a read; a day of call-app calls reads nothing more.
+ */
+async function settleWebCalls(sessions: CallInterval[], touches: (c: CallInterval) => boolean): Promise<{ kept: CallInterval[]; notCalls: Array<CallInterval & { host: string }> }> {
+  let apps = callAppSet()
+  let sites = callSiteSet()
+  const web = sessions.filter((c) => touches(c) && !apps.has(c.app.toLowerCase()))
+  if (web.length === 0) return { kept: sessions, notCalls: [] }
+  try {
+    const { getConfig } = await import('../config-manager.js')
+    const calls = (await getConfig()).time?.calls
+    apps = callAppSet(calls?.apps)
+    sites = callSiteSet(calls?.sites)
+  } catch { /* the defaults */ }
+  const front = new Map<string, FrontSample[]>()
+  const samples = async (date: string): Promise<FrontSample[]> => {
+    let got = front.get(date)
+    if (!got) {
+      got = []
+      for (const r of await outsideDayRecords(date).catch(() => [])) {
+        // A compacted day keeps bucket totals stamped at UTC midnight: no time of day.
+        const a = Date.parse(r.ts)
+        if (r.ts === `${date}T00:00:00.000Z` || !Number.isFinite(a)) continue
+        got.push({ app: r.app, startMs: a, endMs: a + r.durationMs, ...(r.host ? { host: r.host } : {}) })
+      }
+      front.set(date, got)
+    }
+    return got
+  }
+  const sitesKey = [...sites].sort().join(',')
+  const notCalls: Array<CallInterval & { host: string }> = []
+  for (const c of web) {
+    if (apps.has(c.app.toLowerCase())) continue
+    const key = `${sitesKey}|${c.app}|${c.startMs}|${c.endMs}`
+    let host = verdicts.get(key)
+    if (host === undefined) {
+      const dates = new Set([localDateKey(new Date(c.startMs - 120_000)), localDateKey(new Date(c.startMs)), localDateKey(new Date(c.endMs))])
+      host = notACallHost(c, (await Promise.all([...dates].map(samples))).flat(), sites)
+      if (c.endMs < Date.now() - SETTLED_MS) {
+        if (verdicts.size >= MAX_VERDICTS) verdicts.clear()
+        verdicts.set(key, host)
+      }
+    }
+    if (host) notCalls.push({ ...c, host })
+  }
+  return { kept: notCalls.length ? sessions.filter((c) => !notCalls.some((n) => n.app === c.app && n.startMs === c.startMs)) : sessions, notCalls }
 }
 
 /** Tests: forget the write chain (a test that swaps WALNUT_HOME starts clean). */
 export function resetCallsStore(): void {
   tail = Promise.resolve()
+  verdicts.clear()
 }

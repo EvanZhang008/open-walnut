@@ -73,6 +73,33 @@ describe('calls store', () => {
     expect(read.calls).toEqual([{ app: 'FaceTime', startMs: a, endMs: b }])
   })
 
+  it('a browser connection while a game stream was in front is read as not a call; a call app\'s call stays', async () => {
+    const at = (h: number, m: number): number => new Date(2026, 9, 7, h, m).getTime()
+    await appendCallLines([
+      { startMs: at(15, 15), line: callLine({ app: 'zoom.us', startMs: at(15, 15), endMs: at(16, 44) }, 'log') },
+      { startMs: at(22, 1), line: callLine({ app: 'Google Chrome', startMs: at(22, 1), endMs: at(23, 43) }, 'log') },
+    ])
+    const outside = path.join(WALNUT_HOME, 'time-tracking', 'outside', '2026-10-07.jsonl')
+    const rows: string[] = []
+    for (let t = at(22, 1); t < at(23, 43); t += 60_000) {
+      const host = t < at(22, 4) ? 'discord.com' : 'play.geforcenow.com'
+      rows.push(JSON.stringify({ date: '2026-10-07', ts: new Date(t).toISOString(), durationMs: 60_000, app: 'Google Chrome', bundleId: 'com.google.Chrome', host }))
+    }
+    await fs.writeFile(outside, rows.join('\n') + '\n')
+    const read = await readCalls(new Date(2026, 9, 7).getTime(), new Date(2026, 9, 8).getTime())
+    expect(read.calls).toEqual([{ app: 'zoom.us', startMs: at(15, 15), endMs: at(16, 44) }])
+    expect(read.sessions).toEqual(read.calls)
+    expect(read.notCalls).toEqual([{ app: 'Google Chrome', startMs: at(22, 1), endMs: at(23, 43), host: 'play.geforcenow.com' }])
+  })
+
+  it('a browser connection with no foreground record stays a call', async () => {
+    const a = new Date(2026, 9, 8, 9, 0).getTime()
+    await appendCallLines([{ startMs: a, line: callLine({ app: 'Google Chrome', startMs: a, endMs: a + 30 * MIN }, 'live') }])
+    const read = await readCalls(new Date(2026, 9, 8).getTime(), new Date(2026, 9, 9).getTime())
+    expect(read.calls).toHaveLength(1)
+    expect(read.notCalls).toEqual([])
+  })
+
   it('a torn or foreign line is skipped, never fatal', async () => {
     const dir = path.join(WALNUT_HOME, 'time-tracking', 'outside', 'calls')
     await fs.mkdir(dir, { recursive: true })
