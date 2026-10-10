@@ -197,6 +197,17 @@ describe('leader protocol: both twins', () => {
       expect(fnBody(src, 'streamTarget')).toMatch(/origin === 'lane'/)
       expect(fnBody(src, 'streamTarget')).toMatch(/a lane opens streams to the follower only/)
       expect(fnBody(src, 'primaryClientFor')).toMatch(/origin === 'lane' && [\w.?]*laneHome === home && \([\w.?]*missedBeats( \?\? 0| \|\| 0)\) < 2\) return/)
+      // A lane that just closed is coming back: the follower's stream to the primary waits for it
+      // (LANE_HOLD_MS), is opened on it when it is back, and only then takes the session link.
+      expect(src).toMatch(/LANE_BACK_MS = 30_?000/)
+      expect(src).toMatch(/LANE_HOLD_MS = 3_?000/)
+      const open = fnBody(src, 'cmdStreamOpen')
+      expect(open).toMatch(/origin === 'follower' && cmd\.to === 'primary'/)
+      expect(open).toMatch(/!liveLaneFor\(home\) && Date\.now\(\) - \(laneClosedAt\.get\(home\) (\?\?|\|\|) 0\) < LANE_BACK_MS/)
+      expect(open).toMatch(/releaseLaneOpens\(home, entry\)/)
+      expect(fnBody(src, 'cmdStreamLane')).toMatch(/releaseLaneOpens\(home\)/)
+      expect(fnBody(src, 'releaseLaneOpens')).toMatch(/if \(wsClients\.has\(e\.ws\)\) openStreamNow\(e\.ws, e\.cmd\)/)
+      expect(src).toMatch(/origin === 'lane' && [\w.?]*laneHome\) laneClosedAt\.set\([\w.?]*laneHome, Date\.now\(\)\)/)
     })
   }
 

@@ -227,17 +227,24 @@ capability `stream-lane-v1`), and the streams ride it:
 
 - It is its own SSH connection (`ControlMaster=no`, `ControlPath=none`, ahead of
   anything a config file says), so a lane that dies takes nothing else with it.
-  It dials again with a growing wait (5 s to 5 min). Its remote command reads
-  stdin, so it ends with the server that holds it, also one that crashed.
+  Its remote command reads stdin, so it ends with the server that holds it,
+  also one that crashed.
+- A lane that was up dials again at once (a bulk stream on that network ends
+  its connection every 15 MB or so, measured); a dial that fails waits longer
+  each time (5 s to 5 min). A stream waits for a lane that is coming back
+  rather than take the session link: the Mac's for up to 10 s, a host
+  server's for up to 3 s in the daemon (its lane closed less than 30 s ago).
 - On it, the Mac sends `stream.lane {home, walnutId}` (the Walnut its
   `leader.configure` described). The daemon then lets that socket send only
   hello, ping and stream frames (`lane_refused` otherwise), sends it no
   broadcast, never takes it for the primary, lets it open streams to its
   follower only, and offers a follower's stream to the primary to the lane
   first while it answers its beats.
-- It is optional. With an old daemon, a login that needs a fresh sign-in (an
-  expired certificate: the master still serves, a new connection does not), or
-  a lane that is dialing again, streams ride the session link as before.
+- It is optional. With an old daemon, or a login that needs a fresh sign-in
+  (an expired certificate: the master still serves, a new connection does
+  not), streams ride the session link as before. A stream that was on a lane
+  when it dropped ends with it: the request it carried fails (a copy round is
+  tried again on its next round, a browser shows the error).
 
 ## What stays out of the open source tree
 

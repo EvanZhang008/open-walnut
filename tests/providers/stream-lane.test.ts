@@ -147,6 +147,43 @@ describe('StreamLane', () => {
     expect(d.frames.filter((f) => f.cmd === 'stream.lane' && d.sockets.has(f.sock))).toEqual([])
   })
 
+  it('a stream waits for it: up now, back after a drop, never after a dial that failed or a stop', async () => {
+    const d = await fakeDaemon(); daemons.push(d)
+    const { forward, state } = killableForward(() => d.port)
+    const l = lane(d, forward)
+    // Not started: no lane to wait for. Started, before its first dial is through: a caller waits.
+    expect(await l.waitReady(5_000)).toBe(false)
+    l.start()
+    expect(l.ready).toBe(false)
+    expect(await l.waitReady(5_000)).toBe(true)
+    expect(await l.waitReady(0)).toBe(true)
+    // A drop: it dials again at once (no backoff for a lane that worked), and the wait sees it back.
+    const t0 = Date.now()
+    state.kill!()
+    expect(l.ready).toBe(false)
+    expect(await l.waitReady(5_000)).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(state.opened).toBe(2)
+    // A dial that fails: nobody waits for it.
+    d.refuse = true
+    state.kill!()
+    await waitFor(() => d.frames.filter((f) => f.cmd === 'stream.lane').length >= 3, 5_000, 'the refused dial')
+    await sleep(50)
+    const t1 = Date.now()
+    expect(await l.waitReady(5_000)).toBe(false)
+    expect(Date.now() - t1).toBeLessThan(100)
+    // Back once a dial comes up again.
+    d.refuse = false
+    expect(await l.waitReady(5_000)).toBe(false)
+    await waitFor(() => l.ready, 5_000, 'the lane again')
+    // A waiter is told when the lane stops.
+    state.kill!()
+    const waiting = l.waitReady(5_000)
+    l.stop()
+    expect(await waiting).toBe(false)
+    expect(await l.waitReady(5_000)).toBe(false)
+  })
+
   it('a daemon that stops answering its beats is dropped', async () => {
     const d = await fakeDaemon({ autoPong: false }); daemons.push(d)
     const { forward, state } = killableForward(() => d.port)
@@ -208,6 +245,17 @@ describe('DaemonConnection with a stream lane', () => {
     expect(conn.streamLaneUp).toBe(false)
     await expect(conn.openStream('follower')).rejects.toThrow('mock: nobody there')
     expect(daemon.getCommandHistoryFor('stream.open').map((c) => c.connIndex)).toEqual([0, 2, 0])
+  })
+
+  it('a stream waits for a lane that is dialing again, not the session socket', async () => {
+    await setUp()
+    conn.keepStreamLane(true)
+    await waitFor(() => conn.streamLaneUp, 5_000, 'the lane')
+    // The lane is socket 2; it drops, and a stream asked for meanwhile goes on the next one.
+    expect(daemon.killClient(2)).toBe(true)
+    await waitFor(() => !conn.streamLaneUp, 5_000, 'the lane down')
+    await expect(conn.openStream('follower')).rejects.toThrow('mock: nobody there')
+    expect(daemon.getCommandHistoryFor('stream.open').map((c) => c.connIndex)).toEqual([3])
   })
 
   it('goes down with the session link', async () => {

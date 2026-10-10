@@ -2979,9 +2979,54 @@ function cmdStreamLane(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   if (ws.data) { ws.data.origin = 'lane'; ws.data.laneHome = home }
   logMsg('info', 'stream lane: the leader opened a lane for its streams', { wsId: wsId(ws), home })
   sendOk(ws, id, {})
+  // The follower's streams that waited for it.
+  releaseLaneOpens(home)
+}
+
+/**
+ * A Walnut whose lane closed a moment ago gets it back within seconds (the Mac
+ * dials it again at once), so a follower's stream to the primary waits for it
+ * a little rather than taking the session link, whose SSH connection a bulk
+ * stream can break. After LANE_HOLD_MS it goes the way it can.
+ */
+const LANE_BACK_MS = 30_000
+const LANE_HOLD_MS = 3_000
+const laneClosedAt = new Map<string, number>()
+const heldLaneOpens = new Map<string, Array<{ ws: ServerWebSocket<WsData>; cmd: Record<string, unknown>; timer: ReturnType<typeof setTimeout> }>>()
+
+function liveLaneFor(home: string): boolean {
+  for (const client of wsClients) {
+    if (client.data?.origin === 'lane' && client.data.laneHome === home && (client.data.missedBeats ?? 0) < 2) return true
+  }
+  return false
 }
 
 function cmdStreamOpen(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>) {
+  const home = ws.data?.origin === 'follower' && cmd.to === 'primary' ? ws.data.followerHome : undefined
+  if (home && followerSockets.get(home) === ws && !liveLaneFor(home) && Date.now() - (laneClosedAt.get(home) ?? 0) < LANE_BACK_MS) {
+    const held = heldLaneOpens.get(home) ?? []
+    const entry = { ws, cmd, timer: setTimeout(() => releaseLaneOpens(home, entry), LANE_HOLD_MS) }
+    held.push(entry)
+    heldLaneOpens.set(home, held)
+    return
+  }
+  openStreamNow(ws, cmd)
+}
+
+/** Open the held streams of `home` now (all of them, or the one whose wait ran out). */
+function releaseLaneOpens(home: string, only?: { ws: ServerWebSocket<WsData>; cmd: Record<string, unknown>; timer: ReturnType<typeof setTimeout> }) {
+  const held = heldLaneOpens.get(home) ?? []
+  const go = only ? held.filter((e) => e === only) : held
+  const rest = only ? held.filter((e) => e !== only) : []
+  if (rest.length) heldLaneOpens.set(home, rest)
+  else heldLaneOpens.delete(home)
+  for (const e of go) {
+    clearTimeout(e.timer)
+    if (wsClients.has(e.ws)) openStreamNow(e.ws, e.cmd)
+  }
+}
+
+function openStreamNow(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>) {
   const target = streamTarget(ws, cmd.to)
   const purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined
   if ('why' in target) return streamRelay.open(ws, cmd.sid, null, {}, target.why)
@@ -8695,6 +8740,7 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
   wsClients.delete(ws)
   acp.removeSubscriber(ws)
   streamRelay.dropLink(ws)
+  if (ws.data?.origin === 'lane' && ws.data.laneHome) laneClosedAt.set(ws.data.laneHome, Date.now())
   const followed = ws.data?.followerHome
   if (followed && followerSockets.get(followed) === ws) followerSockets.delete(followed)
   // Phone sends handed to it and not answered move to the next client now.

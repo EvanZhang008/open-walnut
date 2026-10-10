@@ -4,10 +4,12 @@
  * (lib/link-stream.ts). A copy of the search index or a page a browser loads
  * from the host server is megabytes; on a network that corrupts packets, one
  * bad MAC ends the SSH connection it rode. Here that is the lane's connection,
- * not the one every session on the host shares, and the lane dials again.
+ * not the one every session on the host shares, and the lane dials again at
+ * once. Streams wait for it while it does (waitReady, and the daemon holds a
+ * follower's open for a moment), so their bytes stay off the session link.
  *
- * Optional: while it is down (an old daemon, a login that needs a fresh
- * sign-in, a dial in progress), streams ride the session link as before.
+ * Optional: when it cannot come up (an old daemon, a login that needs a fresh
+ * sign-in), streams ride the session link as before.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -39,9 +41,11 @@ export interface StreamLaneOptions {
   forward: () => Promise<LaneForward>
   accept: StreamEndpointOptions['accept']
   beatMs?: number
-  /** First wait before a new dial; it doubles up to maxRetryMs. */
+  /** First wait before a new dial after one failed; it doubles up to maxRetryMs. */
   retryMs?: number
   maxRetryMs?: number
+  /** Wait before dialing again after a lane that was up dropped. */
+  redialMs?: number
 }
 
 const BEAT_MS = 15_000
@@ -49,8 +53,12 @@ const BEAT_MS = 15_000
 const MISSED_BEATS = 3
 const RETRY_MS = 5_000
 const MAX_RETRY_MS = 5 * 60_000
-/** A lane up this long starts the wait over at its first step. */
-const STEADY_MS = 60_000
+/**
+ * A lane that was up and dropped is dialed again at once: on a network that
+ * corrupts packets a bulk stream ends its connection every few megabytes, and
+ * the streams wait for the lane meanwhile (waitReady).
+ */
+const REDIAL_MS = 300
 
 export class StreamLane {
   private wanted = false
@@ -58,7 +66,6 @@ export class StreamLane {
   private ws: WebSocket | null = null
   private fwd: LaneForward | null = null
   private endpoint: StreamEndpoint | null = null
-  private upAt = 0
   private retryMs: number
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private beatTimer: ReturnType<typeof setInterval> | null = null
@@ -66,12 +73,35 @@ export class StreamLane {
   /** Bumped by every teardown, so a dial that finishes late installs nothing. */
   private gen = 0
   private _ready = false
+  /** The last dial did not come up: streams do not wait for this lane. */
+  private failing = false
+  private waiters: Array<(up: boolean) => void> = []
 
   constructor(private readonly opts: StreamLaneOptions) {
     this.retryMs = opts.retryMs ?? RETRY_MS
   }
 
   get ready(): boolean { return this._ready }
+
+  /**
+   * True once the lane is up, within `ms`. False at once when its last dial
+   * failed (a login that needs a fresh sign-in, say) or it is stopped: the
+   * caller then uses the session link.
+   */
+  waitReady(ms: number): Promise<boolean> {
+    if (this._ready) return Promise.resolve(true)
+    if (this.failing || !this.wanted) return Promise.resolve(false)
+    return new Promise((resolve) => {
+      const done = (up: boolean) => { clearTimeout(timer); this.waiters = this.waiters.filter((w) => w !== done); resolve(up) }
+      const timer = setTimeout(() => done(false), ms)
+      timer.unref?.()
+      this.waiters.push(done)
+    })
+  }
+
+  private settle(up: boolean): void {
+    for (const w of this.waiters.slice()) w(up)
+  }
 
   /** Keep the lane up (dialing again after a drop) until stop(). */
   start(): void {
@@ -84,6 +114,7 @@ export class StreamLane {
     this.wanted = false
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null }
     this.teardown('the lane was closed')
+    this.settle(false)
   }
 
   open(to: StreamPeer, purpose?: string): Promise<Duplex> {
@@ -160,10 +191,12 @@ export class StreamLane {
           if (lane.ok !== true) throw new Error(`the daemon refused it: ${String(lane.error ?? '')}`)
           if (gen !== this.gen || this.ws !== ws) return
           this._ready = true
-          this.upAt = Date.now()
-          this.heardAt = this.upAt
+          this.failing = false
+          this.retryMs = this.opts.retryMs ?? RETRY_MS
+          this.heardAt = Date.now()
           this.startBeat(ws)
           log.session.info('stream lane: up', { host: this.opts.hostKey, port })
+          this.settle(true)
           resolve()
         })().catch((err: Error) => {
           try { ws.terminate() } catch { /* gone */ }
@@ -201,12 +234,18 @@ export class StreamLane {
 
   private dropped(why: string): void {
     const wasUp = this._ready
-    const steady = wasUp && Date.now() - this.upAt >= STEADY_MS
     this.teardown(`the stream lane to ${this.opts.hostKey} closed`)
+    if (!wasUp) {
+      // A dial that did not come up: nobody waits for this lane until one does.
+      this.failing = true
+      this.settle(false)
+    }
     if (!this.wanted || this.retryTimer) return
-    if (steady) this.retryMs = this.opts.retryMs ?? RETRY_MS
-    const wait = this.retryMs
-    this.retryMs = Math.min(this.retryMs * 2, this.opts.maxRetryMs ?? MAX_RETRY_MS)
+    let wait = this.opts.redialMs ?? REDIAL_MS
+    if (!wasUp) {
+      wait = this.retryMs
+      this.retryMs = Math.min(this.retryMs * 2, this.opts.maxRetryMs ?? MAX_RETRY_MS)
+    }
     log.session.warn(wasUp ? 'stream lane: dropped, dialing again' : 'stream lane: dial failed, trying again', { host: this.opts.hostKey, why, waitMs: wait })
     this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.dial() }, wait)
     this.retryTimer.unref?.()

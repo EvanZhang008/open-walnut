@@ -369,7 +369,7 @@ describe('a host server, linked to its daemon only', () => {
     expect(JSON.parse((await get('/api/tasks')).body)).toMatchObject({ from: 'mac' })
   })
 
-  it('with a lane, the big bytes ride it, not the session link; a lane that drops costs the session link nothing', async () => {
+  it('with a lane, the big bytes ride it, not the session link; a lane that drops costs the session link nothing, and requests wait for it', async () => {
     // The lane's forward: a TCP hop to the daemon that can die, as an SSH connection does on a bad packet.
     let kill: () => void = () => {}
     let opened = 0
@@ -392,7 +392,7 @@ describe('a host server, linked to its daemon only', () => {
     const lane = new StreamLane({
       hostKey: 'devbox', home: HOME, walnutId: async () => WALNUT, daemonInstanceId: () => null, forward,
       accept: (info) => (info.from === 'follower' ? (st) => spliceStream(st, net.connect(macDoorPort, '127.0.0.1')) : null),
-      retryMs: 200, beatMs: 1_000,
+      beatMs: 1_000,
     })
     try {
       lane.start()
@@ -415,19 +415,22 @@ describe('a host server, linked to its daemon only', () => {
       expect(status).toBe(200)
       expect(mac!.streamFrames()).toBe(before)
 
-      // The lane's connection dies: the session link stays, and browsers go on over it.
+      // The lane's connection dies: the session link stays, the lane dials again at once, and a
+      // browser's request asked for meanwhile waits for it instead of taking the session link.
       kill()
       await waitFor(() => !lane.ready, 5_000, 'the lane down')
       expect(mac!.ws.readyState).toBe(WebSocket.OPEN)
       const r = await get('/api/tasks?after=lane')
       expect(JSON.parse(r.body)).toMatchObject({ from: 'mac', url: '/api/tasks?after=lane' })
-      expect(mac!.streamFrames()).toBeGreaterThan(before)
+      expect(opened).toBe(2)
+      expect(mac!.streamFrames()).toBe(before)
       expect(hostServer!.route().kind).toBe('leader')
-      // And it dials again.
-      await waitFor(() => lane.ready && opened === 2, 10_000, 'the lane again')
-      const again = mac!.streamFrames()
-      expect(JSON.parse((await get('/api/tasks?lane=2')).body)).toMatchObject({ from: 'mac' })
-      expect(mac!.streamFrames()).toBe(again)
+
+      // A lane that does not come back: after a short wait, browsers go on over the session link.
+      lane.stop()
+      const r2 = await get('/api/tasks?no=lane')
+      expect(JSON.parse(r2.body)).toMatchObject({ from: 'mac', url: '/api/tasks?no=lane' })
+      expect(mac!.streamFrames()).toBeGreaterThan(before)
     } finally {
       lane.stop()
     }

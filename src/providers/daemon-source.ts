@@ -4101,9 +4101,54 @@ function cmdStreamLane(ws, id, cmd) {
   ws.laneHome = home;
   logMsg('info', 'stream lane: the leader opened a lane for its streams', { home: home });
   sendOk(ws, id, {});
+  // The follower's streams that waited for it.
+  releaseLaneOpens(home);
+}
+
+// A Walnut whose lane closed a moment ago gets it back within seconds (the Mac
+// dials it again at once), so a follower's stream to the primary waits for it
+// a little rather than taking the session link, whose SSH connection a bulk
+// stream can break. After LANE_HOLD_MS it goes the way it can. Twin of
+// daemon-standalone.ts.
+var LANE_BACK_MS = 30000;
+var LANE_HOLD_MS = 3000;
+var laneClosedAt = new Map();
+var heldLaneOpens = new Map();
+
+function liveLaneFor(home) {
+  for (const client of wsClients) {
+    if (client.origin === 'lane' && client.laneHome === home && (client.missedBeats || 0) < 2) return true;
+  }
+  return false;
 }
 
 function cmdStreamOpen(ws, cmd) {
+  var home = ws.origin === 'follower' && cmd.to === 'primary' ? ws.followerHome : undefined;
+  if (home && followerSockets.get(home) === ws && !liveLaneFor(home) && Date.now() - (laneClosedAt.get(home) || 0) < LANE_BACK_MS) {
+    var held = heldLaneOpens.get(home) || [];
+    var entry = { ws: ws, cmd: cmd, timer: null };
+    entry.timer = setTimeout(function () { releaseLaneOpens(home, entry); }, LANE_HOLD_MS);
+    held.push(entry);
+    heldLaneOpens.set(home, held);
+    return;
+  }
+  openStreamNow(ws, cmd);
+}
+
+// Open the held streams of home now (all of them, or the one whose wait ran out).
+function releaseLaneOpens(home, only) {
+  var held = heldLaneOpens.get(home) || [];
+  var go = only ? held.filter(function (e) { return e === only; }) : held;
+  var rest = only ? held.filter(function (e) { return e !== only; }) : [];
+  if (rest.length) heldLaneOpens.set(home, rest);
+  else heldLaneOpens.delete(home);
+  for (const e of go) {
+    clearTimeout(e.timer);
+    if (wsClients.has(e.ws)) openStreamNow(e.ws, e.cmd);
+  }
+}
+
+function openStreamNow(ws, cmd) {
   var target = streamTarget(ws, cmd.to);
   var purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined;
   if (target.why) return streamRelay.open(ws, cmd.sid, null, {}, target.why);
@@ -11203,6 +11248,7 @@ async function startDaemon() {
       clearInterval(pingTimer);
       if (acp) acp.removeSubscriber(ws);
       streamRelay.dropLink(ws);
+      if (ws.origin === 'lane' && ws.laneHome) laneClosedAt.set(ws.laneHome, Date.now());
       if (ws.followerHome && followerSockets.get(ws.followerHome) === ws) followerSockets.delete(ws.followerHome);
 
       // Remove this ws from every session's subscribers. The watcher (file

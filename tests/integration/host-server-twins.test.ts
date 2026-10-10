@@ -24,6 +24,7 @@ import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
@@ -66,6 +67,8 @@ ws.on('message', (d) => {
   if (!m.ev) return
   // Streams: ours to the leader (o…), and the leader's to us (r…).
   if (m.ev === 'stream-accept' && m.sid === 'o1') ws.send(JSON.stringify({ cmd: 'stream.data', sid: 'o1', d: b64('hello leader') }))
+  else if (m.ev === 'stream-accept' && /^o1[0-9]$/.test(m.sid)) ws.send(JSON.stringify({ cmd: 'stream.data', sid: m.sid, d: b64('again ' + m.sid) }))
+  else if (m.ev === 'stream-data' && /^o1[0-9]$/.test(m.sid)) log({ ev: 'echo-again', sid: m.sid, text: text(m.d) })
   else if (m.ev === 'stream-data' && m.sid === 'o1') { log({ ev: 'echo', text: text(m.d) }); ws.send(JSON.stringify({ cmd: 'stream.ack', sid: 'o1', n: 1 })); ws.send(JSON.stringify({ cmd: 'stream.end', sid: 'o1' })) }
   else if (m.ev === 'stream-open') { log({ ev: 'incoming', from: m.from, home: m.home, purpose: m.purpose }); ws.send(JSON.stringify({ cmd: 'stream.accept', sid: m.sid })) }
   else if (m.ev === 'stream-data') log({ ev: 'from-leader', text: text(m.d) })
@@ -93,6 +96,13 @@ ws.on('open', async () => {
   const after = process.env.FAKE_OPEN_AFTER
   if (!after) openStreams()
   else { const t = setInterval(() => { if (fs.existsSync(after)) { clearInterval(t); openStreams() } }, 100) }
+  // And one more stream to the primary each time FAKE_OPEN_AFTER.<n> appears.
+  const again = new Set()
+  if (after) setInterval(() => {
+    for (let n = 1; n <= 5; n++) {
+      if (!again.has(n) && fs.existsSync(after + '.' + n)) { again.add(n); ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o1' + n, to: 'primary', purpose: 'web' })) }
+    }
+  }, 50)
   ws.send(JSON.stringify({ cmd: 'follower.report', report: { route: { kind: 'leader' }, pid: process.pid } }))
   // Chatty on purpose: none of this may count as the primary heard.
   setInterval(async () => { log({ ev: 'status', r: await call('follower.status', {}) }) }, 250)
@@ -360,10 +370,29 @@ for (const twin of ['source', 'standalone'] as const) {
 
       // The Mac's lane: its streams to the follower, the follower's to the Mac.
       const incoming: Array<{ from: string; purpose?: string }> = []
+      // The lane's forward: a hop to the daemon that can die, as its SSH connection does on a bad packet.
+      let kill: () => void = () => {}
+      let forwards = 0
+      const forward = async () => {
+        forwards++
+        const conns = new Set<net.Socket>()
+        const hop = net.createServer((c) => {
+          const u = net.connect(d.port, '127.0.0.1')
+          conns.add(c); conns.add(u)
+          c.pipe(u).pipe(c)
+          c.on('error', () => u.destroy()); u.on('error', () => c.destroy())
+          c.on('close', () => u.destroy()); u.on('close', () => c.destroy())
+        })
+        const port = await new Promise<number>((r) => hop.listen(0, '127.0.0.1', () => r((hop.address() as net.AddressInfo).port)))
+        let exit: ((why: string) => void) | null = null
+        const end = () => { for (const c of conns) c.destroy(); hop.close() }
+        kill = () => { end(); exit?.('Broken pipe') }
+        return { port, onExit: (cb: (why: string) => void) => { exit = cb }, stop: end }
+      }
       const lane = new StreamLane({
         hostKey: 'devbox', home: HOME, walnutId: async () => WALNUT,
         daemonInstanceId: () => null,
-        forward: async () => ({ port: d.port, onExit: () => {}, stop: () => {} }),
+        forward,
         accept: (info) => {
           incoming.push({ from: info.from, purpose: info.purpose })
           return (stream) => {
@@ -389,18 +418,37 @@ for (const twin of ['source', 'standalone'] as const) {
       // None of it rode the session link.
       expect(leaderSaw.filter((m) => String(m.ev).startsWith('stream-'))).toEqual([])
 
-      // The session link goes quiet: the lane, still answering, is not the primary heard.
+      // The lane's connection dies: the follower's next stream waits for the lane, which dials again at once.
+      kill()
+      await waitFor(() => !lane.ready, 5_000, 'the lane down')
+      await sleep(50)
+      fs.writeFileSync(`${go}.1`, '1')
+      await waitFor(() => events(out).some((e) => e.ev === 'echo-again' && e.sid === 'o11'), 10_000, 'the held stream on the new lane')
+      expect(events(out).find((e) => e.ev === 'echo-again' && e.sid === 'o11')!.text).toBe('echo:again o11')
+      expect(forwards).toBe(2)
+      expect(incoming).toEqual([{ from: 'follower', purpose: 'web' }, { from: 'follower', purpose: 'web' }])
+      expect(leaderSaw.filter((m) => String(m.ev).startsWith('stream-'))).toEqual([])
+      // Its stream to the follower ended with the old lane.
+      expect((await toFollowerError).message).toBe('the stream lane to devbox closed')
+
+      // A lane that does not come back: after a short wait the stream takes the session link.
+      lane.stop()
+      await sleep(50)
+      const asked = Date.now()
+      fs.writeFileSync(`${go}.2`, '1')
+      await waitFor(() => leaderSaw.some((m) => m.ev === 'stream-open' && m.from === 'follower'), 10_000, 'the stream on the session link')
+      expect(Date.now() - asked).toBeGreaterThanOrEqual(2_500)
+
+      // The session link goes quiet: a lane, still answering, is not the primary heard.
+      lane.start()
+      await waitFor(() => lane.ready, 10_000, 'the lane again')
       clearInterval(beat)
       leader.close()
       await sleep(T + 1_000)
       const last = events(out).filter((e) => e.ev === 'status').pop()!.r
       expect(last.primaryConnected).toBe(false)
-
-      // The lane ends: its stream ends at the follower.
       lane.stop()
-      await waitFor(() => events(out).some((e) => e.ev === 'stream-close' && e.error === 'the other server is no longer linked to this host'), 5_000, 'the stream to end with the lane')
       expect(lane.ready).toBe(false)
-      expect((await toFollowerError).message).toBe('the lane was closed')
 
       const leader2 = await connectWs(d.port)
       expect((await cmd(leader2, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)

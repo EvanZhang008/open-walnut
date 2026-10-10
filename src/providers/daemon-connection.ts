@@ -1867,11 +1867,16 @@ export class DaemonConnection {
    * A byte stream to the server on this host that follows this Walnut, through
    * its daemon (lib/link-stream.ts; the daemon's half is stream-relay-core.ts).
    */
-  openStream(to: 'follower', purpose?: string): Promise<Duplex> {
-    // On the lane while it is up: the bytes stay off the connection the sessions share.
-    if (this.lane?.ready) return this.lane.open(to, purpose)
+  async openStream(to: 'follower', purpose?: string): Promise<Duplex> {
+    // On the lane, waiting for it while it dials again: the bytes stay off the
+    // connection the sessions share. The session link only when it cannot come up.
+    const lane = this.lane
+    if (lane && await lane.waitReady(DaemonConnection.LANE_WAIT_MS)) return lane.open(to, purpose)
     return this.streamEndpoint().open(to, purpose ? { purpose } : {})
   }
+
+  /** How long a stream waits for the lane to come back before it takes the session link. */
+  private static LANE_WAIT_MS = 10_000
 
   /**
    * Keep a stream lane to this host's daemon (stream-lane.ts) while a server
