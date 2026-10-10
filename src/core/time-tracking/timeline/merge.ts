@@ -225,19 +225,22 @@ function planChecks(day: DayBounds, planned: readonly SourcedSegment[], pieces: 
     }
     const blockMs = ev.endMs - ev.startMs
     const title = ev.label
-    // Match the block to a task: a task id written in the title, else shared title words.
+    // Match the block to a task: a task id written in the title wins; else, of the tasks
+    // sharing enough title words, the one with the most time in the block (2026-10-10: a
+    // task sharing three words but 4 minutes beat the one sharing two with 62).
     let matched: PlanCheck['matched']
     const idInTitle = /\b([a-z0-9]{8}-[a-z0-9]{4})\b/.exec(title)?.[1]
     const evWords = tokens(title)
-    let bestScore = 0
+    let best: { rank: number; ms: number } | undefined
     for (const [taskId, t] of tasks) {
       if (!taskId) continue
-      const by: 'id' | 'title' | null = idInTitle && taskId === idInTitle ? 'id' : null
+      const by: 'id' | 'title' = idInTitle && taskId === idInTitle ? 'id' : 'title'
       const shared = [...tokens(t.title)].filter((w) => evWords.has(w)).length
-      const score = by ? 100 : shared >= Math.min(2, evWords.size) && shared > 0 ? shared : 0
-      if (score > bestScore) {
-        bestScore = score
-        matched = { taskId, title: t.title, minInBlock: minutes(t.ms), minThatDay: minutes(dayTaskMs.get(taskId) ?? t.ms), by: by ?? 'title' }
+      if (by === 'title' && !(shared > 0 && shared >= Math.min(2, evWords.size))) continue
+      const rank = by === 'id' ? 1 : 0
+      if (!best || rank > best.rank || (rank === best.rank && t.ms > best.ms)) {
+        best = { rank, ms: t.ms }
+        matched = { taskId, title: t.title, minInBlock: minutes(t.ms), minThatDay: minutes(dayTaskMs.get(taskId) ?? t.ms), by }
       }
     }
     const meetingApps = [...apps.entries()].filter(([app]) => MEETING_APP.test(app)).reduce((s, [, ms]) => s + ms, 0)

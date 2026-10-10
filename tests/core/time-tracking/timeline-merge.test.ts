@@ -109,11 +109,13 @@ describe('mergeDay', () => {
     const out = merge(MON, [
       seg('calendar', 'plan', '\u2605CIS Design 1 \u6536\u53e3: ship the commit', t(5, 11), t(5, 12)),
       walnut('t9', 'Feedback on CIS Design 1', t(5, 11), t(5, 11, 40)),
+      // Shares more words with the block, but had only 5 minutes in it.
+      walnut('t7', 'CIS Design 1 commit data', t(5, 11, 40), t(5, 11, 45)),
       seg('calendar', 'plan', '\u5199\u8bbe\u8ba1\u6587\u6863', t(5, 15), t(5, 16)),
       walnut('t8', '\u8bbe\u8ba1\u6587\u6863 draft', t(5, 15), t(5, 15, 50)),
     ])
     const [cis, cjk] = out.plan
-    expect(cis).toMatchObject({ verdict: 'kept', matched: { taskId: 't9', by: 'title' } })
+    expect(cis).toMatchObject({ verdict: 'kept', matched: { taskId: 't9', by: 'title', minInBlock: 40 } })
     expect(cjk).toMatchObject({ verdict: 'kept', matched: { taskId: 't8', by: 'title' } })
   })
 
