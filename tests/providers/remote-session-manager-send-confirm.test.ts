@@ -104,6 +104,24 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
     expect(sent[1].payload.dedupe).toBe(true)
   })
 
+  it('r5 F1: a resend written behind a cut copy of the line tells the caller (onCut) before it resolves', async () => {
+    const { conn, sent } = fakeConn([new Error('connection closed'), { ok: true, cut: true }])
+    const order: string[] = []
+    const run = manager(conn).writeMessage('hello', { uuid: 'u-1', markers, onCut: () => order.push('cut') })
+    await expect(run.then((ok) => { order.push('resolved'); return ok })).resolves.toBe(true)
+    expect(sent[1].payload.dedupe).toBe(true)
+    expect(order).toEqual(['cut', 'resolved'])
+  })
+
+  it('r5 F1: a plain ok, or a duplicate, never reports a cut', async () => {
+    for (const reply of [{ ok: true }, { ok: true, duplicate: true, fate: 'waiting' }]) {
+      const { conn } = fakeConn([new Error('connection closed'), reply])
+      const onCut = vi.fn()
+      await expect(manager(conn).writeMessage('hello', { uuid: 'u-1', markers, onCut })).resolves.toBe(true)
+      expect(onCut).not.toHaveBeenCalled()
+    }
+  })
+
   it('keeps asking through more silence, then gives up with SendOutcomeUnknownError, never false', async () => {
     RemoteSessionManager.SEND_CONFIRM_DEADLINE_MS = 1_500
     const { conn, sent } = fakeConn([timeout(), timeout(), timeout(), timeout()])

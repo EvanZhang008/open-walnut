@@ -132,6 +132,14 @@ export interface TransportStartResult {
   outputFile: string
   /** Current file size at start time (for resume offset tracking) */
   fileSize: number
+  /**
+   * The deferred first line (`markers` with send-markers-v1: written after the
+   * spawn) went in behind a cut copy of it (LineWriteOptions.onCut): no delivery
+   * yet, the CLI may exit on that copy without running the line.
+   */
+  cut?: boolean
+  /** The daemon wrote no first line: it knew what became of it (LineWriteOptions.onFate). */
+  fate?: { fate: string; state?: string }
 }
 
 // ── Attach Result ──
@@ -169,6 +177,14 @@ export interface LineWriteOptions {
   onHeld?: () => void
   /** True once the user stopped the session: stop asking about this line. */
   isStopped?: () => boolean
+  /**
+   * The daemon wrote the line, but an earlier write of it into the same process
+   * died inside the line (the daemon was killed mid write), so the pipe may hold
+   * a cut copy the CLI will exit on without running either. Called before the
+   * write resolves: the caller keeps the line until the CLI names it, and hands
+   * it to the next process when this one exits without a word on it.
+   */
+  onCut?: () => void
 }
 
 /**

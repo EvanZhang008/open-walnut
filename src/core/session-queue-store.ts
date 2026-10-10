@@ -186,6 +186,22 @@ export async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false, d
   return result;
 }
 
+/**
+ * A relayed message (the companion is waiting to tell the phone the Mac has it)
+ * could not be put on disk. Its enqueue writes strictly and throws this instead
+ * of keeping the row in memory only: told "taken", the companion would forget a
+ * message a Mac restart then loses. DaemonConnection answers it as errorKind
+ * `not_stored`, and the companion keeps the message and asks again (same id,
+ * so a write that did land is found and answered once).
+ */
+export class QueueNotStoredError extends Error {
+  readonly errorKind = 'not_stored';
+  constructor(cause: unknown) {
+    super(`the Mac could not store the message: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'QueueNotStoredError';
+  }
+}
+
 /** A fresh read of the queue file, bypassing the cache (no lock, no write). */
 export async function readQueueFileFresh(): Promise<QueueStore> {
   return normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));

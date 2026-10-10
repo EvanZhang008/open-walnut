@@ -54,6 +54,8 @@ const cliPids = new Set<number>()
  * such (Claude Code exits on one), and a blank line is skipped (as Claude Code does).
  * --count-blank still skips a blank line but records that it read one, so a test
  * can say how many lines the CLI read, not only which ones it ran.
+ * --read-after=<file> reads nothing from stdin until that file exists (a CLI still
+ * booting, whose full stdin takes not one byte).
  */
 const FAKE_CLI = `
 const fs = require('fs')
@@ -61,10 +63,11 @@ const [received, ...modes] = process.argv.slice(2)
 const mode = modes[0]
 const seen = new Set()
 let lose = modes.includes('--lose-first')
+const readAfter = (modes.find((m) => m.startsWith('--read-after=')) || '').slice('--read-after='.length)
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake' }) + '\\n')
 setTimeout(() => process.exit(0), 40000).unref()
 let buf = ''
-process.stdin.on('data', (chunk) => {
+const listen = () => process.stdin.on('data', (chunk) => {
   buf += chunk.toString()
   let i
   while ((i = buf.indexOf('\\n')) !== -1) {
@@ -88,6 +91,8 @@ process.stdin.on('data', (chunk) => {
     }
   }
 })
+if (!readAfter) listen()
+else { const t = setInterval(() => { if (fs.existsSync(readAfter)) { clearInterval(t); listen() } }, 50) }
 setInterval(() => {}, 1000)
 `
 
@@ -272,6 +277,59 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
       { pid: cli.pid, uuid, content: 'cut' },
     ])
   }, 60_000)
+
+  it('r5 F1: a write that stopped inside its body (begin noted, no record) is answered cut, never a plain ok', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const cli = await start(dirs, 'dd-begun', false)
+    const uuid = 'aaaaaaaa-0000-4000-8000-000000000009'
+    // What a daemon that went away inside its write leaves: the begin it noted before
+    // the first byte, and a piece of the body in the pipe (no marker, no record).
+    fs.appendFileSync(`${cli.outputFile}.lines`, JSON.stringify({ pid: cli.pid, uuid, begin: ['qm-begun'], at: Date.now() - 1000 }) + '\n')
+    const w = fs.openSync(path.join(dirs.streams, 'dd-begun.pipe'), fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    fs.writeSync(w, JSON.stringify({ type: 'user', message: { role: 'user', content: 'begun' }, uuid }).slice(0, 30))
+    fs.closeSync(w)
+    expect(body(await send('dd-begun', 'begun', uuid, ['qm-begun'], true))).toEqual({ ok: true, cut: true })
+    expect(await waitFor(() => received(dirs).length >= 2)).toBe(true)
+    await new Promise((r) => setTimeout(r, 300))
+    // The piece reads as one malformed line (the real CLI exits there); the copy is whole after it.
+    const got = received(dirs)
+    expect(got).toHaveLength(2)
+    expect(got[0]).toHaveProperty('parseError')
+    expect(got[1]).toEqual({ pid: cli.pid, uuid, content: 'begun' })
+    // This daemon noted its own begin before its first byte, and its whole write after the newline.
+    const notes = fs.readFileSync(`${cli.outputFile}.lines`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    expect(notes.slice(1)).toMatchObject([{ pid: cli.pid, uuid, begin: ['qm-begun'] }, { pid: cli.pid, uuid, ids: ['qm-begun'] }])
+  }, 60_000)
+
+  // The r5 gate's N4 (mutant mv07: the JS twin wrote `begin` where it should write
+  // `unbegun`, and every test passed). A write that put not one byte in must take its
+  // begin back in both twins, or the resend is told of a cut that never happened.
+  it('r5 N4: a write that put not one byte in (EAGAIN) takes its begin back; the resend is plain, never cut', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const go = path.join(root, 'cli-may-read')
+    const cli = await start(dirs, 'dd-eagain', [`--read-after=${go}`])
+    const uuid = 'aaaaaaaa-0000-4000-8000-00000000000e'
+    // The CLI is still booting: its stdin pipe is full, so not one byte of the line fits.
+    // Blank lines, which the CLI skips once it reads them.
+    const w = fs.openSync(fifoOf(dirs, 'dd-eagain'), fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+    const filler = Buffer.alloc(64 * 1024, 0x0a)
+    try { for (;;) { try { if (fs.writeSync(w, filler, 0, filler.length) === 0) break } catch { break } } } finally { fs.closeSync(w) }
+    const ask = (dedupe: boolean) => rpc({ cmd: 'send', sid: 'dd-eagain', message: 'late', uuid,
+      markers: [{ message: 'late', messageId: 'qm-eagain' }], ...(dedupe ? { dedupe: true } : {}) }, 45_000)
+    expect(body(await ask(false))).toEqual({ ok: false, reason: 'EAGAIN', retriable: true })
+    const notes = () => fs.readFileSync(`${cli.outputFile}.lines`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    expect(notes()).toMatchObject([{ pid: cli.pid, uuid, begin: ['qm-eagain'] }, { pid: cli.pid, uuid, unbegun: ['qm-eagain'] }])
+    // The CLI boots and drains its stdin; the server's retry asks first.
+    fs.writeFileSync(go, '')
+    expect(body(await ask(true))).toEqual({ ok: true })
+    expect(await waitFor(() => received(dirs).length >= 1)).toBe(true)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(received(dirs)).toEqual([{ pid: cli.pid, uuid, content: 'late' }])
+    expect(notes().map((n) => Object.keys(n).find((k) => ['begin', 'unbegun', 'ids'].includes(k))))
+      .toEqual(['begin', 'unbegun', 'begin', 'ids'])
+  }, 90_000)
 
   it('the CLI\'s lifecycle word and the write record settle a resend, also after a daemon restart', async () => {
     const dirs = makeDirs()

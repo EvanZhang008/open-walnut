@@ -164,6 +164,26 @@ describe('model-options hostNote, per host class', () => {
     expect(res.body).not.toHaveProperty('hostNote')
     expect(res.body.currentEffort).toBe('high')
   })
+
+  // The r4d gate's mu08: nothing pinned that the model the CLI reports wins over
+  // the one the record holds (the case above checks only the effort).
+  it('the model the CLI is running wins over the record\'s; the record answers only when the CLI names none', async () => {
+    connected.add('devbox')
+    const record = (sid: string) => createSessionRecord(sid, `task-${sid}`, 'proj', '/tmp', {
+      host: 'devbox', initialProcessStatus: 'idle', cliModel: 'opus',
+    } as Parameters<typeof createSessionRecord>[4])
+    attach.mockResolvedValue(answeringCli() as never)
+    await record('note-live-model')
+    const live = await options('note-live-model')
+    expect(live.status, live.text).toBe(200)
+    expect(String(live.body.current)).toMatch(/sonnet/i)
+    // Control: a CLI that reports no model leaves the record's pick in place.
+    attach.mockResolvedValue({ ...answeringCli(), getSettingsSnapshot: vi.fn(async () => ({ applied: { effort: 'high' } })) } as never)
+    await record('note-record-model')
+    const fallback = await options('note-record-model')
+    expect(fallback.status, fallback.text).toBe(200)
+    expect(String(fallback.body.current)).toMatch(/opus/i)
+  })
 })
 
 describe('a pick for a CLI whose host cannot be asked', () => {

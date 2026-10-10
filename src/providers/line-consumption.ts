@@ -140,27 +140,37 @@ export function untakenLines(sessionId: string | null | undefined, pid?: number 
   return out
 }
 
-// ── Rows the user was told were not confirmed ──
+// ── What the user was told about a row's delivery ──
 //
-// When the CLI later reports taking such a row, the user is told it was
-// delivered after all (the failed bubble would otherwise invite a Retry).
+// A row is reported delivered once: at the first proof that a CLI has its line,
+// whichever comes first (the write's plain answer, the daemon's word that the
+// line ran, or the CLI naming it started or completed). A later proof for the
+// same row says nothing. Once the user is told the row failed or is unconfirmed
+// (markUnconfirmed), the next proof reports it delivered again (the failed bubble
+// would otherwise invite a Retry of a message that ran).
 
-const unconfirmed = new Map<string, Set<string>>()
+const told = new Map<string, Set<string>>()
 
+/** The user was told these rows are not delivered (failed, unconfirmed, parked): the next proof reports them. */
 export function markUnconfirmed(sessionId: string, rowIds: string[]): void {
-  if (!sessionId || rowIds.length === 0) return
-  let ids = unconfirmed.get(sessionId)
-  if (!ids) { ids = new Set(); unconfirmed.set(sessionId, ids) }
-  for (const id of rowIds) ids.add(id)
-  while (ids.size > MAX_SEEN) ids.delete(ids.values().next().value!)
+  const ids = sessionId ? told.get(sessionId) : undefined
+  if (!ids) return
+  for (const id of rowIds) ids.delete(id)
+  if (ids.size === 0) told.delete(sessionId)
 }
 
-/** Of these rows, the ones the user was told were unconfirmed (cleared). */
-export function takeUnconfirmed(sessionId: string, rowIds: string[]): string[] {
-  const ids = unconfirmed.get(sessionId)
-  if (!ids) return []
-  const out = rowIds.filter((id) => ids.delete(id))
-  if (ids.size === 0) unconfirmed.delete(sessionId)
+/** Of these rows, the ones not yet reported delivered. From now on they count as reported. */
+export function takeUntold(sessionId: string, rowIds: string[]): string[] {
+  if (!sessionId || rowIds.length === 0) return []
+  let ids = told.get(sessionId)
+  if (!ids) { ids = new Set(); told.set(sessionId, ids) }
+  const out: string[] = []
+  for (const id of rowIds) {
+    if (ids.has(id) || out.includes(id)) continue
+    out.push(id)
+    ids.add(id)
+  }
+  while (ids.size > MAX_SEEN) ids.delete(ids.values().next().value!)
   return out
 }
 
@@ -217,7 +227,7 @@ export function announceReclaimed(sessionId: string, why: ReclaimReason = 'death
 export function resetLineConsumption(): void {
   bySession.clear()
   seen.clear()
-  unconfirmed.clear()
+  told.clear()
   held.clear()
   reclaimListener = null
 }

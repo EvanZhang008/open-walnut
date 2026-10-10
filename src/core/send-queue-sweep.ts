@@ -297,6 +297,16 @@ export async function flushOnce(onlyHost?: string): Promise<{ sent: number; wait
       sent++;
       continue;
     }
+    // The Mac could not write its queue file: never a refusal. The row stays and
+    // is asked about again. Relay-only, since a write that failed after it landed
+    // may have left the row there; the Mac's dedupe by id answers that once.
+    if (reply.errorKind === 'not_stored') {
+      await markRowMaybeRelayed(op);
+      heldHosts.add(op.host);
+      waitingSoon = true;
+      log.session.warn('send-queue: the Mac could not store a banked send; retrying later', { opId: op.opId, reason });
+      continue;
+    }
     // No primary behind the host ("no primary server connected"), or a daemon
     // that predates the relay ("unknown command"): the daemon forwarded nothing.
     if (reason.includes('no primary server connected') || reason.startsWith('unknown command')) {

@@ -392,6 +392,19 @@ async function cloudSendOnce(
       sendError(res, 409, 'removed_on_mac', REMOVED_ON_MAC)
       return
     }
+    if (relayed.errorKind === 'not_stored') {
+      // The Mac could not write its queue file. Held here, relay-only (a write that
+      // failed after it landed may have left it there), the sweep asks again with
+      // the same id, and the Mac's dedupe answers that once.
+      await queue.markSendOutcome(sessionId, messageId, 'maybe-relayed')
+      if (await holdIt('the Mac could not store it yet')) {
+        res.status(202).json(await held())
+        void drainBankedSends()
+        return
+      }
+      sendError(res, 503, 'bridge_offline', relayFailureSentence(relayErr, host, hostName, projected.hostLabel))
+      return
+    }
     if (relayed.errorKind === 'withdrawn') {
       // The Mac gave this id back earlier and refuses it now: direct-only, the sweep's to settle.
       await queue.markSendOutcome(sessionId, messageId, 'withdrawn')

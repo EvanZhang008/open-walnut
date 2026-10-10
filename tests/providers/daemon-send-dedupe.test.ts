@@ -84,7 +84,8 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
       expect(markers(s.jsonlPath)).toMatchObject([{ walnutMessageId: 'qm-1', walnutPid: 900 }])
       const records = fs.readFileSync(`${s.jsonlPath}.lines`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-      expect(records).toMatchObject([{ pid: 900, uuid: 'u-1', ids: ['qm-1'] }])
+      // r5 F1: a begin record goes first (before the first byte), the whole-write record after the newline.
+      expect(records).toMatchObject([{ pid: 900, uuid: 'u-1', begin: ['qm-1'] }, { pid: 900, uuid: 'u-1', ids: ['qm-1'] }])
     } finally { fs.closeSync(s.readerFd) }
   })
 
@@ -272,7 +273,11 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
         const filler = Buffer.alloc(64 * 1024, 0x7a)
         try { for (;;) { try { if (fs.writeSync(fillFd, filler, 0, filler.length) === 0) break } catch { break } } } finally { fs.closeSync(fillFd) }
         expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: false, reason: 'EAGAIN', retriable: true })
-        expect(fs.existsSync(`${jsonlPath}.lines`)).toBe(false)
+        // No whole-write record; the begin noted before the attempt is taken back (r5 F1), so the
+        // resend below is not told of a cut and puts no newline ahead of the line.
+        const notes = fs.readFileSync(`${jsonlPath}.lines`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+        expect(notes).toMatchObject([{ pid: 912, begin: ['qm-1'] }, { pid: 912, unbegun: ['qm-1'] }])
+        expect(notes.some((n) => Array.isArray(n.ids))).toBe(false)
         // The CLI drains its stdin; the caller's retry asks first, and must write.
         for (let i = 0; i < 64; i++) { try { if (fs.readSync(readerFd, Buffer.alloc(64 * 1024), 0, 64 * 1024, null) <= 0) break } catch { break } }
         expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })).toEqual({ ok: true })
@@ -358,7 +363,11 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       expect(raw.endsWith('}\n')).toBe(true)
       expect(raw.split('\n').filter(Boolean).map((l) => JSON.parse(l)))
         .toMatchObject([{ type: 'user', uuid: 'u-1', message: { role: 'user', content: 'hello' } }])
-      expect(records(s.jsonlPath)).toMatchObject([{ pid: 915, uuid: 'u-1' }, { pid: 915, uuid: 'u-1' }])
+      // Each whole write is noted twice (r5 F1): a begin before its first byte, its record after the newline.
+      expect(records(s.jsonlPath)).toMatchObject([
+        { pid: 915, uuid: 'u-1', begin: ['qm-1'] }, { pid: 915, uuid: 'u-1', ids: ['qm-1'] },
+        { pid: 915, uuid: 'u-1', begin: ['qm-1'] }, { pid: 915, uuid: 'u-1', ids: ['qm-1'] },
+      ])
     } finally { fs.closeSync(s.readerFd) }
   })
 
@@ -422,13 +431,16 @@ describe('send-dedupe-v1 twins', () => {
 
   it('the JS twin runs the very same scan and verdict text (behavior: daemon-send-dedupe-twins-e2e.test.ts)', async () => {
     const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-    const { lineFateScan, lineFateVerdict, lineTornEnd } = await import('../../src/providers/line-fate-core.js')
+    const { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut } = await import('../../src/providers/line-fate-core.js')
     const src = getDaemonSource()
     expect(src).not.toContain('__LINE_FATE_')
     expect(src).not.toContain('__LINE_TORN_END__')
+    expect(src).not.toContain('__LINE_WRITE_')
     expect(src).toContain(`const lineFateScan = (${lineFateScan.toString()});`)
     expect(src).toContain(`const lineFateVerdict = (${lineFateVerdict.toString()});`)
     expect(src).toContain(`const lineTornEnd = (${lineTornEnd.toString()});`)
+    expect(src).toContain(`const lineWriteBegun = (${lineWriteBegun.toString()});`)
+    expect(src).toContain(`const lineWriteCut = (${lineWriteCut.toString()});`)
   })
 
   it('both twins ask piece by piece and await the answer inside the write chain', () => {
@@ -441,7 +453,13 @@ describe('send-dedupe-v1 twins', () => {
 
   it('both twins end a torn line before its copy, by the same rule (r3-torn; behavior: the twins e2e)', () => {
     for (const src of [template, fs.readFileSync(path.join(ROOT, 'src/providers/daemon-core.ts'), 'utf-8')]) {
-      expect(src).toMatch(/torn\.end = lineTornEnd\(verdict, q, scan\)/)
+      expect(src).toMatch(/const begunAt = lineWriteBegun\(records, q\)/)
+      expect(src).toMatch(/torn\.end = lineTornEnd\(verdict, q, scan, begunAt\)/)
+      // r5 F1: a begin is noted before the first byte, and a cut copy is said so in the answer.
+      expect(src).toMatch(/torn\.cut = lineWriteCut\(verdict, q, scan, begunAt\)/)
+      expect(src).toMatch(/line(\?\.begin\?\.\(true\)| && line\.begin\) line\.begin\(true\);)\s*\n\s*const written = await writeFifoFullyAsync\(session\.pipePath, out,/)
+      expect(src).toMatch(/return \{ ok: true, cut: true \}/)
+      expect(src).toMatch(/else if \(written === 'EAGAIN'( && line && line\.begin\) line\.begin\(false\);|\) line\?\.begin\?\.\(false\))/)
       expect(src).toMatch(/const out = tornEnd \? Buffer\.concat\(\[Buffer\.from\('\\{1,2}n'\), buf\]\) : buf/)
       expect(src).toMatch(/writeFifoFullyAsync\(session\.pipePath, out, deadline/)
       // A send-lost-line-v1 rewrite already starts with its newline: never a second one.

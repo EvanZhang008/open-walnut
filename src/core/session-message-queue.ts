@@ -36,7 +36,7 @@ import {
   type RelayFate, type WithdrawState,
 } from './relay-fates.js';
 import {
-  compareEnqueueOrder, generateId, getStore, mutateStore, nextEnqueueSeq, resetCache,
+  compareEnqueueOrder, generateId, getStore, mutateStore, nextEnqueueSeq, QueueNotStoredError, resetCache,
   type QueuedMessage, type QueueStore,
 } from './session-queue-store.js';
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
@@ -44,7 +44,7 @@ import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 // ── Types and store (session-queue-store.ts) ──
 
 export type { MessageStatus, QueuedMessage } from './session-queue-store.js';
-export { resetCache } from './session-queue-store.js';
+export { QueueNotStoredError, resetCache } from './session-queue-store.js';
 // The dead-letter API and the identity move (session-queue-park.ts), re-exported: callers know one module.
 export {
   MAX_PENDING_AGE_MS, parkIfQueued, parkMessages, parkStalePending, unparkMessage,
@@ -121,6 +121,9 @@ export async function enqueueMessage(
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
     ...(inherited ? { lineUuid: inherited, lineTries: 1 } : {}),
   };
+  // A relayed row is written strictly: on a disk failure the companion is told
+  // (QueueNotStoredError) instead of the row living in this process alone.
+  const relayed = opts?.relayTaken === true;
   const outcome = await mutateStore((s) => {
     if (!s.queues[sessionId]) {
       s.queues[sessionId] = [];
@@ -133,7 +136,7 @@ export async function enqueueMessage(
     }
     s.queues[sessionId].push(msg);
     return { queueDepth: s.queues[sessionId].length, existing: null };
-  }, false, opts?.relayTaken === true);
+  }, relayed, relayed).catch((err: unknown) => { throw relayed ? new QueueNotStoredError(err) : err; });
   if (outcome.existing) {
     log.session.info('message enqueue deduped by id (already queued)', {
       sessionId, messageId: outcome.existing.id, queueDepth: outcome.queueDepth,

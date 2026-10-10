@@ -17,7 +17,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
-import { lineFateScan, lineFateVerdict, lineTornEnd, type LineFate, type LineFateKind, type LineFateScan } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, type LineFate, type LineFateKind, type LineFateScan } from './line-fate-core.js'
 
 // ── Shared types ──
 
@@ -244,7 +244,9 @@ export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): bo
 
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
 export type SendResult =
-  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string }
+  // cut: an earlier write of this line into this process died inside it (lineWriteCut):
+  // the line is written, but the CLI may exit on what that write left without running it.
+  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; cut?: true }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'session_dead'; exitCode: number | null }
   | { ok: false; reason: 'ENXIO'; exitCode: number | null }
@@ -897,9 +899,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         ? () => { for (const m of pending) appendUserMarkerLine(sid, session, m.message, m.messageId, true) }
         : undefined
       const ids = pending.map((m) => m.messageId)
-      const torn = { end: false }
+      const torn = { end: false, cut: false }
       const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
         fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid, torn) : undefined,
+        begin: ids.length > 0 ? (on: boolean) => recordLineBegun(session, uuid, ids, on) : undefined,
         written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
         // A rewrite already starts with its newline: one is enough.
         tornEnd: () => torn.end && !rewrite,
@@ -920,6 +923,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         // latencies against this (CLI-side half of the text-latency attribution).
         session.ttftSendTs = clock()
         session.ttftSawFirstLine = false
+        if (torn.cut) {
+          logger('warn', 'send: an earlier write of this line into this process died inside it; the CLI may exit on what it left', {
+            sid, pid: session.pid, messageIds: ids,
+          })
+          return { ok: true, cut: true }
+        }
         return { ok: true }
       }
       if (result === 'dead') {
@@ -1073,7 +1082,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    */
   async function lineFateInProcess(
     session: S, uuid: string | undefined, messageIds: string[], lostPid: number | null = null,
-    torn?: { end: boolean },
+    torn?: { end: boolean; cut: boolean },
   ): Promise<LineFate | null> {
     const q = { uuid: uuid ?? '', messageIds, pid: session.pid, lostPid }
     let scan: LineFateScan | null = null
@@ -1081,9 +1090,31 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     let records = ''
     await scanTail(lineRecordPath(session.jsonlPath), LINE_RECORD_SCAN_BYTES, (text) => { records += text })
     const verdict = lineFateVerdict(scan, records, q)
-    // A first attempt that died after its body and marker: end what it left first (lineTornEnd).
-    if (torn) torn.end = lineTornEnd(verdict, q, scan)
+    // An earlier attempt into this process that died part way: end what it left first
+    // (lineTornEnd), and say so when that may be a cut body the CLI will exit on (lineWriteCut).
+    const begunAt = lineWriteBegun(records, q)
+    if (torn) {
+      torn.end = lineTornEnd(verdict, q, scan, begunAt)
+      torn.cut = lineWriteCut(verdict, q, scan, begunAt)
+    }
     return verdict
+  }
+
+  /**
+   * The line's first byte is about to go into the pipe of process `session.pid`.
+   * Written before the write, so a daemon killed inside it leaves this as the
+   * newest record of the line (lineWriteBegun). Its ids go under `begin`: a
+   * reader that knows only whole-write records skips it. `on` false: the write
+   * ended with not one byte in, and an `unbegun` takes the begin back.
+   */
+  function recordLineBegun(session: S, uuid: string | undefined, messageIds: string[], on: boolean): void {
+    if (!session.pid) return
+    try {
+      fs.appendFileSync(lineRecordPath(session.jsonlPath),
+        JSON.stringify({ pid: session.pid, ...(uuid ? { uuid } : {}), [on ? 'begin' : 'unbegun']: messageIds, at: clock() }) + '\n')
+    } catch (err) {
+      logger('warn', 'send: could not note the line\'s write before it began', { pid: session.pid, error: (err as Error).message })
+    }
   }
 
   /** The whole line, newline included, is in the pipe of process `session.pid`. */
@@ -1154,9 +1185,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     buf: Buffer,
     beforeNewline?: () => void,
     /** send-dedupe-v1, run inside the chain: `fate` before the write (non-null = do not
-     *  write), `written` right after a whole line went in (before the next write may ask),
-     *  `tornEnd` (asked after `fate`): a newline goes in before the line (lineTornEnd). */
-    line?: { fate?: () => Promise<LineFate | null>; written?: () => void; tornEnd?: () => boolean },
+     *  write), `begin(true)` right before the first byte and `begin(false)` when none went
+     *  in (recordLineBegun), `written` right after
+     *  a whole line went in (before the next write may ask), `tornEnd` (asked after
+     *  `fate`): a newline goes in before the line (lineTornEnd). */
+    line?: { fate?: () => Promise<LineFate | null>; begin?: (on: boolean) => void; written?: () => void; tornEnd?: () => boolean },
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
@@ -1172,8 +1205,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       const tornEnd = line?.tornEnd?.() === true
       if (tornEnd) logger('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid, pid: session.pid })
       const out = tornEnd ? Buffer.concat([Buffer.from('\n'), buf]) : buf
+      // Noted before the first byte: a daemon killed inside the write leaves it as the line's newest record.
+      line?.begin?.(true)
       const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline)
       if (written === 'ok') line?.written?.()
+      // Not one byte went in: the write left nothing, so a resend must not be told of a cut.
+      else if (written === 'EAGAIN') line?.begin?.(false)
       return written
     })
     session.fifoWriteChain = run

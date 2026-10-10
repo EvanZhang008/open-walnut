@@ -526,6 +526,24 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).toMatch(/function cmdImageSave/)
     }
   })
+  // The r4d gate's R5: the per-command checks below each look for one entry, so a
+  // command added to one twin's list only passed them. The two lists must be the
+  // same set, whole.
+  it('both twins allow exactly the same bridge commands (the two lists compared as sets)', () => {
+    const allowed = (src: string, label: string): string[] => {
+      const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(start, `${label}: no BRIDGE_ALLOWED_COMMANDS list`).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('])', start))
+        .split('\n').map((line) => line.replace(/\/\/.*$/, '')).join('\n')
+      const names = [...body.matchAll(/'([^']+)'/g)].map((m) => m[1])
+      expect(new Set(names).size, `${label}: a command listed twice`).toBe(names.length)
+      return names.sort()
+    }
+    const standalone = allowed(readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts')), 'daemon-standalone')
+    const template = allowed(templateSrc, 'daemon-source template')
+    expect(standalone.length).toBeGreaterThan(10)
+    expect(template).toEqual(standalone)
+  })
   it('both twins validate image.save with the same mediaType allowlist, caps, and magic-byte gate', () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
     for (const src of [standaloneSrc, templateSrc]) {

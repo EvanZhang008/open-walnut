@@ -67,7 +67,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
-import { lineFateScan, lineFateVerdict, lineTornEnd } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut } from './line-fate-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -266,6 +266,8 @@ export function getDaemonSource(): string {
     ['__LINE_FATE_SCAN__', lineFateScan.toString()],
     ['__LINE_FATE_VERDICT__', lineFateVerdict.toString()],
     ['__LINE_TORN_END__', lineTornEnd.toString()],
+    ['__LINE_WRITE_BEGUN__', lineWriteBegun.toString()],
+    ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -505,6 +507,23 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (!tornOf || !tornOf(null, q, seen) || tornOf(null, q, scanOf('', q, null)) || tornOf(null, q, null)
         || tornOf(null, { ...q, uuid: '' }, seen) || tornOf({ fate: 'waiting' }, q, seen)) {
         throw new Error('line fate did not end a torn line by the rule')
+      }
+      // A write that began and never finished in this process: a newline first, and the
+      // line counts as cut unless this process's marker went in at or after the begin.
+      const begunOf = reconstructed['__LINE_WRITE_BEGUN__'] as typeof lineWriteBegun | undefined
+      const cutOf = reconstructed['__LINE_WRITE_CUT__'] as typeof lineWriteCut | undefined
+      const begin = JSON.stringify({ pid: 7, begin: ['m'], at: 1000 })
+      const begunAt = begunOf ? begunOf(begin, q) : null
+      const timed = (at: string) => scanOf(JSON.stringify({ type: 'system', subtype: 'walnut-injected', walnutMessageId: 'm', walnutPid: 7, timestamp: at }), q, null)
+      // An unbegun takes back only its own attempt's begin: an older one that died still stands (r5 gate N3).
+      const unbegun = JSON.stringify({ pid: 7, unbegun: ['m'] })
+      if (!begunOf || !cutOf || begunAt !== 1000 || begunOf(begin + '\n' + JSON.stringify({ pid: 7, ids: ['m'] }), q) !== null
+        || begunOf(begin + '\n' + unbegun, q) !== null
+        || begunOf(begin + '\n' + JSON.stringify({ pid: 7, begin: ['m'], at: 2000 }) + '\n' + unbegun, q) !== 1000
+        || verdictOf(null, begin, q) !== null || !tornOf(null, q, null, begunAt) || !cutOf(null, q, null, begunAt)
+        || cutOf(null, q, timed(new Date(1000).toISOString()), begunAt) || !cutOf(null, q, timed(new Date(999).toISOString()), begunAt)
+        || cutOf(null, q, null, null) || cutOf({ fate: 'waiting' }, q, null, begunAt) || cutOf(null, { ...q, uuid: '' }, null, begunAt)) {
+        throw new Error('line fate did not judge a write that died part way by the rule')
       }
     }
     const createDrift = reconstructed['__CREATE_LOOP_DRIFT_PROBE__'] as typeof createLoopDriftProbe | undefined
@@ -5531,12 +5550,16 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line) {
     // line written is recorded before the next write may ask.
     const known = line && line.fate ? await line.fate() : null;
     if (known) return known;
-    // A first attempt that died after its body and marker may have left it in the pipe: a newline first ends it (lineTornEnd).
+    // An earlier attempt that died part way (after its marker, or after its begin record) may have left
+    // a piece in the pipe: a newline first ends it (lineTornEnd). The begin is noted before the first byte.
     const tornEnd = !!(line && line.tornEnd && line.tornEnd());
     if (tornEnd) logMsg('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid: sid, pid: session.pid });
     const out = tornEnd ? Buffer.concat([Buffer.from('\\n'), buf]) : buf;
+    if (line && line.begin) line.begin(true);
     const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline);
     if (written === 'ok' && line && line.written) line.written();
+    // Not one byte went in: the write left nothing, so a resend must not be told of a cut.
+    else if (written === 'EAGAIN' && line && line.begin) line.begin(false);
     return written;
   });
   session.fifoWriteChain = run;
@@ -7539,9 +7562,10 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       ? function () { for (const m of markers.list) appendUserMarkerLine(sid, session, m.message, m.messageId, true); }
       : undefined;
     const ids = markers.list.map(function (m) { return m.messageId; });
-    const torn = { end: false };
+    const torn = { end: false, cut: false };
     const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
       fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid, torn); } : undefined,
+      begin: ids.length > 0 ? function (on) { recordLineBegun(session, uuid, ids, on); } : undefined,
       written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
       // A rewrite already starts with its newline: one is enough.
       tornEnd: function () { return torn.end && !rewrite; },
@@ -7556,6 +7580,12 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       if (rewrite) logMsg('warn', 'send: wrote a line again that the CLI read past without taking', { sid: sid, pid: session.pid, messageIds: ids });
       session.ttftSendTs = Date.now();
       session.ttftSawFirstLine = false;
+      // An earlier write of this line into this process died inside it: the CLI may
+      // exit on what it left without running the line (daemon-core.ts, lineWriteCut).
+      if (torn.cut) {
+        logMsg('warn', 'send: an earlier write of this line into this process died inside it; the CLI may exit on what it left', { sid: sid, pid: session.pid, messageIds: ids });
+        return { ok: true, cut: true };
+      }
       return { ok: true };
     }
     if (result === 'dead') return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
@@ -7680,6 +7710,8 @@ const LINE_RECORD_SCAN_BYTES = 256 * 1024;
 const lineFateScan = (__LINE_FATE_SCAN__);
 const lineFateVerdict = (__LINE_FATE_VERDICT__);
 const lineTornEnd = (__LINE_TORN_END__);
+const lineWriteBegun = (__LINE_WRITE_BEGUN__);
+const lineWriteCut = (__LINE_WRITE_CUT__);
 async function scanTail(filePath, max, onText) {
   let fh;
   try { fh = await fs.promises.open(filePath, 'r'); } catch { return; }
@@ -7710,9 +7742,30 @@ async function lineFateInProcess(session, uuid, messageIds, lostPid, torn) {
   let records = '';
   await scanTail(session.jsonlPath + '.lines', LINE_RECORD_SCAN_BYTES, (text) => { records += text; });
   const verdict = lineFateVerdict(scan, records, q);
-  // A first attempt that died after its body and marker: end what it left first (lineTornEnd).
-  if (torn) torn.end = lineTornEnd(verdict, q, scan);
+  // An earlier attempt into this process that died part way: end what it left first
+  // (lineTornEnd), and say so when that may be a cut body the CLI will exit on (lineWriteCut).
+  const begunAt = lineWriteBegun(records, q);
+  if (torn) {
+    torn.end = lineTornEnd(verdict, q, scan, begunAt);
+    torn.cut = lineWriteCut(verdict, q, scan, begunAt);
+  }
   return verdict;
+}
+// The line's first byte is about to go in: noted first, so a daemon killed inside the
+// write leaves this as the newest record of the line. Its ids go under 'begin', never
+// 'ids'; 'unbegun' (on false) takes it back when not one byte went in.
+// Keep in sync with daemon-core.ts recordLineBegun.
+function recordLineBegun(session, uuid, messageIds, on) {
+  if (!session.pid) return;
+  const rec = { pid: session.pid };
+  if (typeof uuid === 'string' && uuid) rec.uuid = uuid;
+  rec[on ? 'begin' : 'unbegun'] = messageIds;
+  rec.at = Date.now();
+  try {
+    fs.appendFileSync(session.jsonlPath + '.lines', JSON.stringify(rec) + '\\n');
+  } catch (err) {
+    logMsg('warn', "send: could not note the line's write before it began", { pid: session.pid, error: err.message });
+  }
 }
 function recordLineWritten(session, uuid, messageIds) {
   if (!session.pid) return;

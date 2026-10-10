@@ -92,6 +92,20 @@ describe('companionAnswers: the routes the companion keeps', () => {
     expect(companionAnswers(method, rel)).toBeNull()
   })
 
+  // The r4d gate's R6: the GET-only kept routes forwarded a HEAD to the Mac.
+  it('a HEAD is kept or forwarded exactly as its GET is', () => {
+    for (const rel of ['/sessions/abc/messages/qm-mobile-1', '/sessions/abc/queue', '/sessions', '/sessions/abc/transcript', '/me', '/tasks']) {
+      expect(companionAnswers('HEAD', rel), rel).toBe(companionAnswers('GET', rel))
+      expect(companionAnswers('head', rel), rel).not.toBeNull()
+    }
+    for (const rel of ['/sessions/abc', '/sessions/abc/model-options', '/usage/overview']) {
+      expect(companionAnswers('HEAD', rel), rel).toBeNull()
+    }
+    // HEAD reads like GET only: it never takes a POST-only route.
+    expect(companionAnswers('HEAD', '/sessions/abc/terminate')).toBeNull()
+    expect(companionAnswers('HEAD', '/sessions/abc/messages')).toBeNull()
+  })
+
   it('a session path that only begins like a kept one goes to the Mac', () => {
     expect(companionAnswers('GET', '/sessions/abc/streamer')).toBeNull()
     expect(companionAnswers('GET', '/statusboard')).toBeNull()

@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   announceReclaimed, awaitLine, dropLine, hasUntakenLines, heldRows, markUnconfirmed, noteHeld, noteLineState,
-  onLinesReclaimed, releaseHeld, resetLineConsumption, takeLine, takeUnconfirmed, untakenLines,
+  onLinesReclaimed, releaseHeld, resetLineConsumption, takeLine, takeUntold, untakenLines,
 } from '../../src/providers/line-consumption.js'
 import type { QueuedMessage } from '../../src/core/session-message-queue.js'
 
@@ -76,11 +76,16 @@ describe('line-consumption', () => {
     expect(untakenLines('s1', null).map((l) => l.uuid)).toEqual(['x', 'y'])
   })
 
-  it('rows the user was told were unconfirmed are reported once', () => {
-    markUnconfirmed('s1', ['a', 'b'])
-    expect(takeUnconfirmed('s1', ['a', 'c'])).toEqual(['a'])
-    expect(takeUnconfirmed('s1', ['a', 'b'])).toEqual(['b'])
-    expect(takeUnconfirmed('s1', ['b'])).toEqual([])
+  it('a row is reported delivered once, and again only after the user was told it is unconfirmed', () => {
+    expect(takeUntold('s1', ['a', 'b'])).toEqual(['a', 'b'])
+    expect(takeUntold('s1', ['a', 'c'])).toEqual(['c'])
+    expect(takeUntold('s1', ['a', 'b', 'c'])).toEqual([])
+    markUnconfirmed('s1', ['b'])
+    expect(takeUntold('s1', ['a', 'b'])).toEqual(['b'])
+    expect(takeUntold('s2', ['a'])).toEqual(['a'])
+    expect(takeUntold('s1', ['d', 'd'])).toEqual(['d'])
+    resetLineConsumption()
+    expect(takeUntold('s1', ['a'])).toEqual(['a'])
   })
 
   it('P4: past the bound the oldest line is handed to the caller, never left behind', () => {

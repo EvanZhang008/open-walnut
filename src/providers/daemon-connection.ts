@@ -1622,7 +1622,10 @@ export class DaemonConnection {
       const message2 = err instanceof Error ? err.message : String(err)
       log.session.warn('DaemonConnection: message relay failed', { host: this.hostKey, relayId, message: message2 })
       const { isSessionStopSuperseded } = await import('../core/sessions/session-stop.js')
-      reply = { relayId, error: message2, errorKind: isSessionStopSuperseded(err) ? 'session_stopped' : 'internal' }
+      const { QueueNotStoredError } = await import('../core/session-queue-store.js')
+      // not_stored: the queue write failed, so the companion keeps it and asks again.
+      const errorKind = isSessionStopSuperseded(err) ? 'session_stopped' : err instanceof QueueNotStoredError ? 'not_stored' : 'internal'
+      reply = { relayId, error: message2, errorKind }
     }
     try {
       await this.send('message-result', reply)

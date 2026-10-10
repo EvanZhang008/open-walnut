@@ -301,10 +301,21 @@ export class RemoteSessionManager implements SessionManager {
     const fileSize = (result.offset as number) ?? 0
     this.adoptCursor(fileSize)
 
+    // The deferred first line has a send's contract (r5 gate N1). It asks first
+    // (dedupe): the start may have adopted a live process that holds an earlier,
+    // unfinished write of this line, and the daemon then ends that piece before
+    // the copy instead of gluing the two. And its answer reaches the caller: a cut
+    // (the CLI may exit on the piece without running the line) or a fate the
+    // daemon already knew (nothing written) is not a plain delivery.
+    let cut = false
+    let fate: { fate: string; state?: string } | undefined
     if (sendAfterStart) {
-      if (!await this.writeMessage(opts.message, { uuid: opts.uuid, markers: opts.markers, stopFence: opts.stopFence })) {
-        throw new Error('Session started, but the queued message was not delivered')
-      }
+      const written = await this.writeMessage(opts.message, {
+        uuid: opts.uuid, markers: opts.markers, stopFence: opts.stopFence, dedupe: true,
+        onCut: () => { cut = true },
+        onFate: (f) => { fate = f },
+      })
+      if (!written) throw new Error('Session started, but the queued message was not delivered')
     } else {
       for (const marker of opts.markers ?? []) this.writeSyntheticUserEvent(marker.message, marker.messageId)
     }
@@ -324,6 +335,8 @@ export class RemoteSessionManager implements SessionManager {
       // Callers should check isRemote before attempting file I/O.
       outputFile: `remote://${this.hostKey}/${this._sid}`,
       fileSize,
+      ...(cut ? { cut: true } : {}),
+      ...(fate ? { fate } : {}),
     }
   }
 
@@ -618,6 +631,12 @@ export class RemoteSessionManager implements SessionManager {
       }
       if (result.ok && result.duplicate === true) {
         opts?.onFate?.({ fate: String(result.fate ?? 'waiting'), ...(typeof result.state === 'string' ? { state: result.state } : {}) })
+      }
+      // Written, but behind a cut copy of the line that the CLI will exit on: the
+      // write is no proof of delivery, so the caller keeps the line (onCut).
+      if (result.ok && result.cut === true) {
+        log.session.warn('RemoteSessionManager: line written behind a cut copy of it', { host: this.hostKey, sid, uuid: opts?.uuid ?? null })
+        opts?.onCut?.()
       }
       if (result.ok) {
         if (!orderedMarkers) {

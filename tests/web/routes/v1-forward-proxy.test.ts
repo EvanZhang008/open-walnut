@@ -166,6 +166,19 @@ describe('the forward middleware', () => {
     expect(h.fwd.status().answeredHere[why]).toBe(1)
   })
 
+  // The r4d gate's R6: a HEAD of a GET-only kept route went to the Mac.
+  it('a HEAD of a kept read is answered here like its GET; a HEAD the companion does not keep is forwarded', async () => {
+    const h = harness()
+    for (const path of ['/api/v1/sessions/abc/messages/qm-mobile-1', '/api/v1/sessions/abc/queue']) {
+      const res = await request(h.app).head(path)
+      expect(res.status, path).toBe(200)
+      expect(res.headers['x-walnut-answered-by'], path).toBe('companion')
+    }
+    expect(h.calls).toHaveLength(0)
+    expect((await request(h.app).head('/api/v1/usage/overview')).status).toBe(200)
+    expect(h.calls.map((c) => c.params.method)).toEqual(['HEAD'])
+  })
+
   it('turned off: answered here', async () => {
     const h = harness({ enabled: false })
     expect((await request(h.app).get('/api/v1/usage/overview')).body.from).toBe('companion')

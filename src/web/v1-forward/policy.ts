@@ -87,7 +87,8 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
 
 /** Why the companion answers this call itself, or null when the Mac should. `rel` is the path under /api/v1. */
 export function companionAnswers(method: string, rel: string): CompanionReason | null {
-  const m = method.toUpperCase()
+  // Express answers a HEAD with the GET handler, so a GET route kept here keeps its HEAD.
+  const m = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
   for (const r of COMPANION_ROUTES) {
     if (r.methods && !r.methods.includes(m)) continue
     if (!r.re.test(rel)) continue

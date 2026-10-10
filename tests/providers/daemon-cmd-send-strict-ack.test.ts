@@ -408,8 +408,9 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
       }) as typeof fs.writeSync,
       appendFileSync: ((p: string, data: string) => {
         // send-dedupe-v1's write record (`<stream>.lines`): written only after the newline.
+        // r5 F1: a `begin` record goes in before the first byte of the line.
         if (String(p).endsWith('.lines')) {
-          events.push('record')
+          events.push(String(data).includes('"begin":') ? 'begin' : 'record')
           return fs.appendFileSync(p, data)
         }
         events.push('append')
@@ -458,7 +459,7 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
           { message: 'ordered-send', messageId: 'qm-1' },
         ])
         expect(res).toEqual({ ok: true })
-        expect(traced.events).toEqual(['body', 'append', 'newline', 'record'])
+        expect(traced.events).toEqual(['begin', 'body', 'append', 'newline', 'record'])
 
         const lines = jsonlLines(jsonlPath)
         expect(lines).toHaveLength(1)
@@ -531,7 +532,7 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
           { message: 'b', messageId: 'qm-b' },
         ])
         expect(res).toEqual({ ok: true })
-        expect(traced.events).toEqual(['body', 'append', 'append', 'newline', 'record'])
+        expect(traced.events).toEqual(['begin', 'body', 'append', 'append', 'newline', 'record'])
         expect(jsonlLines(jsonlPath).map((l) => l.walnutMessageId)).toEqual(['qm-a', 'qm-b'])
       } finally {
         fs.closeSync(readerFd)
@@ -560,7 +561,8 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
         ])
         expect(res).toMatchObject({ ok: false, reason: 'session_dead' })
         expect(freshCtx.sessions.get('sid')!.exitReason).toBe('send-partial-write')
-        expect(traced.events).toEqual(['body', 'append'])
+        // r5 F1: the begin record goes in before the first byte; no whole-write record follows a cut write.
+        expect(traced.events).toEqual(['begin', 'body', 'append'])
         const wire = drain(readerFd)
         expect(wire.includes('\n')).toBe(false)
         expect(wire.includes('no-marker')).toBe(true)
@@ -588,7 +590,8 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
         { message: 'never-delivered', messageId: 'qm-enxio' },
       ])
       expect(res).toMatchObject({ ok: false, reason: 'ENXIO' })
-      expect(traced.events).toEqual([])
+      // Only the begin record (r5 F1): no reader means that process is gone, and its pid's records never count again.
+      expect(traced.events).toEqual(['begin'])
       expect(fs.readFileSync(jsonlPath, 'utf-8')).toBe('')
     } finally {
       await freshCtx.cleanup()

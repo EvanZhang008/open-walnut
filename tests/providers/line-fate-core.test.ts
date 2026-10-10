@@ -4,7 +4,7 @@
  * every rule is pinned here; the twins run the same function text.
  */
 import { describe, it, expect } from 'vitest'
-import { lineFate, lineFateScan, lineFateVerdict, lineTornEnd } from '../../src/providers/line-fate-core.js'
+import { lineFate, lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut } from '../../src/providers/line-fate-core.js'
 
 const marker = (id: string, pid?: number) => JSON.stringify({
   type: 'user', subtype: 'walnut-injected', message: { role: 'user', content: 'x' },
@@ -164,7 +164,7 @@ describe('the inlined text survives a bundler that keeps names', () => {
     const src = (await import('node:fs')).readFileSync(new URL('../../src/providers/line-fate-core.ts', import.meta.url), 'utf8')
     const out = transformSync(src, { loader: 'ts', keepNames: true, format: 'esm' }).code
     const wrapped = [...out.matchAll(/__name\(([^,]+),/g)].map((m) => m[1].trim())
-    expect(wrapped.every((name) => ['lineFateScan', 'lineFateVerdict', 'lineTornEnd', 'lineFate'].includes(name))).toBe(true)
-    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd]) expect(fn.toString()).not.toContain('__name(')
+    expect(wrapped.every((name) => ['lineFateScan', 'lineFateVerdict', 'lineTornEnd', 'lineWriteBegun', 'lineWriteCut', 'lineFate'].includes(name))).toBe(true)
+    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut]) expect(fn.toString()).not.toContain('__name(')
   })
 })
