@@ -14974,7 +14974,8 @@ body.walnut-dragging {
    Keep the 16px in step with useMenuPlacement's `margin = 8` (8px per edge). */
 .task-kebab-menu:not(.task-batch-dropdown) {
   max-height: calc(100vh - 16px);
-  overflow-y: auto;
+  /* A toggling scrollbar changes shrink-to-fit width and feeds back into placement. */
+  overflow-y: scroll;
   /* Structural, not cosmetic: `overflow-y: auto` alone makes overflow-x compute
      to `auto` too, and a horizontal scrollbar would inflate
      (offsetHeight - clientHeight) — the value useMenuPlacement adds back as the

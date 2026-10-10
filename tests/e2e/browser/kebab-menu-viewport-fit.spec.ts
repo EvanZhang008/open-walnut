@@ -25,6 +25,7 @@
  * sanctioned exception — every subsequent step here is a real UI click.
  */
 import { expect, test, type APIRequestContext, type Page, type Locator } from '@playwright/test'
+import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -136,10 +137,8 @@ test('the session kebab fits the viewport and scrolls when the window is short',
   // marker for the task half of the menu is its two collapsed date rows.
   await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(2)
 
-  // 2. overflow-y must be `auto` — this is the CSS half of the fix, and the half
-  //    that makes overflow REACHABLE rather than merely clipped. Asserted
-  //    unconditionally so deleting the CSS rule fails here even on a tall window.
-  expect(m.overflowY).toBe('auto')
+  // Always reserve the scrollbar so height caps cannot change intrinsic width.
+  expect(m.overflowY).toBe('scroll')
   //    Then, if the content genuinely exceeds the capped box, prove it scrolls.
   if (m.scrollHeight > m.clientHeight + 1) {
     const scrolled = await menu.evaluate((el) => {
@@ -248,7 +247,7 @@ test('the kebab containing an inline calendar still fits the viewport', async ({
   await toggles.nth(1).click()
   await expect(kebab.locator('.dp-content')).toHaveCount(2)
   const m = await assertFitsViewport(page, kebab, 'kebab with inline date picker')
-  expect(m.overflowY).toBe('auto')
+  expect(m.overflowY).toBe('scroll')
 })
 
 test('a menu whose trigger disappears closes instead of stranding off-screen', async ({ page, request }) => {
@@ -277,4 +276,62 @@ test('a menu whose trigger disappears closes instead of stranding off-screen', a
   }, TASK_ID)
 
   await expect(menu).toHaveCount(0)
+})
+
+test.describe('zoom stability', () => {
+  test.describe.configure({ mode: 'serial' })
+  for (const zoom of [0.8, 0.9, 1, 1.1, 1.25]) {
+    test(`task menu does not oscillate horizontally at ${zoom * 100}% CSS zoom`, async ({ page, request }) => {
+      await isolateUiPrefs(page)
+      await presetPanelView(page, { section: 'all' })
+      await page.route('**/api/integrations/task-fields', (route) => route.fulfill({
+        json: { fields: [{ pluginId: 'fixture', pluginName: 'Fixture', key: 'sprint', label: 'Sprint', type: 'enum', optionsUrl: '/api/fixture/sprints' }] },
+      }))
+      const title = `Menu geometry ${Date.now()} ${zoom}`
+      const created = await request.post('/api/tasks', { data: { title, source: 'local' } })
+      expect(created.ok()).toBe(true)
+      const { task } = await created.json()
+      let tierId: string | undefined
+      try {
+        const tierResponse = await request.post('/api/focus/tiers', { data: { label: 'Virtual Teammate' } })
+        expect(tierResponse.ok()).toBe(true)
+        tierId = (await tierResponse.json()).tier.id
+        expect((await request.post(`/api/focus/tasks/${task.id}`)).ok()).toBe(true)
+        await page.setViewportSize({ width: 1280, height: 900 })
+        await page.evaluate((url) => { location.assign(url) }, `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`)
+        await page.locator('.todo-search-input').fill(title)
+        const row = page.locator(`.todo-panel-item[data-task-id="${task.id}"]`).first()
+        await expect(row).toBeVisible()
+        await page.evaluate((scale) => { document.documentElement.style.zoom = String(scale) }, zoom)
+        const menu = page.locator('.task-kebab-menu')
+        for (let round = 0; round < 3; round++) {
+          await row.getByRole('button', { name: 'More actions' }).click()
+          await expect(menu).toBeVisible()
+          await expect(menu.getByRole('button', { name: 'Virtual Teammate', exact: true })).toBeVisible()
+          await expect(menu.getByText('Sprint', { exact: true })).toBeVisible()
+          const samples = await menu.evaluate(async (el) => {
+            const frames: Array<{ left: number; right: number; width: number; contentLeft: number }> = []
+            for (let frame = 0; frame < 80; frame++) {
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+              const box = el.getBoundingClientRect()
+              const content = el.querySelector('.task-kebab-item')!.getBoundingClientRect()
+              frames.push({ left: box.left, right: box.right, width: box.width, contentLeft: content.left })
+            }
+            return frames.slice(20)
+          })
+          for (const key of ['left', 'right', 'width', 'contentLeft'] as const) {
+            const positions = samples.map((sample) => sample[key])
+            expect(Math.max(...positions) - Math.min(...positions), `${key} drift at zoom ${zoom}, round ${round}`)
+              .toBeLessThanOrEqual(1)
+          }
+          await page.keyboard.press('Escape')
+          await expect(menu).toHaveCount(0)
+        }
+      } finally {
+        await request.delete(`/api/focus/tasks/${task.id}`)
+        await request.delete(`/api/tasks/${task.id}`)
+        if (tierId) await request.delete(`/api/focus/tiers/${tierId}`)
+      }
+    })
+  }
 })
