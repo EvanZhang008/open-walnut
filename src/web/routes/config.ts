@@ -592,6 +592,27 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       res.status(403).json({ error: 'Only you, at this computer, can change how Walnut is reached from outside (Settings, Phones & Cloud).', code: 'person_at_this_machine' })
       return
     }
+    // A server this Mac runs on a host (hosts.<key>.server) is written through
+    // /api/host-servers only: a hosts map sent without it (the Remote Hosts editor)
+    // keeps each host's current one, so a stale editor never turns one off.
+    if (body.hosts && typeof body.hosts === 'object' && !Array.isArray(body.hosts)) {
+      const current = (await getConfig()).hosts ?? {}
+      const sent = body.hosts as Record<string, Record<string, unknown> | undefined>
+      for (const [key, host] of Object.entries(sent)) {
+        const kept = (current as Record<string, { server?: unknown }>)[key]?.server
+        if (host && typeof host === 'object' && host.server === undefined && kept !== undefined) sent[key] = { ...host, server: kept }
+      }
+    }
+    // And only the person at this machine changes one: it installs and runs a program
+    // there and can put a tunnel in front of it (core/host-server/).
+    if (body.hosts !== undefined && !isPersonAtThisMachine(req)) {
+      const servers = (hosts: unknown) => JSON.stringify(Object.entries((hosts && typeof hosts === 'object' ? hosts : {}) as Record<string, { server?: unknown }>)
+        .map(([k, h]) => [k, h?.server ?? null]).filter(([, v]) => v !== null).sort())
+      if (servers(body.hosts) !== servers((await getConfig()).hosts)) {
+        res.status(403).json({ error: 'Only you, at this computer, can change which hosts run a Walnut server (Settings, Hosts).', code: 'person_at_this_machine' })
+        return
+      }
+    }
 
     await updateConfig(body)
     // Re-read merged config so the event carries the full picture

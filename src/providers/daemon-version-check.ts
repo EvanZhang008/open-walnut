@@ -162,6 +162,10 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/offline-search-core.ts',
   'src/providers/offline-board-core.ts',
   'src/providers/host-replica-core.ts',
+  // The host server the daemon keeps running (host-server-v1): same rule.
+  'src/providers/host-server-core.ts',
+  // Streams between servers through the daemon (stream-relay-v1): same rule.
+  'src/providers/stream-relay-core.ts',
   'src/core/sessions/open-items-text.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',

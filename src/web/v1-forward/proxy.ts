@@ -15,6 +15,7 @@
 import type { NextFunction, Request, Response } from 'express'
 import { log } from '../../logging/index.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
+import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
 import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders } from './policy.js'
@@ -74,6 +75,11 @@ export function macAnswers(s: PrimarySnapshot | null, now: number, suspectAt: nu
   if (unsupportedUntil > now) return 'primary-too-old'
   return null
 }
+
+/** Away by the companion's own view; unknown (never heard, no leader) is not away. */
+const AWAY = new Set<Why>(['no-bridge', 'primary-silent', 'primary-suspect', 'companion-leads'])
+/** How often the companion's one view of the leader (core/server-role.ts) is brought up to date. */
+const PRESENCE_TICK_MS = 5_000
 
 export interface ForwardStatus {
   forwarded: number
@@ -209,7 +215,12 @@ export function createV1Forward(deps: ForwardDeps) {
      */
     primaryAway: async (): Promise<boolean> => {
       const why = macAnswers(await deps.primary(), deps.now(), suspectAt, unsupportedUntil)
-      return why === 'no-bridge' || why === 'primary-silent' || why === 'primary-suspect' || why === 'companion-leads'
+      return why !== null && AWAY.has(why)
+    },
+    /** The same view as an answer for server-role.ts: whether the Mac is there, and why not. */
+    presence: async (): Promise<{ answers: boolean; why: string }> => {
+      const why = macAnswers(await deps.primary(), deps.now(), suspectAt, unsupportedUntil)
+      return { answers: why === null || !AWAY.has(why), why: why ?? 'answers' }
     },
     status: (): ForwardStatus & { suspectAt: number | null; unsupportedUntil: number | null } => ({
       ...status,
@@ -258,7 +269,30 @@ export function getV1Forward(): ReturnType<typeof createV1Forward> {
   return instance
 }
 
+let presenceTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * The companion's one view of the leader (core/server-role.ts) follows this
+ * forward's view, from boot (server.ts) until stop. Started there, never as a
+ * side effect of getV1Forward(): a route reading leaderAnswers() before any
+ * forward exists would see the default (not heard).
+ */
+export function startLeaderPresenceTick(): void {
+  if (presenceTimer) return
+  const tick = () => {
+    void getV1Forward().presence().then((p) => setLeaderPresence(p.answers, p.why)).catch(() => { /* the next tick */ })
+  }
+  tick()
+  presenceTimer = setInterval(tick, PRESENCE_TICK_MS)
+  presenceTimer.unref?.()
+}
+
+export function stopLeaderPresenceTick(): void {
+  if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null }
+}
+
 /** Tests only. */
 export function _resetV1ForwardForTesting(): void {
   instance = null
+  stopLeaderPresenceTick()
 }

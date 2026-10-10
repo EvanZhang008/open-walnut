@@ -14,6 +14,8 @@ import { createLeaderBook } from '../../src/providers/leader-core.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
 import { createLiveSettings } from '../../src/providers/live-settings-core.js'
 import { createOfflineSearch } from '../../src/providers/offline-search-core.js'
+import { createHostServerSupervisor } from '../../src/providers/host-server-core.js'
+import { createStreamRelay } from '../../src/providers/stream-relay-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
@@ -74,7 +76,8 @@ describe('leader protocol: both twins', () => {
 
     it(`${name}: a trusted frame is a witness of the primary, and while the companion leads it tells the primary`, () => {
       const heard = fnBody(src, 'heardFrom')
-      expect(heard).toMatch(/origin === 'bridge'\) return/)
+      // Neither the bridge nor a follower (the host server) is the primary heard.
+      expect(heard).toMatch(/if \(!isServerClient\((ws|client)\)\) return/)
       expect(heard).toMatch(/leaderBook\.noteHeard\(home\)/)
       expect(heard).toMatch(/leaderBook\.backupLead\(home\)/)
       expect(heard).toMatch(/sendEvent\((ws|client), 'leader-lost'/)
@@ -133,10 +136,51 @@ describe('leader protocol: both twins', () => {
     })
   }
 
+  for (const [name, src] of Object.entries(twins)) {
+    it(`${name}: a follower socket reads, and is never taken for the leader`, () => {
+      const start = src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set([')
+      expect(start).toBeGreaterThan(0)
+      const list = src.slice(start, src.indexOf('])', start)).replace(/\/\/[^\n]*/g, '')
+      for (const c of ['follower.hello', 'follower.status', 'list', 'attach', 'read-history']) expect(list).toContain(`'${c}'`)
+      for (const c of ['leader.configure', 'leader.claim', 'host.slice', 'replica.sync', 'hooks.configure', 'triggers.configure', 'bridge.configure', 'server.configure', 'offline.drain', 'stop', 'start', 'send', 'fs.write']) {
+        expect(list).not.toContain(`'${c}'`)
+      }
+      expect(fnBody(src, 'isServerClient')).toMatch(/origin !== 'bridge' && [\w.?]*origin !== 'follower'/)
+      // The gate refuses before any handler runs.
+      expect(src).toMatch(/origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS\.has\(cmd\.cmd( as string)?\)\) \{/)
+      // Every pick of "the" server skips followers: relays, gateway calls, triggers, cron notes.
+      expect(fnBody(src, 'pickTrustedClient')).toMatch(/if \(!isServerClient\(client\)\) continue/)
+      expect(fnBody(src, 'sendGatewayRequest')).toMatch(/if \(!isServerClient\(client\) \|\| isQuietTrustedClient\(client\)\) continue/)
+      expect(fnBody(src, 'sendTriggerEvent')).toMatch(/if \(isServerClient\(client\)\) \{/)
+      expect(src).toMatch(/if \(isServerClient\(client\)\) sendEvent\(client, 'cron-metadata'/)
+      // Only the socket the leader's configure tagged may say what server runs here.
+      expect(fnBody(src, 'cmdServerConfigure')).toMatch(/gatewayClientHomes\.get\(ws\) !== home\) return sendError/)
+      expect(fnBody(src, 'cmdFollowerHello')).toMatch(/gatewayClientHomes\.has\(ws\)\) return sendError/)
+      // Only the server the daemon started speaks as the follower.
+      expect(fnBody(src, 'cmdFollowerHello')).toMatch(/if \(!hostServers\.tokenMatches\(home, cmd\.token\)\)/)
+    })
+
+    it(`${name}: streams go only where each link may open them, and end with the link`, () => {
+      const bridge = src.slice(src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['))).replace(/\/\/[^\n]*/g, '')
+      for (const c of ['stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close']) expect(bridge).toContain(`'${c}'`)
+      // The bridge opens no stream to anyone.
+      expect(bridge).not.toContain(`'stream.open'`)
+      const target = fnBody(src, 'streamTarget')
+      // A follower: to the primary of its own Walnut or the companion; the primary: to its follower.
+      expect(target).toMatch(/origin === 'follower'/)
+      expect(target).toMatch(/followerSockets\.get\(\w+\) !== ws\) return \{ why: 'send follower\.hello first' \}/)
+      expect(target).toMatch(/isServerClient\(ws\) \? gatewayClientHomes\.get\(ws\)/)
+      expect(fnBody(src, 'primaryClientFor')).toMatch(/!isServerClient\(client\) \|\| gatewayClientHomes\.get\(client\) !== home/)
+      expect(src).toMatch(/streamRelay\.dropLink\(ws\)/)
+      // The bridge's streams end with it (the standalone twin drops it through handleDisconnect).
+      expect(src).toMatch(/streamRelay\.dropLink\(bridgeAdapter\)|try \{ handleDisconnect\(bridgeAdapter\) \}/)
+    })
+  }
+
   it('both cores are part of the daemon version hash, in the build script', () => {
     const versionSrc = read('src/providers/daemon-version-check.ts')
     const buildSrc = read('scripts/build-daemon.sh')
-    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts']) {
+    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts', 'src/providers/host-server-core.ts', 'src/providers/stream-relay-core.ts']) {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
     }
@@ -150,7 +194,9 @@ describe('the source twin template', () => {
     expect(rendered).not.toContain('__CREATE_BOARD_OFFLINE__')
     expect(rendered).not.toContain('__CREATE_LIVE_SETTINGS__')
     expect(rendered).not.toContain('__CREATE_OFFLINE_SEARCH__')
-    for (const fn of [createLeaderBook, createBoardOffline, createLiveSettings, createOfflineSearch]) {
+    expect(rendered).not.toContain('__CREATE_HOST_SERVER__')
+    expect(rendered).not.toContain('__CREATE_STREAM_RELAY__')
+    for (const fn of [createLeaderBook, createBoardOffline, createLiveSettings, createOfflineSearch, createHostServerSupervisor, createStreamRelay]) {
       const text = fn.toString()
       expect(text).not.toMatch(/__name\(|__vite|import\(/)
       expect(rendered).toContain(text)

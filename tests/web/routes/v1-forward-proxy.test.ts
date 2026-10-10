@@ -91,6 +91,15 @@ describe('macAnswers', () => {
     expect(await away(fresh({ backupAllowed: false }))).toBe(false)
   })
 
+  it('the leader presence every follower route reads (core/server-role.ts) is the same view', async () => {
+    const presence = (snapshot: PrimarySnapshot | null) => harness({ primary: () => snapshot }).fwd.presence()
+    expect(await presence(fresh())).toEqual({ answers: true, why: 'answers' })
+    expect(await presence(fresh({ backupAllowed: false }))).toEqual({ answers: true, why: 'not-allowed' })
+    expect(await presence(null)).toEqual({ answers: true, why: 'no-leader' })
+    expect(await presence(fresh({ bridge: false }))).toEqual({ answers: false, why: 'no-bridge' })
+    expect(await presence(fresh({ leading: 1 }))).toEqual({ answers: false, why: 'companion-leads' })
+  })
+
   it('an old Mac rests until its time is up', () => {
     expect(macAnswers(fresh(), NOW, 0, NOW + 1)).toBe('primary-too-old')
     expect(macAnswers(fresh(), NOW, 0, NOW)).toBeNull()

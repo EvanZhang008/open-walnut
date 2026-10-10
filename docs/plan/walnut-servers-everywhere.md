@@ -1,6 +1,6 @@
 # One Walnut server, on any machine, reachable from anywhere
 
-Status: stage 1 built; the other stages below ship in order. Builds on
+Status: stages 1 and 2 built; the other stages below ship in order. Builds on
 [the control plane](./walnut-control-plane.md) (who leads, the companion's copy,
 the one request path) and [daemon-first hosts](./daemon-first-hosts.md).
 
@@ -52,7 +52,7 @@ How a follower reaches the leader depends on the path it has:
 
 | Path | Who has it | What crosses |
 |---|---|---|
-| **byte path** | a server on a host: the Mac's SSH connection to that host carries a reverse forward to the Mac | every HTTP request and WebSocket, unchanged, no size cap |
+| **byte path** | a server on a host: a stream its daemon passes from its link to the Mac's (see "One kind of link") | every HTTP request and WebSocket, unchanged, no size cap |
 | **bridge forward** | the companion: the Mac's daemon dials its `/bridge` | `/api/v1` calls as `server.http`, 1 MB in, 256 KB out |
 
 The decision "does the leader answer now" is one function per follower, fed by
@@ -119,29 +119,101 @@ A host the user picks can run a follower: the **host server**. It is what makes 
 cloud desktop a front door that is up while the Mac sleeps.
 
 ```
-phone ── tunnel (on the host) ── host server ──(Mac awake)── reverse SSH forward ── Mac's tunnel port
-                                     │
-                                     └──(Mac away)── its own copy + the host's daemon
+phone ── tunnel (on the host) ── host server ── stream via the host's daemon ──(Mac awake)── Mac's tunnel port
+                                     │                                  └──(Mac away)── the companion
+                                     └──(neither)── its own copy + the host's daemon
 ```
 
 - **Lifecycle.** The host's daemon keeps the host server running (start, restart
   after a crash, survive the Mac sleeping); the Mac installs and upgrades it on
-  connect, the way it deploys the daemon. It listens on loopback only.
-- **Leader path.** The Mac's SSH master to that host adds a reverse forward from
-  a loopback port on the host to the Mac's tunnel port. The host server probes the
-  leader through it (`GET /api/v1/instance`, a few seconds' deadline) and, while
-  it answers, forwards every request and WebSocket to it byte for byte. The
-  phone sees the Mac's full console.
-- **Leader away.** The host server answers itself: first the backup leader when
-  one leads this host (the companion), then its own copy. Its own copy is fed by
-  the host's daemon, which already keeps the copy its sessions need (task slice,
-  notes, memory, skills) and answers ops from it; writes go to that daemon's
-  journal, which the Mac drains when it returns.
+  connect, the way it deploys the daemon. It listens on one loopback port, the
+  one its tunnel points at.
+- **Leader path.** While the daemon says the Mac leads and hears it, every
+  request and WebSocket goes to the Mac byte for byte, on a stream through the
+  daemon that lands on the Mac's tunnel port. The phone sees the Mac's full
+  console. A stream that cannot be opened (the Mac's link just went) sends that
+  request, if it is a read, on to the companion at once.
+- **Leader away.** Requests go to the companion, on a stream through the same
+  daemon, while the companion is linked to the host. With neither, the host
+  server answers alone: today a page and a JSON error that say why. Stage 4
+  makes that answer its own copy, fed by the host's daemon (which already keeps
+  the copy its sessions need: task slice, notes, memory, skills); writes go to
+  that daemon's journal, which the Mac drains when it returns.
+- **Copies.** The Mac pushes the same copies it pushes to the companion (the task
+  store, the search index) to every follower, the host server included: to the
+  host server on a stream through its daemon (`src/core/replication/replica-targets.ts`
+  names the targets; `src/core/server-role.ts` says which role this server plays
+  and whether its leader answers).
 - **Runtime.** The host needs a Node that runs there. On an older Linux (glibc
   2.26), stock Node 24 does not start and the prebuilt SQLite module does not
   load; a Node built for that system and a newer compiler for native modules
   (`CC`, `CXX`) are the answer, and the install step checks both before it starts
   anything.
+
+### One kind of link
+
+Every connection is the same thing: a two way link between **a server and a
+daemon**. How it was dialled is a detail of the transport underneath; once up,
+either side sends requests and events on it.
+
+```
+  Mac server ──┐               ┌── companion server
+  (SSH, dials) │               │  (the daemon dials its /bridge)
+               ▼               ▼
+          daemon (one per host) ◄── loopback ── host server
+```
+
+- Daemons never link to each other, and servers never link to each other.
+  (The Mac's HTTPS push to the companion is the one exception today.)
+- One server reaches another through a daemon both are linked to. The
+  companion already reaches the Mac this way (`server.http` through the Mac's
+  daemon). A host server links to its own host's daemon only, and reaches the
+  Mac and the companion through it.
+- The daemon's one primitive for this is a **byte stream** between two of its
+  links (`src/providers/stream-relay-core.ts`, both twins, capability
+  `stream-relay-v1`): `stream.open {sid, to}`, then accept, data, ack, end and
+  close frames in either direction. The server that receives a stream treats it
+  as an ordinary connection to its own door (`src/lib/link-stream.ts`). The
+  daemon holds no bytes: each end acks what it read and keeps at most a window
+  unacked, so a slow end slows its peer and never fills the daemon. Bytes are
+  base64 in JSON frames: simpler than a binary framing, and a third more bytes.
+- Who may open to whom: the host server to the primary of its own Walnut or to
+  the companion; the primary to the host server of its Walnut; the bridge opens
+  nothing and only answers. A stream ends when either link drops.
+
+So the daemon on a host has up to three clients, and tells them apart, because
+most of what it does assumes a trusted client is the leader:
+
+| Client | How it connects | What the daemon lets it do |
+|---|---|---|
+| the Mac's server | the SSH forward (a trusted socket, tagged with its data dir by `leader.configure` / `host.slice`) | everything: it configures the host (hooks, triggers, the host copy, the bridge), drains the journal, stops sessions, says which server the daemon keeps running here, opens streams to it |
+| the cloud companion | the bridge (the daemon dials out; one slot) | the narrow bridge set; it leads only by the leader book's rules; it answers streams a host server opens |
+| the host server | loopback, then `follower.hello {walnutId, home, token}` | reads (`follower.status`, the session list, a session's stream), its report, streams to the Mac or the companion; never a configure command |
+
+A follower socket is never mistaken for the leader:
+
+- its frames are not "the primary was heard" (otherwise a host server that is
+  always up would keep the companion from ever leading while the Mac sleeps);
+- it is never the target of a session's `walnut` call, a relayed message, a
+  trigger event or a cron note, all of which only the leader acts on;
+- a command that writes state the leader owns (`leader.*`, `host.slice`,
+  `replica.*`, `hooks.configure`, `triggers.configure`, `bridge.configure`,
+  `server.configure`, `offline.drain`, a stop) is refused with `follower_refused`;
+- `follower.hello` takes only the token the daemon started that server with, so
+  no stray process on the host takes its place.
+
+The bridge slot stays the companion's. Who leads right now comes from the leader
+book through `follower.status` (holder, epoch, whether the primary was heard),
+so the host server keeps no view of its own and probes nothing.
+
+The daemon keeps the host server running (`server.configure {spec}` from the
+leader only, `server.status`; `src/providers/host-server-core.ts`, both twins,
+capability `host-server-v1`): it starts it in its own process group with a token
+of its own, restarts it with backoff after an exit, adopts it after a daemon
+restart (pid and start time must match), passes it the spec's `settings` (its
+tunnel) without a restart, keeps its last `follower.report` for the leader, and
+stops it when the spec is removed. One spec per Walnut data dir, so a test
+server never touches the real one.
 
 ## What stays out of the open source tree
 
@@ -160,16 +232,16 @@ routing) is generic and lives here.
   is no door from the internet to the primary's codes.
 - A tunnel provider's own access control (a company sign-in, a tailnet) stays in
   front; the device token is the second lock, never the only one we recommend.
-- The reverse forward on a host is a loopback port any process on that host can
-  reach, which is why it points at the tunnel port (token required) and never at
-  the Mac's main port (which trusts loopback).
+- A host server's stream lands on the Mac's tunnel port (token required), never
+  on its main port (which trusts loopback); every forwarded request carries
+  X-Forwarded-For, so no server takes it for its own machine.
 
 ## Stages
 
 | # | Stage | State |
 |---|---|---|
 | 1 | Exposure: tunnel port, supervisor, `command` provider, plugin API, sign-in code, Settings | built |
-| 2 | Host server, leader awake: install and run on a host, reverse forward, byte forward | next |
+| 2 | Host server, leader awake: install and run on a host, streams through its daemon, byte forward | built |
 | 3 | Feature routing: one helper (`src/core/feature-route.ts`), speech to text on every server | built for speech to text |
 | 4 | Host server, leader away: copy fed by the host's daemon, journaled writes | after 2 |
 

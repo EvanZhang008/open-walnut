@@ -237,6 +237,14 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('host-server')
+    .description('Run as a server on this host that follows your Mac (started by this host\'s Walnut daemon)')
+    .action(async () => {
+      const { runHostServer } = await import('../host-server/main.js');
+      await runHostServer();
+    });
+
+  program
     .command('logs')
     .description('View structured logs')
     .option('-f, --follow', 'Follow log output (tail)')

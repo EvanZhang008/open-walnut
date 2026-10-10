@@ -303,6 +303,31 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Optional: an older daemon's bridge refuses the command, and the companion
   // says that host's daemon upgrades on its next connect to the primary.
   'leader-settings-v1',
+  // 'follower-v1' (docs/plan/walnut-servers-everywhere.md, "One kind of link"):
+  // the server this daemon started for a Walnut says so with `follower.hello
+  // {walnutId, home, token}` (the token the daemon started it with), asks
+  // `follower.status` (the leader book's view and its settings) and says how it
+  // is with `follower.report`. A follower socket reads only
+  // (FOLLOWER_ALLOWED_COMMANDS); it is never taken for the primary (its frames
+  // are not the primary heard) and never gets a relay, gateway call, trigger
+  // event or cron note. Both twins, inline. Optional: without it there is no
+  // host server on that host.
+  'follower-v1',
+  // 'host-server-v1' (host-server-core.ts): the leader, on the socket its
+  // leader.configure tagged, sets what server runs here for its Walnut with
+  // `server.configure {home, spec}` (null removes it) and reads it back, with
+  // the server's last report, with `server.status`. The daemon keeps it running
+  // across exits and adopts it after its own restart. Both twins (the core is
+  // text-injected into the source twin). Not bridge-reachable. Optional: without
+  // it the Mac says the host's daemon needs an update.
+  'host-server-v1',
+  // 'stream-relay-v1' (stream-relay-core.ts): byte streams between two servers
+  // linked to this daemon (`stream.open {sid, to}`, then accept / data / ack /
+  // end / close frames, never answered by id). The follower opens to the primary
+  // or the companion, the primary to its follower; the bridge only answers. The
+  // daemon passes frames on and holds none. Both twins. Optional: the host
+  // server needs it.
+  'stream-relay-v1',
   // 'host-replica-v1' (host-replica-core.ts, docs/plan/walnut-control-plane.md):
   // the primary keeps a read copy of its notes, memory and skills on this host
   // with `replica.sync` (a manifest of key + hash; the daemon answers which keys

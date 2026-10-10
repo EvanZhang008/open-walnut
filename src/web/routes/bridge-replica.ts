@@ -53,6 +53,22 @@ async function replica(req: Request, res: Response): Promise<void> {
   }
 }
 
+/**
+ * The same steps on a host server, where the primary reaches it on a stream
+ * through the host's daemon (host-server/main.ts). No credential: only the
+ * primary's own link to that daemon may open such a stream (stream-relay-core.ts).
+ */
+export function createLinkedReplicaRouter(): Router {
+  const router = Router()
+  router.post(
+    '/',
+    express.json({ limit: BODY_LIMIT }),
+    (req, res, next) => { void replica(req, res).catch(next) },
+  )
+  router.use(parseErrors)
+  return router
+}
+
 export function createBridgeReplicaRouter(): Router {
   const router = Router()
   router.post(

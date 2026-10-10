@@ -26,7 +26,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import net from 'node:net'
+import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
+import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
@@ -344,6 +347,8 @@ export type DaemonConnectPhase =
 
 export class DaemonConnection {
   private ws: WebSocket | null = null
+  /** Byte streams to the host's server (core/host-server/), through the daemon. */
+  private streams: StreamEndpoint | null = null
   private tunnel: ChildProcess | null = null
   private sshTarget: SshTarget | null
   private hostKey: string
@@ -774,6 +779,11 @@ export class DaemonConnection {
       void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
     }
     if (changed && value) this.pushHostSlice()
+    // A server this Mac keeps on the host loses its streams with the link
+    // (core/host-server/); it is set up again after the next leader.configure.
+    if (changed && !value) {
+      void import('../core/host-server/index.js').then((m) => m.hostServerDisconnected(this.hostKey)).catch(() => {})
+    }
     // Distribute the walnut skill to this host's engine-native discovery
     // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
     // same freshness mechanism as the shims, hash-skipped daemon-side.
@@ -1086,6 +1096,11 @@ export class DaemonConnection {
           const { configureHostLeader } = await import('../core/leader/primary-leader.js')
           if (await configureHostLeader({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })) {
             this.leaderConfigured = true
+            // The daemon now knows which Walnut speaks: the server this Mac keeps
+            // on the host may be set up (core/host-server/; off unless enabled).
+            void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {
+              log.session.warn('DaemonConnection: host server setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+            })
           }
         }
         // Then, once per connection, the host's read copy of the notes, memory and
@@ -1817,6 +1832,78 @@ export class DaemonConnection {
       .finally(() => { if (this.portForwardDials.get(key) === dial) this.portForwardDials.delete(key) })
     this.portForwardDials.set(key, dial)
     return dial
+  }
+
+  // ── For a server this Mac keeps on the host (core/host-server/) ──
+
+  /** Run a POSIX sh script on the host (see sshExec): the host server's install and port checks. */
+  runRemoteScript(script: string, timeoutMs = 30_000): Promise<string> {
+    if (this.isCloudTunnel) return Promise.reject(new Error('Cloud is reached through the cloud companion, not SSH'))
+    return this.sshExec(script, timeoutMs)
+  }
+
+  /**
+   * Put `data` at `remotePath` on the host, checked by size and sha256: one SSH
+   * stream first, 256 KB chunks when a proxy kills it (the daemon binary's path).
+   */
+  async uploadFile(remotePath: string, data: Buffer): Promise<void> {
+    if (this.isCloudTunnel) throw new Error('Cloud is reached through the cloud companion, not SSH')
+    const dir = remotePath.slice(0, remotePath.lastIndexOf('/')) || '.'
+    await this.sshExec(`mkdir -p ${shq(dir)}`, 10_000)
+    const sha = crypto.createHash('sha256').update(data).digest('hex')
+    if (await this.pipeSingleStream(data, remotePath, sha)) return
+    log.session.warn('DaemonConnection: single-stream upload failed, falling back to chunked', { host: this.hostKey, bytes: data.length, remotePath })
+    await this.pipeChunked(data, remotePath, `${remotePath}.chunks`, 'upload')
+  }
+
+  /**
+   * A byte stream to the server on this host that follows this Walnut, through
+   * its daemon (lib/link-stream.ts; the daemon's half is stream-relay-core.ts).
+   */
+  openStream(to: 'follower', purpose?: string): Promise<Duplex> {
+    return this.streamEndpoint().open(to, purpose ? { purpose } : {})
+  }
+
+  /** The streams on this connection's socket; frames go on whichever socket is in use. */
+  private streamEndpoint(): StreamEndpoint {
+    if (!this.streams) {
+      this.streams = createStreamEndpoint({
+        send: (frame) => {
+          const ws = this.ws
+          if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(`not connected to ${this.hostKey}`)
+          ws.send(JSON.stringify(frame))
+        },
+        // A host server's browser reaching this Mac: into the tunnel port, which
+        // trusts nothing on loopback (the same door a tunnel here uses).
+        accept: (info) => (info.from === 'follower' ? (stream) => { void this.plugFollowerStream(stream) } : null),
+      })
+    }
+    return this.streams
+  }
+
+  private async plugFollowerStream(stream: Duplex): Promise<void> {
+    const { getExposeRuntime } = await import('../web/expose-runtime.js')
+    const port = getExposeRuntime()?.openPort() ?? null
+    if (!port) {
+      stream.destroy(new Error('this Walnut has no door open for host servers'))
+      return
+    }
+    spliceStream(stream, net.connect(port, '127.0.0.1'))
+  }
+
+  /** What the host-server manager may do on this host (core/host-server/manager.ts HostServerHost). */
+  hostServerHandle() {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const conn = this
+    return {
+      hostKey: this.hostKey,
+      get connected() { return conn.connected },
+      hasCapability: (cap: string) => conn.hasCapability(cap),
+      send: (cmd: string, params?: Record<string, unknown>, timeoutMs?: number) => conn.send(cmd, params, timeoutMs),
+      runRemoteScript: (script: string, timeoutMs?: number) => conn.runRemoteScript(script, timeoutMs),
+      uploadFile: (remotePath: string, data: Buffer) => conn.uploadFile(remotePath, data),
+      openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
+    }
   }
 
   /** Drop one forward (a service probe found nothing behind it). */
@@ -3177,109 +3264,11 @@ export class DaemonConnection {
           host: this.hostKey, gzBytes: gzSize,
         })
         // Fall through to chunked path below.
-        // 256KB — deep under the corporate proxy’s ~5MB kill threshold AND any per-connection
-        // byte-rate throttling. Larger chunks (1MB) were the main failure mode
-        // pre-2026-05-05: corp proxies would kill ~half the chunks on a ~40MB
-        // binary, blowing past MAX_RETRIES=2, falling back to source deploy,
-        // which then failed on old-glibc hosts — leaving the daemon dead.
-        //
-        // Tune by observation, not theory — too small wastes SSH setup overhead
-        // (per-chunk connection cost dominates); too large hits proxy kills.
-        // 256KB was chosen after observing proxy kills consistently at ~1MB and
-        // confirming 256KB survives reliably across proxy variants.
-        const CHUNK_SIZE = 262_144
-        const totalChunks = Math.ceil(gzSize / CHUNK_SIZE)
-        const chunkDir = `${this._remoteDir}/deploy_chunks`
-
-        // Clean any partial previous transfer
-        await this.sshExec(`rm -rf ${shq(chunkDir)} && mkdir -p ${shq(chunkDir)}`, 5_000).catch(() => {})
-
-        // Per-chunk retry budget: proxy kills are transient. 5 attempts per
-        // chunk with exponential backoff (3s → 5s → 10s → 15s → 20s) gives
-        // us ~53s per bad chunk before accepting defeat.
-        //
-        // Total failure cap: ~5 min worst case under sustained proxy
-        // interference (30 failures × mixed backoffs + per-chunk SSH cost).
-        // Source-deploy fallback is still faster than giving up on upgrade
-        // permanently, so err on the robust side here.
-        //
-        // Values chosen empirically — 5 retries per chunk handled the observed
-        // proxy transient kills on 40MB deploys during the 2026-05-05 incident.
-        // Tune downward only with data; the cost of failing the deploy is
-        // ~30min of blocked remote sessions until the user notices.
-        const MAX_CHUNK_RETRIES = 5
-        const BACKOFF_MS = [3_000, 5_000, 10_000, 15_000, 20_000]
-        const MAX_TOTAL_FAILURES = 30
-        let totalFailures = 0
-
-        for (let i = 0; i < totalChunks; i++) {
-          // Abort fast if the connection was torn down mid-deploy — user should
-          // not have to wait out retries/backoff after a destroy().
-          if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
-
-          const offset = i * CHUNK_SIZE
-          const chunk = gzData.subarray(offset, offset + CHUNK_SIZE)
-
-          let chunkAttempt = 0
-          // Each chunk writes to its own file (overwrite) — retries are safe
-          let ok = await this.pipeChunk(chunk, chunkDir, i)
-          while (!ok) {
-            chunkAttempt++
-            totalFailures++
-            if (totalFailures > MAX_TOTAL_FAILURES) {
-              throw new Error(
-                `binary deploy failed: ${totalFailures} total chunk failures across ${totalChunks} chunks — proxy actively blocking, will fall back to source deploy`,
-              )
-            }
-            if (chunkAttempt > MAX_CHUNK_RETRIES) {
-              throw new Error(
-                `binary deploy failed: chunk ${i + 1}/${totalChunks} killed ${chunkAttempt} times — will fall back to source deploy`,
-              )
-            }
-            // ±20% jitter prevents lockstep retry collision when multiple
-            // Walnut instances happen to be deploying to the same host.
-            const baseDelay = BACKOFF_MS[Math.min(chunkAttempt - 1, BACKOFF_MS.length - 1)]
-            const delayMs = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
-            log.session.info('DaemonConnection: chunk transfer killed by proxy, retrying', {
-              host: this.hostKey, chunk: i + 1, totalChunks,
-              chunkAttempt, totalFailures, delayMs,
-            })
-            // Second abort gate: don't burn the full backoff if we're being torn down.
-            if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
-            await new Promise(r => setTimeout(r, delayMs))
-            ok = await this.pipeChunk(chunk, chunkDir, i)
-          }
-
-          // Progress log every 16 chunks (~4MB) so a 160-chunk (~40MB) upload
-          // shows ~10 progress markers without log spam.
-          if (i % 16 === 0 || i === totalChunks - 1) {
-            log.session.info('DaemonConnection: binary deploy progress', {
-              host: this.hostKey, chunk: i + 1, totalChunks,
-              percent: Math.round(((i + 1) / totalChunks) * 100),
-            })
-          }
-
-          // Brief pause between chunks to avoid triggering rate limits.
-          // 250ms (vs old 1000ms) because 256KB chunks = 4x as many chunks;
-          // keep total deploy wall-clock roughly constant.
-          if (i < totalChunks - 1) {
-            await new Promise(r => setTimeout(r, 250))
-          }
-        }
-
-        // Reassemble chunks and verify size before unpacking
-        const remoteSize = parseInt(
-          await this.sshExec(`cat ${shq(chunkDir)}/chunk_* > ${shq(remotePath + '.gz')} && wc -c < ${shq(remotePath + '.gz')}`, 30_000),
-          10,
-        )
-        if (remoteSize !== gzSize) {
-          await this.sshExec(`rm -rf ${shq(chunkDir)} ${shq(remotePath + '.gz')}`, 5_000).catch(() => {})
-          throw new Error(`binary deploy size mismatch: remote=${remoteSize} local=${gzSize}`)
-        }
+        const { chunks: totalChunks, totalFailures } = await this.pipeChunked(gzData, remotePath + '.gz', `${this._remoteDir}/deploy_chunks`, 'binary deploy')
 
         // Unpack and make executable
         const unpackResult = await this.sshExec(
-          `rm -rf ${shq(chunkDir)} && gunzip -f ${shq(remotePath + '.gz')} && chmod +x ${shq(remotePath)} && ${shq(remotePath)} --version`,
+          `gunzip -f ${shq(remotePath + '.gz')} && chmod +x ${shq(remotePath)} && ${shq(remotePath)} --version`,
           30_000,
         )
 
@@ -3293,6 +3282,115 @@ export class DaemonConnection {
     } catch (err) {
       throw new Error(`Failed to deploy daemon binary to ${this.hostKey}: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  /**
+   * Upload `data` to `remotePath` in 256 KB chunks, each over its own SSH
+   * connection, then join them and check the size: the path that survives an SSH
+   * proxy that kills large transfers (see deployBinary). Throws when the proxy
+   * keeps killing chunks.
+   */
+  private async pipeChunked(data: Buffer, remotePath: string, chunkDir: string, what: string): Promise<{ chunks: number; totalFailures: number }> {
+    // 256KB — deep under the corporate proxy’s ~5MB kill threshold AND any per-connection
+    // byte-rate throttling. Larger chunks (1MB) were the main failure mode
+    // pre-2026-05-05: corp proxies would kill ~half the chunks on a ~40MB
+    // binary, blowing past MAX_RETRIES=2, falling back to source deploy,
+    // which then failed on old-glibc hosts — leaving the daemon dead.
+    //
+    // Tune by observation, not theory — too small wastes SSH setup overhead
+    // (per-chunk connection cost dominates); too large hits proxy kills.
+    // 256KB was chosen after observing proxy kills consistently at ~1MB and
+    // confirming 256KB survives reliably across proxy variants.
+    const CHUNK_SIZE = 262_144
+    const totalChunks = Math.ceil(data.length / CHUNK_SIZE)
+
+    // Clean any partial previous transfer
+    await this.sshExec(`rm -rf ${shq(chunkDir)} && mkdir -p ${shq(chunkDir)}`, 5_000).catch(() => {})
+
+    // Per-chunk retry budget: proxy kills are transient. 5 attempts per
+    // chunk with exponential backoff (3s → 5s → 10s → 15s → 20s) gives
+    // us ~53s per bad chunk before accepting defeat.
+    //
+    // Total failure cap: ~5 min worst case under sustained proxy
+    // interference (30 failures × mixed backoffs + per-chunk SSH cost).
+    // Source-deploy fallback is still faster than giving up on upgrade
+    // permanently, so err on the robust side here.
+    //
+    // Values chosen empirically — 5 retries per chunk handled the observed
+    // proxy transient kills on 40MB deploys during the 2026-05-05 incident.
+    // Tune downward only with data; the cost of failing the deploy is
+    // ~30min of blocked remote sessions until the user notices.
+    const MAX_CHUNK_RETRIES = 5
+    const BACKOFF_MS = [3_000, 5_000, 10_000, 15_000, 20_000]
+    const MAX_TOTAL_FAILURES = 30
+    let totalFailures = 0
+
+    for (let i = 0; i < totalChunks; i++) {
+      // Abort fast if the connection was torn down mid-deploy — user should
+      // not have to wait out retries/backoff after a destroy().
+      if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
+
+      const offset = i * CHUNK_SIZE
+      const chunk = data.subarray(offset, offset + CHUNK_SIZE)
+
+      let chunkAttempt = 0
+      // Each chunk writes to its own file (overwrite) — retries are safe
+      let ok = await this.pipeChunk(chunk, chunkDir, i)
+      while (!ok) {
+        chunkAttempt++
+        totalFailures++
+        if (totalFailures > MAX_TOTAL_FAILURES) {
+          throw new Error(
+            `${what} failed: ${totalFailures} total chunk failures across ${totalChunks} chunks — proxy actively blocking`,
+          )
+        }
+        if (chunkAttempt > MAX_CHUNK_RETRIES) {
+          throw new Error(
+            `${what} failed: chunk ${i + 1}/${totalChunks} killed ${chunkAttempt} times`,
+          )
+        }
+        // ±20% jitter prevents lockstep retry collision when multiple
+        // Walnut instances happen to be deploying to the same host.
+        const baseDelay = BACKOFF_MS[Math.min(chunkAttempt - 1, BACKOFF_MS.length - 1)]
+        const delayMs = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+        log.session.info('DaemonConnection: chunk transfer killed by proxy, retrying', {
+          host: this.hostKey, chunk: i + 1, totalChunks,
+          chunkAttempt, totalFailures, delayMs,
+        })
+        // Second abort gate: don't burn the full backoff if we're being torn down.
+        if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
+        await new Promise(r => setTimeout(r, delayMs))
+        ok = await this.pipeChunk(chunk, chunkDir, i)
+      }
+
+      // Progress log every 16 chunks (~4MB) so a 160-chunk (~40MB) upload
+      // shows ~10 progress markers without log spam.
+      if (i % 16 === 0 || i === totalChunks - 1) {
+        log.session.info('DaemonConnection: chunked upload progress', {
+          host: this.hostKey, what, chunk: i + 1, totalChunks,
+          percent: Math.round(((i + 1) / totalChunks) * 100),
+        })
+      }
+
+      // Brief pause between chunks to avoid triggering rate limits.
+      // 250ms (vs old 1000ms) because 256KB chunks = 4x as many chunks;
+      // keep total deploy wall-clock roughly constant.
+      if (i < totalChunks - 1) {
+        await new Promise(r => setTimeout(r, 250))
+      }
+    }
+
+    // Reassemble chunks and verify size
+    const remoteSize = parseInt(
+      await this.sshExec(`cat ${shq(chunkDir)}/chunk_* > ${shq(remotePath)} && wc -c < ${shq(remotePath)}`, 30_000),
+      10,
+    )
+    if (remoteSize !== data.length) {
+      await this.sshExec(`rm -rf ${shq(chunkDir)} ${shq(remotePath)}`, 5_000).catch(() => {})
+      throw new Error(`${what} size mismatch: remote=${remoteSize} local=${data.length}`)
+    }
+    await this.sshExec(`rm -rf ${shq(chunkDir)}`, 5_000).catch(() => {})
+    return { chunks: totalChunks, totalFailures }
   }
 
   /**
@@ -3838,6 +3936,12 @@ export class DaemonConnection {
     // Command response (has 'id' field)
     if (this.resolveCommandFrame(msg)) return
 
+    // Streams between servers through the daemon (stream-relay-v1): handled here, never fanned out.
+    if (typeof msg.ev === 'string' && msg.ev.startsWith('stream-')) {
+      this.streamEndpoint().handle(msg)
+      return
+    }
+
     // Unsolicited event (has 'ev' field)
     if ('ev' in msg) {
       const event = msg as unknown as DaemonEvent
@@ -4143,6 +4247,8 @@ export class DaemonConnection {
       try { this.ws.close() } catch {}
       this.ws = null
     }
+    // The daemon drops the streams of the closed socket too.
+    this.streams?.closeAll(`the link to ${this.hostKey} closed`)
 
     log.session.info('DaemonConnection: connection lost, scheduling reconnect', {
       host: this.hostKey, delayMs: DaemonConnection.RECONNECT_DELAY_MS,

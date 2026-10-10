@@ -1673,12 +1673,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/devices', deviceAdoptionRouter)
   // The browser sign-in code, and this server's tunnel (docs/plan/walnut-servers-everywhere.md).
   {
-    const [{ browserCodeRouter }, { exposeRouter }] = await Promise.all([
+    const [{ browserCodeRouter }, { exposeRouter }, { hostServersRouter }] = await Promise.all([
       import('./routes/browser-pair.js'),
       import('./routes/expose.js'),
+      import('./routes/host-servers.js'),
     ])
     app.use('/api/devices', browserCodeRouter)
     app.use('/api/expose', exposeRouter)
+    app.use('/api/host-servers', hostServersRouter)
   }
   app.use('/api/devices', devicesRouter)
   app.use('/api/focus', focusRouter)
@@ -1879,8 +1881,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The companion is this server plus a public address: while the Mac answers,
   // a phone's call is carried to it and answered there (web/v1-forward/).
   if (CLOUD_MODE) {
-    const { getV1Forward } = await import('./v1-forward/proxy.js')
+    const { getV1Forward, startLeaderPresenceTick } = await import('./v1-forward/proxy.js')
     app.use('/api/v1', getV1Forward().middleware)
+    // And this server's one view of the leader (core/server-role.ts) follows it.
+    startLeaderPresenceTick()
   }
   // A browser trading its one-time sign-in code for a device token (public, see auth.ts).
   app.use('/api/v1', (await import('./routes/browser-pair.js')).browserPairV1Router)
@@ -5793,6 +5797,9 @@ export async function stopServer(): Promise<void> {
     const { closeAllBridges } = await import('./ws/bridge-registry.js')
     closeAllBridges()
   } catch { /* best-effort */ }
+  if (CLOUD_MODE) {
+    try { (await import('./v1-forward/proxy.js')).stopLeaderPresenceTick() } catch { /* best-effort */ }
+  }
   // The cloud box: stop the pairing probe (primary), drop the tunnels (replica;
   // the tunnel daemon and its sessions stay up).
   try {

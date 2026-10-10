@@ -53,6 +53,8 @@ import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createHostServerSupervisor } from './host-server-core.js'
+import { createStreamRelay } from './stream-relay-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
@@ -239,6 +241,8 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
+    ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
+    ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
@@ -391,6 +395,30 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         || !fmt.format({ task, subtasks: [{ id: 'msub', title: 's', phase: 'TODO' }], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }, 0).includes('- msub [TODO] s')) {
         throw new Error('open items text did not build')
       }
+    }
+    // Host server smoke: a reconstructed supervisor must refuse a spec with a
+    // relative command and report nothing configured, without touching disk.
+    const createHostServer = reconstructed['__CREATE_HOST_SERVER__'] as typeof createHostServerSupervisor | undefined
+    if (createHostServer) {
+      const noDir = { readdirSync: () => { throw new Error('none') } } as unknown as typeof fs
+      const sup = createHostServer({
+        fs: noDir, path, spawn: () => { throw new Error('no spawn') }, dir: '/nonexistent', keyOf: () => 'k', now: () => 0,
+        setTimer: () => 0, clearTimer: () => {}, log: () => {}, startTimeOf: () => null, killGroup: () => {}, baseEnv: () => ({}),
+        randomToken: () => 't'.repeat(64),
+      })
+      sup.boot()
+      let refused = false
+      try { sup.configure('/h', { home: '/h', walnutId: 'w', command: 'node', args: [], cwd: '/', env: {}, log: '/l', port: 1, settings: {} }) } catch { refused = true }
+      if (!refused || sup.status('/h').state !== 'off') throw new Error('host server supervisor did not build')
+    }
+    // Stream relay smoke: a reconstructed relay must pass an open on and refuse a reused id.
+    const createRelay = reconstructed['__CREATE_STREAM_RELAY__'] as typeof createStreamRelay | undefined
+    if (createRelay) {
+      const sent: string[] = []
+      const relay = createRelay<string>({ send: (link, ev) => sent.push(`${link}:${ev}`), log: () => {} })
+      relay.open('a', 'o1', 'b', {})
+      relay.open('a', 'o1', 'b', {})
+      if (sent.join(',') !== 'b:stream-open,a:stream-close' || relay.count() !== 1) throw new Error('stream relay did not build')
     }
     // Leader book smoke: a reconstructed book must refuse a companion claim for
     // a Walnut it does not know, without touching disk.
@@ -2545,7 +2573,7 @@ var TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_M
 function heardFrom(client) {
   client.lastHeardAt = Date.now();
   client.missedBeats = 0;
-  if (client.origin === 'bridge') return;
+  if (!isServerClient(client)) return;
   // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
   // host is a witness of whether it is still there (leader-core.ts).
   var home = gatewayClientHomes.get(client);
@@ -2585,7 +2613,7 @@ function pickTrustedClient() {
   var now = Date.now();
   var fresh = null, suspect = null, quietAt = null, quiet = 0;
   for (const client of wsClients) {
-    if (client.origin === 'bridge') continue;
+    if (!isServerClient(client)) continue;
     var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
     var silentMs = now - at;
     if (silentMs > TRUSTED_CLIENT_QUIET_MS) {
@@ -2618,7 +2646,7 @@ const cronMetadata = (__CREATE_CRON_METADATA__)({
   epoch: DAEMON_INSTANCE_ID,
   changed: function (value) {
     for (const client of wsClients) {
-      if (!client.data || client.data.origin !== 'bridge') sendEvent(client, 'cron-metadata', { value: value });
+      if (isServerClient(client)) sendEvent(client, 'cron-metadata', { value: value });
     }
   },
   oneShotTime: function (cron, createdAt, id) {
@@ -2929,11 +2957,28 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // message ids have a delivery marker in one session's stream. Read-only,
   // bounded (ids and bytes), and the answer is ids the caller already holds.
   'markers.find',
+  // The companion's end of a stream a host server opened to it (stream-relay-v1).
+  // NOT stream.open. Twin of daemon-standalone.ts.
+  'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
   // SSH-tunneled walnut client.
 ]);
+
+// What a follower socket (the host server) may ask (follower-v1). Twin of
+// daemon-standalone.ts FOLLOWER_ALLOWED_COMMANDS.
+var FOLLOWER_ALLOWED_COMMANDS = new Set([
+  'hello', 'ping', 'follower.hello', 'follower.status', 'follower.report', 'server.status',
+  'list', 'status', 'attach', 'read-history', 'markers.find',
+  // Streams to the leader or the companion (stream-relay-v1); where an open may go is streamTarget's call.
+  'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
+]);
+
+// A Walnut server socket that may be the leader: not the bridge, not a follower.
+function isServerClient(client) {
+  return client.origin !== 'bridge' && client.origin !== 'follower';
+}
 
 function handleCommand(ws, msg) {
   let cmd;
@@ -2944,8 +2989,8 @@ function handleCommand(ws, msg) {
   if (!cmd || typeof cmd !== 'object') return sendError(ws, null, 'invalid JSON');
   const { id } = cmd;
 
-  // Per-command receive log (drop ping — too high frequency to log).
-  if (cmd.cmd !== 'ping') {
+  // Per-command receive log (not ping or stream frames: too frequent to log).
+  if (cmd.cmd !== 'ping' && cmd.cmd !== 'stream.data' && cmd.cmd !== 'stream.ack') {
     logMsg('debug', 'cmd_recv', {
       cmd: cmd.cmd, id,
       sid: typeof cmd.sid === 'string' ? cmd.sid : undefined,
@@ -2959,6 +3004,12 @@ function handleCommand(ws, msg) {
   if (ws.origin === 'bridge' && !BRIDGE_ALLOWED_COMMANDS.has(cmd.cmd)) {
     logMsg('warn', 'bridge: rejected non-allowlisted command', { cmd: cmd.cmd, id });
     return sendError(ws, id, 'command not permitted over bridge: ' + cmd.cmd);
+  }
+  // A follower (the host server) reads; the leader alone writes this host's state.
+  if (ws.origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS.has(cmd.cmd)) {
+    logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id });
+    try { ws.send(JSON.stringify({ id: id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' })); } catch (e) {}
+    return;
   }
 
   // One command must never kill the daemon: a throw anywhere in a handler
@@ -3158,6 +3209,19 @@ function dispatchCommand(ws, id, cmd) {
     case 'gateway-result': return cmdGatewayResult(ws, id, cmd);
     // Leader book (leader-epoch-v1): each handler checks which side may ask.
     case 'leader.configure': return cmdLeaderConfigure(ws, id, cmd);
+    // A server on this host that follows the leader (follower-v1) and the server
+    // the daemon keeps running for the leader (host-server-v1). NOT in
+    // BRIDGE_ALLOWED_COMMANDS. Twin of daemon-standalone.ts.
+    case 'follower.hello': return cmdFollowerHello(ws, id, cmd);
+    case 'follower.status': return cmdFollowerStatus(ws, id);
+    case 'follower.report': return cmdFollowerReport(ws, cmd);
+    // Streams between servers through this daemon (stream-relay-v1): frames,
+    // never answered by id. Twin of daemon-standalone.ts.
+    case 'stream.open': return cmdStreamOpen(ws, cmd);
+    case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
+      return streamRelay.frame(ws, cmd.cmd.slice('stream.'.length), cmd);
+    case 'server.configure': return cmdServerConfigure(ws, id, cmd);
+    case 'server.status': return cmdServerStatus(ws, id, cmd);
     case 'leader.claim': return cmdLeaderClaim(ws, id, cmd);
     case 'leader.witness': return cmdLeaderWitness(ws, id);
     case 'leader.deliver': return daemonCommands.run(function () { return cmdLeaderDeliver(ws, id, cmd); });
@@ -3879,6 +3943,159 @@ function cmdLeaderConfigure(ws, id, cmd) {
   }
 }
 
+// The server this daemon keeps running for a leader (host-server-core.ts,
+// inlined). Twin of the daemon-standalone.ts block.
+var HOST_SERVER_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'host-server')
+  : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-server') : path.join(DAEMON_DIR, 'host-server');
+function hostServerStartTime(pid) {
+  if (!hasProcFs()) return readStartTime(pid);
+  try {
+    var raw = fs.readFileSync('/proc/' + pid + '/stat', 'utf-8');
+    return raw.slice(raw.lastIndexOf(')') + 2).split(' ')[19] || null;
+  } catch (e) {
+    return null;
+  }
+}
+var hostServers = (__CREATE_HOST_SERVER__)({
+  fs: fs, path: path,
+  spawn: function (command, args, opts) { return spawn(command, args, opts); },
+  dir: HOST_SERVER_DIR,
+  keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
+  now: function () { return Date.now(); },
+  setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
+  clearTimer: function (t) { clearTimeout(t); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  startTimeOf: hostServerStartTime,
+  killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
+  baseEnv: function () {
+    var env = { PATH: process.env.PATH || '', HOME: process.env.HOME || HOME_DIR, WALNUT_HOST_DAEMON_DIR: DAEMON_DIR };
+    if (process.env.LANG) env.LANG = process.env.LANG;
+    return env;
+  },
+  randomToken: function () { return crypto.randomBytes(32).toString('hex'); },
+});
+
+// The socket that speaks as the follower of each Walnut. Twin of daemon-standalone.ts.
+var followerSockets = new Map();
+
+// What a follower of home is told about its leader. Twin of daemon-standalone.ts.
+function followerView(home) {
+  var rec = leaderBook.recordOf(home);
+  if (!rec) return null;
+  var age = leaderBook.primaryAgeMs(home);
+  var companion = null;
+  try { if (bridgeConfig && bridgeConfig.enabled && bridgeConfig.url) companion = new URL(bridgeConfig.url.replace(/^ws/, 'http')).origin; } catch (e) { companion = null; }
+  return {
+    walnutId: rec.walnutId,
+    home: home,
+    epoch: rec.epoch,
+    holder: rec.holder,
+    backup: rec.backup,
+    primaryConnected: primarySocketOpen(home) && age < LEADER_TAKEOVER_MS,
+    primaryHeardAgoMs: age,
+    takeoverMs: LEADER_TAKEOVER_MS,
+    bridge: { connected: bridgeAdapter != null, companion: companion },
+    settings: hostServers.settingsOf(home),
+  };
+}
+
+function cmdFollowerHello(ws, id, cmd) {
+  if (ws.origin === 'bridge') return sendError(ws, id, 'follower.hello: not over the bridge');
+  if (gatewayClientHomes.has(ws)) return sendError(ws, id, 'follower.hello: this socket already speaks for a leader');
+  var home = typeof cmd.home === 'string' ? cmd.home : '';
+  var view = home ? followerView(home) : null;
+  if (!view || view.walnutId !== cmd.walnutId) {
+    try { ws.send(JSON.stringify({ id: id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' })); } catch (e) {}
+    return;
+  }
+  if (!hostServers.tokenMatches(home, cmd.token)) {
+    try { ws.send(JSON.stringify({ id: id, ok: false, error: 'this daemon did not start that server', errorKind: 'not_started_here' })); } catch (e) {}
+    return;
+  }
+  ws.origin = 'follower';
+  ws.followerHome = home;
+  followerSockets.set(home, ws);
+  logMsg('info', 'follower: a server on this host follows its leader', { home: home });
+  sendOk(ws, id, view);
+}
+
+function cmdFollowerReport(ws, cmd) {
+  var home = ws.followerHome;
+  if (home && followerSockets.get(home) === ws) hostServers.report(home, cmd.report);
+}
+
+// Streams between servers (stream-relay-v1). Twin of daemon-standalone.ts.
+var streamRelay = (__CREATE_STREAM_RELAY__)({
+  send: function (ws, ev, data) { sendEvent(ws, ev, data); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
+function primaryClientFor(home) {
+  var best = null;
+  for (const client of wsClients) {
+    if (!isServerClient(client) || gatewayClientHomes.get(client) !== home) continue;
+    if (!best || (client.missedBeats || 0) < (best.missedBeats || 0)) best = client;
+  }
+  return best;
+}
+
+function streamTarget(ws, to) {
+  if (ws.origin === 'follower') {
+    var fhome = ws.followerHome;
+    if (!fhome || followerSockets.get(fhome) !== ws) return { why: 'send follower.hello first' };
+    if (to === 'primary') {
+      var p = primaryClientFor(fhome);
+      return p ? { link: p, meta: { from: 'follower', home: fhome } } : { why: 'the Mac is not linked to this host' };
+    }
+    if (to === 'companion') {
+      return bridgeAdapter ? { link: bridgeAdapter, meta: { from: 'follower', home: fhome } } : { why: 'the cloud companion is not linked to this host' };
+    }
+    return { why: 'a follower opens streams to the primary or the companion' };
+  }
+  var home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined;
+  if (home && to === 'follower') {
+    var f = followerSockets.get(home);
+    return f ? { link: f, meta: { from: 'primary', home: home } } : { why: 'no server on this host follows that Walnut' };
+  }
+  return { why: 'this link opens no such stream' };
+}
+
+function cmdStreamOpen(ws, cmd) {
+  var target = streamTarget(ws, cmd.to);
+  var purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined;
+  if (target.why) return streamRelay.open(ws, cmd.sid, null, {}, target.why);
+  var meta = Object.assign({}, target.meta);
+  if (purpose) meta.purpose = purpose;
+  streamRelay.open(ws, cmd.sid, target.link, meta);
+}
+
+function cmdFollowerStatus(ws, id) {
+  var view = ws.followerHome ? followerView(ws.followerHome) : null;
+  if (!view) return sendError(ws, id, 'follower.status: send follower.hello first');
+  sendOk(ws, id, view);
+}
+
+function cmdServerConfigure(ws, id, cmd) {
+  if (!isServerClient(ws)) return sendError(ws, id, 'server.configure: the leader only');
+  var home = typeof cmd.home === 'string' ? cmd.home : '';
+  if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'server.configure: send leader.configure for this Walnut first');
+  var spec = cmd.spec;
+  var rec = leaderBook.recordOf(home);
+  if (spec && spec.walnutId !== (rec && rec.walnutId)) return sendError(ws, id, 'server.configure: the spec names another Walnut');
+  try {
+    sendOk(ws, id, { status: hostServers.configure(home, spec || null) });
+  } catch (err) {
+    sendError(ws, id, err.message);
+  }
+}
+
+function cmdServerStatus(ws, id, cmd) {
+  var home = ws.origin === 'follower' ? ws.followerHome : (typeof cmd.home === 'string' ? cmd.home : '');
+  if (!home) return sendError(ws, id, 'server.status: missing home');
+  sendOk(ws, id, { status: hostServers.status(home) });
+}
+
 function cmdLeaderClaim(ws, id, cmd) {
   if (ws.origin === 'bridge') {
     var r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch);
@@ -3966,7 +4183,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   var untagged = null;
   for (const client of wsClients) {
     // A quiet client is a dead forward (see pickTrustedClient): never a target.
-    if (client.origin === 'bridge' || isQuietTrustedClient(client)) continue;
+    if (!isServerClient(client) || isQuietTrustedClient(client)) continue;
     var clientHome = gatewayClientHomes.get(client);
     if (home && clientHome === home) target = client;
     else if (!clientHome && !untagged) untagged = client;
@@ -5515,7 +5732,7 @@ function loadTriggersAtBoot() {
 function sendTriggerEvent(ev, fields) {
   var delivered = false;
   for (const client of wsClients) {
-    if (client.origin !== 'bridge') {
+    if (isServerClient(client)) {
       sendEvent(client, ev, fields);
       delivered = true;
     }
@@ -10103,6 +10320,7 @@ function stopBridge() {
   if (bridgeAdapter) {
     wsClients.delete(bridgeAdapter);
     for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
+    streamRelay.dropLink(bridgeAdapter);
     for (const [key, sub] of agentSubs) {
       if (sub.ws === bridgeAdapter) {
         clearInterval(sub.timer);
@@ -10349,6 +10567,7 @@ function dialBridge(gen) {
       logBridgeConnClose(closeInfo);
       wsClients.delete(bridgeAdapter);
       for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
+      streamRelay.dropLink(bridgeAdapter);
       bridgeAdapter = null;
       bridgeDroppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null;
       bridgeHasDropped = true;
@@ -10939,6 +11158,8 @@ async function startDaemon() {
       wsClients.delete(ws);
       clearInterval(pingTimer);
       if (acp) acp.removeSubscriber(ws);
+      streamRelay.dropLink(ws);
+      if (ws.followerHome && followerSockets.get(ws.followerHome) === ws) followerSockets.delete(ws.followerHome);
 
       // Remove this ws from every session's subscribers. The watcher (file
       // tailer) stays alive — it's session-bound, not ws-bound. The next ws
@@ -10984,6 +11205,8 @@ async function startDaemon() {
     if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID);
     else { try { fs.unlinkSync(SERVICE_FILE); } catch {} }
     fs.writeFileSync(VERSION_FILE, DAEMON_VERSION);
+    // The servers an earlier daemon kept running here (twin of daemon-standalone.ts).
+    try { hostServers.boot(); } catch (err) { logMsg('warn', 'host server: boot failed', { error: err.message }); }
     console.log(port); // Print port for parent to capture
     // turnRetry: read from env ONCE at boot, so this line is the only way to
     // answer "is this daemon retrying, and with what budget?" without shell

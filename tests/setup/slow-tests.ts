@@ -57,6 +57,7 @@ export const SLOW_TEST_FILES = [
   'tests/integration/trigger-host-delivery-daemon.test.ts', // ~60s: both daemon twins, real sessions, waits out the host grace and the 5s tick
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
+  'tests/integration/host-server-twins.test.ts', // ~40s: both daemon twins as processes, a 5s restart backoff, a daemon restart each
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 

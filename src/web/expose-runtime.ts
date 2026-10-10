@@ -5,7 +5,8 @@
  * The tunnel port is a second HTTP listener on 127.0.0.1 serving the same app,
  * with WebSocket upgrades handed to the main server's handler. It is marked in
  * local-trust.ts, so nothing that arrives on it is ever this machine: a tunnel
- * connects from loopback. It is open only while a provider is asked to run.
+ * connects from loopback. It is open while a provider is asked to run, and
+ * while something holds it (a host server reaches this Mac through it).
  *
  * `reconcile()` brings both in line with config.yaml's `expose` section and the
  * registered providers; calls are serialized. It runs at start, after a settings
@@ -35,6 +36,14 @@ export interface ExposeRuntime {
   status(): ExposeStatus
   retry(): void
   stop(): Promise<void>
+  /**
+   * Keep the tunnel port open for `holder` (a host server's way back to this Mac
+   * reaches it), whether or not a tunnel runs here. Resolves to the port.
+   */
+  holdTunnelPort(holder: string): Promise<number>
+  releaseTunnelPort(holder: string): Promise<void>
+  /** The tunnel port while it is open, else null. */
+  openPort(): number | null
 }
 
 let current: ExposeRuntime | null = null
@@ -54,6 +63,8 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
   let override: { state: 'unavailable'; lastError: string; since: number } | null = null
   let chain: Promise<unknown> = Promise.resolve()
   let stopped = false
+  /** Who keeps the tunnel port open apart from a running tunnel (host servers). */
+  const holders = new Set<string>()
 
   const deps: SupervisorDeps = {
     spawn: nodeSpawn,
@@ -107,6 +118,12 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     log.web.info('tunnel port closed', { port })
   }
 
+  /** No tunnel runs: the port stays only for its holders. */
+  async function settleListener(): Promise<void> {
+    if (holders.size > 0) await openListener(listenerPort ?? wantedPort)
+    else await closeListener()
+  }
+
   async function reconcileNow(): Promise<ExposeStatus> {
     if (stopped) return status()
     const cfg = (await getConfig().catch(() => null))?.expose ?? {}
@@ -117,13 +134,13 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
       override = null
       providerTitle = undefined
       await supervisor.stop()
-      await closeListener()
+      await settleListener()
       return status()
     }
     const def = getExposeProvider(providerId, cfg.command)
     if (!def) {
       await supervisor.stop()
-      await closeListener()
+      await settleListener()
       providerTitle = undefined
       if (override?.state !== 'unavailable') override = { state: 'unavailable', lastError: '', since: Date.now() }
       override.lastError = providerId === 'command'
@@ -157,10 +174,14 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     return status()
   }
 
-  function reconcile(): Promise<ExposeStatus> {
-    const next = chain.then(reconcileNow, reconcileNow)
+  function serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const next = chain.then(fn, fn)
     chain = next.catch(() => undefined)
     return next
+  }
+
+  function reconcile(): Promise<ExposeStatus> {
+    return serialize(reconcileNow)
   }
 
   const unsubscribe = onExposeProvidersChanged(() => { void reconcile() })
@@ -168,8 +189,19 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     reconcile,
     status,
     retry: () => supervisor.retryNow(),
+    holdTunnelPort: (holder) => serialize(async () => {
+      if (stopped) throw new Error('the server is stopping')
+      holders.add(holder)
+      return openListener(listenerPort ?? wantedPort)
+    }),
+    releaseTunnelPort: (holder) => serialize(async () => {
+      holders.delete(holder)
+      if (holders.size === 0 && !supervisor.running()) await closeListener()
+    }),
+    openPort: () => listenerPort,
     async stop() {
       stopped = true
+      holders.clear()
       unsubscribe()
       await supervisor.stop()
       await closeListener()

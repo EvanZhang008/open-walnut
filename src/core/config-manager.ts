@@ -455,6 +455,43 @@ export async function updatePluginConfig(
 }
 
 /**
+ * Atomically patch one host's `server` section (`hosts.<key>.server`, the server
+ * this Mac keeps on that host: core/host-server/). Each patched key replaces
+ * its value; `expose` is replaced whole. Throws for a host config.yaml does not
+ * name. Returns the section as written.
+ */
+export async function updateHostServerConfig(
+  hostKey: string,
+  patch: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return withWriteLock(async () => {
+    const raw = await readRawConfigContent();
+    const existing = raw === null ? {} : ((yaml.load(raw) as Record<string, unknown>) ?? {});
+    const hosts = existing.hosts && typeof existing.hosts === 'object' && !Array.isArray(existing.hosts)
+      ? { ...(existing.hosts as Record<string, Record<string, unknown>>) }
+      : {};
+    const host = hosts[hostKey];
+    if (!host || typeof host !== 'object') throw new Error(`No host named ${hostKey} in config.yaml`);
+    const current = host.server && typeof host.server === 'object' ? host.server as Record<string, unknown> : {};
+    const next: Record<string, unknown> = { ...current };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue;
+      if (v === null) delete next[k];
+      else next[k] = v;
+    }
+    hosts[hostKey] = { ...host, server: next };
+    existing.hosts = hosts;
+    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
+    content = content.replace(
+      /^(\s+)available_models:/m,
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+    );
+    await writeConfigWithBackup(content);
+    return next;
+  });
+}
+
+/**
  * Atomically delete one Plugin namespace (`plugins.<id>`), settings and all. A no-op, with
  * no write, when the key is not there. Returns whether a key was removed.
  *

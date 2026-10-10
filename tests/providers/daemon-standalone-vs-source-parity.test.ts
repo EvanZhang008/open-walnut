@@ -3071,7 +3071,11 @@ describe('walnut-trigger daemon parity', () => {
       const start = src.indexOf('function sendTriggerEvent(')
       expect(start).toBeGreaterThan(-1)
       const body = src.slice(start, src.indexOf('\n}', start))
-      expect(body).toMatch(/origin !== 'bridge'/)
+      // A server client is neither the bridge nor a host server (a follower).
+      expect(body).toMatch(/isServerClient\(client\)/)
+      const isServer = src.slice(src.indexOf('function isServerClient('), src.indexOf('\n}', src.indexOf('function isServerClient(')))
+      expect(isServer).toMatch(/origin !== 'bridge'/)
+      expect(isServer).toMatch(/origin !== 'follower'/)
       expect(body).toMatch(/sendEvent\(client, ev, fields\)/)
       expect(body).toMatch(/delivered = true/)
       expect(body).toMatch(/return delivered/)

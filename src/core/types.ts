@@ -1145,6 +1145,21 @@ export interface Config {
       memory?: boolean;
       skills?: boolean;
     };
+    /** A Walnut server this Mac keeps running on the host, following it
+     *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
+    server?: {
+      enabled?: boolean;
+      /** A Node (22 or newer) that runs on the host. Default: the one the host's preflight found. */
+      node?: string;
+      /** Extra environment for installing its native modules there (a newer compiler: CC, CXX). */
+      build_env?: Record<string, string>;
+      /** The host's own tunnel, so a browser anywhere can open it. */
+      expose?: {
+        enabled?: boolean;
+        provider?: string;
+        options?: Record<string, string>;
+      };
+    };
   }>;
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the

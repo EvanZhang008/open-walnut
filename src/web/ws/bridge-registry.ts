@@ -23,7 +23,10 @@
  * every just-launched session).
  */
 
+import net from 'node:net'
 import type { WebSocket } from 'ws'
+import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../lib/link-stream.js'
+import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { emitSse, sseConnCount } from '../sse-channels.js'
 import { toolDetail, toolInputPreview, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
 import { log } from '../../logging/index.js'
@@ -60,6 +63,29 @@ interface BridgeConn {
   stats: BridgeWireStats
   /** Reassembles `{ev:'chunk'}` frames from a paced daemon uplink. */
   chunks: ChunkAssembler
+  /** Streams a server on that host opened to this companion (stream-relay-v1). */
+  streams: StreamEndpoint
+}
+
+/**
+ * A host server's browser reaching this companion through its daemon
+ * (docs/plan/walnut-servers-everywhere.md, "One kind of link"): into this
+ * server's own port, which trusts no loopback caller here (cloud mode), and the
+ * request carries X-Forwarded-For besides.
+ */
+function bridgeStreams(ws: WebSocket, hostAlias: string): StreamEndpoint {
+  return createStreamEndpoint({
+    send: (frame) => { ws.send(JSON.stringify(frame)) },
+    accept: (info) => {
+      const root = getSelfApiRoot()
+      if (info.from !== 'follower' || !root) return null
+      const port = Number(new URL(root).port)
+      return (stream) => {
+        log.ws.debug('bridge: a host server stream', { hostAlias, sid: info.sid })
+        spliceStream(stream, net.connect(port, '127.0.0.1'))
+      }
+    },
+  })
 }
 
 /** The primary box's daemon always registers under this alias (see
@@ -273,6 +299,11 @@ function handleFrame(conn: BridgeConn, raw: string): void {
 
   const ev = msg.ev as string | undefined
   if (!ev) return
+
+  if (ev.startsWith('stream-')) {
+    conn.streams.handle(msg)
+    return
+  }
 
   if (ev === 'bridge-ping') {
     // Answer with a real RPC ping. The daemon tears the link down 45 to 50s
@@ -521,6 +552,7 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     lastInbound: Date.now(),
     stats,
     chunks: createChunkAssembler(),
+    streams: bridgeStreams(ws, hostAlias),
   }
   bridges.set(hostAlias, conn)
   // The link is back: this host has no outage to report until it drops again.
@@ -619,6 +651,7 @@ function dropBridge(conn: BridgeConn, reason: string): void {
   }
   conn.pending.clear()
   conn.chunks.clear()
+  conn.streams.closeAll('the host\'s bridge closed')
   // Tell the phones only if the host STAYS gone (bridge-presence.ts). A
   // replacement is already connected, and a shutdown is not the host's news.
   if (wasRegistered && reason !== 'replaced' && reason !== 'shutdown') {

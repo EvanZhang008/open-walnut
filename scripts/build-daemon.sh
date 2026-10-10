@@ -116,6 +116,8 @@ SOURCES=(
   src/providers/offline-search-core.ts
   src/providers/offline-board-core.ts
   src/providers/host-replica-core.ts
+  src/providers/host-server-core.ts
+  src/providers/stream-relay-core.ts
   src/core/sessions/open-items-text.ts
   src/providers/git-diff-core.ts
   src/providers/bridge-uplink-core.ts

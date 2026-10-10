@@ -13,6 +13,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-settings-nav';
 import { landOnRow } from '@/utils/scroll-land';
 import { AddLimitRow } from './RemoteHostLimits';
+import { HostServersGroup } from './HostServersGroup';
 import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
 import { hasStatusHosts } from '../diagnostics-copy';
 import '@/styles/settings-sections-addons.css';
@@ -441,6 +442,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
           );
         })}
       </SettingsGroup>
+
+      <HostServersGroup hosts={config.hosts} />
 
       <SettingsGroup heading="Session limits" footer="Most sessions one host runs at once.">
         {/* Each limit is a row: host on the left, its number on the right (N3-21). */}
