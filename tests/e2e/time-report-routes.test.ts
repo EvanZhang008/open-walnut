@@ -171,6 +171,22 @@ describe('the ops over these routes', () => {
     expect(result.kinds).toEqual(['session'])
   })
 
+  it('time_report takes list arguments as an array or a comma list, and the route takes repeated names', async () => {
+    const asArray = await op('time_report', { from: SUN, to: MON, group_by: ['day', 'task', 'app'], kinds: ['session', 'chat'] })
+    expect(asArray.ok).toBe(true)
+    const result = asArray.ok ? asArray.result as any : undefined
+    expect(Object.keys(result.groups).sort()).toEqual(['app', 'task'])
+    expect(result.kinds).toEqual(['session', 'chat'])
+    const asText = await op('time_report', { from: SUN, to: MON, group_by: 'day,task,app', kinds: 'session,chat' })
+    expect(asText.ok && (asText.result as any).totals).toEqual(result.totals)
+    const repeated = await getJson(`/api/time/report?from=${SUN}&to=${MON}&group_by=task&group_by=app&work_days=mon&work_days=sun`)
+    expect(repeated.status).toBe(200)
+    expect(Object.keys(repeated.body.groups).sort()).toEqual(['app', 'task'])
+    expect(repeated.body.days[0]).toMatchObject({ date: SUN, workday: true })
+    const bad = await op('time_report', { group_by: ['task', 'weekday'] })
+    expect(bad.ok).toBe(false)
+  })
+
   it('time_work_hours_set saves, time_timeline reads', async () => {
     const set = await op('time_work_hours_set', { start: '09:30' })
     expect(set.ok && (set.result as any).start).toBe('09:30')

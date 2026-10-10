@@ -43,6 +43,13 @@ defineOp({
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 })
 
+/**
+ * A list argument: "task,project" or ["task","project"]. The array form used to be
+ * refused, though the description called the groups combinable (2026-10-10). The GET
+ * binding sends an array as the same comma list.
+ */
+const LIST = (max: number) => z.union([z.string().max(max), z.array(z.string().max(20)).max(12)])
+
 defineOp({
   name: 'time_report',
   title: 'Where the time went over a range of days',
@@ -60,13 +67,13 @@ defineOp({
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('First local date YYYY-MM-DD'),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Last local date YYYY-MM-DD (inclusive, default today)'),
     last_days: z.number().int().min(1).max(31).optional().describe('Instead of from/to: the N days ending today (default 7)'),
-    kinds: z.string().max(60).optional().describe('Comma list of kinds counted as the user\'s time: session, triage, chat, agent (default session,triage,chat)'),
+    kinds: LIST(60).optional().describe('Kinds counted as the user\'s time, a comma list or an array: session, triage, chat, agent (default session,triage,chat)'),
     include_outside: z.boolean().optional().describe('Add other Mac apps from the foreground sampler (default true)'),
-    group_by: z.string().max(80).optional().describe('Comma list, any of: task, project, hour, kind, app, host (default task,project; days are always returned)'),
+    group_by: LIST(80).optional().describe('Groups, a comma list or an array, any of: day, task, project, hour, kind, app, host (default task,project; days are always returned)'),
     top: z.number().int().min(1).max(100).optional().describe('Rows per group (default 15; the rest are summed in otherMin)'),
     work_start: z.string().max(5).optional().describe('Override work hours start for this report, HH:MM'),
     work_end: z.string().max(5).optional().describe('Override work hours end for this report, HH:MM'),
-    work_days: z.string().max(40).optional().describe('Override working weekdays, comma list (mon,tue,wed,thu,fri)'),
+    work_days: LIST(40).optional().describe('Override working weekdays, a comma list or an array (mon,tue,wed,thu,fri)'),
     merge_gap_min: z.number().int().min(1).max(120).optional().describe('Same-task records closer than this join one stretch (default 5)'),
     long_min: z.number().int().min(5).max(480).optional().describe('A stretch this long counts as deep work (default 45)'),
   },

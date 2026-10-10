@@ -63,6 +63,16 @@ function csv(raw: string | undefined): string[] | undefined {
   return raw === undefined ? undefined : raw.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
+/** A list query parameter: `a,b`, or the same name repeated (`?group_by=a&group_by=b`). */
+function listArg(req: Request, name: string): string | undefined {
+  const v = req.query[name]
+  if (Array.isArray(v)) {
+    const joined = v.filter((x): x is string => typeof x === 'string').join(',')
+    return joined.trim() ? joined : undefined
+  }
+  return q(req, name)
+}
+
 function intArg(req: Request, name: string, min: number, max: number): number | undefined {
   const raw = q(req, name)
   if (raw === undefined) return undefined
@@ -136,7 +146,7 @@ async function readConfig(): Promise<import('../../core/types.js').Config | unde
 function workHoursFor(req: Request, stored: ReturnType<typeof resolveWorkHours>): { wh: WorkHours; source: 'config' | 'default' | 'args' } {
   const start = q(req, 'work_start')
   const end = q(req, 'work_end')
-  const days = csv(q(req, 'work_days'))
+  const days = csv(listArg(req, 'work_days'))
   if (start === undefined && end === undefined && days === undefined) return { wh: stored.workHours, source: stored.source }
   try {
     return { wh: parseWorkHours({ start, end, days }, stored.workHours), source: 'args' }
@@ -173,8 +183,8 @@ timeReportRouter.get('/report', async (req: Request, res: Response) => {
   try {
     const today = localDateKey(new Date())
     const dates = resolveRange(req, today)
-    const kinds = resolveKinds(q(req, 'kinds'))
-    const groupBy = resolveGroups(q(req, 'group_by'))
+    const kinds = resolveKinds(listArg(req, 'kinds'))
+    const groupBy = resolveGroups(listArg(req, 'group_by'))
     const includeOutside = boolArg(req, 'include_outside', true)
     const top = intArg(req, 'top', 1, MAX_TOP) ?? REPORT_DEFAULTS.top
     const mergeGapMin = intArg(req, 'merge_gap_min', 1, 120)

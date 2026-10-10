@@ -28,7 +28,8 @@ the ops below; never parse the JSONL files under the data directory by hand.
   walnut tools call time_report '{"last_days":7}'
   ```
 
-  `group_by` takes any of `task, project, hour, kind, app, host` (default
+  `group_by` takes any of `task, project, hour, kind, app, host`, as a comma
+  list or an array (default
   `task,project`; `day` rows always come back). `kinds` defaults to the user's
   own time (`session,triage,chat`). `top` (default 15) caps each group; the rest
   is summed in `otherMin`.
@@ -227,10 +228,20 @@ that happened.
 - Everything stays local. Never copy coordinates, addresses or raw health
   values into a task, a note, a board or anything that syncs, unless the user
   asks. Write "at the office", "a short night", "a 45-minute run".
-- A report is a deliverable. Save the final report in the notes vault under the
-  time-review topic: find it with `note_search` ("time-review"); when there is
-  none, create `time-review/README.md`. Write the report as
-  `time-review/<YYYY-MM-DD>-<short-name>.md` with `note_write`, then add one
-  dated line to the README with the conclusion
-  (`- 2026-10-10: week of 10-05: ops took 38% of work hours; two deep blocks.`).
+- A report is a deliverable: save the final report in the notes vault, in the
+  time-review topic the vault already has. Never start a second home for it.
+  1. Follow the vault's own routing first: when the vault root has an
+     `AGENTS.md` (or a README that indexes topics), read it with `note_read`
+     and use the topic it names.
+  2. Otherwise find the topic: `note_search` for "time-review" and for
+     "time reviews", and look at the PATHS of the hits for a folder named like
+     time-review, time-reviews or time review, at any depth, in any case. When
+     several match, take the one with a `README.md`.
+  3. Write into that folder and follow its README: its file names, where it
+     keeps attachments (an HTML report, charts), and its line format. Add one
+     dated line with the conclusion to its README
+     (`- 2026-10-10: week of 10-05: ops took 38% of work hours; two deep blocks.`).
+  4. Only when no such topic exists, create `time-review/README.md` at the vault
+     root (one line on what the folder holds, then the dated lines) and write
+     the report as `time-review/<YYYY-MM-DD>-<short-name>.md` with `note_write`.
   A copy in a scratch directory alone is not saved.
