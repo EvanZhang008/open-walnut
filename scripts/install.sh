@@ -11,7 +11,8 @@
 # after that (`walnut update`, and on every start).
 #
 # Knobs: OPEN_WALNUT_VERSION (a release, default the newest), OPEN_WALNUT_INSTALL_DIR,
-# OPEN_WALNUT_BIN_DIR, OPEN_WALNUT_RELEASE_BASE_URL and OPEN_WALNUT_RELEASES_API (mirrors, tests).
+# OPEN_WALNUT_BIN_DIR, OPEN_WALNUT_RELEASE_BASE_URL and OPEN_WALNUT_RELEASES_API (mirrors, tests),
+# OPEN_WALNUT_PROGRESS=1 (the download's progress bar without a terminal).
 set -eu
 
 repo="EvanZhang008/open-walnut"
@@ -29,9 +30,11 @@ say() { printf '  %s\n' "$1" >&2; }
 # fetch URL FILE [progress]: 0 on success, 44 on a 404, 1 otherwise.
 fetch() {
   if command -v curl >/dev/null 2>&1; then
-    # A progress bar for the one big download, when someone is watching.
+    # A progress bar for the one big download, when someone is watching: a
+    # terminal, or the Mac app, which reads the percentage off it
+    # (OPEN_WALNUT_PROGRESS=1, desktop/BundledRuntime.swift).
     quiet="-sS"
-    if [ "${3:-}" = progress ] && [ -t 2 ]; then quiet="--progress-bar"; fi
+    if [ "${3:-}" = progress ] && { [ -t 2 ] || [ "${OPEN_WALNUT_PROGRESS:-}" = 1 ]; }; then quiet="--progress-bar"; fi
     status="$(curl "$quiet" -L --retry 3 -w '%{http_code}' "$1" -o "$2")" || return 1
     case "$status" in
       2??) return 0 ;;

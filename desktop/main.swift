@@ -79,6 +79,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// none of, and sat on the loading screen forever.
     var retrySetup: (() -> Void)?
     var statusLabel: NSTextField?
+    /// The setup screen's spinner and its download bar (shown once the size is known).
+    var setupSpinner: NSProgressIndicator?
+    var setupProgressBar: NSProgressIndicator?
+    /// The first-launch install.sh, and which setup is current: one the user
+    /// left for another (an existing folder) has its result ignored.
+    var installerProcess: Process?
+    var setupGeneration = 0
     var retryTimer: Timer?
     var bootstrapProcess: Process?
     var serverOutputReader: ProcessOutputReader?
@@ -140,12 +147,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             runtime = config.runtimeDir.map { BundledRuntime(installDir: $0) }
             showLoadingScreen()
             startServer()
-        } else if ProcessInfo.processInfo.environment["WALNUT_DESKTOP_AUTOSETUP"] == "1" {
-            // Unattended first launch (the release workflow's smoke test): what
-            // Get Started does, without a click.
-            startFreshSetup()
         } else {
-            showSetupScreen()
+            // A first launch starts by itself, like any app: it installs the
+            // self-contained Walnut (or finds the one install.sh put here) and
+            // opens the console. The other ways to run it (an existing folder, a
+            // source checkout) are a click away on that screen, and Reset Setup...
+            // brings back the choice.
+            startFreshSetup()
         }
     }
 
@@ -183,6 +191,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DesktopLogger.shared.log("app_terminating")
         dictation?.unregisterHotKey()
         bootstrapProcess?.terminate()
+        installerProcess?.terminate()
         stopServer()
         DesktopLogger.shared.flush()
     }
@@ -317,16 +326,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         retrySetup = { [weak self] in self?.startFreshSetup() }
-        showBootstrapScreen()
-        statusLabel?.stringValue = "Downloading Walnut..."
+        showBootstrapScreen(
+            detail: "Walnut downloads what it needs once (about 300 MB). After that it opens at once.",
+            offerExisting: true)
+        statusLabel?.stringValue = "Getting Walnut..."
         try? FileManager.default.removeItem(at: bootstrapLogPath())
         DesktopLogger.shared.log("runtime_install_started", fields: ["dir": bundled.installDir])
+        setupGeneration += 1
+        let generation = setupGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = BundledRuntime.runInstaller(script: script, environment: env) { line in
-                self?.updateStatus(line)
+            let result = BundledRuntime.runInstaller(script: script, environment: env, onStart: { proc in
+                DispatchQueue.main.async { if self?.setupGeneration == generation { self?.installerProcess = proc } }
+            }) { progress in
+                DispatchQueue.main.async { if self?.setupGeneration == generation { self?.showSetupProgress(progress) } }
             }
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.setupGeneration == generation else { return }
+                self.installerProcess = nil
                 self.appendToBootstrapLog("install.sh", result.output)
                 DesktopLogger.shared.log("runtime_install_finished", fields: ["ok": String(result.success)])
                 if result.success, bundled.isInstalled() {
@@ -380,7 +396,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func showBootstrapScreen() {
+    /// The setup screen's step, and the download's share as a bar once curl knows the size.
+    func showSetupProgress(_ progress: BundledRuntime.Progress) {
+        guard let label = statusLabel else { return }
+        if let fraction = progress.fraction {
+            label.stringValue = "\(progress.status) \(Int((fraction * 100).rounded()))%"
+            setupProgressBar?.doubleValue = fraction * 100
+            setupProgressBar?.isHidden = false
+            setupSpinner?.isHidden = true
+        } else {
+            label.stringValue = progress.status
+            setupProgressBar?.isHidden = true
+            setupSpinner?.isHidden = false
+        }
+    }
+
+    func showBootstrapScreen(
+        detail: String = "This may take a couple of minutes on the first run.",
+        offerExisting: Bool = false
+    ) {
         let container = NSView(frame: window.contentView!.bounds)
         container.autoresizingMask = [.width, .height]
         // These screens paint a fixed light cream; in Dark Mode the system's
@@ -395,10 +429,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stack.alignment = .centerX
         stack.translatesAutoresizingMaskIntoConstraints = false
 
+        let title = NSTextField(labelWithString: "Welcome to Walnut")
+        title.font = NSFont.systemFont(ofSize: 24, weight: .bold)
+        title.textColor = NSColor(red: 0.45, green: 0.33, blue: 0.15, alpha: 1)
+        stack.addArrangedSubview(title)
+        stack.setCustomSpacing(20, after: title)
+
         let spinner = NSProgressIndicator()
         spinner.style = .spinning
         spinner.startAnimation(nil)
         stack.addArrangedSubview(spinner)
+        self.setupSpinner = spinner
+
+        let bar = NSProgressIndicator()
+        bar.style = .bar
+        bar.isIndeterminate = false
+        bar.minValue = 0
+        bar.maxValue = 100
+        bar.isHidden = true
+        bar.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        stack.addArrangedSubview(bar)
+        self.setupProgressBar = bar
 
         let label = NSTextField(labelWithString: "Setting up Walnut...")
         label.font = NSFont.systemFont(ofSize: 14)
@@ -406,11 +457,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(label)
         self.statusLabel = label
 
-        let detailLabel = NSTextField(wrappingLabelWithString: "This may take a couple of minutes on the first run.")
+        let detailLabel = NSTextField(wrappingLabelWithString: detail)
         detailLabel.font = NSFont.systemFont(ofSize: 12)
         detailLabel.textColor = NSColor(white: 0.55, alpha: 1)
+        detailLabel.alignment = .center
         detailLabel.preferredMaxLayoutWidth = 400
         stack.addArrangedSubview(detailLabel)
+
+        if offerExisting {
+            let other = NSButton(title: "Use an existing installation instead…", target: self, action: #selector(chooseExistingFolderInsteadOfDownload))
+            other.isBordered = false
+            other.font = NSFont.systemFont(ofSize: 12)
+            other.contentTintColor = NSColor(red: 0.45, green: 0.33, blue: 0.15, alpha: 1)
+            stack.setCustomSpacing(24, after: detailLabel)
+            stack.addArrangedSubview(other)
+        }
 
         container.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -629,7 +690,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Use Existing Folder
 
-    @objc func chooseExistingFolder() {
+    @objc func chooseExistingFolder() { pickExistingFolder(beforeUse: nil) }
+
+    /// From the first-launch screen: the download keeps going until a folder is
+    /// picked, so Cancel leaves the install as it was.
+    @objc func chooseExistingFolderInsteadOfDownload() {
+        pickExistingFolder(beforeUse: { [weak self] in self?.abandonInstall() })
+    }
+
+    /// Stops the first-launch install: its process, and its result when it ends.
+    func abandonInstall() {
+        setupGeneration += 1
+        installerProcess?.terminate()
+        installerProcess = nil
+    }
+
+    func pickExistingFolder(beforeUse: (() -> Void)?) {
         let defaultPath = NSHomeDirectory() + "/.open-walnut"
 
         let panel = NSOpenPanel()
@@ -645,12 +721,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
-            self?.runtime = nil
             let home = url.path
             let sourceDir = home + "/source"
 
             // Layout A — a data home (~/.open-walnut) with a bundled source/ dir.
             if FileManager.default.fileExists(atPath: sourceDir + "/dist/cli.js") {
+                beforeUse?()
+                self?.runtime = nil
                 self?.walnutHome = home
                 self?.walnutSourceDir = sourceDir
                 self?.finishSetup()
@@ -658,6 +735,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // straight from it: no clone, no pull, no second source tree. Data
             // still lives in the standard ~/.open-walnut home.
             } else if FileManager.default.fileExists(atPath: home + "/dist/cli.js") {
+                beforeUse?()
+                self?.runtime = nil
                 let dataHome = NSHomeDirectory() + "/.open-walnut"
                 try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
                 self?.walnutHome = dataHome
@@ -672,7 +751,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.addButton(withTitle: "Cancel")
 
                 alert.beginSheetModal(for: self!.window) { alertResponse in
+                    // Cancel leaves whatever was running (a first-launch download) as it was.
                     if alertResponse == .alertFirstButtonReturn {
+                        beforeUse?()
                         self?.runBootstrap(walnutHome: home)
                     }
                 }

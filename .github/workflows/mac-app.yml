@@ -2,7 +2,8 @@ name: Mac app
 
 # Walnut.app for macOS, signed with the project's Developer ID, notarized by
 # Apple, stapled, in a DMG attached to the release as Walnut.dmg: the install
-# that is one click (releases/latest/download/Walnut.dmg). The app is a small
+# that is one click (releases/latest/download/Walnut.dmg), with its Homebrew
+# cask beside it (walnut.rb). The app is a small
 # shell (desktop/); its first launch installs the release's self-contained
 # archive with the install.sh it carries (desktop/BundledRuntime.swift). So
 # release-archives.yml calls this once the archives are attached, and the app
@@ -167,6 +168,32 @@ jobs:
       - name: Attach Walnut.dmg to v${{ inputs.version }}
         if: steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'
         run: gh release upload "v$VERSION" desktop/Walnut.dmg --clobber
+      # The cask is written from the Walnut.dmg the release now holds, installed
+      # from GitHub with brew as a user does, and attached as walnut.rb. The tap
+      # (EvanZhang008/homebrew-tap) copies the newest release's walnut.rb into
+      # Casks/: brew install --cask evanzhang008/tap/walnut.
+      - name: Homebrew cask for the attached Walnut.dmg
+        if: steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_ANALYTICS: '1'
+          HOMEBREW_NO_ENV_HINTS: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          gh release download "v$VERSION" --pattern Walnut.dmg --dir "$RUNNER_TEMP/attached" --clobber
+          sha="$(shasum -a 256 "$RUNNER_TEMP/attached/Walnut.dmg" | cut -d' ' -f1)"
+          node harness/scripts/homebrew/cask.mjs --version "$VERSION" --sha256 "$sha" > "$RUNNER_TEMP/walnut.rb"
+          cat "$RUNNER_TEMP/walnut.rb"
+          brew tap-new --no-git walnut-release/cask
+          mkdir -p "$(brew --repository walnut-release/cask)/Casks"
+          cp "$RUNNER_TEMP/walnut.rb" "$(brew --repository walnut-release/cask)/Casks/walnut.rb"
+          mkdir -p "$RUNNER_TEMP/brew-apps"
+          brew install --cask walnut-release/cask/walnut --appdir "$RUNNER_TEMP/brew-apps"
+          # Homebrew quarantines what it installs, as a browser does: Gatekeeper must take it.
+          spctl -a -vv "$RUNNER_TEMP/brew-apps/Walnut.app" 2>&1 | tee "$RUNNER_TEMP/cask-assess.txt"
+          grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/cask-assess.txt" || { echo "::error::the cask's Walnut.app is not a notarized Developer ID app"; exit 1; }
+          brew uninstall --cask walnut-release/cask/walnut
+          gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb" --clobber
       - name: Remove the signing keychain and key
         if: always()
         run: |

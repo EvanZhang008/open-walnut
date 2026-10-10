@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * First launch of Walnut.app on a Mac that has never seen Walnut: the app runs
- * Get Started on its own (WALNUT_DESKTOP_AUTOSETUP=1), installs the
+ * First launch of Walnut.app on a Mac that has never seen Walnut: with no click
+ * (a first launch starts by itself, as a user's does), the app installs the
  * self-contained Walnut with the install.sh it carries, starts the server with
  * that copy's Node and nothing else on PATH, and serves the console. Then the
  * app dies, the server goes with it (OPEN_WALNUT_EXIT_ON_ORPHAN), and a second
@@ -94,7 +94,6 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
     PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
     WALNUT_DAEMON_DIR: path.join(work, 'daemon'),
     WALNUT_DESKTOP_PORTS: String(port),
-    WALNUT_DESKTOP_AUTOSETUP: '1',
   }
   if (releaseUrl) {
     env.OPEN_WALNUT_RELEASE_BASE_URL = releaseUrl

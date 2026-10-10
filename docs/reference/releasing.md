@@ -202,8 +202,14 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   Connect API key with the Developer role) are secrets of the `release` environment, which only
   `main` may deploy to; the identity goes into a keychain made for the job and deleted after it.
   Without them the app is built ad-hoc and kept as a workflow artifact, never attached. The app
-  is a small shell that is never modified: its first launch runs the bundled `install.sh`, and
-  the runtime it installed updates itself like any archive install.
+  is a small shell that is never modified: its first launch starts by itself (no setup screen),
+  runs the bundled `install.sh` with a progress bar read off curl's (`OPEN_WALNUT_PROGRESS=1`)
+  and opens the console, and the runtime it installed updates itself like any archive install.
+- **The cask**: right after `Walnut.dmg` is attached, the same job downloads it back from the
+  release, writes `walnut.rb` with its sha256 (`scripts/homebrew/cask.mjs`), installs it from
+  GitHub with `brew install --cask` (Homebrew quarantines it, as a browser does), requires
+  Gatekeeper to see a notarized Developer ID app, and attaches `walnut.rb`. The tap's workflow
+  copies it to `Casks/walnut.rb` with the formula: `brew install --cask evanzhang008/tap/walnut`.
 - **Updates**: the archive carries `runtime/open-walnut-runtime.json`. The updater
   (`src/core/self-update/install-kind.ts`) sees it and installs a newer release with the
   archive's own Node and npm into the archive's own prefix (`walnut update`, and on start), never

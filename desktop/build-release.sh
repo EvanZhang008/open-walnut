@@ -65,7 +65,7 @@ rm "$MACOS/${APP_NAME}_arm64" "$MACOS/${APP_NAME}_x86_64"
 
 lipo -archs "$MACOS/$APP_NAME"
 
-# The installer Get Started runs (BundledRuntime.swift): the same install.sh
+# The installer a first launch runs (BundledRuntime.swift): the same install.sh
 # every release attaches, so the app and `curl … | sh` install the same way.
 cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
 chmod 755 "$RESOURCES/install.sh"

@@ -7,8 +7,8 @@ starts the local server, and shows the web console in a `WKWebView` window.
 It's deliberately thin — **all** the product lives in the main Open Walnut
 codebase. This wrapper only:
 
-- On first launch, **Get Started** installs the self-contained Walnut (its own
-  Node inside, about 300 MB) with the `install.sh` it carries in
+- On first launch it installs the self-contained Walnut by itself (its own
+  Node inside, about 300 MB, with a progress bar) with the `install.sh` it carries in
   `Contents/Resources`, the same script `curl … | sh` runs, into
   `~/.local/share/open-walnut` (also linking `walnut` into `~/.local/bin`). Nothing
   else needs to be installed. That copy updates itself; the app is never modified.
@@ -88,18 +88,21 @@ A build that was not signed with a Developer ID and notarized (see
 xattr -dr com.apple.quarantine Walnut.app
 ```
 
-On first launch pick **Get Started** to download the self-contained Walnut (a
-minute or so), or **Use Existing Installation** to point at a directory you
-already have (a `~/.open-walnut` with a built `source/`, or a dev checkout).
-A Mac where `install.sh` already ran uses that copy without downloading.
-Subsequent launches start instantly.
+On first launch the app downloads the self-contained Walnut by itself (a
+minute or so, with a progress bar) and opens the console; nothing to click.
+**Use an existing installation instead…** on that screen points it at a
+directory you already have (a `~/.open-walnut` with a built `source/`, or a dev
+checkout); the download stops only once a folder is picked. A Mac where
+`install.sh` already ran uses that copy without downloading. Subsequent launches
+start instantly. **Reset Setup…** (app menu) shows the choice again.
 
 ## How it works
 
 `main.swift` is the whole app (one file, AppKit). Key pieces:
 
-- **Setup** — Get Started runs the bundled `install.sh` (`BundledRuntime.swift`)
-  and the server then runs on that copy's own Node. **Set Up Now** (from Use
+- **Setup** — a first launch runs the bundled `install.sh` (`BundledRuntime.swift`,
+  which reads the download's percentage off its progress bar) and the server then
+  runs on that copy's own Node. **Set Up Now** (from Use
   Existing, for a folder with no build) clones
   `https://github.com/EvanZhang008/open-walnut.git`, runs `npm install`, then
   builds the CLI/server (`tsup`) and web UI (`vite`) directly. Progress and a full
@@ -121,8 +124,7 @@ Desktop lifecycle events are written as JSON lines to
 and keeps one previous copy.
 
 Test knobs (environment): `WALNUT_DESKTOP_PORTS` (comma-separated, instead of
-3456 and 4567), `WALNUT_DESKTOP_AUTOSETUP=1` (Get Started without a click on a
-first launch), and install.sh's own `OPEN_WALNUT_*` knobs, which pass through.
+3456 and 4567) and install.sh's own `OPEN_WALNUT_*` knobs, which pass through.
 `scripts/desktop-smoke.mjs` uses them with a throwaway `HOME` and
 `CFFIXED_USER_HOME` (which `NSHomeDirectory()` follows) to launch a built app
 the way a new Mac would; CI's macOS release rehearsal runs it on every push.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// BundledRuntime (desktop/BundledRuntime.swift): where the Mac app finds the
-/// self-contained Walnut that Get Started installs, how it runs install.sh, and
+/// self-contained Walnut its first launch installs, how it runs install.sh, and
 /// what the server it starts sees on PATH. The layout must match what
 /// scripts/runtime-bundle/build.mjs builds and scripts/install.sh installs
 /// (tests/scripts/release-archives.test.ts checks those two sides).
@@ -29,6 +29,8 @@ struct BundledRuntimeTests {
         precondition(env["OPEN_WALNUT_BIN_DIR"] == "/Users/someone/.local/bin")
         precondition(env["PATH"]!.hasPrefix("/usr/bin:/bin:/usr/sbin:/sbin:"))
         precondition(env["HOME"] == home)
+        // And asked for the download's progress bar, which the setup screen reads.
+        precondition(env["OPEN_WALNUT_PROGRESS"] == "1")
         // A caller's knobs pass through: a test's mirror, a pinned version, another dir.
         let pinned = BundledRuntime.installEnvironment(base: [
             "OPEN_WALNUT_INSTALL_DIR": "/tmp/rt", "OPEN_WALNUT_VERSION": "0.7.0",
@@ -48,6 +50,27 @@ struct BundledRuntimeTests {
         precondition(BundledRuntime.statusLine(from: out) == "Downloading open-walnut-0.7.0-darwin-arm64.tar.gz...")
         precondition(BundledRuntime.statusLine(from: "") == nil)
 
+        // The setup screen speaks of Walnut, not of install.sh's files and PATH hints.
+        precondition(BundledRuntime.friendlyStatus("Finding the newest release...") == "Finding the latest Walnut...")
+        precondition(BundledRuntime.friendlyStatus("Installing Open Walnut 0.7.0 (darwin-arm64)...") == "Getting Walnut 0.7.0...")
+        precondition(BundledRuntime.friendlyStatus("Downloading open-walnut-0.7.0-darwin-arm64.tar.gz...") == "Downloading Walnut...")
+        precondition(BundledRuntime.friendlyStatus("Unpacking...") == "Unpacking...")
+        precondition(BundledRuntime.friendlyStatus("Add /Users/someone/.local/bin to your PATH, then start it with:  walnut web") == "Starting Walnut...")
+
+        // The download's share, off curl's bar: the newest figure after the last redraw.
+        let started = out + "##                                   3.1%\r########                        24.7%\r###############             47.3%"
+        precondition(BundledRuntime.downloadFraction(from: started) == 0.473)
+        precondition(BundledRuntime.downloadFraction(from: started + "\r" + String(repeating: "#", count: 60) + " 100.0%\n") == 1.0)
+        // None before the download, none while curl does not know the size, none once unpacking.
+        precondition(BundledRuntime.downloadFraction(from: "  Finding the newest release...\n") == nil)
+        precondition(BundledRuntime.downloadFraction(from: out + "#=#=#  ##O#- #\r") == nil)
+        precondition(BundledRuntime.downloadFraction(from: started + "\r 100.0%\n  Unpacking...\n") == nil)
+        // The version in the file name is not a percentage.
+        precondition(BundledRuntime.downloadFraction(from: out) == nil)
+        let now = BundledRuntime.progress(from: started)
+        precondition(now == BundledRuntime.Progress(status: "Downloading Walnut...", fraction: 0.473))
+        precondition(BundledRuntime.progress(from: "") == nil)
+
         // A real run: output streams to the callback, the exit status is kept.
         let dir = NSTemporaryDirectory() + "walnut-bundled-runtime-tests-\(getpid())"
         try! FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -56,8 +79,8 @@ struct BundledRuntimeTests {
         try! "printf '  Downloading x...\\n' >&2\nprintf '  Unpacking...\\n'\n[ \"$OPEN_WALNUT_INSTALL_DIR\" = /tmp/rt ]\n".write(toFile: ok, atomically: true, encoding: .utf8)
         var seen: [String] = []
         let lock = NSLock()
-        let result = BundledRuntime.runInstaller(script: ok, environment: pinned) { line in
-            lock.lock(); seen.append(line); lock.unlock()
+        let result = BundledRuntime.runInstaller(script: ok, environment: pinned) { progress in
+            lock.lock(); seen.append(progress.status); lock.unlock()
         }
         precondition(result.success, result.output)
         precondition(result.output.contains("Downloading x...") && result.output.contains("Unpacking..."))

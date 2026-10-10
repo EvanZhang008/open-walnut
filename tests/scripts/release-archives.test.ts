@@ -19,6 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, shipsNativeBinary, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
+import { BUNDLE_ID, cask } from '../../scripts/homebrew/cask.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 
@@ -176,6 +177,44 @@ describe('formula.mjs', () => {
   it('is Ruby that parses', () => {
     const rb = path.join(tmp, 'open-walnut.rb')
     fs.writeFileSync(rb, formula({ version: '0.7.0', sums }))
+    expect(execFileSync('ruby', ['-c', rb], { encoding: 'utf8' })).toContain('Syntax OK')
+  })
+})
+
+describe('cask.mjs', () => {
+  it('installs the release\'s Walnut.dmg, checked against its sha256', () => {
+    const rb = cask({ version: '0.7.0', sha256: SHA('a') })
+    expect(rb).toMatch(/^cask "walnut" do$/m)
+    expect(rb).toContain('version "0.7.0"')
+    expect(rb).toContain(`sha256 "${SHA('a')}"`)
+    expect(rb).toContain('url "https://github.com/EvanZhang008/open-walnut/releases/download/v#{version}/Walnut.dmg"')
+    expect(rb).toContain('app "Walnut.app"')
+    // Homebrew 4.x reads a bare symbol as "this or newer"; the string form is deprecated.
+    expect(rb).toContain('depends_on macos: :monterey')
+  })
+
+  it('zaps only what the app itself writes, never the user\'s data or the shared runtime', () => {
+    const zap = /zap trash: \[([\s\S]*?)\]/.exec(cask({ version: '0.7.0', sha256: SHA('a') }))![1]!
+    const paths = [...zap.matchAll(/"([^"]+)"/g)].map((m) => m[1]!)
+    expect(paths.length).toBeGreaterThan(0)
+    for (const p of paths) expect(p).toMatch(/^~\/Library\//)
+    expect(paths).toContain('~/Library/Application Support/Walnut')
+  })
+
+  it('names the bundle id the release build gives the app', () => {
+    const build = fs.readFileSync(path.join(ROOT, 'desktop/build-release.sh'), 'utf8')
+    expect(/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(build)![1]).toBe(BUNDLE_ID)
+  })
+
+  it('refuses what is not a stable version or a sha256', () => {
+    expect(() => cask({ version: '0.7.0-rehearsal.1', sha256: SHA('a') })).toThrow(/not a stable version/)
+    expect(() => cask({ version: 'v0.7.0"; system "x', sha256: SHA('a') })).toThrow(/not a stable version/)
+    expect(() => cask({ version: '0.7.0', sha256: 'abc' })).toThrow(/not a sha256/)
+  })
+
+  it('is Ruby that parses', () => {
+    const rb = path.join(tmp, 'walnut.rb')
+    fs.writeFileSync(rb, cask({ version: '0.7.0', sha256: SHA('a') }))
     expect(execFileSync('ruby', ['-c', rb], { encoding: 'utf8' })).toContain('Syntax OK')
   })
 })
@@ -356,6 +395,15 @@ describe('the Mac app', () => {
     expect(job.steps[job.steps.length - 1].if).toBe('always()')
     expect(job.steps[job.steps.length - 1].run).toContain('security delete-keychain')
     expect(job.steps.find((s) => s.name?.startsWith('Attach Walnut.dmg'))!.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
+    // The cask: from the DMG the release holds, after it is attached, installed by
+    // brew and assessed by Gatekeeper before walnut.rb goes up beside it.
+    const caskStep = job.steps.find((s) => s.name === 'Homebrew cask for the attached Walnut.dmg')!
+    expect(at(/^Homebrew cask/)).toBe(at(/^Attach Walnut\.dmg/) + 1)
+    expect(caskStep.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
+    const caskRun = caskStep.run!
+    expect(caskRun).toContain('gh release download "v$VERSION" --pattern Walnut.dmg')
+    expect(caskRun.indexOf('brew install --cask')).toBeLessThan(caskRun.indexOf("source=Notarized Developer ID"))
+    expect(caskRun.indexOf("source=Notarized Developer ID")).toBeLessThan(caskRun.indexOf('gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb"'))
     // The secrets reach one step, as environment variables.
     const withSecrets = job.steps.filter((s) => JSON.stringify(s).includes('secrets.'))
     expect(withSecrets.map((s) => s.name)).toEqual(['Signing identity and notary key, from the release environment'])

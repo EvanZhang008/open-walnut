@@ -94,6 +94,17 @@ describe('install.sh', () => {
     expect(leftovers(r.home)).toEqual([])
   })
 
+  // The Mac app reads the percentage off the bar to fill its own (BundledRuntime.swift).
+  it('prints the download\'s progress bar to a reader that is not a terminal only when asked', async () => {
+    await release('0.8.0', fakeArchive('0.8.0'))
+    const asked = await install(freshHome(), { OPEN_WALNUT_PROGRESS: '1' })
+    expect(asked.code, asked.out).toBe(0)
+    expect(asked.out).toMatch(/100\.0%/)
+    const quiet = await install(freshHome())
+    expect(quiet.code, quiet.out).toBe(0)
+    expect(quiet.out).not.toMatch(/\d\.\d%/)
+  })
+
   it('a pinned version installs that one', async () => {
     await release('0.7.0', fakeArchive('0.7.0'), false)
     await release('0.8.0', fakeArchive('0.8.0'))

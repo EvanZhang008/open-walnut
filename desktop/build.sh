@@ -28,7 +28,7 @@ swiftc -O -o "$MACOS/$APP_NAME" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit
 
-# The installer Get Started runs (BundledRuntime.swift): the same install.sh
+# The installer a first launch runs (BundledRuntime.swift): the same install.sh
 # every release attaches, so the app and `curl … | sh` install the same way.
 cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
 chmod 755 "$RESOURCES/install.sh"
