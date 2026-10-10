@@ -228,6 +228,14 @@ that happened.
 - Session minutes are the user's attention; agent minutes cost none. Mixing them
   inflates the user's day.
 - A workout overlapping sleep is a watch left running, not a night of exercise.
+- Make the parts add up. `attentionMin` adds Walnut time and outside-app time,
+  and the two can overlap (a Walnut lease keeps counting for up to 60 seconds
+  after the user switches to another app; one measured day overlapped by about
+  9%). Meetings overlap screen time too. When the user asks "how many hours did
+  I have and where did they go", count each second once (frontmost app, then
+  the Walnut task, then the off-screen part of a meeting, then sleep or a
+  workout, then short pauses and longer away time), so the slices sum to the
+  window, and show it per day as well as per week.
 - A gap is not idleness: it can be a meeting room, a walk, a talk at a desk.
   Say what is known (the place, the calendar), then ask.
 
