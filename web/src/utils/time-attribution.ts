@@ -20,9 +20,13 @@
  *   - `data-time-view` on a session panel's columns (chat, files, changed, board,
  *     terminal…): which part of the panel had the input;
  *   - `data-time-file` on the file viewer: the file open in it;
- *   - `data-time-item` on a plugin's own view (a channel, a thread, a letter),
- *     with `data-time-kind` (the plugin), `data-time-label` (what to call it)
- *     and `data-time-mode="reply"` on its reply box. It earns kind 'app'.
+ *   - a plugin's own page or app (`.plugin-native-app` / `.plugin-native-page`,
+ *     which carry `data-plugin-id`) earns kind 'app' with the plugin as `app`.
+ *     Inside it `data-time-item` names what the user was on (a channel, a
+ *     thread, a letter), `data-time-label` what to call it, and
+ *     `data-time-mode="reply"` marks its reply box. `data-time-kind` is the
+ *     item's own kind (channel, thread...) for the plugin's use; Walnut groups
+ *     by item and does not read it.
  * A change of any of them is a new context, so the old one is banked at the switch.
  */
 
@@ -54,6 +58,9 @@ function attr(el: Element | null, name: string): string | undefined {
   return v && v.length > 0 ? v : undefined;
 }
 
+/** A plugin's own page or app; Settings rows that also carry data-plugin-id are not one. */
+const PLUGIN_VIEW = '.plugin-native-app[data-plugin-id], .plugin-native-page[data-plugin-id]';
+
 /** The nearest `name` attribute at or above `el`, but only inside `owner`. */
 function within(el: Element, owner: Element, name: string): string | undefined {
   const hit = el.closest(`[${name}]`);
@@ -76,12 +83,13 @@ export function resolveAttribution(el: Element | null, pathname: string): TimeCo
       return { kind: 'session', sessionId, ...(view ? { view } : {}), ...(file ? { file } : {}) };
     }
 
-    // 1b. A plugin's own item. Only the reader's input reaches here: a message
-    //     arriving in the view is not a DOM event, so it never extends a lease.
+    // 1b. An item in a plugin's own view. Only the reader's input reaches here: a
+    //     message arriving in the view is not a DOM event, so it never extends a lease.
+    const pluginEl = el.closest(PLUGIN_VIEW);
+    const app = attr(pluginEl, 'data-plugin-id');
     const itemEl = el.closest('[data-time-item]');
     const item = attr(itemEl, 'data-time-item');
-    if (itemEl && item) {
-      const app = attr(el.closest('[data-time-kind]'), 'data-time-kind');
+    if (itemEl && item && (!pluginEl || pluginEl.contains(itemEl))) {
       const label = within(el, itemEl, 'data-time-label');
       const reply = within(el, itemEl, 'data-time-mode') === 'reply';
       return { kind: 'app', item, ...(app ? { app } : {}), ...(label ? { label } : {}), ...(reply ? { mode: 'reply' } : {}) };
@@ -91,6 +99,12 @@ export function resolveAttribution(el: Element | null, pathname: string): TimeCo
     const row = el.closest('div[data-task-id]');
     const taskId = attr(row, 'data-task-id');
     if (taskId) return { kind: 'triage', taskId };
+
+    // 2b. Elsewhere in a plugin's own view (a list being browsed): time in the plugin.
+    if (pluginEl && app) {
+      const reply = within(el, pluginEl, 'data-time-mode') === 'reply';
+      return { kind: 'app', app, ...(reply ? { mode: 'reply' } : {}) };
+    }
 
     // 3. The home chat.
     if (el.closest('.main-page-chat, .chat-panel')) return { kind: 'chat' };

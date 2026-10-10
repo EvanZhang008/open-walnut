@@ -21,14 +21,17 @@ const PANEL = `<div class="session-panel" data-session-id="${SID}">
   </div>
   <div class="session-panel-chat-col" data-time-view="chat"><textarea id="composer"></textarea></div>
 </div>
-<div class="plugin-view" data-time-kind="chatapp">
-  <div data-time-item="C0123/1700000000.0001" data-time-label="#general">
+<div class="plugin-native-app" data-plugin-id="chatapp">
+  <div data-time-item="C0123/1700000000.0001" data-time-label="#general" data-time-kind="channel">
     <span id="msg">a message</span>
     <div data-time-mode="reply"><textarea id="reply"></textarea></div>
   </div>
-  <div data-time-item="C0456" data-time-label="#random"><span id="other">other</span></div>
-  <span id="chrome">plugin chrome, no item</span>
-</div>`;
+  <div data-time-item="C0456" data-time-label="#random" data-time-kind="channel"><span id="other">other</span></div>
+  <ul id="list"><li id="row">a conversation in the list, no item</li></ul>
+  <div data-task-id="t_42"><b id="taskrow">a Walnut task shown by the plugin</b></div>
+</div>
+<div class="settings-row" data-plugin-id="chatapp"><button id="settings">plugin settings</button></div>
+<div data-time-item="X1" data-time-label="loose"><i id="loose">an item outside any plugin view</i></div>`;
 
 function el(id: string): Element {
   const { document } = parseHTML(`<body>${PANEL}</body>`);
@@ -64,8 +67,21 @@ describe('resolveAttribution: detail markers', () => {
     expect(resolveAttribution(el('reply'), '/')).toEqual({ kind: 'app', app: 'chatapp', item: 'C0123/1700000000.0001', label: '#general', mode: 'reply' });
   });
 
-  it('plugin chrome with no item is not attributable', () => {
-    expect(resolveAttribution(el('chrome'), '/')).toBeNull();
+  it('the item\'s data-time-kind (channel, thread) is never read as the plugin', () => {
+    expect(resolveAttribution(el('other'), '/')).toEqual({ kind: 'app', app: 'chatapp', item: 'C0456', label: '#random' });
+  });
+
+  it('browsing the plugin outside an item is time in the plugin, with no item', () => {
+    expect(resolveAttribution(el('row'), '/')).toEqual({ kind: 'app', app: 'chatapp' });
+  });
+
+  it('a task row inside a plugin view is still that task; a Settings row is no plugin view', () => {
+    expect(resolveAttribution(el('taskrow'), '/')).toEqual({ kind: 'triage', taskId: 't_42' });
+    expect(resolveAttribution(el('settings'), '/')).toBeNull();
+  });
+
+  it('an item outside any plugin view counts, without a plugin', () => {
+    expect(resolveAttribution(el('loose'), '/')).toEqual({ kind: 'app', item: 'X1', label: 'loose' });
   });
 
   it('a change of view, file, item or mode is a context switch', () => {
