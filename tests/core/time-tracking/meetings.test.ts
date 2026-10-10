@@ -16,7 +16,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { dayBoundsMs } from '../../../src/core/time-tracking/blocks.js'
 import { mergeDay } from '../../../src/core/time-tracking/timeline/merge.js'
 import {
-  callsIn, EMPTY_MEETING_CONTEXT, meetingAttendance, seriesIdOf, seriesNeverOnCall, settleDoubleBooked,
+  assignCalls, callsIn, EMPTY_MEETING_CONTEXT, meetingAttendance, seriesIdOf, seriesNeverOnCall, settleDoubleBooked,
   type MeetingContext, type MeetingFacts,
 } from '../../../src/core/time-tracking/timeline/meetings.js'
 import { ignoreList, loadMeetingContext, readMeetingAnswers, setMeetingAnswer } from '../../../src/core/time-tracking/timeline/meeting-context.js'
@@ -37,7 +37,7 @@ describe('meetingAttendance', () => {
   it('a call in the meeting: attended, meeting time = the call minus other work during it', () => {
     const a = meetingAttendance(meeting({ otherWork: [[t(5, 11, 40), t(5, 11, 50)]] }), ctx({ calls: [[t(5, 11, 2), t(5, 11, 55)]] }))
     expect(a).toEqual({
-      attendance: 'attended', basis: 'call', callMs: 53 * MIN, meetingMs: 43 * MIN, otherWorkMs: 10 * MIN,
+      attendance: 'attended', basis: 'call', callMs: 53 * MIN, overrunMs: 0, meetingMs: 43 * MIN, otherWorkMs: 10 * MIN,
       spans: [[t(5, 11, 2), t(5, 11, 55)]],
       counted: [[t(5, 11, 2), t(5, 11, 40)], [t(5, 11, 50), t(5, 11, 55)]],
     })
@@ -64,7 +64,7 @@ describe('meetingAttendance', () => {
 
   it('no call and nothing recorded: needs confirmation, never counted', () => {
     expect(meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 5)]] }), ctx())).toEqual({
-      attendance: 'needs_confirmation', basis: 'nothing_recorded', callMs: 0, meetingMs: 0, otherWorkMs: 0, spans: [], counted: [],
+      attendance: 'needs_confirmation', basis: 'nothing_recorded', callMs: 0, overrunMs: 0, meetingMs: 0, otherWorkMs: 0, spans: [], counted: [],
     })
   })
 
@@ -174,8 +174,8 @@ describe('mergeDay with calls', () => {
   })
 
   it('overlapping meetings count each call second once; one call under two meetings needs the user', () => {
-    // A 10:00-11:00 and B 10:30-11:30 with two calls: each meeting has its own, not double booked
-    // (the 10:00 call only runs ten minutes into B, so it stays A's).
+    // A 10:00-11:00 and B 10:30-11:30 with two calls: the 10:00 call is A's, and the 10:45 one,
+    // started while both ran, goes to B, which had none yet (the user left A for B).
     const out = merge([
       cal('Alpha review', t(5, 10), t(5, 11), 'E-a'),
       cal('Beta review', t(5, 10, 30), t(5, 11, 30), 'E-b'),
@@ -187,10 +187,10 @@ describe('mergeDay with calls', () => {
       seg('calls', 'call', 'Zoom call', t(5, 15, 5), t(5, 15, 50)),
     ], ctx())
     const plan = Object.fromEntries(out.plan.map((p) => [p.title, p]))
-    expect(plan['Alpha review']).toMatchObject({ attendance: 'attended', meetingMin: 55 })
+    expect(plan['Alpha review']).toMatchObject({ attendance: 'attended', meetingMin: 40 })
     expect(plan['Beta review']).toMatchObject({ attendance: 'attended', meetingMin: 45 })
     expect(plan['Gamma sync']).toMatchObject({ attendance: 'needs_confirmation', attendanceBasis: 'double_booked', meetingMin: 0 })
-    // 40 + 45 (A and B overlap: each second once) + 45 (the shared call, once).
+    // 40 (A) + 45 (B) + 45 (the shared call, once).
     expect(out.summary).toMatchObject({ attendedMeetingMin: 130, meetingMin: 130, meetings: { attended: 2, needs_confirmation: 2 } })
     expect(out.summary.needsConfirmation).toEqual([
       expect.objectContaining({ title: 'Gamma sync', basis: 'double_booked', eventId: 'E-c' }),
@@ -204,6 +204,41 @@ describe('mergeDay with calls', () => {
       seg('mac-apps', 'app', 'Zoom', t(5, 15), t(5, 16)),
     ], ctx())
     expect(out.plan[0]).toMatchObject({ attendance: 'needs_confirmation', attendanceBasis: 'nothing_recorded', verdict: 'meeting_on_screen' })
+  })
+
+  it('one call is one meeting: it stays the meeting it started in, past the calendar end', () => {
+    // 2026-10-05: one Zoom call 11:00-12:37 under an 11:00-12:00 slot, a 12:00 meeting after it.
+    const out = merge([
+      cal('Alpha review', t(5, 11), t(5, 12), 'E-a'),
+      cal('Beta review', t(5, 12), t(5, 12, 30), 'E-b'),
+      seg('calls', 'call', 'Zoom call', t(5, 11), t(5, 12, 37)),
+    ], ctx({ sessions: [[t(5, 11), t(5, 12, 37)]] }))
+    const plan = Object.fromEntries(out.plan.map((p) => [p.title, p]))
+    expect(plan['Alpha review']).toMatchObject({ attendance: 'attended', callMin: 97, attendedMin: 97, overrunMin: 37 })
+    // The next meeting had no call of its own: Alpha's call ran on through it.
+    expect(plan['Beta review']).toMatchObject({ attendance: 'needs_confirmation', callMin: 0 })
+    expect(out.summary).toMatchObject({ callMin: 97, adHocCallMin: 0, attendedMeetingMin: 97 })
+  })
+
+  it('joining the next meeting starts a new call, and that one is the next meeting\'s', () => {
+    // 2026-10-09: back-to-back meetings, the call app's assertions split five seconds apart.
+    const sessions: Array<[number, number]> = [[t(5, 10), t(5, 10, 45)], [t(5, 10, 45) + 5_000, t(5, 11, 10)]]
+    const out = merge([
+      cal('Alpha review', t(5, 10), t(5, 10, 30), 'E-a'),
+      cal('Beta review', t(5, 10, 45), t(5, 11, 15), 'E-b'),
+      seg('calls', 'call', 'Zoom call', t(5, 10), t(5, 11, 10)),
+    ], ctx({ sessions }))
+    const plan = Object.fromEntries(out.plan.map((p) => [p.title, p]))
+    expect(plan['Alpha review']).toMatchObject({ attendance: 'attended', callMin: 45, overrunMin: 15 })
+    expect(plan['Beta review']).toMatchObject({ attendance: 'attended', callMin: 25 })
+    expect(plan['Beta review']).not.toHaveProperty('overrunMin')
+    expect(out.summary).toMatchObject({ callMin: 70, adHocCallMin: 0, attendedMeetingMin: 70 })
+  })
+
+  it('a call that started before every meeting belongs to the one it runs into', () => {
+    expect(assignCalls([{ startMs: t(5, 14), endMs: t(5, 14, 30) }], [[t(5, 13, 50), t(5, 14, 40)]])).toEqual([[[t(5, 14), t(5, 14, 40)]]])
+    // ...but a short spill into a meeting is the earlier call's.
+    expect(assignCalls([{ startMs: t(5, 14), endMs: t(5, 15) }], [[t(5, 13), t(5, 14, 5)]])).toEqual([[]])
   })
 
   it('the same meeting twice, a minute apart, is one meeting, not a double booking', () => {

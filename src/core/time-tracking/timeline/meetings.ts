@@ -16,6 +16,10 @@
  *     half, needs confirmation too (basis some_other_work). Never counted and
  *     never guessed: the time review asks, and the user's answer
  *     (time_meeting_attendance_set) is kept on this Mac.
+ * One call is one meeting (assignCalls): the call the user joined for a meeting
+ * stays that meeting's past the calendar end, until it ends (2026-10-07: a
+ * 15:15-16:00 meeting's call ran to 16:44, and the 44 minutes read as an ad-hoc
+ * call; 2026-10-05: one 97-minute call under a 60-minute slot).
  * "No call" is only an answer inside call coverage (the stretch this Mac was
  * watching); outside it the attendance is unknown. One call under two meetings
  * at once is the user's to say too (settleDoubleBooked).
@@ -44,6 +48,8 @@ export type AttendanceBasis =
 export interface MeetingContext {
   /** Call intervals (merged across apps) around the range. */
   calls: ReadonlyArray<Span>
+  /** One span per call, never joined to the next (callSessions); absent = `calls`. */
+  sessions?: ReadonlyArray<Span>
   /** Where this Mac was watching for calls. */
   coverage: ReadonlyArray<Span>
   /** Series (seriesId) seen at least NEVER_MIN_OCCURRENCES times in coverage and never on a call. */
@@ -72,6 +78,33 @@ export function callsIn(a: number, b: number, calls: ReadonlyArray<Span>): Array
   return out
 }
 
+/**
+ * Which meeting each call belongs to, whole. A call (one session: callSessions)
+ * belongs to the meeting it started in, or started up to SPILL_LEAD_MS before,
+ * from that meeting's start to the call's end, past the calendar end included. A
+ * call that started outside every meeting belongs to the meetings it runs into
+ * beyond a spill (callsIn). A call that starts while two meetings run goes to
+ * the one that has no call yet (the user left the first for the second); when
+ * that does not settle it, to both, and settleDoubleBooked asks. Returns the
+ * spans per meeting, in input order.
+ */
+export function assignCalls(meetings: ReadonlyArray<{ startMs: number; endMs: number }>, sessions: ReadonlyArray<Span>): Array<Array<[number, number]>> {
+  const out = meetings.map(() => [] as Array<[number, number]>)
+  for (const [s, e] of [...sessions].sort((x, y) => x[0] - y[0])) {
+    let owners = meetings.flatMap((m, i) => (m.startMs - SPILL_LEAD_MS <= s && s < m.endMs ? [i] : []))
+    if (owners.length > 1) {
+      const fresh = owners.filter((i) => out[i]!.length === 0)
+      if (fresh.length === 1) owners = fresh
+    }
+    if (owners.length === 0) owners = meetings.flatMap((m, i) => (callsIn(m.startMs, m.endMs, [[s, e]]).length ? [i] : []))
+    for (const i of owners) {
+      const a = Math.max(s, meetings[i]!.startMs)
+      if (e > a) out[i]!.push([a, e])
+    }
+  }
+  return out.map((spans) => mergeSpans(spans))
+}
+
 export interface MeetingFacts {
   startMs: number
   endMs: number
@@ -79,15 +112,19 @@ export interface MeetingFacts {
   eventId?: string
   seriesId?: string
   recurring?: boolean
-  /** Spans inside the meeting the user was doing something else on screen (not the call app). */
+  /** Spans inside the meeting (and its call's overrun) the user was doing something else on screen (not the call app). */
   otherWork: ReadonlyArray<Span>
+  /** This meeting's calls (assignCalls); absent = the calls inside it (callsIn). */
+  calls?: ReadonlyArray<Span>
 }
 
 export interface MeetingAttendance {
   attendance: Attendance
   basis: AttendanceBasis
-  /** Call minutes inside the meeting (ms). */
+  /** Call time in the meeting (ms), its overrun past the calendar end included. */
   callMs: number
+  /** The part of callMs after the calendar end. */
+  overrunMs: number
   /** Counted meeting time: call minus other work while on it; 0 unless attended. */
   meetingMs: number
   /** Other work while on the call (ms). */
@@ -104,8 +141,9 @@ export interface MeetingAttendance {
 
 export function meetingAttendance(m: MeetingFacts, ctx: MeetingContext): MeetingAttendance {
   const len = m.endMs - m.startMs
-  const inCall = mergeSpans(callsIn(m.startMs, m.endMs, ctx.calls))
+  const inCall = mergeSpans(m.calls ?? callsIn(m.startMs, m.endMs, ctx.calls))
   const callMs = inCall.reduce((s, [a, b]) => s + (b - a), 0)
+  const overrunMs = inCall.reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, m.endMs)), 0)
   const otherWork = mergeSpans(m.otherWork)
   const otherWorkMs = inCall.reduce((s, [a, b]) => s + coveredMs(a, b, otherWork), 0)
   const otherWorkInMeetingMs = coveredMs(m.startMs, m.endMs, otherWork)
@@ -116,14 +154,14 @@ export function meetingAttendance(m: MeetingFacts, ctx: MeetingContext): Meeting
     // The user's word. "Attended" with no call counts the meeting minus other work.
     const spans: Array<[number, number]> = answer ? (callMs > 0 ? inCall : [[m.startMs, m.endMs]]) : []
     const counted = minus(spans)
-    return { attendance: answer ? 'attended' : 'not_attended', basis: 'user', callMs, meetingMs: sum(counted), otherWorkMs, spans, counted }
+    return { attendance: answer ? 'attended' : 'not_attended', basis: 'user', callMs, overrunMs, meetingMs: sum(counted), otherWorkMs, spans, counted }
   }
   if (callMs >= Math.min(ATTEND_MIN_MS, len)) {
     const counted = minus(inCall)
-    return { attendance: 'attended', basis: 'call', callMs, meetingMs: sum(counted), otherWorkMs, spans: inCall, counted }
+    return { attendance: 'attended', basis: 'call', callMs, overrunMs, meetingMs: sum(counted), otherWorkMs, spans: inCall, counted }
   }
   const watched = coveredMs(m.startMs, m.endMs, ctx.coverage)
-  const none = { callMs, meetingMs: 0, otherWorkMs, spans: [] as Array<[number, number]>, counted: [] as Array<[number, number]> }
+  const none = { callMs, overrunMs, meetingMs: 0, otherWorkMs, spans: [] as Array<[number, number]>, counted: [] as Array<[number, number]> }
   if (watched < len * COVERED_SHARE) return { attendance: 'unknown', basis: 'no_call_data', ...none }
   if (m.recurring && m.seriesId && ctx.neverOnCall.has(m.seriesId)) return { attendance: 'not_attended', basis: 'recurring_never_on_call', ...none }
   // The call app alone in front is no other work: with no call heard, that is the user's to say.

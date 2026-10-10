@@ -170,9 +170,13 @@ Each meeting in `time_timeline` `plan` carries `attendance` and why
 (`attendanceBasis`), decided from the calls on this Mac:
 
 - `attended` (basis `call`): a call ran during it. `attendedMin` is the time
-  on the call inside the meeting; `otherWorkMin` is the part of it the user was
-  also doing something else on screen (Walnut input, another app in front);
-  `meetingMin` is the rest. Time in a meeting is `attendedMin`, never the
+  on the call in the meeting. One call is one meeting: the call the user joined
+  for it counts until it ends, past the calendar end too (`overrunMin`), since
+  joining the next meeting starts a new call. `otherWorkMin` is the part of it
+  the user also had something else in front (Walnut input, another app, a site);
+  `meetingMin` is the rest. A doc or a ticket opened for the meeting counts as
+  other work too: the screen cannot tell meeting material apart, so say so
+  when `meetingMin` is low. Time in a meeting is `attendedMin`, never the
   calendar length; say how much of it went to other work (people often work
   through a call, so `meetingMin` alone can be a few minutes of an hour).
 - `not_attended`: a recurring meeting never on a call in the last four weeks

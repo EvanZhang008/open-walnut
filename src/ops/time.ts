@@ -113,7 +113,7 @@ defineOp({
     + '(measured / planned / inferred); a screen block lists its top tasks and apps and the meeting it sat in. '
     + '`plan` compares every calendar block with what was measured inside it (verdict kept / partly / other_work / '
     + 'meeting_on_screen / not_on_screen). A meeting also gets `attendance` from the calls on this Mac: attended (a call '
-    + 'ran; attendedMin = time on the call, meetingMin = the part with nothing else on screen), not_attended (a recurring meeting never on a call, or other '
+    + 'ran; attendedMin = time on the call, past the calendar end too (overrunMin), meetingMin = the part with nothing else on screen), not_attended (a recurring meeting never on a call, or other '
     + 'work on screen), needs_confirmation (no call and nothing recorded, or two meetings at once on one call: ASK the '
     + 'user, never guess; record the answer with time_meeting_attendance_set) or unknown (no call data). `summary` gives minutes per kind for the whole day '
     + 'and for work hours, plus callMin, adHocCallMin, attendedMeetingMin, meetingMin and needsConfirmation. '

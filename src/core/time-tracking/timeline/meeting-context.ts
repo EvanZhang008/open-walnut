@@ -80,7 +80,7 @@ export async function loadMeetingContext(
   ignore: readonly string[],
 ): Promise<MeetingContext> {
   const lookFromMs = range.startMs - SERIES_LOOKBACK_DAYS * 86_400_000
-  const [{ calls, coverage }, answers] = await Promise.all([readCalls(lookFromMs, range.endMs), readMeetingAnswers()])
+  const [{ calls, sessions, coverage }, answers] = await Promise.all([readCalls(lookFromMs, range.endMs), readMeetingAnswers()])
   const callSpans = mergeSpans(calls.map((c) => [c.startMs, c.endMs] as [number, number]))
   let occurrences: SeriesOccurrence[] = []
   if (coverage.length) {
@@ -97,6 +97,7 @@ export async function loadMeetingContext(
   const attendedSeries = new Set([...answers].filter(([, yes]) => yes).map(([id]) => seriesIdOf(id)))
   return {
     calls: callSpans,
+    sessions: sessions.map((c) => [c.startMs, c.endMs] as [number, number]),
     coverage,
     neverOnCall: seriesNeverOnCall(occurrences, callSpans, coverage, attendedSeries),
     answers,

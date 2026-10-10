@@ -177,6 +177,28 @@ export function mergeCalls(calls: readonly CallInterval[], joinMs = CALL_JOIN_MS
   return out.sort((a, b) => a.startMs - b.startMs)
 }
 
+/** Two records of one call start this close (the log's and the live sampler's start from different clocks). */
+const SAME_CALL_START_MS = 5_000
+
+/**
+ * One interval per call, kept apart from the next one: a call app holds one power
+ * assertion per call, and joining another meeting releases it and makes a new one
+ * (2026-10-09: three meetings back to back, the assertions split at 15:16:29 and
+ * 15:33:04, five seconds apart). Records of the same call (log and live, a live call
+ * persisted every few minutes) share its start, so they are joined by app and start;
+ * mergeCalls, which joins calls a minute apart, would weld the three into one.
+ */
+export function callSessions(calls: readonly CallInterval[]): CallInterval[] {
+  const sorted = calls.filter((c) => c.endMs > c.startMs).map((c) => ({ ...c })).sort((a, b) => a.app.localeCompare(b.app) || a.startMs - b.startMs)
+  const out: CallInterval[] = []
+  for (const c of sorted) {
+    const last = out[out.length - 1]
+    if (last && last.app === c.app && c.startMs - last.startMs <= SAME_CALL_START_MS) last.endMs = Math.max(last.endMs, c.endMs)
+    else out.push(c)
+  }
+  return out.sort((a, b) => a.startMs - b.startMs)
+}
+
 /** Union of spans, joining pieces closer than `joinMs`. */
 export function mergeSpans(spans: readonly Span[], joinMs = 0): Array<[number, number]> {
   const sorted = spans.filter(([a, b]) => b > a).map(([a, b]) => [a, b] as [number, number]).sort((x, y) => x[0] - y[0])

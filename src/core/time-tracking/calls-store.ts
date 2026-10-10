@@ -20,7 +20,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { mergeCalls, mergeSpans, COVERAGE_JOIN_MS, type CallInterval, type Span } from './calls.js'
+import { callSessions, mergeCalls, mergeSpans, COVERAGE_JOIN_MS, type CallInterval, type Span } from './calls.js'
 import { localDateKey, shiftDateKey } from './rollup.js'
 
 export type CallSource = 'live' | 'log'
@@ -111,6 +111,8 @@ export function appendCallLines(lines: ReadonlyArray<{ startMs: number; line: st
 export interface CallsRead {
   /** Merged per app, sorted by start. */
   calls: CallInterval[]
+  /** One per call, never joined to the next (callSessions): which meeting a call was. */
+  sessions: CallInterval[]
   /** Merged stretches this Mac was watching for calls. */
   coverage: Array<[number, number]>
 }
@@ -138,6 +140,7 @@ export function readCalls(fromMs: number, toMs: number): Promise<CallsRead> {
     const touches = (a: number, b: number): boolean => b > fromMs && a < toMs
     return {
       calls: mergeCalls(calls).filter((c) => touches(c.startMs, c.endMs)),
+      sessions: callSessions(calls).filter((c) => touches(c.startMs, c.endMs)),
       coverage: mergeSpans(cov, COVERAGE_JOIN_MS).filter(([a, b]) => touches(a, b)),
     }
   })

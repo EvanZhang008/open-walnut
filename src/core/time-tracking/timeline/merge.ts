@@ -22,7 +22,7 @@ import { localIso } from '../../health/day-key.js'
 import { coveredMs, mergeSpans, type Span } from '../calls.js'
 import { isWorkday, workMsOf, WEEKDAY_NAMES, type WorkHours } from '../work-hours.js'
 import {
-  callsIn, EMPTY_MEETING_CONTEXT, isIgnoredMeeting, meetingAttendance, settleDoubleBooked,
+  assignCalls, EMPTY_MEETING_CONTEXT, isIgnoredMeeting, meetingAttendance, settleDoubleBooked,
   type Attendance, type AttendanceBasis, type MeetingAttendance, type MeetingContext,
 } from './meetings.js'
 import type { SourcedSegment, TimelineConfidence } from './types.js'
@@ -204,8 +204,10 @@ export interface PlanCheck {
   /** Meetings: attended or not, from the call (meetings.ts), and why. */
   attendance?: Attendance
   attendanceBasis?: AttendanceBasis
-  /** Call minutes inside the meeting. */
+  /** Call minutes in the meeting, its overrun past the calendar end included. */
   callMin?: number
+  /** The call ran this long past the calendar end. */
+  overrunMin?: number
   /** Attended: minutes in the meeting, other work included (the call, or the whole meeting on the user's word). */
   attendedMin?: number
   /** Counted meeting minutes: the call minus other work while on it. */
@@ -226,8 +228,13 @@ function planChecks(
     if (p.seg.kind === 'walnut' && typeof id === 'string') dayTaskMs.set(id, (dayTaskMs.get(id) ?? 0) + (p.endMs - p.startMs))
   }
   const out: PlanCheck[] = []
+  // One call is one meeting's, whole, its run past the calendar end included.
+  const checked = planned.filter((p) => p.kind === 'meeting' && p.endMs - p.startMs >= PLAN_MIN_MS)
+  const owned = new Map(assignCalls(checked, ctx.sessions ?? calls).map((spans, i) => [checked[i]!, spans] as const))
   for (const ev of planned) {
     if (ev.endMs - ev.startMs < PLAN_MIN_MS) continue
+    const own = owned.get(ev) ?? []
+    const until = Math.max(ev.endMs, ...own.map(([, b]) => b))
     const tasks = new Map<string, { title: string; ms: number }>()
     const apps = new Map<string, number>()
     let screenMs = 0
@@ -272,7 +279,7 @@ function planChecks(
       for (const p of pieces) {
         if (!SCREEN_KINDS.has(p.seg.kind) || (p.seg.kind === 'app' && MEETING_APP.test(p.seg.label))) continue
         const a = Math.max(ev.startMs, p.startMs)
-        const b = Math.min(ev.endMs, p.endMs)
+        const b = Math.min(until, p.endMs)
         if (b > a) otherWork.push([a, b])
       }
       const d = ev.detail ?? {}
@@ -281,7 +288,7 @@ function planChecks(
         ...(typeof d.eventId === 'string' ? { eventId: d.eventId } : {}),
         ...(typeof d.seriesId === 'string' ? { seriesId: d.seriesId } : {}),
         ...(d.recurring === true ? { recurring: true } : {}),
-        otherWork,
+        otherWork, calls: own,
       }, { ...ctx, calls })
     }
     const matchedMs = matched ? matched.minInBlock * MIN : 0
@@ -303,7 +310,7 @@ function planChecks(
     out.push(check)
     if (attend) {
       meetings.push({
-        check, attendance: attend, inCall: mergeSpans(callsIn(ev.startMs, ev.endMs, calls)),
+        check, attendance: attend, inCall: own,
         ...(typeof ev.detail?.eventId === 'string' ? { eventId: ev.detail.eventId } : {}),
       })
     }
@@ -315,6 +322,7 @@ function planChecks(
     Object.assign(m.check, {
       attendance: a.attendance, attendanceBasis: a.basis,
       callMin: minutes(a.callMs),
+      ...(a.overrunMs >= MIN ? { overrunMin: minutes(a.overrunMs) } : {}),
       ...(a.attendance === 'attended' ? { attendedMin: minutes(a.spans.reduce((s, [x, y]) => s + (y - x), 0)) } : {}),
       meetingMin: minutes(a.meetingMs),
       ...(a.otherWorkMs >= MIN ? { otherWorkMin: minutes(a.otherWorkMs) } : {}),
@@ -491,6 +499,8 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
   const { checks: plan, meetingSpans: countedSpans, attendedSpans } = planChecks(day, planned, pieces, opts.tz, calls, ctx)
   const meetingChecks = plan.filter((p) => p.attendance !== undefined)
   const meetingSpans = mergeSpans(allPlanned.filter((s) => s.kind === 'meeting').map((s) => [s.startMs, s.endMs] as [number, number]))
+  // A meeting's overrun is its call, not an ad-hoc one.
+  const explained = mergeSpans([...meetingSpans, ...attendedSpans])
   const needsConfirmation = meetingChecks.filter((p) => p.attendance === 'needs_confirmation')
     .map((p) => ({ title: p.title, start: p.start, end: p.end, basis: p.attendanceBasis, ...(p.eventId ? { eventId: p.eventId } : {}) }))
 
@@ -509,7 +519,7 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
       ...(calls.length ? {
         callMin: minutes(calls.reduce((s, [a, b]) => s + (b - a), 0)),
         // Call time no planned meeting explains: an ad-hoc call.
-        adHocCallMin: minutes(calls.reduce((s, [a, b]) => s + (b - a) - coveredMs(a, b, meetingSpans), 0)),
+        adHocCallMin: minutes(calls.reduce((s, [a, b]) => s + (b - a) - coveredMs(a, b, explained), 0)),
       } : {}),
       ...(meetingChecks.length ? {
         // Each second once, even when two attended meetings overlap. attendedMeetingMin is the

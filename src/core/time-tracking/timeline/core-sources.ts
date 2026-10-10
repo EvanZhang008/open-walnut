@@ -4,7 +4,10 @@
  * only (places and health never leave it), and the route that calls them is
  * this-Mac-only for the same reason.
  *
- *   walnut    100  the attention lease (session, triage, chat; phone included)
+ *   walnut    100  the attention lease (session, triage, chat, app; phone included),
+ *                  minus the seconds another Mac app was frontmost (the lease's
+ *                  60 s tail ran on after the user switched: the same cut the
+ *                  report makes, report-adjust.ts)
  *   mac-apps   90  the foreground sampler, Walnut's own foreground left out
  *   calls      85  a call app holding a call on this Mac (power assertions): shows
  *                  a call the user listened to with the Mac idle
@@ -22,6 +25,10 @@ import { outsideDayRecords } from '../outside-store.js'
 import { WALNUT_DESKTOP_BUNDLE_ID } from '../outside-view.js'
 import { walnutHostsFor } from '../walnut-hosts.js'
 import { shiftDateKey } from '../rollup.js'
+import { adjustLeases } from '../report-adjust.js'
+import { coveredMs } from '../calls.js'
+import type { TimeRecord } from '../types.js'
+import type { OutsideRecord } from '../outside-store.js'
 import { seriesIdOf } from './meetings.js'
 import { registerTimelineSource } from './registry.js'
 import type { TimelineRange, TimelineSegmentInput, TimelineSourceResult } from './types.js'
@@ -60,12 +67,16 @@ function datesOf(range: TimelineRange): string[] {
 
 interface Run { startMs: number; endMs: number; key: string; seg: TimelineSegmentInput }
 
-/** Join consecutive same-key intervals closer than `joinMs`. Input sorted by start. */
-function joinRuns(items: Array<{ startMs: number; endMs: number; key: string; make: () => TimelineSegmentInput }>, joinMs: number): TimelineSegmentInput[] {
+/** Join consecutive same-key intervals closer than `joinMs` (and, when given, only where `bridge` allows the gap). Input sorted by start. */
+function joinRuns(
+  items: Array<{ startMs: number; endMs: number; key: string; make: () => TimelineSegmentInput }>, joinMs: number,
+  bridge?: (fromMs: number, toMs: number) => boolean,
+): TimelineSegmentInput[] {
   const runs: Run[] = []
   for (const it of items) {
     const last = runs[runs.length - 1]
-    const same = last && last.key === it.key && it.startMs - last.endMs <= joinMs ? last : undefined
+    const same = last && last.key === it.key && it.startMs - last.endMs <= joinMs
+      && (!bridge || it.startMs <= last.endMs || bridge(last.endMs, it.startMs)) ? last : undefined
     if (same) { same.endMs = Math.max(same.endMs, it.endMs); continue }
     const run = { startMs: it.startMs, endMs: it.endMs, key: it.key, seg: it.make() }
     runs.push(run)
@@ -76,16 +87,27 @@ function joinRuns(items: Array<{ startMs: number; endMs: number; key: string; ma
 async function walnutSegments(range: TimelineRange): Promise<TimelineSourceResult> {
   const items: Array<{ startMs: number; endMs: number; taskId: string; device: string; app?: string }> = []
   let compactedMs = 0
+  const records = new Map<string, TimeRecord[]>()
+  const outside = new Map<string, OutsideRecord[]>()
   for (const date of datesOf(range)) {
+    const recs: TimeRecord[] = []
     for (const rec of await readDayRecords(date)) {
       if (!HUMAN_KINDS.has(rec.kind)) continue
       if (!rec.ts || rec.ts === `${date}T00:00:00.000Z`) { compactedMs += rec.durationMs; continue }
+      if (!Number.isFinite(Date.parse(rec.ts))) continue
+      recs.push(rec)
+    }
+    records.set(date, recs)
+    outside.set(date, await outsideDayRecords(date).catch(() => []))
+  }
+  // Outside wins: a lease second another Mac app was frontmost is that app's.
+  const { getConfig } = await import('../../config-manager.js')
+  const adj = adjustLeases(records, outside, new Set(await walnutHostsFor(await getConfig().catch(() => undefined))))
+  for (const recs of records.values()) {
+    for (const rec of recs) {
       const startMs = Date.parse(rec.ts)
-      if (!Number.isFinite(startMs)) continue
-      items.push({
-        startMs, endMs: startMs + rec.durationMs, taskId: rec.taskId ?? '', device: rec.source === 'ios' ? 'phone' : 'mac',
-        ...(rec.kind === 'app' ? { app: rec.app ?? 'a plugin' } : {}),
-      })
+      const base = { taskId: rec.taskId ?? '', device: rec.source === 'ios' ? 'phone' : 'mac', ...(rec.kind === 'app' ? { app: rec.app ?? 'a plugin' } : {}) }
+      for (const [a, b] of adj.pieces.get(rec) ?? [[startMs, startMs + rec.durationMs]]) items.push({ startMs: a, endMs: b, ...base })
     }
   }
   items.sort((a, b) => a.startMs - b.startMs)
@@ -104,7 +126,8 @@ async function walnutSegments(range: TimelineRange): Promise<TimelineSourceResul
       label: i.app ? `${i.app} in Walnut` : i.taskId ? (titles.get(i.taskId) ?? 'a deleted task') : 'Walnut (no task)',
       detail: { taskId: i.taskId || null, device: i.device, ...(i.app ? { app: i.app } : {}) },
     }),
-  })), WALNUT_JOIN_MS)
+  // Never bridge a gap another app filled: that is the cut above, drawn back in.
+  })), WALNUT_JOIN_MS, (a, b) => coveredMs(a, b, adj.other) === 0)
   return {
     segments,
     coverage: {

@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  callAppSet, coveredMs, createLogFolder, isCallAssertion, mergeCalls, mergeSpans, parseAssertionsNow, uncovered,
+  callAppSet, callSessions, coveredMs, createLogFolder, isCallAssertion, mergeCalls, mergeSpans, parseAssertionsNow, uncovered,
   MAX_CALL_MS,
 } from '../../../src/core/time-tracking/calls.js'
 import {
@@ -99,6 +99,30 @@ describe('createLogFolder', () => {
     f.push(logLine('2026-10-09 15:33:09', 1, 'zoom.us', 'Released', 'NoDisplaySleepAssertion', 'Describe Activity Type', '00:10:00', 'abc'))
     f.push('2026-10-09 15:34:00 -0700 Assertions          \tPID 1(zoom.us) Crea')
     expect(f.finish(ms('2026-10-09T16:00:00')).calls).toEqual([])
+  })
+})
+
+describe('callSessions', () => {
+  it('keeps back-to-back calls apart and joins the records of one call', () => {
+    const at = (m: number, sec = 0) => m * MIN + sec * 1_000
+    const sessions = callSessions([
+      // Three meetings back to back: the app's assertions split 7 and 5 seconds apart.
+      { app: 'zoom.us', startMs: at(0), endMs: at(45, 29) },
+      { app: 'zoom.us', startMs: at(45, 36), endMs: at(62, 4) },
+      { app: 'zoom.us', startMs: at(62, 9), endMs: at(146) },
+      // The live sampler's record of the first call: its start a second off, persisted twice.
+      { app: 'zoom.us', startMs: at(0, 1), endMs: at(20) },
+      { app: 'zoom.us', startMs: at(0, 1), endMs: at(45, 30) },
+      { app: 'FaceTime', startMs: at(10), endMs: at(11) },
+    ])
+    expect(sessions).toEqual([
+      { app: 'zoom.us', startMs: at(0), endMs: at(45, 30) },
+      { app: 'FaceTime', startMs: at(10), endMs: at(11) },
+      { app: 'zoom.us', startMs: at(45, 36), endMs: at(62, 4) },
+      { app: 'zoom.us', startMs: at(62, 9), endMs: at(146) },
+    ])
+    // mergeCalls welds them into one, which is right for "time on calls" and wrong for "which meeting".
+    expect(mergeCalls(sessions).filter((c) => c.app === 'zoom.us')).toHaveLength(1)
   })
 })
 
