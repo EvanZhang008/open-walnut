@@ -73,6 +73,8 @@ struct TimelineHarnessView: View {
                     .accessibilityIdentifier("harness.append")
                 Button("Bottom") { store.scrollToBottomSignal += 1 }
                     .accessibilityIdentifier("harness.bottom")
+                Button("Tables") { store.replaceWithTableMessages() }
+                    .accessibilityIdentifier("harness.tables")
                 Spacer(minLength: 0)
                 Text("\(store.messages.count) msgs")
                     .font(.caption)
@@ -222,6 +224,40 @@ final class TimelineHarnessStore {
             i += 1
         }
         return String(out.prefix(target))
+    }
+
+    /// Only markdown tables whose cells hold `<br>`, each followed by prose: the
+    /// screenshot view for the 2026-10-09 report, where one `<br>` sent a whole
+    /// table into a web view as raw `| a | b |` text. A row the formula
+    /// under-measures draws over the prose below it, which is why prose follows.
+    func replaceWithTableMessages() {
+        let weekend = """
+        ## Weekend draft
+
+        | Time | Saturday 10/10 | Sunday 10/11 |
+        |---|---|---|
+        | Morning | 10:00 call the repair shop (most open on Saturday morning)<br>10:30-12:30 **set up the proxy on Windows** | **Climbing** |
+        | Afternoon | 14:00-16:00 **launch post**: pick A or B first | **Pickleball** |
+        | Evening | **finish the game**, no time limit | rest, early night |
+
+        The prose right under the table must start below its last row.
+        """
+        let steps = """
+        A two-line header and a three-line cell:
+
+        | Step<br>(owner) | Status |
+        |---|---|
+        | Build | one<br>two<br>three |
+        | Ship | done, and `<br>` in code stays literal |
+        | Docs | spaced <br> break, escaped \\<br> stays |
+
+        Nothing below this line may be covered.
+        """
+        messages = [weekend, steps].enumerated().map { offset, text in
+            ChatMessage(id: "h-table-\(offset)", role: "assistant", text: text,
+                        createdAt: "2026-08-08T10:00:0\(offset)Z", kind: nil)
+        }
+        scrollToBottomSignal += 1
     }
 
     /// Only the rich fixtures, nothing else — the screenshot view, where every

@@ -264,6 +264,34 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(checked, 3, "gate checked nothing (n=\(checked))")
     }
 
+    /// A `<br>` in a cell makes its row as many lines tall as the cell has breaks.
+    /// The row formula has to count them, or the extra lines draw over the next
+    /// message. Real shape (2026-10-09): CJK cells, bold, a two-line and a
+    /// three-line cell, in the header too.
+    func testTablesWithLineBreaksInCellsFit() async {
+        // "\u{5148}\u{6253}\u{7535}\u{8BDD}" is a short CJK phrase ("call first").
+        let cjk = "\u{5148}\u{6253}\u{7535}\u{8BDD}"
+        let text = """
+        | Time | Saturday<br>10/10 | Sunday |
+        |---|---|---|
+        | Morning | 10:00 \(cjk)<br>10:30-12:30 **set up the proxy** | **Climbing** |
+        | Afternoon | one<br>two<br>three | **Pickleball** |
+        | Evening | **\(cjk)** | rest |
+        """
+        let built = await rows([message("b-1", text: text)])
+        XCTAssertEqual(built.map(\.content.reuseKind), ["table"],
+                       "a <br> in a cell must keep the table native, not route it to a web view")
+        let checked = assertFits(built, "table with <br> cells")
+        XCTAssertEqual(checked, 1, "gate checked nothing")
+        // The four extra lines (2 + 2 + 3 + 1 against 1 + 1 + 1 + 1) cost the row what
+        // they cost SwiftUI: compared against the real layout of both, so a wrong
+        // per-line height fails here even where the slack above would absorb it.
+        let flat = await rows([message("b-2", text: text.replacingOccurrences(of: "<br>", with: " "))])
+        guard let multi = built.first, let single = flat.first else { return XCTFail("no rows") }
+        XCTAssertEqual(multi.height - single.height,
+                       renderedHeight(multi) - renderedHeight(single), accuracy: 1)
+    }
+
     /// The EXPANDED reasoning card is the new asymmetric case: its height is a
     /// line-count model of SwiftUI's wrapped prose, so a line-breaking
     /// disagreement is a whole line of overflow. Sampled across the shapes that

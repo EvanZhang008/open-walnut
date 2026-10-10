@@ -331,6 +331,8 @@ enum MarkdownParser {
             let title = inner.components(separatedBy: "/").last ?? inner
             source.replaceSubrange(range, with: title)
         }
+        // Before the `<u>` pass, whose ranges must be taken on the text that is parsed.
+        let breaks = markLineBreakTags(&source)
         // AttributedString(markdown:) doesn't know `<u>` — mark the ranges
         // ourselves, then strip the tags before handing off to the parser.
         var underlineRanges: [Range<String.Index>] = []
@@ -357,9 +359,113 @@ enum MarkdownParser {
                 attributed[lower..<upper].underlineStyle = .single
             }
         }
+        // After the underline pass: that one maps String indices taken BEFORE this
+        // edit changes the length.
+        if let breaks { resolveLineBreakMarks(&attributed, spellings: breaks) }
         linkifyBareURLs(&attributed)
         linkifyPreviewableFilePaths(&attributed)
         return attributed
+    }
+
+    // MARK: - Line break tags
+
+    /// `<br>`, `<br/>`, `<br class="…">`, `</br>`: what an HTML parser reads as a
+    /// break. The name must END at `br` and attribute values are quote-aware, the
+    /// same rules RichHTMLSegments' tag scanner applies, so the two agree on what
+    /// is a `br`. A backslash-escaped `\<br>` is the model asking for the text.
+    private static let lineBreakTagRegex = try? NSRegularExpression(
+        pattern: #"(?<!\\)</?br(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Stands in for a `<br>` while AttributedString(markdown:) parses: a
+    /// private-use character, which no reply contains and the parser keeps as is.
+    private static let breakMark: Character = "\u{E000}"
+
+    static let lineSeparator = "\u{2028}"
+
+    /// A `<br>` the model wrote becomes a line break. AttributedString(markdown:)
+    /// keeps inline HTML as literal text, and models put `<br>` in table cells all
+    /// the time, because a markdown cell cannot hold a newline. The web console
+    /// renders it; `RichHTMLSegments.nativeTags` keeps such text on this native
+    /// path, so this is what draws it.
+    ///
+    /// Two halves around the parse, because each side knows one thing. Only the
+    /// SOURCE says which `<br>` is a real tag: after the parse, `&lt;br&gt;` and
+    /// `\<br>` have become the same five characters. Only the PARSE says which one
+    /// sits in a code span, where it is a sample to show as written. So the tags
+    /// become `breakMark` first (their spellings kept in order), and
+    /// `resolveLineBreakMarks` turns each mark back into its tag inside code, or into
+    /// a break everywhere else. Returns nil when there is nothing to do.
+    static func markLineBreakTags(_ source: inout String) -> [String]? {
+        guard source.utf8.contains(UInt8(ascii: "<")), let regex = lineBreakTagRegex,
+              !source.contains(breakMark) else { return nil }
+        let ns = source as NSString
+        let matches = regex.matches(in: source, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return nil }
+        var out = ""
+        var spellings: [String] = []
+        var cursor = 0
+        for match in matches {
+            out += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            out.append(breakMark)
+            spellings.append(ns.substring(with: match.range))
+            cursor = match.range.location + match.range.length
+        }
+        out += ns.substring(from: cursor)
+        source = out
+        return spellings
+    }
+
+    /// The second half of `markLineBreakTags`. A break is U+2028 LINE SEPARATOR,
+    /// not "\n": a break inside the paragraph, as in a browser, so it takes no
+    /// paragraph spacing. Also as in a browser, the spaces around it are dropped (a
+    /// line never starts with one), and a break that ends the text draws nothing.
+    static func resolveLineBreakMarks(_ attributed: inout AttributedString, spellings: [String]) {
+        let chars = attributed.characters
+        var offsets: [Int] = []
+        var n = 0
+        for ch in chars {
+            if ch == breakMark { offsets.append(n) }
+            n += 1
+        }
+        // The k-th mark is the k-th tag only if the parser kept every mark; if it
+        // dropped one (a tag inside a link destination), fall back to `<br>`.
+        let paired = offsets.count == spellings.count
+        // Back to front, and by offset: an index taken before a mutation is not
+        // promised to survive it.
+        for (k, offset) in offsets.enumerated().reversed() {
+            let start = attributed.characters.startIndex
+            var lower = attributed.characters.index(start, offsetBy: offset)
+            var upper = attributed.characters.index(after: lower)
+            let mark = attributed[lower..<upper]
+            let attributes = mark.runs.first?.attributes ?? AttributeContainer()
+            if mark.runs.contains(where: { $0.inlinePresentationIntent?.contains(.code) == true }) {
+                attributed.replaceSubrange(lower..<upper, with: AttributedString(
+                    paired ? spellings[k] : "<br>", attributes: attributes))
+                continue
+            }
+            while lower > start {
+                let before = attributed.characters.index(before: lower)
+                guard Self.isSpace(attributed.characters[before]) else { break }
+                lower = before
+            }
+            while upper < attributed.characters.endIndex, Self.isSpace(attributed.characters[upper]) {
+                upper = attributed.characters.index(after: upper)
+            }
+            let trailing = k == offsets.count - 1 && upper == attributed.characters.endIndex
+            attributed.replaceSubrange(lower..<upper, with: trailing
+                ? AttributedString() : AttributedString(lineSeparator, attributes: attributes))
+        }
+    }
+
+    private static func isSpace(_ ch: Character) -> Bool { ch == " " || ch == "\t" }
+
+    /// Lines a table cell draws: cells never wrap, so only explicit breaks count.
+    static func explicitLineCount(_ text: AttributedString) -> Int {
+        text.characters.reduce(1) { count, ch in
+            ch == "\u{2028}" || ch == "\n" ? count + 1 : count
+        }
     }
 
     /// AttributedString(markdown:) only links `[text](url)` — a bare

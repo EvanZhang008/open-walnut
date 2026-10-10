@@ -298,7 +298,8 @@ final class TimelineRowBuilder {
                             clipOversized: clipOversized, nextID: nextID, into: &rows)
         } else if !text.isEmpty {
             rows.append(textRow(id: nextID(), revision: revision,
-                                attributed: TimelineTextStyler.inlineText(text), width: width))
+                                attributed: TimelineTextStyler.inlineText(text, lineBreakTags: true),
+                                width: width))
         }
         return rows
     }
@@ -1066,10 +1067,21 @@ final class TimelineRowBuilder {
         let omitted = rows.count - rendered.count
         // Cells never wrap (horizontal scroll), so height is line arithmetic:
         // header + divider + body rows (+ omitted line), spacing 6, padding 12.
-        let lineH = TimelineTextStyler.subheadlineFont.lineHeight
-        var contentH = lineH // header
+        // A row is as tall as its cell with the most explicit breaks (`<br>`), and
+        // each line after a Text's first adds the font's LEADING too. Measured on the
+        // pinned simulator, subheadline (lineHeight 17.9, leading 2.1): 1 line 18pt,
+        // 2 lines 38, 3 lines 58, for Latin, CJK, Thai and emoji alike.
+        let font = TimelineTextStyler.subheadlineFont
+        let lineH = font.lineHeight
+        func rowHeight(_ cells: [AttributedString]) -> CGFloat {
+            let lines = CGFloat(cells.map(MarkdownParser.explicitLineCount).max() ?? 1)
+            return lineH + (lines - 1) * (lineH + font.leading)
+        }
+        var contentH = rowHeight(header)
         contentH += TimelineMetrics.tableRowSpacing + 1 // divider
-        contentH += CGFloat(rendered.count) * (lineH + TimelineMetrics.tableRowSpacing)
+        for row in rendered {
+            contentH += rowHeight(row) + TimelineMetrics.tableRowSpacing
+        }
         if omitted > 0 { contentH += 1 + TimelineTextStyler.captionFont.lineHeight + TimelineMetrics.tableRowSpacing * 2 }
         // A Grid's rows come out at the font's own line height (unlike a lone
         // `Text`), so the shortfall here is not per line — measured at 1.4pt total,

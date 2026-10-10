@@ -305,12 +305,20 @@ enum TimelineTextStyler {
     }
 
     /// Inline-markdown fast path for short plain rows (mirror of `Text(inline:)`).
+    ///
+    /// `lineBreakTags`: draw a `<br>` as a line break, as the block parser does.
+    /// Only for a MODEL's reply: a `<br>` the user typed into their own bubble, or one
+    /// quoted in a notification, is text they meant to show.
     static func inlineText(_ text: String, font: UIFont = bodyFont,
-                           color: UIColor = .label) -> NSAttributedString {
+                           color: UIColor = .label,
+                           lineBreakTags: Bool = false) -> NSAttributedString {
+        var source = text
+        let breaks = lineBreakTags ? MarkdownParser.markLineBreakTags(&source) : nil
         if var attributed = try? AttributedString(
-            markdown: text,
+            markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
+            if let breaks { MarkdownParser.resolveLineBreakMarks(&attributed, spellings: breaks) }
             MarkdownParser.linkifyBareURLs(&attributed)
             MarkdownParser.linkifyPreviewableFilePaths(&attributed)
             let style = paragraphStyle(spacing: 0, lineSpacing: 3)

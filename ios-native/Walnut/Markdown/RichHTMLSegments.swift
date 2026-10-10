@@ -38,7 +38,7 @@ enum RichSegment: Equatable {
 ///    byte for byte (minus the withheld streaming tail). A renderer that drops or
 ///    duplicates a byte here shows the user a different answer than the model sent.
 ///
-/// Four deliberate divergences from the web version, each with a reason:
+/// Five deliberate divergences from the web version, each with a reason:
 ///
 ///  1. `isRich` SKIPS code regions (web's `hasRichContent` does not). On the phone
 ///     a code sample rendering as native monospace is the CORRECT outcome; routing
@@ -58,6 +58,9 @@ enum RichSegment: Equatable {
 ///     AND html chunks through the same markdown renderer — `kind` there only picks
 ///     a CSS class — so `**Bottom line:**` written beside a `<div>` is bold on the
 ///     Mac. WebKit gets bytes, so the phone showed the asterisks instead.
+///  5. `<br>` does NOT make text rich (`nativeTags`): the native renderer draws it.
+///     Block markdown (a table, a list) inside an html run is NOT rendered, so a
+///     `<br>` in one table cell turned the whole table into its raw pipe source.
 ///
 /// NOT ported: `collapseRawtextBlankLines`. That exists because CommonMark ends a
 /// raw-HTML block at the first blank line, so a blank line inside `<style>` made
@@ -914,7 +917,8 @@ enum RichHTMLSegments {
     /// Element names this text opens or closes as MARKUP, lowercased.
     ///
     /// ONE scanner backs both chunk classification and the `isRich` precheck, so
-    /// the two can never disagree about what counts as a tag.
+    /// the two can never disagree about what counts as a tag. Tags the native
+    /// renderer draws (`nativeTags`) are left out: they do not make text rich.
     private static func markupTagNames(_ t: Text, _ skip: CodeSkip, firstOnly: Bool) -> [String] {
         var names: [String] = []
         var i = 0
@@ -924,6 +928,10 @@ enum RichHTMLSegments {
             if skip.contains(lt) { continue }
             guard let tag = tagName(t, at: lt) else { continue }
             let end = tagEnd(t, from: lt)
+            // No jump to `end` here: for a `<br` that is prose ("the <br tag isn't
+            // closed"), the quote-aware `tagEnd` can run past a real tag further on.
+            if nativeTags.contains(tag.name) { continue }
+            if end < 0, mayBecomeNativeTag(t, at: lt, name: tag.name) { continue }
             // A tag still arriving counts by what it has so far — classification
             // has to be right from the first delta, not only once the `>` lands.
             let raw = end < 0 ? t.substring(lt..<t.length) : t.substring(lt..<end)
@@ -1502,6 +1510,24 @@ enum RichHTMLSegments {
     /// the web splitter's set, and this file follows the splitter so the two halves
     /// of one decision cannot drift.)
     private static let rawtextTags: Set<String> = ["style", "script", "textarea"]
+
+    /// Tags the NATIVE markdown renderer draws itself (`MarkdownParser.applyLineBreakTags`),
+    /// so on their own they are no reason to leave it. Models write `<br>` inside
+    /// table cells because a markdown cell cannot hold a newline; counted as markup,
+    /// one `<br>` routed the whole table into a web document, where only inline
+    /// markdown applies, and the reader got the raw `| a | b |` source instead of a
+    /// table (2026-10-09). Inside an html run they are still markup: WebKit draws them.
+    private static let nativeTags: Set<String> = ["br"]
+
+    /// Could the tag name at `lt`, cut off by the end of the text, still grow into a
+    /// native tag? `<b` is either `<b>` or `<br>`; until the next delta says which,
+    /// it must not move a markdown chunk into a web view for one tick.
+    private static func mayBecomeNativeTag(_ t: Text, at lt: Int, name: String) -> Bool {
+        var i = lt + 1
+        if i < t.length, t[i] == uSlash { i += 1 }
+        guard i + name.utf16.count == t.length else { return false }
+        return nativeTags.contains { $0.hasPrefix(name) }
+    }
 
     /// Walnut's own inline pill syntax, NOT model HTML — `MarkdownParser`
     /// rewrites these before anything renders. They are absent from

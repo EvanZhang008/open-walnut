@@ -1676,6 +1676,11 @@ private struct TimelineLocalThumb: View {
 
 /// Markdown table — same Grid rendering as MarkdownView.tableView, on
 /// actor-prepared (already row-capped) data.
+///
+/// Cells never WRAP (the table scrolls sideways), but a cell may hold explicit
+/// breaks (a `<br>` the model wrote), so each cell is its ideal size: as many lines
+/// as it has breaks. `tableRow` measures the row by the same rule; a `lineLimit(1)`
+/// here once cut every such cell to its first line.
 private struct TimelineTableView: View {
     let header: [AttributedString]
     let rows: [[AttributedString]]
@@ -1690,7 +1695,7 @@ private struct TimelineTableView: View {
                     ForEach(0..<columns, id: \.self) { c in
                         Text(c < header.count ? header[c] : AttributedString(""))
                             .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
+                            .fixedSize()
                     }
                 }
                 Divider()
@@ -1699,7 +1704,7 @@ private struct TimelineTableView: View {
                         ForEach(0..<columns, id: \.self) { c in
                             Text(c < row.count ? row[c] : AttributedString(""))
                                 .font(.subheadline)
-                                .lineLimit(1)
+                                .fixedSize()
                         }
                     }
                 }

@@ -97,6 +97,48 @@ final class RichHTMLSegmentsTests: XCTestCase {
         XCTAssertFalse(RichHTMLSegments.isRich("Inline `<div>` is a sample too."))
     }
 
+    /// A `<br>` is drawn by the native renderer, so it must not take text off the
+    /// native path. Models put one in a table cell because a markdown cell cannot
+    /// hold a newline; counted as markup, it routed the whole table into a web
+    /// document, which applies inline markdown only, and the reader got the raw
+    /// `| a | b |` source instead of a table (2026-10-09, a weekend plan in chat).
+    func testLineBreakTagsStayOnTheNativePath() {
+        let table = """
+        ## Weekend draft
+
+        | Time | Saturday | Sunday |
+        |---|---|---|
+        | Morning | 10:00 call the repair shop<br>10:30-12:30 **set up the proxy** | **Climbing** |
+        | Evening | free | rest |
+
+        Two things need a word from you.
+        """
+        XCTAssertFalse(RichHTMLSegments.isRich(table))
+        XCTAssertEqual(kinds(table), ["md"])
+        for text in ["one<br>two", "one<br/>two", "one <BR /> two", #"a<br class="x">b"#, "a</br>b"] {
+            XCTAssertFalse(RichHTMLSegments.isRich(text), "must not be rich: \(text.debugDescription)")
+        }
+        // Inside real markup it is markup again: WebKit draws it in the card.
+        XCTAssertTrue(RichHTMLSegments.isRich("<div>one<br>two</div>"))
+        XCTAssertEqual(kinds("<div>one<br>two</div>"), ["html"])
+        // A `<br` that is prose must not hide the real tag after it: its quote-aware
+        // end runs across the apostrophe and past the `<img>`.
+        XCTAssertTrue(RichHTMLSegments.isRich("The <br tag isn't closed here.\n\n<img src=\"chart.png\">"))
+    }
+
+    /// `<b` at the very end of a streaming reply is `<b>` or `<br>`. Until the next
+    /// delta says which, it must not move a native table into a web view for a tick.
+    func testAnArrivingTagThatMayBecomeALineBreakIsUndecided() {
+        let head = "| a | b |\n|---|---|\n| one"
+        XCTAssertFalse(RichHTMLSegments.isRich(head + "<b"))
+        XCTAssertFalse(RichHTMLSegments.isRich(head + "<br"))
+        XCTAssertEqual(kinds(head + "<b", streaming: true), ["md"])
+        // Once the name is settled, so is the answer, either way.
+        XCTAssertTrue(RichHTMLSegments.isRich(head + "<b>bold</b> |"))
+        XCTAssertTrue(RichHTMLSegments.isRich(head + #"<b class="k""#))
+        XCTAssertFalse(RichHTMLSegments.isRich(head + "<br>two |"))
+    }
+
     /// The words "html-app" in prose are not an island. The fence probe is the LAST
     /// resort — consulted only once the tag scan has found nothing — and it has to be
     /// backed by the real classification, or a reply that merely mentions the fence

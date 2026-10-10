@@ -30,6 +30,7 @@ final class TimelineHarnessIdentifierTests: XCTestCase {
         "harness.plainStream",
         "harness.append",
         "harness.bottom",
+        "harness.tables",
         "harness.count",
         "harness.richMixed",
         "harness.richOnly",
