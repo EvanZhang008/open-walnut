@@ -49,7 +49,7 @@ struct CalendarCreateSheet: View {
         _isAllDay = State(initialValue: draft.isAllDay)
         // Deliberately NOT seeded into `project`: a pre-filled TextField with
         // the caret at the end silently CONCATENATES what the user types
-        // ("EKS Harbor Team" + "Home Lab" = "EKS Harbor TeamHome Lab" — caught
+        // ("Acme Team" + "Home Lab" = "Acme TeamHome Lab" — caught
         // in dogfood R18 verification). The suggestion is offered as a tappable
         // row instead, so the field starts empty and typing means what it says.
         _project = State(initialValue: "")
