@@ -80,6 +80,8 @@ test('Settings picker lists writable calendars by account, saves the choice, and
   await select.selectOption('cal-personal')
   await expect.poll(serverDefault, { timeout: 10_000 }).toBe('cal-personal')
   await expect(select).toHaveValue('cal-personal')
+  // The closed select shows only the name, so the help line names the account too.
+  await expect(row.locator('.settings-row-help')).toContainText('New events go to Personal (iCloud)')
   await expect(page.locator('#calendar [role="alert"]')).toHaveCount(0)
   await shot(page, 'settings-picker', page.locator('#calendar'))
 

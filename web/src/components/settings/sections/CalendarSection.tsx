@@ -236,7 +236,9 @@ export function CalendarSection() {
                 label="Default calendar"
                 htmlFor="calendar-default"
                 help={defaultCal?.warning ?? (defaultChoice.value
-                  ? 'New events go here unless you pick another: ones you add in Walnut and blocks your agents schedule.'
+                  // Names the account: the closed select shows only the calendar's name, and the
+                  // same name often exists in two accounts ("Family", "Calendar").
+                  ? `New events go to ${defaultCal?.id === defaultChoice.value && defaultCal.title ? `${calendarDisplayName(defaultCal.title).name} (${defaultCal.account})` : 'this calendar'} unless you pick another: ones you add in Walnut and blocks your agents schedule.`
                   : 'Pick where new events go. With none, agents have to name a calendar every time.')}
                 state={defaultCal?.warning ? 'warning' : undefined}
                 error={defaultChoice.error ?? undefined}
