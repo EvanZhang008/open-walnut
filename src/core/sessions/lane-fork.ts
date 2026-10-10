@@ -6,9 +6,9 @@
  * fork is a SESSION fork underneath: a fresh conversation is created, a new
  * session id is minted and seeded with `forkedFromSessionId`, and the spawn
  * rides the CLI's native `--resume <src> --fork-session` (the same mechanism
- * task-session forks use in session-controls.ts). Unlike those, a chat fork
- * creates NO task — lane sessions are taskless by design, and the fork's
- * lifecycle is the conversation's.
+ * task-session forks use in session-controls.ts). The fork is a new chat, so it
+ * gets its own ask like every chat (lane-ask-link.ts); its lifecycle stays the
+ * conversation's.
  *
  * The spawn is emitted HERE, at fork time, with an empty first message (the
  * same created-idle contract the lane-session endpoint uses): the forked id
@@ -81,8 +81,11 @@ export async function forkLaneConversation(
   const conversation = await createConversation(agentId, forkTitle);
   const forkSessionId = crypto.randomUUID();
   const lane = `chat:${agentId}:${conversation.id}`;
+  const { askTaskForLaneMint } = await import('./lane-ask-link.js');
+  // A fork is the user's own "keep going in a copy", so it is an ask at once.
+  const askTaskId = await askTaskForLaneMint(agentId, conversation.id, { create: true });
 
-  await createSessionRecord(forkSessionId, '', '', source.cwd, {
+  await createSessionRecord(forkSessionId, askTaskId, '', source.cwd, {
     title: forkTitle,
     // The fork inherits the source's launch bundle verbatim: same persona, same
     // effort, re-applied from the record on every cold resume.
@@ -95,7 +98,7 @@ export async function forkLaneConversation(
   });
 
   bus.emit(EventNames.SESSION_START, {
-    taskId: '',
+    taskId: askTaskId,
     // Created idle — the user's next message rides session:send like any lane.
     message: '',
     cwd: source.cwd,

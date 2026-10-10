@@ -280,6 +280,9 @@ apiV1Router.get('/conversations', async (req: Request, res: Response, next: Next
       ...(c.title && !isBannerTitle(c.title) ? { title: c.title } : {}),
       updatedAt: c.lastMessageAt,
       messageCount: c.messageCount,
+      // The ask this chat is (sessions/lane-ask-link.ts): the client lists it
+      // with the asks, and keeps the chats without one apart.
+      ...(c.askTaskId ? { askTaskId: c.askTaskId } : {}),
     })))
   } catch (err) {
     next(err)

@@ -131,6 +131,7 @@ export async function promoteSideThread(
   try {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     sessionRunner.syncLane(sessionId, undefined);
+    sessionRunner.syncTask(sessionId, task.id);
   } catch { /* runner unavailable (tests) — the record write above still holds */ }
   // The session was invisible until this write, so nothing else would tell the
   // UI it now exists.

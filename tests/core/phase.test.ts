@@ -291,15 +291,19 @@ describe('sessionInputPhase (reopens COMPLETE, 2026-09-23)', () => {
     // Allowlist by design: a deliberate path missing here keeps the old behavior
     // (task stays done); a missed AUTOMATED path on a denylist would reopen a
     // finished task on every auto-continue nudge / routine tick.
-    for (const source of ['ui', 'mobile', 'cli', 'peer', 'web-api', 'human-inbox']) {
+    // 'api-v1' / 'chat': a person's chat turn into a chat that is an ask
+    // (sessions/lane-ask-link.ts); the background turns into the same lanes
+    // ('cron', 'triage', 'heartbeat') must not reopen a finished ask.
+    for (const source of ['ui', 'mobile', 'cli', 'peer', 'web-api', 'human-inbox', 'api-v1', 'chat']) {
       expect(sendSourceReopensTerminal(source), source).toBe(true);
     }
     for (const source of ['auto-continue', 'auto-recover', 'routine-trigger', 'routine-watcher',
-      'hook:abc', 'side-thread', 'side-thread-digest', 'session-start', 'retry', 'restart', 'unknown', '']) {
+      'hook:abc', 'side-thread', 'side-thread-digest', 'session-start', 'retry', 'restart', 'unknown', '',
+      'cron', 'triage', 'heartbeat']) {
       expect(sendSourceReopensTerminal(source), source).toBe(false);
     }
     expect(sendSourceReopensTerminal(undefined)).toBe(false);
-    expect([...REOPENING_SEND_SOURCES].sort()).toEqual(['cli', 'human-inbox', 'mobile', 'peer', 'ui', 'web-api']);
+    expect([...REOPENING_SEND_SOURCES].sort()).toEqual(['api-v1', 'chat', 'cli', 'human-inbox', 'mobile', 'peer', 'ui', 'web-api']);
   });
 
   it('is the ONLY session trigger that leaves the terminal phase', () => {

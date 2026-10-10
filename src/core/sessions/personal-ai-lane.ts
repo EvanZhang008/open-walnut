@@ -740,6 +740,13 @@ async function resolveLane(
         });
       }
     }
+    // A real turn into a lane no task holds yet (warmed without a message, or
+    // older than asks): the chat becomes an ask before the turn, so the ask's
+    // phase and activity follow it from this turn on.
+    if (!existing.taskId && firstMessage) {
+      const { adoptLaneSessionForTurn } = await import('./lane-ask-link.js');
+      await adoptLaneSessionForTurn(agentId, conversationId, existing.claudeSessionId);
+    }
     log.session.info('Personal AI lane: reusing session', {
       lane, sessionId: existing.claudeSessionId, processStatus: existing.process_status,
     });
@@ -747,6 +754,12 @@ async function resolveLane(
   }
 
   const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
+  // Every chat is an ask (lane-ask-link.ts). Found or made BEFORE the spawn so
+  // its id rides SESSION_START: the runner then links the slot and moves the
+  // phase exactly as for an ask started on the Mac. A mint without a message
+  // (a lane warmed when a chat opens) only joins an ask the chat already has.
+  const { askTaskForLaneMint } = await import('./lane-ask-link.js');
+  const askTaskId = await askTaskForLaneMint(agentId, conversationId, { create: !!firstMessage });
 
   if (isAcpEngine(engine)) {
     // ACP lane: the worker mints the session id itself, so there is no record to
@@ -775,7 +788,7 @@ async function resolveLane(
       ? buildAskProfilePrefix((await buildLaneProfile(config, agentId)).profile)
       : '';
     bus.emit(EventNames.SESSION_START, {
-      taskId: '',
+      taskId: askTaskId,
       message: personaPrefix + (viaMessage?.message ?? firstMessage),
       cwd: WALNUT_HOME,
       title,
@@ -836,7 +849,7 @@ async function resolveLane(
   // ours, so the row can exist before the CLI). Here it additionally CLOSES the
   // lane: a second message arriving during the spawn window finds this row and
   // reuses the session instead of minting a rival one.
-  await createSessionRecord(sessionId, '', '', WALNUT_HOME, {
+  await createSessionRecord(sessionId, askTaskId, '', WALNUT_HOME, {
     title,
     profile,
     lane,
@@ -869,7 +882,7 @@ async function resolveLane(
   // Mode is left unset → send() defaults to 'bypass', matching the in-process
   // Personal AI (which never prompted the user to approve its own tool calls).
   bus.emit(EventNames.SESSION_START, {
-    taskId: '',
+    taskId: askTaskId,
     message,
     cwd: WALNUT_HOME,
     title,

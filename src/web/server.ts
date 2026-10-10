@@ -624,6 +624,8 @@ export function getDiskWatermarkHandle(): { stop: () => void; poll: () => Promis
   return diskWatermarkHandle
 }
 let taskProjectionHandle: { stop: () => void } | null = null
+/** Stops the chat ↔ ask title/delete sync (core/sessions/lane-ask-link.ts). */
+let laneAskSyncStop: (() => void) | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
@@ -3135,6 +3137,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }, delayMs)
       timer.unref?.()
     }
+  }
+
+  // -- Every chat is an ask (core/sessions/lane-ask-link.ts) --
+  // New chats become asks as they mint; this pass files the chats that already
+  // had sessions (the first run is the one-time migration) and heals any link a
+  // mint missed. Idempotent, detached, after the boot storm. The sync keeps a
+  // chat renamed or deleted on one side in step with its ask on the other.
+  if (!CLOUD_MODE) {
+    const { startLaneAskSync } = await import('../core/sessions/lane-ask-link.js')
+    laneAskSyncStop = startLaneAskSync()
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const { linkLaneAsks } = await import('../core/sessions/lane-ask-link.js')
+          await linkLaneAsks()
+        } catch (err) {
+          log.web.warn('chat → ask pass failed', { error: err instanceof Error ? err.message : String(err) })
+        }
+      })()
+    }, 20_000)
+    timer.unref?.()
   }
 
   // -- Pin retirement (completed pins expire off the board) --
@@ -5987,6 +6010,10 @@ export async function stopServer(): Promise<void> {
   if (sendPathCanaryHandle) {
     sendPathCanaryHandle.stop()
     sendPathCanaryHandle = null
+  }
+  if (laneAskSyncStop) {
+    laneAskSyncStop()
+    laneAskSyncStop = null
   }
   if (taskProjectionHandle) {
     taskProjectionHandle.stop()

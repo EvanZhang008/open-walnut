@@ -368,10 +368,24 @@ unchanged. Unknown/non-console agent ids → `404 not_found`.
 Array, most-recent first:
 
 ```json
-[ { "id": "conv-…", "title": "Weekend Travel", "updatedAt": "…", "messageCount": 12 } ]
+[ { "id": "conv-…", "title": "Weekend Travel", "updatedAt": "…", "messageCount": 12,
+    "askTaskId": "<task id>" } ]
 ```
 
 `title` is omitted while a conversation is still untitled. `limit` defaults to 50 (max 200).
+
+`askTaskId` (additive, 2026-10): the ask this conversation is. Every conversation a
+session has answered is one of its agent's asks, so the Mac's Ask Walnut drawer
+lists it and can continue it, and `GET /api/v1/asks` lists it with a
+`conversationId` naming this conversation. A new conversation gets its ask with
+its first message; the conversations that already had a session got theirs once,
+filed as history with their own dates. Absent: no session has answered it yet
+(written before conversations had sessions, or only on the companion while the
+Mac was away); its next message gives it one. The agent's MAIN conversation is
+never an ask: scheduled jobs and notices run their turns there. The pair stays in
+step: renaming either one renames the other, a person deleting either one deletes
+the other (a merge or a sync plugin's mirrored delete does not), and an ask the
+user deleted is never made again for the same conversation.
 
 ### POST /api/v1/conversations
 
@@ -417,6 +431,10 @@ retitles them itself.
   Treat a value you do not know as a new state, not an error.
 - `sessionId` is absent while the ask has no session; `unread: true` appears only
   when set.
+- `conversationId` (additive, 2026-10): the Personal AI conversation this ask was
+  written in (see `askTaskId` under `GET /api/v1/conversations`). A client opens
+  such a row in that conversation, with its history and the companion's fallback;
+  a row without one (an ask started on the Mac) opens as its session.
 - `q`: every whitespace-separated word must appear in the title, any case.
   `limit` defaults to 200; a larger one, however many digits it has, is capped at
   1000, and `total` counts the matches before `limit`. A `limit` that is not a

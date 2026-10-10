@@ -1817,6 +1817,13 @@ export interface ConversationMeta {
   model?: string;
   /** Legacy stored preference; the linked session owns the active effort. */
   effort?: string;
+  /** The ask task this chat is (sessions/lane-ask-link.ts): every chat with a
+   *  session is listed with the agent's asks on every surface. Set once, and kept
+   *  after the task is deleted, so a deleted ask is never minted again. */
+  askTaskId?: string;
+  /** The title was copied from the ask (its name is the user's or the ask's own
+   *  titler's), so an automatic chat title must not replace the ask's. */
+  titleFromAsk?: boolean;
 }
 
 /** Per-agent conversation registry, persisted as _index.json. */

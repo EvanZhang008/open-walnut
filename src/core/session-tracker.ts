@@ -1032,6 +1032,24 @@ export async function listSessionsByLane(lane: string): Promise<SessionRecord[]>
 }
 
 /**
+ * Every session bound to a Personal AI chat lane (`chat:<agent>:<conversation>`),
+ * archived included, oldest first: ONE scan for a pass over all chats, where a
+ * listSessionsByLane per conversation would scan the table once each.
+ */
+export async function listChatLaneSessions(): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const rows = db.prepare(`
+    SELECT * FROM sessions
+    WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
+      AND json_extract(payload, '$.lane') LIKE 'chat:%'
+    ORDER BY started_at ASC
+  `).all() as Array<Record<string, any>>;
+  return rows.map(rowToSession);
+}
+
+/**
  * Minimum prefix length accepted by {@link resolveSessionByIdOrPrefix}. 8 hex
  * chars (32 bits) is what the UI renders in its session-id chips and in
  * "Session <id> finished" notifications, so it is the shortest string a user can

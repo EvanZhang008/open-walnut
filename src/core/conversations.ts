@@ -297,6 +297,9 @@ function collapseTwinsForWrite(
     if (loser.pinned) winner.pinned = true;
     if (winner.model === undefined && loser.model !== undefined) winner.model = loser.model;
     if (winner.effort === undefined && loser.effort !== undefined) winner.effort = loser.effort;
+    // The ask binding is write-once (setConversationAskTask): losing it would
+    // mint the chat a second ask.
+    if (!winner.askTaskId && loser.askTaskId) winner.askTaskId = loser.askTaskId;
   }
   if (losers.length > 0) {
     index.conversations = index.conversations.filter((c) => c.id !== id || c === winner);
@@ -354,8 +357,9 @@ function dedupeConversations(agentId: string, list: ConversationMeta[]): Convers
     const losers = list.filter((c) => c.id === winner.id && c !== winner);
     const isMain = winner.isMain || losers.some((l) => l.isMain);
     const pinned = winner.pinned || losers.some((l) => l.pinned);
-    if (isMain === !!winner.isMain && pinned === !!winner.pinned) return winner;
-    return { ...winner, isMain, pinned };
+    const askTaskId = winner.askTaskId || losers.find((l) => l.askTaskId)?.askTaskId;
+    if (isMain === !!winner.isMain && pinned === !!winner.pinned && askTaskId === winner.askTaskId) return winner;
+    return { ...winner, isMain, pinned, ...(askTaskId ? { askTaskId } : {}) };
   });
 }
 
@@ -689,6 +693,70 @@ export async function deleteConversation(agentId: string, conversationId: string
 
     await writeIndex(agentId, index);
     log.agent.info('conversation deleted', { agentId, conversationId, activeConversationId: index.activeConversationId });
+    if (target?.askTaskId) askLink((m) => m.conversationDeleted(agentId, conversationId, target.askTaskId!));
+  });
+}
+
+/**
+ * Hand a chat change to its ask (sessions/lane-ask-link.ts), after the index
+ * write and never awaited: the ask is a second view of the chat, and nothing
+ * there may fail or slow the chat's own write. Only called for a chat that has
+ * an ask, so a chat without one never loads the module.
+ */
+function askLink(fn: (m: typeof import('./sessions/lane-ask-link.js')) => Promise<unknown>): void {
+  void import('./sessions/lane-ask-link.js').then(fn).catch((err) => {
+    log.agent.warn('conversation: updating its ask failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+/** A chat's title moved: its ask follows (see conversationTitleChanged).
+ *  `beforeFromAsk`: the title it replaced was the ask's own. */
+function noteTitleChange(meta: ConversationMeta, before: string, by: 'user' | 'auto', beforeFromAsk = false): void {
+  if (!meta.askTaskId || meta.title === before) return;
+  const { agentId, id, title } = meta;
+  askLink((m) => m.conversationTitleChanged(agentId, id, before, title, by, beforeFromAsk));
+}
+
+/**
+ * Bind a conversation to its ask task (sessions/lane-ask-link.ts). Write-once:
+ * a conversation that already names a task keeps that one, so two linkers can
+ * never give one chat two asks. Returns the task id the conversation names
+ * after the call, or null when there is no such conversation.
+ */
+export async function setConversationAskTask(
+  agentId: string,
+  conversationId: string,
+  taskId: string,
+): Promise<string | null> {
+  const bound = await setConversationAskTasks(agentId, new Map([[conversationId, taskId]]));
+  return bound.get(conversationId) ?? null;
+}
+
+/** {@link setConversationAskTask} for many conversations of one agent, in ONE
+ *  index write. Returns the task id each existing conversation names after it. */
+export async function setConversationAskTasks(
+  agentId: string,
+  links: ReadonlyMap<string, string>,
+): Promise<Map<string, string>> {
+  for (const id of links.keys()) validateConversationId(id);
+  await migrateIfNeeded(agentId);
+  return withIndexLock(agentId, async () => {
+    const index = await readIndex(agentId);
+    const bound = new Map<string, string>();
+    let changed = false;
+    for (const [conversationId, taskId] of links) {
+      const meta = collapseTwinsForWrite(index, conversationId);
+      if (!meta) continue;
+      if (!meta.askTaskId) {
+        meta.askTaskId = taskId;
+        changed = true;
+      }
+      bound.set(conversationId, meta.askTaskId);
+    }
+    if (changed) await writeIndex(agentId, index);
+    return bound;
   });
 }
 
@@ -703,21 +771,30 @@ export async function renameConversation(
   agentId: string,
   conversationId: string,
   title: string,
-  opts?: { auto?: boolean },
+  /** `fromAsk`: the ask's own title is being copied here, so it is not copied back. */
+  opts?: { auto?: boolean; fromAsk?: boolean },
 ): Promise<ConversationMeta> {
   validateConversationId(conversationId);
   await migrateIfNeeded(agentId);
-  return withIndexLock(agentId, async () => {
+  let before = '';
+  let beforeFromAsk = false;
+  const renamed = await withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
     // The WINNER row (and drop its twins) — a rename that landed on the loser was
     // invisible, and the next lane send re-bumped the other row's title back.
     const meta = collapseTwinsForWrite(index, conversationId);
     if (!meta) throw new Error(`Conversation not found: ${conversationId}`);
+    before = meta.title;
+    beforeFromAsk = meta.titleFromAsk === true;
     meta.title = title.trim().slice(0, MAX_TITLE_LEN) || meta.title;
     meta.titleAutoGenerated = true;
+    if (opts?.fromAsk) meta.titleFromAsk = true;
+    else delete meta.titleFromAsk;
     await writeIndex(agentId, index);
     return meta;
   });
+  if (!opts?.fromAsk) noteTitleChange(renamed, before, opts?.auto ? 'auto' : 'user', beforeFromAsk);
+  return renamed;
 }
 
 /**
@@ -820,11 +897,13 @@ export async function touchLaneConversation(
       if (!meta) return;
       meta.lastMessageAt = new Date().toISOString();
       meta.messageCount += 1;
+      const before = meta.title;
       if (meta.title === 'New Conversation' || !meta.title) {
         const derived = deriveTitle(messageText);
         if (derived) meta.title = derived;
       }
       await writeIndex(agentId, index);
+      noteTitleChange(meta, before, 'auto');
     });
   } catch (err) {
     log.agent.debug('touchLaneConversation failed (non-critical)', {
@@ -853,6 +932,7 @@ export async function touchConversation(
       if (!meta) return; // pre-migration / race — ignore
       meta.lastMessageAt = new Date().toISOString();
       meta.messageCount = opts.messageCount;
+      const before = meta.title;
       // Auto-title: if still the default and we now have a first user message, derive one.
       if ((meta.title === 'New Conversation' || !meta.title) && meta.messageCount > 0) {
         try {
@@ -862,6 +942,7 @@ export async function touchConversation(
         } catch { /* best-effort */ }
       }
       await writeIndex(agentId, index);
+      noteTitleChange(meta, before, 'auto');
     });
   } catch (err) {
     log.agent.debug('touchConversation failed (non-critical)', {

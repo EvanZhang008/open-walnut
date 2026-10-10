@@ -311,6 +311,12 @@ export const REOPENING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'peer',        // another task's send / task_start resume (session-send-core.ts)
   'web-api',     // Execute-continue button (session-lifecycle.ts)
   'human-inbox', // a letter delivered to the session (human-inbox/letter-ops.ts)
+  // A person's chat turn into a chat that is an ask (sessions/lane-ask-link.ts):
+  // the phone (routes/api-v1.ts) and the console's chat surfaces (routes/chat.ts).
+  // The background turns into the same lanes ('cron', 'triage', 'heartbeat')
+  // stay out, so they never reopen a finished ask.
+  'api-v1',
+  'chat',
 ])
 
 export function sendSourceReopensTerminal(source: string | undefined): boolean {

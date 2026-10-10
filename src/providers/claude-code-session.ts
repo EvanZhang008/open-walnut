@@ -1886,7 +1886,8 @@ export class ClaudeCodeSession {
   private _expectedTeardown = false
 
   constructor(
-    readonly taskId: string,
+    /** Written once more only by bindTask: a taskless session that a task adopts. */
+    public taskId: string,
     readonly project: string,
     cliCommand?: string,
   ) {
@@ -4317,6 +4318,16 @@ export class ClaudeCodeSession {
    *  instance, or persistSessionRecord echoes the stale spawn-time lane back. */
   setLane(lane: string | undefined): void {
     this._lane = lane
+  }
+
+  /** A task adopted this taskless session after it spawned (a chat that became an
+   *  ask): every event from now on names it, so the task's phase follows the turns
+   *  (the result handler reads the event's taskId). Never moves a session from one
+   *  task to another. */
+  bindTask(taskId: string): boolean {
+    if (this.taskId || !taskId) return false
+    this.taskId = taskId
+    return true
   }
 
   /** Reject + clear any in-flight side questions (e.g. on session teardown) so the
@@ -9538,6 +9549,19 @@ export class SessionRunner {
   syncLane(claudeSessionId: string, lane: string | undefined): void {
     const session = this.findSessionByClaudeId(claudeSessionId)
     if (session) session.setLane(lane)
+  }
+
+  /**
+   * Sync a LIVE taskless session with a record-side task link (a chat adopted as
+   * an ask, a promoted side thread). The instance's taskId is what its events
+   * carry, so without this its turns never moved the task's phase until the next
+   * spawn read the record. Safe no-op when not in memory.
+   */
+  syncTask(claudeSessionId: string, taskId: string): void {
+    const session = this.findSessionByClaudeId(claudeSessionId)
+    if (session?.bindTask(taskId)) {
+      log.session.info('live session bound to its task', { sessionId: claudeSessionId, taskId })
+    }
   }
 
   /** Public lookup for health monitor — returns hung-detection timestamps for a session. */

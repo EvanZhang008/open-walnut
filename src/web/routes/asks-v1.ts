@@ -129,7 +129,18 @@ export async function computeAgentAsks(query: AsksQuery): Promise<AsksAnswer> {
   const { enrichTasksWithSessionStatus } = await import('./tasks.js')
   const enriched = await enrichTasksWithSessionStatus(candidates)
   const { total, asks } = buildAskList(enriched, agent, { query: query.q, limit: query.limit })
-  return { agentId: agent.id, project: agent.project, total, launch: true, asks }
+  // An ask that IS a chat (sessions/lane-ask-link.ts) names its conversation, so
+  // the phone opens it in the chat it was written in, history and all.
+  const { listConversations } = await import('../../core/conversations.js')
+  const chatOf = new Map<string, string>()
+  for (const c of await listConversations(agent.id).catch(() => [])) {
+    if (c.askTaskId) chatOf.set(c.askTaskId, c.id)
+  }
+  const named = asks.map((row) => {
+    const conversationId = chatOf.get(row.id)
+    return conversationId ? { ...row, conversationId } : row
+  })
+  return { agentId: agent.id, project: agent.project, total, launch: true, asks: named }
 }
 
 asksV1Router.get('/asks', async (req: Request, res: Response, next: NextFunction) => {

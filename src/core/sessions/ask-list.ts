@@ -92,6 +92,9 @@ export interface AskRow {
   sessionId?: string;
   phase?: string;
   unread?: boolean;
+  /** Set by GET /api/v1/asks when the ask is a chat (lane-ask-link.ts): the
+   *  conversation it was written in. */
+  conversationId?: string;
 }
 
 /**

@@ -55,6 +55,8 @@ const SID_DANGLING_TURN = 'dangling-turn-complete';
 const SID_DANGLING_MSG = 'dangling-message-send';
 const SID_WITHTASK_TURN = 'withtask-turn-complete';
 const SID_WITHTASK_MSG = 'withtask-message-send';
+const SID_CHAT_LANE_TURN = 'chat-lane-turn-complete';
+const SID_PLAIN_ASK_TURN = 'plain-ask-turn-complete';
 
 // A non-empty id that does NOT exist in tasks.json (dangling reference).
 const DANGLING_TASK_ID = 'task-deleted-deadbeef';
@@ -90,7 +92,8 @@ function registerFakeSession(sid: string) {
 function unregisterFakeSessions() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const map = (sessionRunner as any).sessions as Map<string, unknown>;
-  for (const sid of [SID_TASKLESS_TURN, SID_TASKLESS_MSG, SID_DANGLING_TURN, SID_DANGLING_MSG, SID_WITHTASK_TURN, SID_WITHTASK_MSG]) {
+  for (const sid of [SID_TASKLESS_TURN, SID_TASKLESS_MSG, SID_DANGLING_TURN, SID_DANGLING_MSG, SID_WITHTASK_TURN, SID_WITHTASK_MSG,
+    SID_CHAT_LANE_TURN, SID_PLAIN_ASK_TURN]) {
     map.delete(sid);
   }
 }
@@ -196,6 +199,37 @@ describe('taskless session: turn-complete triage', () => {
     expect(t.summary).toBeTruthy();
     // And still zero subagent dispatches — the summarizer subagent is retired.
     expect(captured.count).toBe(0);
+  });
+});
+
+/**
+ * A Personal AI chat is an ask (sessions/lane-ask-link.ts), so its session HAS a
+ * real task, but its turns are never summarized: the main chat is where summary
+ * notices land, and summarizing each of its turns would feed every notice back
+ * in as a new one. The hook only arms a debounce timer, so the window is set to
+ * zero and the real timer runs.
+ */
+describe('a chat that is an ask: turn-complete summary', () => {
+  beforeAll(async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js');
+    await updateConfig({ agent: { triage: { debounce_minutes: 0, notify_mode: 'off' } } });
+  });
+
+  function withLane(payload: OnTurnCompletePayload, lane?: string): OnTurnCompletePayload {
+    return { ...payload, session: { ...payload.session, ...(lane ? { lane } : {}) } as OnTurnCompletePayload['session'] };
+  }
+
+  it('does NOT ask a chat lane session for a summary, even with a real task', async () => {
+    const fake = registerFakeSession(SID_CHAT_LANE_TURN);
+    await turnCompleteTriageHook.handler!(withLane(turnPayload(SID_CHAT_LANE_TURN, realTaskId, realTask), 'chat:general:conv-main'));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fake.askSideQuestion).not.toHaveBeenCalled();
+  });
+
+  it('control: the same task in a plain session IS asked once the window passes', async () => {
+    const fake = registerFakeSession(SID_PLAIN_ASK_TURN);
+    await turnCompleteTriageHook.handler!(withLane(turnPayload(SID_PLAIN_ASK_TURN, realTaskId, realTask)));
+    await vi.waitFor(() => expect(fake.askSideQuestion).toHaveBeenCalledOnce(), { timeout: 5000 });
   });
 });
 

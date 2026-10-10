@@ -1026,6 +1026,17 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
 }
 
 /**
+ * A Personal AI chat, which is also an ask (sessions/lane-ask-link.ts). Its task
+ * is a second view of the chat, so the task-session hooks below leave it alone:
+ * the chat names itself (its own titler, which the ask follows), and the MAIN
+ * chat is where summary notices are delivered, so summarizing its turns would
+ * feed each notice back in as a new one.
+ */
+function isChatLaneSession(session: Pick<SessionRecord, 'lane'> | undefined): boolean {
+  return !!session?.lane?.startsWith('chat:');
+}
+
+/**
  * turn-complete-triage: trailing-debounces the summary work on turn completion.
  * Hook: onTurnComplete. Each turn-complete (re)arms a per-session timer; the work
  * fires ONCE after the session has been quiet for `debounce_minutes`
@@ -1053,6 +1064,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     // `task` via getTask() and leaves it undefined when that throws). Triaging a
     // nonexistent task burns a side_question updating nothing.
     if (!p.taskId || !p.task) return;
+    if (isChatLaneSession(p.session)) return;
 
     // Skip triage for embedded subagent sessions (provider='embedded').
     if (p.session?.provider === 'embedded') return;
@@ -1689,6 +1701,7 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
   handler: async (payload) => {
     const p = payload as OnMessageSendPayload;
     if (!p.taskId || !p.task) return;
+    if (isChatLaneSession(p.session)) return;
     // Title from the HUMAN's words only — allow-list, not deny-list: automated
     // senders keep appearing ('retry' resends "continue", 'phase-hook' and the
     // plan-execute 'web-api' boilerplate, 'auto-continue' nudges) and any of
@@ -1740,6 +1753,7 @@ export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
   handler: async (payload) => {
     const p = payload as OnTurnCompletePayload;
     if (!p.taskId || !p.task) return;
+    if (isChatLaneSession(p.session)) return;
 
     // Same placeholder gate as the primary trigger (see there).
     const { matchPlaceholderTitle } = await import('../sessions/quick-start.js');
