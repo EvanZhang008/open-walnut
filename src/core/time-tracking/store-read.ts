@@ -7,7 +7,7 @@
 
 import fsp from 'node:fs/promises';
 import { normalizeSource } from './rollup.js';
-import type { TimeRecord } from './types.js';
+import { TIME_MODES, TIME_VIEWS, type TimeRecord } from './types.js';
 
 /** A day file this large is never parsed whole — only its tail is read. */
 export const MAX_DAY_FILE_BYTES = 8 * 1024 * 1024;
@@ -48,6 +48,9 @@ export function parseLine(line: string, fallbackDate: string): TimeRecord | null
       ...(obj.taskId ? { taskId: obj.taskId } : {}),
       ...(obj.sessionId ? { sessionId: obj.sessionId } : {}),
       ...(source ? { source } : {}),
+      ...(typeof obj.view === 'string' && (TIME_VIEWS as readonly string[]).includes(obj.view) ? { view: obj.view } : {}),
+      ...(typeof obj.app === 'string' && obj.app.length <= 32 ? { app: obj.app } : {}),
+      ...(typeof obj.mode === 'string' && (TIME_MODES as readonly string[]).includes(obj.mode) ? { mode: obj.mode } : {}),
     };
   } catch {
     return null; // a torn tail line is expected; skip it

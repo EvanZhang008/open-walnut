@@ -1330,7 +1330,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         />
         )}
 
-        <div className="session-file-explorer-preview">
+        {/* data-time-file: the file the user's input was on (time tracking, kept on this Mac). */}
+        <div className="session-file-explorer-preview" data-time-file={selectedFile ?? undefined}>
           {selectedFile ? (
             <FileContentView
               key={selectedFile}

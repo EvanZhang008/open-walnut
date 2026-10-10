@@ -9,7 +9,9 @@
 import {
   HUMAN_KINDS,
   TIME_KINDS,
+  TIME_MODES,
   TIME_SOURCES,
+  TIME_VIEWS,
   type HeartbeatSample,
   type HumanKind,
   type RollupIndex,
@@ -171,7 +173,33 @@ export function sanitizeSample(raw: unknown, now: Date): TimeRecord | null {
   if (sessionId) rec.sessionId = sessionId;
   const source = normalizeSource(s.source);
   if (source) rec.source = source;
+  if (typeof s.view === 'string' && (TIME_VIEWS as readonly string[]).includes(s.view)) rec.view = s.view;
+  if (rec.kind === 'app') {
+    if (typeof s.app === 'string' && APP_SLUG_RE.test(s.app)) rec.app = s.app;
+    if (typeof s.mode === 'string' && (TIME_MODES as readonly string[]).includes(s.mode)) rec.mode = s.mode;
+  }
   return rec;
+}
+
+/** A plugin's slug in an `app` record: short, lower case, no separators that could reach a key. */
+const APP_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const MAX_DETAIL_LEN = 512;
+
+function cleanDetail(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const t = raw.trim();
+  if (!t || CONTROL_CHARS_RE.test(t)) return undefined;
+  return t.slice(0, MAX_DETAIL_LEN);
+}
+
+/** The LOCAL-only detail a sample carries (file, plugin item and label), cleaned. Never part of a TimeRecord. */
+export function sampleDetail(raw: unknown): { file?: string; item?: string; label?: string } {
+  if (!raw || typeof raw !== 'object') return {};
+  const s = raw as Partial<HeartbeatSample>;
+  const file = cleanDetail(s.file);
+  const item = s.kind === 'app' ? cleanDetail(s.item) : undefined;
+  const label = s.kind === 'app' ? cleanDetail(s.label) : undefined;
+  return { ...(file ? { file } : {}), ...(item ? { item } : {}), ...(label ? { label } : {}) };
 }
 
 /** Accept a batch, dropping unusable entries. Caps the batch size. */
@@ -216,7 +244,7 @@ export function datesWithAgentTime(index: RollupIndex): Set<string> {
 }
 
 function emptyByKind(): Record<HumanKind, number> {
-  return { session: 0, triage: 0, chat: 0 };
+  return { session: 0, triage: 0, chat: 0, app: 0 };
 }
 
 /**

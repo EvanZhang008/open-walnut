@@ -40,6 +40,12 @@ export interface TimeSample {
   kind: TimeKind;
   taskId?: string;
   sessionId?: string;
+  view?: string;
+  file?: string;
+  app?: string;
+  item?: string;
+  label?: string;
+  mode?: string;
 }
 
 export interface LeaseState {
@@ -61,13 +67,10 @@ function bank(state: LeaseState, endMs: number): TimeSample | undefined {
   if (!state.ctx) return undefined;
   const durationMs = Math.round(endMs - state.startedAt);
   if (durationMs < MIN_SAMPLE_MS) return undefined;
-  return {
-    ts: new Date(state.startedAt).toISOString(),
-    durationMs,
-    kind: state.ctx.kind,
-    ...(state.ctx.taskId ? { taskId: state.ctx.taskId } : {}),
-    ...(state.ctx.sessionId ? { sessionId: state.ctx.sessionId } : {}),
-  };
+  const { kind, ...rest } = state.ctx;
+  const detail: Partial<TimeSample> = {};
+  for (const [k, v] of Object.entries(rest)) if (typeof v === 'string' && v) (detail as Record<string, string>)[k] = v;
+  return { ts: new Date(state.startedAt).toISOString(), durationMs, kind, ...detail };
 }
 
 function started(ctx: TimeContext, now: number): LeaseState {
@@ -145,8 +148,23 @@ export interface TrackerDeps {
 const SIGNAL_EVENTS = ['pointerdown', 'keydown', 'wheel'] as const;
 const HEARTBEAT_PATH = '/api/time/heartbeats';
 
+/** The names in a sample (open file, plugin item) never leave this machine. */
+function isLoopbackPage(): boolean {
+  try {
+    return /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/.test(location.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** A batch fit for the page's server: off a loopback page, the names are dropped (the view word stays). */
+export function forServer(samples: TimeSample[], loopback: boolean): TimeSample[] {
+  if (loopback) return samples;
+  return samples.map(({ file: _f, item: _i, label: _l, ...rest }) => rest);
+}
+
 function defaultSend(samples: TimeSample[], unloading: boolean): void {
-  const body = JSON.stringify({ samples });
+  const body = JSON.stringify({ samples: forServer(samples, isLoopbackPage()) });
   if (unloading) {
     try {
       if (navigator.sendBeacon(HEARTBEAT_PATH, new Blob([body], { type: 'application/json' }))) return;
@@ -278,8 +296,30 @@ export function installTimeTracker(deps: TrackerDeps): () => void {
     post(true);
   };
 
+  // Another app took the focus. In the Mac app a window behind another app is not
+  // hidden, so without this the lease's 60 s tail kept counting while the user
+  // was already in the other app (the overlap the report also cuts for history).
+  // Focus moving into an iframe inside Walnut (the Board, the code view) blurs the
+  // window too, but the user is still here: checked a tick later, once
+  // activeElement has moved.
+  let blurTimer: ReturnType<typeof setTimeout> | null = null;
+  const handleBlur = (event: Event): void => {
+    // The window's own blur only: an element losing focus is not the user leaving.
+    if (typeof (event.target as Node | null)?.nodeType === 'number') return;
+    if (blurTimer) clearTimeout(blurTimer);
+    blurTimer = setTimeout(() => {
+      blurTimer = null;
+      if (stillInWalnut()) return;
+      const result = closeLease(state, clock());
+      state = result.state;
+      enqueue(result.samples);
+      post(false);
+    }, 0);
+  };
+
   document.addEventListener('visibilitychange', handleVisibility);
   window.addEventListener('pagehide', handlePageHide);
+  window.addEventListener('blur', handleBlur);
 
   log.info('time-tracking', 'lease tracker installed', { leaseMs: LEASE_MS, flushMs: FLUSH_INTERVAL_MS });
 
@@ -292,10 +332,23 @@ export function installTimeTracker(deps: TrackerDeps): () => void {
     document.removeEventListener('walnut:time-signal', handleEvent, { capture: true });
     document.removeEventListener('visibilitychange', handleVisibility);
     window.removeEventListener('pagehide', handlePageHide);
+    window.removeEventListener('blur', handleBlur);
+    if (blurTimer) clearTimeout(blurTimer);
     offVoice();
     cancelInterval();
     handlePageHide();
   };
+}
+
+/** After a window blur: is the focus still inside this page (an iframe of ours)? */
+export function stillInWalnut(doc: Document = document): boolean {
+  try {
+    const active = doc.activeElement;
+    if (active && active.tagName === 'IFRAME') return true;
+    return doc.hasFocus();
+  } catch {
+    return false;
+  }
 }
 
 /** Fire a signal for the current context from code (e.g. a non-DOM interaction). */

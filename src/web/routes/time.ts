@@ -33,8 +33,8 @@ import {
   isOutsideCollectorRunning,
   localDateKey, outsideDayRecords, outsideDayRows, readDayRecords, recentDateKeys,
   outsideHelperReason, recordTime, resetHeartbeatDedupe, resetOutsideStore, resetTimeStore,
-  sanitizeSamples, startAgentTimeCollector,
-  startOutsideCollector, stopAgentTimeCollector, stopOutsideCollector, summarize, walnutHostsFromConfig,
+  startAgentTimeCollector,
+  startOutsideCollector, stopAgentTimeCollector, stopOutsideCollector, summarize,
   withLedgerBackfill, TIME_KINDS,
   SCREEN_TIME_BLOCK_GRANULARITY,
   startScreenTimeSnapshots, stopScreenTimeSnapshots,
@@ -43,6 +43,10 @@ import {
   type TimeKind, type TimeRecord,
   type TimeSummary,
 } from '../../core/time-tracking/index.js';
+import { startCallsCollector, stopCallsCollector } from '../../core/time-tracking/calls-collector.js';
+import { recordLeaseDetails, startSentMarkers, stopSentMarkers } from '../../core/time-tracking/detail-store.js';
+import { MAX_SAMPLES_PER_REQUEST, sampleDetail, sanitizeSample } from '../../core/time-tracking/rollup.js';
+import { noteWalnutHost, walnutHostsFor } from '../../core/time-tracking/walnut-hosts.js';
 import { taskTimeRouter } from './time-task.js';
 import { timeReportRouter } from './time-report.js';
 import { timeTimelineRouter } from './time-timeline.js';
@@ -77,6 +81,9 @@ export function startTimeTracking(): void {
   // arming it costs nothing when the feature is off, and enabling it later does not
   // need a restart. Apple purges its own history, so a missed window is lost data.
   startScreenTimeSnapshots();
+  // Calls (pmset power assertions) and sent-message markers: Mac-local detail.
+  startCallsCollector();
+  startSentMarkers();
 }
 
 /**
@@ -101,6 +108,8 @@ export function stopTimeTracking(): void {
   // store would spawn a helper for nobody.
   stopScreenTimeSnapshots();
   resetScreenTimeAccessCache();
+  stopCallsCollector();
+  stopSentMarkers();
 }
 
 // POST /api/time/heartbeats — { samples: [{ ts, durationMs, kind, taskId?, sessionId? }] }
@@ -112,7 +121,17 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
       res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' });
       return;
     }
-    const records = sanitizeSamples((req.body ?? {}).samples, new Date());
+    // Each sample may carry LOCAL detail (the open file, a plugin item): it is
+    // split off here, kept on this Mac (detail-store.ts) and never reaches the
+    // synced day file.
+    const raw = (req.body ?? {}).samples;
+    const now = new Date();
+    const pairs: Array<{ rec: TimeRecord; detail: ReturnType<typeof sampleDetail> }> = [];
+    for (const item of Array.isArray(raw) ? raw.slice(0, MAX_SAMPLES_PER_REQUEST) : []) {
+      const rec = sanitizeSample(item, now);
+      if (rec) pairs.push({ rec, detail: sampleDetail(item) });
+    }
+    const records = pairs.map((p) => p.rec);
     if (records.length === 0) {
       res.status(204).end();
       return;
@@ -124,6 +143,9 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
     await attachTaskIdsBounded(records);
     void recordTime(records); // folds synchronously, appends in the background
     emitTimeBanked(records);
+    void recordLeaseDetails(pairs);
+    // The name the page was opened under, so the report knows that browser tab is Walnut.
+    void noteWalnutHost(req.hostname);
     res.status(204).end();
   } catch (err) {
     // Telemetry must never surface as a user-visible failure.
@@ -369,7 +391,7 @@ async function buildApps(date: string): Promise<DayAppsResponse> {
   const config = await getConfig().catch(() => undefined);
   if (config) lastKnownOutsideEnabled = config.time?.outside?.enabled === true;
   const rows = await outsideDayRows(date);
-  const fold = foldOutsideApps(rows, { walnutHosts: walnutHostsFromConfig(config) });
+  const fold = foldOutsideApps(rows, { walnutHosts: await walnutHostsFor(config) });
   const reason = helperReason();
   return {
     date,
@@ -439,7 +461,7 @@ async function buildAppsBlocks(date: string): Promise<DayAppsBlocksResponse> {
   if (config) lastKnownOutsideEnabled = config.time?.outside?.enabled === true;
   const records = await outsideDayRecords(date);
   const fold = foldOutsideTimeline(records, {
-    walnutHosts: walnutHostsFromConfig(config),
+    walnutHosts: await walnutHostsFor(config),
     // The day's LOCAL bounds: a ts outside them (old midnight-UTC folds) must
     // count without being drawn at a fictional hour.
     bounds: dayBoundsMs(date),

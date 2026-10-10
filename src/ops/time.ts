@@ -55,21 +55,24 @@ defineOp({
   title: 'Where the time went over a range of days',
   description:
     'Answers "where did my time go" for a range of local days (default the last 7, at most 31, inside the 90-day window): '
-    + 'per-day totals, groups (task with title + project + createdAt, project, hour of day, kind, Mac app, site), '
+    + 'per-day totals, groups (task with title + project + createdAt, project, hour of day, kind, Mac app, site, '
+    + 'session view such as chat/files/board, file, plugin item), '
     + 'fragmentation per day (tasks touched, switches, longest stretch, deep share) and EVERY number in two views: the '
     + 'whole day and the user\'s work hours (`workMin`, `workShare` = share of all work-hours attention; work hours from '
-    + 'time_work_hours_set, default 09:00-18:00 Mon-Fri). walnutMin = the user\'s attention in Walnut (lease minutes); '
+    + 'time_work_hours_set, default 09:00-18:00 Mon-Fri). walnutMin = the user\'s attention in Walnut (lease minutes, the '
+    + 'seconds another app was frontmost cut as overlapMin); readingMin = inferred reading in Walnut without input; '
     + 'agentMin = agents running alone (costs no attention, never summed in); outside = other Mac apps from the foreground '
-    + 'sampler, Walnut\'s own foreground excluded; attention = walnut + outside. Echoes from/to: say the window you used. '
+    + 'sampler, Walnut\'s own foreground excluded; attention = walnut + reading + outside; callMin = a call app holding a '
+    + 'call on this Mac (overlaps screen time, never added); sent = messages the user sent. Echoes from/to: say the window you used. '
     + 'For WHEN things happened on a day (sleep, workouts, places, meetings, plan vs actual) use time_timeline; for one '
     + 'day of everything use day_review. Read the walnut-time-review skill before writing a time audit.',
   input: {
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('First local date YYYY-MM-DD'),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Last local date YYYY-MM-DD (inclusive, default today)'),
     last_days: z.number().int().min(1).max(31).optional().describe('Instead of from/to: the N days ending today (default 7)'),
-    kinds: LIST(60).optional().describe('Kinds counted as the user\'s time, a comma list or an array: session, triage, chat, agent (default session,triage,chat)'),
+    kinds: LIST(60).optional().describe('Kinds counted as the user\'s time, a comma list or an array: session, triage, chat, app (a plugin view in Walnut), agent (default session,triage,chat,app)'),
     include_outside: z.boolean().optional().describe('Add other Mac apps from the foreground sampler (default true)'),
-    group_by: LIST(80).optional().describe('Groups, a comma list or an array, any of: day, task, project, hour, kind, app, host (default task,project; days are always returned)'),
+    group_by: LIST(100).optional().describe('Groups, a comma list or an array, any of: day, task, project, hour, kind, app, host, view, file, item (default task,project; days are always returned)'),
     top: z.number().int().min(1).max(100).optional().describe('Rows per group (default 15; the rest are summed in otherMin)'),
     work_start: z.string().max(5).optional().describe('Override work hours start for this report, HH:MM'),
     work_end: z.string().max(5).optional().describe('Override work hours end for this report, HH:MM'),
@@ -109,7 +112,11 @@ defineOp({
     + 'plugin source. Each block has kind (screen, sleep, workout, meeting, plan, gap…), source and confidence '
     + '(measured / planned / inferred); a screen block lists its top tasks and apps and the meeting it sat in. '
     + '`plan` compares every calendar block with what was measured inside it (verdict kept / partly / other_work / '
-    + 'meeting_on_screen / not_on_screen). `summary` gives minutes per kind for the whole day and for work hours. '
+    + 'meeting_on_screen / not_on_screen). A meeting also gets `attendance` from the calls on this Mac: attended (a call '
+    + 'ran; meetingMin = the call minus other work during it), not_attended (a recurring meeting never on a call, or other '
+    + 'work on screen), needs_confirmation (no call and nothing recorded, or two meetings at once on one call: ASK the '
+    + 'user, never guess; record the answer with time_meeting_attendance_set) or unknown (no call data). `summary` gives minutes per kind for the whole day '
+    + 'and for work hours, plus callMin, adHocCallMin, meetingMin and needsConfirmation. '
     + '`sources[]` says what each source could see: a source with available:false is MISSING, never zero. Flags '
     + '(a workout left running, a sleep recording gap) must be passed on. For totals over weeks use time_report. '
     + 'Places and health stay on this Mac: summarise ("gym 1h05"), never paste addresses or raw values.',
@@ -124,4 +131,34 @@ defineOp({
   timeoutMs: 30_000,
   localOnlyMessage: 'The day timeline includes places and health, so it is only available to sessions on this Mac',
   tags: { readonly: true, remote: 'deny', localHostGateway: true, primaryOnly: true },
+})
+
+defineOp({
+  name: 'time_meeting_attendance_set',
+  title: 'Record whether the user attended a meeting',
+  description:
+    'Record the user\'s own answer for ONE meeting occurrence that time_timeline marked needs_confirmation (or correct '
+    + 'any other): attended true or false, null to clear. Use the meeting\'s eventId from time_timeline `plan` or '
+    + '`summary.needsConfirmation`. Only with the user\'s answer; never guess. Kept on this Mac.',
+  input: {
+    event_id: z.string().min(1).max(200).describe('eventId of the meeting in time_timeline'),
+    attended: z.boolean().nullable().describe('true = attended, false = did not attend, null = clear the answer'),
+  },
+  bind: { method: 'POST', path: '/api/time/meetings/attendance' },
+  localOnlyMessage: 'Meeting answers are kept on this Mac, so they can only be set by sessions on this Mac',
+  tags: { readonly: false, remote: 'deny', localHostGateway: true, primaryOnly: true },
+})
+
+defineOp({
+  name: 'time_meetings_ignore_set',
+  title: 'Leave meetings out of the time review',
+  description:
+    'Replace the list of meetings the time review leaves out of plan checks (config time.meetings.ignore): title words or '
+    + 'phrases, case-insensitive. Only when the user asks ("ignore the team lunch"). A recurring meeting never on a call '
+    + 'is already counted as not attended without this. [] clears the list.',
+  input: {
+    patterns: z.array(z.string().max(120)).max(50).describe('Title words or phrases, e.g. ["lunch", "office hours"]'),
+  },
+  bind: { method: 'POST', path: '/api/time/meetings/ignore' },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
 })

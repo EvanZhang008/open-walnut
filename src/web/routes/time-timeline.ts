@@ -15,7 +15,8 @@ import { log } from '../../logging/index.js'
 import { dayBoundsMs, localDateKey } from '../../core/time-tracking/index.js'
 import { shiftDateKey } from '../../core/time-tracking/rollup.js'
 import { buildTimeline, TIMELINE_MAX_DAYS } from '../../core/time-tracking/timeline/build.js'
-import { registerCoreTimelineSources } from '../../core/time-tracking/timeline/core-sources.js'
+import { calendarSegments, registerCoreTimelineSources } from '../../core/time-tracking/timeline/core-sources.js'
+import { ignoreList, loadMeetingContext, setMeetingAnswer } from '../../core/time-tracking/timeline/meeting-context.js'
 import { parseWorkHours, resolveWorkHours, WorkHoursError } from '../../core/time-tracking/work-hours.js'
 import { systemTz } from '../../core/health/day-key.js'
 import { thisMachineGuard } from '../middleware/health-access.js'
@@ -80,7 +81,11 @@ timeTimelineRouter.get('/timeline', thisMachineGuard('time timeline', TIMELINE_L
     }
     registerCoreTimelineSources()
     const started = Date.now()
-    const answer = await buildTimeline(from, to, { workHours, workHoursSource: source, tz: systemTz() })
+    const ignore = ignoreList(config?.time?.meetings?.ignore)
+    const answer = await buildTimeline(from, to, {
+      workHours, workHoursSource: source, tz: systemTz(),
+      meetings: (range) => loadMeetingContext(range, calendarSegments, ignore),
+    })
     log.web.debug('time timeline served', { days: answer.days.length, sources: answer.sources.length, ms: Date.now() - started })
     res.json({ ...answer, today })
   } catch (err) {
@@ -90,5 +95,59 @@ timeTimelineRouter.get('/timeline', thisMachineGuard('time timeline', TIMELINE_L
     }
     log.web.warn('time timeline failed', { error: err instanceof Error ? err.message : String(err) })
     res.status(500).json({ error: 'internal', message: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+const MAX_EVENT_ID = 200
+
+// POST /api/time/meetings/attendance { event_id, attended: true | false | null }
+// The user's own answer for one meeting occurrence; null clears it. Kept on this Mac.
+timeTimelineRouter.post('/meetings/attendance', thisMachineGuard('meeting attendance', TIMELINE_LOCAL_ONLY_MESSAGE), async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'meeting answers are kept on the primary box only' })
+    return
+  }
+  const body = (req.body ?? {}) as { event_id?: unknown; attended?: unknown }
+  const eventId = typeof body.event_id === 'string' ? body.event_id.trim() : ''
+  if (!eventId || eventId.length > MAX_EVENT_ID) {
+    res.status(400).json({ error: 'bad_request', message: 'event_id is the eventId of a meeting in time_timeline' })
+    return
+  }
+  if (body.attended !== true && body.attended !== false && body.attended !== null) {
+    res.status(400).json({ error: 'bad_request', message: 'attended must be true, false, or null to clear the answer' })
+    return
+  }
+  try {
+    res.json(await setMeetingAnswer(eventId, body.attended))
+  } catch (err) {
+    log.web.warn('meeting answer failed', { error: err instanceof Error ? err.message : String(err) })
+    res.status(500).json({ error: 'internal', message: 'could not save the answer' })
+  }
+})
+
+// POST /api/time/meetings/ignore { patterns: string[] }  replaces time.meetings.ignore.
+timeTimelineRouter.post('/meetings/ignore', async (req: Request, res: Response) => {
+  if (CLOUD_MODE) {
+    res.status(501).json({ error: 'not_supported_cloud', message: 'settings are changed on the primary box' })
+    return
+  }
+  const raw = (req.body ?? {}) as { patterns?: unknown }
+  if (!Array.isArray(raw.patterns) || raw.patterns.some((p) => typeof p !== 'string' || p.length > 120) || raw.patterns.length > 50) {
+    res.status(400).json({ error: 'bad_request', message: 'patterns is a list of at most 50 title words or phrases (120 characters each); [] clears it' })
+    return
+  }
+  try {
+    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
+    const config = await getConfig()
+    const time = { ...config.time }
+    const patterns = (raw.patterns as string[]).map((p) => p.trim()).filter(Boolean)
+    if (patterns.length) time.meetings = { ...time.meetings, ignore: patterns }
+    else delete time.meetings
+    // updateConfig replaces the whole `time` key, so its siblings ride along.
+    await updateConfig({ time })
+    res.json({ ignore: patterns })
+  } catch (err) {
+    log.web.warn('meeting ignore update failed', { error: err instanceof Error ? err.message : String(err) })
+    res.status(500).json({ error: 'internal', message: 'could not save the list' })
   }
 })

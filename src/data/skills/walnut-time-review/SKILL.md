@@ -28,11 +28,15 @@ the ops below; never parse the JSONL files under the data directory by hand.
   walnut tools call time_report '{"last_days":7}'
   ```
 
-  `group_by` takes any of `task, project, hour, kind, app, host`, as a comma
-  list or an array (default
-  `task,project`; `day` rows always come back). `kinds` defaults to the user's
-  own time (`session,triage,chat`). `top` (default 15) caps each group; the rest
-  is summed in `otherMin`.
+  `group_by` takes any of `task, project, hour, kind, app, host, view, file,
+  item`, as a comma list or an array (default `task,project`; `day` rows always
+  come back). `view` is the part of a session panel that had the input (chat,
+  files, changed, board, terminal…; `unknown` for days before views were
+  recorded); `file` is the file open in a session's file viewer; `item` is a
+  plugin's own item inside Walnut (a channel, a thread) with `replyMin` for time
+  in its reply box. `kinds` defaults to the user's own time
+  (`session,triage,chat,app`; `app` = a plugin's view inside Walnut). `top`
+  (default 15) caps each group; the rest is summed in `otherMin`.
 - **What did one day look like, from every source at once** (Walnut, Mac apps,
   sleep, workouts, calendar, places, plugins), and **was the plan kept**:
   `time_timeline` (up to 7 days; this Mac only, because it carries places and
@@ -55,6 +59,11 @@ the ops below; never parse the JSONL files under the data directory by hand.
   (`time_timeline` already reads it).
 - **The user's work hours**: `time_work_hours_set` (`{"start":"08:30","end":"17:30","days":["mon","tue","wed","thu","fri"]}`,
   or `{"reset":true}`).
+- **Whether the user attended a meeting the timeline could not decide**:
+  `time_meeting_attendance_set` with the meeting's `eventId` and the user's
+  answer (`{"event_id":"…","attended":false}`, `null` clears it).
+- **Leave a meeting out of plan checks** when the user asks ("ignore the team
+  lunch"): `time_meetings_ignore_set` (`{"patterns":["lunch"]}`; `[]` clears).
 
 ## 2. Two views, always: work hours and the whole day
 
@@ -81,10 +90,19 @@ to that call; if they say these are their hours, save them with
 - Knows: time with a Walnut session, triage row or chat, per task, to the
   minute, on the Mac and in the phone app (`phoneMin`).
 - How: a lease. A real interaction (click, key, scroll, selection) gives that
-  task the next 60 seconds; switching to another task banks the old one at the
-  switch. Reading without touching earns one lease, 60 seconds.
-- Cannot know: thinking away from the screen, or reading a long answer without
-  scrolling past the first minute. Session minutes are a floor of attention.
+  task the next 60 seconds; switching to another task, another session view,
+  another file or another plugin item banks the old one at the switch. The lease
+  ends when the window loses focus to another app, and the report cuts any
+  second another Mac app was frontmost (`overlapMin`), so no second counts twice.
+- `readingMin` (inferred): Walnut frontmost with no click or key (moving the
+  pointer, reading), credited to the context used last, at most 15 minutes
+  after it and only while Walnut stayed in front. It is counted in attention,
+  kept apart from `walnutMin`; say "about" for it.
+- `sent`: messages the user sent (count and length, never the text), per day
+  and per task.
+- Cannot know: thinking away from the screen, or reading with the Mac idle for
+  more than two minutes. File minutes are input with that file open, not proof
+  it was read. Session minutes are a floor of attention.
 
 **Agent time** (`agentMin`)
 - Knows: how long agents ran for a task on their own.
@@ -94,8 +112,8 @@ to that call; if they say these are their hours, save them with
 **Mac apps** (`outside`, the `mac-apps` source)
 - Knows: the frontmost Mac app every ~5 seconds, and the site for a scriptable
   browser (host only, never the full address).
-- Leaves out: idle over 120 seconds and the lock screen. So a meeting the user
-  only listened to counts as away: meeting minutes are a floor.
+- Leaves out: idle over 120 seconds and the lock screen. A call the user only
+  listened to is not screen time; the calls source below sees it.
 - Walnut's own window is `walnutForegroundMin`, a cross-check, never added
   (the lease already counts it).
 - Cannot know: what was done inside the app, or anything on the phone outside
@@ -122,9 +140,20 @@ to that call; if they say these are their hours, save them with
 - Travel between two places is `inferred` from the gap, not measured; a quick
   stop can be missing.
 
+**Calls** (`callMin`, the `calls` source, this Mac only)
+- Knows: when a call app (Zoom, Teams, Webex, FaceTime, or one the user added
+  in `time.calls.apps`) held a call on this Mac, to the second, from macOS power
+  assertions; also a browser or chat app holding a WebRTC call (labelled
+  "… WebRTC call": it can also be a real-time web app that is not a call).
+  Recorded while outside activity is on; the first run recovers the week macOS
+  still keeps.
+- A call in progress is not attention to it. `callMin` overlaps screen time:
+  never add it to attention. `adHocCallMin` is call time no meeting explains.
+
 **Calendar** (the `calendar` source, read only)
 - Knows: what was planned (meetings, focus blocks), not what happened. Every
-  calendar segment is `planned`.
+  calendar segment is `planned`. An event with a call link, a room booking or
+  other people invited is a meeting.
 - Room bookings that repeat a meeting count once.
 
 **Plugin sources**
@@ -134,10 +163,42 @@ to that call; if they say these are their hours, save them with
 **Never visible**: paper, in-person talks, phone calls, the phone's other apps,
 anything away from the Mac. When a gap matters, ask; do not invent.
 
+## 3b. Meetings: attended or not
+
+Each meeting in `time_timeline` `plan` carries `attendance` and why
+(`attendanceBasis`), decided from the calls on this Mac:
+
+- `attended` (basis `call`): a call ran during it. `meetingMin` is the call's
+  minutes inside the meeting minus `otherWorkMin`, the seconds the user was
+  doing something else on screen (Walnut input, another app in front). Report
+  `meetingMin`, not the calendar length.
+- `not_attended`: a recurring meeting never on a call in the last four weeks
+  (basis `recurring_never_on_call`), or no call while the screen showed other
+  work for at least half of it (basis `other_work`: the time belongs to that
+  work).
+- `needs_confirmation`: never count it and never guess. Ask the user, listing
+  `summary.needsConfirmation` (title, time, basis), then record each answer
+  with `time_meeting_attendance_set`. Their answer then wins (basis `user`).
+  Two bases:
+  - `nothing_recorded`: no call and nothing on the screen (the Mac idle, asleep
+    or away). Ask "were you in it?".
+  - `double_booked`: two meetings at the same time and one call. Ask which one
+    it was. Marking one attended makes the other not attended (basis
+    `double_booked`); marking one not attended gives the call to the other.
+- `unknown` (basis `no_call_data`): no call data for that time (calls are
+  watched only while outside activity is on). Say so.
+
+`summary.meetingMin` is the attended meeting time, each second once (two
+overlapping meetings never count the same call twice, and the call under a
+double booking counts though which meeting it was is open); `summary.meetings` counts
+each attendance. Meetings the user asked to leave out (`time_meetings_ignore_set`)
+are not checked (`summary.ignoredMeetings`).
+
 ## 4. How the timeline decides, and how sure it is
 
 For each minute the activity with the highest source priority wins: Walnut 100,
-Mac apps 90, sleep 70, workouts 60, calendar 50, a plugin 40 (never above 80).
+Mac apps 90, calls 85, sleep 70, workouts 60, calendar 50, a plugin 40 (never
+above 80).
 Places say where and never compete. Screen time joins into one `screen` block
 across gaps up to 10 minutes; a hole of 15 minutes or more is a `gap` block,
 labelled with the place when Places knew it, or `travel?` between two places.
@@ -194,9 +255,8 @@ that happened.
    `not_on_screen` (away, or doing something the Mac cannot see).
    A planned block is matched to a task by a task id in its title, or by two
    shared title words (short names such as "CIS" and CJK words count).
-   For a meeting, `other_work` means the Mac showed other work during it: the
-   user may have sat in a room with the laptop open, listened while working, or
-   skipped it. Never call a meeting skipped from this alone.
+   For a meeting, read `attendance` (section 3b), not the verdict: the verdict
+   only says what the screen showed.
 3. Report kept blocks, moved blocks and what took their place, then the
    unplanned time that mattered. Ask about `not_on_screen` blocks rather than
    calling them missed.
@@ -228,12 +288,12 @@ that happened.
 - Session minutes are the user's attention; agent minutes cost none. Mixing them
   inflates the user's day.
 - A workout overlapping sleep is a watch left running, not a night of exercise.
-- Make the parts add up. `attentionMin` adds Walnut time and outside-app time,
-  and the two can overlap (a Walnut lease keeps counting for up to 60 seconds
-  after the user switches to another app; one measured day overlapped by about
-  9%). Meetings overlap screen time too. When the user asks "how many hours did
-  I have and where did they go", count each second once (frontmost app, then
-  the Walnut task, then the off-screen part of a meeting, then sleep or a
+- Make the parts add up. `attentionMin` = `walnutMin` + `readingMin` +
+  `outsideMin`, and each second is in one of them only (the overlap a lease
+  used to run into another app is cut and shown as `overlapMin`). Calls and
+  meetings overlap screen time. When the user asks "how many hours did I have
+  and where did they go", count each second once (frontmost app, then the Walnut
+  task, then the off-screen part of a call or attended meeting, then sleep or a
   workout, then short pauses and longer away time), so the slices sum to the
   window, and show it per day as well as per week.
 - A gap is not idleness: it can be a meeting room, a walk, a talk at a desk.

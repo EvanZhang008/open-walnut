@@ -439,7 +439,7 @@ async function compactDay(date: string, sizeBefore: number): Promise<void> {
     // The source is part of the bucket, so it must be written back: a folded
     // line that dropped it would silently re-attribute the phone's time to the
     // browser, and compaction is irreversible. Same for the session.
-    const key = JSON.stringify([rec.taskId ?? '', rec.kind, rec.source ?? '', rec.sessionId ?? '']);
+    const key = JSON.stringify([rec.taskId ?? '', rec.kind, rec.source ?? '', rec.sessionId ?? '', rec.view ?? '', rec.app ?? '', rec.mode ?? '']);
     const bucket = folded.get(key);
     if (bucket) {
       bucket.durationMs += rec.durationMs;
@@ -453,6 +453,9 @@ async function compactDay(date: string, sizeBefore: number): Promise<void> {
       ...(rec.taskId ? { taskId: rec.taskId } : {}),
       ...(rec.sessionId ? { sessionId: rec.sessionId } : {}),
       ...(rec.source ? { source: rec.source } : {}),
+      ...(rec.view ? { view: rec.view } : {}),
+      ...(rec.app ? { app: rec.app } : {}),
+      ...(rec.mode ? { mode: rec.mode } : {}),
     });
   }
   const lines: string[] = [];

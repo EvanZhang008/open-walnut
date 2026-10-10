@@ -6,6 +6,8 @@
  *
  *   walnut    100  the attention lease (session, triage, chat; phone included)
  *   mac-apps   90  the foreground sampler, Walnut's own foreground left out
+ *   calls      85  a call app holding a call on this Mac (power assertions): shows
+ *                  a call the user listened to with the Mac idle
  *   sleep      70  nights and naps (Apple Health)
  *   workouts   60  workouts (Apple Health): below sleep, so a watch left running
  *                  overnight does not hide the night
@@ -17,12 +19,14 @@
 import { log } from '../../../logging/index.js'
 import { readDayRecords } from '../store.js'
 import { outsideDayRecords } from '../outside-store.js'
-import { WALNUT_DESKTOP_BUNDLE_ID, walnutHostsFromConfig } from '../outside-view.js'
+import { WALNUT_DESKTOP_BUNDLE_ID } from '../outside-view.js'
+import { walnutHostsFor } from '../walnut-hosts.js'
 import { shiftDateKey } from '../rollup.js'
+import { seriesIdOf } from './meetings.js'
 import { registerTimelineSource } from './registry.js'
 import type { TimelineRange, TimelineSegmentInput, TimelineSourceResult } from './types.js'
 
-const HUMAN_KINDS = new Set(['session', 'triage', 'chat'])
+const HUMAN_KINDS = new Set(['session', 'triage', 'chat', 'app'])
 /** Same task, same device, closer than this: one segment (a missed beat is not a switch). */
 const WALNUT_JOIN_MS = 90_000
 /** Same app (and site), closer than this: one segment (the sampler runs every ~5 s). */
@@ -70,7 +74,7 @@ function joinRuns(items: Array<{ startMs: number; endMs: number; key: string; ma
 }
 
 async function walnutSegments(range: TimelineRange): Promise<TimelineSourceResult> {
-  const items: Array<{ startMs: number; endMs: number; taskId: string; device: string }> = []
+  const items: Array<{ startMs: number; endMs: number; taskId: string; device: string; app?: string }> = []
   let compactedMs = 0
   for (const date of datesOf(range)) {
     for (const rec of await readDayRecords(date)) {
@@ -78,7 +82,10 @@ async function walnutSegments(range: TimelineRange): Promise<TimelineSourceResul
       if (!rec.ts || rec.ts === `${date}T00:00:00.000Z`) { compactedMs += rec.durationMs; continue }
       const startMs = Date.parse(rec.ts)
       if (!Number.isFinite(startMs)) continue
-      items.push({ startMs, endMs: startMs + rec.durationMs, taskId: rec.taskId ?? '', device: rec.source === 'ios' ? 'phone' : 'mac' })
+      items.push({
+        startMs, endMs: startMs + rec.durationMs, taskId: rec.taskId ?? '', device: rec.source === 'ios' ? 'phone' : 'mac',
+        ...(rec.kind === 'app' ? { app: rec.app ?? 'a plugin' } : {}),
+      })
     }
   }
   items.sort((a, b) => a.startMs - b.startMs)
@@ -91,11 +98,11 @@ async function walnutSegments(range: TimelineRange): Promise<TimelineSourceResul
     } catch { /* an unnamed segment still says when */ }
   }
   const segments = joinRuns(items.map((i) => ({
-    startMs: i.startMs, endMs: i.endMs, key: `${i.taskId}\u0000${i.device}`,
+    startMs: i.startMs, endMs: i.endMs, key: `${i.taskId}\u0000${i.device}\u0000${i.app ?? ''}`,
     make: (): TimelineSegmentInput => ({
       start: i.startMs, end: i.endMs, kind: 'walnut', confidence: 'measured',
-      label: i.taskId ? (titles.get(i.taskId) ?? 'a deleted task') : 'Walnut (no task)',
-      detail: { taskId: i.taskId || null, device: i.device },
+      label: i.app ? `${i.app} in Walnut` : i.taskId ? (titles.get(i.taskId) ?? 'a deleted task') : 'Walnut (no task)',
+      detail: { taskId: i.taskId || null, device: i.device, ...(i.app ? { app: i.app } : {}) },
     }),
   })), WALNUT_JOIN_MS)
   return {
@@ -110,7 +117,7 @@ async function walnutSegments(range: TimelineRange): Promise<TimelineSourceResul
 async function appSegments(range: TimelineRange): Promise<TimelineSourceResult> {
   const { getConfig } = await import('../../config-manager.js')
   const config = await getConfig().catch(() => undefined)
-  const walnutHosts = new Set(walnutHostsFromConfig(config))
+  const walnutHosts = new Set(await walnutHostsFor(config))
   const items: Array<{ startMs: number; endMs: number; key: string; app: string; host: string }> = []
   for (const date of datesOf(range)) {
     for (const rec of await outsideDayRecords(date)) {
@@ -240,7 +247,7 @@ function healthSource(kinds: ReadonlySet<string>) {
   }
 }
 
-async function calendarSegments(range: TimelineRange): Promise<TimelineSourceResult> {
+export async function calendarSegments(range: TimelineRange): Promise<TimelineSourceResult> {
   const { executeOp, getOp } = await import('../../../ops/index.js')
   if (!getOp('calendar_query')) return { segments: [], coverage: { available: false, note: 'the calendar plugin is not installed or turned off' } }
   const { LOCAL_ORIGIN } = await import('../../../lib/caller-origin.js')
@@ -259,15 +266,49 @@ async function calendarSegments(range: TimelineRange): Promise<TimelineSourceRes
     if (a === null || b === null || b <= a) continue
     const title = typeof e.title === 'string' && e.title.trim() ? e.title.trim() : '(untitled event)'
     const where = typeof e.location === 'string' ? e.location : ''
-    // A call link or a room booking is a meeting; anything else is a block the user planned.
-    const meeting = /https?:\/\/|zoom|chime|teams|meet\./i.test(where) || /^booked for /i.test(title)
+    // A call link, a room booking or other people invited is a meeting; anything
+    // else is a block the user planned.
+    const meeting = /https?:\/\/|zoom|chime|teams|meet\./i.test(where) || /^booked for /i.test(title) || e.hasAttendees === true
+    const id = typeof e.id === 'string' ? e.id : ''
+    const recurring = e.recurring === true
     segments.push({
       start: a, end: b, kind: meeting ? 'meeting' : 'plan', label: title.replace(/^Booked for "(.*)" via .*$/i, '$1'),
       confidence: 'planned',
-      ...(typeof e.calendar === 'string' ? { detail: { calendar: e.calendar } } : {}),
+      detail: {
+        ...(typeof e.calendar === 'string' ? { calendar: e.calendar } : {}),
+        ...(id ? { eventId: id, ...(recurring ? { seriesId: seriesIdOf(id) } : {}) } : {}),
+        ...(recurring ? { recurring: true } : {}),
+      },
     })
   }
   return { segments, coverage: { available: true } }
+}
+
+/**
+ * A call app's process name as people say it. Any other process got here through
+ * a WebRTC assertion (a browser tab, a chat app's huddle), which can also be a
+ * real-time web app that is not a call: the label says so.
+ */
+export function callAppLabel(app: string): string {
+  if (/^zoom/i.test(app)) return 'Zoom'
+  if (/teams/i.test(app)) return 'Teams'
+  if (/webex/i.test(app)) return 'Webex'
+  if (/^facetime$/i.test(app)) return 'FaceTime'
+  return `${app} WebRTC`
+}
+
+async function callSegments(range: TimelineRange): Promise<TimelineSourceResult> {
+  const { readCalls } = await import('../calls-store.js')
+  const { calls, coverage } = await readCalls(range.startMs, range.endMs)
+  const segments: TimelineSegmentInput[] = calls.map((c) => ({
+    start: c.startMs, end: c.endMs, kind: 'call', label: `${callAppLabel(c.app)} call`, confidence: 'measured', detail: { app: c.app },
+  }))
+  if (coverage.length === 0) {
+    return { segments, coverage: { available: segments.length > 0, note: 'calls are recorded on this Mac while outside activity is on; none were watched in this range' } }
+  }
+  const first = coverage[0]![0]
+  const note = first > range.startMs + 3_600_000 ? `calls were watched from ${new Date(first).toISOString()}` : undefined
+  return { segments, coverage: { available: true, ...(note ? { note } : {}) } }
 }
 
 async function placeSegments(range: TimelineRange): Promise<TimelineSourceResult> {
@@ -325,6 +366,7 @@ export function registerCoreTimelineSources(): void {
   }
   registerTimelineSource('core', { id: 'walnut', label: 'Walnut attention', lane: 'activity', priority: 100, segments: wrap('walnut', walnutSegments) })
   registerTimelineSource('core', { id: 'mac-apps', label: 'Mac apps (foreground)', lane: 'activity', priority: 90, segments: wrap('mac-apps', appSegments) })
+  registerTimelineSource('core', { id: 'calls', label: 'Calls (call apps on this Mac)', lane: 'activity', priority: 85, segments: wrap('calls', callSegments) })
   registerTimelineSource('core', { id: 'sleep', label: 'Apple Health sleep', lane: 'activity', priority: 70, segments: wrap('sleep', healthSource(new Set(['sleep', 'nap']))) })
   registerTimelineSource('core', { id: 'workouts', label: 'Apple Health workouts', lane: 'activity', priority: 60, segments: wrap('workouts', healthSource(new Set(['workout']))) })
   registerTimelineSource('core', { id: 'calendar', label: 'Calendar', lane: 'activity', priority: 50, segments: wrap('calendar', calendarSegments) }, { replaceableByOwner: 'calendar' })

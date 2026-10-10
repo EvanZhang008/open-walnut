@@ -4,7 +4,7 @@
  *
  * The rule a reader must be able to repeat: for every minute, the ACTIVITY
  * segment with the highest source priority wins (walnut 100 > Mac apps 90 >
- * sleep 70 > workouts 60 > calendar 50; a plugin's ≤ 80, default 40); ties go to
+ * calls 85 > sleep 70 > workouts 60 > calendar 50; a plugin's ≤ 80, default 40); ties go to
  * measured over planned over inferred, then to the later-starting, shorter
  * segment (the more specific one). PLACE segments never compete: they annotate.
  *
@@ -19,7 +19,12 @@
  */
 
 import { localIso } from '../../health/day-key.js'
+import { coveredMs, mergeSpans, type Span } from '../calls.js'
 import { isWorkday, workMsOf, WEEKDAY_NAMES, type WorkHours } from '../work-hours.js'
+import {
+  callsIn, EMPTY_MEETING_CONTEXT, isIgnoredMeeting, meetingAttendance, settleDoubleBooked,
+  type Attendance, type AttendanceBasis, type MeetingAttendance, type MeetingContext,
+} from './meetings.js'
 import type { SourcedSegment, TimelineConfidence } from './types.js'
 
 export const SCREEN_KINDS: ReadonlySet<string> = new Set(['walnut', 'app'])
@@ -196,9 +201,23 @@ export interface PlanCheck {
   /** The task the block names (by id, or by shared title words), with its minutes. */
   matched?: { taskId: string; title: string; minInBlock: number; minThatDay: number; by: 'id' | 'title' }
   verdict: 'kept' | 'partly' | 'other_work' | 'meeting_on_screen' | 'not_on_screen'
+  /** Meetings: attended or not, from the call (meetings.ts), and why. */
+  attendance?: Attendance
+  attendanceBasis?: AttendanceBasis
+  /** Call minutes inside the meeting. */
+  callMin?: number
+  /** Counted meeting minutes: the call minus other work while on it. */
+  meetingMin?: number
+  /** Other work while on the call. */
+  otherWorkMin?: number
+  /** The calendar occurrence, for time_meeting_attendance_set. */
+  eventId?: string
 }
 
-function planChecks(day: DayBounds, planned: readonly SourcedSegment[], pieces: readonly Piece[], tz: string): PlanCheck[] {
+function planChecks(
+  day: DayBounds, planned: readonly SourcedSegment[], pieces: readonly Piece[], tz: string, calls: readonly Span[], ctx: MeetingContext,
+): { checks: PlanCheck[]; meetingSpans: Array<[number, number]> } {
+  const meetings: Array<{ check: PlanCheck; attendance: MeetingAttendance; inCall: Array<[number, number]>; eventId?: string }> = []
   const dayTaskMs = new Map<string, number>()
   for (const p of pieces) {
     const id = p.seg.detail?.taskId
@@ -244,13 +263,32 @@ function planChecks(day: DayBounds, planned: readonly SourcedSegment[], pieces: 
       }
     }
     const meetingApps = [...apps.entries()].filter(([app]) => MEETING_APP.test(app)).reduce((s, [, ms]) => s + ms, 0)
+    let attend: MeetingAttendance | undefined
+    if (ev.kind === 'meeting') {
+      // Other work = any screen piece that is not the call app itself.
+      const otherWork: Span[] = []
+      for (const p of pieces) {
+        if (!SCREEN_KINDS.has(p.seg.kind) || (p.seg.kind === 'app' && MEETING_APP.test(p.seg.label))) continue
+        const a = Math.max(ev.startMs, p.startMs)
+        const b = Math.min(ev.endMs, p.endMs)
+        if (b > a) otherWork.push([a, b])
+      }
+      const d = ev.detail ?? {}
+      attend = meetingAttendance({
+        startMs: ev.startMs, endMs: ev.endMs, title,
+        ...(typeof d.eventId === 'string' ? { eventId: d.eventId } : {}),
+        ...(typeof d.seriesId === 'string' ? { seriesId: d.seriesId } : {}),
+        ...(d.recurring === true ? { recurring: true } : {}),
+        otherWork,
+      }, { ...ctx, calls })
+    }
     const matchedMs = matched ? matched.minInBlock * MIN : 0
     const verdict: PlanCheck['verdict'] = ev.kind === 'meeting'
       ? (meetingApps >= blockMs * 0.3 ? 'meeting_on_screen' : screenMs >= blockMs * 0.5 ? 'other_work' : 'not_on_screen')
       : matchedMs >= blockMs * 0.5 ? 'kept'
         : matchedMs > 0 ? 'partly'
           : screenMs >= blockMs * 0.3 ? 'other_work' : 'not_on_screen'
-    out.push({
+    const check: PlanCheck = {
       title, kind: ev.kind,
       start: localIso(Math.max(ev.startMs, day.startMs), tz), end: localIso(Math.min(ev.endMs, day.endMs), tz),
       min: minutes(blockMs), screenMin: minutes(screenMs),
@@ -259,9 +297,27 @@ function planChecks(day: DayBounds, planned: readonly SourcedSegment[], pieces: 
       topApps: [...apps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([app, ms]) => ({ app, min: minutes(ms) })),
       ...(matched ? { matched } : {}),
       verdict,
+    }
+    out.push(check)
+    if (attend) {
+      meetings.push({
+        check, attendance: attend, inCall: mergeSpans(callsIn(ev.startMs, ev.endMs, calls)),
+        ...(typeof ev.detail?.eventId === 'string' ? { eventId: ev.detail.eventId } : {}),
+      })
+    }
+  }
+  // One call, two meetings at once: which one is the user's to say.
+  settleDoubleBooked(meetings)
+  for (const m of meetings) {
+    const a = m.attendance
+    Object.assign(m.check, {
+      attendance: a.attendance, attendanceBasis: a.basis,
+      callMin: minutes(a.callMs), meetingMin: minutes(a.meetingMs),
+      ...(a.otherWorkMs >= MIN ? { otherWorkMin: minutes(a.otherWorkMs) } : {}),
+      ...(m.eventId ? { eventId: m.eventId } : {}),
     })
   }
-  return out
+  return { checks: out, meetingSpans: mergeSpans(meetings.flatMap((m) => m.attendance.counted)) }
 }
 
 /** Same-start, same-end calendar entries where one title holds the other are one entry (room bookings). */
@@ -291,6 +347,8 @@ export interface MergeOptions {
   tz: string
   workHours: WorkHours
   nowMs: number
+  /** Call history, coverage and the user's answers for meeting attendance. */
+  meetings?: MeetingContext
 }
 
 function toBlock(startMs: number, endMs: number, seg: SourcedSegment, tz: string, places: readonly SourcedSegment[]): TimelineBlock {
@@ -309,7 +367,12 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
   const end = Math.min(day.endMs, Math.max(day.startMs, opts.nowMs))
   const activity = clip(segments.filter((s) => s.lane === 'activity'), day.startMs, end)
   const places = clip(segments.filter((s) => s.lane === 'place'), day.startMs, end)
-  const planned = dedupePlanned(activity.filter((s) => PLANNED_KINDS.has(s.kind)))
+  const ctx = opts.meetings ?? EMPTY_MEETING_CONTEXT
+  const allPlanned = dedupePlanned(activity.filter((s) => PLANNED_KINDS.has(s.kind)))
+  // Meetings the user asked to leave out (time.meetings.ignore) are not checked.
+  const planned = allPlanned.filter((s) => s.kind !== 'meeting' || !isIgnoredMeeting(s.label, ctx.ignore))
+  // A call from any source (core reads power assertions; a plugin may add its own).
+  const calls = mergeSpans(activity.filter((s) => s.kind === 'call').map((s) => [s.startMs, s.endMs] as [number, number]))
   const pieces = resolveActivity(activity)
   const screens = screenBlocks(pieces)
   const blocks: Array<TimelineBlock & { _s: number; _e: number }> = []
@@ -333,6 +396,7 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
       .filter((ev) => overlap(sb.startMs, sb.endMs, ev.startMs, ev.endMs) >= Math.min(5 * MIN, (ev.endMs - ev.startMs) / 2))
       .map((ev) => ev.label)
     const place = placeFor(sb.startMs, sb.endMs, places)
+    const onCallMs = coveredMs(sb.startMs, sb.endMs, calls)
     blocks.push({
       _s: sb.startMs, _e: sb.endMs,
       start: localIso(sb.startMs, opts.tz), end: localIso(sb.endMs, opts.tz), min: minutes(sb.endMs - sb.startMs),
@@ -344,6 +408,7 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
       trackedMin: minutes(tracked),
       top: top.map((t) => ({ kind: t.kind, label: t.label, min: minutes(t.ms), ...(t.taskId ? { taskId: t.taskId } : {}) })),
       ...(during.length ? { during: [...new Set(during)] } : {}),
+      ...(onCallMs >= MIN ? { callMin: minutes(onCallMs) } : {}),
     })
   }
 
@@ -403,9 +468,16 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
     appMin: sum((p) => p.seg.kind === 'app', work),
     plannedNotOnScreenMin: minutes(others.filter((p) => PLANNED_KINDS.has(p.seg.kind))
       .reduce((s, p) => s + (work ? workMsOf(p.startMs, p.endMs, opts.workHours) : p.endMs - p.startMs), 0)),
-    ...Object.fromEntries(kindsSeen.map((k) => [`${k}Min`, shown(k, work)])),
+    // A call outside every screen block: the user on a call with the Mac idle.
+    ...Object.fromEntries(kindsSeen.map((k) => [k === 'call' ? 'callOffScreenMin' : `${k}Min`, shown(k, work)])),
     gapMin: minutes(gapMs(work)),
   })
+
+  const { checks: plan, meetingSpans: attendedSpans } = planChecks(day, planned, pieces, opts.tz, calls, ctx)
+  const meetingChecks = plan.filter((p) => p.attendance !== undefined)
+  const meetingSpans = mergeSpans(allPlanned.filter((s) => s.kind === 'meeting').map((s) => [s.startMs, s.endMs] as [number, number]))
+  const needsConfirmation = meetingChecks.filter((p) => p.attendance === 'needs_confirmation')
+    .map((p) => ({ title: p.title, start: p.start, end: p.end, basis: p.attendanceBasis, ...(p.eventId ? { eventId: p.eventId } : {}) }))
 
   return {
     date: day.date,
@@ -414,11 +486,24 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
     ...(end < day.endMs ? { partial: true as const } : {}),
     blocks: withGaps.map(({ _s, _e, ...b }) => b),
     places: places.map((p) => toBlock(p.startMs, p.endMs, p, opts.tz, [])),
-    plan: planChecks(day, planned, pieces, opts.tz),
+    plan,
     summary: {
       wholeDay: view(false),
       ...(workday ? { workHours: view(true) } : {}),
       ...(Object.keys(byPlace).length ? { byPlaceMin: byPlace } : {}),
+      ...(calls.length ? {
+        callMin: minutes(calls.reduce((s, [a, b]) => s + (b - a), 0)),
+        // Call time no planned meeting explains: an ad-hoc call.
+        adHocCallMin: minutes(calls.reduce((s, [a, b]) => s + (b - a) - coveredMs(a, b, meetingSpans), 0)),
+      } : {}),
+      ...(meetingChecks.length ? {
+        // Each second once, even when two attended meetings overlap.
+        meetingMin: minutes(attendedSpans.reduce((s, [a, b]) => s + (b - a), 0)),
+        meetings: Object.fromEntries((['attended', 'not_attended', 'needs_confirmation', 'unknown'] as const)
+          .map((a) => [a, meetingChecks.filter((p) => p.attendance === a).length])),
+      } : {}),
+      ...(needsConfirmation.length ? { needsConfirmation } : {}),
+      ...(planned.length < allPlanned.length ? { ignoredMeetings: allPlanned.length - planned.length } : {}),
     },
   }
 }

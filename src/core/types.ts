@@ -1330,6 +1330,21 @@ export interface Config {
       end?: string;
       days?: Array<string | number>;
     };
+    /**
+     * Calls on this Mac, from the power assertions a call app holds while a call
+     * runs (src/core/time-tracking/calls.ts). On while `outside` is on; kept on
+     * this Mac only.
+     */
+    calls?: {
+      /** Default: true (follows `outside.enabled`). */
+      enabled?: boolean;
+      /** More call apps, by process name as macOS shows it (`pmset -g assertions`). */
+      apps?: string[];
+    };
+    /** Meetings the time review leaves out of plan checks: title words or phrases, case-insensitive. */
+    meetings?: {
+      ignore?: string[];
+    };
   };
   tools?: {
     exec?: {

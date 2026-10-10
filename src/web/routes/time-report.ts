@@ -21,10 +21,14 @@ import { Router, type Request, type Response } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import {
-  dayBoundsMs, localDateKey, outsideDayRecords, readDayRecords, recentDateKeys, walnutHostsFromConfig, TIME_KINDS,
+  dayBoundsMs, localDateKey, outsideDayRecords, readDayRecords, recentDateKeys, TIME_KINDS,
   type TimeKind, type TimeRecord,
 } from '../../core/time-tracking/index.js'
 import type { OutsideRecord } from '../../core/time-tracking/outside-store.js'
+import type { CallInterval } from '../../core/time-tracking/calls.js'
+import { readCalls } from '../../core/time-tracking/calls-store.js'
+import { walnutHostsFor } from '../../core/time-tracking/walnut-hosts.js'
+import { readDetailDay, type DetailLine } from '../../core/time-tracking/detail-store.js'
 import {
   buildTimeReport, REPORT_DEFAULTS, REPORT_GROUPS, type ReportGroup, type ReportTaskMeta,
 } from '../../core/time-tracking/report.js'
@@ -46,9 +50,11 @@ const MAX_TOP = 100
 
 /** What every report says about how the numbers were measured. Kept short: it rides on every answer. */
 export const REPORT_NOTES = [
-  'walnutMin = attention leased by real interaction (click, key, scroll, selection) in a Walnut session, triage row or chat: each grants 60 s, a switch banks the old context at the switch; passive reading earns 60 s; the phone app reports the same way (phoneMin).',
+  'walnutMin = attention leased by real interaction (click, key, scroll, selection) in a Walnut session, triage row, chat or plugin view (kind app): each grants 60 s, a switch banks the old context at the switch; the phone app reports the same way (phoneMin). Seconds another Mac app was frontmost are cut (overlapMin), so no second counts twice.',
+  'readingMin = inferred: Walnut frontmost with no click or key, credited to the context used last, at most 15 min after it and only while Walnut stayed frontmost. Counted in attention, never in walnutMin.',
   'agentMin = an agent running on its own. It costs the user no attention and is never part of walnutMin or attention.',
-  'outside = the Mac foreground sampler: the frontmost app every ~5 s, idle over 120 s and the lock screen excluded, so a meeting the user only listens to counts as away (meeting minutes are a floor). Walnut\'s own foreground is walnutForegroundMin, a cross-check that is not added.',
+  'outside = the Mac foreground sampler: the frontmost app every ~5 s, idle over 120 s and the lock screen excluded. Walnut\'s own foreground is walnutForegroundMin, a cross-check that is not added.',
+  'callMin = a call app (Zoom, Teams, Webex, FaceTime) holding a call on this Mac, from macOS power assertions: a call in progress, not proof of listening. It overlaps screen time; do not add it to attention.',
   'Invisible: the phone\'s other apps, paper, in-person talks, anything away from the Mac.',
 ]
 
@@ -204,17 +210,30 @@ timeReportRouter.get('/report', async (req: Request, res: Response) => {
       records.set(date, await readDayRecords(date))
       if (includeOutside) outside.set(date, await outsideDayRecords(date))
     }
+    // Mac-local extras: calls and the detail file (files, plugin items, sent markers).
+    let calls: CallInterval[] | undefined
+    const detail = new Map<string, DetailLine[]>()
+    if (includeOutside && dates.length) {
+      const first = dayBoundsMs(dates[0]!)
+      const last = dayBoundsMs(dates[dates.length - 1]!)
+      if (first && last && Date.now() <= end) calls = (await readCalls(first.startMs, last.endMs)).calls
+      for (const date of dates) {
+        if (Date.now() > end) break
+        detail.set(date, await readDetailDay(date))
+      }
+    }
     const ids = new Set<string>()
     for (const recs of records.values()) for (const r of recs) if (r.taskId) ids.add(r.taskId)
+    for (const lines of detail.values()) for (const l of lines) if (l.taskId) ids.add(l.taskId)
     const tasks = await taskMeta([...ids])
 
-    const report = buildTimeReport({ records, outside, tasks }, {
+    const report = buildTimeReport({ records, outside, tasks, ...(calls ? { calls } : {}), ...(includeOutside ? { detail } : {}) }, {
       dates, kinds, workHours: wh, workHoursSource: source, groupBy, top,
       mergeGapMs: (mergeGapMin ?? REPORT_DEFAULTS.mergeGapMs / 60_000) * 60_000,
       longStretchMs: (longMin ?? REPORT_DEFAULTS.longStretchMs / 60_000) * 60_000,
       glanceMs: REPORT_DEFAULTS.glanceMs,
       includeOutside,
-      walnutHosts: walnutHostsFromConfig(config),
+      walnutHosts: await walnutHostsFor(config),
     })
     log.web.debug('time report served', { days: dates.length, tasks: ids.size, ms: Date.now() - started })
     res.json({

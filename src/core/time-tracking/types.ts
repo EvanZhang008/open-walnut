@@ -11,8 +11,24 @@
  * therefore approximate at day edges; see agent-time.ts.
  */
 
-export const HUMAN_KINDS = ['session', 'triage', 'chat'] as const;
+/**
+ * `app` is a plugin's own view inside Walnut (a chat console, a mail reader): an
+ * element marked `data-time-item` (web/src/utils/time-attribution.ts). It has no
+ * task; `TimeRecord.app` names the plugin.
+ */
+export const HUMAN_KINDS = ['session', 'triage', 'chat', 'app'] as const;
 export type HumanKind = (typeof HUMAN_KINDS)[number];
+
+/**
+ * Which part of a session panel had the input (`data-time-view`). The one detail
+ * that rides the synced day files: a short word, never a name.
+ */
+export const TIME_VIEWS = ['chat', 'changed', 'files', 'terminal', 'code', 'inbox', 'web', 'board'] as const;
+export type TimeView = (typeof TIME_VIEWS)[number];
+
+/** `app` records only: the user was writing (a reply box), not reading. */
+export const TIME_MODES = ['reply'] as const;
+export type TimeMode = (typeof TIME_MODES)[number];
 
 /**
  * The three human contexts plus the derived agent lane — the ONE list of lanes.
@@ -52,6 +68,18 @@ export interface HeartbeatSample {
   sessionId?: string;
   /** Absent = 'web' (the browser). */
   source?: TimeSource;
+  view?: TimeView;
+  /** `app` kind: the plugin (a short slug). */
+  app?: string;
+  mode?: TimeMode;
+  /**
+   * LOCAL detail, never written to the synced day file: the file open in the
+   * session's file viewer, and a plugin item's id and label. Kept in
+   * outside/detail (detail-store.ts).
+   */
+  file?: string;
+  item?: string;
+  label?: string;
 }
 
 /** A validated, day-keyed record — the JSONL line shape and the fold input. */
@@ -74,6 +102,11 @@ export interface TimeRecord {
   sessionId?: string;
   /** Absent = 'web'. Only ever set on a human record (see TIME_SOURCES). */
   source?: TimeSource;
+  /** Which part of a session panel (see TIME_VIEWS). Absent on older records. */
+  view?: TimeView;
+  /** `app` kind: which plugin. */
+  app?: string;
+  mode?: TimeMode;
 }
 
 /** Per (date, taskId, kind[, source]) accumulated milliseconds. Key via bucketKey(). */

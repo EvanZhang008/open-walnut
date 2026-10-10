@@ -2371,7 +2371,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             return (
               <>
                 {splitOpen && sessionId && activeView !== 'code' && (
-                  <div className="session-panel-diff-col">
+                  // data-time-view: which part of the panel had the input (time tracking).
+                  <div className="session-panel-diff-col" data-time-view={activeView ?? undefined}>
                     {activeView === 'changed' && (
                       <SessionChangedTab sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} onOpenFile={handleFileOpen} />
                     )}
@@ -2465,7 +2466,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     which is why this is its own stable sibling rather than a
                     child of the conditional diff-col above. */}
                 {codeViewMounted && sessionId && (
-                  <div className={`session-panel-diff-col session-panel-code-col${activeView === 'code' ? '' : ' session-panel-code-col-hidden'}`}>
+                  <div className={`session-panel-diff-col session-panel-code-col${activeView === 'code' ? '' : ' session-panel-code-col-hidden'}`} data-time-view="code">
                     <SessionCodeView
                       sessionId={sessionId}
                       host={session?.host}
@@ -2481,6 +2482,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           )}
           <div
             className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}`}
+            data-time-view="chat"
             onClick={handleServiceLinkClick}
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}

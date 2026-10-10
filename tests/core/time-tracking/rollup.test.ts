@@ -237,7 +237,7 @@ describe('summarize', () => {
     expect(day.agentMs).toBe(120_000);
     expect(day.tasks[0]).toMatchObject({
       taskId: 't_alpha', humanMs: 90_000, agentMs: 120_000,
-      byKind: { session: 60_000, triage: 30_000, chat: 0 },
+      byKind: { session: 60_000, triage: 30_000, chat: 0, app: 0 },
     });
     expect(out.totalHumanMs).toBe(90_000);
     expect(out.totalAgentMs).toBe(120_000);
@@ -266,7 +266,7 @@ describe('summarize', () => {
     // ONE row for the task, summing both sources — the number a user reads as
     // "time on this task" must not depend on which screen they held.
     expect(day.tasks).toEqual([
-      { taskId: 't_alpha', humanMs: 100_000, byKind: { session: 90_000, triage: 0, chat: 10_000 }, agentMs: 0, focus: false },
+      { taskId: 't_alpha', humanMs: 100_000, byKind: { session: 90_000, triage: 0, chat: 10_000, app: 0 }, agentMs: 0, focus: false },
     ]);
   });
 
@@ -346,7 +346,7 @@ describe('summarize', () => {
     const day = out.days.at(-1)!;
     expect(day.tasks).toHaveLength(1);
     expect(day.tasks[0]).toMatchObject({
-      taskId: 't_alpha', humanMs: 60_000, byKind: { session: 60_000, triage: 0, chat: 0 },
+      taskId: 't_alpha', humanMs: 60_000, byKind: { session: 60_000, triage: 0, chat: 0, app: 0 },
     });
   });
 

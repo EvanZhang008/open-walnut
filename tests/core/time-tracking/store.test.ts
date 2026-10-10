@@ -271,7 +271,7 @@ describe('hydrate', () => {
     expect(out.totalIosMs).toBe(1000);
     // Per-task rows aggregate ACROSS sources — one number per task, always.
     expect(out.days[0]!.tasks).toEqual([
-      { taskId: 't_alpha', humanMs: 7000, byKind: { session: 5000, triage: 2000, chat: 0 }, agentMs: 0, focus: false },
+      { taskId: 't_alpha', humanMs: 7000, byKind: { session: 5000, triage: 2000, chat: 0, app: 0 }, agentMs: 0, focus: false },
     ]);
   });
 

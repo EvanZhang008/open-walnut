@@ -10,6 +10,7 @@ import { dayBoundsMs } from '../blocks.js'
 import { shiftDateKey } from '../rollup.js'
 import { workHoursLabel, workHoursToConfig, type WorkHours } from '../work-hours.js'
 import { mergeDay, type DayTimeline } from './merge.js'
+import type { MeetingContext } from './meetings.js'
 import { listTimelineSources, type RegisteredSource } from './registry.js'
 import type { SourcedSegment, TimelineRange, TimelineSegmentInput } from './types.js'
 
@@ -21,7 +22,7 @@ const MAX_FLAGS = 4
 const MAX_DETAIL_KEYS = 8
 
 export const TIMELINE_PRECEDENCE =
-  'For each minute the activity with the highest source priority wins: Walnut attention 100 > Mac apps 90 > sleep 70 > '
+  'For each minute the activity with the highest source priority wins: Walnut attention 100 > Mac apps 90 > calls 85 > sleep 70 > '
   + 'workouts 60 > calendar 50 (a plugin source 40 by default, never above 80); places say where, they never compete.'
 
 export interface SourceReport {
@@ -104,6 +105,13 @@ async function runSource(src: RegisteredSource, range: TimelineRange, timeoutMs:
   }
 }
 
+/** `work`, or undefined when it fails or is late. */
+function withinDeadline<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms) })
+  return Promise.race([work.catch(() => undefined), late]).finally(() => clearTimeout(timer))
+}
+
 export interface TimelineAnswer {
   from: string
   to: string
@@ -117,13 +125,20 @@ export interface TimelineAnswer {
 export async function buildTimeline(
   from: string,
   to: string,
-  opts: { workHours: WorkHours; workHoursSource: string; tz: string; nowMs?: number; sourceTimeoutMs?: number },
+  opts: {
+    workHours: WorkHours; workHoursSource: string; tz: string; nowMs?: number; sourceTimeoutMs?: number
+    /** Builds the meeting-attendance context for the range (meeting-context.ts); absent = no call history. */
+    meetings?: (range: TimelineRange) => Promise<MeetingContext>
+  },
 ): Promise<TimelineAnswer> {
   const dates: string[] = []
   for (let d = from; d <= to && dates.length < TIMELINE_MAX_DAYS; d = shiftDateKey(d, 1)) dates.push(d)
   const bounds = dates.map((date) => ({ date, ...dayBoundsMs(date)! }))
   const range: TimelineRange = { from, to: dates[dates.length - 1]!, startMs: bounds[0]!.startMs, endMs: bounds[bounds.length - 1]!.endMs, tz: opts.tz }
-  const runs = await Promise.all(listTimelineSources().map((src) => runSource(src, range, opts.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS)))
+  const [runs, meetings] = await Promise.all([
+    Promise.all(listTimelineSources().map((src) => runSource(src, range, opts.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS))),
+    opts.meetings ? withinDeadline(opts.meetings(range), opts.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS) : Promise.resolve(undefined),
+  ])
   const all = runs.flatMap((r) => r.segments)
   const nowMs = opts.nowMs ?? Date.now()
   return {
@@ -131,6 +146,6 @@ export async function buildTimeline(
     workHours: { ...workHoursToConfig(opts.workHours), label: workHoursLabel(opts.workHours), source: opts.workHoursSource },
     precedence: TIMELINE_PRECEDENCE,
     sources: runs.map((r) => r.report),
-    days: bounds.map((b) => mergeDay(b, all, { tz: opts.tz, workHours: opts.workHours, nowMs })),
+    days: bounds.map((b) => mergeDay(b, all, { tz: opts.tz, workHours: opts.workHours, nowMs, ...(meetings ? { meetings } : {}) })),
   }
 }
