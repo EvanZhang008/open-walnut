@@ -1,30 +1,37 @@
 /**
- * The primary's side of the companion's copy of the search index
+ * The primary's side of the followers' copies of the search index
  * (docs/plan/walnut-control-plane.md "The companion's copy of the search
- * index"; the companion's side is search-replica-store.ts).
+ * index"; a follower's side is search-replica-store.ts). A follower is any
+ * other Walnut server: the cloud companion, or a server on a host
+ * (replica-targets.ts lists them and carries each one's requests).
  *
- * One round, up to three steps over POST /bridge/replica (kind 'search'):
+ * One round per follower, up to three steps over its /bridge/replica (kind
+ * 'search'):
  *   status  the setting (`search.companion_semantic`), this Mac's model and
- *           its digest; the companion answers whether its copy is on and its
+ *           its digest; the follower answers whether its copy is on and its
  *           own digest. Off, or the digests equal: the round ends there.
- *   sync    the docs' keys and values → the keys the companion lacks. Once
+ *   sync    the docs' keys and values → the keys the follower lacks. Once
  *           both sides matched, only what changed since (and the keys removed
  *           since); the whole manifest (under 1 MB for 12k docs) only when that
- *           is unknown or did not bring the companion level.
+ *           is unknown or did not bring the follower level.
  *   put     those docs with their vectors, about 1 MB per request; the last
- *           one carries the digest, so the companion knows it is complete.
+ *           one carries the digest, so the follower knows it is complete.
  *
  * A doc's value is its content hash and its vector state, kept in memory and
  * refreshed only for the docs a write touched (the index's change listener):
  * a round with nothing new reads no index row. The whole table is walked once
  * after boot and then hourly, in small slices, because reading a doc's hash
- * reads its body's overflow pages (3 s for 12k docs cold, in one go).
+ * reads its body's overflow pages (3 s for 12k docs cold, in one go). That map
+ * is shared; what each follower last matched, its rest after an older build
+ * and its status are kept per follower. Followers go one after another, so a
+ * first copy (about 126 MB gzipped) is never sent to two at once.
  */
 
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { SearchIndex } from '../../lib/hybrid-search/index.js'
-import type { CloudReplicaReply } from '../cloud-ingest.js'
+import { isFollower, type FollowerKind } from '../server-role.js'
+import type { ReplicaTarget } from './replica-targets.js'
 import { refOfReplicaKey, replicaKey } from '../search/replica-refs.js'
 import { DigestMap } from './search-digest.js'
 import {
@@ -39,7 +46,7 @@ const FULL_SCAN_MS = 60 * 60_000
 const SCAN_SLICE = 32
 const PUT_BATCH_BYTES = 1024 * 1024
 const PUT_TIMEOUT_MS = 60_000
-/** A companion that does not know kind 'search' is asked again after this. */
+/** A follower that does not know kind 'search' is asked again after this. */
 const UNSUPPORTED_REST_MS = 30 * 60_000
 
 export interface SearchReplicaDeps {
@@ -49,16 +56,19 @@ export interface SearchReplicaDeps {
   model: () => string | null
   home: string
   mode: () => Promise<CompanionSearchMode>
-  post: (payload: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<CloudReplicaReply>
-  available: () => Promise<boolean>
+  /** The followers to keep level, in the order Settings lists them. */
+  targets: () => ReplicaTarget[]
   /** Wait between slices of a walk (the event loop's turn). */
   pause?: () => Promise<void>
 }
 
-/** What Settings shows about the companion's copy. */
-export interface CompanionSearchStatus {
+/** What Settings shows about one follower's copy. */
+export interface FollowerSearchStatus {
+  id: string
+  kind: FollowerKind
+  label: string
   mode: CompanionSearchMode
-  state: 'no-companion' | 'unsupported' | 'mac-keyword-only' | 'off' | 'memory' | 'model' | 'syncing' | 'ready' | 'error'
+  state: 'unavailable' | 'unsupported' | 'mac-keyword-only' | 'off' | 'memory' | 'model' | 'syncing' | 'ready' | 'error'
   reason?: CompanionSearchReason
   totalMb?: number
   needMb?: number
@@ -72,17 +82,39 @@ export interface CompanionSearchStatus {
   error?: string
 }
 
-let status: CompanionSearchStatus | null = null
+interface FollowerState {
+  /** What the follower held the last time both digests matched (key → value). */
+  confirmed: Map<string, string> | null
+  unsupportedUntil: number
+  status: FollowerSearchStatus | null
+}
 
-export function companionSearchStatus(): CompanionSearchStatus | null {
-  return status
+const followers = new Map<string, FollowerState>()
+
+function stateOf(id: string): FollowerState {
+  let s = followers.get(id)
+  if (!s) {
+    s = { confirmed: null, unsupportedUntil: 0, status: null }
+    followers.set(id, s)
+  }
+  return s
+}
+
+/** Every follower's last round, for Settings; one that left the list is gone. */
+export function followerSearchStatuses(targets?: ReplicaTarget[]): FollowerSearchStatus[] {
+  const order = targets?.map((t) => t.id) ?? [...followers.keys()]
+  const out: FollowerSearchStatus[] = []
+  for (const id of order) {
+    const st = followers.get(id)?.status
+    if (st) out.push(st)
+  }
+  return out
 }
 
 const map = new DigestMap()
 let mapBuiltAt = 0
 let allDirty = true
 const dirty = new Set<number>()
-let unsupportedUntil = 0
 
 /** The index's change listener. */
 export function noteSearchDocChange(docId: number | null): void {
@@ -134,13 +166,13 @@ class StepFailed extends Error {
   constructor(readonly outcome: 'failed' | 'unsupported', message: string) { super(message) }
 }
 
-async function step(deps: SearchReplicaDeps, payload: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
-  const r = await deps.post({ kind: 'search', ...payload }, timeoutMs ? { timeoutMs } : undefined)
+async function step(target: ReplicaTarget, payload: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
+  const r = await target.post({ kind: 'search', ...payload }, timeoutMs ? { timeoutMs } : undefined)
   if (r.ok) {
     if (r.reply.ok !== true) throw new StepFailed('failed', typeof r.reply.error === 'string' ? r.reply.error : 'refused')
     return r.reply
   }
-  // An older companion: the route answers 400 for an op or kind it does not know.
+  // An older follower: the route answers 400 for an op or kind it does not know.
   if (r.error === 'unknown_op' || r.error === 'unknown_kind') throw new StepFailed('unsupported', r.error)
   throw new StepFailed(r.outcome, r.error ?? (r.status ? `HTTP ${r.status}` : r.outcome))
 }
@@ -160,12 +192,11 @@ function wireBytes(doc: WireDoc): number {
   return n
 }
 
-/** What the companion held the last time both digests matched (key → value). */
-let confirmed: Map<string, string> | null = null
-
 /** One manifest step and the puts it asks for; the last put carries the digest. */
 async function sendManifest(
   deps: SearchReplicaDeps,
+  target: ReplicaTarget,
+  fs: FollowerState,
   index: SearchIndex,
   snapshot: Map<string, string>,
   digest: string,
@@ -173,30 +204,30 @@ async function sendManifest(
   pause: () => Promise<void>,
 ): Promise<{ need: number; sent: number; removed: number; inSync: boolean }> {
   let payload: Record<string, unknown>
-  if (whole || !confirmed) {
+  if (whole || !fs.confirmed) {
     payload = { op: 'sync', entries: [...snapshot].map(([k, h]) => ({ k, h })) }
   } else {
-    const was = confirmed
+    const was = fs.confirmed
     const entries = [...snapshot].filter(([k, h]) => was.get(k) !== h).map(([k, h]) => ({ k, h }))
     const removes = [...was.keys()].filter((k) => !snapshot.has(k))
     payload = { op: 'sync', partial: true, entries, removes }
   }
-  const synced = await step(deps, payload)
+  const synced = await step(target, payload)
   const need = Array.isArray(synced.need) ? (synced.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
   const removed = Number(synced.removed) || 0
-  status = { ...status!, pending: need.length }
+  fs.status = { ...fs.status!, pending: need.length }
   let sent = 0
   let inSync = false
   let batch: WireDoc[] = []
   let bytes = 0
   const flush = async (last: boolean): Promise<void> => {
     if (batch.length === 0 && !last) return
-    const r = await step(deps, { op: 'put', docs: batch, ...(last ? { digest } : {}) }, PUT_TIMEOUT_MS)
+    const r = await step(target, { op: 'put', docs: batch, ...(last ? { digest } : {}) }, PUT_TIMEOUT_MS)
     sent += Number(r.stored) || 0
     if (last) inSync = r.inSync === true
     batch = []
     bytes = 0
-    status = { ...status!, pending: Math.max(0, need.length - sent) }
+    fs.status = { ...fs.status!, pending: Math.max(0, need.length - sent) }
   }
   for (let i = 0; i < need.length; i++) {
     const key = need[i]!
@@ -216,38 +247,58 @@ async function sendManifest(
   return { need: need.length, sent, removed, inSync }
 }
 
-export type SearchReplicaRoundResult =
+type RoundOutcome =
   | { action: 'unavailable' | 'unsupported' | 'keyword-only' | 'off' | 'in-sync' }
   | { action: 'synced'; need: number; sent: number; removed: number; inSync: boolean }
   | { action: 'failed'; error: string }
 
-let running: Promise<SearchReplicaRoundResult> | null = null
+export type SearchReplicaRoundResult = { target: string } & RoundOutcome
 
-/** One round; a round asked for while one runs shares it. Never throws. */
-export function syncSearchReplica(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult> {
+let running: Promise<SearchReplicaRoundResult[]> | null = null
+
+/** One round for every follower, one after another; a round asked for while one runs shares it. Never throws. */
+export function syncSearchReplica(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult[]> {
   if (running) return running
-  running = round(deps).finally(() => { running = null })
+  running = roundAll(deps).finally(() => { running = null })
   return running
 }
 
-async function round(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult> {
+async function roundAll(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult[]> {
+  const targets = deps.targets()
+  // A follower that left the list (a host server removed) leaves Settings too.
+  for (const id of [...followers.keys()]) if (!targets.some((t) => t.id === id)) followers.delete(id)
+  const out: SearchReplicaRoundResult[] = []
+  for (const target of targets) {
+    try {
+      out.push({ target: target.id, ...(await round(deps, target)) })
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      out.push({ target: target.id, action: 'failed', error })
+    }
+  }
+  return out
+}
+
+async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<RoundOutcome> {
   const pause = deps.pause ?? defaultPause
+  const fs = stateOf(target.id)
   const mode = await deps.mode()
-  const base = { mode, checkedAt: Date.now() }
-  if (Date.now() < unsupportedUntil) return { action: 'unsupported' }
-  if (!(await deps.available())) {
-    status = { ...base, state: 'no-companion' }
+  const base = { id: target.id, kind: target.kind, label: target.label, mode, checkedAt: Date.now() }
+  if (Date.now() < fs.unsupportedUntil) return { action: 'unsupported' }
+  if (!(await target.available())) {
+    fs.status = { ...base, state: 'unavailable' }
     return { action: 'unavailable' }
   }
   const index = deps.index()
   const model = deps.model()
   if (!index || !model) {
-    status = { ...base, state: 'mac-keyword-only' }
+    fs.status = { ...base, state: 'mac-keyword-only' }
     return { action: 'keyword-only' }
   }
   try {
+    // Shared by every follower; after the first one it reads only what changed meanwhile.
     await refreshMap(index, deps.home, pause)
-    const reply = await step(deps, { op: 'status', mode, model, digest: map.digest })
+    const reply = await step(target, { op: 'status', mode, model, digest: map.digest })
     const info = {
       reason: reply.reason as CompanionSearchReason | undefined,
       totalMb: Number(reply.totalMb) || undefined,
@@ -257,95 +308,105 @@ async function round(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult>
     }
     if (reply.enabled !== true) {
       const state = info.reason === 'memory' ? 'memory' : info.reason === 'model' ? 'model' : 'off'
-      status = { ...base, ...info, state }
+      fs.status = { ...base, ...info, state }
       return { action: 'off' }
     }
     const counts = { docs: Number(reply.docs) || 0, vectored: Number(reply.vectored) || 0 }
     const snapshot = new Map(map.entries().map((e) => [e.key, e.value]))
     const manifestDigest = map.digest
     if (reply.inSync === true || reply.digest === manifestDigest) {
-      confirmed = snapshot
-      status = { ...base, ...info, ...counts, state: 'ready' }
+      fs.confirmed = snapshot
+      fs.status = { ...base, ...info, ...counts, state: 'ready' }
       return { action: 'in-sync' }
     }
-    status = { ...base, ...info, ...counts, state: 'syncing' }
+    fs.status = { ...base, ...info, ...counts, state: 'syncing' }
     // What changed since both sides last matched; the whole manifest when that
-    // is unknown, or when the delta did not bring the companion level.
+    // is unknown, or when the delta did not bring the follower level.
     let totals = { need: 0, sent: 0, removed: 0 }
     let inSync = false
-    for (const whole of confirmed ? [false, true] : [true]) {
-      const r = await sendManifest(deps, index, snapshot, manifestDigest, whole, pause)
+    for (const whole of fs.confirmed ? [false, true] : [true]) {
+      const r = await sendManifest(deps, target, fs, index, snapshot, manifestDigest, whole, pause)
       totals = { need: totals.need + r.need, sent: totals.sent + r.sent, removed: totals.removed + r.removed }
       inSync = r.inSync
       if (inSync) break
     }
-    if (inSync) confirmed = snapshot
-    status = {
+    if (inSync) fs.confirmed = snapshot
+    fs.status = {
       ...base, ...info, state: inSync ? 'ready' : 'syncing', docs: snapshot.size, pending: 0,
       ...(inSync ? { syncedAt: Date.now() } : {}),
     }
-    log.memory.info('search replica: round', { entries: snapshot.size, ...totals, inSync })
+    log.memory.info('search replica: round', { target: target.id, entries: snapshot.size, ...totals, inSync })
     return { action: 'synced', ...totals, inSync }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     if (err instanceof StepFailed && err.outcome === 'unsupported') {
-      unsupportedUntil = Date.now() + UNSUPPORTED_REST_MS
-      status = { ...base, state: 'unsupported' }
-      log.memory.info('search replica: the companion keeps no search copy yet (older build), asking again in 30 minutes')
+      fs.unsupportedUntil = Date.now() + UNSUPPORTED_REST_MS
+      fs.status = { ...base, state: 'unsupported' }
+      log.memory.info('search replica: this follower keeps no search copy yet (older build), asking again in 30 minutes', { target: target.id })
       return { action: 'unsupported' }
     }
-    status = { ...base, state: 'error', error }
-    log.memory.warn('search replica: round failed', { error })
+    fs.status = { ...base, state: 'error', error }
+    log.memory.warn('search replica: round failed', { target: target.id, error })
     return { action: 'failed', error }
   }
 }
 
 async function defaultDeps(): Promise<SearchReplicaDeps> {
-  const [wiring, ingest, { getConfig }] = await Promise.all([
-    import('../search/wiring.js'), import('../cloud-ingest.js'), import('../config-manager.js'),
+  const [wiring, targets, { getConfig }] = await Promise.all([
+    import('../search/wiring.js'), import('./replica-targets.js'), import('../config-manager.js'),
   ])
   return {
     index: () => (wiring.isSearchV2Enabled() ? wiring.getSearchV2Index() : null),
     model: () => wiring.currentEmbedModelId(),
     home: WALNUT_HOME,
     mode: async () => companionSearchMode((await getConfig()).search?.companion_semantic),
-    post: ingest.postToCloudReplica,
-    available: ingest.cloudReplicaAvailable,
+    targets: targets.replicaTargets,
   }
 }
 
 /**
- * Primary only: a first round a minute after boot, one every 2 minutes, and
- * one a few seconds after the setting changes.
+ * The leader only: a first round a minute after boot, one every 2 minutes,
+ * one a few seconds after the setting changes or a follower joins.
  */
 export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () => void } {
-  if (CLOUD_MODE) return { stop: () => {} }
+  if (isFollower()) return { stop: () => {} }
   let stopped = false
   let deps: SearchReplicaDeps | null = given ?? null
-  let unlisten: (() => void) | null = null
+  const unlisten: Array<() => void> = []
+  let wired = false
   const run = (): void => {
     if (stopped) return
     void (async () => {
       deps ??= await defaultDeps()
-      if (!unlisten && !given) unlisten = (await import('../search/wiring.js')).onSearchIndexDocChange(noteSearchDocChange)
+      if (!wired && !given) {
+        wired = true
+        unlisten.push((await import('../search/wiring.js')).onSearchIndexDocChange(noteSearchDocChange))
+        unlisten.push((await import('./replica-targets.js')).onReplicaTargetsChanged(soonRound))
+      }
       await syncSearchReplica(deps)
     })().catch((err) => log.memory.warn('search replica: round crashed', { error: err instanceof Error ? err.message : String(err) }))
+  }
+  let soon: ReturnType<typeof setTimeout> | null = null
+  function soonRound(): void {
+    if (stopped || soon) return
+    soon = setTimeout(() => { soon = null; run() }, CONFIG_ROUND_MS)
+    soon.unref?.()
   }
   const first = setTimeout(run, FIRST_ROUND_MS)
   first.unref?.()
   const every = setInterval(run, ROUND_MS)
   every.unref?.()
-  let soon: ReturnType<typeof setTimeout> | null = null
   const name = 'search-replica-config'
   void import('../event-bus.js').then(({ bus }) => {
     if (stopped) return
     bus.subscribe(name, (event) => {
       // A Settings save carries the whole merged config; only a new mode is news here.
       const config = (event.data as { config?: { search?: { companion_semantic?: unknown } } } | undefined)?.config
-      if (!config || soon) return
-      if (companionSearchMode(config.search?.companion_semantic) === (status?.mode ?? 'auto')) return
-      soon = setTimeout(() => { soon = null; run() }, CONFIG_ROUND_MS)
-      soon.unref?.()
+      if (!config) return
+      const next = companionSearchMode(config.search?.companion_semantic)
+      const seen = followerSearchStatuses()
+      if (seen.length > 0 && seen.every((s) => s.mode === next)) return
+      soonRound()
     }, { global: true, interest: ['config:changed'] })
   })
   return {
@@ -354,7 +415,7 @@ export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () =>
       clearTimeout(first)
       clearInterval(every)
       if (soon) clearTimeout(soon)
-      unlisten?.()
+      for (const u of unlisten.splice(0)) u()
       void import('../event-bus.js').then(({ bus }) => bus.unsubscribe(name)).catch(() => {})
     },
   }
@@ -366,8 +427,6 @@ export function _resetSearchReplicaForTesting(): void {
   mapBuiltAt = 0
   allDirty = true
   dirty.clear()
-  unsupportedUntil = 0
+  followers.clear()
   running = null
-  status = null
-  confirmed = null
 }

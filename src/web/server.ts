@@ -70,6 +70,7 @@ import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
 import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
+import { isFollower } from '../core/server-role.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -589,6 +590,7 @@ let unsubscribeLocalClaude: (() => void) | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 /** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
 let leaderLoopHandle: { stop: () => void } | null = null
+let searchCopyHandle: { stop: () => Promise<void> } | null = null
 /** Keeps the Inbox Triage routine in line with config.triage (no restart). */
 let triageConfigWatcher: { stop: () => void } | null = null
 /** Keeps what arrived (mail/Slack) for the next Inbox Triage batch. */
@@ -1937,13 +1939,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A task write on this box holds its row against the primary's copy until the primary has it.
     const { startTaskReplicaLocalWrites } = await import('../core/replication/task-replica-store.js')
     const localWrites = startTaskReplicaLocalWrites()
-    // The copy of the primary's search index: semantic search while it is away.
-    const [{ startSearchReplicaStore }, { getV1Forward }] = await Promise.all([
-      import('../core/replication/search-replica-store.js'),
-      import('./v1-forward/proxy.js'),
-    ])
-    const searchCopy = startSearchReplicaStore({ macAway: () => getV1Forward().primaryAway() })
-    leaderLoopHandle = { stop: () => { backup?.stop(); localWrites.stop(); void searchCopy.stop() } }
+    leaderLoopHandle = { stop: () => { backup?.stop(); localWrites.stop() } }
   } else {
     const { startLeaderHeartbeat, watchBackupLeaderSetting } = await import('../core/leader/primary-leader.js')
     const { startHostReplicaSync } = await import('../core/host-replica-sync.js')
@@ -1954,10 +1950,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The companion's copy of the task store (core/replication/task-replica.ts).
     const { startTaskReplicaSync } = await import('../core/replication/task-replica.js')
     const taskReplica = startTaskReplicaSync()
-    // And of the search index, vectors included (core/replication/search-replica.ts).
+    // And of the search index, vectors included, on every follower
+    // (core/replication/search-replica.ts; it does nothing on a server that is
+    // itself a follower, such as a host server).
     const { startSearchReplicaSync } = await import('../core/replication/search-replica.js')
     const searchReplica = startSearchReplicaSync()
     leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop() } }
+  }
+  // A follower (the cloud companion, a server on a host) keeps the leader's
+  // search index copy: semantic search while the leader is away.
+  if (isFollower()) {
+    const { startSearchReplicaStore } = await import('../core/replication/search-replica-store.js')
+    searchCopyHandle = startSearchReplicaStore()
   }
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
@@ -5734,6 +5738,8 @@ export async function stopServer(): Promise<void> {
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
   leaderLoopHandle = null
+  await searchCopyHandle?.stop().catch(() => {})
+  searchCopyHandle = null
   if (!CLOUD_MODE) {
     try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }
   } else {
@@ -5921,9 +5927,9 @@ export async function stopServer(): Promise<void> {
     await searchV2WiringHandle.stop().catch(() => {})
     searchV2WiringHandle = null
   }
-  // The companion's copy has no wiring, but the same rule: an embed run still
+  // A follower's copy has no wiring, but the same rule: an embed run still
   // in flight at exit aborts the process (libc++abi, exit 134).
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     const { closeSearchV2Index } = await import('../core/search/wiring.js')
     await closeSearchV2Index().catch(() => {})
   }

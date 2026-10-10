@@ -30,7 +30,8 @@ import {
   type ScoredHit,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
-import { CLOUD_MODE, GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
+import { GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
+import { isFollower } from '../server-role.js';
 import { log } from '../../logging/index.js';
 import { utilityQosForkExec } from '../../lib/background-qos.js';
 import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
@@ -75,11 +76,12 @@ export const SEARCH_V2_KIND_WEIGHTS = {
 
 export function isSearchV2Enabled(): boolean {
   // WALNUT_DISABLE_SEARCH=1 means "don't index, don't download a model" —
-  // callers degrade to in-process keyword scoring. A cloud replica never
-  // indexes or embeds passages itself: its index, when it has one, is a copy
-  // of the primary's (core/replication/search-replica-store.ts).
+  // callers degrade to in-process keyword scoring. A follower (the cloud
+  // companion, a server on a host) never indexes or embeds passages itself:
+  // its index, when it has one, is a copy of the leader's
+  // (core/replication/search-replica-store.ts).
   return process.env.WALNUT_DISABLE_SEARCH !== '1'
-    && !CLOUD_MODE;
+    && !isFollower();
 }
 
 /** Known embedding models. Plan Q2 settled 2026-08-24 by the full golden-set
@@ -224,7 +226,7 @@ export function onSearchIndexDocChange(listener: DocChangeListener): () => void 
  * on). The copy is machine-local like the model cache, so it sits in cache/.
  */
 export function searchV2IndexPath(): string {
-  return CLOUD_MODE ? path.join(WALNUT_HOME, 'cache', 'search-replica.sqlite') : path.join(WALNUT_HOME, 'search.sqlite');
+  return isFollower() ? path.join(WALNUT_HOME, 'cache', 'search-replica.sqlite') : path.join(WALNUT_HOME, 'search.sqlite');
 }
 
 export function searchV2IndexOpen(): boolean {

@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
+import { isFollower } from '../../core/server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { withFileLock } from '../../utils/file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -1187,11 +1188,12 @@ async function performNotesSearchInner(opts: {
     }
 
     // Run both legs; allSettled so one failing never zeroes the other.
-    // The cloud companion has an index only while it keeps its copy of the
-    // primary's (core/replication/search-replica-store.ts); without it, the
+    // A follower (the cloud companion, a server on a host) has an index only
+    // while it keeps its copy of the leader's
+    // (core/replication/search-replica-store.ts); without it, the
     // string/FTS leg is its answer.
     const wantString = mode === 'hybrid' || mode === 'string'
-    const wantSemantic = (!CLOUD_MODE || companionSearchReady())
+    const wantSemantic = (!isFollower() || companionSearchReady())
       && process.env.WALNUT_DISABLE_SEARCH !== '1'
       && (mode === 'hybrid' || mode === 'semantic')
 
@@ -1786,10 +1788,10 @@ notesV2Router.get('/index/status', async (_req: Request, res: Response, next: Ne
     ensureIndexBootstrap()
     const lastRebuild = getIndexMeta('last_full_rebuild')
     let embedState: 'idle' | 'embedding' | 'unavailable' = 'idle'
-    if (CLOUD_MODE || process.env.WALNUT_DISABLE_SEARCH === '1') {
-      // No index of its own on the companion (its copy of the primary's is
-      // filled by the primary, never embedded here), or indexing is off.
-      embedState = CLOUD_MODE && companionSearchReady() ? 'idle' : 'unavailable'
+    if (isFollower() || process.env.WALNUT_DISABLE_SEARCH === '1') {
+      // No index of its own on a follower (its copy of the leader's is
+      // filled by the leader, never embedded here), or indexing is off.
+      embedState = isFollower() && companionSearchReady() ? 'idle' : 'unavailable'
     } else {
       // Read the wiring's in-memory backfill flag; never open SQLite from a
       // status request (that can synchronously wait on the writer lock and

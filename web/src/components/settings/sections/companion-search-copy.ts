@@ -1,15 +1,19 @@
 /**
- * What the Search settings say about the cloud companion's copy of the index
- * (`search.companion_semantic`; server side core/replication/search-replica.ts).
- * Pure, so the wording and the warning rule are unit tested.
+ * What the Search settings say about each follower's copy of the index: the
+ * cloud companion and every server on a host (`search.companion_semantic`;
+ * server side core/replication/search-replica.ts). Pure, so the wording and
+ * the warning rule are unit tested.
  */
 
 export type CompanionSearchMode = 'auto' | 'on' | 'off';
 
-/** GET /api/search-index/status → `companion` (null before the Mac's first round). */
-export interface CompanionSearchStatus {
+/** GET /api/search-index/status → `followers[]` (empty before the Mac's first round). */
+export interface FollowerSearchStatus {
+  id: string;
+  kind: 'companion' | 'host';
+  label: string;
   mode: CompanionSearchMode;
-  state: 'no-companion' | 'unsupported' | 'mac-keyword-only' | 'off' | 'memory' | 'model' | 'syncing' | 'ready' | 'error';
+  state: 'unavailable' | 'unsupported' | 'mac-keyword-only' | 'off' | 'memory' | 'model' | 'syncing' | 'ready' | 'error';
   reason?: 'auto' | 'on' | 'forced' | 'off' | 'memory' | 'model';
   totalMb?: number;
   needMb?: number;
@@ -31,52 +35,58 @@ export function gb(mb: number): string {
 
 const count = (n: number): string => n.toLocaleString('en-US');
 
-/** The row is shown only once the Mac has a companion to talk to. */
-export function showCompanionSearchRow(s: CompanionSearchStatus | null | undefined): s is CompanionSearchStatus {
-  return !!s && s.state !== 'no-companion';
+/** The servers Settings lists: one the Mac cannot reach (no companion set up, a host server not running) is left out. */
+export function visibleFollowers(list: FollowerSearchStatus[] | null | undefined): FollowerSearchStatus[] {
+  return (list ?? []).filter((s) => s.state !== 'unavailable');
 }
 
-/** One sentence under the row, and whether it is a warning. */
-export function companionSearchHelp(s: CompanionSearchStatus): { text: string; warning?: boolean } {
+/** One sentence under a server's row, and whether it is a warning. The row's label names the server. */
+export function followerSearchHelp(s: FollowerSearchStatus): { text: string; warning?: boolean } {
   const need = s.needMb ?? DEFAULT_NEED_MB;
   const autoMin = s.autoMinMb ?? DEFAULT_AUTO_MIN_MB;
   switch (s.state) {
     case 'ready':
       if (s.reason === 'forced' && s.totalMb) {
-        return { text: `On with little memory: the model takes about ${gb(need)} of the companion's ${gb(s.totalMb)}.`, warning: true };
+        return { text: `On with little memory: the model takes about ${gb(need)} of its ${gb(s.totalMb)}.`, warning: true };
       }
-      return { text: s.docs ? `Ready: the companion runs semantic search over ${count(s.docs)} items while this Mac is away.` : 'Ready: the companion runs semantic search while this Mac is away.' };
+      return { text: s.docs ? `Ready: ${count(s.docs)} items.` : 'Ready.' };
     case 'syncing':
-      return { text: s.pending ? `Copying this index to the companion: ${count(s.pending)} items left.` : 'Copying this index to the companion.' };
+      return { text: s.pending ? `Copying this index: ${count(s.pending)} items left.` : 'Copying this index.' };
     case 'memory':
-      return { text: s.totalMb ? `Off: Auto needs ${gb(autoMin)} of memory and the companion has ${gb(s.totalMb)}.` : `Off: Auto needs ${gb(autoMin)} of memory on the companion.` };
+      return { text: s.totalMb ? `Off: Auto needs ${gb(autoMin)} of memory and it has ${gb(s.totalMb)}.` : `Off: Auto needs ${gb(autoMin)} of memory.` };
     case 'off':
-      return { text: 'Off: the companion searches by keyword while this Mac is away.' };
+      return { text: 'Off: it searches by keyword while this Mac is away.' };
     case 'model':
-      return { text: 'Off: the companion uses another search model than this Mac.' };
+      return { text: 'Off: it uses another search model than this Mac.' };
     case 'unsupported':
-      return { text: 'The companion runs an older build that keeps no copy yet.' };
+      return { text: 'It runs an older build that keeps no copy yet.' };
     case 'mac-keyword-only':
       return { text: 'This Mac searches by keyword only, so there is nothing to copy.' };
     case 'error':
-      return { text: `Couldn't reach the companion: ${s.error ?? 'no answer'}.`, warning: true };
+      return { text: `Couldn't reach it: ${s.error ?? 'no answer'}.`, warning: true };
     default:
       return { text: '' };
   }
 }
 
-/** Choosing On warns unless the companion is known to have the memory Auto asks for. */
-export function onNeedsMemoryWarning(next: CompanionSearchMode, s: CompanionSearchStatus | null | undefined): boolean {
-  if (next !== 'on') return false;
-  const autoMin = s?.autoMinMb ?? DEFAULT_AUTO_MIN_MB;
-  return !(s?.totalMb && s.totalMb >= autoMin);
+/** The servers not known to have the memory Auto asks for. */
+function short(list: FollowerSearchStatus[]): FollowerSearchStatus[] {
+  return list.filter((s) => !(s.totalMb && s.totalMb >= (s.autoMinMb ?? DEFAULT_AUTO_MIN_MB)));
 }
 
-export function memoryWarningMessage(s: CompanionSearchStatus | null | undefined): string {
-  const need = s?.needMb ?? DEFAULT_NEED_MB;
-  const autoMin = s?.autoMinMb ?? DEFAULT_AUTO_MIN_MB;
-  if (s?.totalMb) {
-    return `The companion has ${gb(s.totalMb)} of memory. The search model takes about ${gb(need)}, which can leave too little for the companion itself and make it slow.`;
+/** Choosing On warns unless every listed server is known to have the memory Auto asks for. */
+export function onNeedsMemoryWarning(next: CompanionSearchMode, list: FollowerSearchStatus[]): boolean {
+  if (next !== 'on') return false;
+  return list.length === 0 || short(list).length > 0;
+}
+
+export function memoryWarningMessage(list: FollowerSearchStatus[]): string {
+  const need = list[0]?.needMb ?? DEFAULT_NEED_MB;
+  const autoMin = list[0]?.autoMinMb ?? DEFAULT_AUTO_MIN_MB;
+  const known = short(list).filter((s) => s.totalMb);
+  if (known.length > 0) {
+    const has = known.map((s) => `${s.label} has ${gb(s.totalMb!)}`).join(', ');
+    return `${has} of memory. The search model takes about ${gb(need)} on each server, which can leave too little for the server itself and make it slow.`;
   }
-  return `The search model takes about ${gb(need)} of the companion's memory. Auto turns it on only when the companion has ${gb(autoMin)}.`;
+  return `The search model takes about ${gb(need)} of each server's memory. Auto turns it on only on a server with ${gb(autoMin)}.`;
 }

@@ -331,19 +331,27 @@ keyword:
 ## The companion's copy of the search index
 
 The Mac embeds every passage once (about 0.4 to 0.6 s each; days of work on a
-fresh index). The companion takes the Mac's docs and vectors as they are and
-only ever embeds a query, with the same model, so what the phone finds while
-the Mac is away is what it would find on the Mac. Code:
-`core/replication/search-replica.ts` (the Mac), `search-replica-store.ts` (the
-companion), `search-replica-wire.ts` (the steps and the on/off rule), and the
-library's index-to-index copy (`lib/hybrid-search/replica.ts`).
+fresh index). Every follower (the cloud companion, and each server on a host,
+[servers everywhere](./walnut-servers-everywhere.md)) takes the Mac's docs and
+vectors as they are and only ever embeds a query, with the same model, so what
+the phone finds while the Mac is away is what it would find on the Mac. Code:
+`core/replication/search-replica.ts` (the Mac), `search-replica-store.ts` (a
+follower), `search-replica-wire.ts` (the steps and the on/off rule), the
+library's index-to-index copy (`lib/hybrid-search/replica.ts`), and
+`core/replication/replica-targets.ts` (the followers and how a step reaches
+each) with `core/server-role.ts` (which role this server plays, and whether the
+leader answers).
 
-- **Rounds**, every 2 minutes and a few seconds after the setting changes,
-  over `POST /bridge/replica` with kind `search`: `status` (the setting, the
+- **Rounds**, every 2 minutes and a few seconds after the setting changes or a
+  follower joins, one follower after another (a first copy never goes to two at
+  once), over each follower's `POST /bridge/replica` with kind `search`: `status` (the setting, the
   Mac's model and its digest) → `sync` (keys and values; once both sides
   matched, only what changed since and the keys removed since) → `put` (those
   docs with their vectors, about 1 MB per request; the last one carries the
-  digest). A round with nothing new is one small status step.
+  digest). A round with nothing new is one small status step. The Mac's map of
+  its own docs is shared; what each follower last matched, its rest after an
+  older build and its status are kept per follower, so one that fails or rests
+  never holds another back.
 - **A doc's key** is its id for tasks and sessions, and its place under the data
   home for notes, memory and skills (`note:~/notes/a.md`), so each side maps it
   to its own path. A file outside the data home is not copied. Its value is the
@@ -353,25 +361,28 @@ library's index-to-index copy (`lib/hybrid-search/replica.ts`).
 - **Vectors**: a doc whose text did not change keeps the vectors it has when
   the Mac sends it with fewer (a Mac re-embedding after a rebuild does not blind
   the copy for hours); a complete set always wins.
-- **On or off**: `search.companion_semantic`. Auto (default) turns the copy on
-  only when the companion has the memory for the model (2.6 GB of footprint plus
-  3 GB of headroom: 5.6 GB total); On turns it on anyway, after a warning in
-  Settings; Off closes it and stops its model. A companion with another model
-  keeps it off. While the kernel reports memory pressure, the model is released
+- **On or off**: `search.companion_semantic`, one setting for every follower,
+  decided by each follower for itself. Auto (default) turns the copy on only on
+  a follower with the memory for the model (2.6 GB of footprint plus 3 GB of
+  headroom: 5.6 GB total); On turns it on anyway, after a warning in Settings;
+  Off closes it and stops its model. A follower with another model keeps it
+  off. While the kernel reports memory pressure, the model is released
   and the copy ranks by keyword.
 - **The copy** lives in `cache/search-replica.sqlite` (machine-local, like the
   model cache) and survives a restart: it is opened at boot, before any round,
   and the first round finds it level. The model loads once after the first
   match (so the first search while away does not wait for a 600 MB download)
-  and stays loaded while the Mac is away.
-- **Writes on the companion**: while the Mac is away, a task written there goes
+  and stays loaded while the Mac is away; it is loaded at once when the leader
+  stops answering (`onLeaderPresence`).
+- **Writes on a follower**: while the Mac is away, a task written there goes
   into the copy at once (by keyword; the Mac embeds it later), unstamped, so the
   Mac's own version replaces it after the write reaches the Mac. While the Mac
   answers, its rounds bring every change.
 - **Guards**: a manifest that would remove more than half of a copy of 200 docs
   or more is refused (a damaged Mac index must not empty the only other copy);
-  an older companion (no kind `search`) rests the lane for 30 minutes; only the
-  Mac's machine credential reaches the route.
+  an older follower (no kind `search`) rests its lane for 30 minutes; only the
+  Mac's credential reaches the route (the machine credential on the companion,
+  the per-host secret on a host server).
 
 Measured on the companion (t4g.large, 2 Graviton2 cores, 2026-10-09): model
 load 2.1 s from the local cache (7.7 s with the first download), query embed
@@ -386,10 +397,11 @@ over"), default on. Off: every host keeps to what it can do alone while the Mac
 is away, and the companion answers every phone call itself. A change reaches
 every host and the companion at once.
 
-`search.companion_semantic` (Settings, Search, "Semantic search while this Mac
-is away"): Auto, On, Off; shown once the Mac has a companion, with the copy's
-state in one sentence. Choosing On warns unless the companion is known to have
-the memory Auto asks for.
+`search.companion_semantic` (Settings, Search, Other servers, "Semantic search
+while this Mac is away"): Auto, On, Off; shown once the Mac reaches a follower,
+with one row per follower giving its copy's state in one sentence. Choosing On
+warns, naming them, unless every listed follower is known to have the memory
+Auto asks for.
 
 ## Scenarios
 
@@ -498,10 +510,15 @@ the memory Auto asks for.
   library: a copy answers keyword and semantic searches without embedding a
   passage, stamps, the vector rule), `tests/core/search-replica.test.ts` (the
   Mac's rounds against the real companion store: every doc, the delta, memory
-  and the setting, restart, local writes, the refusal, an older companion),
+  and the setting, restart, local writes, the refusal, an older companion, two
+  followers that each get their own round),
+  `tests/core/search-replica-host-follower.test.ts` (a server on a host keeps
+  the same copy and searches it),
   `tests/web/routes/bridge-replica-search-cloud.test.ts` (the route on a real
   cloud-mode server over the real client, and the phone's search from the copy),
-  `tests/web/companion-search-copy.test.ts` (the Settings wording and warning).
+  `tests/web/companion-search-copy.test.ts` (the Settings wording and warning),
+  `tests/e2e/browser/settings-companion-search.spec.ts` (the Settings rows in
+  both engines).
 - A git backend never outlives its request: `tests/web/routes/git-http-backend-lifetime.test.ts`.
 
 ## Not yet
@@ -517,9 +534,10 @@ the memory Auto asks for.
   holds today (usage): a copy of that store, and the other session
   controls (stop, interrupt, permission mode) sent straight to the host's daemon
   while the companion leads.
-- Semantic search on a host while the Mac is away (the companion has it; a
-  host still searches its own copy by keyword), and notes written on the
-  companion while the Mac is away in its search copy before the Mac is back.
+- Semantic search on a host that runs only a daemon (every follower server has
+  it: the companion and a host server; a daemon-only host still searches its own
+  copy by keyword), and notes written on a follower while the Mac is away in its
+  search copy before the Mac is back.
 - Calls the forward cannot carry yet: a device's own identity (`devices/self`,
   `instance`, `routes` stay the companion's), replies over 256 KB, and non-JSON
   bodies.

@@ -108,12 +108,13 @@ describe('the search index copy over POST /bridge/replica', () => {
   })
 
   it('the real round fills the copy, and the phone\'s search uses it while the Mac is away', async () => {
+    const companion = { id: 'companion', kind: 'companion' as const, label: 'Cloud companion', post: postToCloudReplica, available: cloudReplicaAvailable }
     const deps = {
       index: () => src, model: () => 'fake/model', home: MAC_HOME, mode: async () => 'auto' as const,
-      post: postToCloudReplica, available: cloudReplicaAvailable,
+      targets: () => [companion],
     }
-    expect(await syncSearchReplica(deps)).toMatchObject({ action: 'synced', sent: 2, inSync: true })
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'in-sync' })
+    expect(await syncSearchReplica(deps)).toMatchObject([{ target: 'companion', action: 'synced', sent: 2, inSync: true }])
+    expect(await syncSearchReplica(deps)).toEqual([{ target: 'companion', action: 'in-sync' }])
 
     const notes = await get('/api/v1/search?q=lantern&types=task,memory', T.phone)
     expect(notes.status).toBe(200)

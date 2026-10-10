@@ -40,6 +40,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { followerKind, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
@@ -103,10 +104,12 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       const tasks = wantsTasks ? await extras.searchHitTasks(results) : undefined
       return tasks ? { results, tasks } : { results }
     }
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       // While the Mac answers, the forward (web/v1-forward/) took this call
       // already; here it is away by the forward's view, or the forward is off.
-      if (!(await primaryAway())) {
+      // The companion still tries its control relay once; a host server's
+      // forward is the only way it reaches the Mac.
+      if (followerKind() === 'companion' && !(await primaryAway())) {
         const { callPrimaryControl } = await import('./v1-control-relay.js')
         const outcome = await callPrimaryControl('server.search', SERVER_RELAY_SID, {
           q, ...(types ? { types } : {}), ...(limit !== undefined ? { limit } : {}),
@@ -141,8 +144,9 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
 })
 
 // GET /api/v1/notes/search?q=&mode=&limit=&all=1 — hybrid notes search.
-// Works on BOTH boxes: performNotesSearch gates its semantic leg on
-// !CLOUD_MODE, so the replica serves the string/FTS leg (degraded flag set).
+// Works on every server: on a follower performNotesSearch runs its semantic
+// leg only while its copy of the leader's index is ready, and otherwise serves
+// the string/FTS leg (degraded flag set).
 searchMemoryV1Router.get('/notes/search', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const q = typeof req.query.q === 'string' ? req.query.q : ''

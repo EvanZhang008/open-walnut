@@ -73,14 +73,15 @@ export async function buildSearchIndexStatusPayload(): Promise<Record<string, un
     status = 'error'
     error = err instanceof Error ? err.message : String(err)
   }
-  // The cloud companion's copy of this index, as the last replica round saw it
-  // (core/replication/search-replica.ts); null before the first round.
-  let companion: unknown = null
+  // Each follower's copy of this index (the cloud companion, a server on a
+  // host), as the last replica round saw it (core/replication/search-replica.ts);
+  // empty before the first round.
+  let followers: unknown[] = []
   try {
-    const { companionSearchStatus } = await import('../../core/replication/search-replica.js')
-    companion = companionSearchStatus()
-  } catch { /* the copy is optional */ }
-  return { model, stores, status, error, progress: null, companion }
+    const { followerSearchStatuses } = await import('../../core/replication/search-replica.js')
+    followers = followerSearchStatuses()
+  } catch { /* the copies are optional */ }
+  return { model, stores, status, error, progress: null, followers }
 }
 
 // GET /status

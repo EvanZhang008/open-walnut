@@ -1,10 +1,11 @@
 /**
- * The companion's side of its copy of the primary's search index
+ * A follower's side of its copy of the leader's search index
  * (docs/plan/walnut-control-plane.md "The companion's copy of the search
- * index"; the primary's side is search-replica.ts, the wire is
- * search-replica-wire.ts, the route web/routes/bridge-replica.ts).
+ * index"; the leader's side is search-replica.ts, the wire is
+ * search-replica-wire.ts, the route web/routes/bridge-replica.ts). A follower
+ * is the cloud companion or a server on a host (core/server-role.ts).
  *
- * The primary embeds every passage once; this box takes its docs and vectors
+ * The leader embeds every passage once; this box takes its docs and vectors
  * as they are and only ever embeds a query, so while the Mac is away the phone
  * still runs semantic search: tasks, sessions, notes, memory and skills.
  *
@@ -23,11 +24,12 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
 import type { SearchIndex } from '../../lib/hybrid-search/index.js'
 import { setCompanionSearchReady } from '../search/companion-ready.js'
+import { isFollower, leaderAnswers, onLeaderPresence } from '../server-role.js'
 import { refOfReplicaKey, replicaKey } from '../search/replica-refs.js'
 import { DigestMap } from './search-digest.js'
 import {
@@ -53,15 +55,17 @@ interface State {
 
 export interface SearchReplicaStoreDeps {
   totalMb: () => number
-  /** The companion's view: the Mac does not answer right now. */
+  /** The Mac does not answer right now (default: the follower's leader presence). */
   macAway: () => Promise<boolean>
   /** This box's embedding model id (default: the wiring's); the copy is on only when it equals the primary's. */
   model?: () => string | null
 }
 
+const defaultMacAway = async (): Promise<boolean> => !leaderAnswers()
+
 let deps: SearchReplicaStoreDeps = {
   totalMb: () => Math.round(os.totalmem() / (1024 * 1024)),
-  macAway: async () => false,
+  macAway: defaultMacAway,
 }
 
 let state: State | null = null
@@ -199,7 +203,7 @@ async function warm(why: string): Promise<void> {
 /** The status step: the primary's setting and digest in, this box's decision and digest out. */
 export function searchReplicaStatus(body: Record<string, unknown>): Promise<ReplicaStepResult> {
   return serial(async () => {
-    if (!CLOUD_MODE) return { ok: false, status: 400, error: 'not_a_replica' }
+    if (!isFollower()) return { ok: false, status: 400, error: 'not_a_replica' }
     const s = await loadState()
     const mode = companionSearchMode(body.mode)
     if (s.mode !== mode) { s.mode = mode; await saveState() }
@@ -242,7 +246,7 @@ export function searchReplicaStatus(body: Record<string, unknown>): Promise<Repl
  */
 export function searchReplicaSync(body: Record<string, unknown>): Promise<ReplicaStepResult> {
   return serial(async () => {
-    if (!CLOUD_MODE) return { ok: false, status: 400, error: 'not_a_replica' }
+    if (!isFollower()) return { ok: false, status: 400, error: 'not_a_replica' }
     if (!enabled) return { ok: false, status: 400, error: 'search_copy_off' }
     if (!Array.isArray(body.entries)) return { ok: false, status: 400, error: 'bad_entries' }
     const partial = body.partial === true
@@ -296,7 +300,7 @@ async function forgetSearchMemo(): Promise<void> {
 /** The bodies step: docs as the primary has them, vectors included. */
 export function searchReplicaPut(body: Record<string, unknown>): Promise<ReplicaStepResult> {
   return serial(async () => {
-    if (!CLOUD_MODE) return { ok: false, status: 400, error: 'not_a_replica' }
+    if (!isFollower()) return { ok: false, status: 400, error: 'not_a_replica' }
     if (!enabled) return { ok: false, status: 400, error: 'search_copy_off' }
     if (!Array.isArray(body.docs)) return { ok: false, status: 400, error: 'bad_docs' }
     const docs = []
@@ -348,12 +352,13 @@ async function syncLocalTasks(ids: string[]): Promise<void> {
 }
 
 /**
- * Companion only: answer the steps, keep the copy current for this box's own
- * task writes, keep the model loaded while the Mac is away, and give it back
- * under memory pressure. Returns the stop.
+ * A follower only: answer the steps, keep the copy current for this box's own
+ * task writes, keep the model loaded while the Mac is away (loaded at once when
+ * the leader stops answering), and give it back under memory pressure. Returns
+ * the stop.
  */
 export function startSearchReplicaStore(options: Partial<SearchReplicaStoreDeps> = {}): { stop: () => Promise<void> } {
-  if (!CLOUD_MODE) return { stop: async () => {} }
+  if (!isFollower()) return { stop: async () => {} }
   deps = { ...deps, ...options }
   let stopped = false
   const name = 'search-replica-local-tasks'
@@ -400,6 +405,12 @@ export function startSearchReplicaStore(options: Partial<SearchReplicaStoreDeps>
     })
     .catch((err) => log.memory.warn('search replica: local writes not wired', { error: err instanceof Error ? err.message : String(err) }))
 
+  // The leader just stopped answering: the next search is this copy's, so load the model now.
+  unsubs.push(onLeaderPresence((answers) => {
+    if (stopped || answers || !enabled || state?.syncedAt == null) return
+    void warm('leader away')
+  }))
+
   const tick = setInterval(() => {
     void (async () => {
       if (stopped || !enabled || state?.syncedAt == null) return
@@ -435,6 +446,6 @@ export function _resetSearchReplicaStoreForTesting(overrides: Partial<SearchRepl
   lastWarmAt = 0
   warmedOnce = false
   chain = Promise.resolve()
-  deps = { totalMb: () => Math.round(os.totalmem() / (1024 * 1024)), macAway: async () => false, ...overrides }
+  deps = { totalMb: () => Math.round(os.totalmem() / (1024 * 1024)), macAway: defaultMacAway, ...overrides }
   setCompanionSearchReady(false, null)
 }

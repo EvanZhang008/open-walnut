@@ -27,8 +27,9 @@ import { createSearchIndex, type SearchIndex } from '../../src/lib/hybrid-search
 import * as wiring from '../../src/core/search/wiring.js'
 import * as store from '../../src/core/replication/search-replica-store.js'
 import {
-  syncSearchReplica, noteSearchDocChange, companionSearchStatus, _resetSearchReplicaForTesting, type SearchReplicaDeps,
+  syncSearchReplica, noteSearchDocChange, followerSearchStatuses, _resetSearchReplicaForTesting, type SearchReplicaDeps,
 } from '../../src/core/replication/search-replica.js'
+import type { ReplicaTarget } from '../../src/core/replication/replica-targets.js'
 import { companionSearchDecision, wireDocOf, AUTO_MIN_TOTAL_MB } from '../../src/core/replication/search-replica-wire.js'
 import { DigestMap } from '../../src/core/replication/search-digest.js'
 import { replicaKey, refOfReplicaKey } from '../../src/core/search/replica-refs.js'
@@ -48,13 +49,12 @@ let companionModel: string | null = 'fake/model'
 let calls: Array<{ op: string; n: number; partial?: boolean }> = []
 let olderCompanion = false
 
-const deps: SearchReplicaDeps = {
-  index: () => src,
-  model: () => 'fake/model',
-  home: MAC_HOME,
-  mode: async () => mode,
-  available: async () => true,
-  pause: async () => {},
+let companionAvailable = true
+const companion: ReplicaTarget = {
+  id: 'companion',
+  kind: 'companion',
+  label: 'Cloud companion',
+  available: async () => companionAvailable,
   post: async (payload) => {
     // The wire: the companion sees what JSON carries, never the primary's objects.
     const body = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
@@ -67,6 +67,24 @@ const deps: SearchReplicaDeps = {
     return r.ok ? { ok: true, reply: r } : { ok: false, outcome: 'failed', status: r.status, error: r.error }
   },
 }
+let targets: ReplicaTarget[] = [companion]
+
+const deps: SearchReplicaDeps = {
+  index: () => src,
+  model: () => 'fake/model',
+  home: MAC_HOME,
+  mode: async () => mode,
+  targets: () => targets,
+  pause: async () => {},
+}
+
+/** One round; the companion's result (the only follower unless a test adds one). */
+const round = async () => {
+  const all = await syncSearchReplica(deps)
+  const { target: _t, ...r } = all.find((x) => x.target === 'companion')!
+  return r
+}
+const companionStatus = () => followerSearchStatuses().find((s) => s.id === 'companion')
 
 function openSource(): SearchIndex {
   return createSearchIndex({
@@ -107,6 +125,8 @@ beforeEach(async () => {
   macAway = false
   companionModel = 'fake/model'
   olderCompanion = false
+  companionAvailable = true
+  targets = [companion]
   calls = []
   _resetSearchReplicaForTesting()
   await resetCompanion()
@@ -125,7 +145,7 @@ afterEach(async () => {
 
 describe('the companion copy of the search index', () => {
   it('the first round copies every doc with its vectors, file kinds at the companion\'s paths; the next is one status step', async () => {
-    const r = await syncSearchReplica(deps)
+    const r = await round()
     expect(r).toMatchObject({ action: 'synced', need: 4, sent: 4, inSync: true })
     expect(ops()).toEqual(['status', 'sync', 'put'])
 
@@ -137,19 +157,19 @@ describe('the companion copy of the search index', () => {
     expect(copyDoc('memory', path.join(WALNUT_HOME, 'memory', 'MEMORY.md'))).toBeDefined()
     expect(copy().db.prepare(`SELECT COUNT(*) AS n FROM doc WHERE ref LIKE '%loose.md'`).get()).toEqual({ n: 0 })
     expect(companionSearchReady()).toBe(true)
-    expect(companionSearchStatus()).toMatchObject({ state: 'ready', mode: 'auto', reason: 'auto', docs: 4 })
+    expect(companionStatus()).toMatchObject({ state: 'ready', mode: 'auto', reason: 'auto', docs: 4 })
 
     calls = []
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'in-sync' })
+    expect(await round()).toEqual({ action: 'in-sync' })
     expect(ops()).toEqual(['status'])
   })
 
   it('a change on the Mac is one small delta: the changed doc goes, a removed doc leaves', async () => {
-    await syncSearchReplica(deps)
+    await round()
     calls = []
     src.upsert({ kind: 'task', ref: 't-1', title: 'Rotate the cedar certificate, now with a new name', updatedAt: 6_000, identifiers: ['t-1'] })
     src.remove('session', 's-1')
-    const r = await syncSearchReplica(deps)
+    const r = await round()
     expect(r).toMatchObject({ action: 'synced', need: 1, sent: 1, removed: 1, inSync: true })
     expect(calls).toEqual([
       { op: 'status', n: 0 },
@@ -161,27 +181,27 @@ describe('the companion copy of the search index', () => {
     // Vectors the Mac has not computed yet do not arrive as stale ones.
     expect(vecRows(copy(), copyDoc('task', 't-1')!.id)).toEqual([])
     await drainBackfill(src)
-    await syncSearchReplica(deps)
+    await round()
     expect(vecRows(copy(), copyDoc('task', 't-1')!.id)).toEqual(vecRows(src, srcId('task', 't-1')))
   })
 
   it('the search path uses the copy only while it is ready: memory lane included, at the companion\'s paths', async () => {
     const { search } = await import('../../src/core/search.js')
     expect(await search('lantern', { types: ['memory'] })).toEqual([]) // no copy: no memory lane on a replica
-    await syncSearchReplica(deps)
+    await round()
     const hits = await search('lantern', { types: ['memory'] })
     expect(hits[0]).toMatchObject({ type: 'memory', path: path.join(WALNUT_HOME, 'notes', 'garden', 'lantern.md'), matchField: 'note' })
     const tasks = await search('cedar gateway', { types: ['task'] })
     expect(tasks[0]).toMatchObject({ type: 'task', taskId: 't-1', matchField: 'task' })
 
     mode = 'off'
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'off' })
+    expect(await round()).toEqual({ action: 'off' })
     expect(companionSearchReady()).toBe(false)
     expect(await search('lantern', { types: ['memory'] })).toEqual([])
   })
 
   it('a session hit from the copy names its task through the task copy (this box holds no record of it)', async () => {
-    await syncSearchReplica(deps)
+    await round()
     const tm = await import('../../src/core/task-manager.js')
     const now = new Date().toISOString()
     await tm.applyTaskReplica({ rows: [{
@@ -195,32 +215,32 @@ describe('the companion copy of the search index', () => {
 
   it('Auto without the memory copies nothing and says why; On copies anyway and says it is forced', async () => {
     totalMb = AUTO_MIN_TOTAL_MB - 1_700
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'off' })
+    expect(await round()).toEqual({ action: 'off' })
     expect(ops()).toEqual(['status'])
     expect(wiring.searchV2IndexOpen()).toBe(false)
-    expect(companionSearchStatus()).toMatchObject({ state: 'memory', totalMb: AUTO_MIN_TOTAL_MB - 1_700, autoMinMb: AUTO_MIN_TOTAL_MB })
+    expect(companionStatus()).toMatchObject({ state: 'memory', totalMb: AUTO_MIN_TOTAL_MB - 1_700, autoMinMb: AUTO_MIN_TOTAL_MB })
 
     mode = 'on'
-    expect(await syncSearchReplica(deps)).toMatchObject({ action: 'synced', inSync: true })
-    expect(companionSearchStatus()).toMatchObject({ state: 'ready', reason: 'forced' })
+    expect(await round()).toMatchObject({ action: 'synced', inSync: true })
+    expect(companionStatus()).toMatchObject({ state: 'ready', reason: 'forced' })
     expect(companionSearchReady()).toBe(true)
   })
 
   it('Off closes the copy; back on, the copy it kept matches at once (nothing sent again)', async () => {
-    await syncSearchReplica(deps)
+    await round()
     mode = 'off'
-    await syncSearchReplica(deps)
+    await round()
     expect(wiring.searchV2IndexOpen()).toBe(false)
-    expect(companionSearchStatus()?.state).toBe('off')
+    expect(companionStatus()?.state).toBe('off')
     mode = 'auto'
     calls = []
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'in-sync' })
+    expect(await round()).toEqual({ action: 'in-sync' })
     expect(ops()).toEqual(['status'])
     expect(companionSearchReady()).toBe(true)
   })
 
   it('a companion restart opens its copy at boot, before any round, and the first round finds it level', async () => {
-    await syncSearchReplica(deps)
+    await round()
     await resetCompanion()
     expect(companionSearchReady()).toBe(false)
     const started = store.startSearchReplicaStore({ totalMb: () => totalMb, macAway: async () => true, model: () => companionModel })
@@ -230,7 +250,7 @@ describe('the companion copy of the search index', () => {
       expect((await search('cedar gateway', { types: ['task'] }))[0]?.taskId).toBe('t-1')
       _resetSearchReplicaForTesting() // the Mac restarted too: it knows nothing of the last match
       calls = []
-      expect(await syncSearchReplica(deps)).toEqual({ action: 'in-sync' })
+      expect(await round()).toEqual({ action: 'in-sync' })
       expect(ops()).toEqual(['status'])
     } finally {
       await started.stop()
@@ -238,7 +258,7 @@ describe('the companion copy of the search index', () => {
   })
 
   it('a task written here while the Mac is away goes into the copy; the Mac\'s own version replaces it later', async () => {
-    await syncSearchReplica(deps)
+    await round()
     macAway = true
     const started = store.startSearchReplicaStore({ totalMb: () => totalMb, macAway: async () => macAway, model: () => companionModel })
     try {
@@ -253,7 +273,7 @@ describe('the companion copy of the search index', () => {
       // The Mac is back with the write relayed: its row wins and the copy is level again.
       macAway = false
       src.upsert({ kind: 'task', ref: task.id, title: 'Buy lantern oil for the porch', meta: 'Project: Home\n\nv1', updatedAt: 7_000, identifiers: [task.id] })
-      const r = await syncSearchReplica(deps)
+      const r = await round()
       expect(r).toMatchObject({ action: 'synced', inSync: true })
       expect(copyDoc('task', task.id)?.hash).toBe((src.db.prepare('SELECT hash FROM doc WHERE ref = ?').get(task.id) as { hash: string }).hash)
     } finally {
@@ -262,7 +282,7 @@ describe('the companion copy of the search index', () => {
   })
 
   it('while the Mac answers, a write here stays out of the copy (the Mac\'s round brings it)', async () => {
-    await syncSearchReplica(deps)
+    await round()
     const started = store.startSearchReplicaStore({ totalMb: () => totalMb, macAway: async () => false, model: () => companionModel })
     try {
       const tm = await import('../../src/core/task-manager.js')
@@ -272,7 +292,7 @@ describe('the companion copy of the search index', () => {
       await new Promise((r) => setTimeout(r, 3_000))
       expect(copyDoc('task', task.id)).toBeUndefined()
       calls = []
-      expect(await syncSearchReplica(deps)).toEqual({ action: 'in-sync' })
+      expect(await round()).toEqual({ action: 'in-sync' })
     } finally {
       await started.stop()
     }
@@ -280,17 +300,19 @@ describe('the companion copy of the search index', () => {
 
   it('Settings reads the last round from the index status payload', async () => {
     const { buildSearchIndexStatusPayload } = await import('../../src/web/routes/search-index.js')
-    expect((await buildSearchIndexStatusPayload()).companion).toBeNull()
-    await syncSearchReplica(deps)
-    expect((await buildSearchIndexStatusPayload()).companion).toMatchObject({ state: 'ready', mode: 'auto', docs: 4 })
+    expect((await buildSearchIndexStatusPayload()).followers).toEqual([])
+    await round()
+    expect((await buildSearchIndexStatusPayload()).followers).toMatchObject([
+      { id: 'companion', kind: 'companion', label: 'Cloud companion', state: 'ready', mode: 'auto', docs: 4 },
+    ])
   })
 
   it('a manifest that would remove most of the copy is refused, and the copy keeps answering', async () => {
     for (let i = 0; i < 210; i++) src.upsert({ kind: 'task', ref: `bulk-${i}`, title: `Bulk task ${i}`, updatedAt: 10_000 + i })
-    await syncSearchReplica(deps)
+    await round()
     expect(copy().stats().docs).toBe(214)
     await src.rebuildAll([]) // a damaged Mac index, emptied at boot
-    const r = await syncSearchReplica(deps)
+    const r = await round()
     expect(r).toEqual({ action: 'failed', error: 'manifest_removes_most_docs' })
     expect(copy().stats().docs).toBe(214)
     expect(companionSearchReady()).toBe(true)
@@ -298,22 +320,59 @@ describe('the companion copy of the search index', () => {
 
   it('an older companion rests the lane instead of failing every round', async () => {
     olderCompanion = true
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'unsupported' })
-    expect(companionSearchStatus()?.state).toBe('unsupported')
+    expect(await round()).toEqual({ action: 'unsupported' })
+    expect(companionStatus()?.state).toBe('unsupported')
     calls = []
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'unsupported' })
+    expect(await round()).toEqual({ action: 'unsupported' })
     expect(calls).toEqual([])
+  })
+
+  it('every follower gets its own round: an older host server rests, the companion still fills, a removed one leaves Settings', async () => {
+    const hostCalls: string[] = []
+    const host: ReplicaTarget = {
+      id: 'host:devbox', kind: 'host', label: 'devbox',
+      available: async () => true,
+      post: async (payload) => { hostCalls.push(String(payload.op)); return { ok: false, outcome: 'failed', status: 400, error: 'unknown_op' } },
+    }
+    targets = [host, companion]
+    const all = await syncSearchReplica(deps)
+    expect(all.map((r) => [r.target, r.action])).toEqual([['host:devbox', 'unsupported'], ['companion', 'synced']])
+    expect(followerSearchStatuses().map((s) => [s.id, s.state, s.label])).toEqual([
+      ['host:devbox', 'unsupported', 'devbox'], ['companion', 'ready', 'Cloud companion'],
+    ])
+    // The next round asks the resting host nothing and finds the companion level.
+    hostCalls.length = 0
+    calls = []
+    expect((await syncSearchReplica(deps)).map((r) => r.action)).toEqual(['unsupported', 'in-sync'])
+    expect(hostCalls).toEqual([])
+    expect(ops()).toEqual(['status'])
+    targets = [companion]
+    await syncSearchReplica(deps)
+    expect(followerSearchStatuses().map((s) => s.id)).toEqual(['companion'])
+  })
+
+  it('a follower that fails mid-round does not stop the next one', async () => {
+    const broken: ReplicaTarget = {
+      id: 'host:flaky', kind: 'host', label: 'flaky',
+      available: async () => true,
+      post: async () => { throw new Error('socket hang up') },
+    }
+    targets = [broken, companion]
+    const all = await syncSearchReplica(deps)
+    expect(all[0]).toMatchObject({ target: 'host:flaky', action: 'failed', error: 'socket hang up' })
+    expect(all[1]).toMatchObject({ target: 'companion', action: 'synced', inSync: true })
   })
 
   it('another model on the companion keeps the copy off; no companion means no step at all', async () => {
     companionModel = 'other/model'
     await resetCompanion()
-    expect(await syncSearchReplica(deps)).toEqual({ action: 'off' })
-    expect(companionSearchStatus()?.state).toBe('model')
+    expect(await round()).toEqual({ action: 'off' })
+    expect(companionStatus()?.state).toBe('model')
     calls = []
-    expect(await syncSearchReplica({ ...deps, available: async () => false })).toEqual({ action: 'unavailable' })
+    companionAvailable = false
+    expect(await round()).toEqual({ action: 'unavailable' })
     expect(calls).toEqual([])
-    expect(companionSearchStatus()?.state).toBe('no-companion')
+    expect(companionStatus()?.state).toBe('unavailable')
   })
 })
 

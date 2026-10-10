@@ -8,8 +8,8 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import {
-  companionSearchHelp, memoryWarningMessage, onNeedsMemoryWarning, showCompanionSearchRow,
-  type CompanionSearchMode, type CompanionSearchStatus,
+  DEFAULT_AUTO_MIN_MB, followerSearchHelp, gb, memoryWarningMessage, onNeedsMemoryWarning, visibleFollowers,
+  type CompanionSearchMode, type FollowerSearchStatus,
 } from './companion-search-copy';
 import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -72,8 +72,8 @@ interface IndexStatus {
   stores: Record<string, StoreStats | null>;
   status: 'ready' | 'indexing' | 'error';
   error: string | null;
-  /** The cloud companion's copy of this index; null before the first round. */
-  companion?: CompanionSearchStatus | null;
+  /** Each follower's copy of this index (the cloud companion, a server on a host); empty before the first round. */
+  followers?: FollowerSearchStatus[];
 }
 
 const COMPANION_MODE_OPTIONS: Array<{ value: CompanionSearchMode; label: string; testId: string }> = [
@@ -154,7 +154,8 @@ export function SearchSection({ config, onSave }: Props) {
 
   // Poll while indexing or while the companion's copy fills; visibleInterval
   // skips hidden tabs (a rebuild, or a first copy, takes minutes).
-  const polling = indexStatus?.status === 'indexing' || indexStatus?.companion?.state === 'syncing';
+  const followers = visibleFollowers(indexStatus?.followers);
+  const polling = indexStatus?.status === 'indexing' || followers.some((f) => f.state === 'syncing');
   useEffect(() => {
     pollRef.current?.();
     if (polling) pollRef.current = visibleInterval(fetchStatus, 5000);
@@ -167,9 +168,9 @@ export function SearchSection({ config, onSave }: Props) {
   useEffect(() => () => { for (const t of followUps.current) clearTimeout(t); }, []);
   const chooseCompanionMode = async (next: CompanionSearchMode) => {
     if (next === companionMode.value) return;
-    if (onNeedsMemoryWarning(next, indexStatus?.companion) && !(await confirm({
-      title: 'Turn on semantic search on the companion?',
-      message: memoryWarningMessage(indexStatus?.companion),
+    if (onNeedsMemoryWarning(next, followers) && !(await confirm({
+      title: 'Turn on semantic search anyway?',
+      message: memoryWarningMessage(followers),
       confirmLabel: 'Turn on',
     }))) return;
     companionMode.set(next);
@@ -207,8 +208,7 @@ export function SearchSection({ config, onSave }: Props) {
   const isBusy = indexStatus?.status === 'indexing';
   const tag = indexStatus ? STATUS_TAG[indexStatus.status] : null;
   const summary = indexStatus ? indexedSummary(indexStatus.stores ?? {}) : '';
-  const companion = indexStatus?.companion;
-  const companionHelp = showCompanionSearchRow(companion) ? companionSearchHelp(companion) : null;
+  const autoMinMb = followers[0]?.autoMinMb ?? DEFAULT_AUTO_MIN_MB;
 
   return (
     <SettingsSection id="search" title="Search">
@@ -247,23 +247,36 @@ export function SearchSection({ config, onSave }: Props) {
         )}
       </SettingsGroup>
 
-      {companionHelp && (
-        <SettingsGroup heading="Cloud companion" data-testid="companion-search-group">
+      {followers.length > 0 && (
+        <SettingsGroup heading="Other servers" data-testid="companion-search-group">
           <SettingsRow
             label="Semantic search while this Mac is away"
-            help={companionHelp.text || undefined}
-            state={companionHelp.warning ? 'warning' : undefined}
+            help={`Auto turns it on for each server with ${gb(autoMinMb)} of memory.`}
             error={companionMode.error ?? undefined}
             data-testid="companion-search-row"
             control={
               <SegmentedControl<CompanionSearchMode>
-                aria-label="Semantic search on the companion"
+                aria-label="Semantic search on other servers"
                 value={companionMode.value}
                 options={COMPANION_MODE_OPTIONS}
                 onChange={(v) => { void chooseCompanionMode(v); }}
               />
             }
           />
+          {followers.map((f) => {
+            const h = followerSearchHelp(f);
+            return (
+              <SettingsRow
+                key={f.id}
+                indent
+                label={f.label}
+                help={h.text || undefined}
+                state={h.warning ? 'warning' : undefined}
+                data-testid="follower-search-row"
+                data-follower={f.id}
+              />
+            );
+          })}
         </SettingsGroup>
       )}
 
