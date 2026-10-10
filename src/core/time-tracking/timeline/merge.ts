@@ -1,0 +1,397 @@
+/**
+ * The day timeline merge, PURE: sourced segments in, one serial timeline per day
+ * out. No I/O, no clock (the caller passes `nowMs`).
+ *
+ * The rule a reader must be able to repeat: for every minute, the ACTIVITY
+ * segment with the highest source priority wins (walnut 100 > Mac apps 90 >
+ * sleep 70 > workouts 60 > calendar 50; a plugin's ≤ 80, default 40); ties go to
+ * measured over planned over inferred, then to the later-starting, shorter
+ * segment (the more specific one). PLACE segments never compete: they annotate.
+ *
+ * Then the minutes are made readable:
+ *   - screen time (walnut + app) joins into one block across gaps up to
+ *     SCREEN_GAP_MS, with its top tasks and apps inside; a short non-screen piece
+ *     inside such a block is absorbed (a calendar meeting the user sat through on
+ *     Zoom is listed in `during`, not as a 30-second sliver);
+ *   - other pieces of the same source, kind and label join across 5 minutes;
+ *   - a hole of GAP_MIN_MS or more becomes a `gap` block (unknown, with the place
+ *     the user was at, when Places knew it).
+ */
+
+import { localIso } from '../../health/day-key.js'
+import { isWorkday, workMsOf, WEEKDAY_NAMES, type WorkHours } from '../work-hours.js'
+import type { SourcedSegment, TimelineConfidence } from './types.js'
+
+export const SCREEN_KINDS: ReadonlySet<string> = new Set(['walnut', 'app'])
+const PLANNED_KINDS: ReadonlySet<string> = new Set(['meeting', 'plan'])
+export const SCREEN_GAP_MS = 10 * 60_000
+export const SAME_JOIN_MS = 5 * 60_000
+export const GAP_MIN_MS = 15 * 60_000
+/** A planned block shorter than this is not checked against what happened. */
+const PLAN_MIN_MS = 10 * 60_000
+const MIN = 60_000
+const minutes = (ms: number): number => Math.round(ms / MIN)
+
+const CONFIDENCE_RANK: Record<TimelineConfidence, number> = { measured: 3, planned: 2, inferred: 1 }
+
+export interface DayBounds { date: string; startMs: number; endMs: number }
+
+interface Piece { startMs: number; endMs: number; seg: SourcedSegment }
+
+/** Prefer: priority, confidence, later start, shorter. */
+function better(a: SourcedSegment, b: SourcedSegment): boolean {
+  if (a.priority !== b.priority) return a.priority > b.priority
+  const ca = CONFIDENCE_RANK[a.confidence] ?? 0
+  const cb = CONFIDENCE_RANK[b.confidence] ?? 0
+  if (ca !== cb) return ca > cb
+  if (a.startMs !== b.startMs) return a.startMs > b.startMs
+  return a.endMs - a.startMs < b.endMs - b.startMs
+}
+
+function sameItem(a: SourcedSegment, b: SourcedSegment): boolean {
+  return a.source === b.source && a.kind === b.kind && a.label === b.label
+    && (a.detail?.taskId ?? null) === (b.detail?.taskId ?? null)
+}
+
+/** Clip to [startMs, endMs), drop empties. */
+function clip(segs: readonly SourcedSegment[], startMs: number, endMs: number): SourcedSegment[] {
+  const out: SourcedSegment[] = []
+  for (const s of segs) {
+    const a = Math.max(s.startMs, startMs)
+    const b = Math.min(s.endMs, endMs)
+    if (b > a) out.push({ ...s, startMs: a, endMs: b })
+  }
+  return out
+}
+
+/** One winner per elementary interval, adjacent pieces of one item joined. */
+export function resolveActivity(segs: readonly SourcedSegment[]): Piece[] {
+  const sorted = [...segs].sort((a, b) => a.startMs - b.startMs)
+  const points = [...new Set(sorted.flatMap((s) => [s.startMs, s.endMs]))].sort((a, b) => a - b)
+  const pieces: Piece[] = []
+  let active: SourcedSegment[] = []
+  let next = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    const t = points[i]!
+    const u = points[i + 1]!
+    active = active.filter((s) => s.endMs > t)
+    while (next < sorted.length && sorted[next]!.startMs <= t) {
+      if (sorted[next]!.endMs > t) active.push(sorted[next]!)
+      next++
+    }
+    if (active.length === 0) continue
+    let best = active[0]!
+    for (const s of active) if (better(s, best)) best = s
+    const last = pieces[pieces.length - 1]
+    if (last && last.endMs === t && (last.seg === best || sameItem(last.seg, best))) last.endMs = u
+    else pieces.push({ startMs: t, endMs: u, seg: best })
+  }
+  return pieces
+}
+
+export interface TimelineBlock {
+  start: string
+  end: string
+  min: number
+  kind: string
+  label: string
+  source: string
+  confidence: TimelineConfidence
+  /** Where the user was for most of it (Places), when known. */
+  place?: string
+  /** Screen blocks: the minutes actually tracked inside, and what they were. */
+  trackedMin?: number
+  top?: Array<{ kind: string; label: string; min: number; taskId?: string }>
+  /** Calendar entries this block sat inside (a meeting the user was on screen for). */
+  during?: string[]
+  detail?: Record<string, string | number | boolean | null>
+  flags?: string[]
+}
+
+interface ScreenBlock { startMs: number; endMs: number; pieces: Piece[] }
+
+function screenBlocks(pieces: readonly Piece[]): ScreenBlock[] {
+  const out: ScreenBlock[] = []
+  for (const p of pieces) {
+    if (!SCREEN_KINDS.has(p.seg.kind)) continue
+    const last = out[out.length - 1]
+    if (last && p.startMs - last.endMs <= SCREEN_GAP_MS) { last.endMs = Math.max(last.endMs, p.endMs); last.pieces.push(p) } else out.push({ startMs: p.startMs, endMs: p.endMs, pieces: [p] })
+  }
+  return out
+}
+
+/** Parts of [a, b) outside every block span. */
+function outside(a: number, b: number, spans: readonly ScreenBlock[]): Array<[number, number]> {
+  let parts: Array<[number, number]> = [[a, b]]
+  for (const s of spans) {
+    if (s.endMs <= a || s.startMs >= b) continue
+    const nextParts: Array<[number, number]> = []
+    for (const [x, y] of parts) {
+      if (s.endMs <= x || s.startMs >= y) { nextParts.push([x, y]); continue }
+      if (s.startMs > x) nextParts.push([x, s.startMs])
+      if (s.endMs < y) nextParts.push([s.endMs, y])
+    }
+    parts = nextParts
+  }
+  return parts
+}
+
+function overlap(a0: number, a1: number, b0: number, b1: number): number {
+  return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0))
+}
+
+function placeFor(startMs: number, endMs: number, places: readonly SourcedSegment[]): string | undefined {
+  let best: SourcedSegment | undefined
+  let bestMs = 0
+  for (const p of places) {
+    if (p.kind === 'travel') continue
+    const o = overlap(startMs, endMs, p.startMs, p.endMs)
+    if (o > bestMs) { best = p; bestMs = o }
+  }
+  return best && bestMs >= (endMs - startMs) / 2 ? best.label : undefined
+}
+
+const STOPWORDS = new Set(['with', 'from', 'that', 'this', 'into', 'for', 'and', 'the', 'via', 'booked', 'block', 'meeting', 'review', 'sync', 'weekly', 'daily'])
+
+function tokens(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !STOPWORDS.has(w)))
+}
+
+const MEETING_APP = /zoom|chime|teams|webex|facetime|meet\.google|meetings\./i
+
+export interface PlanCheck {
+  title: string
+  kind: string
+  start: string
+  end: string
+  min: number
+  /** Measured screen minutes inside the block. */
+  screenMin: number
+  topTasks: Array<{ taskId: string; title: string; min: number }>
+  topApps: Array<{ app: string; min: number }>
+  /** The task the block names (by id, or by shared title words), with its minutes. */
+  matched?: { taskId: string; title: string; minInBlock: number; minThatDay: number; by: 'id' | 'title' }
+  verdict: 'kept' | 'partly' | 'other_work' | 'meeting_on_screen' | 'not_on_screen'
+}
+
+function planChecks(day: DayBounds, planned: readonly SourcedSegment[], pieces: readonly Piece[], tz: string): PlanCheck[] {
+  const dayTaskMs = new Map<string, number>()
+  for (const p of pieces) {
+    const id = p.seg.detail?.taskId
+    if (p.seg.kind === 'walnut' && typeof id === 'string') dayTaskMs.set(id, (dayTaskMs.get(id) ?? 0) + (p.endMs - p.startMs))
+  }
+  const out: PlanCheck[] = []
+  for (const ev of planned) {
+    if (ev.endMs - ev.startMs < PLAN_MIN_MS) continue
+    const tasks = new Map<string, { title: string; ms: number }>()
+    const apps = new Map<string, number>()
+    let screenMs = 0
+    for (const p of pieces) {
+      if (!SCREEN_KINDS.has(p.seg.kind)) continue
+      const o = overlap(ev.startMs, ev.endMs, p.startMs, p.endMs)
+      if (o <= 0) continue
+      screenMs += o
+      const id = p.seg.detail?.taskId
+      if (p.seg.kind === 'walnut') {
+        const key = typeof id === 'string' ? id : ''
+        const t = tasks.get(key) ?? { title: p.seg.label, ms: 0 }
+        t.ms += o
+        tasks.set(key, t)
+      } else apps.set(p.seg.label, (apps.get(p.seg.label) ?? 0) + o)
+    }
+    const blockMs = ev.endMs - ev.startMs
+    const title = ev.label
+    // Match the block to a task: a task id written in the title, else shared title words.
+    let matched: PlanCheck['matched']
+    const idInTitle = /\b([a-z0-9]{8}-[a-z0-9]{4})\b/.exec(title)?.[1]
+    const evWords = tokens(title)
+    let bestScore = 0
+    for (const [taskId, t] of tasks) {
+      if (!taskId) continue
+      const by: 'id' | 'title' | null = idInTitle && taskId === idInTitle ? 'id' : null
+      const shared = [...tokens(t.title)].filter((w) => evWords.has(w)).length
+      const score = by ? 100 : shared >= Math.min(2, evWords.size) && shared > 0 ? shared : 0
+      if (score > bestScore) {
+        bestScore = score
+        matched = { taskId, title: t.title, minInBlock: minutes(t.ms), minThatDay: minutes(dayTaskMs.get(taskId) ?? t.ms), by: by ?? 'title' }
+      }
+    }
+    const meetingApps = [...apps.entries()].filter(([app]) => MEETING_APP.test(app)).reduce((s, [, ms]) => s + ms, 0)
+    const matchedMs = matched ? matched.minInBlock * MIN : 0
+    const verdict: PlanCheck['verdict'] = ev.kind === 'meeting'
+      ? (meetingApps >= blockMs * 0.3 ? 'meeting_on_screen' : screenMs >= blockMs * 0.5 ? 'other_work' : 'not_on_screen')
+      : matchedMs >= blockMs * 0.5 ? 'kept'
+        : matchedMs > 0 ? 'partly'
+          : screenMs >= blockMs * 0.3 ? 'other_work' : 'not_on_screen'
+    out.push({
+      title, kind: ev.kind,
+      start: localIso(Math.max(ev.startMs, day.startMs), tz), end: localIso(Math.min(ev.endMs, day.endMs), tz),
+      min: minutes(blockMs), screenMin: minutes(screenMs),
+      topTasks: [...tasks.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 3)
+        .map(([taskId, t]) => ({ taskId, title: t.title, min: minutes(t.ms) })),
+      topApps: [...apps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([app, ms]) => ({ app, min: minutes(ms) })),
+      ...(matched ? { matched } : {}),
+      verdict,
+    })
+  }
+  return out
+}
+
+/** Same-start, same-end calendar entries where one title holds the other are one entry (room bookings). */
+function dedupePlanned(planned: SourcedSegment[]): SourcedSegment[] {
+  const out: SourcedSegment[] = []
+  for (const ev of planned.sort((a, b) => a.startMs - b.startMs || a.label.length - b.label.length)) {
+    const twin = out.find((o) => o.startMs === ev.startMs && o.endMs === ev.endMs
+      && (o.label.toLowerCase().includes(ev.label.toLowerCase()) || ev.label.toLowerCase().includes(o.label.toLowerCase())))
+    if (!twin) out.push(ev)
+  }
+  return out
+}
+
+export interface DayTimeline {
+  date: string
+  weekday: string
+  workday: boolean
+  /** True for today: the day is cut at now. */
+  partial?: true
+  blocks: TimelineBlock[]
+  places: TimelineBlock[]
+  plan: PlanCheck[]
+  summary: Record<string, unknown>
+}
+
+export interface MergeOptions {
+  tz: string
+  workHours: WorkHours
+  nowMs: number
+}
+
+function toBlock(startMs: number, endMs: number, seg: SourcedSegment, tz: string, places: readonly SourcedSegment[]): TimelineBlock {
+  const place = seg.lane === 'activity' ? placeFor(startMs, endMs, places) : undefined
+  return {
+    start: localIso(startMs, tz), end: localIso(endMs, tz), min: minutes(endMs - startMs),
+    kind: seg.kind, label: seg.label, source: seg.source, confidence: seg.confidence,
+    ...(place ? { place } : {}),
+    ...(seg.detail && Object.keys(seg.detail).length ? { detail: seg.detail } : {}),
+    ...(seg.flags?.length ? { flags: seg.flags } : {}),
+  }
+}
+
+/** Merge one day. `segments` may extend past the day: they are clipped here. */
+export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], opts: MergeOptions): DayTimeline {
+  const end = Math.min(day.endMs, Math.max(day.startMs, opts.nowMs))
+  const activity = clip(segments.filter((s) => s.lane === 'activity'), day.startMs, end)
+  const places = clip(segments.filter((s) => s.lane === 'place'), day.startMs, end)
+  const planned = dedupePlanned(activity.filter((s) => PLANNED_KINDS.has(s.kind)))
+  const pieces = resolveActivity(activity)
+  const screens = screenBlocks(pieces)
+  const blocks: Array<TimelineBlock & { _s: number; _e: number }> = []
+
+  for (const sb of screens) {
+    const byItem = new Map<string, { kind: string; label: string; ms: number; taskId?: string }>()
+    let tracked = 0
+    let walnutMs = 0
+    for (const p of sb.pieces) {
+      const ms = p.endMs - p.startMs
+      tracked += ms
+      if (p.seg.kind === 'walnut') walnutMs += ms
+      const taskId = typeof p.seg.detail?.taskId === 'string' ? p.seg.detail.taskId : undefined
+      const key = `${p.seg.kind}\u0000${taskId ?? p.seg.label}`
+      const it = byItem.get(key) ?? { kind: p.seg.kind, label: p.seg.label, ms: 0, ...(taskId ? { taskId } : {}) }
+      it.ms += ms
+      byItem.set(key, it)
+    }
+    const top = [...byItem.values()].sort((a, b) => b.ms - a.ms).slice(0, 5)
+    const during = planned
+      .filter((ev) => overlap(sb.startMs, sb.endMs, ev.startMs, ev.endMs) >= Math.min(5 * MIN, (ev.endMs - ev.startMs) / 2))
+      .map((ev) => ev.label)
+    const place = placeFor(sb.startMs, sb.endMs, places)
+    blocks.push({
+      _s: sb.startMs, _e: sb.endMs,
+      start: localIso(sb.startMs, opts.tz), end: localIso(sb.endMs, opts.tz), min: minutes(sb.endMs - sb.startMs),
+      kind: 'screen',
+      label: top.slice(0, 2).map((t) => `${t.label} ${minutes(t.ms)}m`).join(', '),
+      source: walnutMs === tracked ? 'walnut' : walnutMs === 0 ? 'mac-apps' : 'walnut+mac-apps',
+      confidence: 'measured',
+      ...(place ? { place } : {}),
+      trackedMin: minutes(tracked),
+      top: top.map((t) => ({ kind: t.kind, label: t.label, min: minutes(t.ms), ...(t.taskId ? { taskId: t.taskId } : {}) })),
+      ...(during.length ? { during: [...new Set(during)] } : {}),
+    })
+  }
+
+  // Non-screen pieces, outside every screen block, joined per item.
+  const others: Piece[] = []
+  for (const p of pieces) {
+    if (SCREEN_KINDS.has(p.seg.kind)) continue
+    for (const [a, b] of outside(p.startMs, p.endMs, screens)) {
+      const last = others[others.length - 1]
+      if (last && sameItem(last.seg, p.seg) && a - last.endMs <= SAME_JOIN_MS) last.endMs = b
+      else others.push({ startMs: a, endMs: b, seg: p.seg })
+    }
+  }
+  for (const p of others) {
+    if (p.endMs - p.startMs < MIN) continue
+    blocks.push({ ...toBlock(p.startMs, p.endMs, p.seg, opts.tz, places), _s: p.startMs, _e: p.endMs })
+  }
+  blocks.sort((a, b) => a._s - b._s)
+
+  // Holes long enough to ask about.
+  const withGaps: Array<TimelineBlock & { _s: number; _e: number }> = []
+  let cursor = day.startMs
+  const pushGap = (a: number, b: number): void => {
+    if (b - a < GAP_MIN_MS) return
+    const place = placeFor(a, b, places)
+    const travel = places.find((p) => p.kind === 'travel' && overlap(a, b, p.startMs, p.endMs) >= (b - a) / 2)
+    withGaps.push({
+      _s: a, _e: b, start: localIso(a, opts.tz), end: localIso(b, opts.tz), min: minutes(b - a),
+      kind: 'gap', label: travel ? `travel? ${travel.label}` : place ? `away from the Mac (at ${place})` : 'nothing recorded',
+      source: 'timeline', confidence: 'inferred', ...(place ? { place } : {}),
+    })
+  }
+  for (const b of blocks) {
+    pushGap(cursor, b._s)
+    withGaps.push(b)
+    cursor = Math.max(cursor, b._e)
+  }
+  pushGap(cursor, end)
+
+  // Summary: minutes per kind, whole day and work hours.
+  const workday = isWorkday(day.date, opts.workHours)
+  const sum = (pred: (p: Piece) => boolean, work = false): number => minutes(pieces.filter(pred)
+    .reduce((s, p) => s + (work ? workMsOf(p.startMs, p.endMs, opts.workHours) : p.endMs - p.startMs), 0))
+  const shown = (kind: string, work = false): number => minutes(others.filter((p) => p.seg.kind === kind)
+    .reduce((s, p) => s + (work ? workMsOf(p.startMs, p.endMs, opts.workHours) : p.endMs - p.startMs), 0))
+  const gapMs = (work: boolean): number => withGaps.filter((b) => b.kind === 'gap')
+    .reduce((s, b) => s + (work ? workMsOf(b._s, b._e, opts.workHours) : b._e - b._s), 0)
+  const byPlace: Record<string, number> = {}
+  for (const p of places) {
+    const key = p.kind === 'travel' ? 'travel (inferred)' : p.label
+    byPlace[key] = (byPlace[key] ?? 0) + minutes(p.endMs - p.startMs)
+  }
+  const kindsSeen = [...new Set(others.map((p) => p.seg.kind))].filter((k) => !PLANNED_KINDS.has(k))
+  const view = (work: boolean): Record<string, number> => ({
+    screenMin: sum((p) => SCREEN_KINDS.has(p.seg.kind), work),
+    walnutMin: sum((p) => p.seg.kind === 'walnut', work),
+    appMin: sum((p) => p.seg.kind === 'app', work),
+    plannedNotOnScreenMin: minutes(others.filter((p) => PLANNED_KINDS.has(p.seg.kind))
+      .reduce((s, p) => s + (work ? workMsOf(p.startMs, p.endMs, opts.workHours) : p.endMs - p.startMs), 0)),
+    ...Object.fromEntries(kindsSeen.map((k) => [`${k}Min`, shown(k, work)])),
+    gapMin: minutes(gapMs(work)),
+  })
+
+  return {
+    date: day.date,
+    weekday: WEEKDAY_NAMES[new Date(day.startMs + 12 * 3_600_000).getDay()]!,
+    workday,
+    ...(end < day.endMs ? { partial: true as const } : {}),
+    blocks: withGaps.map(({ _s, _e, ...b }) => b),
+    places: places.map((p) => toBlock(p.startMs, p.endMs, p, opts.tz, [])),
+    plan: planChecks(day, planned, pieces, opts.tz),
+    summary: {
+      wholeDay: view(false),
+      ...(workday ? { workHours: view(true) } : {}),
+      ...(Object.keys(byPlace).length ? { byPlaceMin: byPlace } : {}),
+    },
+  }
+}

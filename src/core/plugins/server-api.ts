@@ -56,6 +56,8 @@ import { HOOK_POINT_DOMAIN, type HookFilter, type HookPoint } from '../session-h
 import '../../ops/index.js'
 import { executeOp } from '../../ops/executor.js'
 import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type WalnutOp } from '../../ops/registry.js'
+import { registerTimelineSource } from '../time-tracking/timeline/registry.js'
+import type { TimelineSourceSpec } from '../time-tracking/timeline/types.js'
 import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import { labelPluginFetch } from './plugin-fetch-origin.js'
@@ -163,6 +165,24 @@ interface PluginOpSpec {
  * a sentence cut in half is worse than making the author shorten it.
  */
 const MAX_OP_DESCRIPTION = 1024
+
+/**
+ * A plugin op that returns JSON TEXT answers as the parsed value. Plugins often reuse
+ * one implementation for a model tool (whose result is text) and an op, so the op
+ * handed back a string, and every surface showed `{"value":"{\n  \"status\"..."}`:
+ * a caller had to parse the answer a second time, and most did not (2026-10-09,
+ * calendar_query). Any other string (prose, an id) is returned as it is.
+ */
+export function structuredOpResult(out: unknown): unknown {
+  if (typeof out !== 'string') return out
+  const text = out.trim()
+  if (!(text.startsWith('{') && text.endsWith('}')) && !(text.startsWith('[') && text.endsWith(']'))) return out
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return out
+  }
+}
 
 /** A plugin curating the agent-facing surface is fine; a plugin flooding it is not. */
 const MAX_OPS_PER_PLUGIN = 24
@@ -1128,7 +1148,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           input: jsonSchemaToZodShape(spec.inputSchema),
           // A plugin op is in-process by construction: it never gets an HTTP `bind`,
           // so `call` is the only way it can reach a route, exactly like a core handler.
-          handler: (args, call) => spec.handler(args, { call }),
+          handler: async (args, call) => structuredOpResult(await spec.handler(args, { call })),
           ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
           tags: {
             readonly,
@@ -1137,6 +1157,14 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           },
         }
         return own(definePluginOp(pluginId, op))
+      },
+      // One more source for the day timeline (time_timeline): the host prefixes the id
+      // with the plugin id and caps the priority, so a plugin can add minutes but
+      // never outrank what the Mac measured (core/time-tracking/timeline/registry.ts).
+      timelineSource(spec: TimelineSourceSpec) {
+        assertLive(`registry.timelineSource("${String(spec?.id)}")`)
+        const id = namespacePluginId(pluginId, String(spec?.id ?? ''))
+        return own(registerTimelineSource(pluginId, { ...spec, id }))
       },
       wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>) {
         assertLive(`registry.wsMethod("${id}")`)

@@ -80,7 +80,9 @@ export function resolveBulkGetFields(requested: readonly string[] | undefined): 
   const resolved: BulkGetField[] = [];
   for (const raw of requested) {
     const name = raw.trim().toLowerCase();
-    if (name === '') continue;
+    // `id` rides on every row anyway. Asking for it is natural ("id,title,project"),
+    // so it is accepted and skipped instead of failing the whole batch.
+    if (name === '' || name === 'id') continue;
     // Retired 2026-09-01. Named explicitly instead of falling into the generic
     // "unknown field" error because it was a valid field for a long time: the
     // caller needs to be told what replaced it, not just that it is gone.

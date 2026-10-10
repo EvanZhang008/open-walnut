@@ -54,6 +54,13 @@ describe('resolveBulkGetFields', () => {
     expect(() => resolveBulkGetFields(['nope'])).toThrow(/Unknown field "nope"/);
   });
 
+  it('accepts `id` in the list (every row carries it) instead of failing the batch', () => {
+    expect(resolveBulkGetFields(['id', 'title', 'project', 'created_at'])).toEqual(['title', 'project', 'created_at']);
+    expect(resolveBulkGetFields(['ID', ' title '])).toEqual(['title']);
+    const { items } = bulkGetFromTasks(['a1'], [task({ id: 'a1' })], ['id', 'title']);
+    expect(items[0]).toEqual({ id: 'a1', title: 'Task a1' });
+  });
+
   it('rejects the retired `status` field and names its replacement', () => {
     // It was valid for a long time, so the generic "unknown field" text is not
     // enough — a caller needs to be told what to use instead, in the error.

@@ -998,6 +998,10 @@ export interface PluginOpDefinition {
   destructive?: boolean
   /** Deadline for EACH `ctx.call` request, not for the handler as a whole. */
   timeoutMs?: number
+  /**
+   * Return a value (object or array). A string holding JSON (a tool's text result reused
+   * here) is parsed by the host, so every surface shows the object, not escaped text.
+   */
   handler(
     args: Record<string, unknown>,
     ctx: {
@@ -1129,6 +1133,55 @@ export interface PluginSkillDefinition {
   directory: string
 }
 
+/**
+ * One more source for the day timeline (`time_timeline`): where the user's time went,
+ * for minutes the host cannot see itself (a fitness app, a car, a desk sensor). The host
+ * names it `<pluginId>:<id>`, runs `segments(range)` under a deadline whenever a timeline
+ * is built, merges what it returns with Walnut's own sources, and lists it in the
+ * answer's `sources[]` (a throw or a late answer shows there as unavailable, never as
+ * zero). For every minute the highest priority wins: Walnut attention 100, Mac apps 90,
+ * sleep 70, workouts 60, calendar 50; a plugin source defaults to 40 and is capped at 80.
+ * `place` segments say where the user was and never compete with activity.
+ */
+export interface PluginTimelineSegment {
+  /** ISO-8601 instant or epoch ms. */
+  start: string | number
+  end: string | number
+  /** e.g. `workout`, `drive`, `meeting`: shown as given. */
+  kind: string
+  /** A few words a person reads: "Morning run", "Office". */
+  label: string
+  /** `measured` (a sensor saw it), `planned`, or `inferred` (worked out). */
+  confidence: 'measured' | 'planned' | 'inferred'
+  lane?: 'activity' | 'place'
+  /** Small facts only (ids, a category); never raw samples or coordinates. At most 8 keys. */
+  detail?: Record<string, string | number | boolean | null>
+  /** Warnings a report must repeat. At most 4. */
+  flags?: string[]
+}
+
+export interface PluginTimelineSourceDefinition {
+  /** Local id; the host prefixes the plugin id. */
+  id: string
+  label: string
+  lane: 'activity' | 'place'
+  /** 1..80, default 40. */
+  priority?: number
+  segments(range: {
+    /** First and last local date (YYYY-MM-DD), inclusive. */
+    from: string
+    to: string
+    /** [startMs, endMs): local midnight of `from` to local midnight after `to`. */
+    startMs: number
+    endMs: number
+    tz: string
+  }): Promise<{
+    segments: PluginTimelineSegment[]
+    /** `available: false` = this source could not see the range (off, signed out). `note` says why. */
+    coverage?: { available: boolean; note?: string }
+  }>
+}
+
 export interface RegistryService {
   sync(adapter: PluginIntegrationSync): Disposable
   sourceClaim(
@@ -1142,6 +1195,8 @@ export interface RegistryService {
   extIndex(spec: PluginExtIndexSpec): Disposable
   tool(spec: PluginToolSpec): Disposable
   op(definition: PluginOpDefinition): Disposable
+  /** Add a source to the day timeline (see PluginTimelineSourceDefinition). */
+  timelineSource(definition: PluginTimelineSourceDefinition): Disposable
   wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>): Disposable
   agent(definition: PluginAgentDefinition): Disposable
   provider(id: string, adapter: PluginProviderAdapter): Disposable

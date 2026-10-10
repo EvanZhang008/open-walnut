@@ -1305,6 +1305,16 @@ export interface Config {
        */
       include_this_mac?: boolean;
     };
+    /**
+     * The user's work hours, local time: every time report shows the whole day AND
+     * these hours (src/core/time-tracking/work-hours.ts). Default 09:00-18:00,
+     * Monday to Friday. `days` takes weekday names (mon … sun).
+     */
+    work_hours?: {
+      start?: string;
+      end?: string;
+      days?: Array<string | number>;
+    };
   };
   tools?: {
     exec?: {

@@ -27,7 +27,7 @@ export function isPlacesAction(value: string): value is PlacesAction {
 export function emptyPlacesStatus(): Record<string, unknown> {
   return {
     recording: false, phone: { enabled: null, access: null, reportedAt: null },
-    visitCount: 0, firstVisitAt: null, lastVisitAt: null, lastUploadAt: null, tz: systemTz(), message: PLACES_NOT_ON,
+    visitCount: 0, firstVisitAt: null, lastVisitAt: null, lastUploadAt: null, tz: systemTz(), labels: [], message: PLACES_NOT_ON,
   }
 }
 

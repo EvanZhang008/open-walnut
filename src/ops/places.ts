@@ -60,3 +60,26 @@ defineOp({
   localOnlyMessage: PLACES_LOCAL_ONLY_MESSAGE,
   tags: PLACES_TAGS,
 })
+
+defineOp({
+  name: 'places_label_set',
+  title: 'Name a place (home, office, gym)',
+  description:
+    'Give a place the user\'s own name, once: every visit within radius_m (default 150 m) of it then reads with that '
+    + 'label in places_visits and time_timeline ("office 9:20-18:05" instead of an address). Point it at a visit '
+    + '(`visit_id` from places_visits) or at text in a visit\'s place name or address (`place`). `kind` is home, office, '
+    + 'gym, school, shop, food, outdoors or other (a label named like a kind gets that kind). `remove:true` deletes the '
+    + 'label. Only for a name the user gave or confirmed: ask "is the place at 1 Main St your office?" rather than guessing. '
+    + 'Labels stay on this Mac; places_status lists them. ' + PRIVACY,
+  input: {
+    label: z.string().min(1).max(40).describe('The user\'s name for the place, e.g. home, office, gym, Mom\'s'),
+    kind: z.enum(['home', 'office', 'gym', 'school', 'shop', 'food', 'outdoors', 'other']).optional().describe('What kind of place'),
+    visit_id: z.string().max(100).optional().describe('A visit id from places_visits whose point the label takes'),
+    place: z.string().max(100).optional().describe('Or: text in a visit\'s place name or address (the latest match is used)'),
+    radius_m: z.number().min(20).max(2000).optional().describe('How far from the point still counts as this place (default 150)'),
+    remove: z.boolean().optional().describe('true: delete this label'),
+  },
+  bind: { method: 'POST', path: '/api/places/labels' },
+  localOnlyMessage: PLACES_LOCAL_ONLY_MESSAGE,
+  tags: { readonly: false, remote: 'deny', localHostGateway: true, primaryOnly: true },
+})

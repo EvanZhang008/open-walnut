@@ -23,6 +23,10 @@ export function placesDbPath(): string {
   return path.join(placesDir(), 'places.sqlite')
 }
 
+// place_labels: the user's own names for places ("home", "office"), set once by
+// asking an agent (labels.ts). Kept here, not in the config, because a label is a
+// point on a map and the config rides the data sync; this file never leaves the Mac.
+//
 // A visit arrives twice from iOS (on arrival, then on departure) under one id the
 // phone keeps, so the row is upserted. arrival_ms is NULL when iOS did not see the
 // arrival; departure_ms is NULL while the user is still there.
@@ -43,6 +47,16 @@ CREATE TABLE IF NOT EXISTS visits (
 CREATE INDEX IF NOT EXISTS visits_arrival ON visits(arrival_ms);
 CREATE INDEX IF NOT EXISTS visits_departure ON visits(departure_ms);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS place_labels (
+  key TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  radius_m REAL NOT NULL,
+  name TEXT,
+  updated_ms INTEGER NOT NULL
+);
 `
 
 let db: DatabaseType | null = null

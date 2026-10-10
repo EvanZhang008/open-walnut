@@ -51,5 +51,6 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 ## Where to get facts
 
 - Instance state: use the task, project, search, and `task_history` tools.
+- Where the user's time went: `time_report` (a range) and `time_timeline` (one day from every source); the `walnut-time-review` skill explains the measurements.
 - Exact input fields: use the current tool schema or `walnut tools help <op>`.
 - Do not inspect Walnut SQLite files or source code to rediscover normal product behavior.

@@ -2573,9 +2573,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', `priority must be one of: ${VALID_PRIORITIES.join(', ')}`)
       return
     }
-    // '' = explicit clear (same as the web PATCH — updateTask normalizes '' to undefined).
-    if (dueDate !== undefined && !(typeof dueDate === 'string' && (dueDate === '' || isValidIsoDate(dueDate)))) {
-      sendError(res, 400, 'bad_request', 'due_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime) or "" to clear')
+    // '' or null = explicit clear, the same two markers start_date and end_date take.
+    if (dueDate !== undefined && !isDateFieldValid(dueDate)) {
+      sendError(res, 400, 'bad_request', 'due_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime), or "" / null to clear')
       return
     }
     if (project !== undefined && typeof project !== 'string') {
@@ -2629,10 +2629,19 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 501, 'not_supported_cloud', 'Leaders and workers are set on the primary box only')
       return
     }
+    // pinned / focus_tier: the pinned board's own write, applied after the fields
+    // below. They used to be dropped with a 200 (task-pin-patch.ts).
+    const { parsePinPatch, checkPinPatch, applyPinPatch } = await import('./task-pin-patch.js')
+    const pinParse = parsePinPatch(req.body as Record<string, unknown> | undefined)
+    if (!pinParse.ok) {
+      sendError(res, pinParse.status, 'bad_request', pinParse.error)
+      return
+    }
+    const pinPatch = pinParse.patch
     if (status === undefined && phase === undefined && waitUntil === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && endDate === undefined && project === undefined && title === undefined
-        && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/parent_task_id)')
+        && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined && !pinPatch) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/parent_task_id/pinned/focus_tier)')
       return
     }
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
@@ -2735,6 +2744,23 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         parentLink = { current, leader, previous }
       }
     }
+    // The pin preconditions are judged here too, before the first write below.
+    let pinTarget: TaskRow | undefined
+    if (pinPatch) {
+      try {
+        pinTarget = await tm.getTask(id)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (/No task found matching/i.test(msg)) { sendError(res, 404, 'not_found', `Task not found: ${id}`); return }
+        if (/Ambiguous ID prefix/i.test(msg)) { sendError(res, 400, 'bad_request', msg); return }
+        throw err
+      }
+      const refusal = await checkPinPatch(pinTarget, pinPatch, phase === 'COMPLETE' || status === 'done')
+      if (refusal) {
+        sendError(res, refusal.status, refusal.status === 409 ? 'conflict' : 'bad_request', refusal.error)
+        return
+      }
+    }
     // Re-sending the link a task already has (or releasing one that has none)
     // writes nothing and tells nobody.
     const parentChanged = parentLink !== undefined && parentLink.leader?.id !== parentLink.previous
@@ -2762,7 +2788,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(phase !== undefined ? { phase: phase as TaskPhase } : {}),
         ...(waitUntil !== undefined ? { wait_until: normalizeDateField(waitUntil) } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
-        ...(dueDate !== undefined ? { due_date: dueDate as string } : {}),
+        ...(dueDate !== undefined ? { due_date: normalizeDateField(dueDate) } : {}),
         // updateTask treats '' as the clear, so a null marker rides as ''.
         ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
@@ -2792,6 +2818,10 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
         const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true, ...(actorSid ? { actorSid } : {}) })
         updated = result.task
+      }
+      if (pinPatch && pinTarget) {
+        await applyPinPatch(updated ?? pinTarget, pinPatch)
+        updated = await tm.getTask(pinTarget.id)
       }
       // A parent link that was already in place was the only field: nothing to write.
       if (!updated && parentLink) updated = parentLink.current

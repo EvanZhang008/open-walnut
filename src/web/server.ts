@@ -6,6 +6,7 @@
  */
 
 import { createServer, type Server as HttpServer } from 'node:http'
+import { attachClientErrorAnswer } from './client-error-answer.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2221,6 +2222,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- HTTP + WebSocket --
   httpServer = createServer(app)
   attachWss(httpServer)
+  // A request Node's parser refuses (a raw non-ASCII URL) gets a JSON reason, not an empty 400.
+  attachClientErrorAnswer(httpServer)
 
   // -- Bind port early (before heavy init) so no other process can grab it --
   // A busy port must NOT make us step to a neighbouring port: every client (the walnut

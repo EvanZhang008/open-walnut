@@ -800,6 +800,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
           if (index >= 0) registeredOps.splice(index, 1)
         })
       },
+      timelineSource: () => disposable(),
       wsMethod: () => disposable(),
       agent: () => disposable(),
       provider: () => disposable(),

@@ -42,3 +42,79 @@ defineOp({
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 })
+
+defineOp({
+  name: 'time_report',
+  title: 'Where the time went over a range of days',
+  description:
+    'Answers "where did my time go" for a range of local days (default the last 7, at most 31, inside the 90-day window): '
+    + 'per-day totals, groups (task with title + project + createdAt, project, hour of day, kind, Mac app, site), '
+    + 'fragmentation per day (tasks touched, switches, longest stretch, deep share) and EVERY number in two views: the '
+    + 'whole day and the user\'s work hours (`workMin`, `workShare` = share of all work-hours attention; work hours from '
+    + 'time_work_hours_set, default 09:00-18:00 Mon-Fri). walnutMin = the user\'s attention in Walnut (lease minutes); '
+    + 'agentMin = agents running alone (costs no attention, never summed in); outside = other Mac apps from the foreground '
+    + 'sampler, Walnut\'s own foreground excluded; attention = walnut + outside. Echoes from/to: say the window you used. '
+    + 'For WHEN things happened on a day (sleep, workouts, places, meetings, plan vs actual) use time_timeline; for one '
+    + 'day of everything use day_review. Read the walnut-time-review skill before writing a time audit.',
+  input: {
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('First local date YYYY-MM-DD'),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Last local date YYYY-MM-DD (inclusive, default today)'),
+    last_days: z.number().int().min(1).max(31).optional().describe('Instead of from/to: the N days ending today (default 7)'),
+    kinds: z.string().max(60).optional().describe('Comma list of kinds counted as the user\'s time: session, triage, chat, agent (default session,triage,chat)'),
+    include_outside: z.boolean().optional().describe('Add other Mac apps from the foreground sampler (default true)'),
+    group_by: z.string().max(80).optional().describe('Comma list, any of: task, project, hour, kind, app, host (default task,project; days are always returned)'),
+    top: z.number().int().min(1).max(100).optional().describe('Rows per group (default 15; the rest are summed in otherMin)'),
+    work_start: z.string().max(5).optional().describe('Override work hours start for this report, HH:MM'),
+    work_end: z.string().max(5).optional().describe('Override work hours end for this report, HH:MM'),
+    work_days: z.string().max(40).optional().describe('Override working weekdays, comma list (mon,tue,wed,thu,fri)'),
+    merge_gap_min: z.number().int().min(1).max(120).optional().describe('Same-task records closer than this join one stretch (default 5)'),
+    long_min: z.number().int().min(5).max(480).optional().describe('A stretch this long counts as deep work (default 45)'),
+  },
+  bind: { method: 'GET', path: '/api/time/report' },
+  timeoutMs: 30_000,
+  tags: { readonly: true, remote: 'allow', primaryOnly: true },
+})
+
+defineOp({
+  name: 'time_work_hours_set',
+  title: 'Set the user\'s work hours',
+  description:
+    'Set the work hours every time report splits by (local time): start and end as HH:MM, days as weekday names. '
+    + 'Fields left out keep their value; reset:true goes back to the default 09:00-18:00 Mon-Fri. Only when the user says '
+    + 'what their hours are; a one-off question about other hours takes work_start/work_end on time_report instead.',
+  input: {
+    start: z.string().max(5).optional().describe('HH:MM, e.g. 09:00'),
+    end: z.string().max(5).optional().describe('HH:MM, e.g. 18:00'),
+    days: z.array(z.string().max(9)).max(7).optional().describe('Working weekdays, e.g. ["mon","tue","wed","thu","fri"]'),
+    reset: z.boolean().optional().describe('true: back to the default'),
+  },
+  bind: { method: 'POST', path: '/api/time/work-hours' },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+})
+
+defineOp({
+  name: 'time_timeline',
+  title: 'One day (or a few) as a single timeline from every source',
+  description:
+    'WHEN things happened: one serial timeline per local day (default today, at most 7 days) merged from every '
+    + 'source: Walnut attention, other Mac apps, sleep and workouts (Apple Health), calendar meetings and planned '
+    + 'blocks, places (iPhone visits, with the user\'s own labels such as home/office/gym and inferred travel), and any '
+    + 'plugin source. Each block has kind (screen, sleep, workout, meeting, plan, gap…), source and confidence '
+    + '(measured / planned / inferred); a screen block lists its top tasks and apps and the meeting it sat in. '
+    + '`plan` compares every calendar block with what was measured inside it (verdict kept / partly / other_work / '
+    + 'meeting_on_screen / not_on_screen). `summary` gives minutes per kind for the whole day and for work hours. '
+    + '`sources[]` says what each source could see: a source with available:false is MISSING, never zero. Flags '
+    + '(a workout left running, a sleep recording gap) must be passed on. For totals over weeks use time_report. '
+    + 'Places and health stay on this Mac: summarise ("gym 1h05"), never paste addresses or raw values.',
+  input: {
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('One local date YYYY-MM-DD (default today)'),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Or: first date of a range (at most 7 days)'),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Last date of the range (inclusive)'),
+    work_start: z.string().max(5).optional().describe('Override work hours start, HH:MM'),
+    work_end: z.string().max(5).optional().describe('Override work hours end, HH:MM'),
+  },
+  bind: { method: 'GET', path: '/api/time/timeline' },
+  timeoutMs: 30_000,
+  localOnlyMessage: 'The day timeline includes places and health, so it is only available to sessions on this Mac',
+  tags: { readonly: true, remote: 'deny', localHostGateway: true, primaryOnly: true },
+})

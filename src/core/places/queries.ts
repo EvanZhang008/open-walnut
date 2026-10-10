@@ -11,6 +11,7 @@
 import { addDays, isDateKey, isValidTz, localDate, localIso, systemTz, zonedMidnight } from '../health/day-key.js'
 import { getMeta, getPlacesDb } from './db.js'
 import { PLACES_ACCESS, type PlacesAccess } from './ingest.js'
+import { labelAt, listPlaceLabels } from './labels.js'
 
 export const PLACES_MAX_RANGE_DAYS = 90
 export const PLACES_MAX_VISITS = 1000
@@ -49,6 +50,8 @@ export interface PlacesStatus {
   lastVisitAt: string | null
   lastUploadAt: string | null
   tz: string
+  /** The user's names for places (labels.ts), without their points. */
+  labels: Array<{ label: string; kind: string; name: string | null; radiusM: number }>
   message?: string
 }
 
@@ -108,6 +111,7 @@ export function placesStatus(now = Date.now()): PlacesStatus {
     lastVisitAt: agg.last ? localIso(agg.last, tz) : null,
     lastUploadAt,
     tz,
+    labels: listPlaceLabels().map(({ label, kind, name, radiusM }) => ({ label, kind, name, radiusM })),
   }
   const message = statusMessage(status, now)
   if (message) status.message = message
@@ -179,6 +183,9 @@ export interface PlaceVisit {
   durationMin: number | null
   status: 'ended' | 'ongoing' | 'departure_unknown'
   arrivalUnknown?: true
+  /** The user's own name for the place (places_label_set), and its kind. */
+  label?: string
+  labelKind?: string
   name: string | null
   address: string | null
   lat: number
@@ -187,6 +194,7 @@ export interface PlaceVisit {
 }
 
 export interface PlaceSummary {
+  label?: string
   name: string | null
   address: string | null
   lat: number
@@ -212,6 +220,7 @@ export function placesVisits(args: PlacesVisitsArgs, now = Date.now()): Record<s
     ORDER BY COALESCE(arrival_ms, departure_ms)`).all({ from, to }) as VisitRow[]
   const nextStart = db.prepare('SELECT MIN(COALESCE(arrival_ms, departure_ms)) AS t FROM visits WHERE COALESCE(arrival_ms, departure_ms) > ?')
 
+  const labels = listPlaceLabels()
   const visits: PlaceVisit[] = []
   for (const r of rows) {
     const start = startOf(r)
@@ -244,6 +253,8 @@ export function placesVisits(args: PlacesVisitsArgs, now = Date.now()): Record<s
       accuracyM: r.accuracy_m !== null ? Math.round(r.accuracy_m) : null,
     }
     if (r.arrival_ms === null) visit.arrivalUnknown = true
+    const labelled = labelAt(r.lat, r.lon, labels)
+    if (labelled) { visit.label = labelled.label; visit.labelKind = labelled.kind }
     visits.push(visit)
   }
   const truncated = visits.length > limit
@@ -251,15 +262,17 @@ export function placesVisits(args: PlacesVisitsArgs, now = Date.now()): Record<s
 
   const places: Array<PlaceSummary & { _lat: number; _lon: number }> = []
   for (const v of kept) {
-    const key = v.name ? `${v.name}\n${v.address ?? ''}`.toLowerCase() : null
+    const key = v.label ? `label:${v.label.toLowerCase()}` : v.name ? `${v.name}\n${v.address ?? ''}`.toLowerCase() : null
     let place = places.find((p) =>
-      (key !== null && p.name !== null && `${p.name}\n${p.address ?? ''}`.toLowerCase() === key)
+      (v.label !== undefined && p.label === v.label)
+      || (key !== null && !v.label && !p.label && p.name !== null && `${p.name}\n${p.address ?? ''}`.toLowerCase() === key)
       || ((key === null || p.name === null) && metres(p._lat, p._lon, v.lat, v.lon) <= SAME_PLACE_M))
     if (!place) {
-      place = { name: v.name, address: v.address, lat: v.lat, lon: v.lon, visits: 0, totalMin: 0, firstArrival: null, lastDeparture: null, _lat: v.lat, _lon: v.lon }
+      place = { ...(v.label ? { label: v.label } : {}), name: v.name, address: v.address, lat: v.lat, lon: v.lon, visits: 0, totalMin: 0, firstArrival: null, lastDeparture: null, _lat: v.lat, _lon: v.lon }
       places.push(place)
     }
     if (!place.name && v.name) { place.name = v.name; place.address = v.address }
+    if (!place.label && v.label) place.label = v.label
     place.visits++
     place.totalMin += v.durationMin ?? 0
     // Visits run oldest first, so the first arrival seen is the earliest.

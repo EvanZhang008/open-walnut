@@ -64,6 +64,7 @@ import {
   type TaskQueryTime,
 } from '../../core/task-query.js'
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
+import { applyPinPatch, checkPinPatch, parsePinPatch } from './task-pin-patch.js'
 import { parseQuickTask, quickParseEnabled, unparsedTask } from '../../core/quick-task-parse.js'
 import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
 import { parseCompletedWithinDays, recentCompletedWindow } from '../../core/task-recent-completed.js'
@@ -1419,13 +1420,32 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
         }
       }
     }
+    // pinned / focus_tier are the pinned board's own write (task-pin-patch.ts), checked
+    // here before anything is written: they used to be dropped with a 200.
+    const pinParse = parsePinPatch(req.body)
+    if (!pinParse.ok) { res.status(pinParse.status).json({ error: pinParse.error }); return }
+    const { pinned: _pinned, focus_tier: _focusTier, ...fields } = (req.body ?? {}) as Record<string, unknown>
+    const pinPatch = pinParse.patch
+    let pinTarget: Task | undefined
+    if (pinPatch) {
+      pinTarget = await getTask(id)
+      const refusal = await checkPinPatch(pinTarget, pinPatch, fields.phase === 'COMPLETE')
+      if (refusal) { res.status(refusal.status).json({ error: refusal.error }); return }
+    }
     // asyncPush: the UI's PATCH must ack as soon as the local write lands — awaiting
     // the external sync round-trip (2-3s each) held browser connections long enough
     // to saturate the 6-per-origin pool and time out every other request (2026-07-31).
     // Push failures still surface via sync_error + TASK_UPDATED, which the UI renders.
     // Phase-transition automation rides the task:phase-changed bus event emitted
     // inside updateTask — no inline executor.
-    const result = await updateTask(id, req.body, { source: 'api', asyncPush: true })
+    let result: { task: Task } | undefined
+    if (!pinPatch || Object.keys(fields).length > 0) {
+      result = await updateTask(id, fields, { source: 'api', asyncPush: true })
+    }
+    if (pinPatch && pinTarget) {
+      await applyPinPatch(result?.task ?? pinTarget, pinPatch)
+      result = { task: await getTask(pinTarget.id) }
+    }
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
 
     res.json(result)

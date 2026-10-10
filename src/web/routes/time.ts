@@ -44,10 +44,16 @@ import {
   type TimeSummary,
 } from '../../core/time-tracking/index.js';
 import { taskTimeRouter } from './time-task.js';
+import { timeReportRouter } from './time-report.js';
+import { timeTimelineRouter } from './time-timeline.js';
 
 export const timeRouter = Router();
 // GET /task/:taskId and /session/:sessionId: one task's (one session's) days and totals.
 timeRouter.use(taskTimeRouter);
+// GET /report (a range of days, for agents) and GET/POST /work-hours.
+timeRouter.use(timeReportRouter);
+// GET /timeline: every source on one serial timeline per day (this Mac only).
+timeRouter.use(timeTimelineRouter);
 
 const DEFAULT_DAYS = 7;
 const MAX_DAYS = 90;

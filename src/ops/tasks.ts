@@ -398,7 +398,7 @@ defineOp({
     + 'task_get per row. `fields` is a projection: '
     + `${BULK_GET_FIELDS.join(', ')}, plus the group alias "dates" (`
     + `${BULK_GET_FIELD_GROUPS.dates.join(', ')}). Omitted fields default to `
-    + `${DEFAULT_BULK_GET_FIELDS.join(', ')}. `
+    + `${DEFAULT_BULK_GET_FIELDS.join(', ')}. Every row carries its id (naming "id" is allowed). `
     + '"progress" is DERIVED: just the note\'s Progress bullets as { status, text } rows (status is '
     + 'DONE | WIP | WAIT | TODO | BLOCKED) plus progress_counts — the state of the work WITHOUT the '
     + 'multi-KB Work Log, so ask for progress rather than note. Rows come back in the order the ids '
@@ -655,7 +655,7 @@ defineOp({
     'that time when nothing else did. Set it to when you expect the event, kept short: a trigger can miss it, and the ' +
     'clock is how you find out; when it wakes you, check the thing and the trigger before parking again. Left out, a ' +
     'task entering WAITING gets 1 day from now, and "" means no clock at all. A park sends no letter: say what you wait on in your last message. ' +
-    '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
+    '`tags` is a full replacement ([] clears). Pass "" or null to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     // No `status` input. It was the more dangerous of the two write paths: a
@@ -669,8 +669,9 @@ defineOp({
       .describe('With phase=WAITING: ISO-8601 datetime, or a duration from now ("2h", "1d"), at which the task is woken if nothing else did. '
         + 'Set it to when you expect the event, kept short. Left out when entering WAITING = 1 day from now; "" = no clock (the wait has no end of its own)'),
     priority: PRIORITY.optional(),
-    due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
-    start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
+    // null clears too: JSON callers reach for it first, and a refused clear read as a broken op.
+    due_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
+    start_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
     project: z.string().optional().describe('Project name; "" = Inbox'),
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
@@ -722,6 +723,41 @@ defineOp({
     }, outcome, next)
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+// The task's own note (plan, work log) had no named op: sessions told to "write the
+// plan into the task note" fell back to the api passthrough (2026-10-10).
+defineOp({
+  name: 'task_note_write',
+  title: 'Write a task note',
+  description:
+    'Write the task\'s own note (the plan, decisions, a work log): mode `replace` (default) sets the whole note to '
+    + '`content`; `append` adds `content` as a new timestamped entry at the end. This is the note on the task, not a '
+    + 'notes-vault page (that is note_write). Read the current note with task_get first when you replace it.',
+  input: {
+    id: z.string().min(1).describe('Task id or a unique id prefix'),
+    content: z.string().max(200_000).describe('Markdown: the whole note (replace) or the entry to add (append)'),
+    mode: z.enum(['replace', 'append']).optional().describe('replace (default) or append'),
+  },
+  // The note routes live on the legacy /api/tasks router only (no v1 twin).
+  routes: [
+    { method: 'PUT', path: '/api/tasks/:id/note' },
+    { method: 'POST', path: '/api/tasks/:id/notes' },
+  ],
+  handler: async (args, call) => {
+    const id = encodeURIComponent(String(args.id))
+    const append = args.mode === 'append'
+    const written = await call(append ? 'POST' : 'PUT', append ? `/api/tasks/${id}/notes` : `/api/tasks/${id}/note`, { content: args.content }) as
+      { task?: Record<string, unknown> } | undefined
+    const task = written?.task
+    const note = typeof task?.note === 'string' ? task.note : ''
+    return withOutcome(
+      { ...headline(task), noteChars: note.length },
+      append ? 'Entry added to the task note. Execution is unchanged.' : 'Task note replaced. Execution is unchanged.',
+      'No further action is required.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow' },
 })
 
 /** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped, the caller's own at its turn end. */
@@ -816,8 +852,8 @@ defineOp({
       phase: TASK_PHASE.optional(),
       wait_until: z.string().optional(),
       priority: PRIORITY.optional(),
-      due_date: z.string().optional(),
-      start_date: z.string().optional(),
+      due_date: z.string().nullable().optional(),
+      start_date: z.string().nullable().optional(),
       project: z.string().optional(),
       title: z.string().optional(),
       description: z.string().optional(),
