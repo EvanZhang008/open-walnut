@@ -263,6 +263,9 @@ struct SessionConversationView: View {
             // Opening the conversation reads the task (the board's unread dot clears),
             // whichever surface pushed this page.
             if let taskId = session.taskId { tasksStore?.markRead(taskId: taskId) }
+            // The detail poll carries the record's status: the header's word when the
+            // stream gives none (a companion stream attaches without one).
+            lifecycle.statusSink = store
             lifecycle.start()
             await store.open()
         }

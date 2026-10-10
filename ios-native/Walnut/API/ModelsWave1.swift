@@ -267,6 +267,10 @@ struct SessionDetail: Codable {
 
     let session: Record
     let pendingPermissions: [PendingPermission]
+    /// True on the companion's degraded reply: the record is its session-list row
+    /// with liveness asked of the host's daemon, which knows alive or dead but not
+    /// whether a turn is running.
+    var degraded: Bool? = nil
 }
 
 /// POST /v1/sessions/:id/terminate → 200.

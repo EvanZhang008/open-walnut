@@ -12,11 +12,19 @@ import Observation
 /// There is no dedicated SSE event for them, so the controller polls the
 /// detail while the page is open (12s — prompts block the CLI turn, so they
 /// wait) and refetches immediately after answering.
+///
+/// The same read carries the session record's status, handed to `statusSink`
+/// (the page's conversation store), which is how the page's header learns it
+/// when the stream never says (see SessionConversationStore.adoptRecordStatus).
 @Observable
 @MainActor
 final class SessionLifecycleController {
     private let api = WalnutAPI()
     let sessionId: String
+    /// The detail read. A seam for WalnutTests; the app always reads the server.
+    @ObservationIgnored private let fetchDetail: @MainActor (String) async throws -> SessionDetail
+    /// Takes the record's status from every detail read.
+    @ObservationIgnored weak var statusSink: SessionConversationStore?
 
     /// Live tool-permission prompts (empty = no card).
     private(set) var pendingPermissions: [PendingPermission] = []
@@ -34,8 +42,13 @@ final class SessionLifecycleController {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     private static let pollSeconds: Double = 12
 
-    init(sessionId: String) {
+    init(
+        sessionId: String,
+        fetchDetail: (@MainActor (String) async throws -> SessionDetail)? = nil
+    ) {
         self.sessionId = sessionId
+        let api = WalnutAPI()
+        self.fetchDetail = fetchDetail ?? { id in try await api.sessionDetail(id: id) }
     }
 
     // MARK: - Permission polling
@@ -58,9 +71,16 @@ final class SessionLifecycleController {
     }
 
     func refreshDetail() async {
+        let streamStatusCount = statusSink?.streamStatusCount
         do {
-            let next = try await api.sessionDetail(id: sessionId)
+            let next = try await fetchDetail(sessionId)
             detail = next
+            if let streamStatusCount {
+                statusSink?.adoptRecordStatus(
+                    next.session.processStatus, degraded: next.degraded == true,
+                    streamStatusCountAtRead: streamStatusCount
+                )
+            }
             // Equality-gated: detail polls at 12s and this drives the card's
             // visibility — a same-value write must not invalidate the page.
             if next.pendingPermissions != pendingPermissions {

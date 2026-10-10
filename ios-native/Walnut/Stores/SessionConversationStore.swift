@@ -153,6 +153,11 @@ final class SessionConversationStore {
     }
 
     var processStatus: String
+    /// How many statuses the live stream has applied (status frames, attach
+    /// snapshots). The page's detail read captures it before asking and gives it
+    /// back with the answer: a stream status that landed while the read was in
+    /// flight is newer than the record, so the record must not overwrite it.
+    @ObservationIgnored private(set) var streamStatusCount = 0
     /// Sticky USER intent, independent of transient geometry changes from
     /// streaming, keyboard resizing, or canonical history reconciliation.
     /// `@ObservationIgnored` for the same reason as ChatStore's: it is written
@@ -1195,6 +1200,7 @@ final class SessionConversationStore {
             }
         case "status":
             if let p = try? JSONDecoder().decode(StatusPayload.self, from: data) {
+                if !p.processStatus.isEmpty { streamStatusCount += 1 }
                 applyStatus(p.processStatus)
             }
         case "turn-end":
@@ -1300,6 +1306,7 @@ final class SessionConversationStore {
         if awaitingFirstTurn && seed.hasBlocks {
             awaitingFirstTurn = false
         }
+        if !seed.processStatus.isEmpty { streamStatusCount += 1 }
         applyStatus(seed.processStatus)
         // Pre-spawn gap of a just-created session: the buffer truthfully says
         // "not streaming" because the CLI isn't up yet — but the first turn IS
@@ -1391,6 +1398,33 @@ final class SessionConversationStore {
             setStreaming(false)
             setActivity(nil)
         }
+    }
+
+    /// The session record's status, from the page's detail read (`GET /sessions/:id`,
+    /// which the Mac answers, liveness-corrected).
+    ///
+    /// The stream alone cannot be trusted to say it: on the cloud companion it attaches
+    /// with no status at all and only reports changes, so the page kept whatever its
+    /// opener handed it, and an opener's copy can be days old. The Recently opened
+    /// drawer reopens a session from the snapshot it saved, and an Ask Walnut session is
+    /// never in the session list that would refresh it: "Ended" on a live session that
+    /// had been resumed since (2026-10-10).
+    ///
+    /// Skipped when it cannot be the newer word: a stream status landed while the read
+    /// was out (`streamStatusCountAtRead`), or a just-launched session is still waiting
+    /// for its first turn (its record can read stopped until the CLI is up, and a
+    /// terminal status there would raise the died-before-start banner). A `degraded`
+    /// reply (the companion answering while the Mac is away) knows liveness only, so it
+    /// corrects the page only where liveness disagrees.
+    func adoptRecordStatus(_ status: String?, degraded: Bool, streamStatusCountAtRead: Int) {
+        guard let status, SessionStatus(status) != .unknown, status != processStatus else { return }
+        guard streamStatusCountAtRead == streamStatusCount, !awaitingFirstTurn else { return }
+        if degraded, SessionStatus(status).isAlive == statusKind.isAlive { return }
+        AppLog.info("session-chat", "status corrected from the session record", [
+            "sessionId": sessionId, "from": processStatus, "to": status,
+            "degraded": String(degraded),
+        ])
+        applyStatus(status)
     }
 
     /// Buffer a streamed text delta and schedule a coalesced flush — SwiftUI
