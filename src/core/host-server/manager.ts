@@ -47,6 +47,8 @@ export interface HostServerHost {
   uploadFile(remotePath: string, data: Buffer): Promise<void>
   /** A byte stream to the server on that host that follows this Walnut, through its daemon. */
   openStream(to: 'follower', purpose?: string): Promise<Duplex>
+  /** Carry those streams on a link of their own while the server runs (providers/stream-lane.ts). */
+  keepStreamLane?(on: boolean): void
 }
 
 export interface HostServerSettings {
@@ -285,6 +287,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         }
       }
       dropLink(hostKey)
+      host?.keepStreamLane?.(false)
       await deps.releaseTunnelPort(`host-server:${hostKey}`)
       set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined })
       return
@@ -305,6 +308,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: rec.publicPort })
       // The door its streams come in by (the tunnel port trusts nothing on loopback).
       await deps.holdTunnelPort(`host-server:${hostKey}`)
+      host.keepStreamLane?.(true)
       const spec = {
         v: 1, home: deps.home, walnutId: await deps.walnutId(),
         command: node,

@@ -38,6 +38,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { startHostServer, type HostServer } from '../../src/host-server/main.js'
+import { StreamLane, type LaneForward } from '../../src/providers/stream-lane.js'
 
 const HOME = '/fixture/mac-home'
 const WALNUT = 'wmachostsrv1'
@@ -121,7 +122,7 @@ let publicPort = 0
 let tunnelPid = 0
 
 /** The fake Mac: a trusted link to the daemon, its stream end plugged into its door. */
-interface Mac { ws: WebSocket; streams: StreamEndpoint; beat: ReturnType<typeof setInterval>; cmd: (body: Record<string, unknown>) => Promise<Record<string, any>> }
+interface Mac { ws: WebSocket; streams: StreamEndpoint; beat: ReturnType<typeof setInterval>; cmd: (body: Record<string, unknown>) => Promise<Record<string, any>>; streamFrames: () => number }
 let mac: Mac | null = null
 
 let cmdId = 1
@@ -133,10 +134,11 @@ async function linkMac(): Promise<Mac> {
     send: (frame) => ws.send(JSON.stringify(frame)),
     accept: (info) => (info.from === 'follower' ? (s) => spliceStream(s, net.connect(macDoorPort, '127.0.0.1')) : null),
   })
+  let streamFrames = 0
   ws.on('message', (data) => {
     let m: Record<string, any>
     try { m = JSON.parse(String(data)) } catch { return }
-    if (streams.handle(m)) return
+    if (streams.handle(m)) { streamFrames++; return }
     const p = typeof m.id === 'number' ? pending.get(m.id) : undefined
     if (p) { pending.delete(m.id); p(m) }
   })
@@ -150,7 +152,7 @@ async function linkMac(): Promise<Mac> {
   // A live Mac is heard all the time.
   const beat = setInterval(() => { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 1_000)
   expect((await cmd({ cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
-  return { ws, streams, beat, cmd }
+  return { ws, streams, beat, cmd, streamFrames: () => streamFrames }
 }
 
 function unlinkMac(): void {
@@ -366,6 +368,70 @@ describe('a host server, linked to its daemon only', () => {
     await waitFor(() => hostServer!.route().kind === 'leader', 15_000, 'the leader route again')
     expect(JSON.parse((await get('/api/tasks')).body)).toMatchObject({ from: 'mac' })
   })
+
+  it('with a lane, the big bytes ride it, not the session link; a lane that drops costs the session link nothing', async () => {
+    // The lane's forward: a TCP hop to the daemon that can die, as an SSH connection does on a bad packet.
+    let kill: () => void = () => {}
+    let opened = 0
+    const forward = async (): Promise<LaneForward> => {
+      opened++
+      const conns = new Set<net.Socket>()
+      const hop = net.createServer((c) => {
+        const u = net.connect(daemonPort, '127.0.0.1')
+        conns.add(c); conns.add(u)
+        c.pipe(u).pipe(c)
+        c.on('error', () => u.destroy()); u.on('error', () => c.destroy())
+        c.on('close', () => u.destroy()); u.on('close', () => c.destroy())
+      })
+      const port = await listen(hop)
+      let exit: ((why: string) => void) | null = null
+      const end = () => { for (const s of conns) s.destroy(); hop.close() }
+      kill = () => { end(); exit?.('Corrupted MAC on input') }
+      return { port, onExit: (cb) => { exit = cb }, stop: end }
+    }
+    const lane = new StreamLane({
+      hostKey: 'devbox', home: HOME, walnutId: async () => WALNUT, daemonInstanceId: () => null, forward,
+      accept: (info) => (info.from === 'follower' ? (st) => spliceStream(st, net.connect(macDoorPort, '127.0.0.1')) : null),
+      retryMs: 200, beatMs: 1_000,
+    })
+    try {
+      lane.start()
+      await waitFor(() => lane.ready, 10_000, 'the lane')
+      const before = mac!.streamFrames()
+      const up = Buffer.alloc(3 * 1024 * 1024, 2)
+      const [posted, big] = await Promise.all([
+        fetch(`http://127.0.0.1:${publicPort}/upload`, { method: 'POST', body: up }).then((r) => r.json()),
+        fetch(`http://127.0.0.1:${publicPort}/big?n=${6 * 1024 * 1024}`).then(async (r) => (await r.arrayBuffer()).byteLength),
+      ])
+      expect(posted).toMatchObject({ from: 'mac', bytes: up.length })
+      expect(big).toBe(6 * 1024 * 1024)
+      // The Mac's own stream to the host server, on the lane.
+      const stream = await lane.open('follower', 'test')
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request({ path: '/host-api/status', headers: { host: 'host-server' }, createConnection: () => stream } as http.RequestOptions, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)) })
+        req.on('error', reject)
+        req.end()
+      })
+      expect(status).toBe(200)
+      expect(mac!.streamFrames()).toBe(before)
+
+      // The lane's connection dies: the session link stays, and browsers go on over it.
+      kill()
+      await waitFor(() => !lane.ready, 5_000, 'the lane down')
+      expect(mac!.ws.readyState).toBe(WebSocket.OPEN)
+      const r = await get('/api/tasks?after=lane')
+      expect(JSON.parse(r.body)).toMatchObject({ from: 'mac', url: '/api/tasks?after=lane' })
+      expect(mac!.streamFrames()).toBeGreaterThan(before)
+      expect(hostServer!.route().kind).toBe('leader')
+      // And it dials again.
+      await waitFor(() => lane.ready && opened === 2, 10_000, 'the lane again')
+      const again = mac!.streamFrames()
+      expect(JSON.parse((await get('/api/tasks?lane=2')).body)).toMatchObject({ from: 'mac' })
+      expect(mac!.streamFrames()).toBe(again)
+    } finally {
+      lane.stop()
+    }
+  }, 60_000)
 
   it('runs the tunnel the Mac sets through the daemon, in front of the public port, and stops it', async () => {
     const fake = path.join(base, 'fake-tunnel.cjs')

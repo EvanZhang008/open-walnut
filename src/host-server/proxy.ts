@@ -87,6 +87,8 @@ export function forwardHttp(req: IncomingMessage, res: ServerResponse, to: Forwa
 export function forwardUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, to: ForwardTarget, onFail: (err: Error) => void): void {
   to.connect().then((link) => {
     if (socket.destroyed) { link.destroy(); return }
+    // A browser that went away ends its stream, whatever the target answered.
+    socket.once('close', () => { if (!link.destroyed) link.destroy() })
     const up = request(req, to, link, true)
     up.on('upgrade', (answer, upSocket, upHead) => {
       let raw = `HTTP/1.1 ${answer.statusCode ?? 101} ${answer.statusMessage ?? 'Switching Protocols'}\r\n`
@@ -108,6 +110,8 @@ export function forwardUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
       }
       socket.write(raw + 'Connection: close\r\n\r\n')
       answer.pipe(socket)
+      // The HTTP client lets go of the stream here: once the answer is passed on, it is done.
+      answer.on('end', () => link.destroy())
     })
     up.on('error', (err) => onFail(err))
     socket.on('error', () => up.destroy())

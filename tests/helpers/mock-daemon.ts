@@ -287,6 +287,12 @@ export class MockDaemon {
         startedAt: Date.now(),
         uptimeSec: 0,
       })
+      // 'stream-lane-v1': any socket may be a lane here; a stream it opens finds nobody.
+      case 'stream.lane': return this.sendOk(ws, id, {})
+      case 'stream.open': {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ev: 'stream-close', sid: cmd.sid, error: 'mock: nobody there' }))
+        return
+      }
       case 'fs.read': return this.cmdFsRead(ws, id, cmd)
       case 'fs.readRange': return this.cmdFsReadRange(ws, id, cmd)
       case 'fs.readImage': return this.cmdFsReadImage(ws, id, cmd)

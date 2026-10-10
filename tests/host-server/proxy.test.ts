@@ -123,11 +123,15 @@ describe('forwardHttp', () => {
 })
 
 describe('forwardUpgrade', () => {
-  it('passes a refused upgrade on as it came', async () => {
-    const target = await listen(http.createServer((_req, res) => { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"unauthorized"}') }))
+  it('passes a refused upgrade on as it came, and ends its connection to the target', async () => {
+    // A keep-alive target: it would hold the connection open after its answer.
+    const target = await listen(http.createServer((_req, res) => { res.writeHead(401, { 'content-type': 'application/json', connection: 'keep-alive' }); res.end('{"error":"unauthorized"}') }))
     const front = await listen(http.createServer())
+    let link: Duplex | null = null
+    const target2 = via('leader', target)
+    const tracked: ForwardTarget = { kind: 'leader', connect: async () => (link = await target2.connect()) }
     servers[servers.length - 1]!.on('upgrade', (req, socket, head) => {
-      forwardUpgrade(req, socket, head, via('leader', target), () => socket.destroy())
+      forwardUpgrade(req, socket, head, tracked, () => socket.destroy())
     })
     const answer = await new Promise<string>((resolve) => {
       const s = net.connect(front, '127.0.0.1', () => {
@@ -139,5 +143,8 @@ describe('forwardUpgrade', () => {
     })
     expect(answer).toMatch(/^HTTP\/1\.1 401/)
     expect(answer).toContain('{"error":"unauthorized"}')
+    // Nothing holds it once the answer is passed on (on a daemon stream it would linger to the link's end).
+    await new Promise((r) => setTimeout(r, 50))
+    expect(link!.destroyed).toBe(true)
   })
 })

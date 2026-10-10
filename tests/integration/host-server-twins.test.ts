@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { StreamLane } from '../../src/providers/stream-lane.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/walnut-home'
@@ -83,9 +84,15 @@ ws.on('open', async () => {
   log({ ev: 'list', r: await call('list', {}) })
   log({ ev: 'own', r: await call('server.status', {}) })
   // A stream to the leader, and one to itself (a follower opens to the primary or the companion only).
-  ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o1', to: 'primary', purpose: 'web' }))
-  ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o2', to: 'follower' }))
-  ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o3', to: 'companion' }))
+  const openStreams = () => {
+    ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o1', to: 'primary', purpose: 'web' }))
+    ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o2', to: 'follower' }))
+    ws.send(JSON.stringify({ cmd: 'stream.open', sid: 'o3', to: 'companion' }))
+  }
+  // FAKE_OPEN_AFTER: not before that file exists (the leader's lane is up by then).
+  const after = process.env.FAKE_OPEN_AFTER
+  if (!after) openStreams()
+  else { const t = setInterval(() => { if (fs.existsSync(after)) { clearInterval(t); openStreams() } }, 100) }
   ws.send(JSON.stringify({ cmd: 'follower.report', report: { route: { kind: 'leader' }, pid: process.pid } }))
   // Chatty on purpose: none of this may count as the primary heard.
   setInterval(async () => { log({ ev: 'status', r: await call('follower.status', {}) }) }, 250)
@@ -310,6 +317,94 @@ for (const twin of ['source', 'standalone'] as const) {
       await waitFor(() => !alive(serverPid), 15_000, 'the server to stop')
       expect(events(out).some((e) => e.ev === 'sigterm' && e.pid === serverPid)).toBe(true)
       expect(fs.readdirSync(path.join(dir, 'host-server')).filter((n) => n.startsWith('server-'))).toEqual([])
+      leader2.close()
+      await stopDaemon(d)
+    }, 120_000)
+
+    it('the leader\'s lane carries its streams both ways, nothing else, and is never the primary', async () => {
+      const dir = path.join(base, `${twin.slice(0, 2)}-lane`)
+      const out = path.join(base, `${twin}-lane.jsonl`)
+      const go = `${out}.go`
+      const fake = path.join(base, `${twin}-lane-fake.cjs`)
+      fs.writeFileSync(fake, FAKE_SERVER)
+      const d = await spawnDaemon(dir, twin)
+      const leader = await connectWs(d.port)
+      const leaderSaw: Array<Record<string, any>> = []
+      leader.on('message', (data) => { try { const m = JSON.parse(String(data)); if (m.ev) leaderSaw.push(m) } catch { /* not json */ } })
+
+      // Before the leader describes its Walnut, nobody may take a lane for it.
+      const early = await connectWs(d.port)
+      expect((await cmd(early, { cmd: 'stream.lane', home: HOME, walnutId: WALNUT })).errorKind).toBe('unknown_walnut')
+      early.close()
+
+      expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
+      const beat = setInterval(() => { try { leader.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 500)
+      const spec = {
+        v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [fake], cwd: base,
+        env: { FAKE_OUT: out, FAKE_WALNUT: WALNUT, FAKE_HOME: HOME, FAKE_OPEN_AFTER: go },
+        log: path.join(base, `${twin}-lane-server.log`), port: 41_235, settings: { expose: { enabled: false } },
+      }
+      expect((await cmd(leader, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
+      await waitFor(() => events(out).some((e) => e.ev === 'own'), 30_000, 'the server to follow')
+
+      // The socket that speaks for the Walnut cannot become a lane; another Walnut's id is refused.
+      expect((await cmd(leader, { cmd: 'stream.lane', home: HOME, walnutId: WALNUT })).error).toMatch(/already speaks for a leader/)
+      const wrong = await connectWs(d.port)
+      expect((await cmd(wrong, { cmd: 'stream.lane', home: HOME, walnutId: 'wsomeoneelse' })).errorKind).toBe('unknown_walnut')
+      // A lane sends streams only.
+      expect((await cmd(wrong, { cmd: 'stream.lane', home: HOME, walnutId: WALNUT })).ok).toBe(true)
+      for (const c of ['list', 'leader.configure', 'server.configure', 'host.slice']) {
+        expect((await cmd(wrong, { cmd: c, home: HOME })).errorKind).toBe('lane_refused')
+      }
+      wrong.close()
+
+      // The Mac's lane: its streams to the follower, the follower's to the Mac.
+      const incoming: Array<{ from: string; purpose?: string }> = []
+      const lane = new StreamLane({
+        hostKey: 'devbox', home: HOME, walnutId: async () => WALNUT,
+        daemonInstanceId: () => null,
+        forward: async () => ({ port: d.port, onExit: () => {}, stop: () => {} }),
+        accept: (info) => {
+          incoming.push({ from: info.from, purpose: info.purpose })
+          return (stream) => {
+            stream.on('error', () => { /* ends with the lane */ })
+            stream.on('data', (b: Buffer) => stream.write(`echo:${b.toString()}`))
+          }
+        },
+        beatMs: 500,
+      })
+      lane.start()
+      await waitFor(() => lane.ready, 10_000, 'the lane')
+      const toFollower = await lane.open('follower', 'replica')
+      const toFollowerError = new Promise<Error>((resolve) => toFollower.on('error', resolve))
+      toFollower.write('a copy over the lane')
+      await waitFor(() => events(out).some((e) => e.ev === 'from-leader'), 5_000, 'the copy to arrive')
+      expect(events(out).find((e) => e.ev === 'from-leader')!.text).toBe('a copy over the lane')
+      expect(events(out).find((e) => e.ev === 'incoming')).toMatchObject({ from: 'primary', home: HOME, purpose: 'replica' })
+
+      fs.writeFileSync(go, '1')
+      await waitFor(() => events(out).some((e) => e.ev === 'echo'), 10_000, 'the follower\'s stream over the lane')
+      expect(events(out).find((e) => e.ev === 'echo')!.text).toBe('echo:hello leader')
+      expect(incoming).toEqual([{ from: 'follower', purpose: 'web' }])
+      // None of it rode the session link.
+      expect(leaderSaw.filter((m) => String(m.ev).startsWith('stream-'))).toEqual([])
+
+      // The session link goes quiet: the lane, still answering, is not the primary heard.
+      clearInterval(beat)
+      leader.close()
+      await sleep(T + 1_000)
+      const last = events(out).filter((e) => e.ev === 'status').pop()!.r
+      expect(last.primaryConnected).toBe(false)
+
+      // The lane ends: its stream ends at the follower.
+      lane.stop()
+      await waitFor(() => events(out).some((e) => e.ev === 'stream-close' && e.error === 'the other server is no longer linked to this host'), 5_000, 'the stream to end with the lane')
+      expect(lane.ready).toBe(false)
+      expect((await toFollowerError).message).toBe('the lane was closed')
+
+      const leader2 = await connectWs(d.port)
+      expect((await cmd(leader2, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
+      await cmd(leader2, { cmd: 'server.configure', home: HOME, spec: null })
       leader2.close()
       await stopDaemon(d)
     }, 120_000)

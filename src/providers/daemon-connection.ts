@@ -30,6 +30,7 @@ import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
+import { laneForwardForTesting, sshLaneForward, StreamLane } from './stream-lane.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
@@ -349,6 +350,9 @@ export class DaemonConnection {
   private ws: WebSocket | null = null
   /** Byte streams to the host's server (core/host-server/), through the daemon. */
   private streams: StreamEndpoint | null = null
+  /** The same streams on a link of their own, while a host server wants it (stream-lane.ts). */
+  private lane: StreamLane | null = null
+  private laneWanted = false
   private tunnel: ChildProcess | null = null
   private sshTarget: SshTarget | null
   private hostKey: string
@@ -784,6 +788,9 @@ export class DaemonConnection {
     if (changed && !value) {
       void import('../core/host-server/index.js').then((m) => m.hostServerDisconnected(this.hostKey)).catch(() => {})
     }
+    // The stream lane lives with the link: down with it, and up again when the
+    // host server is set up on the next one (after its leader.configure).
+    if (changed && !value) this.closeLane()
     // Distribute the walnut skill to this host's engine-native discovery
     // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
     // same freshness mechanism as the shims, hash-skipped daemon-side.
@@ -1861,7 +1868,52 @@ export class DaemonConnection {
    * its daemon (lib/link-stream.ts; the daemon's half is stream-relay-core.ts).
    */
   openStream(to: 'follower', purpose?: string): Promise<Duplex> {
+    // On the lane while it is up: the bytes stay off the connection the sessions share.
+    if (this.lane?.ready) return this.lane.open(to, purpose)
     return this.streamEndpoint().open(to, purpose ? { purpose } : {})
+  }
+
+  /**
+   * Keep a stream lane to this host's daemon (stream-lane.ts) while a server
+   * this Mac keeps there wants one. A lane is its own SSH connection, so only a
+   * host reached over SSH with a daemon that has 'stream-lane-v1' gets one.
+   */
+  keepStreamLane(on: boolean): void {
+    this.laneWanted = on
+    if (on) this.ensureLane()
+    else this.closeLane()
+  }
+
+  /** True while streams ride the lane. */
+  get streamLaneUp(): boolean {
+    return this.lane?.ready === true
+  }
+
+  private ensureLane(): void {
+    if (!this.laneWanted || this.lane || !this._connected || this._destroyed) return
+    if (!this.hasCapability('stream-lane-v1')) return
+    const testForward = laneForwardForTesting()
+    const remotePort = this.remotePort
+    if (!testForward && (this.isCloudTunnel || !this.sshTarget || this._dialledDirect || !remotePort)) return
+    const sshArgs = testForward ? [] : this.buildSshArgs({ useControlMaster: false })
+    const sshHost = testForward ? '' : this.sshHostString
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const conn = this
+    this.lane = new StreamLane({
+      hostKey: this.hostKey,
+      home: WALNUT_HOME,
+      walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
+      daemonInstanceId: () => conn._daemonInstanceId,
+      forward: () => (testForward ? testForward(conn.hostKey) : sshLaneForward(sshArgs, sshHost, remotePort!)),
+      accept: (info) => (info.from === 'follower' ? (stream) => { void conn.plugFollowerStream(stream) } : null),
+    })
+    this.lane.start()
+  }
+
+  private closeLane(): void {
+    const lane = this.lane
+    this.lane = null
+    lane?.stop()
   }
 
   /** The streams on this connection's socket; frames go on whichever socket is in use. */
@@ -1903,6 +1955,7 @@ export class DaemonConnection {
       runRemoteScript: (script: string, timeoutMs?: number) => conn.runRemoteScript(script, timeoutMs),
       uploadFile: (remotePath: string, data: Buffer) => conn.uploadFile(remotePath, data),
       openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
+      keepStreamLane: (on: boolean) => conn.keepStreamLane(on),
     }
   }
 
@@ -2022,6 +2075,7 @@ export class DaemonConnection {
 
     // Close WebSockets (bulk first — it must never outlive the main socket)
     this.closeBulkChannel()
+    this.closeLane()
     if (this.ws) {
       try { this.ws.close() } catch {}
       this.ws = null

@@ -131,7 +131,16 @@ class LinkStream extends Duplex {
 
   onClose(error: unknown): void {
     this.remoteClosed = true
-    this.destroy(typeof error === 'string' && error ? new Error(error) : undefined)
+    this.cut(typeof error === 'string' && error ? new Error(error) : undefined)
+  }
+
+  /**
+   * Ended from the far side or with the link. The error goes to whoever still
+   * listens; an HTTP client lets go of its socket once its answer is in, and
+   * an error nobody listens for would throw in the whole server.
+   */
+  cut(err?: Error): void {
+    this.destroy(err && this.listenerCount('error') > 0 ? err : undefined)
   }
 }
 
@@ -243,7 +252,7 @@ class Endpoint implements StreamEndpoint {
     }
     for (const stream of [...this.streams.values()]) {
       stream.remoteClosed = true
-      stream.destroy(new Error(reason))
+      stream.cut(new Error(reason))
     }
     this.streams.clear()
   }

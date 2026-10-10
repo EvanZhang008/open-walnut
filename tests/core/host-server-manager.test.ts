@@ -21,6 +21,8 @@ interface FakeHost extends HostServerHost {
   specs: Array<Record<string, any> | null>
   uploads: Array<{ path: string; bytes: number }>
   streams: string[]
+  /** keepStreamLane calls. */
+  lane: boolean[]
   installState: 'absent' | 'running' | 'ready' | 'failed'
   pollsUntilReady: number
   nodeVersion: string
@@ -39,7 +41,7 @@ function fakeHost(): FakeHost {
   const h: FakeHost = {
     hostKey: 'devbox',
     connected: true,
-    calls: [], specs: [], uploads: [], streams: [],
+    calls: [], specs: [], uploads: [], streams: [], lane: [],
     installState: 'absent', pollsUntilReady: 2, nodeVersion: 'v24.3.0',
     caps: new Set(['host-server-v1', 'follower-v1', 'stream-relay-v1']),
     daemonState: 'off',
@@ -78,6 +80,7 @@ function fakeHost(): FakeHost {
       throw new Error('unexpected script: ' + script.slice(0, 80))
     },
     async uploadFile(p, data) { h.uploads.push({ path: p, bytes: data.length }) },
+    keepStreamLane(on) { h.lane.push(on) },
     async openStream(to, purpose) {
       h.streams.push(`${to}:${purpose}`)
       const sock = net.connect(followerPort, '127.0.0.1')
@@ -167,8 +170,9 @@ describe('host server manager', () => {
     const ports = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
     expect(fs.statSync(path.join(dir, 'host-servers.json')).mode & 0o777).toBe(0o600)
     expect(Object.keys(ports)).toEqual(['publicPort'])
-    // The door host server streams come in by.
+    // The door host server streams come in by, and a lane of their own to the host.
     expect(held).toEqual(['host-server:devbox'])
+    expect(host.lane).toEqual([true])
     const spec = host.specs[0]!
     expect(spec).toMatchObject({
       home: HOME, walnutId: 'wmac01', command: '/opt/node24/bin/node',
@@ -284,6 +288,7 @@ describe('host server manager', () => {
     await m.reconcile('devbox')
     expect(host.specs.at(-1)).toBeNull()
     expect(released).toEqual(['host-server:devbox'])
+    expect(host.lane).toEqual([true, false])
     expect(ids()).toEqual(['+devbox', '-devbox'])
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
   })

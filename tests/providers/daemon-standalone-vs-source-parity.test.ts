@@ -3076,6 +3076,7 @@ describe('walnut-trigger daemon parity', () => {
       const isServer = src.slice(src.indexOf('function isServerClient('), src.indexOf('\n}', src.indexOf('function isServerClient(')))
       expect(isServer).toMatch(/origin !== 'bridge'/)
       expect(isServer).toMatch(/origin !== 'follower'/)
+      expect(isServer).toMatch(/origin !== 'lane'/)
       expect(body).toMatch(/sendEvent\(client, ev, fields\)/)
       expect(body).toMatch(/delivered = true/)
       expect(body).toMatch(/return delivered/)

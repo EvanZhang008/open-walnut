@@ -698,10 +698,18 @@ interface WsData {
    * reads (FOLLOWER_ALLOWED_COMMANDS) and is never taken for the leader: its
    * frames are not the primary heard, and no relay, gateway call, trigger or
    * cron note is ever sent to it.
+   *
+   * 'lane' = a second link of the leader's, for byte streams only, after
+   * `stream.lane` ('stream-lane-v1'): it rides its own SSH connection, so a
+   * stream's bytes never share the one the leader's sessions use, and the
+   * session link outlives a connection a large stream broke. Streams only
+   * (LANE_ALLOWED_COMMANDS); like a follower, never taken for the leader.
    */
-  origin?: 'bridge' | 'follower'
+  origin?: 'bridge' | 'follower' | 'lane'
   /** A follower's Walnut (the leader's data dir), set by follower.hello. */
   followerHome?: string
+  /** A lane's Walnut, set by stream.lane. */
+  laneHome?: string
   /** When this socket last sent anything (a frame, a ping, a pong). See heardFrom. */
   lastHeardAt?: number
   /** When this socket was last told the companion leads its Walnut (see heardFrom). */
@@ -791,10 +799,17 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ])
 
-/** A Walnut server socket that may be the leader: not the bridge, not a follower. */
+// What a lane socket (the leader's second link, for streams) may send ('stream-lane-v1').
+// Keep in sync with daemon-source.ts.
+const LANE_ALLOWED_COMMANDS = new Set([
+  'hello', 'ping', 'stream.lane',
+  'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
+])
+
+/** A Walnut server socket that may be the leader: not the bridge, a follower or a lane. */
 function isServerClient(ws: ServerWebSocket<WsData>): boolean {
   const origin = ws.data?.origin
-  return origin !== 'bridge' && origin !== 'follower'
+  return origin !== 'bridge' && origin !== 'follower' && origin !== 'lane'
 }
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -1900,6 +1915,10 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id })
     return safeSend(ws, JSON.stringify({ id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' }))
   }
+  // A lane carries the leader's streams and nothing else.
+  if (ws.data?.origin === 'lane' && !LANE_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
+    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' }))
+  }
 
   // One command must never kill the daemon: a throw anywhere in a handler
   // (the pre-guard era: a whale-file rebuild OOM inside cmdAttach took the
@@ -2071,6 +2090,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // Streams between servers through this daemon ('stream-relay-v1',
     // stream-relay-core.ts): frames, never answered by id. Keep in sync with daemon-source.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd)
+    case 'stream.lane': return cmdStreamLane(ws, id as number, cmd)
     case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
       return streamRelay.frame(ws, (cmd.cmd as string).slice('stream.'.length), cmd)
     case 'server.configure': return cmdServerConfigure(ws, id as number, cmd)
@@ -2902,6 +2922,10 @@ const streamRelay = createStreamRelay<ServerWebSocket<WsData>>({
 
 /** The primary's socket for `home` that was heard last. */
 function primaryClientFor(home: string): ServerWebSocket<WsData> | null {
+  // The leader's lane first, while it answers: a stream's bytes stay off its session link.
+  for (const client of wsClients) {
+    if (client.data?.origin === 'lane' && client.data.laneHome === home && (client.data.missedBeats ?? 0) < 2) return client
+  }
   let best: ServerWebSocket<WsData> | null = null
   for (const client of wsClients) {
     if (!isServerClient(client) || gatewayClientHomes.get(client) !== home) continue
@@ -2924,12 +2948,37 @@ function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerW
     }
     return { why: 'a follower opens streams to the primary or the companion' }
   }
+  if (ws.data?.origin === 'lane') {
+    const laneHome = ws.data.laneHome
+    const link = laneHome && to === 'follower' ? followerSockets.get(laneHome) : undefined
+    if (link) return { link, meta: { from: 'primary', home: laneHome } }
+    return { why: to === 'follower' ? 'no server on this host follows that Walnut' : 'a lane opens streams to the follower only' }
+  }
   const home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined
   if (home && to === 'follower') {
     const link = followerSockets.get(home)
     return link ? { link, meta: { from: 'primary', home } } : { why: 'no server on this host follows that Walnut' }
   }
   return { why: 'this link opens no such stream' }
+}
+
+/**
+ * The leader makes this socket its lane for streams ('stream-lane-v1'): a link
+ * on its own SSH connection that carries streams only. The Walnut must be the
+ * one the leader described here (leader.configure on its session link).
+ */
+function cmdStreamLane(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const origin = ws.data?.origin
+  if (origin === 'bridge' || origin === 'follower') return sendError(ws, id, 'stream.lane: the leader only')
+  if (gatewayClientHomes.has(ws)) return sendError(ws, id, 'stream.lane: this socket already speaks for a leader')
+  const home = typeof cmd.home === 'string' ? cmd.home : ''
+  const rec = home ? leaderBook.recordOf(home) : undefined
+  if (!rec || rec.walnutId !== cmd.walnutId) {
+    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' }))
+  }
+  if (ws.data) { ws.data.origin = 'lane'; ws.data.laneHome = home }
+  logMsg('info', 'stream lane: the leader opened a lane for its streams', { wsId: wsId(ws), home })
+  sendOk(ws, id, {})
 }
 
 function cmdStreamOpen(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>) {
@@ -8192,6 +8241,8 @@ function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string
 }
 
 function sendEvent(ws: ServerWebSocket<WsData>, ev: string, data: Record<string, unknown>) {
+  // A lane hears its streams and nothing of the broadcasts its session link already hears.
+  if (ws.data?.origin === 'lane' && !ev.startsWith('stream-')) return
   safeSend(ws, JSON.stringify({ ev, ...data }))
 }
 

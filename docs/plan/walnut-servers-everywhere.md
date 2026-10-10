@@ -215,6 +215,30 @@ tunnel) without a restart, keeps its last `follower.report` for the leader, and
 stops it when the spec is removed. One spec per Walnut data dir, so a test
 server never touches the real one.
 
+### The stream lane
+
+The Mac's link to a host rides one SSH connection that every session on the
+host shares (the ControlMaster). A stream can be megabytes (a copy of the
+search index, the web app a browser loads through the host server), and on a
+network that corrupts packets one bad MAC ends the SSH connection it rode, with
+every session's stream on it. So while a host server runs, the Mac keeps a
+second link to that daemon, the **lane** (`src/providers/stream-lane.ts`,
+capability `stream-lane-v1`), and the streams ride it:
+
+- It is its own SSH connection (`ControlMaster=no`, `ControlPath=none`, ahead of
+  anything a config file says), so a lane that dies takes nothing else with it.
+  It dials again with a growing wait (5 s to 5 min). Its remote command reads
+  stdin, so it ends with the server that holds it, also one that crashed.
+- On it, the Mac sends `stream.lane {home, walnutId}` (the Walnut its
+  `leader.configure` described). The daemon then lets that socket send only
+  hello, ping and stream frames (`lane_refused` otherwise), sends it no
+  broadcast, never takes it for the primary, lets it open streams to its
+  follower only, and offers a follower's stream to the primary to the lane
+  first while it answers its beats.
+- It is optional. With an old daemon, a login that needs a fresh sign-in (an
+  expired certificate: the master still serves, a new connection does not), or
+  a lane that is dialing again, streams ride the session link as before.
+
 ## What stays out of the open source tree
 
 Only the provider definition of a company's tunnel service is private: its

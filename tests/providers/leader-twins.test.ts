@@ -175,6 +175,29 @@ describe('leader protocol: both twins', () => {
       // The bridge's streams end with it (the standalone twin drops it through handleDisconnect).
       expect(src).toMatch(/streamRelay\.dropLink\(bridgeAdapter\)|try \{ handleDisconnect\(bridgeAdapter\) \}/)
     })
+
+    it(`${name}: a lane carries the leader's streams and nothing else`, () => {
+      const start = src.indexOf('LANE_ALLOWED_COMMANDS = new Set([')
+      expect(start).toBeGreaterThan(0)
+      const list = src.slice(start, src.indexOf('])', start)).replace(/\/\/[^\n]*/g, '')
+      expect(list.match(/'[\w.-]+'/g)!.sort()).toEqual(["'hello'", "'ping'", "'stream.accept'", "'stream.ack'", "'stream.close'", "'stream.data'", "'stream.end'", "'stream.lane'", "'stream.open'"])
+      expect(src).toMatch(/origin === 'lane' && !LANE_ALLOWED_COMMANDS\.has\(cmd\.cmd( as string)?\)\) \{/)
+      // Never the primary: not for relays, gateway calls, triggers, cron notes, nor the leader witness.
+      expect(fnBody(src, 'isServerClient')).toMatch(/origin !== 'lane'/)
+      // It hears its streams only.
+      expect(fnBody(src, 'sendEvent')).toMatch(/origin === 'lane' && !ev\.startsWith\('stream-'\)\) return/)
+      // Only for a Walnut whose leader described it here, on a socket that speaks for no one.
+      const lane = fnBody(src, 'cmdStreamLane')
+      expect(lane).toMatch(/origin === 'bridge' \|\| [\w.?]*origin === 'follower'\) return sendError/)
+      expect(lane).toMatch(/gatewayClientHomes\.has\(ws\)\) return sendError/)
+      expect(lane).toMatch(/leaderBook\.recordOf\(home\)/)
+      expect(lane).toMatch(/walnutId !== cmd\.walnutId/)
+      expect(src).toMatch(/case 'stream\.lane': return cmdStreamLane\(ws, id( as number)?, cmd\)/)
+      // To its follower only; and the follower's streams to the primary take it first while it answers.
+      expect(fnBody(src, 'streamTarget')).toMatch(/origin === 'lane'/)
+      expect(fnBody(src, 'streamTarget')).toMatch(/a lane opens streams to the follower only/)
+      expect(fnBody(src, 'primaryClientFor')).toMatch(/origin === 'lane' && [\w.?]*laneHome === home && \([\w.?]*missedBeats( \?\? 0| \|\| 0)\) < 2\) return/)
+    })
   }
 
   it('both cores are part of the daemon version hash, in the build script', () => {

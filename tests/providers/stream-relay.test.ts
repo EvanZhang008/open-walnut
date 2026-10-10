@@ -116,6 +116,31 @@ describe('a stream through the daemon', () => {
     expect(answer).toEqual({ status: 200, body: 'POST /bridge/replica payload', host: 'follower.local' })
   })
 
+  it('a stream nobody listens to ends quietly when its link drops, and one that is listened to hears why', async () => {
+    // An HTTP client lets go of a socket whose upgrade was refused: no listener of any kind is left on it.
+    const h = harness({ accept: () => (s) => { s.on('error', () => {}); s.resume() } })
+    const unheard = await h.primary.ep!.open('follower')
+    const heard = await h.primary.ep!.open('follower')
+    const why = new Promise<Error>((r) => heard.once('error', r))
+    const uncaught: unknown[] = []
+    const saved = process.listeners('uncaughtException')
+    process.removeAllListeners('uncaughtException')
+    const onUncaught = (e: unknown) => uncaught.push(e)
+    process.on('uncaughtException', onUncaught)
+    try {
+      const closed = new Promise((r) => unheard.once('close', r))
+      h.follower.up = false
+      h.relay.dropLink(h.follower)
+      await closed
+      expect((await why).message).toMatch(/no longer linked/)
+      await new Promise((r) => setTimeout(r, 10))
+      expect(uncaught).toEqual([])
+    } finally {
+      process.off('uncaughtException', onUncaught)
+      for (const l of saved) process.on('uncaughtException', l)
+    }
+  })
+
   it('an open to nobody, or one the other side refuses, fails with the reason', async () => {
     const h = harness({ accept: () => null })
     await expect(h.follower.ep!.open('companion')).rejects.toThrow('nobody there')

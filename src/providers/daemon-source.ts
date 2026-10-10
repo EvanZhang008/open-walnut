@@ -2975,9 +2975,16 @@ var FOLLOWER_ALLOWED_COMMANDS = new Set([
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ]);
 
-// A Walnut server socket that may be the leader: not the bridge, not a follower.
+// What a lane socket (the leader's second link, for streams) may send
+// (stream-lane-v1). Twin of daemon-standalone.ts LANE_ALLOWED_COMMANDS.
+var LANE_ALLOWED_COMMANDS = new Set([
+  'hello', 'ping', 'stream.lane',
+  'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
+]);
+
+// A Walnut server socket that may be the leader: not the bridge, a follower or a lane.
 function isServerClient(client) {
-  return client.origin !== 'bridge' && client.origin !== 'follower';
+  return client.origin !== 'bridge' && client.origin !== 'follower' && client.origin !== 'lane';
 }
 
 function handleCommand(ws, msg) {
@@ -3009,6 +3016,11 @@ function handleCommand(ws, msg) {
   if (ws.origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS.has(cmd.cmd)) {
     logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id });
     try { ws.send(JSON.stringify({ id: id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' })); } catch (e) {}
+    return;
+  }
+  // A lane carries the leader's streams and nothing else.
+  if (ws.origin === 'lane' && !LANE_ALLOWED_COMMANDS.has(cmd.cmd)) {
+    try { ws.send(JSON.stringify({ id: id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' })); } catch (e) {}
     return;
   }
 
@@ -3218,6 +3230,7 @@ function dispatchCommand(ws, id, cmd) {
     // Streams between servers through this daemon (stream-relay-v1): frames,
     // never answered by id. Twin of daemon-standalone.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd);
+    case 'stream.lane': return cmdStreamLane(ws, id, cmd);
     case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
       return streamRelay.frame(ws, cmd.cmd.slice('stream.'.length), cmd);
     case 'server.configure': return cmdServerConfigure(ws, id, cmd);
@@ -4032,6 +4045,10 @@ var streamRelay = (__CREATE_STREAM_RELAY__)({
 });
 
 function primaryClientFor(home) {
+  // The leader's lane first, while it answers: a stream's bytes stay off its session link.
+  for (const lane of wsClients) {
+    if (lane.origin === 'lane' && lane.laneHome === home && (lane.missedBeats || 0) < 2) return lane;
+  }
   var best = null;
   for (const client of wsClients) {
     if (!isServerClient(client) || gatewayClientHomes.get(client) !== home) continue;
@@ -4053,12 +4070,37 @@ function streamTarget(ws, to) {
     }
     return { why: 'a follower opens streams to the primary or the companion' };
   }
+  if (ws.origin === 'lane') {
+    var lhome = ws.laneHome;
+    var lf = lhome && to === 'follower' ? followerSockets.get(lhome) : undefined;
+    if (lf) return { link: lf, meta: { from: 'primary', home: lhome } };
+    return { why: to === 'follower' ? 'no server on this host follows that Walnut' : 'a lane opens streams to the follower only' };
+  }
   var home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined;
   if (home && to === 'follower') {
     var f = followerSockets.get(home);
     return f ? { link: f, meta: { from: 'primary', home: home } } : { why: 'no server on this host follows that Walnut' };
   }
   return { why: 'this link opens no such stream' };
+}
+
+// The leader makes this socket its lane for streams (stream-lane-v1): a link on
+// its own SSH connection that carries streams only. The Walnut must be the one
+// the leader described here (leader.configure on its session link). Twin of
+// daemon-standalone.ts.
+function cmdStreamLane(ws, id, cmd) {
+  if (ws.origin === 'bridge' || ws.origin === 'follower') return sendError(ws, id, 'stream.lane: the leader only');
+  if (gatewayClientHomes.has(ws)) return sendError(ws, id, 'stream.lane: this socket already speaks for a leader');
+  var home = typeof cmd.home === 'string' ? cmd.home : '';
+  var rec = home ? leaderBook.recordOf(home) : undefined;
+  if (!rec || rec.walnutId !== cmd.walnutId) {
+    try { ws.send(JSON.stringify({ id: id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' })); } catch (e) {}
+    return;
+  }
+  ws.origin = 'lane';
+  ws.laneHome = home;
+  logMsg('info', 'stream lane: the leader opened a lane for its streams', { home: home });
+  sendOk(ws, id, {});
 }
 
 function cmdStreamOpen(ws, cmd) {
@@ -9943,6 +9985,8 @@ function sendError(ws, id, error, data) {
 }
 
 function sendEvent(ws, ev, data) {
+  // A lane hears its streams and nothing of the broadcasts its session link already hears.
+  if (ws.origin === 'lane' && !ev.startsWith('stream-')) return;
   try { ws.send(JSON.stringify({ ev, ...data })); } catch {}
 }
 

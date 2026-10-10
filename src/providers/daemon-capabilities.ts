@@ -328,6 +328,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // daemon passes frames on and holds none. Both twins. Optional: the host
   // server needs it.
   'stream-relay-v1',
+  // 'stream-lane-v1': the leader may make a second socket its lane with
+  // `stream.lane {home, walnutId}` (the Walnut its leader.configure described).
+  // The Mac dials it on its own SSH connection, so stream bytes never ride the
+  // connection its sessions share. A lane sends only hello, ping and stream
+  // frames, opens streams to its follower only, hears no broadcast, is never
+  // taken for the primary, and is the first choice for a follower's stream to
+  // the primary while it answers its beats. Both twins. Optional: without it
+  // streams ride the session link.
+  'stream-lane-v1',
   // 'host-replica-v1' (host-replica-core.ts, docs/plan/walnut-control-plane.md):
   // the primary keeps a read copy of its notes, memory and skills on this host
   // with `replica.sync` (a manifest of key + hash; the daemon answers which keys
