@@ -538,8 +538,9 @@ export interface BuildTranscriptOptions {
   full?: boolean
   /**
    * Add the expanded-card fields (`inputPreview`, `thinkingText`) and NOTHING
-   * else: the TRANSCRIPT_TAIL slice, clipTranscriptText, and `truncated` all
-   * behave exactly as they do without this flag.
+   * else: the TRANSCRIPT_TAIL slice and `truncated` behave exactly as they do
+   * without this flag. (A rich read is always a live one, so it also gets the
+   * `live` text budget; see that option.)
    *
    * Split out of `full` because `full` is not a field switch, and reading it as
    * one is what produced the defect this exists to fix: the fields were only
@@ -555,6 +556,17 @@ export interface BuildTranscriptOptions {
    * the tool row in buildSessionTranscript.
    */
   rich?: boolean
+  /**
+   * The build answers a client right now and is never swept or pushed: text rows
+   * clip at the LIVE budget (clipTranscriptText `'live'`, 16K prose / 48K markup)
+   * instead of the pushed tail's 4K. Every inline build of
+   * GET /api/v1/sessions/:id/transcript and of the companion's relay sets it; the
+   * export sweep and every other caller keep the default. At 4K a reply the phone
+   * had watched stream in whole was cut to its head plus "…" by the turn-end
+   * refetch (transcript-clip.ts). The row clip is raised, never dropped, so one
+   * row stays bounded.
+   */
+  live?: boolean
   /**
    * Page backwards: only history messages strictly OLDER than this ISO
    * timestamp (the oldest row the client already holds). Rows of one history
@@ -735,7 +747,7 @@ export async function buildSessionTranscript(
     if (text) {
       messages.push({
         role: m.role,
-        text: opts?.full ? text : clipTranscriptText(text),
+        text: opts?.full ? text : clipTranscriptText(text, opts?.live || wantRich ? 'live' : 'tail'),
         timestamp: m.timestamp,
       })
     }

@@ -3095,7 +3095,14 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
 // `rich=1` (additive) adds the expanded-card fields (`inputPreview`,
 // `thinkingText`, `detailRef`) to the rows. The sweep and the bridge push stay
 // slim because neither passes the option; `rich` gates only those fields, so it
-// can never move the tail slice, the clip, or `truncated`.
+// can never move the tail slice or `truncated`.
+//
+// Every read this route BUILDS (fresh, rich, a page, the cold-start inline build)
+// is answered right now and never pushed, so its text rows clip at the live
+// budget (16K prose, 48K markup) rather than the pushed tail's 4K: at 4K a long
+// reply the phone had watched stream in was cut to its head plus "…" by the
+// turn-end refetch (core/sessions/transcript-clip.ts). Only a read served from the
+// sweep file keeps 4K.
 //
 // A RICH REQUEST IS NEVER ANSWERED WITH SLIM ROWS. That is a fix, not a
 // simplification, and the version it replaces is worth stating because the
@@ -3155,9 +3162,10 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       ? Math.min(rawVisible, TRANSCRIPT_VISIBLE_MAX)
       : undefined
     // Passed to BOTH inline builds below, so a tail is never rich on one path and
-    // slim on the other. `{ rich: false }` is byte-for-byte the bare
-    // buildSessionTranscript(sessionId) both sites called before: `rich` gates
-    // only the two fields, never the tail slice, the clip, or `truncated`.
+    // slim on the other. `{ rich: false }` is the bare buildSessionTranscript
+    // (sessionId) both sites called before, except that `live` clips text at the
+    // live budget: `rich` gates only the two fields, never the tail slice or
+    // `truncated`.
     //
     // ONE build per request, and that is load-bearing rather than tidy. The first
     // version of this route got the fields by ALSO building with `{ full: true }`
@@ -3171,6 +3179,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     // `rich` exists so this route never has to do that; keep it at one build.
     const buildOpts = {
       rich: wantRich,
+      live: true,
       ...(rawBefore ? { before: rawBefore } : {}),
       ...(visible ? { visible } : {}),
       ...(rawSince ? { since: rawSince } : {}),

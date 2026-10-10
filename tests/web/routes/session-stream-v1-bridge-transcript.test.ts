@@ -147,3 +147,27 @@ describe('buildTranscriptViaBridge: one row per message id', () => {
     expect((t!.messages as Array<{ text: string }>).map((m) => m.text)).toEqual(['same words', 'same words'])
   })
 })
+
+// 2026-10-10: the phone showed a long reply whole while it streamed, then its
+// first 4,000 characters plus "…" once the turn ended. This read only ever answers
+// a phone reading right now (it is never pushed), so it clips at the live budget
+// the primary's rich read uses, not the pushed tail's 4K.
+describe('buildTranscriptViaBridge: a long reply arrives whole', () => {
+  it('keeps a 5,000-character reply and still clips past the live budget', async () => {
+    const reply = '\u957f\u56de\u7b54\u3002'.repeat(1250) + 'END' // CJK prose, 5,003 chars
+    const huge = 'x'.repeat(20_000)
+    bridgeRequestMock.mockResolvedValue({
+      ok: true,
+      main: jsonl([
+        { type: 'user', timestamp: '2026-10-10T00:00:01Z', message: { content: 'explain it' } },
+        { type: 'assistant', timestamp: '2026-10-10T00:00:02Z', message: { content: [{ type: 'text', text: reply }] } },
+        { type: 'assistant', timestamp: '2026-10-10T00:00:03Z', message: { content: [{ type: 'text', text: huge }] } },
+      ]),
+    })
+    const t = await buildTranscriptViaBridge(SID)
+    const rows = (t!.messages as Array<{ role: string; text: string }>).filter((m) => m.role === 'assistant')
+    expect(rows[0].text).toBe(reply)
+    expect(rows[1].text.length).toBe(16_001)
+    expect(rows[1].text.endsWith('\u2026')).toBe(true)
+  })
+})

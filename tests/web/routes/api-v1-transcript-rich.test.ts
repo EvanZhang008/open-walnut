@@ -22,8 +22,9 @@
  *    that HAS both a reasoning block and a tool input to leak, so the case would
  *    catch the widening it exists to forbid;
  *  - with `rich=1`, both fields arrive, capped and masked as documented;
- *  - `rich=1` is NOT `full`: the tail still slices and text rows still clip. This
- *    is the misreading that produced the defect, so it gets its own case;
+ *  - `rich=1` is NOT `full`: the tail still slices and text rows still clip, at
+ *    the phone's live budget (16K) rather than the pushed tail's 4K. This is the
+ *    misreading that produced the defect, so it gets its own case;
  *  - `full` still implies `rich`, so the lane read keeps the shape it shipped;
  *  - `rich` is parsed exactly like `fresh` (only the literal `1`), proven by
  *    running the same value set through BOTH parameters in one loop;
@@ -180,8 +181,10 @@ describe('transcript ?rich=1', () => {
     const { status, text, body } = await getTranscript(sid, '?fresh=1')
     expect(status).toBe(200)
 
-    // The pre-change route was exactly this call, with no options.
-    const expected = await buildSessionTranscript(sid)
+    // The pre-change route was exactly this call, with no options; `live` only
+    // moves the text budget of rows longer than this fixture has.
+    const expected = await buildSessionTranscript(sid, { live: true })
+    expect(JSON.stringify(expected)).toBe(JSON.stringify({ ...(await buildSessionTranscript(sid)), exportedAt: expected.exportedAt }))
     expect(stripExportedAt(text)).toBe(stripExportedAt(JSON.stringify(expected)))
 
     // Stated as its own assertion so a future widening reads as a field leak
@@ -334,6 +337,10 @@ describe('transcript ?rich=1', () => {
     // clipTranscriptText, so wiring this route to it would have turned a tail the
     // phone refetches at every turn end into the whole unclipped conversation.
     // If `rich` ever starts implying either of those, this goes red.
+    //
+    // What `rich` DOES move (2026-10-10) is the row budget: 4K cut a reply the
+    // phone had just watched stream in whole down to its head plus "…" at turn
+    // end. A rich row clips at the phone's own row bound instead.
     const sid = 'sess-rich-not-full'
     await createSessionRecord(sid, '', '', CWD, { title: 'Long session', initialProcessStatus: 'idle' })
     const lines: unknown[] = []
@@ -356,23 +363,34 @@ describe('transcript ?rich=1', () => {
     expect(rich.body.truncated).toBe(true)
     const firstUser = rich.body.messages.find((m) => m.role === 'user')!
     expect(firstUser.text).not.toBe('question 1') // turn 1 fell off the tail
-    // 2. Text rows are STILL clipped. The source answer is ~10 KB; the clip is
-    //    4 KB (12 KB only for a row carrying HTML, which this is not).
+    // 2. Text rows are clipped at the LIVE budget: the ~10 KB answer the phone
+    //    renders arrives whole, and an answer past 16K is still cut.
     const answers = rich.body.messages.filter((m) => !m.kind && m.role === 'assistant')
     expect(answers.length).toBeGreaterThan(0)
     for (const row of answers) {
-      expect(row.text.length, 'a text row escaped clipTranscriptText').toBeLessThan(6000)
+      expect(row.text.length).toBeGreaterThan(10_000)
+      expect(row.text.endsWith('\u2026'), 'a ~10 KB answer was cut on a rich read').toBe(false)
     }
     // 3. And the fields the caller actually asked for did arrive, so 1 and 2 are
     //    not passing because `rich` quietly did nothing.
     expect(rich.body.messages.find((m) => m.kind === 'tool')!.inputPreview).toContain('file_path: ')
     expect(rich.body.messages.find((m) => m.kind === 'thinking')!.thinkingText).toBeDefined()
-    // 4. Row-for-row, `rich=1` is the slim answer plus the two fields: the tail
-    //    it slices is the SAME tail, in the same order, with the same text.
+    // 4. Row-for-row, `rich=1` is the slim live answer plus the two fields: the
+    //    tail it slices is the SAME tail, in the same order, with the same text
+    //    (every read this route builds clips at the live budget).
     const slim = await getTranscript(sid, '?fresh=1')
     const strip = (rows: Row[]): Row[] =>
       rows.map(({ inputPreview: _i, thinkingText: _t, detailRef: _d, ...rest }) => rest)
     expect(strip(rich.body.messages)).toEqual(strip(slim.body.messages))
+    // 5. Only the swept tail keeps the 4K budget, and it really is what cut these.
+    const swept = await buildSessionTranscript(sid)
+    const sweptAnswers = swept.messages.filter((m) => !m.kind && m.role === 'assistant')
+    expect(sweptAnswers.length).toBe(answers.length)
+    sweptAnswers.forEach((row, i) => {
+      expect(row.text.length).toBe(4_001)
+      expect(row.text.endsWith('\u2026')).toBe(true)
+      expect(answers[i].text.startsWith(row.text.slice(0, -1))).toBe(true)
+    })
   })
 
   it('full still implies rich, so the lane read keeps the shape it shipped', async () => {

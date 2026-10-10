@@ -97,6 +97,8 @@ export async function handlePrimaryTranscriptRelay(
     : undefined
   const page = await buildSessionTranscript(sessionId, {
     rich: raw.rich === true,
+    // A relayed page answers the phone right now, like the route's own builds.
+    live: true,
     ...(before ? { before } : {}),
     ...(since ? { since } : {}),
     ...(visible ? { visible } : {}),

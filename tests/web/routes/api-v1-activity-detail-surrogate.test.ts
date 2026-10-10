@@ -199,7 +199,7 @@ describe('activity detail: an emoji on a cap never poisons the body', () => {
   })
 
   it('serves the plain tail decodable too (the slim rows the bridge pushes)', async () => {
-    // Same cuts, different budget: the 4 KB per-row clip on a plain read.
+    // Same cuts, different budget: the slim rows (no rich fields) of a plain fresh read.
     await clean('/api/v1/sessions/detail-surrogate/transcript?fresh=1', 'slim rows')
   })
 })

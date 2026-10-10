@@ -123,11 +123,12 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
   }
 }
 
-/** Same budgets and the same HTML-safe cut as the primary path: a rich reply
- *  must not arrive whole on one route and cut mid-attribute on the other
- *  (core/sessions/transcript-clip.ts). */
+/** The same HTML-safe cut as the primary path, at the LIVE budget its rich read
+ *  uses: both readers answer only a phone reading right now (nothing they build
+ *  is pushed), so a long reply must not arrive whole on one route and cut at 4K
+ *  on the other (core/sessions/transcript-clip.ts). */
 function clip(text: string): string {
-  return clipTranscriptText(text)
+  return clipTranscriptText(text, 'live')
 }
 
 /** A USER row, minus the machine text the send path appended (output-mode
@@ -139,7 +140,7 @@ function clip(text: string): string {
  *  every send while rich holds. Strip BEFORE clipping so the budget is spent on
  *  the human's words. */
 function clipUserText(text: string): string {
-  return clipTranscriptText(toDisplayedUserText(text))
+  return clipTranscriptText(toDisplayedUserText(text), 'live')
 }
 
 /** The CLI's abort echo ("[Request interrupted by user( for tool use)]"):

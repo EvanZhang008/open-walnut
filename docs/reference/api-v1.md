@@ -1283,7 +1283,8 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   timestamp, kind?, detail?, resultPreview?, agent?, isError?, inputPreview?,
   thinkingText?, detailRef? } ] }`: a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row, or 12 KB for a row that
-  carries HTML, and the cut is made where it cannot leave half a tag behind so a
+  carries HTML, 16 KB / 48 KB on any read built live (`fresh=1`, `rich=1`, a page;
+  see `rich=1` below), and the cut is made where it cannot leave half a tag behind so a
   rich reply is never truncated mid-attribute; `kind: "tool"` rows carry
   the tool name, plus additive `detail` (input summary) / `resultPreview`
   (clipped output) when available, and `kind: "thinking"` rows carry a
@@ -1320,8 +1321,20 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   `detail` stays the collapsed ≤160 one-liner) and `kind: "thinking"` rows gain
   `thinkingText` (a fuller reasoning excerpt, ≤2000+`…` chars, newlines kept,
   clipped from the START of the block; `text` stays the collapsed ≤160 line).
-  Nothing else about the response changes: same ~100-entry tail, same 4 KB row
-  clip, same `truncated`. Parsed like `fresh`: **only the exact value `1` counts**,
+  Nothing else about the response changes: same ~100-entry tail, same
+  `truncated`. Text rows on every read this route BUILDS (`fresh=1`, `rich=1`, a
+  `before` page, and the inline build that stands in for a missing sweep file)
+  clip at the phone's own row bound instead of the pushed tail's: 16,000
+  characters for prose (the iOS history row clip) and 48,000 for a row that
+  carries HTML (the window the phone renders a streaming reply in), counted in
+  UTF-16 units like every length here (2026-10). At 4 KB a reply the phone had
+  watched stream in whole was cut to its head plus `…` by the turn-end refetch,
+  which on a long answer looked like the reply breaking off halfway. The
+  companion's bridge read, its relay to the primary and a host server answering
+  alone use the same live budget. Only a read served from the sweep file (a plain
+  read on the primary, a replica's synced copy) keeps the 4 KB clip, so a client
+  that mixes reads must not let a clipped row replace the whole text it already
+  holds for that row. Parsed like `fresh`: **only the exact value `1` counts**,
   anything else (`rich=true`, `rich=0`, a bare `rich`) reads as absent.
   `kind: "tool"`/`kind: "thinking"` rows also gain `detailRef` when their excerpt
   had to cut something: it is the handle for `GET /api/v1/activity/detail` (below),

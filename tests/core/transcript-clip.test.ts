@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   clipTranscriptText, TRANSCRIPT_TEXT_MAX, TRANSCRIPT_RICH_TEXT_MAX,
+  TRANSCRIPT_LIVE_TEXT_MAX, TRANSCRIPT_LIVE_RICH_TEXT_MAX,
 } from '../../src/core/sessions/transcript-clip.js'
 
 describe('clipTranscriptText', () => {
@@ -73,5 +74,44 @@ describe('clipTranscriptText', () => {
     // "a < b" and a generic parameter must not buy prose the rich budget.
     const text = `if a < b and Vec<u8> then ${'p'.repeat(TRANSCRIPT_TEXT_MAX)}`
     expect(clipTranscriptText(text).length).toBe(TRANSCRIPT_TEXT_MAX + 1)
+  })
+})
+
+describe('clipTranscriptText: the live budget (a phone reading right now)', () => {
+  // The 2026-10-10 report: on the phone a long reply streamed in whole, then
+  // turned into its first 4,000 characters plus "…" when the turn ended, because
+  // the turn-end refetch was clipped at the pushed tail's budget. The real reply
+  // was 5,005 characters of Chinese prose; this one is the same shape.
+  const cjkReply = '\u8fd9\u662f\u4e00\u6bb5\u5f88\u957f\u7684\u56de\u7b54\u3002'.repeat(500) + 'END'
+
+  it('a 5,000-character CJK reply arrives whole on a live read and cut on the tail', () => {
+    expect(cjkReply.length).toBeGreaterThan(TRANSCRIPT_TEXT_MAX)
+    expect(clipTranscriptText(cjkReply, 'live')).toBe(cjkReply)
+    const tail = clipTranscriptText(cjkReply)
+    expect(tail.length).toBe(TRANSCRIPT_TEXT_MAX + 1)
+    expect(tail.endsWith('\u2026')).toBe(true)
+  })
+
+  it('the default stays the tail budget, so the sweep and the push do not grow', () => {
+    expect(clipTranscriptText(cjkReply)).toBe(clipTranscriptText(cjkReply, 'tail'))
+  })
+
+  it('a live read still clips prose, at the phone row bound', () => {
+    const text = 'a'.repeat(TRANSCRIPT_LIVE_TEXT_MAX + 500)
+    const clipped = clipTranscriptText(text, 'live')
+    expect(clipped.length).toBe(TRANSCRIPT_LIVE_TEXT_MAX + 1)
+    expect(clipped.endsWith('\u2026')).toBe(true)
+  })
+
+  it('a live read gives markup the live window, and still never ends inside a tag', () => {
+    const card = `<div class="c">${'word '.repeat(6000)}</div>`
+    expect(card.length).toBeGreaterThan(TRANSCRIPT_RICH_TEXT_MAX)
+    expect(card.length).toBeLessThan(TRANSCRIPT_LIVE_RICH_TEXT_MAX)
+    expect(clipTranscriptText(card, 'live')).toBe(card)
+    const filler = `<p>${'x'.repeat(TRANSCRIPT_LIVE_RICH_TEXT_MAX - 40)}</p>`
+    const over = `${filler}<div style="border-left:3px solid #dc2626;padding:8px">tail</div>`
+    const clipped = clipTranscriptText(over, 'live')
+    expect(clipped).not.toContain('padding:8')
+    expect(clipped.slice(0, -1).endsWith('</p>')).toBe(true)
   })
 })

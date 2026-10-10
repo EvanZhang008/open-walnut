@@ -22,6 +22,20 @@
  * every HTML parser closes open elements at end of document, so the visible part
  * still renders as the card it was. Only constructs that render as GARBAGE are
  * dropped.
+ *
+ * TWO budgets, by who reads the rows (2026-10-10). The 4K one was sized for the
+ * TAIL that is swept to disk and pushed to the cloud companion under a frame cap.
+ * The phone's LIVE reads (every read the primary builds for it, the companion's
+ * bridge read, a host server answering alone) are never pushed, and they were
+ * clipped by the same 4K anyway: a reply that streamed in whole snapped back to its first 4,000
+ * characters plus "…" the moment the turn ended, with no way on the phone to read
+ * the rest. A 5,000-character Chinese answer is an ordinary reply, so this was the
+ * phone's normal behaviour for long answers. A live read clips at the phone's own
+ * row bound instead (iOS `MarkdownParser.oversizedRowClipLimit` for prose, the live
+ * render window `LiveMarkdownWindow.windowMax` for markup): text the phone would
+ * cut itself is not worth sending, and anything shorter arrives whole. A live page
+ * stays bounded by its rows (the ~100-row tail) and, over the bridge, by bytes
+ * (`capRelayedPage`), so the larger per-row budget cannot grow it without limit.
  */
 
 import { splitPendingMarkup } from '../stream/pending-markup.js';
@@ -35,6 +49,18 @@ export const TRANSCRIPT_TEXT_MAX = 4_000;
  *  one, while staying far below the point where 200 of them stop being a "slim"
  *  tail. */
 export const TRANSCRIPT_RICH_TEXT_MAX = 12_000;
+
+/** Prose budget for a LIVE read: the phone's own row clip (iOS
+ *  `MarkdownParser.oversizedRowClipLimit`). */
+export const TRANSCRIPT_LIVE_TEXT_MAX = 16_000;
+
+/** Markup budget for a LIVE read: the window the phone already renders a
+ *  streaming reply in (iOS `LiveMarkdownWindow.windowMax`). */
+export const TRANSCRIPT_LIVE_RICH_TEXT_MAX = 48_000;
+
+/** `tail`: the swept and pushed tail (the default). `live`: a read the phone makes
+ *  right now, which is never pushed anywhere. */
+export type TranscriptClipBudget = 'tail' | 'live';
 
 /**
  * Does this text carry real markup (as opposed to a `<` that only looks like it)?
@@ -57,11 +83,13 @@ function looksLikeMarkup(text: string): boolean {
  * Clip one transcript message to its budget, never leaving a half-written markup
  * construct behind. Returns the text unchanged when it fits.
  */
-export function clipTranscriptText(text: string): string {
+export function clipTranscriptText(text: string, budget: TranscriptClipBudget = 'tail'): string {
+  const proseMax = budget === 'live' ? TRANSCRIPT_LIVE_TEXT_MAX : TRANSCRIPT_TEXT_MAX;
   // Fast path first: the overwhelming majority of rows are short, and this runs
   // for every row of every sweep.
-  if (text.length <= TRANSCRIPT_TEXT_MAX) return text;
-  const limit = looksLikeMarkup(text) ? TRANSCRIPT_RICH_TEXT_MAX : TRANSCRIPT_TEXT_MAX;
+  if (text.length <= proseMax) return text;
+  const markupMax = budget === 'live' ? TRANSCRIPT_LIVE_RICH_TEXT_MAX : TRANSCRIPT_RICH_TEXT_MAX;
+  const limit = looksLikeMarkup(text) ? markupMax : proseMax;
   if (text.length <= limit) return text;
   // Cut on a code-point boundary (core/text-cut.ts): a cut through an emoji leaves a
   // lone surrogate, and one row of the tail carrying one makes a strict client reject
