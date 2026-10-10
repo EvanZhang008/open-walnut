@@ -253,6 +253,34 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.delivered[0].text).not.toContain('Reply when done')
   })
 
+  it('a task with two live sessions here gets the message in its current one, else the newest, as on the server', async () => {
+    const D = 'eeeeeeee-5555-4555-8555-555555555555'
+    const twoOf = (sessionId?: string) => slice({
+      hash: `two-${sessionId ?? 'none'}`,
+      // The copy lists sessions newest first (host-slice.ts): D is the second try.
+      sessions: [
+        { sid: A, taskId: 'mtaskaaa-0001', title: 'Parent work' },
+        { sid: D, taskId: 'mtaskbbb-0002', title: 'Child, second try' },
+        { sid: B, taskId: 'mtaskbbb-0002', title: 'Child: build the page' },
+      ],
+      tasks: slice().tasks.map((t) => (t.id === 'mtaskbbb-0002' && sessionId ? { ...t, session_id: sessionId } : t)),
+    })
+    const h = harness()
+    h.live.add(D)
+    h.host.configure(twoOf(B))
+    const toCurrent = await call(h, A, 'task_send', { to: 'mtaskbbb-0002', text: 'to the current one', expect_reply: false })
+    expect(toCurrent.ok && toCurrent.result.targetSessionId).toBe(B)
+    h.host.configure(twoOf())
+    const toNewest = await call(h, A, 'task_send', { to: 'mtaskbbb-0002', text: 'to the newest', expect_reply: false })
+    expect(toNewest.ok && toNewest.result.targetSessionId).toBe(D)
+    // A current session that is not running here: the newest live one.
+    h.live.delete(B)
+    h.host.configure(twoOf(B))
+    const stoppedCurrent = await call(h, A, 'task_send', { to: 'mtaskbbb-0002', text: 'current one stopped', expect_reply: false })
+    expect(stoppedCurrent.ok && stoppedCurrent.result.targetSessionId).toBe(D)
+    expect(h.delivered.map((d) => d.sid)).toEqual([B, D, D])
+  })
+
   it('refuses self sends, stopped targets, unknown targets and other Walnuts\' sessions', async () => {
     const h = harness()
     h.host.configure(slice())

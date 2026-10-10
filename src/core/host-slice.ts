@@ -153,7 +153,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       ...(t.parent_task_id ? { parent_task_id: t.parent_task_id } : {}),
       ...(t.description ? { description: clip(t.description, DESCRIPTION_MAX) } : {}),
       ...(t.updated_at ? { updated_at: t.updated_at } : {}),
-      ...(t.session_id ? { session_id: t.session_id } : {}),
+      // The session a message to the task goes to, as the server picks it (session-send-core.ts).
+      ...((t.session_id || t.exec_session_id) ? { session_id: t.session_id || t.exec_session_id } : {}),
     });
   };
   // Session tasks first (newest session first), then their parents, then the

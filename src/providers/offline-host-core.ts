@@ -749,7 +749,10 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       if (live.length === 0) {
         return { error: needsServer(`Task ${task.id} has no session running on this host; starting one`) }
       }
-      return { sid: live[0].sid, taskId: task.id, title: live[0].title ?? task.title }
+      // The session the server picks (session-send-core.ts): the task's current
+      // one, else the most recently active (the copy lists sessions newest first).
+      const current = live.find((s) => s.sid === task.session_id) ?? live[0]
+      return { sid: current.sid, taskId: task.id, title: current.title ?? task.title }
     }
     const ref = to.trim()
     const byId = slice.sessions.filter((s) => s.sid === ref || (ref.length >= 8 && s.sid.startsWith(ref)))
