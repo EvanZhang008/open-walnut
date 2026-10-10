@@ -154,7 +154,8 @@ to that call; if they say these are their hours, save them with
 - Knows: what was planned (meetings, focus blocks), not what happened. Every
   calendar segment is `planned`. An event with a call link, a room booking or
   other people invited is a meeting.
-- Room bookings that repeat a meeting count once.
+- Room bookings that repeat a meeting, and the same meeting in two calendars
+  (a few minutes apart at most), count once.
 
 **Plugin sources**
 - A plugin may add its own (a car, a fitness app). Its id is

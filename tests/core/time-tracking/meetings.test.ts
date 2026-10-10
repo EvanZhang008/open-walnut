@@ -206,6 +206,16 @@ describe('mergeDay with calls', () => {
     expect(out.plan[0]).toMatchObject({ attendance: 'needs_confirmation', attendanceBasis: 'nothing_recorded', verdict: 'meeting_on_screen' })
   })
 
+  it('the same meeting twice, a minute apart, is one meeting, not a double booking', () => {
+    const out = merge([
+      cal('Weekly review', t(5, 13, 29), t(5, 14, 30), 'E-1'),
+      cal('Weekly review', t(5, 13, 30), t(5, 14, 30), 'E-2'),
+      seg('calls', 'call', 'Zoom call', t(5, 13, 31), t(5, 14, 5)),
+    ], ctx())
+    expect(out.plan).toHaveLength(1)
+    expect(out.plan[0]).toMatchObject({ attendance: 'attended', attendanceBasis: 'call', attendedMin: 34 })
+  })
+
   it('a meeting the user asked to leave out is not checked', () => {
     const out = merge([cal('Team lunch', t(5, 12), t(5, 13), 'E-l'), cal('Design', t(5, 15), t(5, 16), 'E-d')], ctx({ ignore: ['lunch'] }))
     expect(out.plan.map((p) => p.title)).toEqual(['Design'])

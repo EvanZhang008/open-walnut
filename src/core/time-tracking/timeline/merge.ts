@@ -328,11 +328,18 @@ function planChecks(
   }
 }
 
-/** Same-start, same-end calendar entries where one title holds the other are one entry (room bookings). */
+/** Starts and ends this close still make the same entry (a copy saved a minute off). */
+const TWIN_SLACK_MS = 5 * 60_000
+
+/**
+ * Calendar entries at the same time (within TWIN_SLACK_MS at both ends) where one
+ * title holds the other are one entry: a room booking, or the same meeting in two
+ * calendars (2026-10-06: one at 13:29, its copy at 13:30, read as a double booking).
+ */
 function dedupePlanned(planned: SourcedSegment[]): SourcedSegment[] {
   const out: SourcedSegment[] = []
   for (const ev of planned.sort((a, b) => a.startMs - b.startMs || a.label.length - b.label.length)) {
-    const twin = out.find((o) => o.startMs === ev.startMs && o.endMs === ev.endMs
+    const twin = out.find((o) => Math.abs(o.startMs - ev.startMs) <= TWIN_SLACK_MS && Math.abs(o.endMs - ev.endMs) <= TWIN_SLACK_MS
       && (o.label.toLowerCase().includes(ev.label.toLowerCase()) || ev.label.toLowerCase().includes(o.label.toLowerCase())))
     if (!twin) out.push(ev)
   }
