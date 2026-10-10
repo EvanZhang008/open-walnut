@@ -165,9 +165,9 @@ describe('meetings in the timeline', () => {
     expect(body.sources.find((s: any) => s.id === 'calls')).toMatchObject({ available: true, priority: 85 })
     const day = body.days[0]
     const plan = Object.fromEntries(day.plan.map((p: any) => [p.title, p]))
-    expect(plan['Design review']).toMatchObject({ attendance: 'attended', attendanceBasis: 'call', callMin: 50, eventId: 'EV-design' })
+    expect(plan['Design review']).toMatchObject({ attendance: 'attended', attendanceBasis: 'call', callMin: 50, attendedMin: 50, eventId: 'EV-design' })
     expect(plan['Team sync']).toMatchObject({ attendance: 'needs_confirmation', meetingMin: 0 })
-    expect(day.summary).toMatchObject({ callMin: 70, adHocCallMin: 20 })
+    expect(day.summary).toMatchObject({ callMin: 70, adHocCallMin: 20, attendedMeetingMin: 50 })
     expect(day.summary.needsConfirmation.map((m: any) => m.eventId)).toEqual(['EV-sync', 'EV-lunch'])
     expect(day.blocks.some((b: any) => b.kind === 'call' && b.label === 'Zoom call')).toBe(true)
   })

@@ -168,10 +168,12 @@ anything away from the Mac. When a gap matters, ask; do not invent.
 Each meeting in `time_timeline` `plan` carries `attendance` and why
 (`attendanceBasis`), decided from the calls on this Mac:
 
-- `attended` (basis `call`): a call ran during it. `meetingMin` is the call's
-  minutes inside the meeting minus `otherWorkMin`, the seconds the user was
-  doing something else on screen (Walnut input, another app in front). Report
-  `meetingMin`, not the calendar length.
+- `attended` (basis `call`): a call ran during it. `attendedMin` is the time
+  on the call inside the meeting; `otherWorkMin` is the part of it the user was
+  also doing something else on screen (Walnut input, another app in front);
+  `meetingMin` is the rest. Time in a meeting is `attendedMin`, never the
+  calendar length; say how much of it went to other work (people often work
+  through a call, so `meetingMin` alone can be a few minutes of an hour).
 - `not_attended`: a recurring meeting never on a call in the last four weeks
   (basis `recurring_never_on_call`), or no call while the screen showed other
   work for at least half of it (basis `other_work`: the time belongs to that
@@ -179,19 +181,25 @@ Each meeting in `time_timeline` `plan` carries `attendance` and why
 - `needs_confirmation`: never count it and never guess. Ask the user, listing
   `summary.needsConfirmation` (title, time, basis), then record each answer
   with `time_meeting_attendance_set`. Their answer then wins (basis `user`).
-  Two bases:
-  - `nothing_recorded`: no call and nothing on the screen (the Mac idle, asleep
-    or away). Ask "were you in it?".
+  Three bases:
+  - `nothing_recorded`: no call and next to nothing on the screen (the Mac
+    idle, asleep or away, or only the call app in front). Ask "were you in it?".
+  - `some_other_work`: no call, and other work for part of it but under half.
+    Ask the same, and say what was on screen.
   - `double_booked`: two meetings at the same time and one call. Ask which one
     it was. Marking one attended makes the other not attended (basis
     `double_booked`); marking one not attended gives the call to the other.
 - `unknown` (basis `no_call_data`): no call data for that time (calls are
   watched only while outside activity is on). Say so.
 
-`summary.meetingMin` is the attended meeting time, each second once (two
-overlapping meetings never count the same call twice, and the call under a
-double booking counts though which meeting it was is open); `summary.meetings` counts
-each attendance. Meetings the user asked to leave out (`time_meetings_ignore_set`)
+`summary.attendedMeetingMin` is the day's time in meetings and
+`summary.meetingMin` the part of it with nothing else on screen, each second
+once (two overlapping meetings never count the same call twice, and the call
+under a double booking counts though which meeting it was is open). Meeting
+time overlaps screen time, so in a review give meetings their own line ("8h10
+in meetings, 6h of it also working in Walnut and Slack") instead of a share
+that adds up with the screen buckets. `summary.meetings` counts each
+attendance. Meetings the user asked to leave out (`time_meetings_ignore_set`)
 are not checked (`summary.ignoredMeetings`).
 
 ## 4. How the timeline decides, and how sure it is
@@ -218,6 +226,8 @@ that happened.
 3. Split the time into a few buckets the user recognises (their projects, or
    areas such as ops, meetings, reviews, deep work, admin, chat). A bucket can
    span several Walnut projects; say which projects and tasks went into it.
+   Meetings come from `time_timeline` (`summary.attendedMeetingMin` per day)
+   and overlap the screen buckets: give them their own line (section 3b).
 4. For each bucket: work hours and whole day, and its share of work hours.
 5. Evenings and weekends: `offMin` per day; name the days that ran late.
 6. Scatter: `fragmentation` (tasks per day, switches per hour, `deepShare` = the

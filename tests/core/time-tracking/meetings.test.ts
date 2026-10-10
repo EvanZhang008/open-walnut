@@ -20,7 +20,7 @@ import {
   type MeetingContext, type MeetingFacts,
 } from '../../../src/core/time-tracking/timeline/meetings.js'
 import { ignoreList, loadMeetingContext, readMeetingAnswers, setMeetingAnswer } from '../../../src/core/time-tracking/timeline/meeting-context.js'
-import { appendCallLines, callLine, coverageLine, resetCallsStore } from '../../../src/core/time-tracking/calls-store.js'
+import { appendCallLines, callLine, coverageLines, resetCallsStore } from '../../../src/core/time-tracking/calls-store.js'
 import type { SourcedSegment, TimelineRange, TimelineSourceResult } from '../../../src/core/time-tracking/timeline/types.js'
 import { DEFAULT_WORK_HOURS } from '../../../src/core/time-tracking/work-hours.js'
 import { systemTz } from '../../../src/core/health/day-key.js'
@@ -38,6 +38,7 @@ describe('meetingAttendance', () => {
     const a = meetingAttendance(meeting({ otherWork: [[t(5, 11, 40), t(5, 11, 50)]] }), ctx({ calls: [[t(5, 11, 2), t(5, 11, 55)]] }))
     expect(a).toEqual({
       attendance: 'attended', basis: 'call', callMs: 53 * MIN, meetingMs: 43 * MIN, otherWorkMs: 10 * MIN,
+      spans: [[t(5, 11, 2), t(5, 11, 55)]],
       counted: [[t(5, 11, 2), t(5, 11, 40)], [t(5, 11, 50), t(5, 11, 55)]],
     })
   })
@@ -56,13 +57,14 @@ describe('meetingAttendance', () => {
   it('no call, other work on screen for at least half of it: not attended, the time is that work\'s', () => {
     expect(meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 20)], [t(5, 11, 30), t(5, 11, 40)]] }), ctx()))
       .toMatchObject({ attendance: 'not_attended', basis: 'other_work' })
-    // 25 of 60 minutes is not half: the user's to say.
-    expect(meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 25)]] }), ctx())).toMatchObject({ attendance: 'needs_confirmation' })
+    // 25 of 60 minutes is not half: the user's to say, and the basis says some work was seen.
+    expect(meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 25)]] }), ctx()))
+      .toMatchObject({ attendance: 'needs_confirmation', basis: 'some_other_work', meetingMs: 0 })
   })
 
   it('no call and nothing recorded: needs confirmation, never counted', () => {
-    expect(meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 10)]] }), ctx())).toEqual({
-      attendance: 'needs_confirmation', basis: 'nothing_recorded', callMs: 0, meetingMs: 0, otherWorkMs: 0, counted: [],
+    expect(meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 5)]] }), ctx())).toEqual({
+      attendance: 'needs_confirmation', basis: 'nothing_recorded', callMs: 0, meetingMs: 0, otherWorkMs: 0, spans: [], counted: [],
     })
   })
 
@@ -73,7 +75,7 @@ describe('meetingAttendance', () => {
 
   it('the user\'s answer wins either way', () => {
     const yes = meetingAttendance(meeting({ otherWork: [[t(5, 11), t(5, 11, 15)]] }), ctx({ answers: new Map([['E1', true]]) }))
-    expect(yes).toMatchObject({ attendance: 'attended', basis: 'user', meetingMs: 45 * MIN })
+    expect(yes).toMatchObject({ attendance: 'attended', basis: 'user', meetingMs: 45 * MIN, spans: [[t(5, 11), t(5, 12)]] })
     const no = meetingAttendance(meeting(), ctx({ calls: [[t(5, 11), t(5, 12)]], answers: new Map([['E1', false]]) }))
     expect(no).toMatchObject({ attendance: 'not_attended', basis: 'user', meetingMs: 0 })
   })
@@ -91,6 +93,7 @@ describe('settleDoubleBooked', () => {
     for (const m of [a!, b!]) {
       expect(m.attendance).toMatchObject({ attendance: 'needs_confirmation', basis: 'double_booked', meetingMs: 0, callMs: 53 * MIN })
       expect(m.attendance.counted).toEqual(CALL)
+      expect(m.attendance.spans).toEqual(CALL)
     }
   })
 
@@ -98,7 +101,7 @@ describe('settleDoubleBooked', () => {
     const yes = new Map([['A', true]])
     const [a, b] = settleDoubleBooked([entry('A', yes), entry('B', yes)])
     expect(a!.attendance).toMatchObject({ attendance: 'attended', basis: 'user', meetingMs: 53 * MIN })
-    expect(b!.attendance).toMatchObject({ attendance: 'not_attended', basis: 'double_booked', meetingMs: 0, counted: [] })
+    expect(b!.attendance).toMatchObject({ attendance: 'not_attended', basis: 'double_booked', meetingMs: 0, spans: [], counted: [] })
   })
 
   it('the user said one was NOT attended: the call is the other one\'s', () => {
@@ -156,10 +159,12 @@ describe('mergeDay with calls', () => {
       seg('calls', 'call', 'Zoom call', t(5, 16), t(5, 16, 20)), // no meeting: ad hoc
     ], ctx())
     const plan = Object.fromEntries(out.plan.map((p) => [p.title, p]))
-    expect(plan['Planning']).toMatchObject({ attendance: 'attended', attendanceBasis: 'call', callMin: 57, meetingMin: 47, otherWorkMin: 10, eventId: 'E-plan' })
+    expect(plan['Planning']).toMatchObject({ attendance: 'attended', attendanceBasis: 'call', callMin: 57, attendedMin: 57, meetingMin: 47, otherWorkMin: 10, eventId: 'E-plan' })
+    expect(plan['Team sync']).not.toHaveProperty('attendedMin')
     expect(plan['Team sync']).toMatchObject({ attendance: 'needs_confirmation', attendanceBasis: 'nothing_recorded', meetingMin: 0 })
     expect(out.summary).toMatchObject({
-      callMin: 77, adHocCallMin: 20, meetingMin: 47,
+      // In the meeting 57 min; 47 of them with nothing else on screen.
+      callMin: 77, adHocCallMin: 20, attendedMeetingMin: 57, meetingMin: 47,
       meetings: { attended: 1, not_attended: 0, needs_confirmation: 1, unknown: 0 },
       needsConfirmation: [expect.objectContaining({ title: 'Team sync', basis: 'nothing_recorded', eventId: 'E-sync' })],
     })
@@ -186,7 +191,7 @@ describe('mergeDay with calls', () => {
     expect(plan['Beta review']).toMatchObject({ attendance: 'attended', meetingMin: 45 })
     expect(plan['Gamma sync']).toMatchObject({ attendance: 'needs_confirmation', attendanceBasis: 'double_booked', meetingMin: 0 })
     // 40 + 45 (A and B overlap: each second once) + 45 (the shared call, once).
-    expect(out.summary).toMatchObject({ meetingMin: 130, meetings: { attended: 2, needs_confirmation: 2 } })
+    expect(out.summary).toMatchObject({ attendedMeetingMin: 130, meetingMin: 130, meetings: { attended: 2, needs_confirmation: 2 } })
     expect(out.summary.needsConfirmation).toEqual([
       expect.objectContaining({ title: 'Gamma sync', basis: 'double_booked', eventId: 'E-c' }),
       expect.objectContaining({ title: 'Delta sync', basis: 'double_booked', eventId: 'E-d' }),
@@ -233,7 +238,7 @@ describe('meeting context (Mac-local answers and history)', () => {
 
   it('finds a recurring series never on a call from the calendar history inside coverage', async () => {
     await appendCallLines([
-      { startMs: t(1, 0), line: coverageLine([t(1, 0), t(9, 0)], 'log') },
+      ...coverageLines([t(1, 0), t(9, 0)], 'log'),
       { startMs: t(6, 9), line: callLine({ app: 'zoom.us', startMs: t(6, 9), endMs: t(6, 9, 30) }, 'log') },
     ])
     const occurrences = (series: string, days: number[]) => days.map((d) => ({

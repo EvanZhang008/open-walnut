@@ -12,8 +12,10 @@
  *   - no call, and the screen shows other work (anything but the call app) for
  *     at least half of it: not attended, the time belongs to that work;
  *   - no call and nothing recorded (the Mac idle, asleep or away, or only the
- *     call app in front): needs confirmation. Never counted and never guessed: the time review asks, and the
- *     user's answer (time_meeting_attendance_set) is kept on this Mac.
+ *     call app in front): needs confirmation; with some other work but under
+ *     half, needs confirmation too (basis some_other_work). Never counted and
+ *     never guessed: the time review asks, and the user's answer
+ *     (time_meeting_attendance_set) is kept on this Mac.
  * "No call" is only an answer inside call coverage (the stretch this Mac was
  * watching); outside it the attendance is unknown. One call under two meetings
  * at once is the user's to say too (settleDoubleBooked).
@@ -30,11 +32,14 @@ const SPILL_INTO_MS = 15 * 60_000
 const COVERED_SHARE = 0.8
 /** Screen time over this share of a meeting with no call is other work. */
 const OTHER_WORK_SHARE = 0.5
+/** Under this share the screen recorded nothing to speak of. */
+const NOTHING_SHARE = 0.15
 /** A series counts as never on a call only after this many watched occurrences. */
 export const NEVER_MIN_OCCURRENCES = 2
 
 export type Attendance = 'attended' | 'not_attended' | 'needs_confirmation' | 'unknown'
-export type AttendanceBasis = 'user' | 'call' | 'recurring_never_on_call' | 'other_work' | 'nothing_recorded' | 'no_call_data' | 'double_booked'
+export type AttendanceBasis =
+  | 'user' | 'call' | 'recurring_never_on_call' | 'other_work' | 'some_other_work' | 'nothing_recorded' | 'no_call_data' | 'double_booked'
 
 export interface MeetingContext {
   /** Call intervals (merged across apps) around the range. */
@@ -87,7 +92,13 @@ export interface MeetingAttendance {
   meetingMs: number
   /** Other work while on the call (ms). */
   otherWorkMs: number
-  /** The counted spans (the call minus other work), so a day can count each second once. */
+  /**
+   * The time in the meeting, other work included: the call, or the whole meeting
+   * when the user said they attended and no call was heard. Kept for a double
+   * booking (the user was in one of the two). Empty when not attended.
+   */
+  spans: Array<[number, number]>
+  /** `spans` minus other work, so a day can count each second once. */
   counted: Array<[number, number]>
 }
 
@@ -103,19 +114,22 @@ export function meetingAttendance(m: MeetingFacts, ctx: MeetingContext): Meeting
   const answer = m.eventId ? ctx.answers.get(m.eventId) : undefined
   if (answer !== undefined) {
     // The user's word. "Attended" with no call counts the meeting minus other work.
-    const counted = answer ? minus(callMs > 0 ? inCall : [[m.startMs, m.endMs]]) : []
-    return { attendance: answer ? 'attended' : 'not_attended', basis: 'user', callMs, meetingMs: sum(counted), otherWorkMs, counted }
+    const spans: Array<[number, number]> = answer ? (callMs > 0 ? inCall : [[m.startMs, m.endMs]]) : []
+    const counted = minus(spans)
+    return { attendance: answer ? 'attended' : 'not_attended', basis: 'user', callMs, meetingMs: sum(counted), otherWorkMs, spans, counted }
   }
   if (callMs >= Math.min(ATTEND_MIN_MS, len)) {
     const counted = minus(inCall)
-    return { attendance: 'attended', basis: 'call', callMs, meetingMs: sum(counted), otherWorkMs, counted }
+    return { attendance: 'attended', basis: 'call', callMs, meetingMs: sum(counted), otherWorkMs, spans: inCall, counted }
   }
   const watched = coveredMs(m.startMs, m.endMs, ctx.coverage)
-  const none = { callMs, meetingMs: 0, otherWorkMs, counted: [] as Array<[number, number]> }
+  const none = { callMs, meetingMs: 0, otherWorkMs, spans: [] as Array<[number, number]>, counted: [] as Array<[number, number]> }
   if (watched < len * COVERED_SHARE) return { attendance: 'unknown', basis: 'no_call_data', ...none }
   if (m.recurring && m.seriesId && ctx.neverOnCall.has(m.seriesId)) return { attendance: 'not_attended', basis: 'recurring_never_on_call', ...none }
   // The call app alone in front is no other work: with no call heard, that is the user's to say.
   if (otherWorkInMeetingMs >= len * OTHER_WORK_SHARE) return { attendance: 'not_attended', basis: 'other_work', ...none }
+  // Some other work, under half: not enough to say either way.
+  if (otherWorkInMeetingMs >= len * NOTHING_SHARE) return { attendance: 'needs_confirmation', basis: 'some_other_work', ...none }
   return { attendance: 'needs_confirmation', basis: 'nothing_recorded', ...none }
 }
 
@@ -124,7 +138,7 @@ export function meetingAttendance(m: MeetingFacts, ctx: MeetingContext): Meeting
  * the user said one of them was attended, the call was that one and the other is
  * not attended; else both go back to the user (needs confirmation, basis
  * `double_booked`). The call stays meeting time for the day either way (the user
- * was in one of them), so `counted` keeps it while `meetingMs` is 0. A meeting
+ * was in one of them), so `spans` and `counted` keep it while `meetingMs` is 0. A meeting
  * the user marked not attended frees the call for the other. Mutates `list`.
  */
 export function settleDoubleBooked<T extends { attendance: MeetingAttendance; inCall: ReadonlyArray<Span> }>(list: T[]): T[] {
@@ -143,7 +157,7 @@ export function settleDoubleBooked<T extends { attendance: MeetingAttendance; in
       if (shared(open[i]!, open[j]!)) { doubled.add(open[i]!); doubled.add(open[j]!) }
     }
   }
-  for (const m of taken) m.attendance = { ...m.attendance, attendance: 'not_attended', basis: 'double_booked', meetingMs: 0, counted: [] }
+  for (const m of taken) m.attendance = { ...m.attendance, attendance: 'not_attended', basis: 'double_booked', meetingMs: 0, spans: [], counted: [] }
   for (const m of doubled) m.attendance = { ...m.attendance, attendance: 'needs_confirmation', basis: 'double_booked', meetingMs: 0 }
   return list
 }

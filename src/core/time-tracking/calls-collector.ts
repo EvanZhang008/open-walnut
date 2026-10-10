@@ -22,7 +22,7 @@ import { createInterface } from 'node:readline'
 import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { callAppSet, createLogFolder, parseAssertionsNow, type OpenCall, type Span } from './calls.js'
-import { appendCallLines, callLine, coverageLine } from './calls-store.js'
+import { appendCallLines, callLine, coverageLines } from './calls-store.js'
 
 const PMSET = '/usr/bin/pmset'
 const LIVE_EVERY_MS = 30_000
@@ -60,7 +60,7 @@ type Line = { startMs: number; line: string }
 export function applyLiveSample(state: LiveState, seen: readonly OpenCall[] | null, nowMs: number): Line[] {
   const lines: Line[] = []
   const writeCov = (c: NonNullable<LiveState['cov']>): void => {
-    if (c.lastMs > c.startMs) lines.push({ startMs: c.startMs, line: coverageLine([c.startMs, c.lastMs], 'live') })
+    if (c.lastMs > c.startMs) lines.push(...coverageLines([c.startMs, c.lastMs], 'live'))
   }
   const writeCall = (c: LiveCall, endMs: number): void => {
     if (endMs > c.startMs) lines.push({ startMs: c.startMs, line: callLine({ app: c.app, startMs: c.startMs, endMs }, 'live') })
@@ -156,14 +156,18 @@ async function liveTick(): Promise<void> {
   if (lines.length) void appendCallLines(lines)
 }
 
+/** Bump when what a backfill writes changes, so the next start writes it again. */
+const STATE_VERSION = 2
+
 function stateFile(): string {
   return path.join(WALNUT_HOME, 'time-tracking', 'outside', 'calls', 'state.json')
 }
 
 async function readLastBackfillMs(): Promise<number> {
   try {
-    const raw = JSON.parse(await fsp.readFile(stateFile(), 'utf8')) as { lastBackfillMs?: unknown }
-    return typeof raw.lastBackfillMs === 'number' ? raw.lastBackfillMs : 0
+    const raw = JSON.parse(await fsp.readFile(stateFile(), 'utf8')) as { lastBackfillMs?: unknown; v?: unknown }
+    // A store an older build wrote (coverage not cut per day) is backfilled again at once.
+    return raw.v === STATE_VERSION && typeof raw.lastBackfillMs === 'number' ? raw.lastBackfillMs : 0
   } catch {
     return 0
   }
@@ -197,10 +201,10 @@ export function backfillCalls(): Promise<BackfillOutcome> {
     try {
       const { calls, span } = await streamLog(cfg.apps)
       const lines: Line[] = calls.map((c) => ({ startMs: c.startMs, line: callLine(c, 'log') }))
-      if (span) lines.push({ startMs: span[0], line: coverageLine(span, 'log') })
+      if (span) lines.push(...coverageLines(span, 'log'))
       const written = await appendCallLines(lines)
       await fsp.mkdir(path.dirname(stateFile()), { recursive: true })
-      await fsp.writeFile(stateFile(), JSON.stringify({ lastBackfillMs: at }), 'utf8')
+      await fsp.writeFile(stateFile(), JSON.stringify({ lastBackfillMs: at, v: STATE_VERSION }), 'utf8')
       log.web.info('calls backfill stored', { calls: calls.length, written })
       return (lastBackfill = { ok: true, calls: calls.length, written, span, at })
     } catch (err) {

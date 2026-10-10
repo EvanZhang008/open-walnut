@@ -206,6 +206,8 @@ export interface PlanCheck {
   attendanceBasis?: AttendanceBasis
   /** Call minutes inside the meeting. */
   callMin?: number
+  /** Attended: minutes in the meeting, other work included (the call, or the whole meeting on the user's word). */
+  attendedMin?: number
   /** Counted meeting minutes: the call minus other work while on it. */
   meetingMin?: number
   /** Other work while on the call. */
@@ -216,7 +218,7 @@ export interface PlanCheck {
 
 function planChecks(
   day: DayBounds, planned: readonly SourcedSegment[], pieces: readonly Piece[], tz: string, calls: readonly Span[], ctx: MeetingContext,
-): { checks: PlanCheck[]; meetingSpans: Array<[number, number]> } {
+): { checks: PlanCheck[]; meetingSpans: Array<[number, number]>; attendedSpans: Array<[number, number]> } {
   const meetings: Array<{ check: PlanCheck; attendance: MeetingAttendance; inCall: Array<[number, number]>; eventId?: string }> = []
   const dayTaskMs = new Map<string, number>()
   for (const p of pieces) {
@@ -312,12 +314,18 @@ function planChecks(
     const a = m.attendance
     Object.assign(m.check, {
       attendance: a.attendance, attendanceBasis: a.basis,
-      callMin: minutes(a.callMs), meetingMin: minutes(a.meetingMs),
+      callMin: minutes(a.callMs),
+      ...(a.attendance === 'attended' ? { attendedMin: minutes(a.spans.reduce((s, [x, y]) => s + (y - x), 0)) } : {}),
+      meetingMin: minutes(a.meetingMs),
       ...(a.otherWorkMs >= MIN ? { otherWorkMin: minutes(a.otherWorkMs) } : {}),
       ...(m.eventId ? { eventId: m.eventId } : {}),
     })
   }
-  return { checks: out, meetingSpans: mergeSpans(meetings.flatMap((m) => m.attendance.counted)) }
+  return {
+    checks: out,
+    meetingSpans: mergeSpans(meetings.flatMap((m) => m.attendance.counted)),
+    attendedSpans: mergeSpans(meetings.flatMap((m) => m.attendance.spans)),
+  }
 }
 
 /** Same-start, same-end calendar entries where one title holds the other are one entry (room bookings). */
@@ -473,7 +481,7 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
     gapMin: minutes(gapMs(work)),
   })
 
-  const { checks: plan, meetingSpans: attendedSpans } = planChecks(day, planned, pieces, opts.tz, calls, ctx)
+  const { checks: plan, meetingSpans: countedSpans, attendedSpans } = planChecks(day, planned, pieces, opts.tz, calls, ctx)
   const meetingChecks = plan.filter((p) => p.attendance !== undefined)
   const meetingSpans = mergeSpans(allPlanned.filter((s) => s.kind === 'meeting').map((s) => [s.startMs, s.endMs] as [number, number]))
   const needsConfirmation = meetingChecks.filter((p) => p.attendance === 'needs_confirmation')
@@ -497,8 +505,10 @@ export function mergeDay(day: DayBounds, segments: readonly SourcedSegment[], op
         adHocCallMin: minutes(calls.reduce((s, [a, b]) => s + (b - a) - coveredMs(a, b, meetingSpans), 0)),
       } : {}),
       ...(meetingChecks.length ? {
-        // Each second once, even when two attended meetings overlap.
-        meetingMin: minutes(attendedSpans.reduce((s, [a, b]) => s + (b - a), 0)),
+        // Each second once, even when two attended meetings overlap. attendedMeetingMin is the
+        // time in them; meetingMin the part with nothing else on screen.
+        attendedMeetingMin: minutes(attendedSpans.reduce((s, [a, b]) => s + (b - a), 0)),
+        meetingMin: minutes(countedSpans.reduce((s, [a, b]) => s + (b - a), 0)),
         meetings: Object.fromEntries((['attended', 'not_attended', 'needs_confirmation', 'unknown'] as const)
           .map((a) => [a, meetingChecks.filter((p) => p.attendance === a).length])),
       } : {}),

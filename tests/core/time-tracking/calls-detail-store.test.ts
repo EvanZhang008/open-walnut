@@ -13,7 +13,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-calls-detail-store'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { appendCallLines, callLine, coverageLine, readCalls, resetCallsStore } from '../../../src/core/time-tracking/calls-store.js'
+import { appendCallLines, callLine, coverageLine, coverageLines, readCalls, resetCallsStore } from '../../../src/core/time-tracking/calls-store.js'
 import {
   appendDetail, leaseDetailOf, readDetailDay, relativeFile, resetDetailStore, sentMarkerOf, startSentMarkers, stopSentMarkers,
 } from '../../../src/core/time-tracking/detail-store.js'
@@ -46,6 +46,23 @@ describe('calls store', () => {
     const read = await readCalls(new Date(2026, 9, 5).getTime(), new Date(2026, 9, 6).getTime())
     expect(read.calls).toEqual([{ app: 'zoom.us', startMs: a, endMs: b }])
     expect(read.coverage).toEqual([[a - 60 * MIN, b + 60 * MIN]])
+  })
+
+  it('a week of coverage is cut per local day, so a read of any later day sees it', async () => {
+    // The power log's span: Saturday 15:35 to the next Saturday 15:33 (2026-10-10 live data).
+    const a = new Date(2026, 9, 3, 15, 35).getTime()
+    const b = new Date(2026, 9, 10, 15, 33).getTime()
+    const lines = coverageLines([a, b], 'log')
+    expect(lines).toHaveLength(8)
+    expect(lines.map((l) => localDateKey(new Date(l.startMs)))).toEqual(['2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10'])
+    await appendCallLines(lines)
+    const thu = await readCalls(new Date(2026, 9, 8).getTime(), new Date(2026, 9, 9).getTime())
+    expect(thu.coverage).toHaveLength(1)
+    expect(thu.coverage[0]![0]).toBeLessThanOrEqual(new Date(2026, 9, 8).getTime())
+    expect(thu.coverage[0]![1]).toBeGreaterThanOrEqual(new Date(2026, 9, 9).getTime())
+    // The pieces join back into the one stretch.
+    const all = await readCalls(a, b)
+    expect(all.coverage).toEqual([[a, b]])
   })
 
   it('a call across midnight is found from the next day too', async () => {

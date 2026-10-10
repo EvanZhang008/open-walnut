@@ -304,7 +304,15 @@ async function callSegments(range: TimelineRange): Promise<TimelineSourceResult>
     start: c.startMs, end: c.endMs, kind: 'call', label: `${callAppLabel(c.app)} call`, confidence: 'measured', detail: { app: c.app },
   }))
   if (coverage.length === 0) {
-    return { segments, coverage: { available: segments.length > 0, note: 'calls are recorded on this Mac while outside activity is on; none were watched in this range' } }
+    return {
+      segments,
+      coverage: {
+        available: segments.length > 0,
+        note: segments.length > 0
+          ? 'these calls were seen, but the stretch watched is unknown, so no call elsewhere proves nothing'
+          : 'calls are recorded on this Mac while outside activity is on; none were watched in this range',
+      },
+    }
   }
   const first = coverage[0]![0]
   const note = first > range.startMs + 3_600_000 ? `calls were watched from ${new Date(first).toISOString()}` : undefined

@@ -10,8 +10,10 @@
  * coverage had none on this Mac; one outside it is unknown.
  *
  * Lines go under the local date of their start; a read takes the day before too,
- * so a call across midnight is found from either day. All fs is async and every
- * write for the store runs in one chain.
+ * so a call across midnight is found from either day. Coverage is cut at local
+ * midnight into one line per day (coverageLines): the log's span is a week long,
+ * and a single line under its first day was invisible to a read of any later day.
+ * All fs is async and every write for the store runs in one chain.
  */
 
 import fsp from 'node:fs/promises'
@@ -41,6 +43,19 @@ export function callLine(c: CallInterval, src: CallSource): string {
 
 export function coverageLine(span: Span, src: CallSource): string {
   return JSON.stringify({ t: 'cov', start: new Date(span[0]).toISOString(), end: new Date(span[1]).toISOString(), src })
+}
+
+/** A watched stretch as one line per local day it touches, ready for appendCallLines. */
+export function coverageLines(span: Span, src: CallSource): Array<{ startMs: number; line: string }> {
+  const out: Array<{ startMs: number; line: string }> = []
+  let a = span[0]
+  for (let guard = 0; a < span[1] && guard < 400; guard++) {
+    const d = new Date(a)
+    const b = Math.min(span[1], new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime())
+    out.push({ startMs: a, line: coverageLine([a, b], src) })
+    a = b
+  }
+  return out
 }
 
 let tail: Promise<void> = Promise.resolve()
