@@ -770,6 +770,9 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // (current epoch only, a session of that Walnut): the same line the server
   // writes, its value checked (live-settings-core.ts).
   'leader.settings',
+  // The same, for a permission answer, a permission mode or a user stop
+  // ('leader-control-v1'): no more than the primary does for that session.
+  'leader.control',
   // Narrow delivery-marker lookup (marker-find-v1): which of the given phone
   // message ids have a delivery marker in one session's stream. Read-only,
   // bounded (ids and bytes), and the answer is ids the caller already holds.
@@ -794,6 +797,10 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
 const FOLLOWER_ALLOWED_COMMANDS = new Set([
   'hello', 'ping', 'follower.hello', 'follower.status', 'follower.report', 'server.status',
   'list', 'status', 'attach', 'read-history', 'markers.find',
+  // While no server answers its Walnut ('follower-alone-v1'): that Walnut's
+  // sessions here, a message to a running one, the answer to its prompt.
+  // Each checks the leader and the session's owner itself.
+  'follower.sessions', 'follower.send', 'follower.permission',
   // Streams to the leader or the companion ('stream-relay-v1'): the frames of a
   // stream on this socket only; where an open may go is checked in streamTarget.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
@@ -2087,6 +2094,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.hello': return cmdFollowerHello(ws, id as number, cmd)
     case 'follower.status': return cmdFollowerStatus(ws, id as number)
     case 'follower.report': return cmdFollowerReport(ws, cmd)
+    case 'follower.sessions': return cmdFollowerSessions(ws, id as number)
+    case 'follower.send': return daemonCommands.run(() => cmdFollowerSend(ws, id as number, cmd))
+    case 'follower.permission': return daemonCommands.run(() => cmdFollowerPermission(ws, id as number, cmd))
     // Streams between servers through this daemon ('stream-relay-v1',
     // stream-relay-core.ts): frames, never answered by id. Keep in sync with daemon-source.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd)
@@ -2099,6 +2109,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'leader.witness': return cmdLeaderWitness(ws, id as number)
     case 'leader.deliver': return daemonCommands.run(() => cmdLeaderDeliver(ws, id as number, cmd))
     case 'leader.settings': return daemonCommands.run(() => cmdLeaderSettings(ws, id as number, cmd))
+    case 'leader.control': return daemonCommands.run(() => cmdLeaderControl(ws, id as number, cmd))
     // Offline host ('offline-host-v1', docs/plan/daemon-first-hosts.md). NOT in
     // BRIDGE_ALLOWED_COMMANDS: a Walnut's copy and journal belong to that
     // Walnut's trusted SSH-tunneled server only. Keep in sync with daemon-source.ts.
@@ -3099,6 +3110,150 @@ async function cmdLeaderSettings(ws: ServerWebSocket<WsData>, id: number, cmd: R
   // The server keeps it on the session's record when it takes this host back.
   offlineHost.noteSettings(f.home, sid, { cliModel: r.cliModel, effort: r.effort })
   sendOk(ws, id, { appliedLive: r.appliedLive, ...(r.reason ? { reason: r.reason } : {}) })
+}
+
+/**
+ * A session control the cloud companion sends while it leads this host
+ * (`leader.control`, 'leader-control-v1'; docs/plan/walnut-control-plane.md
+ * "Session controls while the Mac is away"): fenced at the current epoch, for a
+ * session of that Walnut on this host, like leader.settings.
+ *
+ *   permission {requestId, allow, message?, answers?}  answers the pending can_use_tool
+ *   mode {mode}                                        set_permission_mode, kept for the Mac
+ *   stop {stopRequestId, requestedAt, force?}          the user stop the Mac's terminate sends,
+ *                                                      journaled first (the Mac records it by its id)
+ */
+async function cmdLeaderControl(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.control: the cloud bridge only')
+  const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
+  if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.control: not a session of this Walnut on this host')
+  const session = sessions.get(sid)
+  if (cmd.action === 'permission') {
+    const r = await answerPermission(sid, cmd, 'leader.control')
+    if (!r.ok) return sendError(ws, id, 'leader.control: ' + r.error, { errorKind: r.errorKind })
+    return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId as string, allow: r.allow })
+  }
+  if (cmd.action === 'mode') {
+    const r = await liveSettings.setMode(sid, cmd.mode)
+    if (!r.ok) return sendError(ws, id, 'leader.control: ' + r.error, { errorKind: 'refused' })
+    const now = sessions.get(sid)
+    if (now) applyModePolicy(now, sid, r.mode as SessionMode)
+    // The server keeps it on the session's record when it takes this host back.
+    offlineHost.noteSettings(f.home, sid, { mode: r.mode })
+    return sendOk(ws, id, { mode: r.mode, appliedLive: r.appliedLive, ...(r.reason ? { reason: r.reason } : {}) })
+  }
+  if (cmd.action === 'stop') {
+    // The stop's id and time come from the companion: the server records the same stop when it is back.
+    const stopRequestId = typeof cmd.stopRequestId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cmd.stopRequestId) ? cmd.stopRequestId : ''
+    const requestedAt = typeof cmd.requestedAt === 'string' && cmd.requestedAt.length <= 40 && Number.isFinite(Date.parse(cmd.requestedAt)) ? cmd.requestedAt : ''
+    if (!stopRequestId || !requestedAt) return sendError(ws, id, 'leader.control: a stop needs stopRequestId and requestedAt', { errorKind: 'bad_request' })
+    // As the Mac's terminate: a session that keeps scheduled jobs stops only when the user confirms.
+    if (session && cmd.force !== true && assembleSessionSnapshot(session).cronActive) {
+      return sendError(ws, id, 'leader.control: this session owns scheduled jobs; confirm the stop', { errorKind: 'cron_owner' })
+    }
+    // A person asked for it on a phone; the session is this Walnut's (ownerOf above).
+    const stop = { sid, reason: 'user', home: f.home, initiator: 'human', stopRequestId }
+    const refusal = stopOwnerRefusal(sid, stop)
+    if (refusal) return sendOk(ws, id, { stopped: false, ...refusal })
+    offlineHost.noteStop(f.home, sid, { id: stopRequestId, requestedAt })
+    logMsg('info', 'leader.control: stopping a session for the companion', { sid, epoch: cmd.epoch, stopRequestId })
+    return cmdStop(ws, id, stop)
+  }
+  return sendError(ws, id, 'leader.control: unknown action', { errorKind: 'bad_request' })
+}
+
+/**
+ * Answer a session's pending can_use_tool with the line the server would write
+ * (live-settings-core.ts permissionAnswer), on the server's own write path
+ * (sendRaw), and clear the prompt it answers.
+ */
+async function answerPermission(sid: string, raw: Record<string, unknown>, label: string): Promise<{ ok: true; allow: boolean } | { ok: false; error: string; errorKind: string }> {
+  const session = sessions.get(sid)
+  const pending = session?.pendingCtrl ? { reqId: session.pendingCtrl.reqId, request: session.pendingCtrl.request } : null
+  const answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers })
+  if (!answer.ok) return { ok: false, error: answer.error, errorKind: answer.code }
+  const wrote = await core.handleSendRawCommand(sid, answer.line)
+  if ('error' in wrote || !wrote.ok) return { ok: false, error: 'the session could not be reached', errorKind: 'not_live' }
+  const now = sessions.get(sid)
+  if (now?.pendingCtrl?.reqId === raw.requestId) {
+    now.pendingCtrl = null
+    try { persistRegistry() } catch {}
+    pushSnapshot(sid, false)
+  }
+  logMsg('info', label + ': permission answered', { sid, requestId: raw.requestId, allow: answer.allow })
+  return { ok: true, allow: answer.allow }
+}
+
+/**
+ * What the server this daemon started may do for its Walnut while no server
+ * answers it ('follower-alone-v1'; docs/plan/walnut-servers-everywhere.md "Host
+ * server, leader away"): list that Walnut's sessions here, write to a running
+ * one, answer its prompt. A message is journaled for the server that takes this
+ * host back (offline-host-core.ts deliverHuman). While a server answers that
+ * Walnut, a write is refused: the browser reaches that server, and its own path
+ * records the write.
+ */
+function followerHomeOf(ws: ServerWebSocket<WsData>): string | null {
+  const home = ws.data?.followerHome
+  return home && followerSockets.get(home) === ws ? home : null
+}
+
+function cmdFollowerSessions(ws: ServerWebSocket<WsData>, id: number) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.sessions: send follower.hello first')
+  const copy = offlineHost.sessionsOf(home)
+  if (!copy) return sendOk(ws, id, { host: '', asOf: null, sessions: [] })
+  const list = copy.sessions.map((s) => {
+    const live = sessions.get(s.sid)
+    const running = live?.state === 'running'
+    let lastActiveAt: string | undefined
+    try { if (live) lastActiveAt = fs.statSync(live.jsonlPath).mtime.toISOString() } catch {}
+    const pc = running ? live!.pendingCtrl : null
+    const req = (pc?.request ?? {}) as { subtype?: unknown; tool_name?: unknown; input?: unknown; decision_reason?: unknown }
+    const prompt = pc && req.subtype === 'can_use_tool'
+      ? { requestId: pc.reqId, toolName: pc.toolName || (typeof req.tool_name === 'string' ? req.tool_name : 'tool'), input: req.input ?? {}, ...(typeof req.decision_reason === 'string' ? { reason: req.decision_reason } : {}) }
+      : null
+    return { ...s, state: !running ? 'stopped' : live!.foldState.turnActive ? 'working' : 'idle', ...(prompt ? { prompt } : {}), ...(lastActiveAt ? { lastActiveAt } : {}) }
+  })
+  sendOk(ws, id, { host: copy.host, asOf: copy.asOf, sessions: list })
+}
+
+/**
+ * Whether the primary answers `home` for a follower's write: the same window
+ * the host server routes by (host-server/route.ts LEADER_QUIET_MS), so the page
+ * and the daemon agree on "alone". Keep in sync with daemon-source.ts.
+ */
+const FOLLOWER_LEADER_QUIET_MS = 30_000
+function primaryAnswersFollower(home: string): boolean {
+  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < FOLLOWER_LEADER_QUIET_MS
+}
+
+/** A follower's write is for a session of its Walnut, while no server answers that Walnut. */
+function followerWriteTarget(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, name: string): { home: string; sid: string } | null {
+  const home = followerHomeOf(ws)
+  if (!home) { sendError(ws, id, name + ': send follower.hello first'); return null }
+  if (primaryAnswersFollower(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null }
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  if (!sid || offlineHost.ownerOf(sid) !== home) { sendError(ws, id, name + ': not a session of this Walnut on this host', { errorKind: 'not_found' }); return null }
+  return { home, sid }
+}
+
+async function cmdFollowerSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const t = followerWriteTarget(ws, id, cmd, 'follower.send')
+  if (!t) return
+  const r = await offlineHost.deliverHuman(t.home, t.sid, cmd.text, cmd.messageId)
+  if (r.ok) return sendOk(ws, id, { delivered: true, messageId: r.result.messageId })
+  sendError(ws, id, 'follower.send: ' + r.error.message, { errorKind: r.error.code })
+}
+
+async function cmdFollowerPermission(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const t = followerWriteTarget(ws, id, cmd, 'follower.permission')
+  if (!t) return
+  const r = await answerPermission(t.sid, cmd, 'follower.permission')
+  if (!r.ok) return sendError(ws, id, 'follower.permission: ' + r.error, { errorKind: r.errorKind })
+  sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId as string, allow: r.allow })
 }
 
 /** The Walnut a session belongs to: the home whose copy lists it. */
@@ -5965,7 +6120,13 @@ function cmdSetMode(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string,
   const session = sessions.get(sid)
   if (!session) return sendError(ws, id, 'setMode: session not found: ' + sid)
   const oldMode = session.mode
-  session.mode = mode as SessionMode
+  applyModePolicy(session, sid, mode as SessionMode)
+  sendOk(ws, id, { oldMode, newMode: mode })
+}
+
+/** The session's auto-answer policy follows its mode; a prompt the new mode allows is answered now. */
+function applyModePolicy(session: SessionData, sid: string, mode: SessionMode): void {
+  session.mode = mode
   if (session.pendingCtrl && shouldAutoRespond(session.mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true)
     if (writeFifoRaw(session.pipePath, resp)) {
@@ -5977,7 +6138,6 @@ function cmdSetMode(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string,
     }
   }
   try { persistRegistry() } catch {}
-  sendOk(ws, id, { oldMode, newMode: mode })
 }
 
 // ── Stop session ──
@@ -6526,8 +6686,12 @@ function readTailWindow(filePath: string, maxBytes: number): { text: string; byt
 }
 
 function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { sid, canonicalPath, tailBytes } = cmd as { sid: string; canonicalPath?: string; tailBytes?: number }
-  if (!sid) return sendError(ws, id, 'read-history: missing sid')
+  const { sid, tailBytes } = cmd as { sid: string; tailBytes?: number }
+  // A session id names a file in the streams dir and nothing else: the bridge
+  // and a follower reach this command, and neither may read any other file.
+  if (typeof sid !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(sid) || sid.includes('..')) return sendError(ws, id, 'read-history: missing or invalid sid')
+  // A follower reads its own Walnut's sessions only.
+  if (ws.data?.origin === 'follower' && offlineHost.ownerOf(sid) !== ws.data.followerHome) return sendError(ws, id, 'read-history: not a session of this Walnut on this host', { errorKind: 'not_found' })
 
   try {
     // Read main JSONL. tailBytes > 0 = tail-only read (mobile transcript):
@@ -6539,7 +6703,7 @@ function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     let mainBytes = 0
     let mainSize = 0
     let truncated = false
-    const jsonlPath = canonicalPath || path.join(STREAMS_DIR, sid + '.jsonl')
+    const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
     const wantTail = typeof tailBytes === 'number' && tailBytes > 0
     const windowBytes = wantTail ? Math.min(tailBytes as number, READ_HISTORY_MAX_BYTES) : READ_HISTORY_MAX_BYTES
     try {

@@ -122,11 +122,18 @@ export type OfflineRecord =
   /** `base`: the copy's updated_at for that task when the write was queued (the server's clock). */
   | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string }
   /**
-   * A model or effort the cloud companion applied to a live session here while
-   * it led (leader.settings): the server keeps it on the session's record, so
-   * a cold resume starts with it.
+   * A model, effort or permission mode the cloud companion applied to a live
+   * session here while it led (leader.settings, leader.control): the server
+   * keeps it on the session's record, so a cold resume starts with it.
    */
-  | { seq: number; at: number; online?: true; kind: 'settings'; sid: string; cliModel?: string; effort?: string }
+  | { seq: number; at: number; online?: true; kind: 'settings'; sid: string; cliModel?: string; effort?: string; mode?: string }
+  /**
+   * A user stop the cloud companion sent while it led (leader.control), noted
+   * before it runs: the server takes it as its own stop request (same id) and
+   * runs it through its own stop path when it takes the host back, so a phone
+   * message is fenced by the same stop on both servers.
+   */
+  | { seq: number; at: number; online?: true; kind: 'stop'; sid: string; stopRequestId: string; requestedAt: string }
 
 interface Journal { nextSeq: number; records: OfflineRecord[]; rows: Record<string, OfflineRequestRow>; settledCopies: string[] }
 
@@ -375,12 +382,17 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   /** The companion, leading, changed a session's model or effort here: the server takes it on its next drain. */
-  function noteSettings(home: string, sid: string, settings: { cliModel?: string; effort?: string }): void {
+  function noteSettings(home: string, sid: string, settings: { cliModel?: string; effort?: string; mode?: string }): void {
     append(home, {
       kind: 'settings', sid,
       ...(settings.cliModel ? { cliModel: settings.cliModel } : {}),
       ...(settings.effort ? { effort: settings.effort } : {}),
+      ...(settings.mode ? { mode: settings.mode } : {}),
     })
+  }
+
+  function noteStop(home: string, sid: string, stop: { id: string; requestedAt: string }): void {
+    append(home, { kind: 'stop', sid, stopRequestId: stop.id, requestedAt: stop.requestedAt })
   }
 
   /** The server applied every record up to `upTo`: drop them, and the rows it now owns. */
@@ -538,6 +550,31 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       host: slice?.host ?? null, status: deps.isLive(s.sid) ? 'running' : 'stopped',
     }))
     return ok({ sessions, offline: true, as_of: asOf(home), hint: offlineNote(home) })
+  }
+
+  /**
+   * This Walnut's sessions on this host as the copy names them, for the server
+   * this daemon started (follower.sessions, while nobody leads): each one's task
+   * as the overlay has it. Lane and environment sessions are left out; how each
+   * one runs right now is the daemon's to add.
+   */
+  function sessionsOf(home: string): { host: string; asOf: string; sessions: Array<{ sid: string; title?: string; taskId?: string; taskTitle?: string; taskPhase?: string }> } | null {
+    const slice = slices.get(home)
+    if (!slice) return null
+    const tasks = new Map(tasksWithOverlay(home).map((t) => [t.id, t]))
+    return {
+      host: slice.host,
+      asOf: asOf(home),
+      sessions: slice.sessions.filter((s) => !s.aside).map((s) => {
+        const task = s.taskId ? tasks.get(s.taskId) : undefined
+        return {
+          sid: s.sid,
+          ...(s.title ? { title: s.title } : {}),
+          ...(s.taskId ? { taskId: s.taskId } : {}),
+          ...(task ? { taskTitle: task.title, ...(task.phase ? { taskPhase: task.phase } : {}) } : {}),
+        }
+      }),
+    }
   }
 
   function findRequest(home: string, id: string): { own?: OfflineRequestRow; copy?: OfflineSliceRequest } {
@@ -1303,6 +1340,33 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     }
   }
 
+  /**
+   * A person's message to a session of this Walnut here, from the server this
+   * daemon started while no server leads (follower.send). Written as the person
+   * typed it, and journaled for the server that takes this host back: it reopens
+   * a completed task as a person's message does.
+   */
+  async function deliverHuman(home: string, sid: string, text: unknown, given: unknown): Promise<GatewayResult> {
+    try {
+      if (!slices.get(home)) return fail('not_found', 'this host holds no copy for that Walnut')
+      if (!sessionOf(home, sid)) return fail('not_found', 'no session of that Walnut with that id on this host')
+      const body = typeof text === 'string' ? text.trim() : ''
+      if (!body) return fail('bad_request', 'text must be a non-empty string')
+      if (!deps.isLive(sid)) return fail('not_running', 'this session is not running; the Walnut server resumes it when it is back')
+      const denied = roomFor(home)
+      if (denied) return denied
+      const mid = messageId(given)
+      const delivered = await deps.deliver(sid, body, mid)
+      if (!delivered.ok) return fail('internal', `delivery failed: ${delivered.reason}`)
+      append(home, { kind: 'delivery', fromSessionId: '', toSessionId: sid, messageId: mid })
+      deps.log('info', 'offline host: a person wrote to a session while no server leads', { home, to: sid, messageId: mid })
+      return ok({ delivered: true, targetSessionId: sid, messageId: mid })
+    } catch (err) {
+      deps.log('error', 'offline host: a person\'s message failed', { home, sid, error: (err as Error).message })
+      return fail('internal', `offline host error: ${(err as Error).message}`)
+    }
+  }
+
   async function sweep(): Promise<number> {
     let n = 0
     const now = deps.now()
@@ -1340,7 +1404,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     return !!home && (journals.get(home)?.records.length ?? 0) > 0
   }
 
-  return { configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, handle, handleLocal, onResult, sweep, deliverTrigger, deliverFromLeader, callerOf, answersRead, homes: () => [...slices.keys()] }
+  return { configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, homes: () => [...slices.keys()] }
 }
 
 export type OfflineHost = ReturnType<typeof createOfflineHost>

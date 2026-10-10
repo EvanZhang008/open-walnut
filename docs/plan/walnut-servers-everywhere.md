@@ -1,6 +1,6 @@
 # One Walnut server, on any machine, reachable from anywhere
 
-Status: stages 1 and 2 built; the other stages below ship in order. Builds on
+Status: stages 1 to 4 built (stage 3 for speech to text). Builds on
 [the control plane](./walnut-control-plane.md) (who leads, the companion's copy,
 the one request path) and [daemon-first hosts](./daemon-first-hosts.md).
 
@@ -135,10 +135,10 @@ phone ── tunnel (on the host) ── host server ── stream via the host'
   request, if it is a read, on to the companion at once.
 - **Leader away.** Requests go to the companion, on a stream through the same
   daemon, while the companion is linked to the host. With neither, the host
-  server answers alone: today a page and a JSON error that say why. Stage 4
-  makes that answer its own copy, fed by the host's daemon (which already keeps
-  the copy its sessions need: task slice, notes, memory, skills); writes go to
-  that daemon's journal, which the Mac drains when it returns.
+  server answers alone: its own page of this Walnut's sessions on the host,
+  read and written through the host's daemon; writes go to that daemon's
+  journal, which the Mac drains when it returns (see "Host server, leader
+  away"). Its API answers `503 leader_away` for everything else.
 - **Copies.** The Mac pushes the same copies it pushes to the companion (the task
   store, the search index) to every follower, the host server included: to the
   host server on a stream through its daemon (`src/core/replication/replica-targets.ts`
@@ -246,6 +246,66 @@ capability `stream-lane-v1`), and the streams ride it:
   when it dropped ends with it: the request it carried fails (a copy round is
   tried again on its next round, a browser shows the error).
 
+### Host server, leader away
+
+With neither the Mac nor the companion answering, the host server answers a
+browser itself, from the host's daemon: the sessions this Walnut runs on that
+host. That is what a phone needs while the Mac sleeps and there is no companion:
+see how the work goes, write to a session, answer what it asks.
+
+```
+browser ──► host server ──(no leader)──► /_alone/ ──follower link──► host daemon ──► the session's CLI
+                                                                         └──► journal ──(Mac back)──► offline.drain
+```
+
+- **The page** (`src/host-server/alone-page.ts`): one HTML file with its own
+  script, served for every page request while alone. Without a device token it
+  says why Walnut is away and names nothing. With the token this browser holds
+  for that address (it signed in while the Mac answered: same origin, same
+  storage) it lists this Walnut's sessions on the host (lane and environment
+  sessions left out) with their task and state (working, idle, needs you,
+  stopped), shows a conversation, sends a message to a running session and
+  answers its permission prompt (Allow, Deny, or the options of a question).
+  It asks `/_alone/state` every 5 seconds and opens the full console again as
+  soon as the Mac or the companion answers, unless a message is being written:
+  then it says so and keeps the text until the person opens it. Script and style
+  run under a nonce per response (CSP `default-src 'none'`); every text goes in
+  through `textContent`.
+- **The API** (`src/host-server/alone-api.ts`): `GET /_alone/state` (route and
+  whether the token holds, nothing named), `GET /_alone/sessions`,
+  `GET /_alone/sessions/:sid/transcript` (the phone's transcript shape,
+  `src/core/sessions/transcript-from-jsonl.ts`), `POST .../messages {text}` and
+  `POST .../permission {requestId, allow, message?, answers?}`. Every call but
+  `state` needs the device token, and answers only while the server is alone
+  (`409 leader_answers` otherwise). Refusals read as the Mac's: a stopped session
+  is `409 not_running`, an unknown one `404`.
+- **Who may ask**: the Mac sends every host server the hash of each phone's and
+  browser's token, never a token and never a machine credential
+  (`src/core/replication/device-replica.ts`, kind `devices` on
+  `/bridge/replica`; `src/host-server/device-copy.ts` keeps it, mode 0600). The
+  whole list each time it changes, every 30 seconds at most, at once after a
+  device is removed. A device removed while the Mac is away keeps working on the
+  host server until the Mac is back, as on the companion. An unreadable
+  `auth.json` sends nothing (it would sign everyone out).
+- **The daemon** (`follower-alone-v1`, both twins): `follower.sessions`
+  (`offline-host-core.ts sessionsOf` plus each session's state and pending
+  prompt), `follower.send` (`deliverHuman`: the text as typed, journaled as a
+  `delivery` record with no sender, which the Mac's drain treats as a person's
+  message: it reopens a completed task) and `follower.permission` (the same
+  answer line the companion's `leader.control` writes). A write comes only from
+  the follower socket the daemon started for that Walnut, only while the Mac
+  has not been heard for 30 seconds (the window the host server routes by, so
+  the page and the daemon agree; `leader_answers` otherwise), and only for a
+  session of that Walnut on the host. A sleeping Mac keeps its socket open and
+  sends nothing, so that window, not the socket, is the test. `read-history` from a follower reads its own Walnut's
+  sessions only, and from anyone a session id names a stream file and nothing
+  else (the old `canonicalPath` argument, which no server sent, is gone: it read
+  any file for the bridge too).
+- **Not here**: starting, resuming or stopping a session, changing its model or
+  mode, tasks, notes and search. A stopped session waits for the Mac (only the
+  server builds a session's command line). The companion, when there is one,
+  does all of it while it leads.
+
 ## What stays out of the open source tree
 
 Only the provider definition of a company's tunnel service is private: its
@@ -274,7 +334,7 @@ routing) is generic and lives here.
 | 1 | Exposure: tunnel port, supervisor, `command` provider, plugin API, sign-in code, Settings | built |
 | 2 | Host server, leader awake: install and run on a host, streams through its daemon, byte forward | built |
 | 3 | Feature routing: one helper (`src/core/feature-route.ts`), speech to text on every server | built for speech to text |
-| 4 | Host server, leader away: copy fed by the host's daemon, journaled writes | after 2 |
+| 4 | Host server, leader away: the sessions on the host through its daemon, a device copy, journaled writes | built |
 
 ## Not yet
 

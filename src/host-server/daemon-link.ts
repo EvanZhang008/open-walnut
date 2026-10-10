@@ -63,6 +63,8 @@ export interface DaemonLink {
   openStream(to: 'primary' | 'companion', purpose?: string): Promise<Duplex>
   /** Tell the daemon how this server is (the Mac reads it with server.status). */
   report(body: Record<string, unknown>): void
+  /** A command on the link (what a follower may send); the daemon's answer as it came. */
+  request(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
 }
 
 const CALL_TIMEOUT_MS = 5_000
@@ -91,10 +93,10 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     opts.log(next === 'following' ? 'info' : 'warn', 'host server: daemon link', { state: next, ...(why ? { why } : {}) })
   }
 
-  function call(socket: WebSocket, cmd: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  function call(socket: WebSocket, cmd: string, params: Record<string, unknown> = {}, timeoutMs = CALL_TIMEOUT_MS): Promise<Record<string, unknown>> {
     const id = nextId++
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${cmd} timed out`)) }, CALL_TIMEOUT_MS)
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${cmd} timed out`)) }, timeoutMs)
       pending.set(id, (m) => { clearTimeout(timer); resolve(m) })
       try {
         socket.send(JSON.stringify({ id, cmd, ...params }))
@@ -220,6 +222,10 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     openStream: (to, purpose) => {
       if (state !== 'following' || !streams) return Promise.reject(new Error('not linked to the daemon'))
       return streams.open(to, purpose ? { purpose } : {})
+    },
+    request: (cmd, params = {}, timeoutMs) => {
+      if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('not linked to the daemon'))
+      return call(ws, cmd, params, timeoutMs)
     },
     report: (body) => {
       if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return

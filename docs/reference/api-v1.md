@@ -2855,6 +2855,17 @@ While the primary answers, `GET /api/v1/sessions/:id/model-options`, `POST .../m
 
 A client needs no change; `offline` may be shown as the copy's age.
 
+### Session controls on a replica while it stands in for the session's host (additive, 2026-10)
+
+While the replica stands in for the host a session runs on (the primary away), these no longer wait for the primary; the host applies them:
+
+- **GET /api/v1/sessions/:id** (the degraded detail, `degraded: true`) lists in `pendingPermissions` the prompt the host's CLI waits on (`requestId`, `toolName`, `input`, `reason`), as the primary does, and `session.mode` is the mode the replica last applied.
+- **POST .../permission** answers it: `200 { "status": "resolved", "requestId", "allow", "viaCompanion": true }`. A prompt that is gone, or already answered: `404 not_found`.
+- **PATCH /api/v1/sessions/:id** with `mode`, and **POST .../controls** `{ "id": "mode", "value" }`, change the permission mode: `200 { "session": { …, "mode" }, "viaCompanion": true }` and the usual `{ engine, controls }`. Other fields of the same patch are queued for the primary (`"queued": true`). A mode the session refuses: `409 conflict`.
+- **POST .../terminate** stops the session: `200 { "status": "terminated", "sessionId", "tookMs", "stopRequest": { "id", "requestedAt", "state": "confirmed" }, "viaCompanion": true }`. A session that owns scheduled jobs: `409 cron_owner` without `force: true`; a stop the host has not confirmed: `503 stop_pending`. The primary records the same stop when it is back.
+
+A session on the primary itself, another agent's session (session rows carry `engine` when it is not Claude Code), or a host the replica does not stand in for: relayed to the primary as before. A host whose daemon predates this: `400 session_control_needs_upgrade`. A client needs no change.
+
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 
 One long-lived SSE stream that pushes slim updates so the app can keep its task list and session list current without polling. Works on BOTH boxes; auth is the standard Bearer.

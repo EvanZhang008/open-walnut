@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { createLiveSettings } from '../../src/providers/live-settings-core.js'
+import { SESSION_MODE_CLI_MAP } from '../../src/core/types.js'
 
 const SID = 'bbbbbbbb-2222-4222-8222-222222222222'
 
@@ -100,5 +101,99 @@ describe('live settings', () => {
       const h = harness('dead')
       expect((await h.live.apply(SID, { model })).ok).toBe(true)
     }
+  })
+})
+
+describe('live mode (leader.control)', () => {
+  it('knows the same modes as the server, in the CLI\'s words', () => {
+    expect(harness().live.modes()).toEqual(SESSION_MODE_CLI_MAP)
+  })
+
+  it('sends set_permission_mode in the CLI\'s words and takes the echo as applied', async () => {
+    const h = harness()
+    const p = h.live.setMode(SID, 'accept')
+    await Promise.resolve()
+    const [req] = h.sent()
+    expect(req).toMatchObject({ type: 'control_request', request: { subtype: 'set_permission_mode', mode: 'acceptEdits' } })
+    h.live.noteResponse(SID, { type: 'control_response', response: { subtype: 'success', request_id: req.request_id, response: { mode: 'acceptEdits' } } })
+    expect(await p).toEqual({ ok: true, appliedLive: true, mode: 'accept' })
+  })
+
+  it('an answer that echoes another mode, or an error, is a refusal', async () => {
+    for (const response of [
+      { subtype: 'success', response: { mode: 'default' } },
+      { subtype: 'success' },
+      { subtype: 'error', error: 'not allowed' },
+    ]) {
+      const h = harness()
+      const p = h.live.setMode(SID, 'bypass')
+      await Promise.resolve()
+      h.live.noteResponse(SID, { type: 'control_response', response: { ...response, request_id: h.sent()[0].request_id } })
+      const r = await p
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toMatch(/did not take the mode bypass/)
+    }
+  })
+
+  it('no answer, or no live CLI: kept for the next spawn', async () => {
+    const quiet = harness()
+    expect(await quiet.live.setMode(SID, 'plan', 50)).toEqual({ ok: true, appliedLive: false, reason: 'no_answer', mode: 'plan' })
+    const gone = harness('dead')
+    expect(await gone.live.setMode(SID, 'plan')).toEqual({ ok: true, appliedLive: false, reason: 'dead', mode: 'plan' })
+  })
+
+  it('an unknown mode never reaches the CLI', async () => {
+    for (const mode of ['yolo', 'acceptEdits', 7, undefined, '__proto__']) {
+      const h = harness()
+      const r = await h.live.setMode(SID, mode)
+      expect(r.ok).toBe(false)
+      expect(h.lines).toHaveLength(0)
+    }
+  })
+})
+
+describe('permission answer (leader.control)', () => {
+  const pending = { reqId: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls docs/' } } }
+  const line = (r: ReturnType<ReturnType<typeof createLiveSettings>['permissionAnswer']>) => (r.ok ? JSON.parse(r.line) : null)
+
+  it('allow carries the tool input, the server\'s own control_response', () => {
+    expect(line(harness().live.permissionAnswer(pending, { requestId: 'req-1', allow: true }))).toEqual({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'req-1', response: { behavior: 'allow', updatedInput: { command: 'ls docs/' } } },
+    })
+  })
+
+  it('an AskUserQuestion answer rides in the input; an empty one does not', () => {
+    const ask = { reqId: 'req-2', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [{ question: 'Which?' }] } } }
+    expect(line(harness().live.permissionAnswer(ask, { requestId: 'req-2', allow: true, answers: { 'Which?': '\u4e2d' } })).response.response.updatedInput)
+      .toEqual({ questions: [{ question: 'Which?' }], answers: { 'Which?': '\u4e2d' } })
+    expect(line(harness().live.permissionAnswer(ask, { requestId: 'req-2', allow: true, answers: {} })).response.response.updatedInput)
+      .toEqual({ questions: [{ question: 'Which?' }] })
+  })
+
+  it('deny carries the message, or the server\'s default', () => {
+    const live = harness().live
+    expect(line(live.permissionAnswer(pending, { requestId: 'req-1', allow: false, message: 'not now' })).response.response)
+      .toEqual({ behavior: 'deny', message: 'not now' })
+    expect(line(live.permissionAnswer(pending, { requestId: 'req-1', allow: false })).response.response)
+      .toEqual({ behavior: 'deny', message: 'User denied permission' })
+  })
+
+  it('another request, no prompt, or a prompt that is not a tool permission: nothing to answer', () => {
+    const live = harness().live
+    for (const p of [null, pending, { reqId: 'req-1', request: { subtype: 'mcp_message' } }]) {
+      const r = live.permissionAnswer(p, { requestId: p === pending ? 'req-9' : 'req-1', allow: true })
+      expect(r).toMatchObject({ ok: false, code: 'not_found' })
+    }
+  })
+
+  it.each([
+    ['no request id', { allow: true }],
+    ['allow that is not a boolean', { requestId: 'req-1', allow: 'yes' }],
+    ['a message that is not a string', { requestId: 'req-1', allow: false, message: 3 }],
+    ['answers that are a list', { requestId: 'req-1', allow: true, answers: ['a'] }],
+    ['an answer that is not a string', { requestId: 'req-1', allow: true, answers: { q: 1 } }],
+  ])('refuses %s', (_what, raw) => {
+    expect(harness().live.permissionAnswer(pending, raw)).toMatchObject({ ok: false, code: 'bad_request' })
   })
 })

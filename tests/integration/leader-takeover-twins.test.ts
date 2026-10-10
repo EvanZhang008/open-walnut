@@ -39,6 +39,8 @@ const HOME = '/fixture/walnut-home'
 const WALNUT = 'wprimarytest01'
 const A = 'aaaaaaaa-1111-4111-8111-111111111111'
 const B = 'bbbbbbbb-2222-4222-8222-222222222222'
+/** A second session on oldbox, for the stop (A and B keep running for the handback). */
+const C = 'cccccccc-3333-4333-8333-333333333333'
 const TASK_A = 'mleadaaa-0001'
 const TASK_B = 'mworkbbb-0002'
 /** The takeover window, and the daemon's keepalive beat (a silent primary socket is closed after 8). */
@@ -58,20 +60,32 @@ out({ type: 'system', subtype: 'init', session_id: sid })
 out({ type: 'result', subtype: 'success', is_error: false, result: 'ready', session_id: sid })
 out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
 let buf = ''
+let asked = 0
 process.stdin.on('data', (chunk) => {
   buf += chunk.toString('utf8')
   let nl
   while ((nl = buf.indexOf('\\n')) !== -1) {
     const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
     let msg; try { msg = JSON.parse(line) } catch { continue }
-    // A settings change (leader.settings): kept for the test, answered as the CLI does.
+    // A settings or mode change (leader.settings, leader.control): kept for the
+    // test, answered as the CLI does (set_permission_mode echoes the mode).
     if (msg.type === 'control_request') {
       fs.appendFileSync(inbox.replace('.inbox.jsonl', '.ctrl.jsonl'), JSON.stringify(msg) + '\\n')
-      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } })
+      const echo = msg.request && msg.request.subtype === 'set_permission_mode' ? { response: { mode: msg.request.mode } } : {}
+      out({ type: 'control_response', response: Object.assign({ subtype: 'success', request_id: msg.request_id }, echo) })
+      continue
+    }
+    // An answer to a permission prompt this CLI asked.
+    if (msg.type === 'control_response') {
+      fs.appendFileSync(inbox.replace('.inbox.jsonl', '.resp.jsonl'), JSON.stringify(msg) + '\\n')
       continue
     }
     if (msg.type !== 'user') continue
     fs.appendFileSync(inbox, JSON.stringify({ content: msg.message && msg.message.content }) + '\\n')
+    // "ASK:" in a message: the CLI asks to run a tool, as Claude Code does in default mode.
+    if (JSON.stringify(msg.message && msg.message.content).includes('ASK:')) {
+      out({ type: 'control_request', request_id: 'perm-' + (++asked), request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls docs/' } } })
+    }
   }
 })
 setInterval(() => {}, 1 << 30)
@@ -293,6 +307,13 @@ function inboxOf(d: Daemon, sid: string): string[] {
   } catch { return [] }
 }
 
+/** The permission answers a session's CLI got (the mock keeps them). */
+function respOf(d: Daemon, sid: string): Array<{ response: { request_id: string; response: Record<string, unknown> } }> {
+  try {
+    return fs.readFileSync(path.join(d.dir, `${sid}.resp.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+
 /** The control requests a session's CLI got (the mock keeps them). */
 function ctrlOf(d: Daemon, sid: string): Array<{ request_id: string; request: { subtype: string; settings: Record<string, string> } }> {
   try {
@@ -343,7 +364,7 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     daemons.push(devbox, oldbox)
     const mock = path.join(base, 'mock-cli.cjs')
     fs.writeFileSync(mock, MOCK_CLI)
-    for (const [d, sid, task] of [[devbox, A, TASK_A], [oldbox, B, TASK_B]] as const) {
+    for (const [d, sid, task] of [[devbox, A, TASK_A], [oldbox, B, TASK_B], [oldbox, C, TASK_B]] as const) {
       const ws = await connectWs(d.port)
       const started = await cmd(ws, { cmd: 'start', sid, cwd: d.dir, message: 'init', args: [process.execPath, mock, sid, path.join(d.dir, `${sid}.inbox.jsonl`)], origin: { home: HOME, task } })
       expect(started.ok, JSON.stringify(started)).toBe(true)
@@ -360,7 +381,7 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
       home: HOME, walnutId: WALNUT, out: primaryOut, companionUrl: `ws://127.0.0.1:${cport}/primary`,
       hosts: [
         { name: 'devbox', port: devbox.port, slice: slice('devbox', [{ sid: A, taskId: TASK_A, title: 'Leader: ship it' }]) },
-        { name: 'oldbox', port: oldbox.port, slice: slice('oldbox', [{ sid: B, taskId: TASK_B, title: 'Worker: fix the build' }]) },
+        { name: 'oldbox', port: oldbox.port, slice: slice('oldbox', [{ sid: B, taskId: TASK_B, title: 'Worker: fix the build' }, { sid: C, taskId: TASK_B, title: 'Worker: second try' }]) },
       ],
     }))
     const script = path.join(base, 'fake-primary.cjs')
@@ -462,6 +483,60 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(ctrlOf(oldbox, B)).toHaveLength(1)
   }, 60_000)
 
+  it('while it leads, the companion answers a permission prompt on its host with the server\'s own line', async () => {
+    const pendingOf = async (host: string, sid: string) => ((await request(host, 'status', { sid })).pendingCtrl as { reqId: string } | null)?.reqId ?? null
+    const ask = await request('oldbox', 'leader.deliver', { walnutId: WALNUT, epoch: 2, delivery: { kind: 'text', toSid: B, text: 'ASK: list the docs' } })
+    expect(ask, JSON.stringify(ask)).toMatchObject({ ok: true })
+    let reqId: string | null = null
+    await waitFor(() => { void pendingOf('oldbox', B).then((r) => { reqId = r }); return reqId !== null }, 10_000, 'the prompt to be pending')
+    // Another request id answers nothing; the right one is the CLI's control_response.
+    const wrong = await request('oldbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: B, action: 'permission', requestId: 'perm-x', allow: true })
+    expect(wrong).toMatchObject({ ok: false, errorKind: 'not_found' })
+    const r = await request('oldbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: B, action: 'permission', requestId: reqId, allow: true })
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true, status: 'resolved', requestId: reqId, allow: true })
+    await waitFor(() => respOf(oldbox, B).length === 1, 10_000, 'B gets the answer')
+    expect(respOf(oldbox, B)[0]).toEqual({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: reqId, response: { behavior: 'allow', updatedInput: { command: 'ls docs/' } } },
+    })
+    expect(await pendingOf('oldbox', B)).toBeNull()
+    // Answered once: the same answer again finds nothing to answer.
+    const again = await request('oldbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: B, action: 'permission', requestId: reqId, allow: false })
+    expect(again).toMatchObject({ ok: false, errorKind: 'not_found' })
+    expect(respOf(oldbox, B)).toHaveLength(1)
+  }, 60_000)
+
+  it('while it leads, the companion changes a session\'s mode on its host; a prompt the new mode allows is answered there', async () => {
+    const plan = await request('devbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: A, action: 'mode', mode: 'plan' })
+    expect(plan, JSON.stringify(plan)).toMatchObject({ ok: true, mode: 'plan', appliedLive: true })
+    expect(ctrlOf(devbox, A).map((c) => c.request).at(-1)).toEqual({ subtype: 'set_permission_mode', mode: 'plan' })
+    const bad = await request('devbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: A, action: 'mode', mode: 'yolo' })
+    expect(bad).toMatchObject({ ok: false, errorKind: 'refused' })
+    // In plan mode the daemon itself answers every prompt but ExitPlanMode, so
+    // back to default, ask, and then bypass answers the prompt that waits.
+    expect(await request('devbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: A, action: 'mode', mode: 'default' })).toMatchObject({ ok: true, mode: 'default' })
+    await request('devbox', 'leader.deliver', { walnutId: WALNUT, epoch: 2, delivery: { kind: 'text', toSid: A, text: 'ASK: and the docs here' } })
+    let waiting = false
+    await waitFor(() => { void request('devbox', 'status', { sid: A }).then((st) => { waiting = !!st.pendingCtrl }); return waiting }, 10_000, 'A to wait on a prompt')
+    const bypass = await request('devbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: A, action: 'mode', mode: 'bypass' })
+    expect(bypass).toMatchObject({ ok: true, mode: 'bypass', appliedLive: true })
+    await waitFor(() => respOf(devbox, A).length === 1, 10_000, 'the waiting prompt to be answered')
+    expect(respOf(devbox, A)[0].response.response).toMatchObject({ behavior: 'allow' })
+    expect((await request('devbox', 'status', { sid: A })).pendingCtrl).toBeNull()
+  }, 60_000)
+
+  it('while it leads, the companion stops a session on its host with the stop id it made', async () => {
+    const STOP_ID = 'dddddddd-4444-4444-8444-444444444444'
+    const noId = await request('oldbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: C, action: 'stop' })
+    expect(noId).toMatchObject({ ok: false, errorKind: 'bad_request' })
+    expect((await request('oldbox', 'status', { sid: C })).alive).toBe(true)
+    const r = await request('oldbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: C, action: 'stop', stopRequestId: STOP_ID, requestedAt: '2026-10-10T10:00:00.000Z' }, 20_000)
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true, stopped: true })
+    expect((await request('oldbox', 'status', { sid: C })).alive).toBe(false)
+    // B on the same host keeps running.
+    expect((await request('oldbox', 'status', { sid: B })).alive).toBe(true)
+  }, 60_000)
+
   it('the Mac wakes on the same sockets: the daemons tell it, it drains, takes the lead back, and the companion lets go', async () => {
     // Still inside the keepalive: the sleeping primary's sockets were never closed.
     expect(daemonLog(devbox, /client silent, closing it/)).toHaveLength(0)
@@ -472,13 +547,20 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(claims.map((c) => [c.host, c.epoch, c.why]).sort()).toEqual([['devbox', 3, 'leader-lost'], ['oldbox', 3, 'leader-lost']])
     // It drained before it claimed: the journal of each host, in order.
     const drained = (host: string) => primaryEvents().filter((e) => e.ev === 'drained' && e.host === host).flatMap((e) => e.records as OfflineRecord[])
-    expect(drained('oldbox').map((r) => (r.kind === 'op' ? `op:${r.op}` : r.kind))).toEqual(['row', 'delivery', 'row', 'op:board_edit', 'settings'])
+    expect(drained('oldbox').map((r) => (r.kind === 'op' ? `op:${r.op}` : r.kind))).toEqual(['row', 'delivery', 'row', 'op:board_edit', 'settings', 'delivery', 'stop'])
     expect(drained('oldbox')[0]).toMatchObject({ row: { id: requestId, fromSessionId: A, toSessionId: B, fromHost: 'devbox', status: 'pending' } })
     expect(drained('oldbox')[2]).toMatchObject({ row: { id: requestId, status: 'replied' } })
     expect(drained('oldbox')[4]).toMatchObject({ kind: 'settings', sid: B, cliModel: 'sonnet[1m]' })
+    // The prompt answer leaves nothing for the Mac; the stop is the companion's, by its id.
+    expect(drained('oldbox')[5]).toMatchObject({ kind: 'delivery', toSessionId: B })
+    expect(drained('oldbox')[6]).toMatchObject({ kind: 'stop', sid: C, stopRequestId: 'dddddddd-4444-4444-8444-444444444444', requestedAt: '2026-10-10T10:00:00.000Z' })
     expect(drained('devbox')).toEqual([
       expect.objectContaining({ kind: 'delivery', fromSessionId: B, toSessionId: A, requestId, reply: true }),
       expect.objectContaining({ kind: 'settings', sid: A, effort: 'low' }),
+      expect.objectContaining({ kind: 'settings', sid: A, mode: 'plan' }),
+      expect.objectContaining({ kind: 'settings', sid: A, mode: 'default' }),
+      expect.objectContaining({ kind: 'delivery', toSessionId: A }),
+      expect.objectContaining({ kind: 'settings', sid: A, mode: 'bypass' }),
     ])
     await waitFor(() => !leader.isLeading(), 10_000, 'the companion to let go')
   }, 60_000)
@@ -489,10 +571,17 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(r).toMatchObject({ ok: false })
     expect(['stale_epoch', 'not_leader']).toContain(r.errorKind)
     expect(inboxOf(devbox, A)).toHaveLength(before)
+    const ctrlBefore = ctrlOf(devbox, A).length
     const settings = await request('devbox', 'leader.settings', { walnutId: WALNUT, epoch: 2, sid: A, effort: 'high' })
     expect(settings).toMatchObject({ ok: false })
     expect(['stale_epoch', 'not_leader']).toContain(settings.errorKind)
-    expect(ctrlOf(devbox, A)).toHaveLength(1)
+    for (const action of [{ action: 'mode', mode: 'plan' }, { action: 'stop', stopRequestId: 'eeeeeeee-5555-4555-8555-555555555555', requestedAt: '2026-10-10T11:00:00.000Z' }]) {
+      const control = await request('devbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: A, ...action })
+      expect(control).toMatchObject({ ok: false })
+      expect(['stale_epoch', 'not_leader']).toContain(control.errorKind)
+    }
+    expect(ctrlOf(devbox, A)).toHaveLength(ctrlBefore)
+    expect((await request('devbox', 'status', { sid: A })).alive).toBe(true)
     // And a call between hosts goes to the Mac again.
     const back = await gatewayCall(devbox, A, 'task_send', { to: TASK_B, text: 'status?' })
     expect(back).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })

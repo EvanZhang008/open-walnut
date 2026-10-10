@@ -17,7 +17,7 @@
  *   - with the Mac linked, requests (large ones too) and WebSockets go to it unchanged;
  *   - the Mac gone, the first request finds out and goes on to the companion,
  *     under the companion's own Host and Origin;
- *   - neither, a page (HTML) or a 503 `leader_away` (API, WebSocket);
+ *   - neither, the alone page (HTML) or a 503 `leader_away` (API, WebSocket);
  *   - the Mac back, browsers reach it again;
  *   - the Mac's stream to the host server reaches its status and its copy door;
  *   - the Mac sets the tunnel through the daemon, and a tunnel in front of the
@@ -352,11 +352,13 @@ describe('a host server, linked to its daemon only', () => {
     for (const s of companionSockets) s.terminate()
     companionBridge.close()
     await waitFor(() => hostServer!.route().kind === 'alone', 15_000, 'alone')
+    // A page of its own (host-server/alone-page.ts): it names nothing until a device token holds.
     const page = await get('/', { accept: 'text/html' })
-    expect(page.status).toBe(503)
+    expect(page.status).toBe(200)
     expect(page.body).toContain('Walnut on devbox')
+    expect(page.body).toContain('data-why="nobody-answers"')
     expect(page.body).toContain('Neither your Mac nor your cloud companion is answering')
-    expect(page.body).not.toMatch(/task|session \w{8}/i)
+    expect(page.headers.get('content-security-policy')).toMatch(/script-src 'nonce-/)
     const api = await get('/api/tasks')
     expect(api.status).toBe(503)
     expect(JSON.parse(api.body).error.code).toBe('leader_away')

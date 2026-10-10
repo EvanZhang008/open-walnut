@@ -303,6 +303,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Optional: an older daemon's bridge refuses the command, and the companion
   // says that host's daemon upgrades on its next connect to the primary.
   'leader-settings-v1',
+  // 'leader-control-v1' (live-settings-core.ts): the same, with
+  // `leader.control {action}`: `permission` answers the pending can_use_tool
+  // with the server's own line, `mode` sends set_permission_mode (the answer
+  // echoes it; journaled as a `settings` record), `stop` is the user stop the
+  // primary's terminate sends (a session with scheduled jobs needs `force`),
+  // journaled as a `stop` record the primary records under the same id.
+  // Optional, like leader-settings-v1.
+  'leader-control-v1',
   // 'follower-v1' (docs/plan/walnut-servers-everywhere.md, "One kind of link"):
   // the server this daemon started for a Walnut says so with `follower.hello
   // {walnutId, home, token}` (the token the daemon started it with), asks
@@ -313,6 +321,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // event or cron note. Both twins, inline. Optional: without it there is no
   // host server on that host.
   'follower-v1',
+  // 'follower-alone-v1' (docs/plan/walnut-servers-everywhere.md, "Host server,
+  // leader away"): while no server answers its Walnut, the follower may also
+  // list that Walnut's sessions here (`follower.sessions`: the copy's rows with
+  // each one's state and pending prompt), write a person's message to a running
+  // one (`follower.send`, journaled as a `delivery` record) and answer its
+  // prompt (`follower.permission`). Each write is refused while the Mac was heard
+  // in the last 30 s (the host server's route window). `read-history` from a
+  // follower reads its own Walnut's sessions only. Both twins. Optional:
+  // without it the host server's page says the daemon needs an update.
+  'follower-alone-v1',
   // 'host-server-v1' (host-server-core.ts): the leader, on the socket its
   // leader.configure tagged, sets what server runs here for its Walnut with
   // `server.configure {home, spec}` (null removes it) and reads it back, with

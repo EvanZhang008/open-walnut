@@ -16,6 +16,7 @@
  * copies the Mac sends.
  */
 
+import crypto from 'node:crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -28,7 +29,10 @@ import { createDaemonLink, type DaemonLink, type FollowerView } from './daemon-l
 import { chooseRoute, leaderAnswers, SUSPECT_MS, type Route } from './route.js'
 import { forwardHttp, forwardUpgrade, type ForwardTarget } from './proxy.js'
 import { createHostExpose, type HostExpose } from './expose.js'
-import { aloneJson, alonePage } from './pages.js'
+import { aloneJson } from './pages.js'
+import { alonePage, aloneContentSecurityPolicy } from './alone-page.js'
+import { createAloneApi, ALONE_PREFIX } from './alone-api.js'
+import { createDeviceCopy } from './device-copy.js'
 
 const REPORT_MS = 5_000
 /** A browser's request waits this long for the Mac or the companion to take its stream. */
@@ -102,6 +106,17 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
     exposeRetry = s.exposeRetry ?? null
   }
 
+  // The Mac's copy of the signed-in devices: what the alone answers check tokens against.
+  const devices = createDeviceCopy(path.join(WALNUT_HOME, 'replica', 'devices.json'))
+  const aloneApi = createAloneApi({
+    label: env.label,
+    route: () => routeNow(),
+    devices,
+    request: (cmd, params, timeoutMs) => link.request(cmd, params, timeoutMs),
+    transcript: async (sid, jsonl) => (await import('../core/sessions/transcript-from-jsonl.js')).transcriptFromJsonl(sid, jsonl),
+    log: (level, msg, data) => log.web[level](msg, data),
+  })
+
   function routeNow(): Route {
     const input = { view: link.view(), now: Date.now(), suspect }
     const presence = leaderAnswers(input)
@@ -134,11 +149,21 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
       sendJson(res, 503, aloneJson(env.label, why))
       return
     }
-    res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '10' })
-    res.end(alonePage(env.label, why))
+    // A working page of its own: this Walnut's sessions here, once the browser's token holds (alone-page.ts).
+    const nonce = crypto.randomBytes(16).toString('base64')
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+      'content-security-policy': aloneContentSecurityPolicy(nonce), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer',
+    })
+    res.end(alonePage(env.label, why, nonce))
   }
 
   function handlePublic(req: IncomingMessage, res: ServerResponse): void {
+    // This server's own answers, whoever leads: the page asks /_alone/state to know when to leave.
+    if ((req.url ?? '').startsWith(ALONE_PREFIX)) {
+      void aloneApi.handle(req, res)
+      return
+    }
     const route = routeNow()
     if (route.kind === 'alone') return answerAlone(req, res, route.why)
     forwardHttp(req, res, target(route), (err) => {
@@ -177,6 +202,8 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
       route: route.kind === 'alone' ? { kind: 'alone', why: route.why } : { kind: route.kind },
       daemon: { state: link.state(), lastError: link.lastError(), at: view?.at ?? null },
       expose: expose.status(),
+      // Which device list the alone answers check against (null: none from the Mac yet).
+      deviceCopy: devices.hash(),
     }
   }
 
@@ -191,7 +218,7 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
             import('express'), import('../web/routes/bridge-replica.js'),
           ])
           const app = express()
-          app.use('/bridge/replica', createLinkedReplicaRouter())
+          app.use('/bridge/replica', createLinkedReplicaRouter({ devices: (body) => devices.put(body) }))
           replicaRouter = app
         }
         replicaRouter(req, res)

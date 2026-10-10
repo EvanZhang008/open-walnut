@@ -76,7 +76,7 @@ import {
   writeTranscriptCache,
 } from './projection-cache.js'
 import type { SessionModelCatalogEntry, SessionRecord, Task } from './types.js'
-import { engineCaps } from './agents/engine-registry.js'
+import { engineCaps, normalizeEngine } from './agents/engine-registry.js'
 // Per-message text clipping, shared with the cloud twin in
 // web/routes/session-stream-v1.ts: an HTML-bearing reply gets a larger budget and
 // the cut is made where it cannot leave half a tag behind.
@@ -171,6 +171,9 @@ export interface ProjectedSession {
   /** The reasoning effort in effect (additive, same reader). */
   effort?: string
   mode?: string
+  /** The agent engine when it is not Claude Code (additive): the companion sends
+   *  Claude Code's own control lines to a session only when this is absent. */
+  engine?: string
   started_at: string
   last_active_at: string
   message_count: number
@@ -238,6 +241,7 @@ export function projectSession(
     ...(s.cliModel ? { cli_model: s.cliModel } : {}),
     ...(s.effectiveEffort || s.effort ? { effort: s.effectiveEffort || s.effort } : {}),
     ...(s.mode ? { mode: s.mode } : {}),
+    ...(normalizeEngine(s.engine) ? { engine: normalizeEngine(s.engine) } : {}),
     started_at: s.startedAt,
     last_active_at: s.lastActiveAt,
     message_count: s.messageCount ?? 0,

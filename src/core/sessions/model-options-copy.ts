@@ -20,6 +20,7 @@ import {
   type SessionEffort, type SessionModelCatalogEntry,
 } from '../types.js'
 import { effortSupportedBy, modelOptionsFromCatalog, type ModelOptionsResult } from './session-controls.js'
+import { callLeadHost } from '../leader/host-session-control.js'
 
 export interface CopyAnswer { status: number; body: Record<string, unknown> }
 
@@ -84,6 +85,10 @@ export function createModelCopy(deps: ModelCopyDeps) {
     const found = await rowOf(sessionId)
     if (!found) return { ok: false, answer: error(404, 'not_found', 'session not found') }
     const host = aliasOf(found.row.host)
+    // Another agent's session takes its own control messages, never Claude Code's flag line.
+    if (found.row.engine) {
+      return { ok: false, answer: error(503, 'bridge_offline', 'This session needs your Mac to change its model. Try again when it is back.') }
+    }
     if (host === '__local__') {
       return { ok: false, answer: error(503, 'bridge_offline', 'This session runs on your Mac, which is offline. Try again when it is back.') }
     }
@@ -91,21 +96,9 @@ export function createModelCopy(deps: ModelCopyDeps) {
     if (!lead) {
       return { ok: false, answer: error(503, 'bridge_offline', 'Your Mac is offline. The cloud companion takes over this host within about a minute; try again then.') }
     }
-    let reply: Record<string, unknown>
-    try {
-      reply = await deps.request(host, 'leader.settings', { walnutId: lead.walnutId, epoch: lead.epoch, sid: sessionId, ...change }, SETTINGS_TIMEOUT_MS)
-    } catch (err) {
-      return { ok: false, answer: error(503, 'bridge_offline', `Could not reach ${host}: ${err instanceof Error ? err.message : String(err)}`) }
-    }
-    if (reply.ok !== true) {
-      const kind = String(reply.errorKind ?? '')
-      if (kind === 'stale_epoch' || kind === 'not_leader') deps.lostHost?.(host, kind)
-      const message = String(reply.error ?? 'refused')
-      if (message.includes('not permitted over bridge')) {
-        return { ok: false, answer: error(400, 'session_control_needs_upgrade', `The daemon on ${host} predates this; it upgrades on its next connect to your Mac.`) }
-      }
-      return { ok: false, answer: error(kind === 'stale_epoch' || kind === 'not_leader' ? 503 : 400, kind === 'stale_epoch' || kind === 'not_leader' ? 'bridge_offline' : 'bad_request', message) }
-    }
+    const r = await callLeadHost(deps, { row: found.row, host, lead, asOf: found.projection.exportedAt }, 'leader.settings', change, SETTINGS_TIMEOUT_MS)
+    if (!r.ok) return r
+    const reply = r.reply
     appliedHere.set(sessionId, { ...appliedHere.get(sessionId), ...(change.model ? { cliModel: change.model } : {}), ...(change.effort ? { effort: change.effort } : {}), at: deps.now() })
     return { ok: true, appliedLive: reply.appliedLive === true }
   }

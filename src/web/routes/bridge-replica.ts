@@ -11,6 +11,10 @@
  * search-replica-store.ts; the steps are listed in search-replica-wire.ts):
  *   {op:'status'|'sync'|'put', kind:'search', …}
  *
+ * Kind 'devices', on a host server only (host-server/device-copy.ts): the
+ * hashes of the primary's phone and browser tokens, the whole list each time:
+ *   {op:'put', kind:'devices', devices:[{name, tokenHash}], hash}  → {ok, hash, devices}
+ *
  * Same door as /bridge/ingest: only the primary's own machine credential, auth
  * before the body is read, gzip bodies, the limit on the inflated body.
  */
@@ -32,12 +36,16 @@ async function searchStep(body: Record<string, unknown>) {
         : { ok: false as const, status: 400 as const, error: 'unknown_op' }
 }
 
-async function replica(req: Request, res: Response): Promise<void> {
+type DevicesStep = (body: Record<string, unknown>) => { ok: true; hash: string; devices: number } | { ok: false; status: 400; error: string }
+
+async function replica(req: Request, res: Response, devices?: DevicesStep): Promise<void> {
   const started = Date.now()
   const body = (req.body ?? {}) as { op?: unknown; kind?: unknown }
   const store = await import('../../core/replication/task-replica-store.js')
   try {
-    const result = body.kind === 'search' ? await searchStep(body)
+    const result = body.kind === 'devices' && devices
+      ? (body.op === 'put' ? devices(body as Record<string, unknown>) : { ok: false as const, status: 400 as const, error: 'unknown_op' })
+      : body.kind === 'search' ? await searchStep(body)
       : body.op === 'sync' ? await store.replicaSync(body)
         : body.op === 'put' ? await store.replicaPut(body)
           : { ok: false as const, status: 400 as const, error: 'unknown_op' }
@@ -58,12 +66,12 @@ async function replica(req: Request, res: Response): Promise<void> {
  * through the host's daemon (host-server/main.ts). No credential: only the
  * primary's own link to that daemon may open such a stream (stream-relay-core.ts).
  */
-export function createLinkedReplicaRouter(): Router {
+export function createLinkedReplicaRouter(opts: { devices?: DevicesStep } = {}): Router {
   const router = Router()
   router.post(
     '/',
     express.json({ limit: BODY_LIMIT }),
-    (req, res, next) => { void replica(req, res).catch(next) },
+    (req, res, next) => { void replica(req, res, opts.devices).catch(next) },
   )
   router.use(parseErrors)
   return router

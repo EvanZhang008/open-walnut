@@ -42,6 +42,8 @@ const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/
   .find((p): p is string => !!p && fs.existsSync(p))
 const A = 'aaaaaaaa-1111-4111-8111-111111111111'
 const B = 'bbbbbbbb-2222-4222-8222-222222222222'
+/** A second session on oldbox, for the stop (A and B keep running for the wake). */
+const C = 'cccccccc-3333-4333-8333-333333333333'
 const T = 6_000
 const BEAT = 2_500
 
@@ -54,20 +56,32 @@ out({ type: 'system', subtype: 'init', session_id: sid })
 out({ type: 'result', subtype: 'success', is_error: false, result: 'ready', session_id: sid })
 out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
 let buf = ''
+let asked = 0
 process.stdin.on('data', (chunk) => {
   buf += chunk.toString('utf8')
   let nl
   while ((nl = buf.indexOf('\\n')) !== -1) {
     const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
     let msg; try { msg = JSON.parse(line) } catch { continue }
-    // A settings change (leader.settings): kept for the test, answered as the CLI does.
+    // A settings or mode change (leader.settings, leader.control): kept for the
+    // test, answered as the CLI does (set_permission_mode echoes the mode).
     if (msg.type === 'control_request') {
       fs.appendFileSync(inbox.replace('.inbox.jsonl', '.ctrl.jsonl'), JSON.stringify(msg) + '\\n')
-      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } })
+      const echo = msg.request && msg.request.subtype === 'set_permission_mode' ? { response: { mode: msg.request.mode } } : {}
+      out({ type: 'control_response', response: Object.assign({ subtype: 'success', request_id: msg.request_id }, echo) })
+      continue
+    }
+    // An answer to a permission prompt this CLI asked.
+    if (msg.type === 'control_response') {
+      fs.appendFileSync(inbox.replace('.inbox.jsonl', '.resp.jsonl'), JSON.stringify(msg) + '\\n')
       continue
     }
     if (msg.type !== 'user') continue
     fs.appendFileSync(inbox, JSON.stringify({ content: msg.message && msg.message.content }) + '\\n')
+    // "ASK:" in a message: the CLI asks to run a tool, as Claude Code does in default mode.
+    if (JSON.stringify(msg.message && msg.message.content).includes('ASK:')) {
+      out({ type: 'control_request', request_id: 'perm-' + (++asked), request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls docs/' } } })
+    }
   }
 })
 setInterval(() => {}, 1 << 30)
@@ -252,6 +266,7 @@ const far = (await tm.addTask({ title: 'Far task: release notes', project: 'Othe
 const st = await import(${src('src/core/session-tracker.ts')})
 await st.createSessionRecord(${JSON.stringify(A)}, lead.id, 'Acme', ${JSON.stringify(dev.dir)}, { host: 'devbox', title: 'Leader', initialProcessStatus: 'idle' })
 await st.createSessionRecord(${JSON.stringify(B)}, worker.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker', initialProcessStatus: 'idle' })
+await st.createSessionRecord(${JSON.stringify(C)}, worker.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker, second try', initialProcessStatus: 'idle' })
 const bs = await import(${src('src/core/boards/board-store.ts')})
 await bs.setBoardHtml(lead.id, '<h1>Release</h1><p id="build">Build: red</p>', { by: 'human' })
 const { localDaemon } = await import(${src('src/providers/local-daemon.ts')})
@@ -308,6 +323,22 @@ function ctrlOf(d: Daemon, sid: string): Array<{ request_id: string; request: { 
   } catch { return [] }
 }
 
+/** The permission answers a session's CLI got (the mock keeps them). */
+function respOf(d: Daemon, sid: string): Array<{ response: { request_id: string; response: Record<string, unknown> } }> {
+  try {
+    return fs.readFileSync(path.join(d.dir, `${sid}.resp.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+
+/** A session's record in the primary's own session store, read-only. */
+function primaryRecord(sid: string): Record<string, any> {
+  const db = new Database(path.join(primary.data, 'sessions.sqlite'), { readonly: true, fileMustExist: true })
+  try {
+    const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(sid) as Record<string, any> | undefined
+    return { ...(row ?? {}), ...(row?.payload ? JSON.parse(row.payload) as Record<string, unknown> : {}) }
+  } finally { db.close() }
+}
+
 /** A session's CLI model and effort in the primary's own session store, read-only. */
 function primarySettings(sid: string): { cliModel: string | null; effort: string | null } {
   const db = new Database(path.join(primary.data, 'sessions.sqlite'), { readonly: true, fileMustExist: true })
@@ -332,6 +363,22 @@ function macPids(): number[] {
 
 const companionLeads = async () => ((await api(companion, '/api/leader')).json.leading ?? []) as Array<{ host: string; epoch: number }>
 
+/** A session as its host's daemon sees it (status, read-only). */
+async function daemonStatus(d: Daemon, sid: string): Promise<Record<string, any>> {
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const s = new WebSocket(`ws://127.0.0.1:${d.port}`)
+    s.once('open', () => resolve(s))
+    s.once('error', reject)
+  })
+  try {
+    return await new Promise<Record<string, any>>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('status timed out')), 10_000)
+      ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
+      ws.send(JSON.stringify({ id: 1, cmd: 'status', sid }))
+    })
+  } finally { ws.close() }
+}
+
 /** What a host's copy of the primary's notes, memory and skills holds (replica.status). */
 async function replicaStatus(d: Daemon): Promise<Record<string, { entries: number; pending: number }>> {
   const ws = await new Promise<WebSocket>((resolve, reject) => {
@@ -353,6 +400,7 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
   let devbox: Daemon
   let oldbox: Daemon
   let requestId = ''
+  let stopIdOfC = ''
 
   beforeAll(async () => {
     base = await fsp.mkdtemp(path.join(os.tmpdir(), 'wll-'))
@@ -365,6 +413,7 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     primary.data = path.join(base, 'primary', 'data') // the sessions' origin
     await startSession(devbox, A)
     await startSession(oldbox, B)
+    await startSession(oldbox, C)
     await startPrimary(devbox, oldbox)
     expect(primary.ids.lead).toMatch(/\S/)
     expect(primary.serverPid).toBeGreaterThan(1)
@@ -534,6 +583,43 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     expect(after.json).toMatchObject({ current: 'sonnet', currentEffort: 'low', offline: true })
   }, 60_000)
 
+  it('while the Mac sleeps, the phone answers B\'s permission prompt, changes A\'s mode and stops C, each on its host', async () => {
+    // B asks to run a tool: the phone's message reaches it through the companion.
+    const sent = await api(companion, `/api/v1/sessions/${B}/messages`, { method: 'POST', body: JSON.stringify({ text: 'ASK: list the docs' }) })
+    expect(sent.status, JSON.stringify(sent.json)).toBe(202)
+    // The detail shows the prompt the host keeps, at once (no wait on the sleeping Mac).
+    const detail = await waitFor(async () => {
+      const started = Date.now()
+      const r = await api(companion, `/api/v1/sessions/${B}`)
+      expect(Date.now() - started).toBeLessThan(3_000)
+      return r.json.pendingPermissions?.length === 1 ? r : null
+    }, 30_000, 'B\'s prompt in the detail')
+    expect(detail.json).toMatchObject({ degraded: true, pendingPermissions: [{ toolName: 'Bash', input: { command: 'ls docs/' } }] })
+    const requestId = String(detail.json.pendingPermissions[0].requestId)
+    const answered = await api(companion, `/api/v1/sessions/${B}/permission`, { method: 'POST', body: JSON.stringify({ requestId, allow: true }) })
+    expect(answered.status, JSON.stringify(answered.json)).toBe(200)
+    expect(answered.json).toEqual({ status: 'resolved', requestId, allow: true, viaCompanion: true })
+    await waitFor(() => respOf(oldbox, B).length === 1, 15_000, 'B\'s CLI to get the answer')
+    expect(respOf(oldbox, B)[0].response).toMatchObject({ request_id: requestId, response: { behavior: 'allow', updatedInput: { command: 'ls docs/' } } })
+    expect((await api(companion, `/api/v1/sessions/${B}`)).json.pendingPermissions).toEqual([])
+
+    // A's mode: the phone's picker shows it, a change reaches A's CLI.
+    const mode = await api(companion, `/api/v1/sessions/${A}`, { method: 'PATCH', body: JSON.stringify({ mode: 'plan' }) })
+    expect(mode.status, JSON.stringify(mode.json)).toBe(200)
+    expect(mode.json).toMatchObject({ session: { claudeSessionId: A, mode: 'plan' }, viaCompanion: true })
+    expect(ctrlOf(devbox, A).map((c) => c.request).at(-1)).toEqual({ subtype: 'set_permission_mode', mode: 'plan' })
+    const controls = await api(companion, `/api/v1/sessions/${A}/controls`)
+    expect(controls.json).toMatchObject({ engine: 'claude', controls: [{ id: 'mode', currentValue: 'plan' }] })
+
+    // C stops on oldbox; B keeps running.
+    const stopped = await api(companion, `/api/v1/sessions/${C}/terminate`, { method: 'POST', body: JSON.stringify({}) })
+    expect(stopped.status, JSON.stringify(stopped.json)).toBe(200)
+    expect(stopped.json).toMatchObject({ status: 'terminated', sessionId: C, viaCompanion: true, stopRequest: { state: 'confirmed' } })
+    stopIdOfC = String(stopped.json.stopRequest.id)
+    expect(await daemonStatus(oldbox, C)).toMatchObject({ exists: true, alive: false })
+    expect(await daemonStatus(oldbox, B)).toMatchObject({ exists: true, alive: true })
+  }, 120_000)
+
   it('while the Mac sleeps, a session\'s search and the phone\'s both reach the companion\'s copy of every task', async () => {
     // The far task is in no host's copy: only the companion holds it.
     const fromHost = await gatewayCall(devbox, A, 'search', { q: 'release notes', types: 'task' })
@@ -579,6 +665,11 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     // The model and effort the companion set on oldbox are B's on the Mac too.
     const settings = await waitFor(() => { const v = primarySettings(B); return v.cliModel === 'sonnet' ? v : null }, 30_000, 'B\'s model on the Mac')
     expect(settings.effort).toBe('low')
+    // A's mode is A's on the Mac too, and C's stop is the Mac's own stop, by the id the phone saw.
+    await waitFor(() => primaryRecord(A).mode === 'plan', 30_000, 'A\'s mode on the Mac')
+    const c = await waitFor(() => { const r = primaryRecord(C); return r.stopRequest?.state === 'confirmed' ? r : null }, 30_000, 'C\'s stop on the Mac')
+    expect(c.stopRequest.id).toBe(stopIdOfC)
+    expect(c.process_status).toBe('stopped')
     // The task the companion changed for A reaches the Mac through the replica's queue.
     await waitFor(async () => {
       const r = await api(primary, `/api/v1/tasks/${primary.ids.far}`)

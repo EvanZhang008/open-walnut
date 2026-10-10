@@ -23,7 +23,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { OfflineRecord } from '../providers/offline-host-core.js';
 import type { SessionRequest } from './session-requests.js';
-import { VALID_SESSION_EFFORT_IDS, type SessionEffort } from './types.js';
+import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -163,6 +163,14 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
     // The next drain returns what was written during this round (or nothing).
     await conn.send('offline.ack', { home: WALNUT_HOME, upTo }, RPC_TIMEOUT_MS);
   }
+  if (stopsToRun.delete(conn.hostKey)) {
+    try {
+      await (await import('./sessions/session-stop.js')).sessionStops.flush(conn.hostKey);
+    } catch (err) {
+      // Each stays pending on its record; the next connect runs it again.
+      log.session.warn('offline handover: the stops the companion sent did not run yet', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
   if (result.records > 0) log.session.info('offline handover: done', { host: conn.hostKey, ...result });
   if (unapplied.length > 0) await tellCallers(unapplied);
   return result;
@@ -299,28 +307,59 @@ async function applyRecord(
       return;
     }
     case 'settings': {
-      // The companion changed a live session's model or effort while it led.
-      // The CLI already runs with it; the record keeps it for a cold resume.
+      // The companion changed a live session's model, effort or permission mode
+      // while it led. The CLI already runs with it; the record keeps it for a
+      // cold resume.
       const patch: { cliModel?: string; effort?: SessionEffort } = {};
       if (typeof record.cliModel === 'string' && record.cliModel) patch.cliModel = record.cliModel;
       if (typeof record.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(record.effort)) patch.effort = record.effort as SessionEffort;
-      if (!patch.cliModel && !patch.effort) return;
-      const { updateSessionRecord } = await import('./session-tracker.js');
-      await updateSessionRecord(record.sid, patch);
+      const mode = typeof record.mode === 'string' && VALID_SESSION_MODE_IDS.has(record.mode) ? record.mode as SessionMode : undefined;
+      if (!patch.cliModel && !patch.effort && !mode) return;
+      const { updateSessionRecord, getSessionByClaudeId } = await import('./session-tracker.js');
+      if (patch.cliModel || patch.effort) await updateSessionRecord(record.sid, patch);
+      if (mode) {
+        // The same write as the Mac's own mode change: the task's plan and
+        // exec slots follow the mode.
+        const existing = await getSessionByClaudeId(record.sid);
+        if (existing) await (await import('./sessions/session-lifecycle.js')).persistSessionModeChange(existing, record.sid, mode);
+      }
       // A live session object here would write its own (older) values back; it
       // also reads back what the CLI now runs, as the Mac's own change does.
       const { sessionRunner } = await import('../providers/claude-code-session.js');
       const live = sessionRunner.findByClaudeId(record.sid);
       if (live) {
-        live.adoptAppliedSettings(patch);
-        void live.refreshAppliedSettings('companion-settings').catch(() => null);
+        live.adoptAppliedSettings({ ...patch, ...(mode ? { mode } : {}) });
+        if (patch.cliModel || patch.effort) void live.refreshAppliedSettings('companion-settings').catch(() => null);
       }
       result.replayed++;
-      log.session.info('offline handover: settings the companion applied are kept', { host, sessionId: record.sid, ...patch });
+      log.session.info('offline handover: settings the companion applied are kept', { host, sessionId: record.sid, ...patch, ...(mode ? { mode } : {}) });
+      return;
+    }
+    case 'stop': {
+      // The user stopped the session through the companion while it led. It
+      // becomes this server's own stop request, same id and time, so the phone's
+      // next message is fenced by the stop it saw; handover() then runs it
+      // through the usual stop path, which parks the queued messages and finds
+      // the process already gone.
+      const { getSessionByClaudeId, updateSessionRecord } = await import('./session-tracker.js');
+      const existing = await getSessionByClaudeId(record.sid);
+      if (!existing) return;
+      const mine = Date.parse(existing.stopRequest?.requestedAt ?? '');
+      if (existing.stopRequest && (existing.stopRequest.id === record.stopRequestId || (Number.isFinite(mine) && mine >= Date.parse(record.requestedAt)))) {
+        result.skipped++;
+        return;
+      }
+      await updateSessionRecord(record.sid, { stopRequest: { id: record.stopRequestId, requestedAt: record.requestedAt, state: 'pending' } });
+      stopsToRun.add(host);
+      result.replayed++;
+      log.session.info('offline handover: a stop the companion sent is recorded', { host, sessionId: record.sid, stopRequestId: record.stopRequestId });
       return;
     }
   }
 }
+
+/** Hosts whose drained stops this handover still runs (handover()). */
+const stopsToRun = new Set<string>();
 
 /** The session (and task) a record is about, for the log line and the card's lifecycle. */
 async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string; taskId?: string }> {
@@ -329,6 +368,7 @@ async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string;
     case 'row': return { sessionId: record.row.fromSessionId };
     case 'delivery': return { sessionId: record.toSessionId };
     case 'settings': return { sessionId: record.sid };
+    case 'stop': return { sessionId: record.sid };
     case 'settle': {
       const { getSessionRequest } = await import('./session-requests.js');
       const row = await getSessionRequest(record.requestId).catch(() => undefined);

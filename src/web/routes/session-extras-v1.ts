@@ -162,6 +162,13 @@ sessionExtrasV1Router.get('/sessions/:id/controls', async (req: Request, res: Re
         res.json(fixed)
         return
       }
+      // While this companion leads the session's host: the mode it knows of.
+      const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
+      if (lead) {
+        const { claudeModeControls } = await import('../../core/sessions/session-extras.js')
+        res.json({ engine: 'claude', controls: claudeModeControls(lead.control.currentMode(lead.target)) })
+        return
+      }
       await relayControlAction(res, 'controls', sessionId, undefined, 200)
       return
     }
@@ -191,6 +198,22 @@ sessionExtrasV1Router.post('/sessions/:id/controls', async (req: Request, res: R
         }
         sendError(res, 409, 'conflict',
           'The cloud companion answers in a fixed mode, so this chat\'s mode cannot be changed while it answers')
+        return
+      }
+      // While this companion leads the session's host, that host takes the mode.
+      const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
+      if (lead) {
+        if (body.id !== 'mode' || typeof body.value !== 'string') {
+          sendError(res, 400, 'bad_request', 'Claude sessions only support the mode control')
+          return
+        }
+        const applied = await lead.control.mode(lead.target, body.value)
+        if (!applied.ok) {
+          res.status(applied.answer.status).json(applied.answer.body)
+          return
+        }
+        const { claudeModeControls } = await import('../../core/sessions/session-extras.js')
+        res.json({ engine: 'claude', controls: claudeModeControls(applied.mode) })
         return
       }
       await relayControlAction(res, 'controls.apply', sessionId, { id: body.id, value: body.value }, 200)

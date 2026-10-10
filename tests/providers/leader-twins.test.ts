@@ -36,8 +36,8 @@ function fnBody(src: string, name: string): string {
 }
 
 describe('leader protocol: both twins', () => {
-  it('advertise leader-epoch-v1 and leader-settings-v1 without requiring them (an old daemon just never lets the companion lead)', () => {
-    for (const cap of ['leader-epoch-v1', 'leader-settings-v1']) {
+  it('advertise leader-epoch-v1, leader-settings-v1 and follower-alone-v1 without requiring them (an old daemon just never lets the companion lead)', () => {
+    for (const cap of ['leader-epoch-v1', 'leader-settings-v1', 'follower-alone-v1']) {
       expect(ADVERTISED_DAEMON_CAPABILITIES).toContain(cap)
       expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain(cap)
     }
@@ -112,6 +112,72 @@ describe('leader protocol: both twins', () => {
       expect(body.indexOf('offlineHost.noteSettings(f.home, sid')).toBeGreaterThan(apply)
       // Every control_response line reaches it, not only one answering a pending prompt.
       expect(src).toMatch(/if \(parsed\.type === 'control_response'\) liveSettings\.noteResponse\(sid, parsed\);?\n\s*if \(parsed\.type === 'control_request' && parsed\.request_id/)
+    })
+
+    it(`${name}: leader.control is the bridge's, fenced at the current epoch, for a session of that Walnut, and a stop is journaled before it runs`, () => {
+      expect(allowlist(src)).toContain("'leader.control'")
+      expect(src).toMatch(/case 'leader\.control': return daemonCommands\.run\(/)
+      const body = fnBody(src, 'cmdLeaderControl')
+      expect(body).toMatch(/origin !== 'bridge'\) return sendError\(ws, id, 'leader\.control: the cloud bridge only'\)/)
+      const fence = body.indexOf('leaderBook.fence(cmd.walnutId, cmd.epoch)')
+      const owner = body.indexOf('offlineHost.ownerOf(sid) !== f.home')
+      expect(fence).toBeGreaterThan(-1)
+      expect(owner).toBeGreaterThan(fence)
+      // Every action comes after both checks.
+      for (const a of ['permission', 'mode', 'stop']) expect(body.indexOf(`cmd.action === '${a}'`)).toBeGreaterThan(owner)
+      // A permission answer is the server's own line, on the server's own write path.
+      expect(body).toMatch(/answerPermission\(sid, cmd, 'leader\.control'\)/)
+      const answer = fnBody(src, 'answerPermission')
+      expect(answer).toMatch(/liveSettings\.permissionAnswer\(/)
+      expect(answer).toMatch(/core\.handleSendRawCommand\(sid, answer\.line\)|writeSessionLine\(sid, answer\.line\)/)
+      // A mode follows the daemon's auto-answer policy and is kept for the primary.
+      expect(body.indexOf('applyModePolicy(')).toBeGreaterThan(body.indexOf('liveSettings.setMode('))
+      expect(body).toMatch(/offlineHost\.noteSettings\(f\.home, sid, \{ mode: r\.mode \}\)/)
+      // A stop: scheduled jobs need force, ownership is checked, then journaled, then run.
+      const stop = body.slice(body.indexOf("cmd.action === 'stop'"))
+      const cron = stop.indexOf('cronActive')
+      const refusal = stop.indexOf('stopOwnerRefusal(sid, stop)')
+      const journal = stop.indexOf('offlineHost.noteStop(f.home, sid')
+      const run = stop.indexOf('cmdStop(ws, id, stop)')
+      expect(cron).toBeGreaterThan(-1)
+      expect(refusal).toBeGreaterThan(cron)
+      expect(journal).toBeGreaterThan(refusal)
+      expect(run).toBeGreaterThan(journal)
+      expect(stop).toMatch(/reason: 'user', home: f\.home, initiator: 'human', stopRequestId/)
+      // cmdSetMode and leader.control share one policy.
+      expect(fnBody(src, 'cmdSetMode')).toMatch(/applyModePolicy\(session, sid, mode/)
+    })
+
+    it(`${name}: the follower lists, writes and answers prompts for its own Walnut only, and only while no server answers it`, () => {
+      const start = src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set([')
+      const list = src.slice(start, src.indexOf('])', start)).replace(/\/\/[^\n]*/g, '')
+      for (const c of ['follower.sessions', 'follower.send', 'follower.permission']) expect(list).toContain(`'${c}'`)
+      expect(src).toMatch(/case 'follower\.sessions': return cmdFollowerSessions\(/)
+      expect(src).toMatch(/case 'follower\.send': return daemonCommands\.run\(/)
+      expect(src).toMatch(/case 'follower\.permission': return daemonCommands\.run\(/)
+      // Its own socket, its own Walnut.
+      expect(fnBody(src, 'followerHomeOf')).toMatch(/followerSockets\.get\(home\) === ws/)
+      expect(fnBody(src, 'cmdFollowerSessions')).toMatch(/offlineHost\.sessionsOf\(home\)/)
+      // A write: the follower's socket, then no server answering, then the session's owner.
+      const target = fnBody(src, 'followerWriteTarget')
+      const home = target.indexOf('followerHomeOf(ws)')
+      const answers = target.indexOf('primaryAnswersFollower(home)')
+      const owner = target.indexOf('offlineHost.ownerOf(sid) !== home')
+      expect(home).toBeGreaterThan(-1)
+      expect(answers).toBeGreaterThan(home)
+      expect(owner).toBeGreaterThan(answers)
+      expect(target).toMatch(/errorKind: 'leader_answers'/)
+      // "Answers" is the window the host server routes by, so the page and the daemon agree.
+      expect(fnBody(src, 'primaryAnswersFollower')).toMatch(/primarySocketOpen\(home\) && leaderBook\.primaryAgeMs\(home\) < FOLLOWER_LEADER_QUIET_MS/)
+      expect(src).toMatch(/FOLLOWER_LEADER_QUIET_MS = 30_?000/)
+      expect(fnBody(src, 'cmdFollowerSend')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.send'\)[\s\S]*offlineHost\.deliverHuman\(t\.home, t\.sid, cmd\.text, cmd\.messageId\)/)
+      expect(fnBody(src, 'cmdFollowerPermission')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.permission'\)[\s\S]*answerPermission\(t\.sid, cmd, 'follower\.permission'\)/)
+      // read-history: a session id names a stream file and nothing else; a follower reads its own Walnut's.
+      const rh = fnBody(src, 'cmdReadHistory')
+      expect(rh).not.toMatch(/canonicalPath/)
+      expect(rh).toMatch(/!\/\^\[A-Za-z0-9\]\[A-Za-z0-9_\.-\]\{0,127\}\$\/\.test\(sid\) \|\| sid\.includes\('\.\.'\)/)
+      expect(rh).toMatch(/origin === 'follower' && offlineHost\.ownerOf\(sid\) !== [\w.?]*followerHome/)
+      expect(rh.indexOf('ownerOf(sid)')).toBeLessThan(rh.indexOf('readTailWindow('))
     })
 
     it(`${name}: search goes to the companion first while it leads, and is answered from this host's copy when it cannot`, () => {
@@ -218,6 +284,13 @@ describe('leader protocol: both twins', () => {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
     }
+  })
+})
+
+describe('the follower\'s "alone" window', () => {
+  it('is the host server\'s own route window', async () => {
+    const { LEADER_QUIET_MS } = await import('../../src/host-server/route.js')
+    expect(LEADER_QUIET_MS).toBe(30_000)
   })
 })
 

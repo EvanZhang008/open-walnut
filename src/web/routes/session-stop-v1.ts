@@ -7,6 +7,7 @@
  * runs, and a message sent while it is pending is refused (cloud-session-send.ts).
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Response } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { classifyRelayReply, driveControlRelay, sendRelayReplyError, sendV1Error as sendError } from './v1-control-relay.js'
@@ -50,6 +51,22 @@ export async function cloudTerminate(res: Response, sessionId: string, force: bo
   // primary's list may not show the stop for a while (cloud-stop-fence.ts).
   const { noteStopRequested, clearStopNote, noteStopAnswered } = await import('../../core/sessions/cloud-stop-fence.js')
   const stopAskedAt = await noteStopRequested(sessionId)
+  // While this companion leads the session's host, that host stops it
+  // (core/leader/host-session-control.ts), and the Mac records the same stop later.
+  const lead = await leadHostOf(sessionId)
+  if (lead) {
+    const request = { id: randomUUID(), requestedAt: new Date(stopAskedAt).toISOString() }
+    const a = await lead.control.stop(lead.target, force, request)
+    if (a.status === 200) await noteStopAnswered(sessionId, stopAskedAt, a.body.stopRequest)
+    // Refused (scheduled jobs, not found, not this Walnut's): nothing was noted on the host.
+    else if (a.status === 400 || a.status === 404 || a.status === 409) await clearStopNote(sessionId, stopAskedAt)
+    if (a.status === 503 && (a.body.error as { code?: unknown } | undefined)?.code === 'stop_pending') {
+      await sendStopPending(res, sessionId)
+      return
+    }
+    res.status(a.status).json(a.body)
+    return
+  }
   const fate: { notSent?: boolean } = {}
   const reply = await driveControlRelay(res, 'terminate', sessionId, { force }, undefined, fate)
   // No stop was recorded when the ask never reached a socket (the Mac off the
@@ -78,6 +95,21 @@ export async function cloudTerminate(res: Response, sessionId: string, force: bo
     return
   }
   sendRelayReplyError(res, reply)
+}
+
+/**
+ * The session's host when this companion leads it (core/leader/host-session-control.ts);
+ * null: relay to the Mac as before. Never throws.
+ */
+export async function leadHostOf(sessionId: string) {
+  try {
+    const { getHostSessionControl } = await import('../../core/leader/host-session-control.js')
+    const control = getHostSessionControl()
+    const target = await control.target(sessionId)
+    return target ? { control, target } : null
+  } catch {
+    return null
+  }
 }
 
 /** A failed terminate reply that proves no stop was recorded (never a timeout: the stop may have landed). */

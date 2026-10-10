@@ -434,6 +434,8 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     if (createLive) {
       const live = createLive({ writeLine: async () => 'not_found', randomHex: () => '00', now: () => 0, log: () => {} })
       if (typeof live.apply !== 'function' || live.pending() !== 0) throw new Error('live settings did not build')
+      const answer = live.permissionAnswer({ reqId: 'r1', request: { subtype: 'can_use_tool', input: { q: 1 } } }, { requestId: 'r1', allow: true, answers: { a: 'b' } })
+      if (!answer.ok || !answer.line.includes('"updatedInput":{"q":1,"answers":{"a":"b"}}')) throw new Error('live settings built a wrong permission answer')
     }
     // Offline search smoke: a reconstructed copy must find a task by a word of its title.
     const createSearch = reconstructed['__CREATE_OFFLINE_SEARCH__'] as typeof createOfflineSearch | undefined
@@ -2953,6 +2955,8 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
   // Twin of daemon-standalone.ts: a model or effort change while the companion leads.
   'leader.settings',
+  // Twin of daemon-standalone.ts: a permission answer, a mode or a user stop ('leader-control-v1').
+  'leader.control',
   // Narrow delivery-marker lookup (marker-find-v1): which of the given phone
   // message ids have a delivery marker in one session's stream. Read-only,
   // bounded (ids and bytes), and the answer is ids the caller already holds.
@@ -2971,6 +2975,9 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
 var FOLLOWER_ALLOWED_COMMANDS = new Set([
   'hello', 'ping', 'follower.hello', 'follower.status', 'follower.report', 'server.status',
   'list', 'status', 'attach', 'read-history', 'markers.find',
+  // While no server answers its Walnut ('follower-alone-v1'); each checks the
+  // leader and the session's owner itself. Keep in sync with daemon-standalone.ts.
+  'follower.sessions', 'follower.send', 'follower.permission',
   // Streams to the leader or the companion (stream-relay-v1); where an open may go is streamTarget's call.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ]);
@@ -3227,6 +3234,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'follower.hello': return cmdFollowerHello(ws, id, cmd);
     case 'follower.status': return cmdFollowerStatus(ws, id);
     case 'follower.report': return cmdFollowerReport(ws, cmd);
+    case 'follower.sessions': return cmdFollowerSessions(ws, id);
+    case 'follower.send': return daemonCommands.run(function () { return cmdFollowerSend(ws, id, cmd); });
+    case 'follower.permission': return daemonCommands.run(function () { return cmdFollowerPermission(ws, id, cmd); });
     // Streams between servers through this daemon (stream-relay-v1): frames,
     // never answered by id. Twin of daemon-standalone.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd);
@@ -3239,6 +3249,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'leader.witness': return cmdLeaderWitness(ws, id);
     case 'leader.deliver': return daemonCommands.run(function () { return cmdLeaderDeliver(ws, id, cmd); });
     case 'leader.settings': return daemonCommands.run(function () { return cmdLeaderSettings(ws, id, cmd); });
+    case 'leader.control': return daemonCommands.run(function () { return cmdLeaderControl(ws, id, cmd); });
     // Offline host (offline-host-v1). NOT in BRIDGE_ALLOWED_COMMANDS: a Walnut's
     // copy and journal belong to its trusted SSH-tunneled server only.
     case 'host.slice': return cmdHostSlice(ws, id, cmd);
@@ -4223,6 +4234,135 @@ async function cmdLeaderSettings(ws, id, cmd) {
   var out = { appliedLive: r.appliedLive };
   if (r.reason) out.reason = r.reason;
   sendOk(ws, id, out);
+}
+
+// leader.control ('leader-control-v1'): a permission answer, a permission mode
+// or a user stop while the companion leads. Twin of daemon-standalone.ts
+// cmdLeaderControl (rationale there).
+async function cmdLeaderControl(ws, id, cmd) {
+  if (ws.origin !== 'bridge') return sendError(ws, id, 'leader.control: the cloud bridge only');
+  var f = leaderBook.fence(cmd.walnutId, cmd.epoch);
+  if (!f.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })); } catch (e) {} return; }
+  var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+  if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.control: not a session of this Walnut on this host');
+  var session = sessions.get(sid);
+  if (cmd.action === 'permission') {
+    var pr = await answerPermission(sid, cmd, 'leader.control');
+    if (!pr.ok) return sendError(ws, id, 'leader.control: ' + pr.error, { errorKind: pr.errorKind });
+    return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: pr.allow });
+  }
+  if (cmd.action === 'mode') {
+    var r = await liveSettings.setMode(sid, cmd.mode);
+    if (!r.ok) return sendError(ws, id, 'leader.control: ' + r.error, { errorKind: 'refused' });
+    var live = sessions.get(sid);
+    if (live) applyModePolicy(live, sid, r.mode);
+    // The server keeps it on the session's record when it takes this host back.
+    offlineHost.noteSettings(f.home, sid, { mode: r.mode });
+    var out = { mode: r.mode, appliedLive: r.appliedLive };
+    if (r.reason) out.reason = r.reason;
+    return sendOk(ws, id, out);
+  }
+  if (cmd.action === 'stop') {
+    // The stop's id and time come from the companion: the server records the same stop when it is back.
+    var stopRequestId = typeof cmd.stopRequestId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cmd.stopRequestId) ? cmd.stopRequestId : '';
+    var requestedAt = typeof cmd.requestedAt === 'string' && cmd.requestedAt.length <= 40 && Number.isFinite(Date.parse(cmd.requestedAt)) ? cmd.requestedAt : '';
+    if (!stopRequestId || !requestedAt) return sendError(ws, id, 'leader.control: a stop needs stopRequestId and requestedAt', { errorKind: 'bad_request' });
+    // As the Mac's terminate: a session that keeps scheduled jobs stops only when the user confirms.
+    if (session && cmd.force !== true && assembleSessionSnapshot(session).cronActive) {
+      return sendError(ws, id, 'leader.control: this session owns scheduled jobs; confirm the stop', { errorKind: 'cron_owner' });
+    }
+    // A person asked for it on a phone; the session is this Walnut's (ownerOf above).
+    var stop = { sid: sid, reason: 'user', home: f.home, initiator: 'human', stopRequestId: stopRequestId };
+    var refusal = stopOwnerRefusal(sid, stop);
+    if (refusal) return sendOk(ws, id, Object.assign({ stopped: false }, refusal));
+    offlineHost.noteStop(f.home, sid, { id: stopRequestId, requestedAt: requestedAt });
+    logMsg('info', 'leader.control: stopping a session for the companion', { sid: sid, epoch: cmd.epoch, stopRequestId: stopRequestId });
+    return cmdStop(ws, id, stop);
+  }
+  return sendError(ws, id, 'leader.control: unknown action', { errorKind: 'bad_request' });
+}
+
+// Twin of daemon-standalone.ts answerPermission (rationale there).
+async function answerPermission(sid, raw, label) {
+  var session = sessions.get(sid);
+  var pending = session && session.pendingCtrl ? { reqId: session.pendingCtrl.reqId, request: session.pendingCtrl.request } : null;
+  var answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers });
+  if (!answer.ok) return { ok: false, error: answer.error, errorKind: answer.code };
+  var wrote = await writeSessionLine(sid, answer.line);
+  if (wrote !== 'ok') return { ok: false, error: 'the session could not be reached', errorKind: 'not_live' };
+  var now = sessions.get(sid);
+  if (now && now.pendingCtrl && now.pendingCtrl.reqId === raw.requestId) {
+    now.pendingCtrl = null;
+    try { persistRegistry(); } catch (e) {}
+    pushSnapshot(sid, false);
+  }
+  logMsg('info', label + ': permission answered', { sid: sid, requestId: raw.requestId, allow: answer.allow });
+  return { ok: true, allow: answer.allow };
+}
+
+// 'follower-alone-v1': the follower's own Walnut's sessions here, a message to a
+// running one, the answer to its prompt, while no server answers that Walnut.
+// Twin of daemon-standalone.ts cmdFollowerSessions / cmdFollowerSend /
+// cmdFollowerPermission (rationale there).
+function followerHomeOf(ws) {
+  var home = ws.followerHome;
+  return home && followerSockets.get(home) === ws ? home : null;
+}
+
+function cmdFollowerSessions(ws, id) {
+  var home = followerHomeOf(ws);
+  if (!home) return sendError(ws, id, 'follower.sessions: send follower.hello first');
+  var copy = offlineHost.sessionsOf(home);
+  if (!copy) return sendOk(ws, id, { host: '', asOf: null, sessions: [] });
+  var list = copy.sessions.map(function (s) {
+    var live = sessions.get(s.sid);
+    var running = !!live && live.state === 'running';
+    var lastActiveAt;
+    try { if (live) lastActiveAt = fs.statSync(live.jsonlPath).mtime.toISOString(); } catch (e) {}
+    var pc = running ? live.pendingCtrl : null;
+    var req = (pc && pc.request) || {};
+    var prompt = null;
+    if (pc && req.subtype === 'can_use_tool') {
+      prompt = { requestId: pc.reqId, toolName: pc.toolName || (typeof req.tool_name === 'string' ? req.tool_name : 'tool'), input: req.input || {} };
+      if (typeof req.decision_reason === 'string') prompt.reason = req.decision_reason;
+    }
+    var row = Object.assign({}, s, { state: !running ? 'stopped' : (live.foldState && live.foldState.turnActive ? 'working' : 'idle') });
+    if (prompt) row.prompt = prompt;
+    if (lastActiveAt) row.lastActiveAt = lastActiveAt;
+    return row;
+  });
+  sendOk(ws, id, { host: copy.host, asOf: copy.asOf, sessions: list });
+}
+
+// Same window as the host server's route (host-server/route.ts LEADER_QUIET_MS).
+var FOLLOWER_LEADER_QUIET_MS = 30000;
+function primaryAnswersFollower(home) {
+  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < FOLLOWER_LEADER_QUIET_MS;
+}
+
+function followerWriteTarget(ws, id, cmd, name) {
+  var home = followerHomeOf(ws);
+  if (!home) { sendError(ws, id, name + ': send follower.hello first'); return null; }
+  if (primaryAnswersFollower(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null; }
+  var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+  if (!sid || offlineHost.ownerOf(sid) !== home) { sendError(ws, id, name + ': not a session of this Walnut on this host', { errorKind: 'not_found' }); return null; }
+  return { home: home, sid: sid };
+}
+
+async function cmdFollowerSend(ws, id, cmd) {
+  var t = followerWriteTarget(ws, id, cmd, 'follower.send');
+  if (!t) return;
+  var r = await offlineHost.deliverHuman(t.home, t.sid, cmd.text, cmd.messageId);
+  if (r.ok) return sendOk(ws, id, { delivered: true, messageId: r.result.messageId });
+  sendError(ws, id, 'follower.send: ' + r.error.message, { errorKind: r.error.code });
+}
+
+async function cmdFollowerPermission(ws, id, cmd) {
+  var t = followerWriteTarget(ws, id, cmd, 'follower.permission');
+  if (!t) return;
+  var r = await answerPermission(t.sid, cmd, 'follower.permission');
+  if (!r.ok) return sendError(ws, id, 'follower.permission: ' + r.error, { errorKind: r.errorKind });
+  sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: r.allow });
 }
 
 function cmdHostSlice(ws, id, cmd) {
@@ -7537,6 +7677,13 @@ function cmdSetMode(ws, id, cmd) {
   const session = sessions.get(sid);
   if (!session) return sendError(ws, id, 'setMode: session not found: ' + sid);
   const oldMode = session.mode;
+  applyModePolicy(session, sid, mode);
+  sendOk(ws, id, { oldMode, newMode: mode });
+}
+
+// The session's auto-answer policy follows its mode; a prompt the new mode
+// allows is answered now. Twin of daemon-standalone.ts applyModePolicy.
+function applyModePolicy(session, sid, mode) {
   session.mode = mode;
   if (session.pendingCtrl && shouldAutoRespond(mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true);
@@ -7549,7 +7696,6 @@ function cmdSetMode(ws, id, cmd) {
     }
   }
   try { persistRegistry(); } catch {}
-  sendOk(ws, id, { oldMode, newMode: mode });
 }
 
 // ── Stop session ──
@@ -8052,8 +8198,11 @@ function readTailWindow(filePath, maxBytes) {
 }
 
 function cmdReadHistory(ws, id, cmd) {
-  const { sid, canonicalPath, tailBytes } = cmd;
-  if (!sid) return sendError(ws, id, 'read-history: missing sid');
+  const { sid, tailBytes } = cmd;
+  // A session id names a file in the streams dir and nothing else (the bridge
+  // and a follower reach this command). Keep in sync with daemon-standalone.ts.
+  if (typeof sid !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(sid) || sid.includes('..')) return sendError(ws, id, 'read-history: missing or invalid sid');
+  if (ws.origin === 'follower' && offlineHost.ownerOf(sid) !== ws.followerHome) return sendError(ws, id, 'read-history: not a session of this Walnut on this host', { errorKind: 'not_found' });
 
   try {
     // Read main JSONL. tailBytes > 0 = tail-only read (mobile transcript) —
@@ -8065,7 +8214,7 @@ function cmdReadHistory(ws, id, cmd) {
     let mainBytes = 0;
     let mainSize = 0;
     let truncated = false;
-    const jsonlPath = canonicalPath || path.join(STREAMS_DIR, sid + '.jsonl');
+    const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
     const wantTail = typeof tailBytes === 'number' && tailBytes > 0;
     const windowBytes = wantTail ? Math.min(tailBytes, READ_HISTORY_MAX_BYTES) : READ_HISTORY_MAX_BYTES;
     try {

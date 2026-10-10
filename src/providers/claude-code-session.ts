@@ -7496,9 +7496,11 @@ export class ClaudeCodeSession {
    * host while it led): remember them, so this object never writes the older
    * values back to the record. Sends nothing.
    */
-  adoptAppliedSettings(settings: { cliModel?: string; effort?: import('../core/types.js').SessionEffort }): void {
+  adoptAppliedSettings(settings: { cliModel?: string; effort?: import('../core/types.js').SessionEffort; mode?: SessionMode }): void {
     if (settings.cliModel) this._cliModel = settings.cliModel
     if (settings.effort) this._effort = settings.effort
+    // The host's daemon already follows the mode (leader.control applied it there).
+    if (settings.mode) this._mode = settings.mode
   }
 
   /**

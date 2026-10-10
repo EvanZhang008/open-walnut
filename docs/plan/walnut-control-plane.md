@@ -301,6 +301,50 @@ phone ──► companion ──(Mac away)──► the session's row in the Mac
   Mac adopts them without sending anything, so it never writes older values
   back.
 
+## Session controls while the Mac is away
+
+A session on a host that waits on a permission prompt, runs in the wrong mode,
+or has to stop does not wait for the Mac either. While the companion leads the
+session's host, the phone's answer, mode change and stop go to that host's
+daemon (`src/core/leader/host-session-control.ts`, command `leader.control`,
+capability `leader-control-v1`), with the same fence as `leader.settings`: this
+lead's epoch, a session of this Walnut on that host.
+
+```
+phone ──► companion ──(leads the host)──► host daemon: leader.control {walnutId, epoch, sid, action}
+   permission {requestId, allow, message?, answers?}
+        the control_response the Mac writes, for the can_use_tool the daemon
+        keeps (pendingCtrl); the same request id only, once
+   mode {mode}
+        set_permission_mode (its answer echoes the mode), then the daemon's own
+        auto-answer policy (a prompt the new mode allows is answered there);
+        journaled as a `settings` record with `mode`
+   stop {stopRequestId, requestedAt, force?}
+        scheduled jobs need force, the stop names this Walnut (owner-home-v1),
+        journaled as a `stop` record, then the user stop the Mac's terminate sends
+Mac wakes ──► offline.drain ──► mode: the Mac's own mode write (plan and exec slots follow)
+                               stop: its own pending stop request, same id and time,
+                                     run through its stop path (queued messages
+                                     parked, the process found gone, confirmed)
+```
+
+- **Seeing the prompt**: the session detail the companion answers while the Mac
+  is away (`degraded: true`) lists the prompt the host's daemon keeps, from the
+  `status` it already asks, so the phone can answer it. The mode it shows is
+  the one the companion applied, until the Mac pushes again.
+- **The stop's id** is made by the companion. The companion's stop fence keeps
+  it, so the phone's next message is fenced by the stop it saw; the Mac records
+  the same id when it drains the host, so a message sent under it is not taken
+  for one that predates the stop.
+- **Only Claude Code's sessions**: the projection names another agent's engine
+  (`engine`), and such a session is relayed to the Mac as before (its controls
+  are not Claude Code's lines). So is a session on the Mac itself, or on a host
+  nothing leads. The refusals read as the Mac's own (`not_found`, `cron_owner`,
+  `stop_pending`, `conflict`); an older daemon answers "not permitted over
+  bridge" (`session_control_needs_upgrade`).
+- **Not here**: interrupting a turn (the phone's Stop is the terminate above),
+  restart, retry and fork, which spawn a CLI: only the Mac validates a spawn.
+
 ## Search while the Mac is away
 
 While the Mac answers, search is the Mac's, for a phone and for a session on
@@ -437,6 +481,8 @@ Auto asks for.
 | Mac asleep, the phone switches a remote session's model or effort | the companion has the host apply it to the live CLI; the Mac keeps it when it wakes |
 | Mac asleep, a session on the Mac itself | the picker reads from the copy; a change says the Mac is offline |
 | Mac asleep, the companion not leading yet | a change says it takes over within about a minute |
+| Mac asleep, a remote session waits on a permission prompt | the phone sees the prompt in the session's detail and answers it; the host writes the CLI's answer |
+| Mac asleep, the phone changes a remote session's mode or stops it | the host applies it; the Mac keeps the mode and records the stop under the same id when it wakes |
 | Mac asleep, a session searches, the companion leads | the companion's copy of every task answers |
 | Mac asleep, a session searches, no companion | its host's copy answers by keyword: its tasks, sessions and memory |
 | Mac asleep, the phone searches | the companion's copy of the Mac's index answers at once with semantic search, marked offline; without the copy, its task copy by keyword |
@@ -498,6 +544,17 @@ Auto asks for.
   sleeps, the Mac's record after the wake), and
   `tests/core/projection-self-heal-catalogs.test.ts` (the 5-minute sweep keeps
   the catalogs on the companion's copy).
+- Session controls while the Mac is away: `tests/providers/live-settings-core.test.ts`
+  (the mode and the permission answer: the CLI's words, the echo, the server's
+  own line), `tests/web/routes/api-v1-session-host-control-mac-away.test.ts`
+  (the routes: the prompt in the detail, the answer, the mode in both shapes, a
+  stop and its fence, what stays the Mac's), `tests/core/offline-handover-settings.test.ts`
+  (the Mac keeps the mode and runs the stop under its id),
+  `tests/providers/leader-twins.test.ts` (both twins: the fence, the order of a
+  stop's checks), and `tests/integration/leader-takeover-twins.test.ts` (real
+  daemon processes: a prompt answered once, a mode that answers a waiting
+  prompt, a stop with the companion's id, the journal the Mac drains, an old
+  epoch refused).
 - Search while the Mac is away: `tests/providers/offline-search-core.test.ts`
   (the ranking), `tests/providers/offline-host-core.test.ts` (the host's op),
   `tests/providers/leader-twins.test.ts` (both twins: the companion first),
@@ -531,9 +588,8 @@ Auto asks for.
   "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).
 - Answers the companion gives alone while the Mac is away for what only the Mac
-  holds today (usage): a copy of that store, and the other session
-  controls (stop, interrupt, permission mode) sent straight to the host's daemon
-  while the companion leads.
+  holds today (usage): a copy of that store. Of the session controls, a
+  restart, a retry and a fork still need the Mac (they spawn a CLI).
 - Semantic search on a host that runs only a daemon (every follower server has
   it: the companion and a host server; a daemon-only host still searches its own
   copy by keyword), and notes written on a follower while the Mac is away in its

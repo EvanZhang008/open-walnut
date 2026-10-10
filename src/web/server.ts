@@ -1960,7 +1960,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // itself a follower, such as a host server).
     const { startSearchReplicaSync } = await import('../core/replication/search-replica.js')
     const searchReplica = startSearchReplicaSync()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop() } }
+    // Each host server's copy of the signed-in devices (the token hashes it
+    // checks while it answers alone; core/replication/device-replica.ts).
+    const { startDeviceReplicaSync } = await import('../core/replication/device-replica.js')
+    const deviceReplica = startDeviceReplicaSync()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop() } }
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's
   // search index copy: semantic search while the leader is away.

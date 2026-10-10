@@ -58,6 +58,11 @@ async function sendLocalError(res: Response, next: NextFunction, err: unknown): 
   next(err)
 }
 
+/** The frozen { session } row for a mode the companion applied on the session's host. */
+function modeOnlyRow(row: { id: string; process_status: string; title?: string }, mode: string): Record<string, unknown> {
+  return { claudeSessionId: row.id, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode }
+}
+
 /**
  * Local-path runner: call a session-lifecycle core function, translate
  * SessionControlError into the frozen v1 shape, funnel the rest to next().
@@ -120,6 +125,7 @@ async function degradedSessionDetail(sessionId: string): Promise<Record<string, 
     if (!row) return null
     let processStatus = row.process_status
     const hostAlias = row.host === '' ? '__local__' : row.host
+    let pendingPermissions: Array<Record<string, unknown>> = []
     try {
       const { bridgeRequest, bridgeForHost } = await import('../ws/bridge-registry.js')
       if (bridgeForHost(hostAlias).connected) {
@@ -130,9 +136,22 @@ async function degradedSessionDetail(sessionId: string): Promise<Record<string, 
           // correct the projection where liveness contradicts it.
           if (status.alive !== true) processStatus = 'stopped'
           else if (processStatus === 'stopped') processStatus = 'idle'
+          // The prompt the CLI waits on, as the daemon keeps it: answerable
+          // here while this companion leads the host (POST …/permission).
+          const pc = status.pendingCtrl as { reqId?: unknown; toolName?: unknown; request?: Record<string, unknown> } | null | undefined
+          if (status.alive === true && pc && typeof pc.reqId === 'string' && pc.request?.subtype === 'can_use_tool') {
+            pendingPermissions = [{
+              requestId: pc.reqId,
+              ...(typeof pc.toolName === 'string' ? { toolName: pc.toolName } : {}),
+              ...(pc.request.input && typeof pc.request.input === 'object' ? { input: pc.request.input } : {}),
+              ...(typeof pc.request.decision_reason === 'string' ? { reason: pc.request.decision_reason } : {}),
+            }]
+          }
         }
       }
     } catch { /* host probe failed — the projection row is still the best truth */ }
+    const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
+    const mode = lead ? lead.control.currentMode(lead.target) : row.mode
     return {
       session: {
         claudeSessionId: sessionId,
@@ -140,9 +159,9 @@ async function degradedSessionDetail(sessionId: string): Promise<Record<string, 
         ...(row.host ? { host: row.host } : {}),
         ...(row.host_label ? { host_label: row.host_label } : {}),
         ...(row.title ? { title: row.title } : {}),
-        ...(row.mode ? { mode: row.mode } : {}),
+        ...(mode ? { mode } : {}),
       },
-      pendingPermissions: [],
+      pendingPermissions,
       degraded: true,
       degradedReason: 'primary_offline',
     }
@@ -159,6 +178,15 @@ sessionLifecycleV1Router.get('/sessions/:id', async (req: Request, res: Response
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (CLOUD_MODE) {
+      // While this companion leads the session's host the Mac is away: the
+      // host's answer at once, not after the relay's 10s.
+      if (await (await import('./session-stop-v1.js')).leadHostOf(sessionId)) {
+        const degraded = await degradedSessionDetail(sessionId)
+        if (degraded) {
+          res.status(200).json(degraded)
+          return
+        }
+      }
       const { callPrimaryControl } = await import('./v1-control-relay.js')
       // 10s, not the 30s relay default: the phone polls this on a 12s cadence
       // and abandons requests at 30s — a stuck primary link must degrade well
@@ -222,7 +250,28 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
       // CLI (changeSessionMode), so only the primary can truthfully accept it.
       const metadataOnly = body.mode === undefined
       if (!metadataOnly) {
-        await relayControlAction(res, 'patch', sessionId, patch, 200)
+        // While this companion leads the session's host, that host takes the
+        // mode (it is the one that can truthfully accept it); the rest of the
+        // patch is metadata and goes the metadata way below.
+        const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
+        if (!lead) {
+          await relayControlAction(res, 'patch', sessionId, patch, 200)
+          return
+        }
+        const applied = await lead.control.mode(lead.target, body.mode)
+        if (!applied.ok) {
+          res.status(applied.answer.status).json(applied.answer.body)
+          return
+        }
+        const rest: Record<string, unknown> = { ...patch }
+        delete rest.mode
+        if (Object.keys(rest).length === 0) {
+          res.status(200).json({ session: modeOnlyRow(lead.target.row, applied.mode), viaCompanion: true })
+          return
+        }
+        const { enqueueSessionPatch } = await import('../../core/control-queue.js')
+        const opId = await enqueueSessionPatch(sessionId, rest)
+        res.status(200).json({ session: { ...modeOnlyRow(lead.target.row, applied.mode), ...rest }, viaCompanion: true, ...(opId ? { queued: true } : {}) })
         return
       }
       const { callPrimaryControl } = await import('./v1-control-relay.js')
@@ -373,6 +422,13 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
     if (!sessionId) return
     const body = (req.body ?? {}) as Record<string, unknown>
     if (CLOUD_MODE) {
+      // While this companion leads the session's host, that host answers the prompt.
+      const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
+      if (lead) {
+        const a = await lead.control.permission(lead.target, body)
+        res.status(a.status).json(a.body)
+        return
+      }
       await relayControlAction(res, 'permission', sessionId, {
         requestId: body.requestId,
         allow: body.allow,
