@@ -58,6 +58,8 @@ describe('stall flight recorder with the real profiler', () => {
     expect(late?.lateByMs as number).toBeGreaterThanOrEqual(1_000)
     const hold = late?.hold as Record<string, unknown>
     expect(hold.mainCpuMs as number).toBeGreaterThan(0)
+    // The second before the hold was quiet, so nearly all of it is the hold's.
+    expect(hold.holdCpuMs as number).toBeLessThanOrEqual(hold.mainCpuMs as number)
     expect(['cpu', 'starved', 'off-cpu']).toContain(hold.verdict)
     const record = warns.find(([m]) => m === 'event-loop stall flight record')?.[1]
     expect(record?.profile).toBe(path.join(dir, files[0]))

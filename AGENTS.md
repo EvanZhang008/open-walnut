@@ -588,13 +588,30 @@ scripts/walnut-logs.sh req <id> | task <id> | errors [n] | tail [n]
 (`src/core/stall-recorder.ts`) keeps a CPU profile of every hold of 2 s or more and tags it with a
 verdict; `node scripts/stall-profile-summary.mjs` (newest profile, or a path) prints the functions
 the loop was in during the hold, with file:line. `cpu` means Walnut code held the loop, also on a
-busy machine: when the kept profile shows code on the thread for most of the hold (`profileHold`,
-with its top frames) or the thread burned a stall's worth of CPU in it, the verdict is `cpu` and
-`loadStretched: true` says the load made it longer. Fix that code first. Trust the profile's
-functions only for `cpu` or `gc`: profiles sample on a wall clock, so a `starved` thread (runnable,
-not run, and with little of its own to run: the loop thread ran a few ms of the hold) is sampled
-wherever it stopped. `starved`, or `paging`/`off-cpu` with a large `decompressions` or `swapins`
-count, is the machine (CPU load, memory) rather than a Walnut code path.
+busy machine (`loadStretched: true` then says the load made it longer). Fix that code first. The
+hold itself (`holdCpuMs`, `holdFromMs` to `holdToMs` around the deadline) runs from the last CPU
+checkpoint before the deadline to the first one after it; checkpoints are the previous probe tick, a
+100 ms timer, and the end of every loop iteration (at most every 5 ms), so a stop is a gap between
+two of them. The rules (`holdVerdict` in `src/core/stall-recorder-hold.ts`): the thread ran a
+stall's worth of CPU (250 ms) in the hold and the kept profile, when it sampled the hold, mostly
+shows code there (`profileHold`, with its top frames; time the sampler missed counts as nothing and
+`coverage` says how much it saw); or it ran 250 ms up to the probe (`afterHoldCpuMs` is the part
+after the hold, `profileAfter` the profile's view of it), counting only the part after the span when
+it ran under half of a span of 250 ms or more, and only past the largest turn the loop ran normally
+(`baseTurnMs`) when the span was shorter than that; or it ran 60% of the window. The first two count
+only the CPU past the backlog of time the loop did not run its work: a pause right before the hold
+(`afterWaitMs`) or between the hold and the probe (`afterHoldPauseMs`), each a second or more the
+thread ran under a tenth of and under 250 ms in, in poll or not (more is a block load stretched, not
+a pause), a wait in poll inside the hold of a second or more or most of it (`loopIdleMs`), a span
+the thread barely ran in. Each owes twice the loop's own rate in its normal turns over the 10 s
+before (`baseCpuShare`; read further back, up to a minute, when blocks and pauses filled those 10 s)
+times its length, and all of its CPU when that rate is unknown. Trust the profile's functions only
+for `cpu` or `gc`: profiles sample on a wall clock, so a `starved` thread (runnable, not run, and
+with little of its own to run: the loop thread ran a few ms of the hold) is sampled wherever it
+stopped. `starved`, or `paging`/`off-cpu` with a large `decompressions` or `swapins` count, is the
+machine (CPU load, memory) rather than a Walnut code path. The recorder costs the loop thread 1.7 to
+4.8 ms of CPU a second when idle, 3 to 10.6 ms in a loop of 1 ms timers, 7.7 to 19.6 ms in a loop
+reading a socket (measured 2026-10-07 against no recorder).
 
 **"Who overwrote my file?" starts with `file <path-substring>`.** Every read logs `file read`
 (status 200/304, the hash the client now holds, the token it quoted, `track`, size, ms), every

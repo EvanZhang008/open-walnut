@@ -117,6 +117,9 @@ export const SLOW_TEST_FILES = [
   'tests/core/health/perf.test.ts', // 3.6s
   // Real inspector profiler around a real 1.8s loop block, on the 1s probe cadence.
   'tests/core/stall-recorder-profile.test.ts', // 4s
+  // The stall recorder's hold span on real CPU: CPU burns up to 1.2 s, and a
+  // running recorder through real 2 to 3 s stops of its loop, three runs each.
+  'tests/core/stall-recorder-running.test.ts', // 30-33s
 ] as const
 
 /**

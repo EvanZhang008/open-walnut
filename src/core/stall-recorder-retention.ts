@@ -37,6 +37,18 @@ async function sweepTemp(dir: string, name: string, pid: number): Promise<void> 
   try { await fsp.unlink(file); } catch { /* raced */ }
 }
 
+/** Write to a temp name outside the `stall-` namespace, then rename into place. */
+export async function writeWhole(file: string, body: string): Promise<void> {
+  const tmp = path.join(path.dirname(file), `.tmp-${process.pid}-${path.basename(file)}`);
+  try {
+    await fsp.writeFile(tmp, body);
+    await fsp.rename(tmp, file);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
 export async function pruneStallDir(dir: string, limits: StallRetention): Promise<void> {
   let names: string[];
   try { names = await fsp.readdir(dir); } catch { return; }

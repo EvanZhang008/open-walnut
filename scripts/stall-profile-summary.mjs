@@ -84,12 +84,25 @@ for (const w of windows) {
     console.log(`stall at ${s.at}: lateBy ${s.lateByMs} ms, suspectSection ${s.suspectSection ?? 'none'}`)
     if (s.hold) {
       const h = s.hold
-      console.log(`  verdict ${h.verdict}: loop thread cpu ${h.mainCpuMs} ms (sys ${h.mainSysMs}) of a ${h.windowMs} ms window; process cpu ${h.procCpuMs} ms`)
-      console.log(`  faults major ${h.majorFaults} minor ${h.minorFaults}; ctx switches invol ${h.invCtxSwitches} vol ${h.volCtxSwitches}; gc ${h.gcMs} ms in ${h.gcCount} (max ${h.gcMaxMs}, major ${h.gcMajor})`)
+      const inHold = typeof h.holdCpuMs === 'number'
+        ? `, ${h.holdCpuMs} ms of it in the hold itself` +
+          (typeof h.holdToMs === 'number' ? ` (${h.holdFromMs} to ${h.holdToMs} ms around the deadline, the loop waiting in poll ${h.loopIdleMs} ms of it)` : '') +
+          (typeof h.afterHoldCpuMs === 'number' ? ` and ${h.afterHoldCpuMs} ms after it` : '') +
+          (h.afterWaitMs > 0 ? `, right after a ${h.afterWaitMs} ms pause` : '') +
+          (h.afterHoldPauseMs > 0 ? `, with a ${h.afterHoldPauseMs} ms pause before the probe` : '') +
+          (typeof h.baseCpuShare === 'number' ? ` (the loop ran ${Math.round(h.baseCpuShare * 100)}% of the time before, its largest turn ${h.baseTurnMs} ms)` : '')
+        : ''
+      console.log(`  verdict ${h.verdict}: loop thread cpu ${h.mainCpuMs} ms (sys ${h.mainSysMs}) of a ${h.windowMs} ms window${inHold}; process cpu ${h.procCpuMs} ms`)
+      console.log(`  faults major ${h.majorFaults} minor ${h.minorFaults}; ctx switches invol ${h.invCtxSwitches} vol ${h.volCtxSwitches}; gc ${h.gcMs} ms in ${h.gcCount} (max ${h.gcMaxMs}, major ${h.gcMajor}${typeof h.gcMajorMs === 'number' ? ` for ${h.gcMajorMs} ms` : ''})`)
       console.log(`  memory rss ${h.rssMb} MB heap ${h.heapUsedMb}/${h.heapTotalMb} MB external ${h.externalMb} MB; load1 ${h.load1} on ${h.cores} cores; free ${h.freeMemMb} MB`)
       if (s.profileHold) {
         const top = (s.profileHold.top ?? []).map((t) => `${t.frame} ${Math.round(t.share * 100)}%`).join('; ')
-        console.log(`  profile in the hold: code ${Math.round(s.profileHold.codeShare * 100)}%, idle ${Math.round(s.profileHold.idleShare * 100)}%, gc ${Math.round(s.profileHold.gcShare * 100)}% of ${s.profileHold.samples} samples; top ${top || 'none'}`)
+        const covered = typeof s.profileHold.coverage === 'number' ? `, ${Math.round(s.profileHold.coverage * 100)}% of the hold sampled` : ''
+        console.log(`  profile in the hold: code ${Math.round(s.profileHold.codeShare * 100)}%, idle ${Math.round(s.profileHold.idleShare * 100)}%, gc ${Math.round(s.profileHold.gcShare * 100)}% of ${s.profileHold.samples} samples${covered}; top ${top || 'none'}`)
+      }
+      if (s.profileAfter) {
+        const top = (s.profileAfter.top ?? []).map((t) => `${t.frame} ${Math.round(t.share * 100)}%`).join('; ')
+        console.log(`  profile after the hold, up to the probe: code ${Math.round(s.profileAfter.codeShare * 100)}% of ${s.profileAfter.samples} samples, ${Math.round(s.profileAfter.coverage * 100)}% sampled; top ${top || 'none'}`)
       }
       if (h.verdict === 'cpu' && h.loadStretched) {
         console.log(`  NOTE: the loop thread ran ${h.mainCpuMs} ms of ${h.windowMs} ms, so the machine was short of CPU too,`)

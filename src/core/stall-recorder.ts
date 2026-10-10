@@ -11,11 +11,20 @@
  *     loop THREAD burned during the hold (user vs system), the process page
  *     faults (major = disk page-ins), context switches, GC time inside the
  *     hold, heap/RSS, load and free memory, and a verdict:
- *       cpu      Walnut code held the loop: synchronous work (see the profile).
- *                Also when the machine was short of CPU at the same time, if the
- *                kept profile shows code on the thread for most of the hold or
- *                the thread burned a stall's worth of CPU in it; the flight
- *                record then says `loadStretched`
+ *       cpu      Walnut code held the loop: synchronous work (see the profile),
+ *                also when the machine was short of CPU at the same time (the
+ *                flight record then says `loadStretched`). The rules are in
+ *                holdVerdict (stall-recorder-hold.ts): a stall's worth of the
+ *                thread's own CPU (250 ms) in the hold (`holdCpuMs`, between
+ *                the CPU checkpoints around the deadline) with code in the kept
+ *                profile, or up to the probe (`afterHoldCpuMs` is the part
+ *                after the hold), or 60% of the window; never the backlog a
+ *                pause (`afterWaitMs`, `afterHoldPauseMs` after the hold: 1 s
+ *                or more the thread ran under 10% of and under 250 ms in), a
+ *                wait in poll (`loopIdleMs`) or a stop left, twice the loop's
+ *                normal rate (`baseCpuShare`) times that time, nor its largest
+ *                turn (`baseTurnMs`) behind a checkpoint right after the deadline.
+ *                Unsampled time never counts as code
  *       starved  the thread was runnable but the machine did not run it, and it
  *                had little of its own to run: it lost the CPU to preemption
  *                and never waited on its own (involuntary context switches, few
@@ -41,9 +50,14 @@
  * 2000 ms on a 430 MB heap (load 300), once per window, on the loop. With the
  * overlap a rotation costs about 1 ms; the walk happens once, at start.
  *
- * Never blocks the loop otherwise: per probe tick it reads two counters
- * (thread CPU, getrusage); rotation runs on a timer; files are written with
- * async fs and pruned by count, age and size. Kill switches:
+ * Never blocks the loop otherwise: per probe tick it reads three counters
+ * (thread CPU, getrusage, the loop's idle time), and at each checkpoint two
+ * (thread CPU, idle time: every 100 ms, and at the end of an iteration at most
+ * once every 5 ms); rotation runs on a timer; files are written with
+ * async fs and pruned by count, age and size. Measured by the 2026-10-07 gate
+ * against no recorder, in loop thread CPU per second: an idle loop +1.7 to
+ * 4.8 ms, a loop of 1 ms timers +3 to 10.6 ms, a loop reading a socket +7.7 to
+ * 19.6 ms. Kill switches:
  * WALNUT_STALL_RECORDER=0 (everything), WALNUT_STALL_PROFILE=0 (profile only).
  * Summarize a kept profile with `node scripts/stall-profile-summary.mjs <file>`.
  */
@@ -56,18 +70,23 @@ import { log } from '../logging/index.js';
 import { setProbeObserver, type ProbeObserver, type StallReport } from './event-loop-monitor.js';
 import { memoryPressureSnapshot } from './memory-pressure.js';
 import {
-  captureHold, gcWithin, holdVerdict, mb, profileHoldShare, readTick, startGcRing, stopGcRing,
-  type HoldContext, type ProfileHold, type TickSample,
+  captureHold, gcWithin, holdVerdict, mb, pickHoldSpan, readLoopCpuUs, readLoopIdleMs, readTick,
+  startGcRing, stopGcRing, type HoldContext, type ProfileHold, type TickSample,
 } from './stall-recorder-hold.js';
+import { cpuCheckpoint, cpuCheckpoints, startCpuCheckpoints, stopCpuCheckpoints } from './stall-recorder-checkpoints.js';
 import { refreshVmBaseline, resetSystemContext, sampleMemContext } from './stall-recorder-system.js';
-import { pruneStallDir } from './stall-recorder-retention.js';
-import { connectInspectorDriver, type CpuProfile, type ProfilerDriver } from './stall-recorder-profiler.js';
+import { pruneStallDir, writeWhole } from './stall-recorder-retention.js';
+import { connectInspectorDriver, stallViews, type CpuProfile, type ProfilerDriver } from './stall-recorder-profiler.js';
 
 export type { CpuProfile, ProfilerDriver } from './stall-recorder-profiler.js';
 export { holdVerdict, profileHoldShare, type HoldContext, type HoldVerdict, type ProfileHold } from './stall-recorder-hold.js';
 
 /** Long probe-late lines (>= this) carry the `hold` context. */
 const HOLD_CONTEXT_MIN_MS = 1_000;
+/** A hold whose catch-up ran this much CPU also gets the profile's view of that
+ *  part (`profileAfter`): the code a stop's backlog or a block behind the
+ *  recorder's checkpoint ran, which the hold's own view does not cover. */
+const AFTER_PROFILE_MIN_MS = 250;
 
 export interface StallRecorderOptions {
   /** Keep a CPU profile for stalls >= this (ms). */
@@ -154,7 +173,9 @@ const observer: ProbeObserver = {
   hold(lateByMs: number, monoNow: number): Record<string, unknown> | undefined {
     if (lateByMs < HOLD_CONTEXT_MIN_MS) return undefined;
     try {
-      return lastTick ? captureHold(lastTick, lateByMs, monoNow, perfToMonoMs) as unknown as Record<string, unknown> : undefined;
+      if (!lastTick) return undefined;
+      const span = pickHoldSpan(lastTick, cpuCheckpoints(), monoNow - lateByMs, monoNow);
+      return captureHold(lastTick, lateByMs, monoNow, perfToMonoMs, span) as unknown as Record<string, unknown>;
     } catch {
       return undefined;
     }
@@ -264,8 +285,11 @@ async function keep(held: HeldProfile): Promise<void> {
   const file = path.join(opts.dir, `${base}.cpuprofile`);
   const offsetUs = held.profile.startTime - held.win.startMonoUs;
   const seen = new Map<StallReport, ProfileHold | null>();
+  const after = new Map<StallReport, ProfileHold | null>();
   for (const s of held.win.stalls) {
-    try { seen.set(s, profileHoldShare(held.profile, offsetUs, s.holdStartMono, s.holdEndMono)); } catch { seen.set(s, null); }
+    const v = stallViews(held.profile, offsetUs, s, opts.intervalUs, AFTER_PROFILE_MIN_MS);
+    seen.set(s, v.hold);
+    if (v.after) after.set(s, v.after);
   }
   const meta = {
     version: 1,
@@ -283,6 +307,7 @@ async function keep(held: HeldProfile): Promise<void> {
       suspectSection: s.suspectSection,
       hold: finalHold(s, seen.get(s) ?? null),
       profileHold: seen.get(s) ?? null,
+      ...(after.get(s) ? { profileAfter: after.get(s) } : {}),
     })),
   };
   try {
@@ -292,23 +317,11 @@ async function keep(held: HeldProfile): Promise<void> {
     await writeWhole(file, JSON.stringify(held.profile));
     await writeWhole(path.join(opts.dir, `${base}.json`), JSON.stringify(meta, null, 2));
     stats.kept += 1;
-    await emitRecord(held.win.stalls, file, undefined, seen);
+    await emitRecord(held.win.stalls, file, undefined, seen, after);
     await prune();
   } catch (err) {
     stats.errors += 1;
     log.web.warn('stall recorder: could not write profile', { error: err instanceof Error ? err.message : String(err) });
-  }
-}
-
-/** Write to a temp name outside the `stall-` namespace, then rename into place. */
-async function writeWhole(file: string, body: string): Promise<void> {
-  const tmp = path.join(path.dirname(file), `.tmp-${process.pid}-${path.basename(file)}`);
-  try {
-    await fsp.writeFile(tmp, body);
-    await fsp.rename(tmp, file);
-  } catch (err) {
-    await fsp.rm(tmp, { force: true }).catch(() => {});
-    throw err;
   }
 }
 
@@ -320,7 +333,7 @@ async function writeWhole(file: string, body: string): Promise<void> {
 function finalHold(s: StallReport, seen: ProfileHold | null): Record<string, unknown> | undefined {
   if (!s.hold) return undefined;
   const gc = gcWithin(s.holdStartMono + perfToMonoMs, s.holdEndMono + perfToMonoMs);
-  const h: HoldContext = { ...(s.hold as unknown as HoldContext), gcMs: gc.ms, gcCount: gc.count, gcMaxMs: gc.maxMs, gcMajor: gc.major };
+  const h: HoldContext = { ...(s.hold as unknown as HoldContext), gcMs: gc.ms, gcCount: gc.count, gcMaxMs: gc.maxMs, gcMajor: gc.major, gcMajorMs: gc.majorMs };
   h.verdict = holdVerdict({ lateByMs: s.lateByMs, ...h, codeShare: seen?.codeShare, profileSamples: seen?.samples });
   if (h.verdict === 'cpu' && h.mainCpuMs / h.windowMs < 0.6) h.loadStretched = true;
   return h as unknown as Record<string, unknown>;
@@ -328,6 +341,7 @@ function finalHold(s: StallReport, seen: ProfileHold | null): Record<string, unk
 
 async function emitRecord(
   stalls: StallReport[], file: string | null, reason?: string, seen?: Map<StallReport, ProfileHold | null>,
+  after?: Map<StallReport, ProfileHold | null>,
 ): Promise<void> {
   for (const s of stalls) {
     const mem = await Promise.race([
@@ -335,6 +349,7 @@ async function emitRecord(
       new Promise<null>((r) => { setTimeout(() => r(null), 10_000).unref?.(); }),
     ]);
     const profileHold = seen?.get(s) ?? null;
+    const profileAfter = after?.get(s) ?? null;
     const hold = finalHold(s, profileHold);
     log.web.warn('event-loop stall flight record', {
       lateByMs: s.lateByMs,
@@ -342,6 +357,7 @@ async function emitRecord(
       suspectSection: s.suspectSection,
       ...(hold ? { hold } : {}),
       ...(profileHold ? { profileHold } : {}),
+      ...(profileAfter ? { profileAfter } : {}),
       ...(mem ?? {}),
       memoryPressure: memoryPressureSnapshot(),
       profile: file,
@@ -394,6 +410,7 @@ export async function startStallRecorder(options: StallRecorderOptions = {}): Pr
   void prune().catch(() => { /* best effort */ });
   perfToMonoMs = performance.now() - monoMs();
   lastTick = readTick(monoMs());
+  startCpuCheckpoints();
   startGcRing();
   setProbeObserver(observer);
   if (opts.systemContext) refreshVmBaseline();
@@ -450,6 +467,7 @@ export async function stopStallRecorder(): Promise<void> {
   const d = driver;
   const win = current;
   driver = null; current = null; previous = null; lastTick = null;
+  stopCpuCheckpoints();
   if (d) {
     if (win) { try { await d.end(win.title); } catch { /* not started */ } }
     try { await d.close(); } catch { /* already gone */ }
@@ -472,4 +490,11 @@ export async function _rotateNowForTest(): Promise<void> {
 /** Test hook: the observer the recorder installs on the probe. */
 export function _recorderObserverForTest(): ProbeObserver {
   return observer;
+}
+
+/** Test hook: take a CPU checkpoint stamped `mono` (the real CPU clock, and
+ *  the real idle time unless `idleMs` is given), or clear them all. */
+export function _cpuCheckpointForTest(mono: number | 'reset', idleMs?: number): void {
+  if (mono === 'reset') stopCpuCheckpoints();
+  else cpuCheckpoint(mono, readLoopCpuUs(), idleMs ?? readLoopIdleMs());
 }
