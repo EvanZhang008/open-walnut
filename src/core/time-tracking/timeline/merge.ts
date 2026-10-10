@@ -151,11 +151,35 @@ function placeFor(startMs: number, endMs: number, places: readonly SourcedSegmen
   return best && bestMs >= (endMs - startMs) / 2 ? best.label : undefined
 }
 
-const STOPWORDS = new Set(['with', 'from', 'that', 'this', 'into', 'for', 'and', 'the', 'via', 'booked', 'block', 'meeting', 'review', 'sync', 'weekly', 'daily'])
+const STOPWORDS = new Set([
+  'with', 'from', 'that', 'this', 'into', 'for', 'and', 'the', 'via', 'not', 'all', 'new', 'get', 'set', 'out', 'off',
+  'per', 'our', 'you', 'your', 'are', 'was', 'has', 'its', 'one', 'two', 'now', 'day', 'task', 'work', 'todo',
+  'booked', 'block', 'meeting', 'review', 'sync', 'weekly', 'daily', 'tbd',
+])
 
-function tokens(text: string): Set<string> {
-  return new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !STOPWORDS.has(w)))
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu
+
+/**
+ * The words a title is matched on: Latin words of 3+ letters, short all-caps names
+ * ("CIS", "Q4"), and every two-character piece of a CJK run (CJK has no spaces).
+ * 2026-10-10: a block "<star>CIS Design 1 <CJK>: ..." never matched the task "Feedback on
+ * CIS Design 1" because only words of 4+ letters counted and CJK counted as one word.
+ */
+export function titleTokens(text: string): Set<string> {
+  const out = new Set<string>()
+  for (const raw of text.split(/[^\p{L}\p{N}]+/u)) {
+    if (!raw) continue
+    for (const run of raw.match(CJK) ?? []) for (let i = 0; i + 1 < run.length; i++) out.add(run.slice(i, i + 2))
+    for (const word of raw.replace(CJK, ' ').split(' ')) {
+      if (!word) continue
+      const lower = word.toLowerCase()
+      const acronym = word.length >= 2 && word === word.toUpperCase() && /\p{L}/u.test(word)
+      if ((lower.length >= 3 || acronym) && !STOPWORDS.has(lower)) out.add(lower)
+    }
+  }
+  return out
 }
+const tokens = titleTokens
 
 const MEETING_APP = /zoom|chime|teams|webex|facetime|meet\.google|meetings\./i
 

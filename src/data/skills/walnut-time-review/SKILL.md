@@ -109,8 +109,10 @@ to that call; if they say these are their hours, save them with
 
 **Workouts** (Apple Health, the `workouts` source)
 - Knows: workouts with their type and length.
-- Watch for a workout that runs into the night or overlaps sleep: the watch was
-  probably left running. The timeline flags it; report the real part only.
+- A workout that runs into a night of sleep is a watch left running: the timeline
+  shows only its first 2 hours (ending at bedtime when that comes first) and
+  flags it with the recorded length. Report the shown part and say the watch
+  was left running; never add the recorded length to exercise.
 
 **Places** (iPhone visits, the `places` lane)
 - Knows: where the user stayed a while (home, office, gym, any named place),
@@ -189,6 +191,11 @@ that happened.
    `kept` (the named task had at least half the block), `partly`,
    `other_work` (on screen, on something else), `meeting_on_screen`,
    `not_on_screen` (away, or doing something the Mac cannot see).
+   A planned block is matched to a task by a task id in its title, or by two
+   shared title words (short names such as "CIS" and CJK words count).
+   For a meeting, `other_work` means the Mac showed other work during it: the
+   user may have sat in a room with the laptop open, listened while working, or
+   skipped it. Never call a meeting skipped from this alone.
 3. Report kept blocks, moved blocks and what took their place, then the
    unplanned time that mattered. Ask about `not_on_screen` blocks rather than
    calling them missed.

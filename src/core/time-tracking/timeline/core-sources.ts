@@ -31,6 +31,22 @@ const APP_JOIN_MS = 15_000
 const LONG_WORKOUT_MIN = 240
 /** Two visits this close in time with different places: the gap is travel. */
 const TRAVEL_MAX_MS = 3 * 3_600_000
+/** A workout the watch kept recording into the night is shown as its first this-long. */
+export const LEFT_RUNNING_KEEP_MS = 2 * 3_600_000
+
+/**
+ * A workout that runs into a night of sleep is a watch left running (2026-10-07: a
+ * pickleball game "lasted" from 20:41 to 08:11). Sleep already wins the night, but
+ * the hours between the game and bed, and between waking and the stop, were still
+ * drawn as exercise. Keep the first LEFT_RUNNING_KEEP_MS, ending at bedtime when that
+ * comes first. A workout that starts inside a night is left as it is (sleep covers it).
+ */
+export function trimLeftRunningWorkout(startMs: number, endMs: number, sleeps: ReadonlyArray<readonly [number, number]>): { endMs: number; trimmed: boolean } {
+  const night = sleeps.filter(([s, e]) => startMs < e && endMs > s).sort((x, y) => x[0] - y[0])[0]
+  if (!night || night[0] <= startMs) return { endMs, trimmed: false }
+  const end = Math.min(endMs, startMs + LEFT_RUNNING_KEEP_MS, night[0])
+  return { endMs: end, trimmed: end < endMs }
+}
 
 function datesOf(range: TimelineRange): string[] {
   const out: string[] = []
@@ -179,10 +195,14 @@ async function readHealth(range: TimelineRange): Promise<HealthRead> {
       seen.add(key)
       const flags: string[] = []
       const durationMin = Math.round((b - a) / 60_000)
-      if (sleeps.some(([s, e]) => a < e && b > s)) flags.push('overlaps a night of sleep: the watch was probably left running; sleep is shown for that part')
-      else if (durationMin > LONG_WORKOUT_MIN) flags.push('very long: the watch may have been left running')
+      const trim = trimLeftRunningWorkout(a, b, sleeps)
+      if (trim.trimmed) {
+        flags.push(`recorded for ${durationMin} min into a night of sleep: the watch was left running, so only the first ${Math.round((trim.endMs - a) / 60_000)} min are shown`)
+      } else if (sleeps.some(([s, e]) => a < e && b > s)) {
+        flags.push('overlaps a night of sleep: the watch was probably left running; sleep is shown for that part')
+      } else if (durationMin > LONG_WORKOUT_MIN) flags.push('very long: the watch may have been left running')
       segments.push({
-        start: a, end: b, kind: 'workout', label: typeof w.activity === 'string' && w.activity ? titleCase(w.activity) : 'Workout',
+        start: a, end: trim.endMs, kind: 'workout', label: typeof w.activity === 'string' && w.activity ? titleCase(w.activity) : 'Workout',
         confidence: 'measured',
         detail: { durationMin, energyKcal: typeof w.energyKcal === 'number' ? Math.round(w.energyKcal) : null },
         ...(flags.length ? { flags } : {}),

@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { dayBoundsMs } from '../../../src/core/time-tracking/blocks.js'
-import { mergeDay } from '../../../src/core/time-tracking/timeline/merge.js'
+import { mergeDay, titleTokens } from '../../../src/core/time-tracking/timeline/merge.js'
 import type { SourcedSegment } from '../../../src/core/time-tracking/timeline/types.js'
 import { DEFAULT_WORK_HOURS } from '../../../src/core/time-tracking/work-hours.js'
 import { systemTz } from '../../../src/core/health/day-key.js'
@@ -102,6 +102,25 @@ describe('mergeDay', () => {
     expect(out.blocks.find((b) => b.label === 'Gym')).toMatchObject({ kind: 'plan', confidence: 'planned', min: 60 })
     // Off-screen remainders: 20 (rollout) + 40 (finish) + 60 (gym) + 20 (paper) + 5 (hold).
     expect(out.summary.wholeDay).toMatchObject({ plannedNotOnScreenMin: 145 })
+  })
+
+  it('matches a planned block to its task on short names and CJK words too', () => {
+    // Test data: "\u6536\u53e3" and "\u8bbe\u8ba1\u6587\u6863" are CJK words (escaped on purpose).
+    const out = merge(MON, [
+      seg('calendar', 'plan', '\u2605CIS Design 1 \u6536\u53e3: ship the commit', t(5, 11), t(5, 12)),
+      walnut('t9', 'Feedback on CIS Design 1', t(5, 11), t(5, 11, 40)),
+      seg('calendar', 'plan', '\u5199\u8bbe\u8ba1\u6587\u6863', t(5, 15), t(5, 16)),
+      walnut('t8', '\u8bbe\u8ba1\u6587\u6863 draft', t(5, 15), t(5, 15, 50)),
+    ])
+    const [cis, cjk] = out.plan
+    expect(cis).toMatchObject({ verdict: 'kept', matched: { taskId: 't9', by: 'title' } })
+    expect(cjk).toMatchObject({ verdict: 'kept', matched: { taskId: 't8', by: 'title' } })
+  })
+
+  it('reads title words: 3+ letters, short all-caps names, CJK pairs, no filler', () => {
+    expect([...titleTokens('EKS Q4 plan for the API run, TBD')].sort()).toEqual(['api', 'eks', 'plan', 'q4', 'run'])
+    expect([...titleTokens('\u5199\u8bbe\u8ba1')]).toEqual(['\u5199\u8bbe', '\u8bbe\u8ba1'])
+    expect([...titleTokens('a b 1 x')]).toEqual([])
   })
 
   it('counts a room booking that repeats a meeting once', () => {
