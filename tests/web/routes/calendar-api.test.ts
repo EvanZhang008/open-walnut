@@ -3,7 +3,7 @@
  * CalendarSource injected via _setCalendarServiceForTest (only the EventKit
  * helper is mocked; service cache/write-through/bus wiring is real).
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { vi } from 'vitest';
 import fs from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
@@ -14,7 +14,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js';
 import { getConfig, updatePluginConfig } from '../../../src/core/config-manager.js';
-import { CalendarService, _setCalendarServiceForTest } from '../../../src/integrations/calendar/service.js';
+import { CalendarService, _setCalendarServiceForTest, getCalendarService as getCalendarServiceForTest } from '../../../src/integrations/calendar/service.js';
 import { CalendarHelperError } from '../../../src/core/calendar/sources/eventkit.js';
 import { createMockCalendarSource, type MockCalendarState } from '../../helpers/mock-calendar-source.js';
 import { startServer, stopServer } from '../../../src/web/server.js';
@@ -598,5 +598,96 @@ describe('PATCH /api/calendar/events/:id/visibility', () => {
     });
     expect(moved.status).toBe(200);
     expect(state.calls.filter((c) => c.method === 'updateEvent').map((c) => c.args[0])).toEqual(['ev-standup']);
+  });
+});
+
+describe('default calendar over REST', () => {
+  const put = (body: unknown) =>
+    fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  const post = (body: unknown) =>
+    fetch(apiUrl('/api/calendar/events'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  const persistedDefault = async () =>
+    ((await getConfig()) as { plugins?: Record<string, Record<string, unknown>> }).plugins?.calendar?.default_calendar_id;
+  const slot = { title: 'Focus block', start: '2026-08-06T09:00:00', end: '2026-08-06T10:00:00' };
+
+  afterEach(async () => {
+    await updatePluginConfig('calendar', { default_calendar_id: '' });
+  });
+
+  it('PUT saves a writable default, GET /sources reports and marks it, and POST without a calendar uses it', async () => {
+    const saved = await put({ default_calendar_id: 'cal-home' });
+    expect(saved.status).toBe(200);
+    expect(await persistedDefault()).toBe('cal-home');
+
+    const sources = await (await fetch(apiUrl('/api/calendar/sources'))).json() as {
+      calendars: { id: string; default?: boolean }[]; defaultCalendar: Record<string, unknown>;
+    };
+    expect(sources.defaultCalendar).toEqual({ id: 'cal-home', configuredId: 'cal-home', title: 'Home', account: 'iCloud' });
+    expect(sources.calendars.filter((c) => c.default).map((c) => c.id)).toEqual(['cal-home']);
+
+    const created = await post(slot);
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { event: EventShape }).event.calendarId).toBe('cal-home');
+    // The tool's spelling works here too, and an explicit calendar beats the default.
+    const snake = await post({ ...slot, calendar_id: 'cal-work' });
+    expect(((await snake.json()) as { event: EventShape }).event.calendarId).toBe('cal-work');
+    const camel = await post({ ...slot, calendarId: 'cal-work' });
+    expect(((await camel.json()) as { event: EventShape }).event.calendarId).toBe('cal-work');
+  });
+
+  it('PUT refuses an unknown or read-only calendar and writes nothing; null clears it', async () => {
+    await put({ default_calendar_id: 'cal-home' });
+    for (const [body, pattern] of [
+      [{ default_calendar_id: 'cal-nope' }, /not a calendar on this Mac/],
+      [{ default_calendar_id: 'cal-holidays' }, /read-only/],
+      [{ default_calendar_id: 42 }, /must be a calendar id string/],
+      // A bad default rejects the whole body: the visibility change beside it is not half-applied.
+      [{ default_calendar_id: 'cal-nope', hidden_calendar_ids: ['cal-work'] }, /not a calendar/],
+    ] as const) {
+      const res = await put(body);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toMatch(pattern);
+    }
+    expect(await persistedDefault()).toBe('cal-home');
+    const cfg = (await getConfig()) as { plugins?: Record<string, Record<string, unknown>> };
+    expect(cfg.plugins?.calendar?.hidden_calendar_ids ?? []).not.toContain('cal-work');
+
+    expect((await put({ default_calendar_id: null })).status).toBe(200);
+    expect(await persistedDefault()).toBe('');
+    const sources = await (await fetch(apiUrl('/api/calendar/sources'))).json() as { defaultCalendar: Record<string, unknown> };
+    expect(sources.defaultCalendar).toEqual({ id: null, configuredId: null });
+  });
+
+  it('POST without a calendar and without a usable default is a 400 that says why, with nothing created', async () => {
+    const none = await post(slot);
+    expect(none.status).toBe(400);
+    expect(((await none.json()) as { error: string }).error).toMatch(/No default calendar is set/);
+
+    // A default that went read-only after it was saved (written straight to config, as macOS would change it).
+    await updatePluginConfig('calendar', { default_calendar_id: 'cal-holidays' });
+    await getCalendarServiceForTest().reloadConfig();
+    const ro = await post(slot);
+    expect(ro.status).toBe(400);
+    expect(((await ro.json()) as { error: string }).error).toMatch(/read-only/);
+    const sources = await (await fetch(apiUrl('/api/calendar/sources'))).json() as { defaultCalendar: { id: unknown; warning?: string } };
+    expect(sources.defaultCalendar.id).toBeNull();
+    expect(sources.defaultCalendar.warning).toMatch(/read-only.*Settings → Calendar Accounts/);
+    expect(state.calls.filter((c) => c.method === 'createEvent')).toEqual([]);
+  });
+
+  it('PATCH keeps an event on its own calendar even when the body names another', async () => {
+    await put({ default_calendar_id: 'cal-home' });
+    const res = await fetch(apiUrl('/api/calendar/events/ev-standup'), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start: '2026-08-04T14:00:00', end: '2026-08-04T14:30:00', calendarId: 'cal-home' }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { event: EventShape }).event.calendarId).toBe('cal-work');
+    expect(state.calls.filter((c) => c.method === 'createEvent' || c.method === 'deleteEvent')).toEqual([]);
   });
 });

@@ -63,6 +63,20 @@ export interface CalendarInfo {
   color: string;
   readonly: boolean;
   hidden: boolean;
+  /** The default calendar for new events (only while it is writable). */
+  default?: boolean;
+}
+
+/** `GET /sources`' check of the configured default against the calendars macOS has now. */
+export interface CalendarDefault {
+  /** Where a create with no calendar goes; null when nothing usable is set. */
+  id: string | null;
+  /** What config says, even when it is unusable. */
+  configuredId: string | null;
+  title?: string;
+  account?: string;
+  /** Why a configured default cannot be used, and what to do. */
+  warning?: string;
 }
 
 export function listCalendarEvents(from: string, to: string, opts: { includeHidden?: boolean } = {}) {
@@ -78,13 +92,15 @@ export function setCalendarEventVisibility(id: string, hidden: boolean) {
 }
 
 export function listCalendarSources() {
-  return apiGet<{ sources: CalendarSourceStatus[]; calendars: CalendarInfo[] }>('/api/calendar/sources');
+  return apiGet<{ sources: CalendarSourceStatus[]; calendars: CalendarInfo[]; defaultCalendar?: CalendarDefault }>('/api/calendar/sources');
 }
 
 export function updateCalendarSource(patch: {
   enabled?: boolean;
   hidden_calendar_ids?: string[];
   visible_calendar_ids?: string[] | null;
+  /** A writable calendar id; null clears the default. */
+  default_calendar_id?: string | null;
 }) {
   return apiPut<{ sources: CalendarSourceStatus[] }>('/api/calendar/sources/eventkit', patch);
 }

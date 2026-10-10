@@ -69,6 +69,8 @@ export interface CalendarInfo {
   readonly: boolean;
   /** User toggled this calendar off in Settings. */
   hidden: boolean;
+  /** The configured default calendar (set by CalendarService, only while it is writable). */
+  default?: boolean;
 }
 
 export type CalendarSourceReason =
@@ -105,6 +107,9 @@ export interface CalendarEventCreate {
   end: string;
   allDay?: boolean;
 }
+
+/** A create as callers hand it to CalendarService: no calendar id means the configured default. */
+export type CalendarEventCreateInput = Omit<CalendarEventCreate, 'calendarId'> & { calendarId?: string };
 
 /** A pluggable event source (EventKit today; a direct API source later). */
 export interface CalendarSource {

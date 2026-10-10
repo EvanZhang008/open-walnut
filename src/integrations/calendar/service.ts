@@ -36,7 +36,7 @@ import { calendarEventNeedsApproval } from './types.js';
 import type {
   CalendarWriteOptions,
   CalendarEvent,
-  CalendarEventCreate,
+  CalendarEventCreateInput,
   CalendarEventPatch,
   CalendarInfo,
   CalendarSource,
@@ -72,8 +72,32 @@ export interface CalendarPluginConfig {
   visible_calendar_ids?: string[] | null;
   /** Single events hidden in Walnut by exact id (an occurrence id hides one occurrence). Plugin-only. */
   hidden_event_ids?: string[];
+  /**
+   * Where a create with no calendar id goes. `''` means CLEARED (written by Settings), which
+   * wins over a legacy top-level value the same way a `null` allowlist does. See
+   * {@link CalendarService.defaultCalendar} for what makes a configured id usable.
+   */
+  default_calendar_id?: string | null;
   refresh_minutes?: number;
   read_ttl_seconds?: number;
+}
+
+/**
+ * The configured default calendar, checked against the calendars macOS has right now.
+ *
+ * `id` is the calendar a create with no calendar id goes to, or null when there is none.
+ * A configured id that is gone or read-only is NOT replaced by some other calendar: the
+ * create is refused with `warning` instead, because guessing is how agent-made blocks kept
+ * landing on a work calendar.
+ */
+export interface CalendarDefaultState {
+  id: string | null;
+  /** What config.yaml says, or null when nothing is set. */
+  configuredId: string | null;
+  title?: string;
+  account?: string;
+  /** Set when a configured id cannot be used; says why and what to do. */
+  warning?: string;
 }
 
 /** The legacy top-level `config.calendar`, read for one release. */
@@ -141,6 +165,10 @@ export function mergeCalendarConfig(
     visible_calendar_ids:
       plugin.visible_calendar_ids !== undefined ? plugin.visible_calendar_ids : old.visible_calendar_ids,
     hidden_event_ids: idList(plugin.hidden_event_ids),
+    // By presence, like the allowlist: Settings clears it by writing '' into the plugin
+    // section, and that has to win over an id still sitting in the legacy section.
+    default_calendar_id:
+      plugin.default_calendar_id !== undefined ? plugin.default_calendar_id : old.default_calendar_id,
     refresh_minutes: plugin.refresh_minutes ?? old.refresh_minutes,
     read_ttl_seconds: plugin.read_ttl_seconds ?? old.read_ttl_seconds,
   };
@@ -227,6 +255,10 @@ export class CalendarService {
   /** When non-null, ONLY these ids are visible (allowlist); hiddenIds still applies on top. */
   private visibleIds: Set<string> | null = null;
   private hiddenEventIds = new Set<string>();
+  /** `default_calendar_id` from config, trimmed; null when unset or cleared. */
+  private defaultCalendarId: string | null = null;
+  /** Last unusable-default warning logged, so a poll does not log it on every read. */
+  private loggedDefaultWarning: string | null = null;
   /** Serializes hide/show read-patch-reload so two writers never drop each other's id; never rejects. */
   private visibilityTail: Promise<void> = Promise.resolve();
   private enabled = true;
@@ -285,6 +317,8 @@ export class CalendarService {
     this.hiddenIds = new Set(cal.hidden_calendar_ids ?? []);
     this.visibleIds = cal.visible_calendar_ids ? new Set(cal.visible_calendar_ids) : null;
     this.hiddenEventIds = new Set(cal.hidden_event_ids ?? []);
+    const configuredDefault = typeof cal.default_calendar_id === 'string' ? cal.default_calendar_id.trim() : '';
+    this.defaultCalendarId = configuredDefault || null;
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
     // 0 is legal and means "never serve from cache" (every read re-fetches).
     this.readTtlMs = Math.max(0, cal.read_ttl_seconds ?? DEFAULT_READ_TTL_SECONDS) * 1000;
@@ -341,7 +375,53 @@ export class CalendarService {
     // The service owns the hidden/visible sets (config) — overlay them here so
     // every source (incl. test mocks) reports visibility consistently.
     const cals = await this.trackErrors(() => this.source.listCalendars());
-    return cals.map((c) => ({ ...c, hidden: this.isHidden(c.id) }));
+    return cals.map((c) => ({
+      ...c,
+      hidden: this.isHidden(c.id),
+      ...(c.id === this.defaultCalendarId && !c.readonly ? { default: true } : {}),
+    }));
+  }
+
+  /**
+   * The configured default checked against `calendars` (a list the caller already holds, so
+   * GET /sources adds no helper call). Never picks a replacement: an unusable configured id
+   * comes back as `id: null` plus a warning, and a create without a calendar id is refused.
+   * A hidden calendar is still a valid default; the user chose it on purpose.
+   */
+  describeDefault(calendars: CalendarInfo[]): CalendarDefaultState {
+    const configuredId = this.defaultCalendarId;
+    if (!configuredId) return { id: null, configuredId: null };
+    const cal = calendars.find((c) => c.id === configuredId);
+    const problem = !cal
+      ? 'The default calendar is not on this Mac any more (it was deleted, or its account was removed).'
+      : cal.readonly
+        ? `The default calendar "${cal.title}" (${cal.account}) is read-only.`
+        : null;
+    if (!problem) {
+      this.loggedDefaultWarning = null;
+      return { id: configuredId, configuredId, title: cal!.title, account: cal!.account };
+    }
+    if (this.loggedDefaultWarning !== problem) {
+      this.loggedDefaultWarning = problem;
+      log.calendar.warn('default calendar unusable, creates without a calendar id are refused', { configuredId, problem });
+    }
+    return {
+      id: null,
+      configuredId,
+      ...(cal ? { title: cal.title, account: cal.account } : {}),
+      warning: `${problem} Pick another in Settings → Calendar Accounts → Default calendar.`,
+    };
+  }
+
+  /** What config says, unchecked (null when unset). */
+  configuredDefaultId(): string | null {
+    return this.defaultCalendarId;
+  }
+
+  /** {@link describeDefault} over a fresh calendar list; no helper call when nothing is set. */
+  async defaultCalendar(): Promise<CalendarDefaultState> {
+    if (!this.defaultCalendarId) return { id: null, configuredId: null };
+    return this.describeDefault(await this.listCalendars());
   }
 
   /** Events within [from, to] (inclusive day strings), served from cache when it
@@ -477,25 +557,50 @@ export class CalendarService {
     }
   }
 
+  // Writes are NOT wrapped in trackErrors: a write can go to a different program than the
+  // reads (the current helper while an older Walnut.app serves reads, see eventkit.ts
+  // runSafeWrite), so a write refused for want of a grant says nothing about whether reads
+  // work. Latching it flipped the source to unavailable and took the calendar view down.
+
+  /** Moves or renames in place: an event never changes calendar here, whatever the default is. */
   async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
     this.assertUsable();
     await this.guardWrite(id, opts);
-    const event = await this.trackErrors(() => this.source.updateEvent(id, patch, opts));
+    // Only the fields an update may carry: nothing a caller adds can move it to another calendar.
+    const event = await this.source.updateEvent(id, {
+      start: patch.start,
+      end: patch.end,
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+    }, opts);
     await this.writeThrough();
     return event;
   }
 
-  async createEvent(input: CalendarEventCreate): Promise<CalendarEvent> {
+  /** No `calendarId` (absent or blank) creates on the configured default calendar. */
+  async createEvent(input: CalendarEventCreateInput): Promise<CalendarEvent> {
     this.assertUsable();
-    const event = await this.trackErrors(() => this.source.createEvent(input));
+    const calendarId = await this.createTarget(input.calendarId);
+    const event = await this.source.createEvent({ ...input, calendarId });
     await this.writeThrough();
     return event;
+  }
+
+  private async createTarget(explicit: string | undefined): Promise<string> {
+    if (typeof explicit === 'string' && explicit.trim()) return explicit;
+    const state = await this.defaultCalendar();
+    if (state.id) return state.id;
+    throw new CalendarHelperError(
+      state.warning
+        ? `${state.warning} Or pass a calendar id.`
+        : 'No default calendar is set. Pass a calendar id (calendar_query with list_calendars:true lists them), or ask the user to pick a default in Settings → Calendar Accounts → Default calendar.',
+      'usage',
+    );
   }
 
   async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
     this.assertUsable();
     await this.guardWrite(id, opts);
-    await this.trackErrors(() => this.source.deleteEvent(id, opts));
+    await this.source.deleteEvent(id, opts);
     await this.writeThrough();
   }
 
@@ -507,6 +612,8 @@ export class CalendarService {
       try {
         const events = await this.source.listEvents(window.from, window.to);
         this.cache.set(key, { events, fetchedAt: Date.now(), hash: eventsHash(events) });
+        // A read that worked: the one place a write path may clear a stale read failure.
+        this.lastError = null;
       } catch {
         this.cache.delete(key); // stale after a write — better a miss than a lie
       }

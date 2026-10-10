@@ -24,7 +24,8 @@ function errText(err: unknown): string {
   const code = calendarErrorCode(err);
   if (code) {
     const message = err instanceof Error ? err.message : String(err);
-    if (code === 'permission-denied') {
+    // A message that already names its fix (a write refused before it could prompt) keeps it.
+    if (code === 'permission-denied' && !message.includes('Settings')) {
       return `Error: ${message} The user must grant Calendar access in System Settings → Privacy & Security → Calendars.`;
     }
     return `Error (${code}): ${message}`;
@@ -43,7 +44,7 @@ export function createCalendarTools(
     {
       name: 'calendar_query',
       description:
-        "Query the user's calendars (all macOS system accounts: iCloud, Google, Exchange). Returns events in a date range, plus source status. Use list_calendars:true to enumerate the calendars themselves (for calendar_event_create targets). Dates are LOCAL tz-less ISO (YYYY-MM-DD). An event may carry status:'canceled' (the organizer cancelled it; macOS still holds the row) or selfStatus:'declined' — never present either one as a meeting the user is attending. Events the user hid in Walnut are left out; include_hidden:true returns them marked hidden:true.",
+        "Query the user's calendars (all macOS system accounts: iCloud, Google, Exchange). Returns events in a date range, plus source status. Use list_calendars:true to enumerate the calendars themselves; the user's default calendar for new events is marked default:true, and defaultCalendar says which one it is. Dates are LOCAL tz-less ISO (YYYY-MM-DD). An event may carry status:'canceled' (the organizer cancelled it; macOS still holds the row) or selfStatus:'declined'; never present either one as a meeting the user is attending. Events the user hid in Walnut are left out; include_hidden:true returns them marked hidden:true.",
       input_schema: {
         type: 'object',
         properties: {
@@ -95,7 +96,11 @@ export function createCalendarTools(
               ...(e.writeSafetyVersion !== undefined ? { writeSafetyVersion: e.writeSafetyVersion } : {}),
             })),
           };
-          if (params.list_calendars) result.calendars = await service.listCalendars();
+          if (params.list_calendars) {
+            const calendars = await service.listCalendars();
+            result.calendars = calendars;
+            result.defaultCalendar = service.describeDefault(calendars);
+          }
           return json(result);
         } catch (err) {
           return errText(err);
@@ -105,19 +110,26 @@ export function createCalendarTools(
     {
       name: 'calendar_event_create',
       description:
-        'Create an event on one of the user\'s calendars. calendar_id comes from calendar_query with list_calendars:true (pick a writable one). Times are LOCAL tz-less ISO; all-day events use YYYY-MM-DD for start/end (end inclusive).',
+        "Create an event on the user's calendar. Leave calendar_id out: the event goes to the user's default calendar (set in Settings → Calendar Accounts), which is the right place for focus blocks, reminders and other personal events. Pass calendar_id only when the user names a specific calendar, and never pick a work or Exchange calendar unless the user explicitly asks for it. With no usable default the call fails and says so; then ask the user which calendar to use rather than guessing. Times are LOCAL tz-less ISO; all-day events use YYYY-MM-DD for start/end (end inclusive).",
       input_schema: {
         type: 'object',
         properties: {
-          calendar_id: { type: 'string', description: 'Target calendar id (writable)' },
+          calendar_id: {
+            type: 'string',
+            description: "Optional. Omit to use the user's default calendar. Only set it when the user asked for a specific calendar (an id from calendar_query with list_calendars:true).",
+          },
           title: { type: 'string' },
           start: { type: 'string', description: 'YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DD for all-day' },
           end: { type: 'string', description: 'Same format as start. Defaults to start + 1h (or same day for all-day).' },
           all_day: { type: 'boolean' },
         },
-        required: ['calendar_id', 'title', 'start'],
+        required: ['title', 'start'],
       },
       async execute(params) {
+        if (params.calendar_id !== undefined && params.calendar_id !== null && typeof params.calendar_id !== 'string') {
+          return 'Error: calendar_id must be a calendar id string; leave it out to use the default calendar.';
+        }
+        if (typeof params.title !== 'string' || !params.title.trim()) return 'Error: title is required.';
         const start = params.start as string;
         if (!LOCAL_ISO_RE.test(start)) return 'Error: start must be tz-less local ISO.';
         let end = (params.end as string | undefined) ?? '';
@@ -133,8 +145,8 @@ export function createCalendarTools(
         if (!LOCAL_ISO_RE.test(end)) return 'Error: end must be tz-less local ISO.';
         try {
           const event = await resolve().createEvent({
-            calendarId: params.calendar_id as string,
-            title: params.title as string,
+            calendarId: (params.calendar_id as string | undefined | null) ?? undefined,
+            title: params.title,
             start,
             end,
             allDay: (params.all_day as boolean | undefined) ?? !start.includes('T'),

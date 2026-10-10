@@ -19,7 +19,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../constants.js';
-import { calendarAuthStatus, calendarGrantApp, calendarHelperFallback } from '../calendar/sources/eventkit.js';
+import { calendarAccessReport, calendarGrantApp, calendarHelperFallback } from '../calendar/sources/eventkit.js';
 import { log } from '../../logging/index.js';
 import { fullDiskAccessRows, probeFullDiskAccess } from './darwin-fda.js';
 import { onFullDiskAccessUsesChanged } from './fda-uses.js';
@@ -164,20 +164,27 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
     return reportCache.report;
   }
 
-  const [launcher, calState, fda, session] = await Promise.all([
+  const [launcher, calAccess, fda, session] = await Promise.all([
     detectLauncher(),
-    calendarAuthStatus(),
+    calendarAccessReport(),
     probeFullDiskAccess(),
     probeSessionIdentity(),
   ]);
 
-  // calendarAuthStatus asks the CURRENT helper. A previous generation can still
+  // calendarAccessReport asks the CURRENT helper. A previous generation can still
   // be holding the grant and serving real events, and saying "not granted" over
   // a full calendar is how a correct panel loses the user's trust.
-  const calFallback = calState === 'granted' ? null : calendarHelperFallback();
+  // It also asks the write route: an older Walnut.app hands calendar CHANGES to the helper,
+  // which needs its own Allow. `writeOnly` is the case where reads are fine and only that is missing.
+  const { state: calState, read: calRead, writeGap } = calAccess;
+  const writeOnly = !!writeGap && calRead === 'granted';
+  const calFallback = calState === 'granted' || writeOnly ? null : calendarHelperFallback();
   // Walnut.app itself when it answers calendar requests; null means the helper does
   // and asks for itself. Resolved by the status probe above, so this is a lookup.
   const calApp = await calendarGrantApp();
+  const writeNote = writeGap
+    ? ' This copy of Walnut.app is older than the calendar write check, so new events and changes go through the separate walnut-calendar helper, which needs its own Allow.'
+    : '';
 
   const permissions: PermissionStatus[] = [
     {
@@ -192,12 +199,13 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
         'Shows your Mac calendar events (iCloud, Google, Exchange) in the calendar view.'
         + (calFallback
           ? ` Your calendar is working right now through an older copy of the helper (${calFallback.version}),`
-            + ` so nothing is missing; granting ${calApp ? 'Walnut' : 'the current one'} just retires the old copy.`
-          : ''),
+            + ` so ${writeGap ? 'reading works' : 'nothing is missing'}; granting ${calApp ? 'Walnut' : 'the current one'} just retires the old copy.`
+          : '')
+        + writeNote,
       ...(calFallback ? { workingVia: `an older copy of the helper (${calFallback.version})` } : {}),
       // Both routes disclaim parent responsibility (Walnut.app re-execs itself the
       // same way the helper does), so the grant is launcher-independent either way.
-      grantTarget: calApp ?? 'walnut-calendar (asks by itself — one Allow click)',
+      grantTarget: calApp && !writeOnly ? calApp : 'walnut-calendar (asks by itself: one Allow click)',
       launcherIndependent: true,
       settingsUrl: SETTINGS_URL.calendars,
       steps:
@@ -208,17 +216,21 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
               // usually true: macOS keys a grant to a CODE IDENTITY, so a helper
               // that got rebuilt or re-signed is a different program with no
               // history. Naming that up front stops it reading as data loss.
-              calApp
-                // The move to Walnut itself is the one extra ask, and it is the
-                // last: the app keeps one certificate identity across updates.
-                ? 'If you granted this before, that was to a separate helper. Calendar now belongs to Walnut itself, so macOS asks once more, and this is the last time.'
-                : 'If you have granted this before, macOS is asking again because Walnut re-signed the helper, and a re-signed program is a new one to macOS. It is now signed with a certificate, so this is the last time.',
+              writeOnly
+                ? 'Walnut can read your calendars already. Creating and moving events needs the walnut-calendar helper allowed too.'
+                : calApp
+                  // The move to Walnut itself is the one extra ask, and it is the
+                  // last: the app keeps one certificate identity across updates.
+                  ? 'If you granted this before, that was to a separate helper. Calendar now belongs to Walnut itself, so macOS asks once more, and this is the last time.'
+                  : 'If you have granted this before, macOS is asking again because Walnut re-signed the helper, and a re-signed program is a new one to macOS. It is now signed with a certificate, so this is the last time.',
               'Click "Request access" below.',
-              'Click Allow Full Access in the macOS dialog.',
+              writeGap === 'not-determined' && !writeOnly
+                ? 'Click Allow Full Access in the macOS dialog. A second dialog asks for the walnut-calendar helper: allow that too.'
+                : 'Click Allow Full Access in the macOS dialog.',
             ]
           : [
               { text: 'Open System Settings → Privacy & Security → Calendars.', open: true },
-              `Find ${calApp ? 'Walnut' : 'the walnut-calendar entry'} and enable Full Access.`,
+              `Find ${calApp && !writeOnly ? 'Walnut' : 'the walnut-calendar entry'} and enable Full Access.`,
               'No entry? Click "Request access" below to re-trigger the prompt.',
             ],
     },

@@ -16,6 +16,7 @@
       "hidden_calendar_ids": { "type": "array", "items": { "type": "string" } },
       "visible_calendar_ids": { "type": "array", "items": { "type": "string" } },
       "hidden_event_ids": { "type": "array", "items": { "type": "string" } },
+      "default_calendar_id": { "type": "string" },
       "refresh_minutes": { "type": "integer", "default": 15 },
       "read_ttl_seconds": { "type": "integer", "default": 60 }
     }
@@ -36,6 +37,10 @@
     "hidden_event_ids": {
       "label": "Hidden events",
       "help": "Single event ids hidden in Walnut only. The events stay in your calendars."
+    },
+    "default_calendar_id": {
+      "label": "Default calendar",
+      "help": "Where new events go when no calendar is named (agents and the calendar view). Empty means always ask."
     },
     "refresh_minutes": {
       "label": "Background poll (minutes)",

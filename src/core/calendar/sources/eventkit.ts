@@ -391,10 +391,64 @@ async function speaksWriteSafety(cmd: CalendarCommand): Promise<boolean> {
   }
 }
 
-/** Writes and their pre-write `get` go only to Walnut.app or the current helper once it proves the protocol, never to a stand-in or older generation. */
+export type GrantState = 'granted' | 'denied' | 'not-determined' | 'unknown';
+
+/** `cmd`'s own Calendars grant, via `status` (answered before any access request, so it never prompts). */
+async function grantOf(cmd: CalendarCommand): Promise<GrantState> {
+  try {
+    const { state } = await execHelper<{ state?: string }>(cmd, ['status']);
+    return state === 'granted' || state === 'denied' || state === 'not-determined' ? state : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** Who macOS lists for a write route: Walnut itself, or the separate helper. */
+function writerName(pick: 'current' | 'helper'): string {
+  return pick === 'current' && currentRoute?.kind === 'app' ? 'Walnut' : 'the walnut-calendar helper';
+}
+
+/**
+ * Why a write did not run because its program holds no grant. Nothing was asked and nothing
+ * changed. Kept short with the fix up front: the quick-create form shows 400 characters.
+ */
+function ungrantedWriteError(pick: 'current' | 'helper', state: GrantState): CalendarHelperError {
+  const who = writerName(pick);
+  if (state === 'denied') {
+    return new CalendarHelperError(
+      `Nothing was changed: macOS does not allow ${who} to change your calendars. Turn on Full Access for it in System Settings → Privacy & Security → Calendars, then try again.`,
+      'permission-denied',
+    );
+  }
+  if (state === 'not-determined') {
+    return new CalendarHelperError(
+      `Nothing was changed: macOS has not allowed ${who} to change your calendars yet. Press Request access in Settings → macOS Access → Calendar, then try again.`,
+      'permission-denied',
+    );
+  }
+  return new CalendarHelperError(
+    `Nothing was changed: Walnut could not check whether macOS allows ${who} to change your calendars. Settings → macOS Access → Calendar shows what is missing.`,
+    'fetch-error',
+  );
+}
+
+/**
+ * Writes and their pre-write `get` go only to Walnut.app or the current helper once it proves
+ * the protocol, never to a stand-in or older generation.
+ *
+ * And only to one macOS has ALREADY granted. A write to a program that was never asked made
+ * EventKit put the Calendars request up from inside the write and wait 30s on it, so every
+ * agent-made block hung and failed as a timeout (2026-10-10: Walnut.app predated the protocol,
+ * the writes went to a helper generation nobody had allowed, while reads were served by an
+ * older granted one). A write never asks: Request access is where the one ask happens, and
+ * it asks this route too (requestCalendarAccess).
+ */
 async function runSafeWrite<T>(current: CalendarCommand, args: string[], humanConfirm: boolean): Promise<T> {
   const picks = currentRoute?.kind === 'app' ? ['current', 'helper'] as const : ['current'] as const;
   let denied: CalendarHelperError | null = null;
+  let ungranted: { pick: 'current' | 'helper'; state: GrantState } | null = null;
+  /** Why the app route was passed over, for the log line when the helper takes the write. */
+  let appSkipped: 'protocol' | 'grant' | 'denied' = 'protocol';
   for (const pick of picks) {
     let cmd: CalendarCommand | null = current;
     if (pick === 'helper') {
@@ -403,10 +457,21 @@ async function runSafeWrite<T>(current: CalendarCommand, args: string[], humanCo
     }
     // Probed per call, never cached: a stale yes would send a guarded write to a binary that ignores the guard.
     if (!cmd || !(await speaksWriteSafety(cmd))) continue;
-    if (pick === 'helper' && !denied) {
-      log.calendar.info('Walnut.app predates the calendar write-safety check, writing through the helper', {
-        helper: cmd[0], subcommand: args[0],
-      });
+    const grant = await grantOf(cmd);
+    if (grant !== 'granted') {
+      ungranted ??= { pick, state: grant };
+      if (pick === 'current') appSkipped = 'grant';
+      continue;
+    }
+    if (pick === 'helper') {
+      log.calendar.info(
+        appSkipped === 'protocol'
+          ? 'Walnut.app predates the calendar write-safety check, writing through the helper'
+          : appSkipped === 'grant'
+            ? 'Walnut.app is not allowed Calendars yet, writing through the helper'
+            : 'Walnut.app was refused this write, writing through the helper',
+        { helper: cmd[0], subcommand: args[0] },
+      );
     }
     try {
       return await execHelperGroup<T>(cmd, args, humanConfirm ? HUMAN_CONFIRM_TIMEOUT_MS : HELPER_TIMEOUT_MS);
@@ -418,12 +483,48 @@ async function runSafeWrite<T>(current: CalendarCommand, args: string[], humanCo
       // A denied identity changed nothing, so the other safe route may still answer.
       if (mapped.code !== 'permission-denied') throw mapped;
       denied = mapped;
+      if (pick === 'current') appSkipped = 'denied';
     }
+  }
+  if (ungranted) {
+    log.calendar.warn('calendar write refused before it could prompt: the write route holds no Calendars grant', {
+      route: ungranted.pick, state: ungranted.state, subcommand: args[0],
+    });
+    throw ungrantedWriteError(ungranted.pick, ungranted.state);
   }
   throw denied ?? new CalendarHelperError(
     'Walnut cannot check whose calendar event this is (the calendar bridge predates the write-safety check), so nothing was changed.',
     'human-approval-required',
   );
+}
+
+/**
+ * The program writes go to when it is NOT the one reads go to: the helper, while an older
+ * Walnut.app that predates the write-safety protocol answers the reads. Null when one program
+ * does both, or when there is no write route at all.
+ *
+ * `build` compiles the helper when it does not exist yet (Request access, a click). The
+ * Permission Doctor's poll passes false and gets `'missing'` instead: a helper that was never
+ * built was never granted either, and compiling one from a poll would mint a new program.
+ */
+async function separateWriteRoute(build: boolean): Promise<CalendarCommand | 'missing' | null> {
+  const current = await currentCommand();
+  if (!current || currentRoute?.kind !== 'app') return null;
+  if (await speaksWriteSafety(current)) return null;
+  const bin = build ? await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift') : existingHelperBinary(HELPER_SPEC);
+  // A helper that cannot be built (no compiler, a failed build) is not a grant anyone can give:
+  // reporting it as "not asked" would offer a Request access that can never fix it.
+  if (!bin) return build || helperFailure(HELPER_SPEC.name) ? null : 'missing';
+  return (await speaksWriteSafety([bin])) ? [bin] : null;
+}
+
+/** The Permission Doctor's view: the combined state, plus the read route's own and the write route's gap. */
+export interface CalendarAccessReport {
+  /** What the row shows: the read route's state, or the write route's gap when reads are fine. */
+  state: 'granted' | 'denied' | 'not-determined' | 'unknown';
+  read: GrantState;
+  /** The separate write route's missing grant; null when writes share the read route or are allowed. */
+  writeGap: 'not-determined' | 'denied' | null;
 }
 
 /** Map an execFile rejection onto our error shape. Non-zero exit still prints a
@@ -451,12 +552,24 @@ function toHelperError(err: unknown): CalendarHelperError {
  * must not present that as "denied", the fixes differ.
  */
 export async function calendarAuthStatus(): Promise<'granted' | 'denied' | 'not-determined' | 'unknown'> {
+  return (await calendarAccessReport()).state;
+}
+
+/** {@link calendarAuthStatus} with the per-route detail the Permission Doctor words its row from. */
+export async function calendarAccessReport(): Promise<CalendarAccessReport> {
+  let read: GrantState;
   try {
     const { state } = await runHelper<{ state: string }>(['status'], { currentOnly: true });
-    return state === 'granted' || state === 'denied' || state === 'not-determined' ? state : 'unknown';
+    read = state === 'granted' || state === 'denied' || state === 'not-determined' ? state : 'unknown';
   } catch {
-    return 'unknown';
+    return { state: 'unknown', read: 'unknown', writeGap: null };
   }
+  // Writes can have their own program (see separateWriteRoute). Reporting "granted" because
+  // reads work would hide the Request access button that is the only way to fix the writes.
+  const writer = await separateWriteRoute(false);
+  const write: GrantState = writer === 'missing' ? 'not-determined' : writer ? await grantOf(writer) : 'granted';
+  const writeGap = write === 'not-determined' || write === 'denied' ? write : null;
+  return { state: read !== 'granted' ? read : (writeGap ?? 'granted'), read, writeGap };
 }
 
 /**
@@ -465,16 +578,30 @@ export async function calendarAuthStatus(): Promise<'granted' | 'denied' | 'not-
  * answers (helper waits up to 30s). Returns the post-prompt state. Once the
  * state is 'denied' this is useless — macOS never re-prompts — which is why
  * the UI routes denied users to System Settings instead.
+ *
+ * When writes have their own program (an older Walnut.app hands them to the helper), that
+ * program is asked right after, in the same click: a write never asks for itself, so this
+ * is its only chance. Two macOS dialogs in that case, one per program.
  */
 export async function requestCalendarAccess(): Promise<'granted' | 'denied' | 'unknown'> {
   try {
     await runHelper<unknown>(['calendars'], { currentOnly: true });
     // The current helper answered, so whatever stand-in was in place is obsolete.
     resetCalendarHelperFallback();
-    return 'granted';
   } catch (err) {
     if (err instanceof CalendarHelperError && err.code === 'permission-denied') return 'denied';
     return 'unknown';
+  }
+  const writer = await separateWriteRoute(true);
+  if (!writer || writer === 'missing') return 'granted';
+  const grant = await grantOf(writer);
+  if (grant === 'granted') return 'granted';
+  if (grant === 'denied') return 'denied';
+  try {
+    await execHelper<unknown>(writer, ['calendars']);
+    return 'granted';
+  } catch (err) {
+    return toHelperError(err).code === 'permission-denied' ? 'denied' : 'unknown';
   }
 }
 

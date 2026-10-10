@@ -20,6 +20,7 @@ import {
   listCalendarSources,
   updateCalendarSource,
   refreshCalendar,
+  type CalendarDefault,
   type CalendarInfo,
   type CalendarSourceStatus,
 } from '@/api/calendar';
@@ -39,6 +40,7 @@ interface WriteError { key: string; message: string }
 export function CalendarSection() {
   const [status, setStatus] = useState<CalendarSourceStatus | null>(null);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
+  const [defaultCal, setDefaultCal] = useState<CalendarDefault | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -64,6 +66,7 @@ export function CalendarSection() {
       const res = await listCalendarSources();
       setStatus(res.sources[0] ?? null);
       setCalendars(res.calendars);
+      setDefaultCal(res.defaultCalendar ?? null);
       setLoadError(null);
     } catch (err) {
       setLoadError(saveErrorMessage(err));
@@ -82,6 +85,30 @@ export function CalendarSection() {
     },
     { rowKey: 'calendar-enabled' },
   );
+
+  // '' is "no default". The server checks the id is a writable calendar before saving it.
+  const defaultChoice = useOptimisticSetting(
+    defaultCal?.configuredId ?? '',
+    async (next: string) => {
+      await updateCalendarSource({ default_calendar_id: next || null });
+      await load();
+    },
+    { rowKey: 'calendar-default' },
+  );
+  const writableByAccount = useMemo(() => {
+    const groups = new Map<string, CalendarInfo[]>();
+    for (const c of calendars) {
+      if (c.readonly) continue;
+      const list = groups.get(c.account);
+      if (list) list.push(c);
+      else groups.set(c.account, [c]);
+    }
+    return groups;
+  }, [calendars]);
+  // A configured id that is gone (or read-only) still needs an option, or the select would
+  // silently show "None" while config.yaml says otherwise.
+  const unusableDefault =
+    defaultChoice.value && !calendars.some((c) => c.id === defaultChoice.value && !c.readonly) ? defaultChoice.value : null;
 
   const allIds = useMemo(() => calendars.map((c) => c.id), [calendars]);
   const serverHidden = useMemo(() => new Set(calendars.filter((c) => c.hidden).map((c) => c.id)), [calendars]);
@@ -201,6 +228,42 @@ export function CalendarSection() {
                   >
                     Refresh now
                   </SettingsButton>
+                }
+              />
+            )}
+            {status.available && (writableByAccount.size > 0 || !!defaultCal?.configuredId) && (
+              <SettingsRow
+                label="Default calendar"
+                htmlFor="calendar-default"
+                help={defaultCal?.warning ?? (defaultChoice.value
+                  ? 'New events go here unless you pick another: ones you add in Walnut and blocks your agents schedule.'
+                  : 'Pick where new events go. With none, agents have to name a calendar every time.')}
+                state={defaultCal?.warning ? 'warning' : undefined}
+                error={defaultChoice.error ?? undefined}
+                disabled={!on}
+                data-testid="calendar-default-row"
+                control={
+                  <select
+                    id="calendar-default"
+                    className="settings-select"
+                    value={defaultChoice.value}
+                    disabled={!on || defaultChoice.busy}
+                    onChange={(e) => defaultChoice.set(e.target.value)}
+                    data-testid="calendar-default-select"
+                  >
+                    <option value="">None</option>
+                    {unusableDefault && <option value={unusableDefault}>Unavailable calendar</option>}
+                    {[...writableByAccount.entries()].map(([account, list]) => (
+                      <optgroup key={account} label={account}>
+                        {list.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {calendarDisplayName(c.title).name}
+                            {c.hidden ? ' (hidden)' : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
                 }
               />
             )}

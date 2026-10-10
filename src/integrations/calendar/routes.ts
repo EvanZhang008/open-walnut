@@ -13,14 +13,18 @@
  *          and `selfStatus` ('pending' | 'accepted' | 'declined' | 'tentative' |
  *          'delegated'). Cancelled and declined events are MARKED, not dropped:
  *          the calendar shows what macOS holds and callers decide how to render.
- * GET    /sources                              → { sources, calendars }
- * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids?, visible_calendar_ids? }
+ * GET    /sources                              → { sources, calendars, defaultCalendar }
+ *          `defaultCalendar`: { id, configuredId, title?, account?, warning? }; `id` is null
+ *          when nothing usable is set (a configured id that is gone or read-only carries a warning).
+ * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids?, visible_calendar_ids?, default_calendar_id? }
  *          `visible_calendar_ids: null` CLEARS the allowlist (an omitted key changes nothing).
+ *          `default_calendar_id` must name a writable calendar (400 otherwise); null or '' clears it.
  * POST   /refresh                              → force re-fetch all cached windows
  * PATCH  /events/:id/visibility                → { hidden: boolean } → { id, hidden, changed, sources }
  *          Walnut-only hide/show by exact id; 400 bad body/id or uncached one-off id, 404 missing.
  * PATCH  /events/:id                           → { start, end, title? }
- * POST   /events                               → { calendarId, title, start, end, allDay? }
+ * POST   /events                               → { calendarId?, title, start, end, allDay? }
+ *          No calendarId (or `calendar_id`) creates on the default calendar; 400 when none is usable.
  * DELETE /events/:id
  *
  * Date contract: tz-less local ISO (same as task dates).
@@ -30,6 +34,7 @@ import type { PluginRouteReply, PluginRouteRequest } from '../../core/plugins/pl
 import { calendarErrorCode } from './api.js'
 import { ORIGIN_HEADER, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import type { CalendarService } from './service.js'
+import type { CalendarInfo } from './types.js'
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const LOCAL_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}))?$/
@@ -134,15 +139,23 @@ export function registerCalendarRoutes(
     try {
       const service = resolve()
       const status = service.status()
-      let calendars: unknown[] = []
+      let calendars: CalendarInfo[] = []
+      let listed = false
       if (status.available && status.enabled) {
         try {
           calendars = await service.listCalendars()
+          listed = true
         } catch {
           calendars = [] // status() will carry the failure reason on next call
         }
       }
-      return { json: { sources: [service.status()], calendars } }
+      // Checked against the list just read: no second helper call. With no list at all (the
+      // source is down) there is nothing to check against, and saying "your default calendar
+      // is gone" would be false: the configured id is reported, unresolved, with no warning.
+      const defaultCalendar = listed
+        ? service.describeDefault(calendars)
+        : { id: null, configuredId: service.configuredDefaultId() }
+      return { json: { sources: [service.status()], calendars, defaultCalendar } }
     } catch (err) {
       return errorReply(walnut, err)
     }
@@ -151,11 +164,13 @@ export function registerCalendarRoutes(
   walnut.http.route('put', '/sources/eventkit', async (request) => {
     const body = await readBody(request)
     if (!body) return { status: 400, json: { error: 'body must be JSON' } }
-    const { enabled, hidden_calendar_ids, visible_calendar_ids } = body as {
+    const { enabled, hidden_calendar_ids, visible_calendar_ids, default_calendar_id } = body as {
       enabled?: boolean
       hidden_calendar_ids?: string[]
       /** Allowlist: when set, ONLY these calendars show. null clears it. */
       visible_calendar_ids?: string[] | null
+      /** Where a create with no calendar id goes. null or '' clears it. */
+      default_calendar_id?: unknown
     }
     const badIdArray = (v: unknown) => !Array.isArray(v) || v.some((x) => typeof x !== 'string')
     if (hidden_calendar_ids !== undefined && badIdArray(hidden_calendar_ids)) {
@@ -164,6 +179,9 @@ export function registerCalendarRoutes(
     if (visible_calendar_ids !== undefined && visible_calendar_ids !== null && badIdArray(visible_calendar_ids)) {
       return { status: 400, json: { error: 'visible_calendar_ids must be a string array or null' } }
     }
+    if (default_calendar_id !== undefined && default_calendar_id !== null && typeof default_calendar_id !== 'string') {
+      return { status: 400, json: { error: 'default_calendar_id must be a calendar id string, or null to clear it', code: 'usage' } }
+    }
     // Resolved BEFORE the write: a torn-down plugin must answer 503 without having changed
     // the user's config first.
     let service: CalendarService
@@ -171,6 +189,22 @@ export function registerCalendarRoutes(
       service = resolve()
     } catch (err) {
       return errorReply(walnut, err)
+    }
+    const nextDefault = typeof default_calendar_id === 'string' ? default_calendar_id.trim() : ''
+    if (nextDefault) {
+      // Checked against macOS BEFORE anything is written, so a typo or a read-only calendar
+      // never becomes the default (and nothing else in this body is half-applied).
+      let calendars: CalendarInfo[]
+      try {
+        calendars = await service.listCalendars()
+      } catch (err) {
+        return errorReply(walnut, err)
+      }
+      const target = calendars.find((c) => c.id === nextDefault)
+      if (!target) return { status: 400, json: { error: `default_calendar_id ${nextDefault} is not a calendar on this Mac`, code: 'usage' } }
+      if (target.readonly) {
+        return { status: 400, json: { error: `"${target.title}" (${target.account}) is read-only and cannot be the default calendar`, code: 'usage' } }
+      }
     }
     // Patch only what was sent: the host merges into `plugins.calendar` under its config
     // write lock, so there is no read-modify-write race with any other writer.
@@ -182,6 +216,9 @@ export function registerCalendarRoutes(
     // key, and an absent key means "fall back to the legacy top-level allowlist", so every
     // hide/unhide (both web callers send null) silently kept the old allowlist alive.
     if (visible_calendar_ids !== undefined) patch.visible_calendar_ids = visible_calendar_ids
+    // Cleared as '' (not null, not undefined): the key stays present so a legacy top-level
+    // value cannot come back, and it keeps the manifest's string type.
+    if (default_calendar_id !== undefined) patch.default_calendar_id = nextDefault
     if (Object.keys(patch).length > 0) await walnut.config.patch(patch)
     await service.reloadConfig()
     service.refreshAll().catch(() => {})
@@ -242,17 +279,23 @@ export function registerCalendarRoutes(
   walnut.http.route('post', '/events', async (request) => {
     const body = await readBody(request)
     if (!body) return { status: 400, json: { error: 'body must be JSON' } }
-    const { calendarId, title, start, end, allDay } = body as {
-      calendarId?: string
+    const { title, start, end, allDay } = body as {
       title?: string
       start?: string
       end?: string
       allDay?: boolean
     }
-    if (!calendarId || !title?.trim() || !start || !end || !LOCAL_ISO_RE.test(start) || !LOCAL_ISO_RE.test(end)) {
-      return { status: 400, json: { error: 'calendarId, title, start, end are required (tz-less local ISO dates)' } }
+    // `calendar_id` too: the tool spells it that way, and an agent that sent it here got a 400,
+    // then retried with whichever calendar id it had seen most (the work calendar).
+    const rawCalendarId = body.calendarId ?? body.calendar_id
+    if (rawCalendarId !== undefined && rawCalendarId !== null && typeof rawCalendarId !== 'string') {
+      return { status: 400, json: { error: 'calendarId must be a string', code: 'usage' } }
+    }
+    if (!title?.trim() || !start || !end || !LOCAL_ISO_RE.test(start) || !LOCAL_ISO_RE.test(end)) {
+      return { status: 400, json: { error: 'title, start, end are required (tz-less local ISO dates); calendarId is optional and defaults to the default calendar' } }
     }
     try {
+      const calendarId = typeof rawCalendarId === 'string' && rawCalendarId.trim() ? rawCalendarId : undefined
       const event = await resolve().createEvent({ calendarId, title: title.trim(), start, end, allDay })
       return { status: 201, json: { event } }
     } catch (err) {

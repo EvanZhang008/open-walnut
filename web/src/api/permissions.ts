@@ -68,7 +68,9 @@ export async function openPermissionSettings(id: PermissionId) {
 }
 
 /** Triggers the one-time system prompt (calendar only). Resolves after the
- *  user answers, with the resulting state. */
+ *  user answers, with the resulting state. The server waits up to 30s per
+ *  macOS dialog, and asks twice when an older Walnut.app hands calendar
+ *  changes to the helper, so the default 15s timeout would give up first. */
 export async function requestPermission(id: PermissionId) {
-  return apiPost<{ state: 'granted' | 'denied' | 'unknown' }>(`/api/permissions/${id}/request`);
+  return apiPost<{ state: 'granted' | 'denied' | 'unknown' }>(`/api/permissions/${id}/request`, undefined, { timeoutMs: 90_000 });
 }

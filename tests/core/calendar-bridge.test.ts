@@ -107,6 +107,8 @@ let gateOpen = true;
 /** Whether a helper binary was ever built here (a fresh install has none). */
 let helperBuilt = true;
 let ensureHelperCalls = 0;
+/** The helper compile failed (no Xcode command line tools): ensureHelper answers null. */
+let buildFailed = false;
 let olderGenerations: string[] = [];
 const findCalls: string[] = [];
 
@@ -121,11 +123,11 @@ vi.mock('../../src/core/helper-build.js', () => ({
   nativeHelpersAllowed: () => gateOpen,
   ensureHelper: async () => {
     ensureHelperCalls += 1;
-    return gateOpen ? HELPER : null;
+    return gateOpen && !buildFailed ? HELPER : null;
   },
   existingHelperBinary: () => (gateOpen && helperBuilt ? HELPER : null),
   olderHelperGenerations: () => (gateOpen ? olderGenerations : []),
-  helperFailure: () => (gateOpen ? null : 'ephemeral'),
+  helperFailure: () => (!gateOpen ? 'ephemeral' : buildFailed ? 'no_compiler' : null),
 }));
 
 const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -147,6 +149,7 @@ beforeEach(() => {
   gateOpen = true;
   helperBuilt = true;
   ensureHelperCalls = 0;
+  buildFailed = false;
   olderGenerations = [];
   findCalls.length = 0;
   return () => {
@@ -179,9 +182,12 @@ describe('calendar route', () => {
     await source.listEvents('2026-09-01', '2026-09-30');
     expect(calls).toEqual([[APP_EXE, '--calendar-bridge', 'list', '2026-09-01', '2026-09-30']]);
     expect(await ek.calendarGrantApp()).toBe(APP);
-    // The Permission Doctor reads the APP's grant, not a helper's.
+    // The Permission Doctor reads the APP's grant, not a helper's, and then checks where
+    // writes would go using only probes that cannot prompt.
+    calls = [];
     expect(await ek.calendarAuthStatus()).toBe('granted');
-    expect(calls.at(-1)).toEqual([APP_EXE, '--calendar-bridge', 'status']);
+    expect(calls[0]).toEqual([APP_EXE, '--calendar-bridge', 'status']);
+    expect(calls.map((c) => c.at(-1))).toEqual(['status', 'capabilities', 'capabilities']);
   });
 
   it('uses the helper when there is no Walnut.app that knows the bridge', async () => {
@@ -239,11 +245,12 @@ describe('calendar route', () => {
     await source.listCalendars();
     expect(ek.calendarHelperFallback()).not.toBeNull();
 
-    // The user presses Request access and allows it.
-    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, list: { ok: [] } };
+    // The user presses Request access and allows it. An app that does its own writes is the
+    // only program asked: the probe after it cannot prompt.
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, list: { ok: [] }, capabilities: SAFE };
     calls = [];
     expect(await ek.requestCalendarAccess()).toBe('granted');
-    expect(calls).toEqual([[APP_EXE, '--calendar-bridge', 'calendars']]);
+    expect(calls).toEqual([[APP_EXE, '--calendar-bridge', 'calendars'], [APP_EXE, '--calendar-bridge', 'capabilities']]);
     expect(ek.calendarHelperFallback()).toBeNull();
 
     calls = [];
@@ -337,6 +344,7 @@ describe('write safety', () => {
   it('an old Walnut.app keeps the reads, while every write goes to the current helper', async () => {
     answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, list: { ok: [] }, capabilities: UNKNOWN_SUB };
     answers[HELPER] = {
+      status: { ok: { state: 'granted' } },
       capabilities: SAFE, get: { ok: OWN_BLOCK }, update: { ok: OWN_BLOCK },
       create: { ok: OWN_BLOCK }, delete: { ok: { ok: true } },
     };
@@ -473,17 +481,24 @@ describe('write safety', () => {
   it('a capable Walnut.app that is denied hands the write to the current helper, never an older one', async () => {
     olderGenerations = [OLD];
     answers[APP_EXE] = { status: { ok: { state: 'denied' } }, capabilities: SAFE, update: { denied: true }, calendars: { denied: true } };
-    answers[HELPER] = { capabilities: SAFE, update: { ok: OWN_BLOCK }, calendars: { ok: CALS } };
+    answers[HELPER] = { status: { ok: { state: 'granted' } }, capabilities: SAFE, update: { ok: OWN_BLOCK }, calendars: { ok: CALS } };
     answers[OLD] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, update: { ok: RAW } };
     const ek = await load();
 
     const updated = await ek.createEventKitSource().updateEvent('e1', SPAN);
 
     expect(updated.walnutCreated).toBe(true);
+    // Its `status` already says denied, so the write is never sent to it at all.
+    expect(writesSent()).toEqual([[HELPER, 'update']]);
+
+    // And when the app's status said yes but the write itself was refused, the helper still answers.
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, capabilities: SAFE, update: { denied: true }, calendars: { ok: CALS } };
+    calls = [];
+    await ek.createEventKitSource().updateEvent('e1', SPAN);
     expect(writesSent()).toEqual([[APP_EXE, 'update'], [HELPER, 'update']]);
   });
 
-  it('on the helper route, a new generation never asked does not prompt from a read, and still takes the writes', async () => {
+  it('on the helper route, a new generation never asked prompts neither from a read nor from a write', async () => {
     appInstalled = false;
     olderGenerations = [OLD];
     answers[HELPER] = { status: { ok: { state: 'not-determined' } }, capabilities: SAFE, update: { ok: OWN_BLOCK } };
@@ -495,6 +510,12 @@ describe('write safety', () => {
     // `status` is the only thing the new generation was asked: it cannot prompt.
     expect(calls).toEqual([[HELPER, 'status'], [OLD, 'status'], [OLD, 'calendars'], [OLD, 'calendars']]);
 
+    // A write to it would put the Calendars request up and wait 30s on it: refused at once instead.
+    await expect(source.updateEvent('e1', SPAN)).rejects.toMatchObject({ code: 'permission-denied', message: /Request access/ });
+    expect(writesSent()).toEqual([]);
+
+    // Once it is granted (Request access), the same write goes through to it.
+    answers[HELPER]!.status = { ok: { state: 'granted' } };
     await source.updateEvent('e1', SPAN);
     expect(writesSent()).toEqual([[HELPER, 'update']]);
   });
@@ -556,6 +577,145 @@ describe('write safety', () => {
     expect(old).not.toHaveProperty('writeSafetyVersion');
     expect(old).not.toHaveProperty('walnutCreated');
     expect(calendarEventNeedsApproval(old!)).toBe(true);
+  });
+});
+
+/**
+ * A write never asks macOS for Calendars. 2026-10-10: Walnut.app predated the write-safety
+ * protocol, so every write went to the current helper, which nobody had ever allowed; EventKit
+ * put the request up from inside the write and the server killed it at 30s, so each agent-made
+ * block failed as a "helper timed out" while reads (an older granted helper) looked fine.
+ */
+describe('writes and the Calendars grant', () => {
+  /** Reads stay on the old granted helper; writes have only the never-asked current helper. */
+  function migrationMoment(helperState: string | null) {
+    olderGenerations = [OLD];
+    answers[APP_EXE] = { status: { ok: { state: 'not-determined' } }, capabilities: UNKNOWN_SUB };
+    answers[OLD] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, list: { ok: [] } };
+    answers[HELPER] = {
+      ...(helperState ? { status: { ok: { state: helperState } } } : {}),
+      capabilities: SAFE, get: { ok: OWN_BLOCK }, update: { ok: OWN_BLOCK }, create: { ok: OWN_BLOCK }, delete: { ok: { ok: true } },
+    };
+  }
+
+  it('fails every write at once, before anything that could prompt, when the write route was never asked', async () => {
+    helperBuilt = false; // the current helper does not exist yet, so the OLD one serves reads
+    migrationMoment('not-determined');
+    const ek = await load();
+    const source = ek.createEventKitSource();
+    await source.listEvents('2026-10-01', '2026-10-31');
+    expect(ek.calendarHelperFallback()?.path).toBe(OLD);
+
+    for (const attempt of [
+      () => source.createEvent({ calendarId: 'c1', title: 'Block', ...SPAN }),
+      () => source.updateEvent('e1', SPAN),
+      () => source.updateEvent('e1', SPAN, { humanConfirm: true }),
+      () => source.deleteEvent('e1'),
+      () => source.getEvent!('e1'),
+    ]) {
+      const err = await attempt().then(() => null, (e: Error) => e);
+      expect(err).toMatchObject({ code: 'permission-denied' });
+      expect(err!.message).toContain('Nothing was changed');
+      expect(err!.message).toContain('Request access in Settings → macOS Access → Calendar');
+      // Short enough that the quick-create form shows the fix whole.
+      expect(err!.message.length).toBeLessThan(200);
+    }
+    // No write, no `get`, and no `calendars` to the never-asked helper: only probes.
+    expect(writesSent()).toEqual([]);
+    const helperSubs = new Set(calls.filter((c) => c[0] === HELPER).map((c) => c[1]));
+    expect([...helperSubs].sort()).toEqual(['capabilities', 'status']);
+    // The older generation that holds the grant is never written through either.
+    expect(calls.filter((c) => c[0] === OLD).map((c) => c[1])).not.toContain('create');
+  });
+
+  it('names the fix: Request access when never asked, System Settings when refused, and says nothing changed', async () => {
+    migrationMoment('not-determined');
+    let ek = await load();
+    const asked = await ek.createEventKitSource().createEvent({ calendarId: 'c1', title: 'Block', ...SPAN }).catch((e: Error) => e);
+    expect(asked.message).toContain('Request access');
+    expect(asked.message).toContain('Nothing was changed');
+    expect(asked.message).toContain('walnut-calendar helper');
+
+    migrationMoment('denied');
+    ek = await load();
+    const refused = await ek.createEventKitSource().createEvent({ calendarId: 'c1', title: 'Block', ...SPAN }).catch((e: Error) => e);
+    expect(refused).toMatchObject({ code: 'permission-denied' });
+    expect(refused.message).toContain('System Settings → Privacy & Security → Calendars');
+
+    // A `status` that cannot be read is not a grant: no write, and not called a denial either.
+    migrationMoment(null);
+    ek = await load();
+    const unknown = await ek.createEventKitSource().createEvent({ calendarId: 'c1', title: 'Block', ...SPAN }).catch((e: Error) => e);
+    expect(unknown).toMatchObject({ code: 'fetch-error' });
+    expect(writesSent()).toEqual([]);
+  });
+
+  it('Request access also asks the write route when an older Walnut.app hands writes to the helper', async () => {
+    migrationMoment('not-determined');
+    const ek = await load();
+    // The Doctor reports the gap, so the Request access button is there to press.
+    expect(await ek.calendarAccessReport()).toEqual({ state: 'not-determined', read: 'not-determined', writeGap: 'not-determined' });
+
+    // The user allows Walnut, then allows the helper in the second dialog.
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, list: { ok: [] }, capabilities: UNKNOWN_SUB };
+    answers[HELPER]!.calendars = { ok: CALS };
+    calls = [];
+    expect(await ek.requestCalendarAccess()).toBe('granted');
+    const prompting = calls.filter((c) => (c[1] === '--calendar-bridge' ? c[2] : c[1]) === 'calendars');
+    expect(prompting).toEqual([[APP_EXE, '--calendar-bridge', 'calendars'], [HELPER, 'calendars']]);
+
+    // The helper now answers granted, and the next write goes straight to it.
+    answers[HELPER]!.status = { ok: { state: 'granted' } };
+    calls = [];
+    await ek.createEventKitSource().createEvent({ calendarId: 'c1', title: 'Block', ...SPAN });
+    expect(writesSent()).toEqual([[HELPER, 'create']]);
+    expect(await ek.calendarAccessReport()).toEqual({ state: 'granted', read: 'granted', writeGap: null });
+    expect(await ek.calendarAuthStatus()).toBe('granted');
+  });
+
+  it('Request access asks the helper only when it needs asking, and reports a refusal of it', async () => {
+    migrationMoment('granted');
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, capabilities: UNKNOWN_SUB };
+    let ek = await load();
+    calls = [];
+    expect(await ek.requestCalendarAccess()).toBe('granted');
+    expect(calls).not.toContainEqual([HELPER, 'calendars']);
+
+    migrationMoment('denied');
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, capabilities: UNKNOWN_SUB };
+    ek = await load();
+    expect(await ek.requestCalendarAccess()).toBe('denied');
+    expect(calls).not.toContainEqual([HELPER, 'calendars']);
+  });
+
+  it('the Doctor poll reports a missing write helper as not asked, without compiling one', async () => {
+    helperBuilt = false;
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, capabilities: UNKNOWN_SUB };
+    const ek = await load();
+
+    expect(await ek.calendarAccessReport()).toEqual({ state: 'not-determined', read: 'granted', writeGap: 'not-determined' });
+    expect(await ek.calendarAuthStatus()).toBe('not-determined');
+    expect(ensureHelperCalls).toBe(0);
+  });
+
+  it('a write helper that cannot be built is no grant gap, so Request access is not offered forever', async () => {
+    helperBuilt = false;
+    buildFailed = true;
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, capabilities: UNKNOWN_SUB };
+    const ek = await load();
+
+    expect(await ek.calendarAccessReport()).toEqual({ state: 'granted', read: 'granted', writeGap: null });
+    // The write itself still refuses, honestly: nothing proves the protocol.
+    await expect(ek.createEventKitSource().createEvent({ calendarId: 'c1', title: 'Block', ...SPAN }))
+      .rejects.toMatchObject({ code: 'human-approval-required' });
+  });
+
+  it('an app that writes for itself adds no write-route gap', async () => {
+    answers[APP_EXE] = { status: { ok: { state: 'granted' } }, calendars: { ok: CALS }, capabilities: SAFE };
+    const ek = await load();
+
+    expect(await ek.calendarAccessReport()).toEqual({ state: 'granted', read: 'granted', writeGap: null });
+    expect(calls.some((c) => c[0] === HELPER)).toBe(false);
   });
 });
 

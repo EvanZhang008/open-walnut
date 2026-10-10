@@ -183,6 +183,7 @@ function EventCreateForm({
   const [title, setTitle] = useState('');
   const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null);
   const [calendarId, setCalendarId] = useState('');
+  const [defaultWarning, setDefaultWarning] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -191,9 +192,20 @@ function EventCreateForm({
     listCalendarSources()
       .then((res) => {
         if (!alive) return;
-        const writable = res.calendars.filter((c) => !c.readonly && !c.hidden);
+        const defaultId = res.defaultCalendar?.id ?? null;
+        // The default stays pickable even when hidden in Walnut: the user chose it on purpose.
+        const writable = res.calendars.filter((c) => !c.readonly && (!c.hidden || c.id === defaultId));
         setCalendars(writable);
-        if (writable.length) setCalendarId(writable[0].id);
+        // The configured default, not whichever calendar macOS happens to list first (that
+        // order is EventKit's, and on a Mac with a work account it can be the work calendar).
+        // A default that is set but unusable preselects nothing: the server refuses to guess
+        // a replacement, so the form must not guess one either.
+        if (res.defaultCalendar?.configuredId && !defaultId) {
+          setDefaultWarning(res.defaultCalendar.warning ?? 'The default calendar cannot be used. Pick a calendar.');
+          return;
+        }
+        const preselect = writable.find((c) => c.id === defaultId) ?? writable[0];
+        if (preselect) setCalendarId(preselect.id);
       })
       .catch(() => alive && setCalendars([]));
     return () => {
@@ -252,7 +264,8 @@ function EventCreateForm({
       await onCreateEvent({ calendarId, title: title.trim(), start, end, allDay });
       onClose();
     } catch (err) {
-      setError(String((err as Error).message ?? err).slice(0, 200));
+      // 400, not 200: a refused write names its fix at the end of a ~170-character message.
+      setError(String((err as Error).message ?? err).slice(0, 400));
       setSubmitting(false);
     }
   };
@@ -287,15 +300,25 @@ function EventCreateForm({
         )}
       </div>
       {misordered && <div className="cal-event-form-error">End must be after start.</div>}
-      <select value={calendarId} disabled={!calendars?.length} onChange={(e) => setCalendarId(e.target.value)}>
+      <select
+        value={calendarId}
+        disabled={!calendars?.length}
+        onChange={(e) => setCalendarId(e.target.value)}
+        aria-label="Calendar"
+        data-testid="cal-event-form-calendar"
+      >
         {calendars === null && <option>Loading calendars…</option>}
         {calendars?.length === 0 && <option>No writable calendar</option>}
+        {!!calendars?.length && !calendarId && <option value="">Pick a calendar</option>}
         {calendars?.map((c) => (
           <option key={c.id} value={c.id}>
-            {c.title} ({c.account})
+            {c.title} ({c.account}){c.default ? ' · default' : ''}
           </option>
         ))}
       </select>
+      {defaultWarning && !calendarId && (
+        <div className="cal-event-form-error" data-testid="cal-event-form-default-warning">{defaultWarning}</div>
+      )}
       {error && <div className="cal-event-form-error">{error}</div>}
       <div className="cal-event-form-footer">
         <button className="cal-event-form-create" disabled={!title.trim() || !calendarId || submitting || invalid} onClick={submit}>

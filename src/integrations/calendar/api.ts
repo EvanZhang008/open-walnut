@@ -13,7 +13,7 @@ export type * from './types.js'
 
 import type {
   CalendarEvent,
-  CalendarEventCreate,
+  CalendarEventCreateInput,
   CalendarEventPatch,
   CalendarInfo,
   CalendarSourceStatus,
@@ -24,7 +24,8 @@ export interface CalendarServiceApi {
   status(): CalendarSourceStatus
   listCalendars(): Promise<CalendarInfo[]>
   getEvents(from: string, to: string, opts?: { force?: boolean }): Promise<CalendarEvent[]>
-  createEvent(input: CalendarEventCreate): Promise<CalendarEvent>
+  /** No `calendarId` creates on the user's default calendar, and fails when none is usable. */
+  createEvent(input: CalendarEventCreateInput): Promise<CalendarEvent>
   updateEvent(id: string, patch: CalendarEventPatch): Promise<CalendarEvent>
   deleteEvent(id: string): Promise<void>
   refreshAll(): Promise<void>

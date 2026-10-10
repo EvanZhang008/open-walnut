@@ -25,7 +25,7 @@ Inside a Walnut session, prefer the ops (they work from remote hosts too):
 
 ```bash
 walnut tools call calendar_query '{"from":"2026-08-03","to":"2026-08-09"}'
-walnut tools call calendar_event_create '{"calendar_id":"<id>","title":"Dentist","start":"2026-08-05T15:00:00","end":"2026-08-05T16:00:00"}'
+walnut tools call calendar_event_create '{"title":"Dentist","start":"2026-08-05T15:00:00","end":"2026-08-05T16:00:00"}'
 walnut tools call calendar_event_update '{"id":"<id>","start":"2026-08-06T15:00:00","end":"2026-08-06T16:00:00"}'
 walnut tools call calendar_event_delete '{"id":"<id>"}'
 walnut tools call calendar_event_visibility '{"id":"<id>","hidden":true}'
@@ -35,6 +35,24 @@ The REST endpoints below do the same on the Mac. **Never** write calendars by
 running Walnut's calendar helper binary, AppleScript, or `osascript` against
 Calendar.app: those bypass Walnut, so open calendar views do not update until
 the next background poll (up to 15 minutes).
+
+## Which calendar a new event goes to (IMPORTANT)
+
+Leave the calendar out. A create with no `calendar_id` (tool) or `calendarId`
+(REST) goes to the user's **default calendar**, chosen in Settings → Calendar
+Accounts → Default calendar. That is the right place for focus blocks,
+reminders and every other personal event.
+
+- Pass a calendar only when the user names one ("put it on the Family
+  calendar"). Never pick a work or Exchange calendar on your own, not even
+  when most of the events you just read live there.
+- `calendar_query` with `list_calendars:true` marks the default with
+  `default: true` and adds `defaultCalendar` (`{ id, title, account }`).
+- With no usable default (none set, or the chosen calendar was removed or is
+  read-only) the create fails with a message that says so. Ask the user which
+  calendar to use, or to set a default; do not guess.
+- Moving or renaming an event keeps it on its own calendar. Nothing re-homes an
+  existing event to the default.
 
 ## Date format contract (IMPORTANT)
 
@@ -59,10 +77,11 @@ curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-03&to=2026-08-09
 # it bypasses the read cache and re-reads macOS.
 curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-27&to=2026-08-27&fresh=1'
 
-# List the calendars themselves (to pick a create target)
+# List the calendars themselves (and which one is the default)
 curl -s 'http://localhost:3456/api/calendar/sources'
 # → { "sources": [...], "calendars": [ { "id", "title", "account", "color",
-#      "readonly", "hidden" } ] }
+#      "readonly", "hidden", "default?" } ],
+#     "defaultCalendar": { "id", "configuredId", "title?", "account?", "warning?" } }
 ```
 
 - If `sources[0].available` is `false`, read `reason`/`message` — e.g.
@@ -118,11 +137,11 @@ confirmation is Mac-only, not relayed through the cloud companion; hide works
 through both.
 
 ```bash
-# Create (end defaults are NOT applied server-side — always send end)
+# Create on the default calendar (end defaults are NOT applied server-side: always send end).
+# Add "calendarId":"<id from /sources>" only when the user named a calendar.
 curl -s -X POST http://localhost:3456/api/calendar/events \
   -H 'Content-Type: application/json' \
-  -d '{"calendarId":"<id from /sources>","title":"Dentist",
-       "start":"2026-08-05T15:00:00","end":"2026-08-05T16:00:00"}'
+  -d '{"title":"Dentist","start":"2026-08-05T15:00:00","end":"2026-08-05T16:00:00"}'
 # All-day: use date-only start/end (end inclusive) and "allDay": true.
 
 # Move / retime / rename a private Walnut-created block (start AND end required)
@@ -161,8 +180,8 @@ curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-03&to=2026-08-09
 
 | HTTP | code | meaning |
 |---|---|---|
-| 400 | `usage` | bad params / date format |
-| 403 | `permission-denied` | macOS Calendar access not granted (Full Access) |
+| 400 | `usage` | bad params / date format / no usable default calendar for a create without one |
+| 403 | `permission-denied` | macOS Calendar access not granted (Full Access). A write whose program was never allowed fails at once and says to press Request access in Settings → macOS Access → Calendar; tell the user that, do not retry |
 | 403 | `human-approval-required` | protected update/delete; use Hide event instead |
 | 403 | `approval-canceled` | the person canceled the Mac confirmation; nothing changed |
 | 404 | `not-found` | event id doesn't resolve |
