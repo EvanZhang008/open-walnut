@@ -55,6 +55,7 @@ import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
+import { createHostResume } from './host-resume-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
@@ -196,7 +197,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -243,6 +244,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
+    ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
@@ -428,6 +430,14 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const book = createLeader({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', log: () => {}, takeoverMs: 1, bootAt: 0 })
       const r = book.backupClaim('w', 2)
       if (r.ok || r.code !== 'unknown_walnut') throw new Error('leader book did not build')
+    }
+    // Host resume smoke: a reconstructed copy must turn a fresh spawn's command
+    // into a resume (no --session-id beside --resume, the bypass flag dropped).
+    const createResume = reconstructed['__CREATE_HOST_RESUME__'] as typeof createHostResume | undefined
+    if (createResume) {
+      const hr = createResume({ fs, path, dir: '/nonexistent', now: () => 0, log: () => {}, modeCli: { plan: 'plan' } })
+      const a = hr.resumeArgs(['claude', '--session-id', 's1', '--dangerously-skip-permissions', '--permission-mode', 'default'], 's1', 'plan')
+      if (a.join(' ') !== 'claude --allow-dangerously-skip-permissions --permission-mode plan --resume s1') throw new Error('host resume built a wrong command')
     }
     // Live settings smoke: a reconstructed copy must refuse a value the CLI would ACK and ignore.
     const createLive = reconstructed['__CREATE_LIVE_SETTINGS__'] as typeof createLiveSettings | undefined
@@ -1655,6 +1665,10 @@ function readStartTimeAsync(pid) {
 function broadcastSessionState(sid, state, extra) {
   const session = sessions.get(sid);
   if (session) updateCronMetadata(sid, session);
+  // Its last mode, for a host resume after this daemon is gone (host-resume-core.ts).
+  if (session && state === 'dead' && session.args && session.args.length > 0 && session.cwd) {
+    hostResume.remember(sid, { args: session.args, cwd: session.cwd, mode: session.mode, home: session.spawnInfo && session.spawnInfo.home, task: session.spawnInfo && session.spawnInfo.task });
+  }
   const payload = Object.assign({ sid, state }, extra || {});
   for (const client of wsClients) {
     try { client.send(JSON.stringify(Object.assign({ ev: 'session_state' }, payload))); } catch {}
@@ -3396,6 +3410,66 @@ async function waitForHandoverReceipt(ws) {
 // record was lost to a daemon restart). Gated on the session's jsonl existing
 // in STREAMS_DIR — proof it genuinely lived on this host. Keep in sync with
 // daemon-standalone.ts.
+// A session's last spawn: the in-memory record while it holds the command (this
+// daemon spawned or adopted it), else its resume record. The mode is the one
+// that record has now: setMode keeps both current. Twin of daemon-standalone.ts.
+function spawnRecordOf(sid) {
+  var s = sessions.get(sid);
+  if (s && s.args && s.args.length > 0 && s.cwd) return { args: s.args, cwd: s.cwd, mode: s.mode || 'default' };
+  var rec = hostResume.recall(sid);
+  return rec ? { args: rec.args, cwd: rec.cwd, mode: rec.mode || 'default' } : null;
+}
+
+// ── Host resume for a trigger fire (trigger-host-resume-v1) ──
+// A fire no server claimed whose task's session is stopped on this host: start
+// that session again with the fire as its first message, with the command it
+// last ran (resumeArgs). Proof first: the spawn journal names this Walnut as the
+// one that started it, and its transcript is here. At most two start at once,
+// one per session every 10 minutes, none while 20 sessions here are mid-turn.
+// Keep in sync with daemon-standalone.ts.
+var HOST_RESUME_MAX_STARTING = 2;
+var HOST_RESUME_COOLDOWN_MS = 10 * 60000;
+var HOST_RESUME_MAX_BUSY = 20;
+var hostResumesStarting = 0;
+var hostResumedAt = new Map();
+
+async function resumeForTrigger(home, sid, text, messageId, taskId) {
+  if (!isJournalSid(sid)) return { ok: false, reason: 'not a session id' };
+  if (journaledHome(sid) !== home) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' };
+  if (!fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return { ok: false, reason: 'no transcript of that session on this host' };
+  var now = Date.now();
+  for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k);
+  if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' };
+  if (hostResumesStarting >= HOST_RESUME_MAX_STARTING) return { ok: false, reason: 'other sessions are starting on this host' };
+  var busy = 0;
+  for (const s of sessions.values()) if (s.state === 'running' && s.foldState && s.foldState.turnActive) busy++;
+  if (busy >= HOST_RESUME_MAX_BUSY) return { ok: false, reason: 'this host is busy' };
+  var spawn = spawnRecordOf(sid);
+  if (!spawn) return { ok: false, reason: 'no spawn record of that session on this host' };
+  if (!fs.existsSync(spawn.cwd)) return { ok: false, reason: 'its folder is gone from this host' };
+  var args = hostResume.resumeArgs(spawn.args, sid, spawn.mode);
+  hostResumedAt.set(sid, now);
+  hostResumesStarting++;
+  var stopVersion = sessionStopVersions.get(sid) || 0;
+  var current = function () {
+    return (sessionStopVersions.get(sid) || 0) === stopVersion
+      && (!cronRuntime || cronRuntime.deliveryAllowed(sid, undefined));
+  };
+  try {
+    await sessionStartGate.run(sid, function () {
+      if (!current()) throw new Error('a stop request superseded this start');
+      return startSessionProcess({ cmd: 'start', sid: sid, args: args, cwd: spawn.cwd, message: text, resume: true, mode: spawn.mode, origin: { home: home, task: taskId } }, undefined, current);
+    });
+    logMsg('info', 'trigger: resumed a stopped session on this host', { sid: sid, taskId: taskId, messageId: messageId, mode: spawn.mode });
+    return { ok: true };
+  } catch (err) {
+    logMsg('warn', 'trigger: host resume failed', { sid: sid, taskId: taskId, messageId: messageId, error: err && err.message });
+    return { ok: false, reason: String(err && err.message) };
+  } finally {
+    hostResumesStarting--;
+  }
+}
+
 function cmdBridgeResume(ws, id, cmd) {
   var sid = cmd.sid, message = cmd.message, cwdHint = cmd.cwd, model = cmd.model;
   if (!sid || !message) {
@@ -3413,28 +3487,18 @@ function cmdBridgeResume(ws, id, cmd) {
     return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
   }
 
-  var cwd = (session && session.cwd && session.cwd !== '') ? session.cwd : cwdHint;
+  var spawn = spawnRecordOf(sid);
+  var cwd = spawn ? spawn.cwd : cwdHint;
   if (!cwd) {
     return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)');
   }
 
+  var mode = spawn ? spawn.mode : ((session && session.mode) || 'default');
   var args;
-  if (session && session.args && session.args.length > 0) {
-    args = session.args.slice();
-    // Bypass CAPABILITY only. The bare --dangerously-skip-permissions also
-    // SELECTS bypass and outranks --permission-mode, so injecting it here would
-    // silently resume a plan/accept/default session in full-trust bypass.
-    if (!args.includes('--allow-dangerously-skip-permissions')) {
-      args.splice(1, 0, '--allow-dangerously-skip-permissions');
-    }
-    var bare = args.indexOf('--dangerously-skip-permissions');
-    if (bare >= 0) { args.splice(bare, 1); }
-    var ri = args.indexOf('--resume');
-    if (ri >= 0 && ri + 1 < args.length) {
-      args[ri + 1] = sid;
-    } else {
-      args.push('--resume', sid);
-    }
+  if (spawn) {
+    // The last spawn command as a resume of this sid: no --session-id (the CLI
+    // refuses it beside --resume), the current mode, the bypass capability only.
+    args = hostResume.resumeArgs(spawn.args, sid, mode);
   } else {
     args = [
       'claude', '-p',
@@ -3443,14 +3507,14 @@ function cmdBridgeResume(ws, id, cmd) {
       '--include-partial-messages',
       '--debug',
       '--allow-dangerously-skip-permissions',
-      '--permission-mode', (session && session.mode && MODE_CLI[session.mode]) || 'default',
+      '--permission-mode', MODE_CLI[mode] || 'default',
     ];
     if (model) { args.push('--model', model); }
     args.push('--resume', sid, '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
   }
 
   logMsg('info', 'bridgeResume: respawning dead session', {
-    sid: sid, cwd: cwd, recordLost: !session || !session.args || session.args.length === 0,
+    sid: sid, cwd: cwd, recordLost: !spawn,
   });
   // cmdStart is async (FIFO write continuation) — return the promise so the
   // dispatcher's rejection handler owns any throw.
@@ -3461,7 +3525,7 @@ function cmdBridgeResume(ws, id, cmd) {
     cwd: cwd,
     message: message,
     resume: true,
-    mode: (session && session.mode) || 'default',
+    mode: mode,
     stopFence: cmd.stopFence,
     autoRetry: cmd.autoRetry === true,
   });
@@ -3871,6 +3935,8 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
       return { ok: true };
     });
   },
+  // A stopped session started again for a trigger fire (trigger-host-resume-v1).
+  resume: function (home, sid, text, messageId, taskId) { return resumeForTrigger(home, sid, text, messageId, taskId); },
   streamOffset: function (sid) {
     var s = sessions.get(sid);
     try { return s ? fs.statSync(s.jsonlPath).size : undefined; } catch (e) { return undefined; }
@@ -5263,6 +5329,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
 
   sessionData.cronMetadataOrigin = { identity: cronProcess(sessionData).identity, offset: cronStartOffset, startedAt: cronStartedAt, fresh: !resume };
   sessions.set(sid, sessionData);
+  // The command to start it again with, for a host resume (host-resume-core.ts).
+  hostResume.remember(sid, { args: args, cwd: cwd, mode: sessionData.mode, home: spawnInfo.home, task: spawnInfo.task });
   // The tree before this session's first recorded turn, when it has none yet.
   try { turnSnapshots.onTurnStart(sid, cwd); } catch (err) { /* never the spawn's problem */ }
   cronMetadata.configure(sid, cronProcess(sessionData), cronMetadataConfig);
@@ -5298,6 +5366,24 @@ var MODE_CLI = {
   auto: 'auto',
   dontAsk: 'dontAsk',
 };
+
+// ── Resume records (host-resume-core.ts) ──
+// The last spawn command of each session, kept so this host can start a stopped
+// one again without a server: a trigger fire no server claimed (resumeForTrigger),
+// and a bridge resume after this daemon restarted (the registry keeps only
+// RUNNING sessions). Beside the trigger state, so a reboot keeps it. Created
+// here, after MODE_CLI. WALNUT_RESUME_RECORD_DIR is for TESTS ONLY. Mirror
+// daemon-standalone.ts.
+var RESUME_RECORD_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'resume-records')
+  : process.env.WALNUT_RESUME_RECORD_DIR || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'resume-records') : path.join(DAEMON_DIR, 'resume-records'));
+var hostResume = (__CREATE_HOST_RESUME__)({
+  fs: fs, path: path,
+  dir: RESUME_RECORD_DIR,
+  now: function () { return Date.now(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  modeCli: MODE_CLI,
+});
 
 function shouldAutoRespond(mode, toolName) {
   // AskUserQuestion is a requiresUserInteraction tool: the CLI emits its
@@ -6115,8 +6201,10 @@ function deliverUnclaimedFires(now) {
         return;
       }
       if (r.ok) {
-        triggerCheckCore.markHostDelivered(state, { atMs: now, sessionId: r.sid, messageId: messageId, seqs: seqs });
-        logMsg('info', 'trigger delivered on host', { id: id, seqs: seqs, sessionId: r.sid, messageId: messageId, taskId: spec.taskId });
+        var delivery = { atMs: now, sessionId: r.sid, messageId: messageId, seqs: seqs };
+        if (r.resumed) delivery.resumed = true;
+        triggerCheckCore.markHostDelivered(state, delivery);
+        logMsg('info', 'trigger delivered on host', { id: id, seqs: seqs, sessionId: r.sid, messageId: messageId, taskId: spec.taskId, resumed: r.resumed === true });
       } else {
         for (var i = 0; i < state.pendingFires.length; i++) {
           if (seqs.indexOf(state.pendingFires[i].seq) !== -1) state.pendingFires[i].hostTriedAt = now;
@@ -7685,6 +7773,9 @@ function cmdSetMode(ws, id, cmd) {
 // allows is answered now. Twin of daemon-standalone.ts applyModePolicy.
 function applyModePolicy(session, sid, mode) {
   session.mode = mode;
+  if (session.args && session.args.length > 0 && session.cwd) {
+    hostResume.remember(sid, { args: session.args, cwd: session.cwd, mode: mode, home: session.spawnInfo && session.spawnInfo.home, task: session.spawnInfo && session.spawnInfo.task });
+  }
   if (session.pendingCtrl && shouldAutoRespond(mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true);
     if (writeFifoRaw(session.pipePath, resp)) {
@@ -9651,7 +9742,7 @@ function daemonCapabilities() {
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.
-  if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1');
+  if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');
   if (cronRuntimeCore && typeof cronRuntimeCore.prepareDaemonServiceHandover === 'function') caps.push('service-handover-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only

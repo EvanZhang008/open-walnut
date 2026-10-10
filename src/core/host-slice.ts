@@ -16,7 +16,9 @@ import { log } from '../logging/index.js';
 import { cutEnd } from './text-cut.js';
 import type { HostSlice, OfflineSliceTask } from '../providers/offline-host-core.js';
 import type { OfflineSliceBoard } from '../providers/offline-board-core.js';
-import type { Task } from './types.js';
+import type { SessionRecord, Task } from './types.js';
+import { isInfraSessionError } from './session-error-kind.js';
+import { engineCaps } from './agents/engine-registry.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
 const MAX_SESSIONS = 200;
@@ -108,6 +110,20 @@ async function childTasks(parentIds: string[]): Promise<Task[]> {
   return out;
 }
 
+/**
+ * Whether the session executor would resume this session for a trigger fire
+ * (routines/session-target.ts): a Claude Code session that is stopped, or whose
+ * error the infrastructure caused (the fire proves its host is up). An error of
+ * the session's own making, and another agent's engine, never.
+ */
+function resumableForTrigger(s: SessionRecord): boolean {
+  // The host replays the session's own CLI command with --resume: native runtimes only.
+  if (engineCaps(s.engine).runtimeKind !== 'native') return false;
+  if (s.provider && s.provider !== 'cli') return false;
+  if (s.process_status === 'error') return isInfraSessionError(s);
+  return true;
+}
+
 export async function buildHostSlice(hostKey: string, now = Date.now()): Promise<HostSlice> {
   const key = normalizeHostKey(hostKey);
   const [{ listSessions, isListableSession }, { listTasksByIds }, requests] = await Promise.all([
@@ -190,6 +206,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       // An environment or lane session: never a message's address by name, nor a
       // reply's (session-send-core.ts, reply-routing.ts), so the host leaves those to us.
       ...(isListableSession(s) ? {} : { aside: true }),
+      // The host resumes a stopped session for a trigger fire only where we would.
+      ...(resumableForTrigger(s) ? {} : { noResume: true }),
     })),
     tasks: [...picked.values()],
     requests: pending,

@@ -22,6 +22,7 @@ import {
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { createHostResume } from '../../src/providers/host-resume-core.js'
 
 interface TestSession extends CoreSessionData {
   watchers: Map<unknown, unknown>
@@ -712,6 +713,8 @@ function buildGateTwin(kind: 'standalone' | 'template'): GateTwin {
     path: nodePath,
     STREAMS_DIR: '/fixture',
     MODE_CLI: { default: 'default' },
+    // No resume record on disk: bridge resume uses the in-memory session's command.
+    hostResume: createHostResume({ fs: nodeFs, path: nodePath, dir: '/fixture/no-resume-records', now: () => Date.now(), log: () => {}, modeCli: { default: 'default' } }),
     logMsg: () => {},
     TURN_RETRY_CFG: { enabled: true },
     turnRetryMessage: () => 'retry',
@@ -748,7 +751,7 @@ function buildGateTwin(kind: 'standalone' | 'template'): GateTwin {
     : getDaemonSource()
   // stopOwnerRefusal (owner-home-v1) rides along because cmdStop calls it first; these
   // stops name no Walnut, so it answers "allowed" without reading the journal.
-  const commands = ['cmdStart', 'cmdStop', 'stopOwnerRefusal', 'cmdSend', 'cmdBridgeResume', 'fireTurnRetry', 'checkTurnRetry'].map((name) => sliceTopLevelFn(src, name)).join('\n')
+  const commands = ['cmdStart', 'cmdStop', 'stopOwnerRefusal', 'cmdSend', 'spawnRecordOf', 'cmdBridgeResume', 'fireTurnRetry', 'checkTurnRetry'].map((name) => sliceTopLevelFn(src, name)).join('\n')
   const exports = '\nreturn { cmdStart, cmdStop, cmdSend, cmdBridgeResume, fireTurnRetry, checkTurnRetry, gate: sessionStartGate };'
   const gateCode = kind === 'template' ? sliceTemplateGate(src) : ''
   const js = ts.transpileModule(gateCode + '\n' + commands + exports, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText

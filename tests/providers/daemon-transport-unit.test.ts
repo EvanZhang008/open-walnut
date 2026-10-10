@@ -499,6 +499,7 @@ describe('B7: recoverDisconnectedSessions stopped-record rescue', () => {
   async function runRecoverWith(
     sessionRecords: Array<Record<string, unknown>>,
     sendImpl?: (cmd: string, payload: Record<string, unknown>) => Record<string, unknown>,
+    only?: ReadonlySet<string>,
   ) {
     const updateSessionRecord = vi.fn(async (
       sessionId: string,
@@ -521,7 +522,7 @@ describe('B7: recoverDisconnectedSessions stopped-record rescue', () => {
       const [cmd, payload] = args as [string, Record<string, unknown>]
       return sendImpl ? sendImpl(cmd, payload) : { ok: true, alive: true }
     })
-    await (priv.recoverDisconnectedSessions as () => Promise<void>)()
+    await (priv.recoverDisconnectedSessions as (only?: ReadonlySet<string>) => Promise<void>).call(conn, only)
     return { send, updateSessionRecord }
   }
 
@@ -580,6 +581,20 @@ describe('B7: recoverDisconnectedSessions stopped-record rescue', () => {
       stoppedRecord({ claudeSessionId: 'old-1', last_status_change: STALE }),
     ])
     expect(send.mock.calls.filter(([cmd]) => cmd === 'status').length).toBe(0)
+  })
+
+  it('a session the host resumed itself is looked at whoever stopped it and however long ago, and only it', async () => {
+    // trigger-host-resume-v1: the idle reaper stopped it hours ago (a terminal-class
+    // reason the plain pass never probes), the host started it again for a fire.
+    const { send, updateSessionRecord } = await runRecoverWith([
+      stoppedRecord({ claudeSessionId: 'host-resumed', status_reason: 'idle_timeout', status_changed_by: 'user', last_status_change: STALE }),
+      stoppedRecord({ claudeSessionId: 'bystander' }),
+    ], () => ({ ok: true, alive: true, pid: 77 }), new Set(['host-resumed']))
+    const probed = send.mock.calls.filter(([cmd]) => cmd === 'status').map(([, p]) => (p as { sid: string }).sid)
+    // The probe, then the recovery's own status read: both about it, none about the bystander.
+    expect(new Set(probed)).toEqual(new Set(['host-resumed']))
+    expect(updateSessionRecord.mock.calls.some(([sid, u]) => sid === 'host-resumed' && (u as { process_status?: string }).process_status === 'idle')).toBe(true)
+    expect(updateSessionRecord.mock.calls.some(([sid]) => sid === 'bystander')).toBe(false)
   })
 
   it('never touches a stopped codex/ACP record — its liveness is acpState-keyed', async () => {

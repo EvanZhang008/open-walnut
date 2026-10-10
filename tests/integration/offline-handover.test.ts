@@ -34,7 +34,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { closeDb } from '../../src/core/task-db.js'
 import { buildHostSlice } from '../../src/core/host-slice.js'
 import { runOfflineHandover, waitForOfflineHandovers } from '../../src/core/offline-handover.js'
-import { createSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js'
 import type { OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -122,6 +122,22 @@ describe('buildHostSlice', () => {
     expect(local.sessions.map((s) => s.sid)).toEqual([L])
     // Same content, same hash: an unchanged copy is never re-sent.
     expect((await buildHostSlice('devbox')).hash).toBe(again.hash)
+  })
+
+  it('marks the sessions the server would never wake for a trigger, so the host does not resume them either', async () => {
+    const t = await newTask('Watch a review')
+    const sid = (n: number) => `eeeeeee${n}-5555-4555-8555-55555555555${n}`
+    await createSessionRecord(sid(1), t, 'Acme', '/work', { host: 'resumebox', title: 'stopped' })
+    await createSessionRecord(sid(2), t, 'Acme', '/work', { host: 'resumebox', title: 'broke itself' })
+    await createSessionRecord(sid(3), t, 'Acme', '/work', { host: 'resumebox', title: 'host went down' })
+    await createSessionRecord(sid(4), t, 'Acme', '/work', { host: 'resumebox', title: 'another agent' })
+    await updateSessionRecord(sid(1), { process_status: 'stopped' })
+    await updateSessionRecord(sid(2), { process_status: 'error', errorKind: 'terminal' })
+    await updateSessionRecord(sid(3), { process_status: 'error', errorKind: 'infra' })
+    await updateSessionRecord(sid(4), { process_status: 'stopped', engine: 'codex' })
+    const slice = await buildHostSlice('resumebox')
+    const flag = (n: number) => slice.sessions.find((s) => s.sid === sid(n))?.noResume
+    expect([flag(1), flag(2), flag(3), flag(4)]).toEqual([undefined, true, undefined, true])
   })
 })
 

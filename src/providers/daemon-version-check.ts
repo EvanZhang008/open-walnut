@@ -166,6 +166,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-server-core.ts',
   // Streams between servers through the daemon (stream-relay-v1): same rule.
   'src/providers/stream-relay-core.ts',
+  // A stopped session resumed on its host for a trigger fire (trigger-host-resume-v1): same rule.
+  'src/providers/host-resume-core.ts',
   'src/core/sessions/open-items-text.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',

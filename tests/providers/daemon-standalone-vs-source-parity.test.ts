@@ -372,17 +372,22 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
 
   it('both bridge resume paths authorize runtime bypass mode changes', () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    const resumeCoreSrc = readFile(path.join(ROOT, 'src/providers/host-resume-core.ts'))
     for (const src of [standaloneSrc, templateSrc]) {
       // Must inject the capability-only spelling. The BARE flag also *selects*
       // bypassPermissions and outranks --permission-mode, so a resume that used
       // it would silently run every mode as bypass.
       expect(src).toContain('--allow-dangerously-skip-permissions')
-      // And it must strip the bare flag out of a stored argv recorded before
-      // that fix. Substring-safe: drop the --allow- occurrences before looking.
+      // A stored argv goes through the shared resume builder (both twins inject it).
+      expect(src).toMatch(/hostResume\.resumeArgs\(spawn\.args, sid, mode\)/)
       const withoutAllow = src.split('--allow-dangerously-skip-permissions').join('')
-      expect(withoutAllow).toMatch(/indexOf\('--dangerously-skip-permissions'\)/)
       expect(withoutAllow).not.toMatch(/push\('--dangerously-skip-permissions'\)/)
     }
+    // The builder strips the bare flag out of a stored argv recorded before that
+    // fix, and adds the capability-only one.
+    expect(resumeCoreSrc).toMatch(/drop\(args, '--dangerously-skip-permissions', false\)/)
+    expect(resumeCoreSrc).toContain("args.splice(1, 0, '--allow-dangerously-skip-permissions')")
+    expect(templateSrc).toContain("['__CREATE_HOST_RESUME__', createHostResume.toString()]")
   })
 
   it('both daemon twins enforce owner-only umask and repair existing storage modes', () => {

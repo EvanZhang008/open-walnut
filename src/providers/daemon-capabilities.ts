@@ -250,6 +250,14 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * socket is dead. Optional: without it the server delivers every fire unclaimed,
  * as before. Sidecar-gated in the source twin like triggers-v1.
  *
+ * 'trigger-host-resume-v1': the same host delivery reaches a STOPPED session
+ * too: the daemon starts it again (`--resume`, the command it last ran, kept in
+ * a resume record that survives a restart; host-resume-core.ts) with the fire as
+ * its first message, and journals a `resume` record so the returning server
+ * takes the running CLI back. Only a session this daemon's spawn journal says it
+ * started for that Walnut, whose transcript is here. Informational: the server
+ * sends nothing new for it. Sidecar-gated in the source twin like triggers-v1.
+ *
  * 'git-file-history-v1' — host-local git history for ONE file (git.fileLog /
  * git.fileShow), backing the History panel of the Files viewer. Same rule as
  * git.diff: git and the file must live on the same host, so the daemon runs the
@@ -390,6 +398,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'grep-v1',
   'triggers-v1',
   'trigger-claim-v1',
+  'trigger-host-resume-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',

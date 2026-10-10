@@ -29,6 +29,11 @@ import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, t
 export interface HandoverConnection {
   hostKey: string;
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
+  /**
+   * Look at these sessions again as a reconnect does, as if their records did
+   * not say stopped: the host started them while this server was away.
+   */
+  rescue?(sessionIds: string[]): Promise<void>;
 }
 
 export interface HandoverResult {
@@ -115,6 +120,7 @@ export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverRe
 /** Tests only. */
 export function _resetOfflineHandoverForTesting(): void {
   running.clear();
+  resumesToRescue.clear();
   for (const d of due.values()) d.resolve();
   due.clear();
 }
@@ -169,6 +175,16 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
     } catch (err) {
       // Each stays pending on its record; the next connect runs it again.
       log.session.warn('offline handover: the stops the companion sent did not run yet', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  const resumed = resumesToRescue.get(conn.hostKey);
+  resumesToRescue.delete(conn.hostKey);
+  if (resumed && resumed.size > 0) {
+    try {
+      await conn.rescue?.([...resumed]);
+    } catch (err) {
+      // Best effort: the record says stopped until a reconnect looks at the session again.
+      log.session.warn('offline handover: could not look at the sessions the host resumed', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
     }
   }
   if (result.records > 0) log.session.info('offline handover: done', { host: conn.hostKey, ...result });
@@ -335,6 +351,17 @@ async function applyRecord(
       log.session.info('offline handover: settings the companion applied are kept', { host, sessionId: record.sid, ...patch, ...(mode ? { mode } : {}) });
       return;
     }
+    case 'resume': {
+      // The host started a stopped session again to hand it a trigger fire no
+      // server claimed (the fire itself is recorded from the trigger's replay).
+      // Our record still says stopped; handover() has the connection look at it.
+      const set = resumesToRescue.get(host) ?? new Set<string>();
+      set.add(record.sid);
+      resumesToRescue.set(host, set);
+      result.replayed++;
+      log.session.info('offline handover: the host resumed a stopped session for a trigger fire', { host, sessionId: record.sid, taskId: record.taskId, messageId: record.messageId });
+      return;
+    }
     case 'stop': {
       // The user stopped the session through the companion while it led. It
       // becomes this server's own stop request, same id and time, so the phone's
@@ -360,6 +387,8 @@ async function applyRecord(
 
 /** Hosts whose drained stops this handover still runs (handover()). */
 const stopsToRun = new Set<string>();
+/** Sessions a host resumed itself, by host, that this handover still looks at (handover()). */
+const resumesToRescue = new Map<string, Set<string>>();
 
 /** The session (and task) a record is about, for the log line and the card's lifecycle. */
 async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string; taskId?: string }> {
@@ -369,6 +398,7 @@ async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string;
     case 'delivery': return { sessionId: record.toSessionId };
     case 'settings': return { sessionId: record.sid };
     case 'stop': return { sessionId: record.sid };
+    case 'resume': return { sessionId: record.sid, taskId: record.taskId };
     case 'settle': {
       const { getSessionRequest } = await import('./session-requests.js');
       const row = await getSessionRequest(record.requestId).catch(() => undefined);

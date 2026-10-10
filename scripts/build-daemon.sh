@@ -118,6 +118,7 @@ SOURCES=(
   src/providers/host-replica-core.ts
   src/providers/host-server-core.ts
   src/providers/stream-relay-core.ts
+  src/providers/host-resume-core.ts
   src/core/sessions/open-items-text.ts
   src/providers/git-diff-core.ts
   src/providers/bridge-uplink-core.ts

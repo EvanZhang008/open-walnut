@@ -128,6 +128,8 @@ export interface HostDelivery {
   messageId: string;
   /** Every seq that rode the same message (a backlog is one envelope). */
   seqs: number[];
+  /** The session was stopped and the host started it again with this message (trigger-host-resume-v1). */
+  resumed?: true;
 }
 
 export interface TriggerItem {

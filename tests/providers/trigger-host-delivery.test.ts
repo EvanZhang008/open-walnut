@@ -225,3 +225,84 @@ describe('offline host: which session on this host takes the fire', () => {
     expect(done.delivered.length + queued.delivered.length).toBe(0)
   })
 })
+
+describe('offline host: a stopped session is resumed for the fire (trigger-host-resume-v1)', () => {
+  const dirs: string[] = []
+  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
+  const OTHER = 'abababab-3333-4333-8333-333333333333'
+  const ASIDE = 'cdcdcdcd-4444-4444-8444-444444444444'
+
+  function setup(overrides: Partial<HostSlice> = {}, resumeAnswer: { ok: true } | { ok: false; reason: string } = { ok: true }) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trigger-host-resume-'))
+    dirs.push(dir)
+    const resumed: Array<{ home: string; sid: string; text: string; messageId: string; taskId: string }> = []
+    const delivered: string[] = []
+    const answer = { value: resumeAnswer as { ok: true } | { ok: false; reason: string } }
+    const host = createOfflineHost({
+      fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
+      keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
+      kit: createEnvelopeKit(), log: () => {},
+      isLive: () => false, turnActive: () => false, streamOffset: () => undefined,
+      deliver: async (sid) => { delivered.push(sid); return { ok: true } },
+      resume: async (home, sid, text, messageId, taskId) => {
+        resumed.push({ home, sid, text, messageId, taskId })
+        return answer.value
+      },
+    })
+    host.configure({
+      v: 1, home: HOME, hash: 'h1', asOf: NOW, host: 'devbox',
+      // Newest first, as the server lists them.
+      sessions: [
+        { sid: ASIDE, taskId: TASK, title: 'env', aside: true },
+        { sid: OTHER, taskId: TASK, title: 'Newer run' },
+        { sid: OLD, taskId: TASK, title: 'Old run' },
+      ],
+      tasks: [{ id: TASK, title: 'Monitor chat', phase: 'WAITING', project: 'Ops' }],
+      requests: [],
+      ...overrides,
+    })
+    return { host, resumed, delivered, answer }
+  }
+
+  it('resumes the newest session of the task here when the task names none, and journals it', async () => {
+    const h = setup()
+    expect(await h.host.deliverTrigger(HOME, TASK, 'ENVELOPE', 'qm-trigger-9')).toEqual({ ok: true, sid: OTHER, resumed: true })
+    expect(h.resumed).toEqual([{ home: HOME, sid: OTHER, text: 'ENVELOPE', messageId: 'qm-trigger-9', taskId: TASK }])
+    expect(h.delivered).toEqual([])
+    const { records } = h.host.drain(HOME)
+    expect(records).toEqual([expect.objectContaining({ kind: 'resume', sid: OTHER, taskId: TASK, messageId: 'qm-trigger-9' })])
+    expect(records[0].online).toBeUndefined()
+    expect(h.host.pendingHandover(HOME)).toBe(true)
+  })
+
+  it('resumes the task\'s own session when it is here, even an older one', async () => {
+    const h = setup({ tasks: [{ id: TASK, title: 'Monitor chat', phase: 'WAITING', project: 'Ops', session_id: OLD }] })
+    expect(await h.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toEqual({ ok: true, sid: OLD, resumed: true })
+  })
+
+  it('leaves it to the server when the task\'s session runs on another host, or the server would not wake it', async () => {
+    const elsewhere = setup({ tasks: [{ id: TASK, title: 'Monitor chat', phase: 'WAITING', project: 'Ops', session_id: 'eeee0000-9999-4999-8999-999999999999' }] })
+    expect(await elsewhere.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toMatchObject({ ok: false, reason: expect.stringContaining('not on this host') })
+    const broken = setup({
+      sessions: [{ sid: OTHER, taskId: TASK, noResume: true }, { sid: ASIDE, taskId: TASK, aside: true }],
+    })
+    expect(await broken.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toMatchObject({ ok: false, reason: expect.stringContaining('no session of the target task on this host') })
+    const slotBroken = setup({
+      sessions: [{ sid: OTHER, taskId: TASK, noResume: true }, { sid: OLD, taskId: TASK }],
+      tasks: [{ id: TASK, title: 'Monitor chat', phase: 'WAITING', project: 'Ops', session_id: OTHER }],
+    })
+    expect(await slotBroken.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toMatchObject({ ok: false })
+    const done = setup({ tasks: [{ id: TASK, title: 'Monitor chat', phase: 'COMPLETE', project: 'Ops' }] })
+    expect(await done.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toMatchObject({ ok: false, reason: 'target task is complete' })
+    for (const h of [elsewhere, broken, slotBroken, done]) {
+      expect(h.resumed).toEqual([])
+      expect(h.host.drain(HOME).records).toEqual([])
+    }
+  })
+
+  it('a refused or failed resume journals nothing and says why', async () => {
+    const h = setup({}, { ok: false, reason: 'this host resumed that session moments ago' })
+    expect(await h.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toEqual({ ok: false, reason: 'this host resumed that session moments ago' })
+    expect(h.host.drain(HOME).records).toEqual([])
+  })
+})

@@ -30,8 +30,12 @@ import type { HostReplica } from './host-replica-core.js'
 import type { OfflineSearch } from './offline-search-core.js'
 import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
 
-/** `aside`: an environment or lane session, which the server never picks as a message's address by name. */
-export interface OfflineSliceSession { sid: string; taskId?: string; title?: string; aside?: boolean }
+/**
+ * `aside`: an environment or lane session, which the server never picks as a message's address by name.
+ * `noResume`: a session the server would never wake for a trigger (an error of its own making, another
+ * agent's engine), so this host does not resume it either.
+ */
+export interface OfflineSliceSession { sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean }
 
 export interface OfflineSliceTask {
   id: string
@@ -134,6 +138,12 @@ export type OfflineRecord =
    * message is fenced by the same stop on both servers.
    */
   | { seq: number; at: number; online?: true; kind: 'stop'; sid: string; stopRequestId: string; requestedAt: string }
+  /**
+   * A stopped session this host resumed itself to hand it a trigger fire no
+   * server claimed (deliverTrigger). The server's record still says stopped:
+   * it looks at the session again and takes the running CLI back.
+   */
+  | { seq: number; at: number; online?: true; kind: 'resume'; sid: string; taskId?: string; messageId: string }
 
 interface Journal { nextSeq: number; records: OfflineRecord[]; rows: Record<string, OfflineRequestRow>; settledCopies: string[] }
 
@@ -166,6 +176,13 @@ export interface OfflineHostDeps {
   streamOffset: (sid: string) => number | undefined
   /** Write one user message into the session's FIFO, with a turn-opening marker (send-markers-v1). */
   deliver: (sid: string, text: string, messageId: string) => Promise<DeliverResult>
+  /**
+   * Start a stopped session of this Walnut again (`--resume`, its last spawn's
+   * command) with `text` as its first message. Refuses what this host cannot
+   * prove it ran for that Walnut. Absent: a trigger fire for a stopped session
+   * waits for the server, as before.
+   */
+  resume?: (home: string, sid: string, text: string, messageId: string, taskId: string) => Promise<DeliverResult>
   /** A journal grew while a server of that home is connected: ask it to drain. */
   onJournal?: (home: string) => void
   /** A server of that home is connected and answering (not silent, not replaced by the companion). */
@@ -1223,33 +1240,55 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   /**
-   * A trigger fire no server claimed, written into the target task's live
-   * session on this host (the walnut-trigger daemon builds the envelope). The
-   * same session pick the server makes for a live one: the newest live session
-   * of the task, as this copy lists them. A COMPLETE task is the server's call
-   * (it refuses and tells the user), so it is left to the server, as is a task
-   * with no live session here (the server resumes or starts one). Nothing is
-   * journaled: the fire's own queue tells the server, on its replay.
+   * A trigger fire no server claimed, written into the target task's session on
+   * this host (the walnut-trigger daemon builds the envelope). The session pick
+   * the server makes: the newest live session of the task, as this copy lists
+   * them; else the stopped one, resumed with the fire as its first message (the
+   * idle reaper stops a quiet CLI after two hours, so an overnight fire finds it
+   * stopped). The stopped one is the task's own session when that runs here
+   * (its slot), else the newest here; a slot on another host is the server's to
+   * wake. A COMPLETE task is the server's call (it refuses and tells the user),
+   * as is a task with no session here (the server starts one). The fire's own
+   * queue tells the server what happened, on its replay; a resume is journaled
+   * too, because the server's record of that session still says stopped.
    */
   async function deliverTrigger(
     home: string,
     taskId: string,
     text: string,
     messageId: string,
-  ): Promise<{ ok: true; sid: string } | { ok: false; reason: string }> {
+  ): Promise<{ ok: true; sid: string; resumed?: true } | { ok: false; reason: string }> {
     const slice = slices.get(home)
     if (!slice) return { ok: false, reason: 'no host copy for this Walnut' }
     const task = tasksWithOverlay(home).find((t) => t.id === taskId)
     if (task?.phase === 'COMPLETE') return { ok: false, reason: 'target task is complete' }
     const live = slice.sessions.filter((s) => s.taskId === taskId && deps.isLive(s.sid))
-    if (live.length === 0) return { ok: false, reason: 'no live session of the target task on this host' }
-    const sid = live[0].sid
+    if (live.length > 0) {
+      const sid = live[0].sid
+      try {
+        const delivered = await deps.deliver(sid, text, messageId)
+        return delivered.ok ? { ok: true, sid } : { ok: false, reason: delivered.reason }
+      } catch (err) {
+        return { ok: false, reason: (err as Error).message }
+      }
+    }
+    if (!deps.resume) return { ok: false, reason: 'no live session of the target task on this host' }
+    const here = slice.sessions.filter((s) => s.taskId === taskId)
+    const slot = task?.session_id
+    if (slot && !here.some((s) => s.sid === slot)) return { ok: false, reason: 'the target task\'s session is not on this host' }
+    const pick = (slot ? here.filter((s) => s.sid === slot) : here).find((s) => !s.aside && !s.noResume)
+    if (!pick) return { ok: false, reason: 'no session of the target task on this host to resume' }
+    if (roomFor(home)) return { ok: false, reason: 'this host\'s journal for the Walnut server is full' }
+    let resumed: DeliverResult
     try {
-      const delivered = await deps.deliver(sid, text, messageId)
-      return delivered.ok ? { ok: true, sid } : { ok: false, reason: delivered.reason }
+      resumed = await deps.resume(home, pick.sid, text, messageId, taskId)
     } catch (err) {
       return { ok: false, reason: (err as Error).message }
     }
+    if (!resumed.ok) return { ok: false, reason: resumed.reason }
+    append(home, { kind: 'resume', sid: pick.sid, taskId, messageId })
+    deps.log('info', 'offline host: resumed a stopped session for a trigger fire', { home, sid: pick.sid, taskId, messageId })
+    return { ok: true, sid: pick.sid, resumed: true }
   }
 
   /**

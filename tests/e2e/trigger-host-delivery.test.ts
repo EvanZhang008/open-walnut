@@ -262,6 +262,20 @@ describe('a fire the host already delivered is recorded, never delivered again',
     expect(envelopes('ep-host-replay')).toEqual([])
   })
 
+  it('a fire the host handed to a session it resumed says so in the history row (trigger-host-resume-v1)', async () => {
+    const taskId = await newTask('Host resumed (replay)')
+    const jobId = await newTrigger('host resumed', taskId)
+    const firedAt = Date.now() - 6 * 3_600_000
+    const host: HostDelivery = { atMs: firedAt + 30_000, sessionId: 'host-e2e-resumed-1', messageId: 'qm-trigger-ee55', seqs: [1], resumed: true }
+    sends.length = 0
+    handleTriggerEvent('__local__', fire(jobId, 'ep-host-resumed', 1, firedAt, { host, replay: true } as Partial<TriggerFiredEvent>))
+    await until('ack', () => acksFor(jobId), (a) => a.length === 1)
+    const row = (await jobState(jobId)).state.fireLog[0]
+    expect(row.delivery).toMatchObject({ status: 'ok', sessionId: 'host-e2e-resumed-1' })
+    expect(row.delivery.summary).toMatch(/^the local host resumed session /)
+    expect(envelopes('ep-host-resumed')).toEqual([])
+  })
+
   it('wakes a WAITING target the host delivery found parked, and leaves one parked after it', async () => {
     const parked = await newTask('Parked before the fire')
     const jobA = await newTrigger('wake parked', parked)

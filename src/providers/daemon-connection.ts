@@ -1073,7 +1073,7 @@ export class DaemonConnection {
           if (this.offlineDrainDue) {
             this.offlineDrainDue = false
             try {
-              await runOfflineHandover({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })
+              await runOfflineHandover(this.handoverConnection())
             } catch (err) {
               this.offlineDrainDue = true
               throw err
@@ -1713,6 +1713,22 @@ export class DaemonConnection {
   private static readonly DRAIN_BEFORE_ANSWER_MS = 5_000
 
   /**
+   * What the offline handover drives on this host. `rescue`: sessions the host
+   * started again while we were away (a trigger fire it delivered itself) get
+   * the reconnect look now, as if their records did not say stopped. Not
+   * awaited: a relayed call waiting on the drain must not wait on these probes.
+   */
+  private handoverConnection(): import('../core/offline-handover.js').HandoverConnection {
+    return {
+      hostKey: this.hostKey,
+      send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs),
+      rescue: async (sessionIds) => {
+        void this.recoverDisconnectedSessions(new Set(sessionIds)).catch(() => {})
+      },
+    }
+  }
+
+  /**
    * Wait until the host's journal is taken: join a running drain (one that began
    * before the nudge may finish without the new record, so check again after
    * it), or run the due one. Bounded; a failed drain stays due for the next push.
@@ -1728,7 +1744,7 @@ export class DaemonConnection {
       let failed = false
       if (!job) {
         this.offlineDrainDue = false
-        job = runOfflineHandover({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })
+        job = runOfflineHandover(this.handoverConnection())
         job.then(() => this.pushHostSlice(), (err) => {
           failed = true
           this.offlineDrainDue = true
@@ -4671,8 +4687,12 @@ export class DaemonConnection {
     }
   }
 
-  /** After successful reconnect, recover sessions marked error due to connection loss. */
-  private async recoverDisconnectedSessions(): Promise<void> {
+  /**
+   * After successful reconnect, recover sessions marked error due to connection loss.
+   * `only`: just these sessions, each looked at even when its record says stopped
+   * long ago or by the user (the host started it again itself; offline-handover.ts).
+   */
+  private async recoverDisconnectedSessions(only?: ReadonlySet<string>): Promise<void> {
     try {
       const {
         emitSessionStatusChanged,
@@ -4703,6 +4723,7 @@ export class DaemonConnection {
         // normalization used elsewhere (e.g. frequent-dirs.ts).
         if ((s.host ?? '__local__') !== this.hostKey) continue
         if (s.archived) continue
+        if (only && !only.has(s.claudeSessionId)) continue
 
         // Reattach any non-terminal session. Both `running` (mid-turn) and
         // `idle` (FIFO session between turns, CLI alive waiting for stdin) must
@@ -4731,9 +4752,10 @@ export class DaemonConnection {
         // and the live CLI ran 1.6h behind a record every loop here skipped.
         // ACP records stay skipped: their liveness probe is acpState on
         // acpRuntimeId, and the branch below would relabel a dead one 'idle'.
+        const hostResumed = only?.has(s.claudeSessionId) === true
         const rescuableStopped = s.process_status === 'stopped'
           && !isAcpEngine(s.engine)
-          && isRescuableStoppedRecord(s)
+          && (hostResumed || isRescuableStoppedRecord(s))
         const isTerminal = s.process_status === 'stopped' && !rescuableStopped
         const isNonRecoverableError = s.process_status === 'error'
           && !isRecoverableSessionError(s)
@@ -4753,8 +4775,8 @@ export class DaemonConnection {
           // unknown, or over budget → leave the record exactly as it is (no
           // writes, no auto-resume): probing must cost nothing when the record
           // was right.
-          if (stoppedProbes >= MAX_STOPPED_PROBES) { clippedStoppedProbes++; continue }
-          stoppedProbes++
+          if (!hostResumed && stoppedProbes >= MAX_STOPPED_PROBES) { clippedStoppedProbes++; continue }
+          if (!hostResumed) stoppedProbes++
           try {
             const probe = await this.send('status', { sid: s.claudeSessionId })
             if (!(probe.ok && probe.alive)) continue

@@ -204,7 +204,8 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
       status: 'ok' as const,
       // Short, and ending in the session handle: the history row clamps this clause
       // and keeps only the handle's id once it runs long.
-      summary: `${host === '__local__' ? 'the local host' : host} sent it to session ${await sessionLabel(h.sessionId)}`,
+      // A stopped session the host started again with it (trigger-host-resume-v1).
+      summary: `${host === '__local__' ? 'the local host' : host} ${h.resumed ? 'resumed' : 'sent it to'} session ${await sessionLabel(h.sessionId)}`,
       delivered: { sessionId: h.sessionId, text },
       deliveredAtMs: h.atMs,
     };
