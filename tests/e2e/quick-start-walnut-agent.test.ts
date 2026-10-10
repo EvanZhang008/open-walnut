@@ -27,6 +27,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
+import { modelSupportsMaxEffort } from '../../src/core/types.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -363,9 +364,14 @@ describe('quick-start walnutAgent — launch memory (model + effort follow the l
     // Auto: the CLI resolves the model; the level rides through.
     const auto = await quickStart({ walnutAgent: true, message: 'deep question' })
     expect((await getSessionByClaudeId(auto.sessionId!))!.effort).toBe('max')
-    // Haiku has no max → medium, not a spawn the CLI would silently downgrade.
-    const haiku = await quickStart({ walnutAgent: true, message: 'quick question', model: 'haiku' })
-    expect((await getSessionByClaudeId(haiku.sessionId!))!.effort).toBe('medium')
+    // Haiku 4.5 has no max → medium, not a spawn the CLI would silently downgrade.
+    // (The bare `haiku` alias is Haiku 5.5 since 2026-10-07, and it takes max.)
+    expect(modelSupportsMaxEffort('us.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(false)
+    expect(modelSupportsMaxEffort('haiku')).toBe(true)
+    const haiku45 = await quickStart({ walnutAgent: true, message: 'quick question', model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' })
+    expect((await getSessionByClaudeId(haiku45.sessionId!))!.effort).toBe('medium')
+    const haiku = await quickStart({ walnutAgent: true, message: 'quick question again', model: 'haiku' })
+    expect((await getSessionByClaudeId(haiku.sessionId!))!.effort).toBe('max')
   })
 
   it('a pick on an ORDINARY session never touches the Ask Walnut memory', async () => {

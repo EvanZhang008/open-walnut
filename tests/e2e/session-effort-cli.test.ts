@@ -36,8 +36,11 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { modelSupportsEffort } from '../../src/core/types.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
+/** A model with no effort at all (the static override table): Haiku 4.5. */
+const HAIKU_4_5 = 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
 
 let server: HttpServer
 let port: number
@@ -198,8 +201,11 @@ describe('session --effort plumbing: E2E', () => {
     await delay(50)
   })
 
-  // Test 3: effort on an effort-incapable model (haiku) is suppressed
-  it('session:start with effort on haiku → no [effort:] marker (unsupported)', async () => {
+  // Test 3: effort on an effort-incapable model is suppressed. Haiku 4.5 has no
+  // effort; the bare `haiku` alias is Haiku 5.5 since 2026-10-07, which does.
+  it('session:start with effort on Haiku 4.5 → no [effort:] marker (unsupported)', async () => {
+    // The premise, said first so a catalog change fails here and not as a stray marker.
+    expect(modelSupportsEffort(HAIKU_4_5)).toBe(false)
     const ws = await connectWs()
 
     const resultPromise = waitForWsEvent(ws, 'session:result')
@@ -208,14 +214,14 @@ describe('session --effort plumbing: E2E', () => {
       message: 'test effort suppressed on haiku',
       project: 'Walnut',
       mode: 'bypass',
-      model: 'haiku',
+      model: HAIKU_4_5,
       effort: 'high',
     })
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
     const result = await resultPromise
     const text = (result.data as { result?: string }).result ?? ''
-    expect(text).toContain('[model:haiku]')
+    expect(text).toContain(`[model:${HAIKU_4_5}]`)
     expect(text).not.toContain('[effort:')
 
     ws.close()
@@ -264,8 +270,8 @@ describe('session --effort plumbing: E2E', () => {
   })
 
   // Test 4b: capability gating — the route rejects levels the model can't do,
-  // since the CLI silently accepts them (verified against 2.1.170). `xhigh` is
-  // NOT supported by Haiku (nor any effort at all), so it's a clean 409 case.
+  // since the CLI silently accepts them (verified against 2.1.170). Haiku 4.5
+  // supports no effort at all, so any level is a clean 409 case.
   it('POST /effort rejects invalid level (400) and unsupported level (409)', async () => {
     const ws = await connectWs()
     const resultPromise = waitForWsEvent(ws, 'session:result')
@@ -274,7 +280,7 @@ describe('session --effort plumbing: E2E', () => {
       message: 'gating test session',
       project: 'Walnut',
       mode: 'bypass',
-      model: 'haiku',  // supports NO effort at all → any level is a 409
+      model: HAIKU_4_5,  // supports NO effort at all → any level is a 409
     })
     const sessionId = (await resultPromise).data!.sessionId as string
     await delay(400)
@@ -286,7 +292,7 @@ describe('session --effort plumbing: E2E', () => {
     })
     expect(bad.status).toBe(400)
 
-    // any effort on haiku (effort-incapable) → 409
+    // any effort on Haiku 4.5 (effort-incapable) → 409
     const nope = await fetch(`http://localhost:${port}/api/sessions/${sessionId}/effort`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ effort: 'high' }),
