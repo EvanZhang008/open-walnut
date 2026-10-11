@@ -6,6 +6,19 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-11
+
+### Added
+
+- The cloud companion searches a copy of the Mac's index by meaning
+- The phone's search runs the Mac's hybrid search and shows Completed like the web
+- Open Walnut from a browser anywhere through a tunnel it runs
+
+### Fixed
+
+- A changed doc keeps the vectors of its unchanged passages, and a worker failure never quarantines a doc
+- An answer whose caller asked for no semantic wait is never memoized
+
 ## [0.6.7] - 2026-10-09
 
 ### Added
