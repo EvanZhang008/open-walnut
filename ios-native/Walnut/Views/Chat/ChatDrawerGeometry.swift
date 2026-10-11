@@ -9,11 +9,15 @@ import CoreGraphics
 /// are genuinely stateful — the current fraction and whether a drag is being
 /// tracked.
 enum ChatDrawerGeometry {
-    /// Share of the container the open drawer covers, and the ceiling that keeps
-    /// it a drawer rather than a page: the sliver of chat left showing is what
-    /// tells the user the conversation is still there behind it.
+    /// The base width: a share of the container, capped so the drawer stays a drawer
+    /// rather than a page. The open drawer covers the base plus `spareShare` of the
+    /// room the base leaves beside it, so the sliver of chat left showing (what tells
+    /// the user the conversation is still there behind it) is half what the base
+    /// left. The user found the base alone too narrow (2026-10-11): 402pt gets
+    /// 365.82 instead of 329.64, 440pt gets 390 instead of 340.
     static let widthFraction: CGFloat = 0.82
     static let maxWidth: CGFloat = 340
+    static let spareShare: CGFloat = 0.5
     /// How far from the leading edge a pull may START while the drawer is shut.
     /// Anything further in belongs to the transcript underneath.
     static let edgeZone: CGFloat = 24
@@ -34,7 +38,8 @@ enum ChatDrawerGeometry {
 
     static func width(container: CGFloat) -> CGFloat {
         guard container > 0 else { return maxWidth }
-        return min(container * widthFraction, maxWidth)
+        let base = min(container * widthFraction, maxWidth)
+        return base + (container - base) * spareShare
     }
 
     /// Is this drag the drawer's? A shut drawer answers only to a rightward pull

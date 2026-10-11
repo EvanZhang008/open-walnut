@@ -13,15 +13,28 @@ final class ChatDrawerGeometryTests: XCTestCase {
 
     // MARK: - Width
 
-    /// A share of the screen on a phone, so the sliver of chat left showing says
-    /// the conversation is still there.
-    func testWidthIsAShareOfANarrowContainer() {
-        XCTAssertEqual(ChatDrawerGeometry.width(container: 393), 393 * 0.82, accuracy: 0.001)
+    /// The base share of the screen plus half the room it left, so only a narrow
+    /// sliver of chat stays showing (402pt: 329.64 + 72.36 / 2).
+    func testWidthTakesHalfTheRoomTheShareLeft() {
+        XCTAssertEqual(ChatDrawerGeometry.width(container: 402), 365.82, accuracy: 0.001)
+        XCTAssertEqual(ChatDrawerGeometry.width(container: 393), 393 * 0.91, accuracy: 0.001)
     }
 
-    /// Capped on anything wide, so it stays a drawer instead of becoming a page.
-    func testWidthIsCappedOnAWideContainer() {
-        XCTAssertEqual(ChatDrawerGeometry.width(container: 1024), ChatDrawerGeometry.maxWidth)
+    /// Past the base cap the drawer still takes half the room beside the cap, so a
+    /// wider phone gets a wider drawer instead of a wider sliver (440pt: 340 + 100 / 2).
+    func testWidthTakesHalfTheRoomBesideTheCap() {
+        XCTAssertEqual(ChatDrawerGeometry.width(container: 440), 390, accuracy: 0.001)
+        XCTAssertEqual(ChatDrawerGeometry.width(container: 874), 607, accuracy: 0.001)
+    }
+
+    /// Every container keeps a sliver showing: the closer the scrim taps on, and what
+    /// says the conversation is still there.
+    func testWidthAlwaysLeavesASliver() {
+        for container in stride(from: CGFloat(320), through: 1024, by: 1) {
+            let sliver = container - ChatDrawerGeometry.width(container: container)
+            XCTAssertGreaterThanOrEqual(sliver, 28.8 - 0.001, "container \(container)")
+            XCTAssertLessThan(ChatDrawerGeometry.width(container: container), container)
+        }
     }
 
     /// Before the first layout there is no container. The drawer still has to
