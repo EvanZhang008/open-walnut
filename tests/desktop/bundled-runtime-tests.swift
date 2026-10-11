@@ -41,6 +41,35 @@ struct BundledRuntimeTests {
         precondition(pinned["OPEN_WALNUT_RELEASE_BASE_URL"] == "http://127.0.0.1:9/r")
         precondition(pinned["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin")
 
+        // A release build carries this Mac's archive: install.sh takes it from this
+        // disk, whatever release mirror or version the caller's knobs name.
+        let res = "/Applications/My Apps/Walnut.app/Contents/Resources"
+        let tree: [String: [String]] = [
+            res + "/release": ["v0.9.1", ".DS_Store"],
+            res + "/release/v0.9.1": ["SHA256SUMS", "open-walnut-0.9.1-darwin-arm64.tar.gz"],
+        ]
+        let list: (String) -> [String] = { tree[$0] ?? [] }
+        let carried = BundledRuntime.carriedRelease(resources: res, arch: "arm64", list: list)
+        precondition(carried == BundledRuntime.CarriedRelease(version: "0.9.1", root: res + "/release"))
+        let offline = BundledRuntime.installEnvironment(base: [
+            "OPEN_WALNUT_VERSION": "0.7.0", "OPEN_WALNUT_RELEASE_BASE_URL": "http://127.0.0.1:9/r",
+        ], home: home, carried: carried)
+        precondition(offline["OPEN_WALNUT_RELEASE_BASE_URL"] == "file://" + res + "/release")
+        precondition(offline["OPEN_WALNUT_VERSION"] == "0.9.1")
+        precondition(offline["OPEN_WALNUT_INSTALL_DIR"] == rt.installDir)
+        // The Intel DMG on Apple silicon, or the other way round: download this Mac's build.
+        precondition(BundledRuntime.carriedRelease(resources: res, arch: "x64", list: list) == nil)
+        // A dev build carries nothing; nor does a release missing its checksums.
+        precondition(BundledRuntime.carriedRelease(resources: "/nowhere", arch: "arm64", list: list) == nil)
+        let noSums: (String) -> [String] = { $0.hasSuffix("/v0.9.1") ? ["open-walnut-0.9.1-darwin-arm64.tar.gz"] : list($0) }
+        precondition(BundledRuntime.carriedRelease(resources: res, arch: "arm64", list: noSums) == nil)
+        // Rosetta never turns an Apple silicon Mac into an Intel one.
+        precondition(BundledRuntime.machineArch(arm64Capable: true) == "arm64")
+        precondition(BundledRuntime.machineArch(arm64Capable: false) == "x64")
+        #if arch(arm64)
+        precondition(BundledRuntime.machineArch() == "arm64")
+        #endif
+
         // The server: the user's tools first, this runtime's Node last (the launcher's rule).
         let path = rt.serverPath(current: "/usr/bin:/bin", extra: ["/opt/homebrew/bin"])
         precondition(path == "/opt/homebrew/bin:/usr/bin:/bin:/Users/someone/.local/share/open-walnut/app/runtime/bin")
@@ -55,6 +84,8 @@ struct BundledRuntimeTests {
         precondition(BundledRuntime.friendlyStatus("Installing Open Walnut 0.7.0 (darwin-arm64)...") == "Getting Walnut 0.7.0...")
         precondition(BundledRuntime.friendlyStatus("Downloading open-walnut-0.7.0-darwin-arm64.tar.gz...") == "Downloading Walnut...")
         precondition(BundledRuntime.friendlyStatus("Unpacking...") == "Unpacking...")
+        precondition(BundledRuntime.friendlyStatus("Unpacking the open-walnut-0.9.1-darwin-arm64.tar.gz it came with...") == "Unpacking...")
+        precondition(BundledRuntime.downloadFraction(from: "  Installing Open Walnut 0.9.1 (darwin-arm64)...\n  Unpacking the open-walnut-0.9.1-darwin-arm64.tar.gz it came with...\n") == nil)
         precondition(BundledRuntime.friendlyStatus("Add /Users/someone/.local/bin to your PATH, then start it with:  walnut web") == "Starting Walnut...")
 
         // The download's share, off curl's bar: the newest figure after the last redraw.

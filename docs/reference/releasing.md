@@ -190,26 +190,36 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   (its own workflow, hourly). The formula keeps the archive packed through `install` and unpacks
   it in `post_install_steps`: Homebrew rewrites the install name of every Mach-O file in a keg it
   builds, and one prebuilt native module has no header room for that, so `brew install` failed.
-- **The Mac app**: job `mac-app` (`.github/workflows/mac-app.yml`) builds `Walnut.app` from the
-  release's tag, signs it with the Developer ID Application identity (hardened runtime,
-  `desktop/Walnut.entitlements`), notarizes and staples the app and then its DMG, has Gatekeeper
-  assess the DMG with a browser's quarantine mark on it, launches the mounted app on a fresh
-  `HOME` (it installs the release's own archive and serves the console), and only then attaches
-  `Walnut.dmg`. The app comes from the tag; the smoke that launches it comes from the workflow's
-  own commit (a second checkout in `harness/`), so a fix to the check reaches every release it
-  judges. The identity (`MACOS_CERT_P12_BASE64`, `MACOS_CERT_P12_PASSWORD`) and the
-  notary key (`APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, an App Store
-  Connect API key with the Developer role) are secrets of the `release` environment, which only
-  `main` may deploy to; the identity goes into a keychain made for the job and deleted after it.
-  Without them the app is built ad-hoc and kept as a workflow artifact, never attached. The app
-  is a small shell that is never modified: its first launch starts by itself (no setup screen),
-  runs the bundled `install.sh` with a progress bar read off curl's (`OPEN_WALNUT_PROGRESS=1`)
-  and opens the console, and the runtime it installed updates itself like any archive install.
-- **The cask**: right after `Walnut.dmg` is attached, the same job downloads it back from the
-  release, writes `walnut.rb` with its sha256 (`scripts/homebrew/cask.mjs`), installs it from
-  GitHub with `brew install --cask` (Homebrew quarantines it, as a browser does), requires
-  Gatekeeper to see a notarized Developer ID app, and attaches `walnut.rb`. The tap's workflow
-  copies it to `Casks/walnut.rb` with the formula: `brew install --cask evanzhang008/tap/walnut`.
+- **The Mac app**: job `mac-app` (`.github/workflows/mac-app.yml`) builds one `Walnut.app` per
+  Mac architecture from the release's tag, each carrying that release's archive for it
+  (`Contents/Resources/release/v<version>/`, beside the release's `SHA256SUMS`;
+  `scripts/desktop-carry-release.mjs`), signs it with the Developer ID Application identity
+  (hardened runtime, `desktop/Walnut.entitlements`), notarizes and staples the app and then its
+  DMG, has Gatekeeper assess the DMG with a browser's quarantine mark on it, launches the mounted
+  app on a fresh `HOME`, and only then attaches `Walnut-arm64.dmg` and `Walnut-x64.dmg`. On the
+  Apple silicon runner the arm64 app must install what it carries with every release URL dead;
+  the x64 app takes the path an Intel DMG takes on Apple silicon and downloads the arm64 build.
+  The app comes from the tag; the smoke that launches it comes from the workflow's own commit (a
+  second checkout in `harness/`), so a fix to the check reaches every release it judges, and it
+  still starts an app older than itself. `app_ref` on a dispatch builds another commit's app on a
+  released Walnut, through every check, and never attaches it. The identity
+  (`MACOS_CERT_P12_BASE64`, `MACOS_CERT_P12_PASSWORD`) and the notary key
+  (`APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, an App Store Connect API
+  key with the Developer role) are secrets of the `release` environment, which only `main` may
+  deploy to; the identity goes into a keychain made for the job and deleted after it. Without
+  them the apps are built ad-hoc and kept as workflow artifacts, never attached. A release older
+  than the carrying app gets none. The app is a signed shell that is never modified: its first
+  launch starts by itself (no setup screen), runs the bundled `install.sh` on what it carries (or
+  downloads it with a progress bar read off curl's, `OPEN_WALNUT_PROGRESS=1`) and opens the
+  console, and the runtime it installed updates itself like any archive install. A team's first
+  notarizations can take over an hour, later ones minutes: a job that waited 45 minutes fails
+  naming the submission, and runs again once `xcrun notarytool info <id>` says Accepted.
+- **The cask**: once both DMGs are attached, job `cask` downloads them back from the release,
+  writes `walnut.rb` with both sha256s (`arch arm: "arm64", intel: "x64"`;
+  `scripts/homebrew/cask.mjs`), installs it from GitHub with `brew install --cask` (Homebrew
+  quarantines it, as a browser does), requires Gatekeeper to see a notarized Developer ID app,
+  and attaches `walnut.rb`. The tap's workflow copies it to `Casks/walnut.rb` with the formula:
+  `brew install --cask evanzhang008/tap/walnut`.
 - **Updates**: the archive carries `runtime/open-walnut-runtime.json`. The updater
   (`src/core/self-update/install-kind.ts`) sees it and installs a newer release with the
   archive's own Node and npm into the archive's own prefix (`walnut update`, and on start), never

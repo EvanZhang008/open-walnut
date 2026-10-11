@@ -11,8 +11,9 @@
 # after that (`walnut update`, and on every start).
 #
 # Knobs: OPEN_WALNUT_VERSION (a release, default the newest), OPEN_WALNUT_INSTALL_DIR,
-# OPEN_WALNUT_BIN_DIR, OPEN_WALNUT_RELEASE_BASE_URL and OPEN_WALNUT_RELEASES_API (mirrors, tests),
-# OPEN_WALNUT_PROGRESS=1 (the download's progress bar without a terminal).
+# OPEN_WALNUT_BIN_DIR, OPEN_WALNUT_RELEASE_BASE_URL and OPEN_WALNUT_RELEASES_API (mirrors, tests;
+# a file:// base is a directory laid out like the releases, by path, not percent-encoded: the
+# release Walnut.app carries), OPEN_WALNUT_PROGRESS=1 (the download's progress bar without a terminal).
 set -eu
 
 repo="EvanZhang008/open-walnut"
@@ -29,6 +30,14 @@ say() { printf '  %s\n' "$1" >&2; }
 
 # fetch URL FILE [progress]: 0 on success, 44 on a 404, 1 otherwise.
 fetch() {
+  # A release on this disk (the one inside Walnut.app): no network at all.
+  case "$1" in
+    file://*)
+      [ -f "${1#file://}" ] || return 44
+      cp "${1#file://}" "$2" || return 1
+      return 0
+      ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
     # A progress bar for the one big download, when someone is watching: a
     # terminal, or the Mac app, which reads the percentage off it
@@ -118,7 +127,10 @@ elif [ "$code" -ne 0 ]; then
 fi
 expected="$(grep " \*\{0,1\}${archive}\$" "$staging/SHA256SUMS" | cut -d' ' -f1)"
 [ -n "$expected" ] || fail "release ${version} has no build for ${target}; install it with npm: npm install -g open-walnut@${version}"
-say "Downloading ${archive}..."
+case "$base_url" in
+  file://*) say "Unpacking the ${archive} it came with..." ;;
+  *) say "Downloading ${archive}..." ;;
+esac
 fetch "${base_url}/v${version}/${archive}" "$staging/${archive}" progress || fail "could not download ${archive}"
 actual="$(checksum "$staging/${archive}")"
 [ "$actual" = "$expected" ] || fail "${archive} does not match its SHA256SUMS entry (a broken or tampered download); nothing was changed"

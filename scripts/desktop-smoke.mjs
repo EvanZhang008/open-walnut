@@ -9,6 +9,11 @@
  *
  *   node scripts/desktop-smoke.mjs --app Walnut.app --version 0.7.0          (from the GitHub release)
  *   node scripts/desktop-smoke.mjs --app Walnut.app --archive <archive.tar.gz> (from a local mirror)
+ *   node scripts/desktop-smoke.mjs --app Walnut.app                          (the release it carries)
+ *
+ * An app that carries the release for this Mac (scripts/desktop-carry-release.mjs,
+ * one DMG per architecture) must install it with no network: every release URL
+ * it is given is dead, and its log must say it installed what it carries.
  *
  * Everything lives under --work (default a temp dir): HOME (so ~/.open-walnut,
  * ~/.local and Application Support), the daemon dir, and a port no one uses.
@@ -21,6 +26,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { carryRelease } from './desktop-carry-release.mjs'
 import { stopOwnDaemon } from './release-rehearsal/own-daemon.mjs'
 import { archiveVersion, publishLocally, serveReleases } from './release-rehearsal/runtime.mjs'
 
@@ -35,7 +41,7 @@ function parseArgs(argv) {
     else if (a === '--keep') out.keep = true
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.app || (!out.version && !out.archive)) throw new Error('usage: desktop-smoke.mjs --app <Walnut.app> (--version <x.y.z> | --archive <file>) [--work <dir>] [--keep]')
+  if (!out.app) throw new Error('usage: desktop-smoke.mjs --app <Walnut.app> [--version <x.y.z> | --archive <file>] [--work <dir>] [--keep]')
   return out
 }
 
@@ -70,6 +76,32 @@ function listener(port) {
   } catch { return null }
 }
 
+/** This Mac's architecture in install.sh's words, also under Rosetta (BundledRuntime.machineArch). */
+export function machineArch() {
+  try {
+    return execFileSync('sysctl', ['-n', 'hw.optional.arm64'], { encoding: 'utf8' }).trim() === '1' ? 'arm64' : 'x64'
+  } catch {
+    return 'x64' // the key exists only on Apple silicon
+  }
+}
+
+/**
+ * The release `app` carries for a Mac of `arch` (Contents/Resources/release,
+ * BundledRuntime.carriedRelease), as `{ version }`, or null: an app without one
+ * downloads the release's archive on its first launch.
+ */
+export function carriedFor(app, arch = machineArch()) {
+  const root = path.join(app, 'Contents', 'Resources', 'release')
+  let dirs = []
+  try { dirs = fs.readdirSync(root).filter((d) => /^v\d/.test(d)) } catch { return null }
+  for (const d of dirs) {
+    const version = d.slice(1)
+    const files = fs.readdirSync(path.join(root, d))
+    if (files.includes('SHA256SUMS') && files.includes(`open-walnut-${version}-darwin-${arch}.tar.gz`)) return { version }
+  }
+  return null
+}
+
 /**
  * Whether the app at `binary` still asks for its setup choice on a first launch:
  * an app built before the no-click first launch (797b3ec9, so 0.6.8 and older)
@@ -87,9 +119,23 @@ export function readsAutosetupKnob(binary) {
  * takes `version` from GitHub. Resolves with the steps' results; rejects on
  * the first failure, after printing the app's logs.
  */
-export async function smokeDesktopApp({ app: appBundle, work: made, version, releaseUrl = null }) {
+export async function smokeDesktopApp({ app: given, work: made, version, releaseUrl = null, carry = null }) {
   fs.mkdirSync(made, { recursive: true })
   const work = fs.realpathSync(made)
+  // `carry` ({ archive, sums }): a copy of the app, carrying that release, signed
+  // again as the dev build is (ad-hoc), the way a release build carries its own.
+  let appBundle = given
+  if (carry) {
+    appBundle = path.join(work, 'carried', 'Walnut.app')
+    fs.mkdirSync(path.dirname(appBundle), { recursive: true })
+    execFileSync('ditto', [given, appBundle])
+    carryRelease({ app: appBundle, ...carry })
+    execFileSync('codesign', ['--force', '--sign', '-', appBundle], { stdio: 'ignore' })
+  }
+  const carried = carriedFor(appBundle)
+  if (carried && version && carried.version !== version) throw new Error(`the app carries ${carried.version}, not ${version}`)
+  version = version ?? carried?.version
+  if (!version) throw new Error('the app carries no release for this Mac: name the one it installs (--version or --archive)')
   const home = path.join(work, 'home')
   fs.mkdirSync(home, { recursive: true })
   const support = path.join(home, 'Library', 'Application Support', 'Walnut')
@@ -106,11 +152,17 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
     WALNUT_DAEMON_DIR: path.join(work, 'daemon'),
     WALNUT_DESKTOP_PORTS: String(port),
   }
-  if (releaseUrl) {
-    env.OPEN_WALNUT_RELEASE_BASE_URL = releaseUrl
-    env.OPEN_WALNUT_RELEASES_API = `${releaseUrl}/no-api`
+  if (carried) {
+    // Nothing to download from: what it carries is all there is.
+    env.OPEN_WALNUT_RELEASE_BASE_URL = 'http://127.0.0.1:9/no-network'
+    env.OPEN_WALNUT_RELEASES_API = 'http://127.0.0.1:9/no-network'
+  } else {
+    if (releaseUrl) {
+      env.OPEN_WALNUT_RELEASE_BASE_URL = releaseUrl
+      env.OPEN_WALNUT_RELEASES_API = `${releaseUrl}/no-api`
+    }
+    env.OPEN_WALNUT_VERSION = version
   }
-  env.OPEN_WALNUT_VERSION = version
   const binary = path.join(appBundle, 'Contents', 'MacOS', 'Walnut')
   // A newer app starts by itself and has to show that here, with no knob.
   if (readsAutosetupKnob(binary)) env.WALNUT_DESKTOP_AUTOSETUP = '1'
@@ -142,7 +194,7 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
     app = null
   }
   try {
-    await step('first launch installs Walnut and serves the console', async () => {
+    await step(`first launch installs Walnut ${carried ? 'from the app, with no network,' : 'from the release'} and serves the console`, async () => {
       app = launch('app-1.log')
       await until('the console on the app\'s port', 20 * 60_000, () => answers(port))
       const config = JSON.parse(fs.readFileSync(path.join(support, 'config.json'), 'utf8'))
@@ -158,6 +210,12 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
       const command = pid ? execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim() : ''
       const node = fs.realpathSync(path.join(runtimeDir, 'app', 'runtime', 'bin', 'node'))
       if (!fs.realpathSync(command.split(' ')[0]).startsWith(node)) throw new Error(`the server on ${port} is "${command}", not the installed runtime's Node`)
+      const started = desktopLog().split('\n').map((l) => { try { return JSON.parse(l) } catch { return null } })
+        .filter((r) => r?.event === 'runtime_install_started')
+      const from = started.at(-1)?.from
+      const want = carried ? `carried ${version}` : 'download'
+      if (from !== undefined && from !== want) throw new Error(`the app installed from "${from}", expected "${want}"`)
+      if (carried && from === undefined) throw new Error('the app never said where it installed from')
       return `walnut ${printed}; server: ${command.slice(0, 120)}`
     })
     await step('the server goes when the app does', appGone)
@@ -204,7 +262,7 @@ async function main() {
       releases = await serveReleases(root)
       releaseUrl = releases.url
     }
-    await smokeDesktopApp({ app: opts.app, work, version: opts.version ?? archiveVersion(opts.archive), releaseUrl })
+    await smokeDesktopApp({ app: opts.app, work, version: opts.version ?? (opts.archive ? archiveVersion(opts.archive) : undefined), releaseUrl })
   } finally {
     await releases?.close()
     if (!opts.keep) removeWorkDir(work)

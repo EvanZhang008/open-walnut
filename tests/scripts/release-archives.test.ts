@@ -12,6 +12,7 @@
  * platform before upload.
  */
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,8 +20,9 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, shipsNativeBinary, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
-import { BUNDLE_ID, cask } from '../../scripts/homebrew/cask.mjs'
-import { readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
+import { BUNDLE_ID, DMG_ARCHES, cask, dmgName } from '../../scripts/homebrew/cask.mjs'
+import { carriedFor, readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
+import { archiveTarget, carryRelease } from '../../scripts/desktop-carry-release.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 
@@ -183,19 +185,24 @@ describe('formula.mjs', () => {
 })
 
 describe('cask.mjs', () => {
-  it('installs the release\'s Walnut.dmg, checked against its sha256', () => {
-    const rb = cask({ version: '0.7.0', sha256: SHA('a') })
+  const both = { arm64: SHA('a'), x64: SHA('b') }
+
+  it('installs the release\'s DMG for this Mac, each checked against its own sha256', () => {
+    const rb = cask({ version: '0.7.0', sha256: both })
     expect(rb).toMatch(/^cask "walnut" do$/m)
     expect(rb).toContain('version "0.7.0"')
-    expect(rb).toContain(`sha256 "${SHA('a')}"`)
-    expect(rb).toContain('url "https://github.com/EvanZhang008/open-walnut/releases/download/v#{version}/Walnut.dmg"')
+    // Homebrew's names for the two Macs, and the DMGs mac-app.yml attaches.
+    expect(rb).toContain('arch arm: "arm64", intel: "x64"')
+    expect(rb).toMatch(new RegExp(`sha256 arm:\\s+"${SHA('a')}",\\s+intel: "${SHA('b')}"`))
+    expect(rb).toContain('url "https://github.com/EvanZhang008/open-walnut/releases/download/v#{version}/Walnut-#{arch}.dmg"')
+    expect(DMG_ARCHES.map((a) => dmgName(a.arch))).toEqual(['Walnut-arm64.dmg', 'Walnut-x64.dmg'])
     expect(rb).toContain('app "Walnut.app"')
     // Homebrew 4.x reads a bare symbol as "this or newer"; the string form is deprecated.
     expect(rb).toContain('depends_on macos: :monterey')
   })
 
   it('zaps only what the app itself writes, never the user\'s data or the shared runtime', () => {
-    const zap = /zap trash: \[([\s\S]*?)\]/.exec(cask({ version: '0.7.0', sha256: SHA('a') }))![1]!
+    const zap = /zap trash: \[([\s\S]*?)\]/.exec(cask({ version: '0.7.0', sha256: both }))![1]!
     const paths = [...zap.matchAll(/"([^"]+)"/g)].map((m) => m[1]!)
     expect(paths.length).toBeGreaterThan(0)
     for (const p of paths) expect(p).toMatch(/^~\/Library\//)
@@ -207,15 +214,17 @@ describe('cask.mjs', () => {
     expect(/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(build)![1]).toBe(BUNDLE_ID)
   })
 
-  it('refuses what is not a stable version or a sha256', () => {
-    expect(() => cask({ version: '0.7.0-rehearsal.1', sha256: SHA('a') })).toThrow(/not a stable version/)
-    expect(() => cask({ version: 'v0.7.0"; system "x', sha256: SHA('a') })).toThrow(/not a stable version/)
-    expect(() => cask({ version: '0.7.0', sha256: 'abc' })).toThrow(/not a sha256/)
+  it('refuses what is not a stable version, or a missing or malformed sha256 for either DMG', () => {
+    expect(() => cask({ version: '0.7.0-rehearsal.1', sha256: both })).toThrow(/not a stable version/)
+    expect(() => cask({ version: 'v0.7.0"; system "x', sha256: both })).toThrow(/not a stable version/)
+    expect(() => cask({ version: '0.7.0', sha256: { arm64: SHA('a'), x64: 'abc' } })).toThrow(/not a sha256 \(for Walnut-x64\.dmg\)/)
+    expect(() => cask({ version: '0.7.0', sha256: { arm64: SHA('a') } })).toThrow(/for Walnut-x64\.dmg/)
+    expect(() => cask({ version: '0.7.0', sha256: SHA('a') as never })).toThrow(/not a sha256/)
   })
 
   it('is Ruby that parses', () => {
     const rb = path.join(tmp, 'walnut.rb')
-    fs.writeFileSync(rb, cask({ version: '0.7.0', sha256: SHA('a') }))
+    fs.writeFileSync(rb, cask({ version: '0.7.0', sha256: both }))
     expect(execFileSync('ruby', ['-c', rb], { encoding: 'utf8' })).toContain('Syntax OK')
   })
 })
@@ -380,37 +389,92 @@ describe('the Mac app', () => {
     }
   })
 
-  it('is built after the archives it installs, signed only inside the release environment, and attached only when notarized and launched', () => {
+  it('is built after the archives it carries, signed only inside the release environment, and attached only when notarized and launched', () => {
     const app = load('mac-app.yml')
-    const job = app.jobs.app as Job & { environment?: string }
+    const job = app.jobs.app as Job & { environment?: string; strategy?: { matrix: { arch: string[] } } }
     expect(job.environment).toBe('release')
+    // One app, and one DMG, per Mac architecture, each carrying that build.
+    expect(job.strategy?.matrix.arch).toEqual(['arm64', 'x64'])
     const mac = archives.jobs['mac-app'] as unknown as { needs: string; uses: string; secrets: string }
     expect(mac.needs).toBe('publish')
     expect(mac.uses).toBe('./.github/workflows/mac-app.yml')
     expect(mac.secrets).toBe('inherit')
     const names = job.steps.map((s) => s.name ?? s.uses ?? '')
     const at = (pattern: RegExp) => names.findIndex((n) => pattern.test(n))
+    // The release's own archive for that architecture goes into the build.
+    const fetched = job.steps[at(/^The release's archive/)]
+    expect(fetched.run).toContain('--pattern "open-walnut-$VERSION-darwin-$ARCH.tar.gz" --pattern SHA256SUMS')
+    expect(fetched.run).toContain('WALNUT_APP_RUNTIME=')
+    expect(at(/^The release's archive/)).toBeLessThan(at(/^Build Walnut\.app/))
     // Smoke-launched and assessed by Gatekeeper before the upload, the keychain gone after it.
-    expect(at(/^Gatekeeper opens it/)).toBeLessThan(at(/^Attach Walnut\.dmg/))
-    expect(at(/^First launch installs/)).toBeLessThan(at(/^Attach Walnut\.dmg/))
+    expect(at(/^Gatekeeper opens it/)).toBeLessThan(at(/^Attach Walnut-/))
+    expect(at(/^First launch installs/)).toBeLessThan(at(/^Attach Walnut-/))
     expect(job.steps[job.steps.length - 1].if).toBe('always()')
     expect(job.steps[job.steps.length - 1].run).toContain('security delete-keychain')
-    expect(job.steps.find((s) => s.name?.startsWith('Attach Walnut.dmg'))!.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
-    // The cask: from the DMG the release holds, after it is attached, installed by
-    // brew and assessed by Gatekeeper before walnut.rb goes up beside it.
-    const caskStep = job.steps.find((s) => s.name === 'Homebrew cask for the attached Walnut.dmg')!
-    expect(at(/^Homebrew cask/)).toBe(at(/^Attach Walnut\.dmg/) + 1)
-    expect(caskStep.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
-    const caskRun = caskStep.run!
-    expect(caskRun).toContain('gh release download "v$VERSION" --pattern Walnut.dmg')
-    expect(caskRun.indexOf('brew install --cask')).toBeLessThan(caskRun.indexOf("source=Notarized Developer ID"))
-    expect(caskRun.indexOf("source=Notarized Developer ID")).toBeLessThan(caskRun.indexOf('gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb"'))
+    const attach = job.steps.find((s) => s.name?.startsWith('Attach Walnut-'))!
+    expect(attach.if).toBe("steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'")
+    expect(attach.run).toBe('gh release upload "v$VERSION" "desktop/Walnut-$ARCH.dmg" --clobber')
+    // The cask: once both DMGs are up, from the DMGs the release holds, installed
+    // by brew and assessed by Gatekeeper before walnut.rb goes up beside them.
+    const caskJob = app.jobs.cask as Job & { needs: string; if: string; environment?: string }
+    expect(caskJob.needs).toBe('app')
+    expect(caskJob.if).toBe("needs.app.outputs.app == 'true' && needs.app.outputs.signed == 'true' && inputs.attach && inputs.app_ref == ''")
+    expect(caskJob.environment).toBeUndefined()
+    const caskRun = caskJob.steps.map((s) => s.run ?? '').join('\n')
+    expect(caskRun).toContain('--pattern Walnut-arm64.dmg --pattern Walnut-x64.dmg')
+    expect(caskRun.indexOf('brew install --cask')).toBeLessThan(caskRun.indexOf('source=Notarized Developer ID'))
+    expect(caskRun.indexOf('source=Notarized Developer ID')).toBeLessThan(caskRun.indexOf('gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb"'))
     // The secrets reach one step, as environment variables.
-    const withSecrets = job.steps.filter((s) => JSON.stringify(s).includes('secrets.'))
+    const withSecrets = [...job.steps, ...caskJob.steps].filter((s) => JSON.stringify(s).includes('secrets.'))
     expect(withSecrets.map((s) => s.name)).toEqual(['Signing identity and notary key, from the release environment'])
     expect(withSecrets[0].run).not.toContain('secrets.')
-    // The release's own app: built from its tag.
-    expect(job.steps[0].with).toEqual({ ref: 'v${{ inputs.version }}' })
+    // The release's own app: built from its tag. A trial of another commit's app
+    // (app_ref) goes through every check and is never attached.
+    expect(job.steps[0].with).toEqual({ ref: "${{ inputs.app_ref || format('v{0}', inputs.version) }}" })
+    expect((job as Job & { env: Record<string, string> }).env.ATTACH).toBe("${{ inputs.attach && inputs.app_ref == '' }}")
+  })
+
+  it('the release build carries the archive it is given, checked, and names its DMG for that architecture', () => {
+    const build = read('desktop/build-release.sh')
+    expect(build).toContain('node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE"')
+    expect(build).toContain('DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"')
+    // Carried before the app is signed: the archive is part of what is sealed and notarized.
+    expect(build.indexOf('desktop-carry-release.mjs')).toBeLessThan(build.indexOf('codesign --force --options runtime'))
+    // Where the app looks for it is where the carrier puts it.
+    expect(swift).toContain('resources + "/release"')
+    expect(swift).toContain('"open-walnut-\\(version)-darwin-\\(arch).tar.gz"')
+  })
+
+  it('carries a release for one architecture, refusing an archive its checksums do not name', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-'))
+    try {
+      const app = path.join(dir, 'Walnut.app')
+      fs.mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
+      const archive = path.join(dir, 'open-walnut-0.9.1-darwin-arm64.tar.gz')
+      fs.writeFileSync(archive, 'stand-in archive')
+      const sha = createHash('sha256').update('stand-in archive').digest('hex')
+      const sums = path.join(dir, 'SHA256SUMS')
+      fs.writeFileSync(sums, `${'0'.repeat(64)}  open-walnut-0.9.1-linux-x64.tar.gz\n${sha}  open-walnut-0.9.1-darwin-arm64.tar.gz\n`)
+      expect(carryRelease({ app, archive, sums })).toMatchObject({ version: '0.9.1', arch: 'arm64' })
+      const carried = path.join(app, 'Contents', 'Resources', 'release', 'v0.9.1')
+      expect(fs.readdirSync(carried).sort()).toEqual(['SHA256SUMS', 'open-walnut-0.9.1-darwin-arm64.tar.gz'])
+      // What the smoke and BundledRuntime read back: arm64 here, nothing for an Intel Mac.
+      expect(carriedFor(app, 'arm64')).toEqual({ version: '0.9.1' })
+      expect(carriedFor(app, 'x64')).toBeNull()
+      expect(carriedFor(dir, 'arm64')).toBeNull()
+      // A tampered archive, a Linux one, an unnamed one: no app carries it.
+      fs.writeFileSync(archive, 'something else')
+      expect(() => carryRelease({ app, archive, sums })).toThrow('does not match its SHA256SUMS entry')
+      const linux = path.join(dir, 'open-walnut-0.9.1-linux-x64.tar.gz')
+      fs.writeFileSync(linux, 'x')
+      expect(() => carryRelease({ app, archive: linux, sums })).toThrow('is not a Mac archive')
+      const other = path.join(dir, 'open-walnut-0.9.2-darwin-x64.tar.gz')
+      fs.writeFileSync(other, 'x')
+      expect(() => carryRelease({ app, archive: other, sums })).toThrow('names no open-walnut-0.9.2-darwin-x64.tar.gz')
+      expect(archiveTarget('open-walnut-0.9.1-darwin-x64.tar.gz')).toEqual({ version: '0.9.1', arch: 'x64' })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('judges a release with the checks of the workflow\'s own commit, never the tag\'s', () => {

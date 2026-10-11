@@ -8,10 +8,13 @@ It's deliberately thin — **all** the product lives in the main Open Walnut
 codebase. This wrapper only:
 
 - On first launch it installs the self-contained Walnut by itself (its own
-  Node inside, about 300 MB, with a progress bar) with the `install.sh` it carries in
-  `Contents/Resources`, the same script `curl … | sh` runs, into
-  `~/.local/share/open-walnut` (also linking `walnut` into `~/.local/bin`). Nothing
-  else needs to be installed. That copy updates itself; the app is never modified.
+  Node inside) with the `install.sh` it carries in `Contents/Resources`, the same
+  script `curl … | sh` runs, into `~/.local/share/open-walnut` (also linking
+  `walnut` into `~/.local/bin`). A release's app carries that Walnut too
+  (`Contents/Resources/release/`, one DMG per Mac architecture), so this takes a
+  few seconds and no network; one without it for this Mac downloads it (about
+  300 MB, with a progress bar). Nothing else needs to be installed. That copy
+  updates itself; the app is never modified.
   Or point it at an existing `~/.open-walnut` install or a source checkout.
 - For a source checkout, locates a suitable **Node.js** (mise / nvm / fnm /
   Homebrew / system, newest first, requires **Node 22+**) and **Git**.
@@ -40,6 +43,10 @@ Two scripts, same output bundle (`Walnut.app` in this directory):
 
 # Distributable: universal binary (arm64 + x86_64) + Walnut.dmg
 ./build-release.sh
+
+# A release's: carries that release's archive for one Mac, + Walnut-<arch>.dmg
+WALNUT_APP_VERSION=0.7.0 WALNUT_APP_RUNTIME=open-walnut-0.7.0-darwin-arm64.tar.gz \
+  WALNUT_APP_RUNTIME_SUMS=SHA256SUMS ./build-release.sh
 ```
 
 ### Signing
@@ -64,9 +71,11 @@ WALNUT_NOTARY_KEY=AuthKey_XXXX.p8 WALNUT_NOTARY_KEY_ID=XXXX WALNUT_NOTARY_ISSUER
 Releases do this in GitHub Actions (`.github/workflows/mac-app.yml`, called by
 `release-archives.yml` once the archives are attached): the identity and an App
 Store Connect API key live only in the repository's `release` environment, go
-into a keychain made for the job, and the DMG is attached only after Gatekeeper
-accepts it as a browser download and its first launch has installed that release
-and served the console (`scripts/desktop-smoke.mjs`).
+into a keychain made for the job, and each DMG (`Walnut-arm64.dmg`,
+`Walnut-x64.dmg`) is attached only after Gatekeeper accepts it as a browser
+download and its first launch has installed that release and served the console
+(`scripts/desktop-smoke.mjs`; the Apple silicon one from what it carries, with no
+network).
 
 Then either launch it in place or install it:
 
@@ -75,8 +84,9 @@ open Walnut.app                 # run from here
 cp -r Walnut.app ~/Applications # or install for the current user
 ```
 
-`build-release.sh` additionally produces `Walnut.dmg` — a drag-to-Applications
-disk image you can hand to other users.
+`build-release.sh` additionally produces `Walnut.dmg` (or `Walnut-<arch>.dmg`
+when it carries a release) — a drag-to-Applications disk image you can hand to
+other users.
 
 ## First run
 
@@ -88,8 +98,10 @@ A build that was not signed with a Developer ID and notarized (see
 xattr -dr com.apple.quarantine Walnut.app
 ```
 
-On first launch the app downloads the self-contained Walnut by itself (a
-minute or so, with a progress bar) and opens the console; nothing to click.
+On first launch the app installs the self-contained Walnut by itself and opens
+the console; nothing to click. A release's DMG carries it (a few seconds, no
+network); a build without it for this Mac downloads it (a minute or so, with a
+progress bar).
 **Use an existing installation instead…** on that screen points it at a
 directory you already have (a `~/.open-walnut` with a built `source/`, or a dev
 checkout); the download stops only once a folder is picked. A Mac where
@@ -100,8 +112,10 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
 
 `main.swift` is the whole app (one file, AppKit). Key pieces:
 
-- **Setup** — a first launch runs the bundled `install.sh` (`BundledRuntime.swift`,
-  which reads the download's percentage off its progress bar) and the server then
+- **Setup** — a first launch runs the bundled `install.sh` (`BundledRuntime.swift`)
+  on the release the app carries for this Mac, as a `file://` base, or else on
+  the GitHub release (reading the download's percentage off its progress bar),
+  and the server then
   runs on that copy's own Node. **Set Up Now** (from Use
   Existing, for a folder with no build) clones
   `https://github.com/EvanZhang008/open-walnut.git`, runs `npm install`, then

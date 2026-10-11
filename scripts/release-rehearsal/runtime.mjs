@@ -196,7 +196,7 @@ export async function rehearseRuntime({ work, archive = null, fromTgz = null, to
       await w.installFrom(INSTALL_SH, server.url)
       const v = w.version()
       if (!reports(v, version)) throw new Error(`the installed walnut says "${v}", expected ${version}`)
-      installed = { w, version }
+      installed = { w, version, archive: file }
       return `${path.basename(file)}: ${Math.round(fs.statSync(file).size / 1e6)} MB${detail}`
     })
     if (!ok) return ran
@@ -218,13 +218,19 @@ export async function rehearseRuntime({ work, archive = null, fromTgz = null, to
       return 'served and answered a session with no node on PATH'
     })
     // The Mac app's first launch: it installs this archive with the install.sh
-    // inside it and serves the console (scripts/desktop-smoke.mjs).
+    // inside it and serves the console (scripts/desktop-smoke.mjs), once
+    // downloading it from the release, once carrying it as a release's app does
+    // (with no network).
     const app = process.env.WALNUT_REHEARSAL_APP
     if (app) {
       ran++
       await scenario('archive-app', async () => {
-        const steps = await smokeDesktopApp({ app, work: path.join(work, 'desktop-app'), version: installed.version, releaseUrl: server.url })
-        return steps.map((s) => `${s.name} (${Math.round(s.secs)}s)`).join('; ')
+        const download = await smokeDesktopApp({ app, work: path.join(work, 'desktop-app'), version: installed.version, releaseUrl: server.url })
+        const carried = await smokeDesktopApp({
+          app, work: path.join(work, 'desktop-app-carried'), version: installed.version,
+          carry: { archive: installed.archive, sums: path.join(releases, `v${installed.version}`, 'SHA256SUMS') },
+        })
+        return [...download, ...carried].map((s) => `${s.name} (${Math.round(s.secs)}s)`).join('; ')
       })
     }
     const brew = process.env.WALNUT_REHEARSAL_BREW

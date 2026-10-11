@@ -16,6 +16,13 @@ set -euo pipefail
 #                                 an App Store Connect API key (.p8 path, key id,
 #                                 issuer id): notarize and staple the app, then
 #                                 the DMG
+#   WALNUT_APP_RUNTIME, WALNUT_APP_RUNTIME_SUMS
+#                                 a release's open-walnut-<version>-darwin-<arch>.tar.gz
+#                                 and its SHA256SUMS: the app carries them, so its
+#                                 first launch installs with no network
+#                                 (scripts/desktop-carry-release.mjs), and the DMG
+#                                 is Walnut-<arch>.dmg. Without them it is Walnut.dmg
+#                                 and its first launch downloads the release's.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Walnut"
@@ -69,6 +76,21 @@ lipo -archs "$MACOS/$APP_NAME"
 # every release attaches, so the app and `curl … | sh` install the same way.
 cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
 chmod 755 "$RESOURCES/install.sh"
+
+# The release it installs, inside it: one app, and one DMG, per Mac architecture.
+if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
+    CARRIED=$(node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE" \
+        --archive "$WALNUT_APP_RUNTIME" --sums "${WALNUT_APP_RUNTIME_SUMS:?WALNUT_APP_RUNTIME_SUMS must name the SHA256SUMS of that release}")
+    CARRIED_ARCH="${CARRIED%% *}"
+    CARRIED_VERSION="${CARRIED#* }"
+    if [ "$CARRIED_VERSION" != "$APP_VERSION" ]; then
+        echo "Walnut.app $APP_VERSION would carry Walnut $CARRIED_VERSION" >&2
+        exit 1
+    fi
+    DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"
+    rm -f "$DMG_OUT"
+    echo "Carries: $(basename "$WALNUT_APP_RUNTIME") ($(du -h "$WALNUT_APP_RUNTIME" | cut -f1))"
+fi
 
 # Create Info.plist
 cat > "$CONTENTS/Info.plist" << 'EOF'
@@ -214,6 +236,13 @@ notarize() {
     echo "$out"
     case "$out" in
         *'"status":"Accepted"'*) ;;
+        *'Timeout of'*)
+            # Apple is still working on it, which is not a rejection: a team's
+            # first submissions can take hours (2026-10-11: over an hour), later
+            # ones minutes. Run the job again once `notarytool info <id>` says Accepted.
+            id=$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+            echo "::error::Apple had not finished notarizing $(basename "$file") after 45 minutes (submission $id, not rejected). Run this job again once \`xcrun notarytool info $id\` says Accepted." >&2
+            return 1 ;;
         *)
             id=$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
             if [ -n "$id" ]; then

@@ -173,6 +173,45 @@ describe('install.sh', () => {
     expect(r.out).toContain(`release 0.8.0 has no build for ${TARGET}; install it with npm: npm install -g open-walnut@0.8.0`)
   })
 
+  // The release Walnut.app carries (desktop/BundledRuntime.swift): a directory
+  // laid out like the releases, under a path with a space, as an app folder may be.
+  it('installs a release from this disk with no network, checked against its SHA256SUMS', async () => {
+    const carried = path.join(scratch, 'My Apps', 'Walnut.app', 'Contents', 'Resources', 'release')
+    publishLocally(carried, '0.8.0', await fakeArchive('0.8.0'))
+    // Every network address is dead: the release on disk is all there is.
+    const r = await install(freshHome(), {
+      OPEN_WALNUT_RELEASE_BASE_URL: `file://${carried}`, OPEN_WALNUT_VERSION: '0.8.0',
+      OPEN_WALNUT_RELEASES_API: 'http://127.0.0.1:9/api.json', OPEN_WALNUT_PROGRESS: '1',
+    })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain(`Unpacking the open-walnut-0.8.0-${TARGET}.tar.gz it came with...`)
+    expect(r.out).not.toContain('Downloading')
+    expect(await printed(r.home)).toMatch(/^0\.8\.0 /)
+    // The carried copy is read, never moved or changed.
+    expect(fs.existsSync(path.join(carried, 'v0.8.0', `open-walnut-0.8.0-${TARGET}.tar.gz`))).toBe(true)
+    expect(leftovers(r.home)).toEqual([])
+  })
+
+  it('a release on this disk that does not match its checksum, or lacks this platform, changes nothing', async () => {
+    const carried = path.join(scratch, 'carried-bad')
+    fs.rmSync(carried, { recursive: true, force: true })
+    publishLocally(carried, '0.8.0', await fakeArchive('0.8.0'))
+    const sums = path.join(carried, 'v0.8.0', 'SHA256SUMS')
+    fs.writeFileSync(sums, fs.readFileSync(sums, 'utf8').replace(/^[0-9a-f]/, (c) => (c === '0' ? '1' : '0')))
+    const tampered = await install(freshHome(), { OPEN_WALNUT_RELEASE_BASE_URL: `file://${carried}`, OPEN_WALNUT_VERSION: '0.8.0' })
+    expect(tampered.code).not.toBe(0)
+    expect(tampered.out).toContain('does not match its SHA256SUMS entry')
+    expect(fs.existsSync(path.join(tampered.home, '.local/share/open-walnut'))).toBe(false)
+    // The checksums name this platform's archive, but the file is not there.
+    fs.rmSync(path.join(carried, 'v0.8.0', `open-walnut-0.8.0-${TARGET}.tar.gz`))
+    const missing = await install(freshHome(), { OPEN_WALNUT_RELEASE_BASE_URL: `file://${carried}`, OPEN_WALNUT_VERSION: '0.8.0' })
+    expect(missing.code).not.toBe(0)
+    expect(missing.out).toContain(`could not download open-walnut-0.8.0-${TARGET}.tar.gz`)
+    const noSums = await install(freshHome(), { OPEN_WALNUT_RELEASE_BASE_URL: `file://${carried}`, OPEN_WALNUT_VERSION: '0.9.0' })
+    expect(noSums.code).not.toBe(0)
+    expect(noSums.out).toContain('release 0.9.0 has no self-contained build')
+  })
+
   it('names npm when no release has a build at all', async () => {
     fs.writeFileSync(path.join(releases, 'api.json'), '[]')
     const r = await install(freshHome())

@@ -311,7 +311,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func startFreshSetup() {
         let home = NSHomeDirectory()
         let dataHome = home + "/.open-walnut"
-        let env = BundledRuntime.installEnvironment(base: ProcessInfo.processInfo.environment, home: home)
+        // A release build carries this Mac's archive: installed from the app, offline.
+        let carried = Bundle.main.resourcePath.flatMap {
+            BundledRuntime.carriedRelease(resources: $0, arch: BundledRuntime.machineArch(), list: BundledRuntime.listDirectory)
+        }
+        let env = BundledRuntime.installEnvironment(base: ProcessInfo.processInfo.environment, home: home, carried: carried)
         let bundled = BundledRuntime(installDir: env["OPEN_WALNUT_INSTALL_DIR"]!)
         try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
 
@@ -327,11 +331,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         retrySetup = { [weak self] in self?.startFreshSetup() }
         showBootstrapScreen(
-            detail: "Walnut downloads what it needs once (about 300 MB). After that it opens at once.",
+            detail: carried != nil
+                ? "This takes a few seconds, the first time only."
+                : "Walnut downloads what it needs once (about 300 MB). After that it opens at once.",
             offerExisting: true)
         statusLabel?.stringValue = "Getting Walnut..."
         try? FileManager.default.removeItem(at: bootstrapLogPath())
-        DesktopLogger.shared.log("runtime_install_started", fields: ["dir": bundled.installDir])
+        DesktopLogger.shared.log("runtime_install_started", fields: [
+            "dir": bundled.installDir, "from": carried.map { "carried " + $0.version } ?? "download",
+        ])
         setupGeneration += 1
         let generation = setupGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -349,6 +357,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.useRuntime(bundled, home: dataHome)
                 } else if result.success {
                     self.showError("The download finished, but Walnut is not in \(bundled.appDir) where this app looks for it.", details: result.output)
+                } else if carried != nil {
+                    self.showError("Walnut could not set itself up from this copy of the app. Download Walnut again from https://github.com/EvanZhang008/open-walnut/releases/latest", details: result.output)
                 } else {
                     self.showError("Walnut could not be downloaded. Check the internet connection and try again.", details: result.output)
                 }
