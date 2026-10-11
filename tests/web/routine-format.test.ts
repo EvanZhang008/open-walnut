@@ -68,6 +68,16 @@ describe('describeSchedule for an interval', () => {
 });
 
 describe('the trigger audit trail as sentences', () => {
+  it('a run the daemon had to repair says so after its verdict', () => {
+    const warnings = ['items[0].id was 490 chars (over 200); the daemon shortened it']
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'all-seen', warnings }))
+      .toBe('quiet — nothing new (all items already seen) · output repaired');
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'fired', items: 2, warnings, delivery: { status: 'ok', summary: 'sent to session Watch [ab12]' } }))
+      .toBe('fired, 2 new items → sent to session Watch [ab12] · output repaired');
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'all-seen', warnings: [] }))
+      .toBe('quiet — nothing new (all items already seen)');
+  });
+
   it('names each verdict, and never calls a retrying delivery "delivered"', () => {
     expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'all-seen' }))
       .toBe('quiet — nothing new (all items already seen)');

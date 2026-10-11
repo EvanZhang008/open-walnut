@@ -117,6 +117,7 @@ export function checkedAuditEntry(input: {
   reason?: TriggerAuditEntry['reason'];
   durationMs?: number;
   error?: string;
+  warnings?: readonly string[];
 }): TriggerAuditEntry {
   return compact({
     atMs: input.atMs,
@@ -124,7 +125,18 @@ export function checkedAuditEntry(input: {
     reason: input.reason,
     durationMs: input.durationMs,
     error: input.error,
+    warnings: auditWarnings(input.warnings),
   });
+}
+
+/** Most warnings one row keeps: the History line shows the first, the rest are for the curious. */
+const AUDIT_WARNINGS_MAX = 3;
+
+/** A row's warnings, bounded like every other string the audit stores; undefined when none. */
+export function auditWarnings(warnings: readonly unknown[] | undefined): string[] | undefined {
+  if (!Array.isArray(warnings)) return undefined;
+  const kept = [...new Set(warnings.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map(clampStored))];
+  return kept.length ? kept.slice(0, AUDIT_WARNINGS_MAX) : undefined;
 }
 
 export function firedAuditEntry(input: {
@@ -142,6 +154,7 @@ export function firedAuditEntry(input: {
   deliveredAtMs?: number;
   delivery: TriggerAuditDelivery;
   injected?: { chars: number; preview: string };
+  warnings?: readonly string[];
 }): TriggerAuditEntry {
   const merged = input.coalesced !== undefined && input.coalesced > 1;
   const oldest = merged && input.firstAtMs !== undefined ? input.firstAtMs : input.atMs;
@@ -159,6 +172,7 @@ export function firedAuditEntry(input: {
     deliveredAtMs: late ? input.deliveredAtMs : undefined,
     delivery: input.delivery,
     injected: input.injected,
+    warnings: auditWarnings(input.warnings),
   });
 }
 

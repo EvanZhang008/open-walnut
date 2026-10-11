@@ -257,22 +257,37 @@ describe('what brings a waiting task back', () => {
     expect((await task(taskId)).phase).toBe('TODO')
   })
 
-  it(`${MAX_CONSECUTIVE_CHECK_ERRORS} failing checks on its trigger hand the task back with a notice`, async () => {
+  it(`${MAX_CONSECUTIVE_CHECK_ERRORS} failing checks on its trigger hand the task back, and the stop letter says so`, async () => {
     const routineId = await createTrigger('flaky-check')
     await park()
+    // A clock-only failure run: no session notice (the cooldown is stamped), so
+    // the task is still WAITING when the trigger stops and must come back by hand-back.
+    const { getCronService } = await import('../../src/web/routes/cron.js')
+    const service = getCronService()!
+    await service.update(routineId, { state: { checkErrorNoticeAtMs: Date.now() } })
     for (let i = 1; i <= MAX_CONSECUTIVE_CHECK_ERRORS; i++) {
       await handleTriggerChecked('__local__', {
         type: 'trigger.checked', id: routineId, atMs: Date.now(), outcome: 'error',
         error: 'exit 1: gh: not logged in', durationMs: 2, nextRunAtMs: Date.now() + 300_000, consecutiveErrors: i,
       })
     }
-    const t = await task(taskId)
+    // The stop notice also wakes the session; its turn ends back in Needs Action.
+    let t = await task(taskId)
+    for (const deadline = Date.now() + 15_000; t.phase !== 'NEED_ACTION' && Date.now() < deadline;) {
+      await new Promise((r) => setTimeout(r, 100))
+      t = await task(taskId)
+    }
     expect(t.phase).toBe('NEED_ACTION')
     expect(t.unread).toBe(true)
+    // One message for the user, not a bell per layer: the letter names the hand-back.
     const { feed } = await listNotifications()
-    const note = feed.find((n) => n.dedupKey === `wait-trigger-failed:${taskId}:${routineId}`)
-    expect(note?.title).toContain('Stopped waiting:')
-    expect(note?.body).toContain('gh: not logged in')
+    expect(feed.find((n) => n.dedupKey === `wait-trigger-failed:${taskId}:${routineId}`)).toBeUndefined()
+    const { listLetters, getLetter } = await import('../../src/core/human-inbox/store.js')
+    const letter = (await listLetters()).letters.find((l) => l.subject.startsWith('Trigger "') && l.taskRefs?.includes(taskId))
+    expect(letter).toBeTruthy()
+    const full = JSON.stringify(await getLetter(letter!.id, { inlineMaxBytes: Infinity }))
+    expect(full).toContain('gh: not logged in')
+    expect(full).toContain('back in Needs Action')
     await req('DELETE', `/api/routines/${routineId}`)
   })
 })

@@ -40,6 +40,7 @@ import {
   type QueuedMessage, type QueueStore,
 } from './session-queue-store.js';
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
+import { staleTriggerText } from './routines/trigger-stale.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -274,11 +275,13 @@ export async function markProcessing(
     }
     const batch = head.lineUuid ? run : splitBatchAtUuid(run);
     const lineUuid = head.lineUuid ?? lineUuidFor(batch);
+    const now = Date.now();
     for (const m of batch) {
       m.status = 'processing';
       m.lineUuid = lineUuid;
       m.lineTries = (m.lineTries ?? 0) + 1;
       if (opts?.tracked) m.lineTracked = true;
+      m.message = staleTriggerText(m.message, m.enqueuedAt, now) ?? m.message;
     }
     return batch;
   }, stopFence !== undefined);
@@ -307,6 +310,7 @@ export async function markNextProcessing(sessionId: string): Promise<QueuedMessa
     if (!next) return null;
 
     next.status = 'processing';
+    next.message = staleTriggerText(next.message, next.enqueuedAt, Date.now()) ?? next.message;
     return { next, queueDepth: queue.length };
   });
   if (!picked) return [];

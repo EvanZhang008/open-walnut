@@ -33,7 +33,7 @@
  */
 
 import {
-  FIRE_BUDGET_WINDOW_MS, MAX_CONSECUTIVE_CHECK_ERRORS, MAX_FIRES_PER_DAY_DEFAULT, isHostDelivery,
+  FIRE_BUDGET_WINDOW_MS, MAX_FIRES_PER_DAY_DEFAULT, isHostDelivery,
 } from '../../providers/trigger-check-core.js';
 import type {
   HostDelivery, TriggerCheckedEvent, TriggerClaimReply, TriggerEvent, TriggerFiredEvent,
@@ -143,19 +143,13 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
       severity: 'warning',
     });
   }
-  if (!applied.disabled) return;
-
-  await notifyTrigger({
-    title: `Trigger "${applied.jobName ?? event.id}" was disabled`,
-    body: `${MAX_CONSECUTIVE_CHECK_ERRORS} check errors in a row on ${host}. Last error: ${event.error ?? 'unknown'}`,
-    dedupKey: `trigger-disabled:${event.id}`,
-  });
-  // The push is what actually stops the polling: the job is disabled in the
-  // store, so the recompiled set no longer contains it.
-  await pushTriggers(applied.host ?? host);
-  // A WAITING task that counted on this trigger would otherwise wait forever: hand it back.
-  const { handBackWaitingTaskOfDisabledTrigger } = await import('../task-wait-until.js');
-  await handBackWaitingTaskOfDisabledTrigger(event.id, event.error).catch((err) => log.cron.warn('hand-back after trigger disable failed', {
+  if (applied.disabled) {
+    // The push is what actually stops the polling: the job is disabled in the
+    // store, so the recompiled set no longer contains it.
+    await pushTriggers(applied.host ?? host);
+  }
+  const { reportTriggerHealth } = await import('./trigger-health.js');
+  await reportTriggerHealth(event, { ...applied, found: true }).catch((err) => log.cron.warn('trigger health report failed', {
     jobId: event.id, error: err instanceof Error ? err.message : String(err),
   }));
 }
@@ -303,6 +297,10 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     });
     await ackFires(host, head.id, applied.duplicateSeqs ?? []);
     return;
+  }
+  if (applied.recovered) {
+    const { dismissFailingNotice } = await import('./trigger-health.js');
+    await dismissFailingNotice(head.id);
   }
   if (applied.gaveUp) {
     await notifyTrigger({

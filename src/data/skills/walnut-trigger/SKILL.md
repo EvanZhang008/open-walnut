@@ -42,7 +42,22 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   cursor, stored verbatim, handed back on stdin). They are never merged, and
   `state` is never shown to the AI.
 - **Errors.** Non-zero exit, a timeout, no JSON on the last line, or over 64 KB
-  of stdout is a check error. Five in a row disable the trigger and notify.
+  of stdout is a check error. The first error of a run is reported into the
+  trigger's session (the error, the trigger id, the run time, and the
+  `trigger_test` call to try a fix); errors that go on for 3 checks or 30
+  minutes put a bell in front of the user; five in a row stop the trigger,
+  tell the session again, and send the user a letter. Fix the script, then
+  `trigger_resume`.
+- **One bad item never fails a run.** An `id` over 200 characters is
+  shortened to a stable id (its head plus a hash, the same every run, the
+  original kept as `fullId`), and an item that is not an object with a string
+  `id` is dropped; the other items and `state` still go through, the run does
+  not count as an error, and the fire and the History row say what was
+  repaired. Only output with no usable item left is an error. Keep ids short
+  anyway: the warning is there to make you fix the script.
+- **Stale fires say so.** A fire delivered over 5 minutes after its check ran,
+  or a trigger message that sat over an hour in the session's queue, carries a
+  line saying how old it is. Check the current state before you act on it.
 - **Limits.** 30s timeout (max 300), one run at a time, never faster than
   every 10s, and a fire budget: `maxFiresPerDay` (default 24) fires in a burst,
   refilling at that many per 24 hours, so a spent budget gives back one fire
@@ -264,8 +279,8 @@ task with them.
   fire budget still applies (a spent budget delivers the backlog on a later
   check, never drops it). After about 30 days paused it may have forgotten
   what it saw and start over like a new trigger. Resuming a stopped trigger
-  retries its check; fix the script first, since one more failure stops it
-  again.
+  starts its error count over; fix the script first (`trigger_test`), or five
+  more failures stop it again.
 - `trigger_delete '{"id":"..."}'`: remove it for good. The script file stays on
   disk.
 - The task's TRIGGER pill and the Routines page show the same thing, with Pause

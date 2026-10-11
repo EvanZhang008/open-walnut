@@ -6096,6 +6096,7 @@ function sendTriggerFire(entry, fire, replay) {
   if (fire.input !== undefined) payload.input = fire.input;
   if (fire.itemsTruncated) payload.itemsTruncated = true;
   if (fire.host) payload.host = fire.host;
+  if (fire.warnings && fire.warnings.length) payload.warnings = fire.warnings;
   if (replay) payload.replay = true;
   var delivered = sendTriggerEvent('trigger.fired', payload);
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now());
@@ -6149,6 +6150,7 @@ async function runTrigger(entry) {
       id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
       seq: fire ? fire.seq : undefined, items: fire ? fire.items.length : undefined,
       reason: decision.kind === 'quiet' ? decision.reason : undefined,
+      warnings: output.warnings && output.warnings.length ? output.warnings : undefined,
       durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs,
     });
     if (fire) {
@@ -6161,6 +6163,7 @@ async function runTrigger(entry) {
       nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
     };
     if (decision.kind === 'quiet') { checked.reason = decision.reason; quiet.reason = decision.reason; }
+    if (output.warnings && output.warnings.length) checked.warnings = output.warnings;
     sendTriggerEvent('trigger.checked', checked);
     return quiet;
   } finally {

@@ -29,8 +29,11 @@ const CHECK_CONTRACT =
   + 'daemon already delivered are dropped, so fire:true with only known ids is quiet, and fire:true with '
   + 'NO items fires every single time (the script did its own judging). `input` goes to the AI THIS run; '
   + '`state` is the script talking to its NEXT run (stored verbatim, handed back on stdin). They are never '
-  + 'merged. Non-zero exit, a timeout, no JSON on the last line, or over 64KB of stdout is a check error; '
-  + 'five in a row disable the trigger.'
+  + 'merged. Non-zero exit, a timeout, no JSON on the last line, or over 64KB of stdout is a check error: '
+  + 'the first one is reported into this session, and five in a row stop the trigger and tell the user. '
+  + 'One bad item does not fail the run: an id over 200 chars is shortened to a stable id (its head plus a '
+  + 'hash, the original kept as fullId) and an item with no string id is dropped, each with a warning in the '
+  + 'fire and on the History row; only output with no usable item left is an error.'
 
 const TRIGGER_LIST_BINDING: HttpBinding = { method: 'GET', path: '/routines' }
 
@@ -256,19 +259,25 @@ defineOp({
       ...(typeof id === 'string' && id ? { id } : {}),
     }) as { result?: Record<string, unknown> } | undefined
     const result = (body?.result ?? {}) as {
-      parsed?: unknown; wouldFire?: boolean; newItemCount?: number; error?: string | null
+      parsed?: { warnings?: unknown } | null; wouldFire?: boolean; newItemCount?: number; error?: string | null
     }
+    const warnings = Array.isArray(result.parsed?.warnings) ? result.parsed.warnings.map(String) : []
+    const repaired = warnings.length
+      ? ` The daemon had to repair its output, so it still counts, but fix the script: ${warnings.join('; ')}.`
+      : ''
     const outcome = result.parsed
       ? result.wouldFire
-        ? `The script parsed and WOULD fire now (${result.newItemCount ?? 0} new item(s)).`
-        : 'The script parsed and would NOT fire right now — that is a working check with nothing to report.'
+        ? `The script parsed and WOULD fire now (${result.newItemCount ?? 0} new item(s)).${repaired}`
+        : `The script parsed and would NOT fire right now — that is a working check with nothing to report.${repaired}`
       : `The script did not produce a usable answer: ${result.error ?? 'no JSON on the last line of stdout'}`
     return withOutcome(
       { ...(body ?? {}) },
       outcome,
-      result.parsed
-        ? 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.'
-        : 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.',
+      !result.parsed
+        ? 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.'
+        : warnings.length
+          ? 'Fix what the daemon repaired (keep each item id under 200 chars, every item an object with a string "id"), then test again.'
+          : 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.',
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
@@ -307,7 +316,7 @@ defineOp({
   title: 'Resume a paused Walnut trigger',
   description:
     'Turn a paused (or stopped) trigger back on. ' + RESUME_SEMANTICS + ' A trigger Walnut stopped because its '
-    + 'check kept failing is retried; fix the script first (trigger_test), since one more failure stops it again. '
+    + 'check kept failing starts its error count over: fix the script first (trigger_test), or five more failures stop it again. '
     + 'Already running is not an error.',
   input: {
     id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),

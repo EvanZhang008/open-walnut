@@ -460,10 +460,11 @@ describe('trigger.checked from the daemon', () => {
     // A disabled trigger has no next check at all.
     expect(job.state.nextRunAtMs).toBeUndefined()
 
-    const { feed } = await listNotifications()
-    const note = feed.find((n) => n.dedupKey === `trigger-disabled:${id}`)
-    expect(note?.title).toContain('broken watcher')
-    expect(note?.body).toContain('jq: command not found')
+    // The user hears it as a letter (its own bell); trigger-health.test.ts covers the rest.
+    const { listLetters } = await import('../../src/core/human-inbox/store.js')
+    const letter = (await listLetters()).letters.find((l) => l.subject.includes('"broken watcher"'))
+    expect(letter?.subject).toBe(`Trigger "broken watcher" stopped after ${MAX_CONSECUTIVE_CHECK_ERRORS} failed checks`)
+    expect(letter?.textPreview ?? '').toContain('stopped polling')
   })
 
   it('a check the fire budget holds tells the user once a day, even after they dismiss it', async () => {

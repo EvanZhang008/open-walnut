@@ -4707,6 +4707,7 @@ function sendTriggerFire(entry: ArmedTrigger, fire: PendingFire, replay: boolean
     ...(fire.itemsTruncated ? { itemsTruncated: true } : {}),
     durationMs: fire.durationMs, nextRunAtMs: entry.nextRunAtMs,
     ...(fire.host ? { host: fire.host } : {}),
+    ...(fire.warnings?.length ? { warnings: fire.warnings } : {}),
     ...(replay ? { replay: true } : {}),
   })
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now())
@@ -4767,6 +4768,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     logMsg('info', 'trigger run', {
       id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
       ...(fire ? { seq: fire.seq, items: fire.items.length } : { reason: decision.kind === 'quiet' ? decision.reason : undefined }),
+      ...(output.warnings?.length ? { warnings: output.warnings } : {}),
       durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs,
     })
     if (fire) {
@@ -4777,6 +4779,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     sendTriggerEvent('trigger.checked', {
       id: entry.def.id, atMs: now, outcome: 'quiet', ...(reason ? { reason } : {}),
       durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+      ...(output.warnings?.length ? { warnings: output.warnings } : {}),
     })
     return { outcome: 'quiet', ...(reason ? { reason } : {}) }
   } finally {

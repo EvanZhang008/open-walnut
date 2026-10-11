@@ -13,7 +13,7 @@ import {
   headChars, tailChars,
   CHECK_STDOUT_CAP, CHECK_STATE_CAP, CHECK_INPUT_CAP, CHECK_ITEMS_CAP, MAX_FIRES_PER_DAY_DEFAULT, SEEN_MAX,
   FIRE_BUDGET_WINDOW_MS, CHECK_ITEMS_PARSE_MAX, fireBudgetNextAtMs, fireBudgetUsed, dayKey,
-  PENDING_FIRES_MAX, MIN_EVERY_MS,
+  PENDING_FIRES_MAX, MIN_EVERY_MS, CHECK_ITEM_ID_MAX, CHECK_WARNINGS_MAX, shortItemId, boundedWarnings,
   triggersSetHash, triggerStateFileName,
   type TriggerDef,
 } from '../../src/providers/trigger-check-core.js';
@@ -43,6 +43,7 @@ describe('parseCheckStdout', () => {
   });
 
   it('validates items: objects with string ids, duplicates folded, count capped', () => {
+    // With nothing usable left the script is broken, not one item: still an error.
     expect(parseCheckStdout('{"fire": true, "items": [1]}')).toMatchObject({ ok: false, error: expect.stringContaining('items[0]') });
     expect(parseCheckStdout('{"fire": true, "items": [{"id": ""}]}')).toMatchObject({ ok: false, error: expect.stringContaining('items[0].id') });
     const dup = parsedOk('{"fire": true, "items": [{"id": "a", "n": 1}, {"id": "a", "n": 2}, {"id": "b"}]}');
@@ -57,6 +58,75 @@ describe('parseCheckStdout', () => {
     const capped = parsedOk(JSON.stringify({ fire: true, items: huge }));
     expect(capped.output.items).toHaveLength(CHECK_ITEMS_PARSE_MAX);
     expect(capped.itemsTruncated).toBe(true);
+  });
+
+  // 2026-10-09: one id of 490 chars failed five runs in a row and the trigger was
+  // stopped; the other items and the cursor were lost with it.
+  describe('one bad item never fails the run', () => {
+    const longId = (tail: string) => `${'acme-pipeline/approval-workflow/'.repeat(14)}${tail}`;
+
+    it('shortens an over-long id to a stable head plus hash and keeps the original', () => {
+      const raw = longId('run-1');
+      expect(raw.length).toBeGreaterThan(CHECK_ITEM_ID_MAX);
+      const p = parsedOk(JSON.stringify({ fire: true, items: [{ id: 'short' }, { id: raw, title: 't' }], state: { c: 7 } }));
+      const [short, long] = p.output.items!;
+      expect(short).toEqual({ id: 'short' });
+      expect(long.id.length).toBeLessThanOrEqual(CHECK_ITEM_ID_MAX);
+      expect(long.id).toBe(shortItemId(raw));
+      expect(long.id.startsWith(raw.slice(0, 100))).toBe(true);
+      expect(long).toMatchObject({ fullId: raw, title: 't' });
+      // The state still goes through.
+      expect(p.output.state).toEqual({ c: 7 });
+      expect(p.output.warnings).toEqual([
+        `items[1].id was ${raw.length} chars (over ${CHECK_ITEM_ID_MAX}); the daemon shortened it to a stable id and kept the original in "fullId"`,
+      ]);
+      // Same id in, same id out (the seen set dedups it next run); a different
+      // tail behind the same long head is a different id.
+      expect(shortItemId(raw)).toBe(shortItemId(longId('run-1')));
+      expect(shortItemId(longId('run-2'))).not.toBe(shortItemId(raw));
+      expect(shortItemId('a'.repeat(CHECK_ITEM_ID_MAX))).toBe('a'.repeat(CHECK_ITEM_ID_MAX));
+    });
+
+    it('never cuts a long id inside a surrogate pair', () => {
+      // U+1F600 is two UTF-16 units; place one across the cut point.
+      const raw = `${'x'.repeat(CHECK_ITEM_ID_MAX - 18)}\u{1F600}${'y'.repeat(300)}`;
+      const id = shortItemId(raw);
+      const head = id.slice(0, id.lastIndexOf('~'));
+      expect(head.endsWith('\uD83D')).toBe(false);
+      expect(id).toMatch(/~[0-9a-f]{16}$/);
+    });
+
+    it('a shortened id is seen next run, so the item fires once', () => {
+      const raw = longId('seen');
+      const out = (stdout: string) => parsedOk(stdout).output;
+      const state = emptyHostState(NOW);
+      const first = out(JSON.stringify({ fire: true, items: [{ id: raw }] }));
+      const fire = applyCheckOutcome(state, first, decideCheck(def, first, state, NOW), NOW, 1);
+      expect(fire?.items.map((i) => i.id)).toEqual([shortItemId(raw)]);
+      expect(fire?.warnings?.[0]).toContain('shortened');
+      const again = out(JSON.stringify({ fire: true, items: [{ id: raw }] }));
+      expect(decideCheck(def, again, state, NOW + 60_000)).toEqual({ kind: 'quiet', reason: 'all-seen' });
+    });
+
+    it('drops an item with no usable id, keeps the rest, and says so', () => {
+      const p = parsedOk(JSON.stringify({ fire: true, items: [{ id: 'a' }, { id: 3 }, 'b', { id: 'c' }], state: 's' }));
+      expect(p.output.items!.map((i) => i.id)).toEqual(['a', 'c']);
+      expect(p.output.state).toBe('s');
+      expect(p.output.warnings).toEqual(['2 items dropped, the first because items[1].id must be a non-empty string']);
+    });
+
+    it('bounds the warnings it carries', () => {
+      const items = Array.from({ length: 9 }, (_, i) => ({ id: longId(`n${i}`) }));
+      const p = parsedOk(JSON.stringify({ fire: true, items }));
+      expect(p.output.items).toHaveLength(9);
+      expect(p.output.warnings).toHaveLength(CHECK_WARNINGS_MAX);
+      expect(p.output.warnings!.at(-1)).toBe('and 5 more warnings like these');
+      expect(boundedWarnings(['a\nb   c', ' '])).toEqual(['a b c']);
+    });
+
+    it('a clean run carries no warnings key at all', () => {
+      expect(parsedOk('{"fire": true, "items": [{"id": "a"}]}').output).not.toHaveProperty('warnings');
+    });
   });
 
   it('caps input with a visible marker and keeps state only when the key was printed', () => {

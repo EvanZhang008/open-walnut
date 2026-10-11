@@ -168,21 +168,28 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
  * A trigger that delivers to a WAITING task was switched off by the server (five
  * check errors in a row): nothing will wake that task now, so it comes back to
  * the human. Any other routine, or a task in any other phase, is left alone.
+ * `notify: false` when the caller tells the user itself (the disable letter).
+ * Returns whether the task was handed back.
  */
-export async function handBackWaitingTaskOfDisabledTrigger(jobId: string, error: string | undefined): Promise<void> {
+export async function handBackWaitingTaskOfDisabledTrigger(
+  jobId: string,
+  error: string | undefined,
+  opts: { notify?: boolean } = {},
+): Promise<boolean> {
   const { getRoutine } = await import('./routines/routines-core.js');
   const job = await getRoutine(jobId).then((r) => r.job as { name?: string; executor?: { type?: string; config?: { target?: unknown } } }).catch(() => null);
   const target = job?.executor?.type === 'session' ? job.executor.config?.target : undefined;
-  if (typeof target !== 'string' || !target) return;
+  if (typeof target !== 'string' || !target) return false;
   const { getTask, updateTaskRaw } = await import('./task-manager.js');
   const task = await getTask(target).catch(() => null);
-  if (!task || task.phase !== 'WAITING') return;
+  if (!task || task.phase !== 'WAITING') return false;
   const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', unread: true }, {
     emitEvent: true, push: true, source: 'trigger-check-failed', leaveHeld: true,
     shouldUpdate: (current) => current.phase === 'WAITING',
   });
-  if (!res.task) return;
+  if (!res.task) return false;
   log.task.warn('waiting task handed back: its trigger kept failing', { taskId: task.id, routineId: jobId, error });
+  if (opts.notify === false) return true;
   try {
     const { addNotification } = await import('./notifications/store.js');
     await addNotification({
@@ -196,6 +203,7 @@ export async function handBackWaitingTaskOfDisabledTrigger(jobId: string, error:
   } catch (err) {
     log.task.warn('wait trigger failure notification failed', { taskId: task.id, error: errText(err) });
   }
+  return true;
 }
 
 /** The boot scan: every WAITING task's clock, including one that passed while Walnut was down. Exported for tests. */

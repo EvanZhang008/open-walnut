@@ -17,7 +17,7 @@ import type { CronJob, CronServiceState } from './types.js';
 import { ensureLoaded, persist } from './store.js';
 import { applyJobResult, emit, locked } from './timer.js';
 import {
-  appendAudit, auditDelivery, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
+  appendAudit, auditDelivery, auditWarnings, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
   TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
 } from './trigger-audit.js';
 
@@ -44,10 +44,38 @@ export interface TriggerCheckedApplied {
    * `maxFiresPerDay` is the stored cap (absent = the default), for the notice.
    */
   budgetHeld?: { maxFiresPerDay?: number; everyMs?: number };
+  /** Where a notice about this check goes, and what it can say (trigger-health.ts). */
+  targetTaskId?: string;
+  checkRun?: string;
+  everyMs?: number;
+  /** The daemon repaired what this quiet check printed, and the session has not been told today. */
+  warningsToTell?: string[];
+  /** This error starts a run of failures and the session has not been told of one lately. */
+  tellSessionError?: boolean;
+  /** The failures went on past the user's threshold; the user has not been told about this run. */
+  tellUserFailing?: boolean;
+  /** When the current run of failed checks began. */
+  errorSinceMs?: number;
+  /** A check passed after a run the user was told about: their notice is out of date. */
+  recovered?: boolean;
 }
 
 /** A trigger the fire budget keeps holding is worth one notice a day, not one per check. */
 export const FIRE_BUDGET_NOTICE_EVERY_MS = 24 * 60 * 60 * 1000;
+/** The same script repeats the same contract slip every check: the session hears it once a day. */
+export const WARNING_NOTICE_EVERY_MS = 24 * 60 * 60 * 1000;
+/** A source that fails now and then must not wake its session every time it does. */
+export const CHECK_ERROR_SESSION_NOTICE_EVERY_MS = 6 * 60 * 60 * 1000;
+/** The user hears about failures that go on this many checks, or this long, whichever comes first. */
+export const CHECK_ERROR_USER_AFTER_ERRORS = 3;
+export const CHECK_ERROR_USER_AFTER_MS = 30 * 60 * 1000;
+
+/** The task a session-executor routine delivers into, if it has one. */
+export function routineTargetTask(job: CronJob): string | undefined {
+  if (job.executor?.type !== 'session') return undefined;
+  const target = (job.executor.config as { target?: unknown } | undefined)?.target;
+  return typeof target === 'string' && target ? target : undefined;
+}
 
 export interface TriggerFiredApplied {
   found: boolean;
@@ -74,6 +102,8 @@ export interface TriggerFiredApplied {
   duplicateSeqs?: number[];
   /** The delivered batch's identity: its lowest new seq (what the audit row and retries key on). */
   seq?: number;
+  /** The check worked after a run of failures the user was told about. */
+  recovered?: boolean;
 }
 
 /**
@@ -168,6 +198,7 @@ export async function applyTriggerChecked(
       job.state.lastError = undefined;
       job.updatedAtMs = atMs;
     }
+    const health = checkHealth(job, event.outcome, atMs);
 
     job.state.lastCheck = {
       atMs,
@@ -181,9 +212,15 @@ export async function applyTriggerChecked(
     // the daemon reports a fire through that path, never through checked.
     job.state.checkLog = appendAudit(
       job.state.checkLog,
-      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error: event.error }),
+      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error: event.error, warnings: event.warnings }),
       TRIGGER_CHECK_LOG_MAX,
     );
+    const warnings = event.outcome === 'quiet' ? auditWarnings(event.warnings) : undefined;
+    let warningsToTell: string[] | undefined;
+    if (job.enabled && warnings && atMs - (job.state.warningNoticeAtMs ?? 0) >= WARNING_NOTICE_EVERY_MS) {
+      job.state.warningNoticeAtMs = atMs;
+      warningsToTell = warnings;
+    }
     // AFTER applyJobResult: its error backoff computes a server-side next run,
     // which for a trigger is always a guess. The daemon's report wins.
     // A check that was already running when the trigger was paused still
@@ -229,8 +266,46 @@ export async function applyTriggerChecked(
       consecutiveErrors: job.state.consecutiveErrors ?? 0,
       ...(event.error ? { error: event.error } : {}),
       ...(budgetHeld ? { budgetHeld } : {}),
+      ...(routineTargetTask(job) ? { targetTaskId: routineTargetTask(job) } : {}),
+      checkRun: job.check.run,
+      ...(job.schedule.kind === 'every' ? { everyMs: job.schedule.everyMs } : {}),
+      ...(warningsToTell ? { warningsToTell } : {}),
+      ...health,
     };
   });
+}
+
+/**
+ * Who should hear about this check's outcome (trigger-health.ts sends it). Runs
+ * after the error count is updated and before the disable, under the store lock,
+ * so two reports never both decide to tell. Only a polling trigger counts: a late
+ * report from a paused one tells no one.
+ */
+function checkHealth(
+  job: CronJob,
+  outcome: TriggerCheckedEvent['outcome'],
+  atMs: number,
+): Pick<TriggerCheckedApplied, 'tellSessionError' | 'tellUserFailing' | 'errorSinceMs' | 'recovered'> {
+  const s = job.state;
+  if (outcome !== 'error') {
+    if (typeof s.checkErrorUserNoticeSinceMs !== 'number') return {};
+    s.checkErrorUserNoticeSinceMs = undefined;
+    return { recovered: true };
+  }
+  const errors = s.consecutiveErrors ?? 0;
+  if (errors <= 1 || typeof s.checkErrorSinceMs !== 'number') s.checkErrorSinceMs = atMs;
+  const since = s.checkErrorSinceMs;
+  if (!job.enabled) return { errorSinceMs: since };
+  const tellSessionError = errors === 1 && atMs - (s.checkErrorNoticeAtMs ?? 0) >= CHECK_ERROR_SESSION_NOTICE_EVERY_MS;
+  if (tellSessionError) s.checkErrorNoticeAtMs = atMs;
+  const tellUserFailing = errors >= 2 && s.checkErrorUserNoticeSinceMs !== since
+    && (errors >= CHECK_ERROR_USER_AFTER_ERRORS || atMs - since >= CHECK_ERROR_USER_AFTER_MS);
+  if (tellUserFailing) s.checkErrorUserNoticeSinceMs = since;
+  return {
+    errorSinceMs: since,
+    ...(tellSessionError ? { tellSessionError } : {}),
+    ...(tellUserFailing ? { tellUserFailing } : {}),
+  };
 }
 
 export type DeliverResult = {
@@ -387,7 +462,13 @@ export async function applyTriggerFired(
         ...(result.delivered?.sessionId ? { sessionId: result.delivered.sessionId } : {}),
       }),
       ...(result.delivered?.text ? { injected: injectedPreview(result.delivered.text) } : {}),
+      warnings: fresh.flatMap((e) => (Array.isArray(e.warnings) ? e.warnings : [])),
     });
+    // A fire's envelope carries its warnings, so a delivered one has told the session.
+    if (result.status === 'ok' && auditEntry.warnings) target.state.warningNoticeAtMs = endedAt;
+    // A fire is a check that worked: the user's "keeps failing" bell is out of date.
+    const recovered = typeof target.state.checkErrorUserNoticeSinceMs === 'number';
+    if (recovered) target.state.checkErrorUserNoticeSinceMs = undefined;
     const stamped = { ...auditEntry, ...(identity.epoch ? { epoch: identity.epoch } : {}) };
     target.state.fireLog = mergeFireAttempt(target.state.fireLog, stamped, TRIGGER_FIRE_LOG_MAX);
     // Both lists carry the fire: checkLog is "what has this trigger been doing",
@@ -447,6 +528,7 @@ export async function applyTriggerFired(
       ...(result.summary ? { summary: result.summary } : {}),
       duplicateSeqs,
       seq: identity.seq,
+      ...(recovered ? { recovered } : {}),
     };
   });
 }

@@ -102,6 +102,8 @@ export type TriggerAuditEntry = {
   delivery?: TriggerAuditDelivery;
   /** Fires only: the message the session actually received, clamped. */
   injected?: { chars: number; preview: string };
+  /** What the daemon repaired in what the check printed (an over-long id, a dropped item). */
+  warnings?: string[];
 };
 
 /** The daemon's last report about a check, for the card and the error counter. */
@@ -216,6 +218,20 @@ export type CronJobState = {
    * the next held check five minutes later.
    */
   fireBudgetNoticeAtMs?: number;
+  /**
+   * Check jobs only: when the target task's session was last told the daemon had
+   * to repair what the check printed (an over-long id shortened, an item dropped).
+   * At most once a day: the same script repeats the same slip on every check.
+   */
+  warningNoticeAtMs?: number;
+  /**
+   * Check jobs only, for telling people a check keeps failing (trigger-health.ts):
+   * when the current run of failed checks began, when the target task's session was
+   * last told a check failed, and the run (named by its start) the user was told about.
+   */
+  checkErrorSinceMs?: number;
+  checkErrorNoticeAtMs?: number;
+  checkErrorUserNoticeSinceMs?: number;
   /**
    * Check jobs only: the highest fire already processed, as (epoch, seq). The
    * daemon's seq restarts at 0 whenever its state file is recreated (a reboot

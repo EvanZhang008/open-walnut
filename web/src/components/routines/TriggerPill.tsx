@@ -31,6 +31,7 @@ import {
   auditClock, auditHistory, describeAuditEntry, describeCheck, describeFireTally, describeLastCheck,
   describeNextRun, describeSchedule, describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
+import { TRIGGER_STOP_AFTER_ERRORS } from '../../../../src/core/cron/trigger-run-state';
 import '@/styles/trigger-state.css';
 import { openSessionOnHome } from '@/utils/open-session';
 import '@/styles/routine-description.css';
@@ -81,7 +82,9 @@ function AuditRow({ entry, onOpenSession }: { entry: RoutineAuditEntry; onOpenSe
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLLIElement>(null);
   const sessionId = entry.delivery?.sessionId;
-  const canOpen = entry.outcome === 'fired' && (!!entry.injected || !!sessionId);
+  const fired = entry.outcome === 'fired';
+  const warnings = entry.warnings ?? [];
+  const canOpen = (fired && (!!entry.injected || !!sessionId)) || warnings.length > 0;
   // The list scrolls inside a bounded flyout, so a row opened near its bottom edge
   // puts the injected text half below the fold with nothing saying to scroll. The
   // whole ROW is scrolled, not just the detail: bringing only the detail into view
@@ -104,7 +107,15 @@ function AuditRow({ entry, onOpenSession }: { entry: RoutineAuditEntry; onOpenSe
       </button>
       {open && (
         <div className="trigger-audit-detail">
-          {entry.injected ? (
+          {warnings.length > 0 && (
+            <>
+              <div className="trigger-audit-detail-label">
+                The daemon repaired what the check printed, so this run still counted. Fix the script:
+              </div>
+              <pre className="trigger-audit-injected">{warnings.map((w) => `- ${w}`).join('\n')}</pre>
+            </>
+          )}
+          {!fired ? null : entry.injected ? (
             <>
               <div className="trigger-audit-detail-label">
                 Injected into the session ({entry.injected.chars} chars)
@@ -186,7 +197,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       {off && (
         <div className="trigger-jobs-off" data-state={run} data-testid="trigger-jobs-off">
           {run === 'stopped'
-            ? `${off}. Resume retries the check; one more failure stops it again.`
+            ? `${off}. Fix the check first: Resume starts the count over, and ${TRIGGER_STOP_AFTER_ERRORS} failures in a row stop it again.`
             : `${off}: not checking. On Resume, anything that appeared meanwhile arrives once, as one fire.`}
         </div>
       )}

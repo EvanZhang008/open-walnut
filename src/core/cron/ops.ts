@@ -397,13 +397,17 @@ export async function recordRunOutcome(
 /**
  * A deliberate switch off is a pause and is stamped, so the task card can say
  * "Paused 2h ago" and tell it apart from a trigger the server stopped after its
- * check kept failing (which never passes through here). Switching on clears it;
- * a resume after a pause starts the error count over, so a check that was still
- * running and failed while it was off cannot stop it at once.
+ * check kept failing (which never passes through here). Switching on clears it
+ * and starts the error count over: after a pause, so a check that was still
+ * running and failed while it was off cannot stop it at once; after a stop, so
+ * the fixed check gets its full count and its first failure is reported again
+ * (trigger-health.ts, whose once-in-6h limit starts over too), instead of one
+ * more failure stopping it unannounced.
  */
 function markSwitched(job: CronJob, now: number): void {
   if (job.enabled) {
-    if (job.state.pausedAtMs !== undefined) job.state.consecutiveErrors = 0;
+    job.state.consecutiveErrors = 0;
+    job.state.checkErrorNoticeAtMs = undefined;
     job.state.pausedAtMs = undefined;
     return;
   }

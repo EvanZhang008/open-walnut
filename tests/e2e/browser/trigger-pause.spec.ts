@@ -245,7 +245,7 @@ test('a trigger stopped after failing checks reads Stopped on its task and on th
     const srow = flyout.locator(`.trigger-jobs-row[data-routine-id="${failing.id}"]`)
     await expect(srow).toHaveAttribute('data-state', 'stopped')
     await expect(srow.getByTestId('trigger-jobs-state')).toHaveText('Stopped')
-    await expect(srow.getByTestId('trigger-jobs-off')).toHaveText('Stopped after 5 failed checks. Resume retries the check; one more failure stops it again.')
+    await expect(srow.getByTestId('trigger-jobs-off')).toHaveText('Stopped after 5 failed checks. Fix the check first: Resume starts the count over, and 5 failures in a row stop it again.')
     await expect(srow.getByRole('button', { name: 'Resume' })).toBeVisible()
     await expect(flyout.locator(`.trigger-jobs-row[data-routine-id="${quiet.id}"]`)).toHaveAttribute('data-state', 'paused')
     await shot(flyout, 'stopped-flyout')

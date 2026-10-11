@@ -17,7 +17,7 @@
 
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js';
 import { describeSpan, LATE_DELIVERY_MS } from '../core/cron/trigger-timing.js';
-import { CHECK_INPUT_CAP } from './trigger-check-core.js';
+import { CHECK_INPUT_CAP, CHECK_WARNINGS_MAX } from './trigger-check-core.js';
 import type { TriggerFiredEvent, TriggerItem } from './trigger-check-core.js';
 
 const kit = createEnvelopeKit();
@@ -56,7 +56,13 @@ export function boundedItemsJson(items: readonly unknown[], cap = ITEMS_JSON_CAP
   return `${JSON.stringify(kept, null, 2)}\n[${items.length - kept.length} more item(s) omitted]`;
 }
 
-export function buildTriggerBody(prompt: string, items: readonly TriggerItem[], input?: string, timing?: string): string {
+export function buildTriggerBody(
+  prompt: string,
+  items: readonly TriggerItem[],
+  input?: string,
+  timing?: string,
+  warnings: readonly string[] = [],
+): string {
   const parts = [prompt.trim()];
   if (timing) parts.push(timing);
   if (items.length > 0) {
@@ -64,10 +70,18 @@ export function buildTriggerBody(prompt: string, items: readonly TriggerItem[], 
   }
   const extra = (input ?? '').trim();
   if (extra) parts.push(extra);
+  // Last, and only when there is something: the script still worked, but the
+  // daemon had to repair what it printed, and the session is who can fix it.
+  if (warnings.length > 0) {
+    parts.push(`The check script broke the output contract, and the daemon repaired it (fix the script):\n${warnings.map((w) => `- ${w}`).join('\n')}`);
+  }
   return parts.join('\n\n');
 }
 
-export type FirePart = Pick<TriggerFiredEvent, 'atMs' | 'items' | 'input'>;
+export type FirePart = Pick<TriggerFiredEvent, 'atMs' | 'items' | 'input' | 'warnings'>;
+
+/** Said with every late fire: what it describes may have changed since, or been handled. */
+export const LATE_FIRE_ADVICE = 'Check the current state before you act on it.';
 
 function isoOf(atMs: number): string {
   return new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString();
@@ -134,15 +148,17 @@ export function buildTriggerMessage(
   if (ordered.length > 1) {
     note = `${ordered.length} fires ${isoOf(first)} to ${isoOf(last)}, ${count}${late ? `, delivered ${describeSpan(age)} late` : ''}`;
     timing = late
-      ? `These ${ordered.length} fires arrive together and late: the oldest is ${describeSpan(age)} old.`
+      ? `These ${ordered.length} fires arrive together and late: the oldest is ${describeSpan(age)} old. ${LATE_FIRE_ADVICE}`
       : `These ${ordered.length} fires arrive together.`;
   } else {
     note = `${triggerNote(first, items.length)}${late ? `, delivered ${describeSpan(age)} late` : ''}`;
-    if (late) timing = `This fire arrives late: it is ${describeSpan(age)} old.`;
+    if (late) timing = `This fire arrives late: it is ${describeSpan(age)} old. ${LATE_FIRE_ADVICE}`;
   }
+  // Every distinct warning of the batch, once: a backlog of one script repeats them.
+  const warnings = [...new Set(ordered.flatMap((f) => (Array.isArray(f.warnings) ? f.warnings : [])))];
   return kit.buildWalnutMessage({
     kind: 'trigger',
     attrs: { from: `Trigger: ${job.name}`, note },
-    body: buildTriggerBody(prompt, items, mergedInput(ordered), timing),
+    body: buildTriggerBody(prompt, items, mergedInput(ordered), timing, warnings.slice(0, CHECK_WARNINGS_MAX)),
   });
 }

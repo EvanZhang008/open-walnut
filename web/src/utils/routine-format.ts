@@ -201,6 +201,11 @@ export function auditClock(atMs: number, nowMs = Date.now()): string {
  * gets mistaken for a delivered one.
  */
 export function describeAuditEntry(entry: RoutineAuditEntry): string {
+  const verdict = describeAuditVerdict(entry);
+  return entry.warnings?.length ? `${verdict} · output repaired` : verdict;
+}
+
+function describeAuditVerdict(entry: RoutineAuditEntry): string {
   if (entry.outcome === 'error') {
     const msg = (entry.error ?? 'check failed').replace(/\s+/g, ' ').trim();
     return `check error: ${msg.length > 90 ? `${clip(msg, 90)}…` : msg}`;

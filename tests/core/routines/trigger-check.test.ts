@@ -343,6 +343,21 @@ describe('buildTriggerMessage', () => {
     expect(onTime.body).not.toContain('arrives');
   });
 
+  it('repairs the daemon made ride at the end, once each across a backlog', () => {
+    const slip = 'items[0].id was 490 chars (over 200); the daemon shortened it to a stable id and kept the original in "fullId"';
+    const parsed = parseWalnutMessage(buildTriggerMessage(job, [
+      { atMs: 1, items: [{ id: 'a' }], warnings: [slip] },
+      { atMs: 2, items: [{ id: 'b' }], warnings: [slip, '1 item dropped, the first because items[3].id must be a non-empty string'] },
+    ], 'look'))!;
+    expect(parsed.body).toContain('The check script broke the output contract, and the daemon repaired it (fix the script):');
+    expect(parsed.body.split(slip)).toHaveLength(2);
+    expect(parsed.body).toContain('- 1 item dropped');
+    expect(parsed.body.indexOf('New items:')).toBeLessThan(parsed.body.indexOf('broke the output contract'));
+    // A clean fire has no such section.
+    expect(parseWalnutMessage(buildTriggerMessage(job, { atMs: 1, items: [{ id: 'a' }] }, 'look'))!.body)
+      .not.toContain('output contract');
+  });
+
   it("a backlog's inputs are labelled per fire, repeats collapse, and the oldest go first when over budget", () => {
     const t0 = Date.UTC(2026, 8, 20, 0, 0, 0);
     const parsed = parseWalnutMessage(buildTriggerMessage(job, [

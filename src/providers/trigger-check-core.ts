@@ -34,7 +34,14 @@ export const CHECK_ITEMS_CAP = 200;
  * seen, and the next run's first new ones are the ones that did not fit.
  */
 export const CHECK_ITEMS_PARSE_MAX = 2000;
+/**
+ * Longest item id the daemon keeps (seen set, wire, state file). A longer one is
+ * shortened (shortItemId), never an error: on 2026-10-09 one 490-char id failed
+ * five runs in a row and turned a 15-minute watch off for 20 hours.
+ */
 export const CHECK_ITEM_ID_MAX = 200;
+/** Most warnings one run reports; the rest are counted in the last one. */
+export const CHECK_WARNINGS_MAX = 5;
 /**
  * The fire budget: a trigger may fire this many times in a burst, and the budget
  * refills at the same number per 24 hours (one fire back every 24h / cap). It
@@ -144,6 +151,11 @@ export interface TriggerCheckOutput {
   /** Present only when the script printed a `state` key (null counts). */
   state?: unknown;
   hasState: boolean;
+  /**
+   * Contract slips the daemon repaired instead of failing the run: an over-long
+   * id it shortened, an item it dropped. The run still counts as a good one.
+   */
+  warnings?: string[];
 }
 
 export type ParsedCheck =
@@ -170,6 +182,8 @@ export interface PendingFire {
   host?: HostDelivery;
   /** The last host delivery attempt that did not land (no live session, a failed write). */
   hostTriedAt?: number;
+  /** What the daemon repaired in the run that made this fire (TriggerCheckOutput.warnings). */
+  warnings?: string[];
 }
 
 /** Per-trigger state the daemon persists at `trigger-state/<id>.json`. */
@@ -250,6 +264,8 @@ export interface TriggerCheckedEvent {
   durationMs: number;
   nextRunAtMs: number;
   consecutiveErrors: number;
+  /** A quiet run the daemon had to repair (TriggerCheckOutput.warnings). */
+  warnings?: string[];
 }
 
 /**
@@ -270,6 +286,8 @@ export interface TriggerFiredEvent {
   nextRunAtMs: number;
   /** Set when the host already delivered this fire: record it, deliver nothing. */
   host?: HostDelivery;
+  /** What the daemon repaired in the run that made this fire. */
+  warnings?: string[];
 }
 
 export type TriggerEvent = TriggerCheckedEvent | TriggerFiredEvent;
@@ -457,23 +475,38 @@ export function parseCheckStdout(stdout: string): ParsedCheck {
 
   let items: TriggerItem[] | undefined;
   let itemsTruncated = false;
+  // One bad item never fails the run: the daemon repairs what it can (an
+  // over-long id) and drops what it cannot (an item with no usable id), and the
+  // rest of the run, its state included, goes through. Only a list with nothing
+  // usable left in it is an error, because then the script is broken, not one item.
+  const warnings: string[] = [];
+  const warn = (text: string) => { warnings.push(text); };
   if (r.items !== undefined) {
     if (!Array.isArray(r.items)) return { ok: false, error: '"items" must be an array' };
     const byId = new Map<string, TriggerItem>();
+    let dropped = 0;
+    let firstDrop = '';
     for (let i = 0; i < r.items.length; i++) {
       const it = r.items[i];
-      if (!it || typeof it !== 'object' || Array.isArray(it)) {
-        return { ok: false, error: `items[${i}] must be an object with a string "id"` };
+      const bad = !it || typeof it !== 'object' || Array.isArray(it)
+        ? `items[${i}] must be an object with a string "id"`
+        : typeof (it as Record<string, unknown>).id !== 'string' || !((it as Record<string, unknown>).id as string).trim()
+          ? `items[${i}].id must be a non-empty string`
+          : null;
+      if (bad) {
+        dropped += 1;
+        if (!firstDrop) firstDrop = bad;
+        continue;
       }
-      const id = (it as Record<string, unknown>).id;
-      if (typeof id !== 'string' || !id.trim()) {
-        return { ok: false, error: `items[${i}].id must be a non-empty string` };
+      const raw = (it as Record<string, unknown>).id as string;
+      const id = shortItemId(raw);
+      if (id !== raw) {
+        warn(`items[${i}].id was ${raw.length} chars (over ${CHECK_ITEM_ID_MAX}); the daemon shortened it to a stable id and kept the original in "fullId"`);
       }
-      if (id.length > CHECK_ITEM_ID_MAX) {
-        return { ok: false, error: `items[${i}].id is longer than ${CHECK_ITEM_ID_MAX} chars` };
-      }
-      if (!byId.has(id)) byId.set(id, { ...(it as Record<string, unknown>), id });
+      if (!byId.has(id)) byId.set(id, { ...(it as Record<string, unknown>), id, ...(id !== raw ? { fullId: raw } : {}) });
     }
+    if (dropped > 0 && byId.size === 0) return { ok: false, error: `no usable item: ${firstDrop}` };
+    if (dropped > 0) warn(`${dropped} item${dropped === 1 ? '' : 's'} dropped, the first because ${firstDrop}`);
     items = [...byId.values()];
     if (items.length > CHECK_ITEMS_PARSE_MAX) {
       items = items.slice(0, CHECK_ITEMS_PARSE_MAX);
@@ -513,10 +546,34 @@ export function parseCheckStdout(stdout: string): ParsedCheck {
       ...(input !== undefined ? { input } : {}),
       ...(hasState ? { state: r.state ?? null } : {}),
       hasState,
+      ...(warnings.length ? { warnings: boundedWarnings(warnings) } : {}),
     },
     inputTruncated,
     itemsTruncated,
   };
+}
+
+/** The tail an over-long id keeps: a hash of the WHOLE id, so ids sharing a long prefix stay apart. */
+const ITEM_ID_HASH_CHARS = 16;
+
+/**
+ * An item id the daemon can keep: unchanged up to CHECK_ITEM_ID_MAX, else its head
+ * plus `~` plus a hash of the whole id. Stable across runs (same id in, same id
+ * out), so the seen set still dedups it, and never cut inside a surrogate pair.
+ */
+export function shortItemId(id: string): string {
+  if (id.length <= CHECK_ITEM_ID_MAX) return id;
+  const hash = createHash('sha256').update(id).digest('hex').slice(0, ITEM_ID_HASH_CHARS);
+  return `${headChars(id, CHECK_ITEM_ID_MAX - ITEM_ID_HASH_CHARS - 1)}~${hash}`;
+}
+
+/** At most CHECK_WARNINGS_MAX lines, each one line and bounded: they travel to the session and the History row. */
+export function boundedWarnings(warnings: readonly string[]): string[] {
+  const flat = warnings.map((w) => headChars(w.replace(/\s+/g, ' ').trim(), 300)).filter(Boolean);
+  if (flat.length <= CHECK_WARNINGS_MAX) return flat;
+  const kept = flat.slice(0, CHECK_WARNINGS_MAX - 1);
+  kept.push(`and ${flat.length - kept.length} more warnings like these`);
+  return kept;
 }
 
 // ── Deciding ──
@@ -598,6 +655,7 @@ export function applyCheckOutcome(
     ...(flags.itemsTruncated || decision.truncated ? { itemsTruncated: true } : {}),
     durationMs,
     ...(flags.arbitrated ? { arbitrated: true as const } : {}),
+    ...(output.warnings?.length ? { warnings: output.warnings } : {}),
   };
   state.pendingFires.push(fire);
   trimPendingFires(state);

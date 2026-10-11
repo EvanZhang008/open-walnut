@@ -92,6 +92,8 @@ export type RoutineAuditEntry = {
   deliveredAtMs?: number;
   delivery?: RoutineAuditDelivery;
   injected?: { chars: number; preview: string };
+  /** What the daemon repaired in what the check printed (an over-long id, a dropped item). */
+  warnings?: string[];
 };
 
 export type RoutineState = {
