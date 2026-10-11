@@ -186,6 +186,37 @@ describe('a new chat', () => {
     expect((await getSessionByClaudeId(warm.sessionId))?.taskId).toBe(task.id);
   });
 
+  // Opening a chat on the phone warms its lane (the model pill needs a session).
+  // When the chat's last session is archived, that warm mint is a new, empty
+  // session: joining the ask then made it the ask's main session, so the Mac
+  // opened an empty page and the ask jumped to the top of both lists without a
+  // word said (seen live on a chat promoted to a work task).
+  it("a warm mint for a chat that already has an ask leaves the ask alone until a real message", async () => {
+    const chat = await makeChat('general', 'Dishwasher drain fault');
+    const first = await getOrCreateLaneSession('general', chat.id, { firstMessage: 'why does it not drain' });
+    const askId = (await chatMeta('general', chat.id))!.askTaskId!;
+    const { linkSession } = await import('../../../src/core/task-manager.js');
+    await linkSession(askId, first.sessionId);
+    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
+    await updateSessionRecord(first.sessionId, { archived: true, archive_reason: 'test' });
+    const before = await getTask(askId);
+
+    started = [];
+    const warm = await getOrCreateLaneSession('general', chat.id);
+    expect(warm.created).toBe(true);
+    expect(warm.sessionId).not.toBe(first.sessionId);
+    expect(started[0].taskId).toBe('');
+    const after = await getTask(askId);
+    expect(after.session_id).toBe(first.sessionId);
+    expect(after.session_ids).not.toContain(warm.sessionId);
+    expect(after.updated_at).toBe(before.updated_at);
+
+    // The first real message is where the chat moves on, and the ask with it.
+    await getOrCreateLaneSession('general', chat.id, { firstMessage: 'it drains now' });
+    expect((await getTask(askId)).session_id).toBe(warm.sessionId);
+    expect((await queryTasks({})).filter((t) => t.walnut_agent)).toHaveLength(1);
+  });
+
   it("files another agent's chat under that agent's ask project with its stamp", async () => {
     const chat = await makeChat('mentor', 'Procrastination');
     await getOrCreateLaneSession('mentor', chat.id, { firstMessage: 'help' });

@@ -756,10 +756,13 @@ async function resolveLane(
   const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
   // Every chat is an ask (lane-ask-link.ts). Found or made BEFORE the spawn so
   // its id rides SESSION_START: the runner then links the slot and moves the
-  // phase exactly as for an ask started on the Mac. A mint without a message
-  // (a lane warmed when a chat opens) only joins an ask the chat already has.
+  // phase exactly as for an ask started on the Mac. A mint without a message (a
+  // lane warmed when a chat opens) joins nothing: linking makes the session the
+  // ask's main one, so an empty warm session would replace the one the Mac
+  // shows and move the ask up both lists with nothing said. Its first real
+  // message adopts it (the reuse branch above).
   const { askTaskForLaneMint } = await import('./lane-ask-link.js');
-  const askTaskId = await askTaskForLaneMint(agentId, conversationId, { create: !!firstMessage });
+  const askTaskId = firstMessage ? await askTaskForLaneMint(agentId, conversationId, { create: true }) : '';
 
   if (isAcpEngine(engine)) {
     // ACP lane: the worker mints the session id itself, so there is no record to

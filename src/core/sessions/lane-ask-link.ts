@@ -189,9 +189,10 @@ function serialized(lane: string, fn: () => Promise<string>): Promise<string> {
  * fork) before the spawn, so the id rides SESSION_START and the runner links the
  * slot and moves the phase itself, the same start every ask gets.
  *
- * `create: false` only finds one: a mint that carries no message (the phone's
- * model pill warms a lane the moment a new chat opens) must not file an empty
- * ask; the chat's first real message does (adoptLaneSessionForTurn).
+ * `create: false` only finds one. The lane never asks for a mint that carries
+ * no message (the phone's model pill warms a lane the moment a chat opens): an
+ * empty warm session must neither file an ask nor become an existing ask's main
+ * session; the chat's first real message links it (adoptLaneSessionForTurn).
  *
  * '' when the chat has no ask and gets none (a replica, no such conversation, an
  * unknown agent, an ask the user deleted) and on ANY failure: a chat that
