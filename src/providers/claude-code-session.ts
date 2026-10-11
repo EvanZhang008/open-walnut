@@ -3978,9 +3978,23 @@ export class ClaudeCodeSession {
     }
     // The CLI showed it reports its queue (command_lifecycle) while this untracked line
     // waited for the one before it: the CLI names this line as it takes it, so its rows
-    // wait for that word as a tracked line's do (r6 gate M1: decided after the wait).
-    const awaitWord = (): boolean => !lineSid && this._sawCommandLifecycle && keep()
+    // wait for that word as a tracked line's do (r6 gate M1: decided after the wait), and
+    // it is watched as one (r7 gate N1).
+    const awaitWord = (): boolean => !lineSid && this._sawCommandLifecycle && keep() && this.watchKeptLine(uuid, pid)
     return { onCut: () => { hold('cut') }, hold, held: () => held, behind: () => this.holdsCutCopy(pid), awaitWord }
+  }
+
+  /**
+   * A line whose rows now wait for the CLI's word (cutLineHold's awaitWord) is watched as a
+   * tracked line written now would be (send-lost-line-v1): a process that names lines as it
+   * takes them and never names this one has read past it (r7 gate N1). A tracked line in the
+   * same spot is armed at its write; armUnwatchedLines runs only on a process's first
+   * `queued` frame, which here came before the line was registered. Always true.
+   */
+  private watchKeptLine(uuid: string | undefined, pid: number | null): true {
+    if (uuid && pid != null && this._queuedFramesFrom === pid && this._lineQueuedIn.get(uuid) !== pid
+      && isLineAwaited(this.claudeSessionId, uuid)) this.armLineAck(uuid, pid)
+    return true
   }
 
   /** Process `pid` took a line behind a cut copy of it (cutLineHold), and so exits on that copy. */

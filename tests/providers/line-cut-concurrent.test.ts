@@ -9,6 +9,11 @@
  * does. The gate's probe PG2 lost it: it was removed on its write and reported
  * delivered.
  *
+ * The second part pins the rest of that rule for a line that waited behind an
+ * unanswered one (r7 gate N2): its rows wait for the CLI's word only when the CLI
+ * showed it reports its queue meanwhile, also when the daemon answers that the line
+ * waits in the CLI, and the user is told "delivered" once.
+ *
  * What's real: SessionRunner (processNext, injectMidTurn), ClaudeCodeSession, the
  * RemoteSessionManager write chain and confirmSend, the disk queue. Scripted: the
  * daemon connection.
@@ -182,33 +187,70 @@ describe('a line handed over while the line before it is confirmed, then answere
   }, 30_000)
 })
 
+/**
+ * The first line's write dies with the daemon; while its confirm is out the second
+ * line is handed over, untracked, and waits behind it. `frame`: the CLI names the
+ * first line `started` meanwhile (so it reports its queue). `bReply`: the daemon's
+ * answer to the second line's write.
+ */
+async function waitedLine(o: { frame: boolean; bReply?: Reply }) {
+  const l = liveSession({ tracked: false })
+  let answerConfirm!: (r: Reply) => void
+  l.plan.push(async () => new Error('connection closed'))
+  l.plan.push(() => new Promise<Reply>((resolve) => { answerConfirm = resolve }))
+  if (o.bReply) { const b = o.bReply; l.plan.push(async () => b) }
+  await enqueueMessage(SID, 'first message')
+  const first = l.internals.processNext(SID)
+  await vi.waitFor(() => expect(l.sends).toHaveLength(2), { timeout: 10_000 })
+  await enqueueMessage(SID, 'second message')
+  // Read while both rows are queued (a row that leaves on its write is gone later).
+  const ids = new Map((await getQueue(SID)).map((m) => [m.message, m.id]))
+  const second = l.internals.injectMidTurn(SID)
+  await vi.waitFor(() => expect(held.length).toBeGreaterThan(0), { timeout: 10_000 })
+  if (o.frame) l.lifecycle(l.sends[0].uuid!, 'started')
+  answerConfirm({ ok: true })
+  await first
+  await second
+  await settle()
+  return { l, idA: ids.get('first message')!, idB: ids.get('second message')! }
+}
+
+/** The process exits on nothing it took; the next one (12346) gets what is pending. */
+async function exitAndRespawn(l: ReturnType<typeof liveSession>, pending: number) {
+  l.cliExits()
+  await vi.waitFor(async () => expect((await rows()).map((r) => r.status)).toEqual(Array(pending).fill('pending')), { timeout: 10_000 })
+  l.respawn(12346)
+  await l.internals.processNext(SID)
+  await vi.waitFor(() => expect(l.sends.filter((s) => s.pid === 12346)).toHaveLength(pending), { timeout: 10_000 })
+  await settle()
+}
+
 describe('a line that waited behind an unanswered one while the CLI showed it reports its queue (r6 gate M1, the rule)', () => {
-  it('its rows wait for the CLI\'s word, so a crash before the CLI takes it hands it to the next process', async () => {
-    const l = liveSession({ tracked: false })
-    let answerConfirm!: (r: Reply) => void
-    l.plan.push(async () => new Error('connection closed'))
-    l.plan.push(() => new Promise<Reply>((resolve) => { answerConfirm = resolve }))
-    await enqueueMessage(SID, 'first message')
-    const first = l.internals.processNext(SID)
-    await vi.waitFor(() => expect(l.sends).toHaveLength(2), { timeout: 10_000 })
-    await enqueueMessage(SID, 'second message')
-    const second = l.internals.injectMidTurn(SID)
-    await vi.waitFor(() => expect(held.length).toBeGreaterThan(0), { timeout: 10_000 })
-    // The CLI takes the first line and names it: the first frame of its queue reports.
-    l.lifecycle(l.sends[0].uuid!, 'started')
-    answerConfirm({ ok: true })
-    await first
-    await second
-    await settle()
+  it('its rows wait for the CLI\'s word, so a crash before the CLI takes it hands it to the next process; told delivered once', async () => {
+    const { l, idA, idB } = await waitedLine({ frame: true })
     expect(l.sends.filter((s) => s.pid === 12345).map((s) => s.message)).toEqual(['first message', 'first message', 'second message'])
     // The first line ran; the second waits for the CLI's word on it.
     expect((await rows()).map((r) => `${r.text}:${r.status}`)).toEqual(['second message:processing'])
-    l.cliExits()
-    await vi.waitFor(async () => expect((await rows()).map((r) => r.status)).toEqual(['pending']), { timeout: 10_000 })
-    l.respawn(12346)
-    await l.internals.processNext(SID)
-    await vi.waitFor(() => expect(l.sends.filter((s) => s.pid === 12346)).toHaveLength(1), { timeout: 10_000 })
+    await exitAndRespawn(l, 1)
     expect(l.sends.filter((s) => s.pid === 12346).map((s) => s.message)).toEqual(['second message'])
+    // Told at its write, and not again when the next process gets it (r7 gate N2, g760).
+    expect(delivered).toEqual([[idA], [idB]])
+    l.runner.destroyAndKill()
+  }, 30_000)
+
+  it('the daemon answers that it waits in the CLI: kept for the word all the same, and the next process gets it (r7 gate N2, g752)', async () => {
+    const { l, idB } = await waitedLine({ frame: true, bReply: { ok: true, duplicate: true, fate: 'waiting' } })
+    expect((await rows()).map((r) => `${r.text}:${r.status}`)).toEqual(['second message:processing'])
+    await exitAndRespawn(l, 1)
+    expect(l.sends.filter((s) => s.pid === 12346).map((s) => s.message)).toEqual(['second message'])
+    expect(delivered.flat().filter((id) => id === idB)).toHaveLength(1)
+    l.runner.destroyAndKill()
+  }, 30_000)
+
+  it('control: a CLI that showed no lifecycle meanwhile keeps the old rule, the line leaves on its write, told once (r7 gate N2, g753)', async () => {
+    const { l, idA, idB } = await waitedLine({ frame: false })
+    expect(await rows()).toEqual([])
+    expect(delivered).toEqual([[idA], [idB]])
     l.runner.destroyAndKill()
   }, 30_000)
 })
