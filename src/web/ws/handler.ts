@@ -14,6 +14,7 @@ import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
 import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
 import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
+import { configChangedForClients } from '../../core/config-broadcast.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
 
@@ -80,8 +81,12 @@ export function _getRpcMethodForTesting(name: string): RpcHandler | undefined {
 
 /**
  * Broadcast a bus event to all connected WebSocket clients.
+ *
+ * A `config:changed` frame leaves in the client view (core/config-broadcast.ts)
+ * whoever emitted it, a relay under a computed event name included.
  */
 export function broadcastEvent(name: string, data: unknown): void {
+  if (name === 'config:changed') data = configChangedForClients(data)
   // DUP-DEBUG (debug-level): for tool_use / tool_result include toolUseId so each
   // broadcast can be traced. If two `broadcast session:tool-use` lines share the
   // same toolUseId, the duplication is upstream of the WS layer. Kept at debug —

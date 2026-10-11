@@ -19,7 +19,7 @@
 import { getConfig, updatePushTokens } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import { apnsStatus } from './apns.js'
-import { tokenKind, tokenPrefix, tokenTag } from './send.js'
+import { legacyTokenPrefix, tokenKind, tokenTag } from './send.js'
 import { ACTIVE_LEASE_MS, parseMode, type LetterPushMode } from './letter-push-policy.js'
 import { LETTER_TYPES } from '../human-inbox/types.js'
 import type { PushTokenEntry } from '../types.js'
@@ -483,9 +483,25 @@ export async function pushRegistrationStatus(
       origin: parsePushOrigin(t.origin),
       registered_at: t.registered_at,
       mode: parseMode(t.mode),
-      // Don't expose the full token — it's a send capability for this device.
-      token_prefix: `${tokenPrefix(t.token)}...`,
+      // Never the full token: it is a send capability for this device. A phone
+      // finds its own row by `token_tag`, the same hash it computes for its token.
+      token_tag: tokenTag(t.token),
+      // Legacy, for app builds that predate token tags (see LEGACY_TOKEN_PREFIX_CHARS).
+      token_prefix: `${legacyTokenPrefix(t.token)}...`,
     })),
+  }
+}
+
+/**
+ * Every token this box holds, for scrubbing text the server did not write
+ * itself (scrubDeviceTokens in send.ts). Never logged or returned. An unreadable
+ * config yields none, so a scrub still runs its key-based pass.
+ */
+export async function registeredTokens(): Promise<string[]> {
+  try {
+    return ((await getConfig()).push_tokens ?? []).map((t) => t.token).filter((t): t is string => typeof t === 'string' && t.length > 0)
+  } catch {
+    return []
   }
 }
 

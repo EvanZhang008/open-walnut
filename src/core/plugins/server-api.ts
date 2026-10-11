@@ -36,6 +36,7 @@ import { createPluginUi } from './plugin-status-items.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import type { HumanInboxAnsweredEvent } from '../event-types.js'
 import { getConfig, updatePluginConfig } from '../config-manager.js'
+import { emitConfigChanged } from '../config-broadcast.js'
 import { getVersion } from '../version.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { createPluginMacos } from './plugin-macos.js'
@@ -812,7 +813,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       async patch(partial: Record<string, unknown>) {
         const next = await updatePluginConfig(pluginId, partial)
-        bus.emit(EventNames.CONFIG_CHANGED, { config: { plugins: { [pluginId]: next } } } as never, ['web-ui'], { source: `plugin/${pluginId}` })
+        emitConfigChanged({ plugins: { [pluginId]: next } }, ['web-ui'], { source: `plugin/${pluginId}` })
       },
       onChange(handler: (config: Record<string, unknown>) => void | Promise<void>) {
         assertLive('config.onChange')

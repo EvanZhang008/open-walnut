@@ -6,7 +6,6 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
-import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { buildProviderMap, resolveProvider, type ProviderConfig } from '../../model/providers/index.js'
@@ -45,12 +44,13 @@ export function getWebAssetsReport(): WebAssetsReport | null {
   return staticRootReporter?.() ?? null
 }
 
-// Secret masking lives in core so the bug-report bundler can reuse it.
-// CLOUD-mode rationale: config.yaml is git-synced to the public box, and
-// `GET /api/config` is reachable by ANY paired device — returning plaintext
-// provider keys / bearer tokens there would hand a phone token holder the
-// Bedrock credentials. On the trusted-LAN Mac it stays unmasked.
-import { redactConfig } from '../../core/config-redact.js'
+// The client view of the config lives in core (core/config-broadcast.ts), so
+// every config:changed broadcast carries the same view this route answers with.
+// CLOUD-mode rationale: `GET /api/config` is reachable by ANY paired device there,
+// so returning the replica's plaintext provider keys / bearer tokens would hand a
+// phone token holder its Bedrock credentials. On the trusted-LAN Mac only the
+// push device tokens are masked.
+import { configForClients, emitConfigChanged } from '../../core/config-broadcast.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
@@ -121,7 +121,10 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // save must never write it back): Settings sees config.yaml's hosts only.
     const hosts = withoutCloudBoxHost(config.hosts)
     const shown = hosts === config.hosts ? config : { ...config, hosts }
-    res.json({ config: CLOUD_MODE ? redactConfig(shown) : shown, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
+    // The client view (core/config-broadcast.ts), the same every config:changed
+    // carries: push device tokens masked in every mode, every secret on a replica,
+    // since any paired device can read this route there.
+    res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
   } catch (err) {
     next(err)
   }
@@ -614,13 +617,21 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
 
-    await updateConfig(body)
+    // The push registry is the only writer of `push_tokens`. GET masks them, so a
+    // client that saves back what it read would otherwise overwrite every phone's
+    // token with its mask.
+    const { push_tokens: ignoredPushTokens, ...writable } = body
+    if (ignoredPushTokens !== undefined) {
+      log.web.info('config: push_tokens in a config write ignored (the push registry owns them)')
+    }
+    await updateConfig(writable)
     // Re-read merged config so the event carries the full picture
     const read = await getConfig()
     // Same view as GET /api/config: the injected cloud box row is not a Settings host.
     const shownHosts = withoutCloudBoxHost(read.hosts)
     const merged = shownHosts === read.hosts ? read : { ...read, hosts: shownHosts }
-    bus.emit(EventNames.CONFIG_CHANGED, { config: merged }, ['web-ui', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
+    // In the client view, like GET: `web-ui` broadcasts this event to every connected client.
+    emitConfigChanged(merged, ['web-ui', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {
     next(err)

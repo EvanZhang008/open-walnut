@@ -29,9 +29,49 @@ const SECRET_FIELDS_BY_PARENT: Record<string, Set<string>> = {
   push_tokens: new Set(['token']),
 }
 
+/**
+ * Fields dropped inside a specific parent: bookkeeping only this box reads,
+ * with no place in any answer. `push_tokens[].claims` (core/push/claims.ts) is
+ * a one-way hash of each pairing's bearer that registered a relayed row; only
+ * the push registry reads it. Both `maskPushTokens` and `redactConfig` drop it.
+ */
+const DROPPED_FIELDS_BY_PARENT: Record<string, Set<string>> = {
+  push_tokens: new Set(['claims']),
+}
+
 export function maskSecret(v: unknown): unknown {
   if (typeof v !== 'string' || v.length === 0) return v
   return v.length > 4 ? '••••••••' + v.slice(-4) : '••••'
+}
+
+/**
+ * Mask the device token of every `push_tokens` row, and nothing else.
+ *
+ * `GET /api/config` serves the whole config to the console on the Mac, because
+ * Settings edits it there. A push token is different: no screen shows one and no
+ * client writes one, and it is a send capability for that phone. The push
+ * registry is its only reader and writer, so the token is masked in every mode,
+ * and `PUT /api/config` drops `push_tokens` so a masked value that is read back
+ * and saved can never replace the real one. A row's `claims` are dropped
+ * (DROPPED_FIELDS_BY_PARENT); the copy on disk keeps them.
+ */
+export function maskPushTokens<T>(config: T): T {
+  const rows = (config as { push_tokens?: unknown } | null)?.push_tokens
+  if (!Array.isArray(rows)) return config
+  const dropped = DROPPED_FIELDS_BY_PARENT.push_tokens
+  return {
+    ...(config as object),
+    push_tokens: rows.map((row) => {
+      if (!row || typeof row !== 'object') return row
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
+        if (dropped.has(k)) continue
+        out[k] = v
+      }
+      out.token = maskSecret((row as { token?: unknown }).token)
+      return out
+    }),
+  } as T
 }
 
 /**
@@ -43,8 +83,10 @@ export function redactConfig(value: unknown, parentKey?: string): unknown {
   if (Array.isArray(value)) return value.map((v) => redactConfig(v, parentKey))
   if (value && typeof value === 'object') {
     const scoped = parentKey ? SECRET_FIELDS_BY_PARENT[parentKey] : undefined
+    const dropped = parentKey ? DROPPED_FIELDS_BY_PARENT[parentKey] : undefined
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (dropped?.has(k)) continue
       out[k] = SECRET_FIELDS.has(k) || scoped?.has(k) ? maskSecret(v) : redactConfig(v, k)
     }
     return out

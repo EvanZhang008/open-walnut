@@ -19,20 +19,34 @@ import { createHash } from 'node:crypto'
 import type { PushTokenEntry } from '../types.js'
 
 /**
- * How much of a device token may appear in an API response: the status route's
- * `token_prefix`, which the iOS app matches against its own token.
+ * Characters of a raw token in the status route's legacy `token_prefix`.
  *
- * A full token is a SEND CAPABILITY for that device, so nothing outside the
- * registry ever prints one. Log lines use `tokenTag` instead.
+ * Kept ONLY for iPhone app builds that predate token tags, which find their own
+ * row by comparing this prefix with their token. Those builds refuse a prefix
+ * under 8 characters (`minComparablePrefix` in PushLaunchDecision.swift), so 8 is
+ * the least that still works for them; it used to be 12. A build that matches by
+ * `token_tag` ignores it. Remove the field once every paired phone runs such a
+ * build (see docs/reference/ios-push-notifications.md, "Finding this phone's row";
+ * tests/core/push-status-old-app.test.ts pins the rule those builds apply).
  */
-export function tokenPrefix(token: string): string {
-  return token.slice(0, 12)
+export const LEGACY_TOKEN_PREFIX_CHARS = 8
+
+/**
+ * The legacy `token_prefix` of the status route: the only place any raw slice of
+ * a token leaves the box. A full token is a SEND CAPABILITY for that device, so
+ * nothing outside the registry ever prints one; log lines and newer clients use
+ * `tokenTag`.
+ */
+export function legacyTokenPrefix(token: string): string {
+  return token.slice(0, LEGACY_TOKEN_PREFIX_CHARS)
 }
 
 /**
- * How a device token appears in a LOG line: a short hash, never the token or a
- * slice of it. Stable, so one device's lines still correlate. Logs leave the box
- * in bug reports, and the old Expo sender once wrote most of an APNs token there.
+ * How a device token appears in a log line or in the status route's `token_tag`:
+ * a short hash, never the token or a slice of it. Stable, so one device's lines
+ * still correlate, and the iPhone computes the same value for its own token.
+ * Logs leave the box in bug reports, and the old Expo sender once wrote most of
+ * an APNs token there.
  */
 export function tokenTag(token: string): string {
   return createHash('sha256').update(token).digest('hex').slice(0, 8)
@@ -50,6 +64,37 @@ export function withoutTokens(text: string | undefined, tokens: readonly string[
     if (token) out = out.split(token).join(`token#${tokenTag(token)}`)
   }
   return out
+}
+
+/**
+ * Log keys under which a raw slice of a token was written: iPhone builds that
+ * predate token tags log the first 12 characters of their APNs token as `tokenPrefix` and
+ * `memoTokenPrefix` (on the wire `m_tokenPrefix` and `m_memoTokenPrefix`: the
+ * app prefixes every meta key, ClientLogWire.swift), and so did this server's
+ * push lines before they took tags.
+ */
+const LEGACY_TOKEN_SLICE_FIELD = /("(?:m_)?(?:tokenPrefix|memoTokenPrefix)"\s*:\s*")([0-9a-fA-F]{6,})(")/g
+
+/** How many characters of a token those legacy log lines carried. */
+const LEGACY_LOG_SLICE_CHARS = 12
+
+/**
+ * Scrub device tokens out of text this server did not write itself: the
+ * diagnostic lines a phone uploads, and old log lines a bug report quotes.
+ *
+ * Two passes. Every registered token, and its 12-character slice, becomes
+ * `token#<tag>`, so a phone's lines still line up with the server's. Then any
+ * hex value left under a legacy slice key (a token no longer registered here)
+ * becomes `[token]`. An Expo token's slice is not replaced: its first 12
+ * characters are the fixed `ExponentPush` and say nothing about the device.
+ */
+export function scrubDeviceTokens(text: string, tokens: readonly string[]): string {
+  let out = withoutTokens(text, tokens) ?? text
+  for (const token of tokens) {
+    if (!token || isExpoPushToken(token) || token.length <= LEGACY_LOG_SLICE_CHARS) continue
+    out = out.split(token.slice(0, LEGACY_LOG_SLICE_CHARS)).join(`token#${tokenTag(token)}`)
+  }
+  return out.replace(LEGACY_TOKEN_SLICE_FIELD, '$1[token]$3')
 }
 
 /** Expo tokens are `ExponentPushToken[...]` / `ExpoPushToken[...]`; APNs is hex. */

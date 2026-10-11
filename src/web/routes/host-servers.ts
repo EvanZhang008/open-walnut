@@ -19,7 +19,7 @@ import { getConfig, updateHostServerConfig } from '../../core/config-manager.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom } from '../../core/host-server/index.js'
-import { bus, EventNames } from '../../core/event-bus.js'
+import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { isPersonAtThisMachine } from './expose.js'
 
@@ -99,7 +99,8 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
     }
     await updateHostServerConfig(hostKey, patch)
     // Settings re-reads the config on this (the Remote Hosts card shows the hosts too).
-    bus.emit(EventNames.CONFIG_CHANGED, { config: await getConfig() }, ['web-ui'], { source: 'api' })
+    // In the client view, like GET /api/config: `web-ui` sends it to every connected client.
+    emitConfigChanged(await getConfig(), ['web-ui'], { source: 'api' })
     log.web.info('host server settings changed', { host: hostKey, enabled: patch.enabled, expose: patch.expose ? (patch.expose as { enabled: boolean }).enabled : undefined })
     void getHostServerManager()?.reconcile(hostKey)
     res.json({ host: await hostEntry(hostKey) })

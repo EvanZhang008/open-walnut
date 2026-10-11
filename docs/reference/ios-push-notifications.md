@@ -285,9 +285,23 @@ route. A token Expo or Apple reports as dead is removed. The general notificatio
 push only while no web client is connected, never while quiet mode holds, and
 never from a cloud replica; letters follow the per-device modes above.
 
-Log lines name a device by `tokenTag`, a short hash of its token, never by the
-token or a slice of it, and any text a push service sends back is scrubbed of the
-token before it is logged.
+Server log lines name a device by `tokenTag`, a short hash of its token, never by
+the token or a slice of it, and any text a push service sends back is scrubbed of
+the token before it is logged. No HTTP response or WebSocket frame carries a token
+either. `GET /api/config` and every `config:changed` broadcast that carries the
+config give the same view of it (`configForClients`, src/core/config-broadcast.ts):
+every `push_tokens[].token` masked in every mode, every secret masked on a replica.
+The WebSocket exit applies that view to each `config:changed` frame again, whoever
+emitted it. `PUT /api/config` ignores `push_tokens` (the push registry is their
+only writer), and the status route names rows by `token_tag`. A relayed row's
+`claims` (see "Revoking a device") are dropped from that view and from the bug
+report, so no answer or broadcast of either box carries them. They live in the
+primary's `config.yaml`, which no sync copies (it is excluded from data sync), and
+travel only from the companion to the primary, inside its relayed registration and
+take-back. iPhone
+builds that predate token tags log a 12-character slice of their own token in the
+diagnostic lines they upload; the server replaces it with the tag (or `[token]`) before the
+upload reaches disk, and again in every bug report.
 
 ## Payload contract
 
@@ -312,9 +326,12 @@ sides are pinned by tests (`tests/core/letter-push.test.ts` and
 
 The four letter fields appear twice, flat and nested, because
 `LetterDeepLink.letterId(fromPush:)` accepts either shape and reading only one is
-how a deep link stops working after a sender change. The body is the envelope
-only: `textPreview` is capped at 300 characters and the document itself never
-rides a push, it stays behind `GET /api/v1/human-inbox/:id`.
+how a deep link stops working after a sender change. The title is `New letter: `
+or `Reply: ` plus the subject, 100 characters in all. The body is the envelope
+only: `textPreview` is capped at 300 characters (by the letter store, and again at
+the push boundary in `letterPushContent`, both pinned by
+`tests/core/letter-push-preview-cap.test.ts`), and the document itself never rides
+a push, it stays behind `GET /api/v1/human-inbox/:id`.
 
 ## Testing without a real device
 
@@ -333,6 +350,36 @@ xcrun simctl push <udid> dev.openwalnut.ios /tmp/letter.apns
 Tapping the banner should open that letter. What this does **not** prove is the
 Apple-side delivery half (key, topic, entitlement, token minting), which only a
 real device can confirm.
+
+## Finding this phone's row
+
+`GET /api/push/status` lists one row per registered device, and never the token.
+Each row carries:
+
+- `token_tag`: the first 8 hex characters of the SHA-256 of the token
+  (`tokenTag` in `src/core/push/send.ts`, the same value server log lines use).
+  The app builds released so far do not read it. A build that does computes it
+  for its own token and finds its row by comparing tags, and falls back to
+  `token_prefix` only against a server too old to send `token_tag`.
+- `token_prefix`: legacy, the token's first 8 characters plus `"..."` (it was 12
+  before token tags). Every app build that predates token tags reads it: it strips
+  the trailing dots, lowercases it, refuses it under 8 characters, and matches it
+  against the start of its own token (`comparablePrefix` and `minComparablePrefix`
+  in `PushLaunchDecision.swift`), so 8 is the least that still works for those
+  builds. `tests/core/push-status-old-app.test.ts` reads that rule from the Swift
+  source and checks the server's rows against it.
+
+**When `token_prefix` can go:** once every paired phone runs a build that matches
+by `token_tag`. The first such build is named here when it ships. Both conditions
+have to hold:
+
+1. TestFlight builds expire 90 days after upload, so 90 days after the last build
+   without tag matching was uploaded, no TestFlight install can run one.
+2. An App Store install never expires, so read what the phones report: every
+   phone sends `appVersion` (for example `"1.0.0 (104)"`) at each launch, and the
+   paired devices list (`GET /api/devices`) shows it. When every device there
+   reports a build that matches by tag, delete `token_prefix` together with
+   `legacyTokenPrefix` and `LEGACY_TOKEN_PREFIX_CHARS`.
 
 ## When nothing arrives
 
@@ -374,8 +421,8 @@ real device can confirm.
      On top of that one-time re-upload, a launch that finds the memo already
      matching now asks the sending box whether it agrees: one `GET
      /api/push/status`, and the memo is dropped only when no listed row holds this
-     phone's token (each row's `token_prefix` is compared against the token APNs
-     just minted). The memo alone could never catch any of this, because all it
+     phone's token (see "Finding this phone's row" above). The memo alone could
+     never catch any of this, because all it
      records is that some box returned a 2xx, and a replica on pre-relay code did
      exactly that while keeping the row in its own config. `registeredThisDevice`
      is only the fallback for a server too old to list rows: it is keyed on the

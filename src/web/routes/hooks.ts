@@ -24,7 +24,7 @@ import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { getHookInventory } from '../../core/hooks/registry.js'
 import { DAEMON_POLICIES } from '../../core/hooks/daemon-policies.js'
 import { buildSettingsPatch, mergeTopLevel } from '../../core/hooks/settings.js'
-import { bus, EventNames } from '../../core/event-bus.js'
+import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 
 export const hooksRouter = Router()
@@ -121,8 +121,8 @@ hooksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       // (server.ts subscribes pushDaemonHooksToAllHosts to this event). Without
       // it, toggling e.g. session-only cron enforcement OFF would leave every
       // connected daemon enforcing the old rules until its next reconnect.
-      const freshCfg = await getConfig()
-      bus.emit(EventNames.CONFIG_CHANGED, { config: freshCfg }, ['web-ui'], { source: 'hooks-api' })
+      // In the client view (core/config-broadcast.ts): `web-ui` sends it to every client.
+      emitConfigChanged(await getConfig(), ['web-ui'], { source: 'hooks-api' })
       log.web.info('daemon policy updated via /api/hooks', {
         id, enabled, settingKeys: settings ? Object.keys(settings as object) : undefined,
       })
@@ -155,8 +155,7 @@ hooksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     await updateConfig({ hooks })
 
     // Nudge the dispatcher's live reload (same event PUT /api/config emits).
-    const fresh = await getConfig()
-    bus.emit(EventNames.CONFIG_CHANGED, { config: fresh }, ['web-ui'], { source: 'hooks-api' })
+    emitConfigChanged(await getConfig(), ['web-ui'], { source: 'hooks-api' })
 
     log.web.info('hook override updated via /api/hooks', { id, enabled, priority, timeoutMs })
     res.json({ ok: true, id, override: overrides[id] })

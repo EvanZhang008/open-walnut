@@ -27,6 +27,7 @@ import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
 import { getQuiet, logQuietSkipOnce, quietSuppresses } from '../quiet/quiet-state.js'
 import { deliverPush } from './deliver.js'
+import { truncatePreview } from '../human-inbox/preview.js'
 import type { PushContent } from './send.js'
 import {
   ACTIVE_LEASE_MS,
@@ -60,7 +61,9 @@ export function letterPushContent(letter: LetterPushInput): PushContent {
   const prefix = letter.kind === 'reply' ? 'Reply: ' : 'New letter: '
   return {
     title: `${prefix}${letter.subject}`.slice(0, TITLE_MAX),
-    body: letter.textPreview || 'Open Walnut to read it',
+    // The store caps every preview it emits at 300 characters; capped again here
+    // so what reaches a lock screen never depends on every producer doing so.
+    body: truncatePreview(letter.textPreview ?? '') || 'Open Walnut to read it',
     data: {
       type: LETTER_PUSH_TYPE,
       letterId: letter.letterId,

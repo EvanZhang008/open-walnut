@@ -14,7 +14,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response } from 'express'
 import { log } from '../../logging/index.js'
-import { bus, EventNames } from '../../core/event-bus.js'
+import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import {
   advanceFixtureClock, connectFixtureHost, failFixtureHost, fixtureCounters, fixtureFile, fixtureFloor, fixtureHost,
@@ -63,7 +63,7 @@ async function writeHosts(update: (hosts: ConfigHosts) => void): Promise<void> {
   for (const [key, def] of Object.entries(current)) if ((def as { discovered?: boolean }).discovered) delete current[key]
   update(current)
   await updateConfig({ hosts: current })
-  bus.emit(EventNames.CONFIG_CHANGED, { config: { hosts: current } } as never, ['web-ui'], { source: 'test-host-fixture' })
+  emitConfigChanged({ hosts: current }, ['web-ui'], { source: 'test-host-fixture' })
 }
 
 function defOf(host: string): HostDef | undefined {

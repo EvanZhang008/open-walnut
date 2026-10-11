@@ -47,6 +47,7 @@ import {
   unregisterPushToken,
 } from '../../src/core/push/registry.js'
 import { apnsStatus } from '../../src/core/push/apns.js'
+import { tokenTag } from '../../src/core/push/send.js'
 import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js'
 import type { PushTokenEntry } from '../../src/core/types.js'
 
@@ -261,7 +262,7 @@ describe('pushRegistrationStatus', () => {
       count: number
       apns: { configured: boolean }
       thisDevice?: { mode: string; kind: string }
-      tokens: Array<{ token_prefix: string; key_name: string; origin: string }>
+      tokens: Array<{ token_tag: string; token_prefix: string; key_name: string; origin: string }>
     }
     expect(status.registered).toBe(true)
     expect(status.registeredThisDevice).toBe(true)
@@ -269,8 +270,12 @@ describe('pushRegistrationStatus', () => {
     expect(status.count).toBe(1)
     expect(status.apns.configured).toBe(true)
     expect(status.thisDevice).toMatchObject({ mode: 'always', kind: 'apns' })
-    expect(status.tokens[0]?.token_prefix).toBe(`${TOKEN_A.slice(0, 12)}...`)
+    // A phone finds its row by the tag; the legacy prefix stays for app builds that
+    // predate token tags, at the 8 characters they need and no more.
+    expect(status.tokens[0]?.token_tag).toBe(tokenTag(TOKEN_A))
+    expect(status.tokens[0]?.token_prefix).toBe(`${TOKEN_A.slice(0, 8)}...`)
     expect(JSON.stringify(status)).not.toContain(TOKEN_A)
+    expect(JSON.stringify(status)).not.toContain(TOKEN_A.slice(0, 10))
   })
 
   it('is honest when nothing is registered', async () => {

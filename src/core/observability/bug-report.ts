@@ -100,9 +100,27 @@ export async function buildBugReportText(opts?: BugReportOpts): Promise<string> 
     ...sections.map(s => `\n=== ${s.name} ===\n${s.body}`),
   ].join('\n');
 
-  text = enforceTotalBudget(text);
-  text = maskHostIdentitiesInText(text, await hostTable);
-  return redactSensitiveText(text);
+  const { registeredTokens } = await import('../push/registry.js');
+  return finishBundleText(text, await registeredTokens(), await hostTable);
+}
+
+/**
+ * The last passes over the assembled bundle, in this order:
+ *  - the push device tokens. Phone builds and servers that predate token tags
+ *    logged a slice of the token; the iOS tail and old server lines can
+ *    still carry one. This runs BEFORE the size budget: the budget cuts the
+ *    middle of the largest section, and a token it split would no longer match
+ *    whole, so the head it left would ride the report (only its first 12
+ *    characters, the legacy slice, would still be replaced);
+ *  - the size budget;
+ *  - the host identities, then the generic secret patterns.
+ */
+export async function finishBundleText(text: string, tokens: readonly string[], hosts: HostIdentity[]): Promise<string> {
+  const { scrubDeviceTokens } = await import('../push/send.js');
+  let out = scrubDeviceTokens(text, tokens);
+  out = enforceTotalBudget(out);
+  out = maskHostIdentitiesInText(out, hosts);
+  return redactSensitiveText(out);
 }
 
 /**

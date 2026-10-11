@@ -74,13 +74,14 @@ vi.mock('../../src/web/routes/v1-control-relay.js', async (importOriginal) => {
 })
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { _resetDeviceAuthForTesting, _settleRevokeWorkForTesting, createDevice, revokePairing, rotateDevice } from '../../src/core/device-auth.js'
+import { _resetDeviceAuthForTesting, _settleRevokeWorkForTesting, createDevice, livePairingHashesOf, revokePairing, rotateDevice } from '../../src/core/device-auth.js'
 import { LOCAL_ACTOR } from '../../src/core/device-actor.js'
 import { getConfig } from '../../src/core/config-manager.js'
 import { handlePushRelayAction } from '../../src/core/push/relay.js'
 import { registerPushToken, takeBackPushToken } from '../../src/core/push/registry.js'
 import { MAX_CLAIMS, MAX_LIVE_CLAIMS, pushClaimOf, pushClaimOfPairingHash, pushTokenSha } from '../../src/core/push/claims.js'
-import { drainRevokeQueue, queuedRevokeSteps } from '../../src/core/devices/revoke-queue.js'
+import { drainRevokeQueue, enqueueRevokeStep, queuedRevokeSteps } from '../../src/core/devices/revoke-queue.js'
+import { takeBackPushRegistration } from '../../src/core/push/device-revoke.js'
 import { _resetDeviceTwinsForTesting } from '../../src/web/routes/device-twins.js'
 import { pushRouter } from '../../src/web/routes/push.js'
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js'
@@ -505,6 +506,30 @@ describe('claims on a relayed row', () => {
     expect((await rows()).map((r) => r.token).sort()).toEqual([ROW, OTHER_ROW].sort())
   })
 
+  it('a record back in auth.json by hand with its hash revoked is no live pairing: its claim keeps nothing', async () => {
+    await write(pushClaimOf(PHONE))
+    const auth = JSON.parse(await fs.readFile(AUTH(), 'utf-8')) as Record<string, unknown>
+    await fs.writeFile(AUTH(), JSON.stringify({ ...auth, revokedHashes: [sha(PHONE)] }, null, 2), { mode: 0o600 })
+    _resetDeviceAuthForTesting()
+    expect(await livePairingHashesOf('my-phone')).toEqual([])
+    primary.mode = 'real'
+    expect(await takeBackPushRegistration({ name: 'my-phone', tokenSha: pushTokenSha(ROW) })).toMatchObject({ removed: 1, relayed: true })
+    expect(primary.calls.filter((c) => c.action === 'server.push.take-back').map((c) => c.params.liveClaims)).toEqual([[]])
+    expect(await rows()).toEqual([])
+  })
+
+  it('on a box that is no companion (any more), a take-back runs here with the live claims too', async () => {
+    await write(pushClaimOf(PHONE))
+    box.cloud = false
+    primary.mode = 'real' // a relay to a primary would be recorded; none may happen here
+    // The name's pairing holds here: its claim keeps the row, called directly and from the queue.
+    expect(await takeBackPushRegistration({ name: 'my-phone', tokenSha: pushTokenSha(ROW) })).toMatchObject({ removed: 0, relayed: false })
+    expect(await enqueueRevokeStep({ step: 'takeback', name: 'my-phone', tokenSha: pushTokenSha(ROW) })).not.toBeNull()
+    expect(await drainRevokeQueue()).toEqual({ done: 1, left: 0 })
+    expect((await rows()).map((r) => r.claims)).toEqual([[pushClaimOf(PHONE)]])
+    expect(primary.calls).toEqual([])
+  })
+
   it('a pairing\'s claim follows its token hash, the one auth.json keeps', () => {
     expect(pushClaimOf(PHONE)).toBe(pushClaimOfPairingHash(sha(PHONE)))
     expect(pushClaimOf(PHONE)).toMatch(/^[0-9a-f]{32}$/)
@@ -513,6 +538,11 @@ describe('claims on a relayed row', () => {
   })
 
   it('a malformed take-back is refused', async () => {
+    // Through the primary's relay: no live claims, or the r3a4 shape (one `claim`), deletes nothing.
+    await write(pushClaimOf('a'))
+    await expect(onPrimary('take-back', { keyName: 'my-phone', tokenSha: pushTokenSha(ROW) })).rejects.toMatchObject({ code: 'bad_request' })
+    await expect(onPrimary('take-back', { keyName: 'my-phone', tokenSha: pushTokenSha(ROW), claim: pushClaimOf('b') })).rejects.toMatchObject({ code: 'bad_request' })
+    expect((await rows()).map((r) => r.token)).toEqual([ROW])
     await expect(takeBackPushToken('my-phone', 'abc', [])).rejects.toThrow(/sha256/)
     await expect(takeBackPushToken('my-phone', pushTokenSha(ROW), pushClaimOf('a'))).rejects.toThrow(/live claims/)
     await expect(takeBackPushToken('my-phone', pushTokenSha(ROW), ['not-a-claim'])).rejects.toThrow(/live claims/)

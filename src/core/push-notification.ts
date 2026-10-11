@@ -15,12 +15,14 @@
  * Unwired today: no producer on a running server emits any of these events to
  * this subscriber, so none of the branches below ever sends. Background replies
  * (AGENT_RESPONSE) reach the console over WebSocket only; session results and
- * errors (SESSION_RESULT, SESSION_ERROR) go to the main AI and the session
- * runner; triage chat (CHAT_HISTORY_UPDATED) goes to the web UI; and nothing
- * emits CRON_NOTIFICATION since forensic incidents stopped pushing (they are
- * developer diagnostics, read through /api/incidents). The branches stay so a
+ * errors (SESSION_RESULT, SESSION_ERROR) go to the main AI, the session runner
+ * and the web UI; triage chat (CHAT_HISTORY_UPDATED) goes to the web UI; and
+ * nothing emits CRON_NOTIFICATION since forensic incidents stopped pushing (they
+ * are developer diagnostics, read through /api/incidents). The branches stay so a
  * producer can opt in. Wiring one is a product decision, because it makes the
  * phone buzz for that event. Letters push through core/push/letter-push.ts.
+ * tests/core/push-producer-ratchet.test.ts fails the day a producer is wired
+ * without that decision.
  */
 
 import { bus, eventData, EventNames } from './event-bus.js'

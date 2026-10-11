@@ -3543,12 +3543,16 @@ apiV1Router.post('/client-logs', async (req: Request, res: Response, next: NextF
     } catch { /* file doesn't exist yet — fine */ }
 
     const accepted = lines.slice(0, CLIENT_LOG_MAX_LINES)
-    const out = accepted
+    const raw = accepted
       .map((l: unknown) => JSON.stringify({
         device, appVersion, os,
         ...(typeof l === 'object' && l !== null ? l : { message: String(l) }),
       }))
       .join('\n') + '\n'
+    // Phone builds that predate token tags log a slice of their push token; it never reaches disk.
+    const { registeredTokens } = await import('../../core/push/registry.js')
+    const { scrubDeviceTokens } = await import('../../core/push/send.js')
+    const out = scrubDeviceTokens(raw, await registeredTokens())
     // Persist BEFORE flagging: the file is the source of truth for forensics,
     // and a notification pointing at a line that failed to land is a lie.
     await fsp.appendFile(file, out, 'utf-8')
