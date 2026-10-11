@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// The sheet a tap on empty calendar space opens: a title field, the slot the
-/// user tapped (editable), and a project pick. Deliberately NOT the full
-/// NewTaskSheet — a calendar tap already answered "when", so asking again would
-/// undo the gesture; this is the one-field version with the date pre-answered.
+/// user tapped (editable), and a project pick. Deliberately a one-field sheet: a
+/// calendar tap already answered "when", so asking again would undo the gesture.
 ///
 /// Dogfood R18: before this, the Day / Multi-Day / List views had no create
 /// entry at all, and tapping empty space did nothing. A calendar you can't put

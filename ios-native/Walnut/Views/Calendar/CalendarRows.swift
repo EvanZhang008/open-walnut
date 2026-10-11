@@ -294,7 +294,7 @@ struct CalendarQuickAddRow: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.body)
                     .foregroundStyle(Theme.tint)
-                // Same placeholder-contrast fix as `QuickAddRow`: this string is
+                // The placeholder-contrast fix (`FieldPlaceholder`): this string is
                 // the only statement of WHICH DAY the task lands on, so it is
                 // held to the text bar rather than the platform's 30%-alpha
                 // placeholder (`FieldPlaceholder`).

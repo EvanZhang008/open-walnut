@@ -13,10 +13,12 @@ final class NewSessionLaunchBodyTests: XCTestCase {
 
     private func body(
         cwd: String = "/Users/x/walnut", host: String? = nil, message: String = "hi",
-        taskId: String? = nil, mode: String? = nil, model: String? = nil
+        taskId: String? = nil, mode: String? = nil, model: String? = nil,
+        project: String? = nil
     ) -> WalnutAPI.CreateSessionBody {
         WalnutAPI.createSessionBody(
-            cwd: cwd, host: host, message: message, taskId: taskId, mode: mode, model: model
+            cwd: cwd, host: host, message: message, taskId: taskId, mode: mode, model: model,
+            project: project
         )
     }
 
@@ -82,11 +84,32 @@ final class NewSessionLaunchBodyTests: XCTestCase {
         XCTAssertNil(object["model"])
         XCTAssertNil(object["mode"])
         XCTAssertNil(object["taskId"])
+        XCTAssertNil(object["project"])
     }
 
     /// A task-linked launch keeps its link (the sheet path still uses this).
     func testTaskIdRidesWhenLinking() {
         XCTAssertEqual(body(taskId: "task-7").taskId, "task-7")
+    }
+
+    // MARK: - project
+
+    /// The draft's project pill files the task the launch creates.
+    func testAPickedProjectRidesATasklessLaunch() {
+        XCTAssertEqual(body(project: "marina").project, "marina")
+    }
+
+    /// "" is the Inbox, which absent already means; whitespace is no project either.
+    func testTheInboxIsSentAsAbsent() {
+        XCTAssertNil(body(project: nil).project)
+        XCTAssertNil(body(project: "").project)
+        XCTAssertNil(body(project: "   ").project)
+    }
+
+    /// A launch linked to a task keeps that task's project: the field would only be a
+    /// second, conflicting answer.
+    func testATaskLinkedLaunchNeverSendsAProject() {
+        XCTAssertNil(body(taskId: "task-7", project: "marina").project)
     }
 
     // MARK: - DirListing decoding

@@ -62,16 +62,26 @@ final class BoardRingTapUITests: XCTestCase {
         // Pairs itself against its own throwaway server, so the helper leaves the URL
         // alone (see `UITestLaunch.app`).
         return UITestLaunch.launch([
-            "-walnut.serverUrl", server,
+            "-walnut.serverUrl", UITestLaunch.pairedServer(server),
             "-walnut.deviceToken", token,
         ])
     }
 
-    /// Open the Tasks tab and wait for the board to have rows.
+    /// Open the Tasks tab's board (its drawer) and wait for the board to have rows.
     private func board(_ app: XCUIApplication) throws -> XCUIElement {
         let tasks = app.buttons["Tasks"]
         XCTAssertTrue(tasks.waitForExistence(timeout: 30), "the tab bar never appeared")
         tasks.tap()
+        // The tab's page is a session; the board is the drawer, open on a fresh launch
+        // with nothing to reopen and one tap away otherwise.
+        // Open is told by the drawer's scrim: the shut drawer stays mounted, so the
+        // board's list is in the tree either way.
+        let scrim = app.descendants(matching: .any)["tasks.drawer.scrim"]
+        if !scrim.waitForExistence(timeout: 3) {
+            let menu = app.buttons["tasks.menu"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 10), "no board button on the Tasks page")
+            menu.tap()
+        }
         let rings = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'board.ring.'"))
         let deadline = Date().addingTimeInterval(45)
@@ -186,14 +196,20 @@ final class BoardRingTapUITests: XCTestCase {
             "a tap at 85%/85% of the ring's column did nothing — before this change that "
                 + "point was outside the 34x30 box and belonged to no control at all"
         )
+        // A tap that reached the ROW instead opens the task's session, or a draft for a
+        // task with none: neither may be on screen. (A row that went away does not prove
+        // the ring was hit on its own; the draft's sheet would hide it too.)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["newSessionChat.pathPill"].waitForExistence(timeout: 2),
+            "the tap opened a New Session draft — it reached the row instead of the ring"
+        )
+        XCTAssertFalse(app.buttons["session.menu"].exists, "the tap opened a session")
         // …and it must not have fallen through to the text column, whose tap OPENS the
-        // session (and starts one when the task has none). The board's own quick-add field
-        // is the cheapest proof we are still on the board rather than in a conversation.
+        // session (and starts one when the task has none), which closes the drawer. The
+        // drawer's scrim still being up is the cheapest proof it stayed open.
         XCTAssertTrue(
-            app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier == 'tasks.quickAdd.field'"))
-                .firstMatch.waitForExistence(timeout: 5),
-            "the tap pushed a session — it reached the row instead of the ring"
+            app.descendants(matching: .any)["tasks.drawer.scrim"].waitForExistence(timeout: 5),
+            "the tap opened a session — it reached the row instead of the ring"
         )
         // No restore here: the caller owns the throwaway task and deletes it. A UI-driven
         // undo would depend on the row still being visible, which fold-done makes false.

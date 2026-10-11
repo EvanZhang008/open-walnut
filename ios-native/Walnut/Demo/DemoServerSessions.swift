@@ -280,7 +280,9 @@ extension DemoServer {
         let message = (r.string("message") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let created = withState { state -> SessionCreated in
             let now = nowISO
-            let project = Self.project(forCwd: cwd)
+            // A picked project wins (the draft's project pill), as on the server.
+            let picked = r.string("project")?.trimmingCharacters(in: .whitespaces) ?? ""
+            let project = picked.isEmpty ? Self.project(forCwd: cwd) : picked
             var taskID = r.string("taskId")
             let title = message.isEmpty ? "New session" : Self.titleFrom(message)
             if taskID == nil || state.taskIndex(taskID!) == nil {

@@ -259,26 +259,17 @@ final class DemoClockPinTests: XCTestCase {
         XCTAssertTrue(SettingsView.showsTokenRow(serverURL: "http://127.0.0.1:3000"))
     }
 
-    /// At the accessibility sizes the drawer's title gets its own line, so a word
-    /// never breaks beside the Clear button.
-    func testTheRecentsTitleStacksAtAccessibilitySizes() {
-        XCTAssertFalse(TasksRecentsDrawer.headerStacks(.large))
-        XCTAssertFalse(TasksRecentsDrawer.headerStacks(.xxxLarge))
-        XCTAssertTrue(TasksRecentsDrawer.headerStacks(.accessibility1))
-        XCTAssertTrue(TasksRecentsDrawer.headerStacks(.accessibility5))
-    }
-
     /// At the accessibility sizes a drawer row's title and meta wrap in full: two
     /// lines of title and one of meta cut "Fix the shared albu..." and the project
     /// after "2m ago" (App Store r7 gate, finding 14). Below them the row keeps its shape.
     func testTheRecentsRowsWrapInFullAtAccessibilitySizes() {
         for size in [DynamicTypeSize.large, .xxxLarge] {
-            let limits = TasksRecentsDrawer.rowLineLimits(size)
+            let limits = TasksRecentsPage.rowLineLimits(size)
             XCTAssertEqual(limits.title, 2, "\(size)")
             XCTAssertEqual(limits.meta, 1, "\(size)")
         }
         for size in [DynamicTypeSize.accessibility1, .accessibility5] {
-            let limits = TasksRecentsDrawer.rowLineLimits(size)
+            let limits = TasksRecentsPage.rowLineLimits(size)
             XCTAssertNil(limits.title, "\(size)")
             XCTAssertNil(limits.meta, "\(size)")
         }

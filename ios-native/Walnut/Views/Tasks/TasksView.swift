@@ -1,83 +1,56 @@
 import SwiftUI
 
-/// Tasks tab, Apple Reminders-style. A two-entry nav row (Pin | Calendar) scrolls
-/// above the content for the active filter; the board is the default and renders as
-/// V1 "edge-to-edge" bands (see `TaskBoardList`).
+/// The board: the Tasks tab's drawer (`TasksTabView`), rendered as inset-grouped bands
+/// (see `TaskBoardList`). A tap on any task here opens its SESSION on the tab's page.
 ///
-/// The board is the PINNED working set and it is now the tab's only task list — the
+/// The board is the PINNED working set and it is the tab's only task list — the
 /// "All Tasks" pill is gone ("已经有 pin 了,为什么还会有 all task"), together with
 /// the board's own "Everything else" band. Both were the whole task store rendered as
 /// rows, which is where a 3,175-row `All` chip and a 460ms scroll hitch came from.
 /// Unpinned work is reachable through SEARCH: typing a query still appends the
 /// matching open tasks below the bands (`sections(excluding:)`) and the server hits
 /// below that (`GlobalSearchSection`), neither of which runs on an idle body pass.
+///
+/// ONE way to make work: the toolbar's `+`, whose page picks the project and can save
+/// the text as a todo instead of starting a session. The per-band, per-heading and
+/// top-of-list add rows are gone (the user: a section needs no add row of its own).
 struct TasksView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(TasksStore.self) private var tasks
     /// Read only to pin the navigation bar's appearance to it (`toolbarColorScheme` below).
     @Environment(\.colorScheme) private var colorScheme
+    /// The drawer this board is in, for its tap suppression (a close drag that starts and
+    /// ends on a row must not also open that row).
+    @Environment(\.leadingDrawer) private var drawer
 
-    @State private var activeFilter: TaskFilter = .sessions
+    /// Opens a task's session (or its attached draft) on the tab's page.
+    let router: TaskSessionRouter
+    /// Put a resolved session on the tab's page.
+    let onShowSession: (WalnutSession) -> Void
+    /// Show the calendar as a page of its own.
+    let onOpenCalendar: () -> Void
+
+    /// The task whose details sheet is up (a row's long-press `Details`).
     @State private var selected: WalnutTask?
-    /// Explicit path so a freshly created session can push programmatically.
-    @State private var navPath: [WalnutSession] = []
-    /// The New Session draft, and WHICH TASK it is about (nil = no sheet).
-    ///
-    /// An item and not a Bool, because the sheet has two entrances that disagree about
-    /// exactly one thing: the toolbar's `New Session` is about nothing
-    /// (`BoardModel.BoardDraftSeed.unattached`), while every route from a TASK ROW is
-    /// about that task and must link the new session to it. A Bool plus a separate
-    /// `@State` task is two values that have to agree about one sheet, which is how a
-    /// draft opens carrying the previous row's task — and an UNATTACHED draft reached
-    /// from a task row is the orphan-session bug this state exists to close.
-    @State private var newSessionSeed: BoardModel.BoardDraftSeed?
-    /// The board row whose tap is currently resolving a destination (nil = none).
-    /// Drives that row's spinner and keeps a second tap from starting a second lookup.
-    @State private var resolvingRowId: String?
-    /// The full NewTaskSheet, presented by ITEM: the sentence carried from a
-    /// quick-add row's expand affordance and the destination the add started
-    /// from ride inside the item. They used to be two separate @States beside a
-    /// Bool, and SwiftUI's first `.sheet(isPresented:)` presentation of a process
-    /// read the content closure with the PREVIOUS values of those states, so the
-    /// first expand after launch opened an empty form while the row had already
-    /// cleared its text (QA, 2026-10-03: 5 of 5 first opens lost the sentence).
-    @State private var newTaskPresentation: NewTaskPresentation?
-    /// Which group header's `+` is currently open, by seed identity. Exactly one
-    /// inline add row at a time: two open keyboards on one list is not a thing,
-    /// and a single value makes "the other one closes" automatic.
-    @State private var openAddGroup: NewTaskSeed?
+    /// The drawer's own pages (Recently opened).
+    @State private var navPath: [TasksDrawerRoute] = []
     /// Local search — filters tasks (title/project) and sessions
     /// (title/task/host/cwd) in place; no server round-trip.
     @State private var searchText = ""
+    /// The search field is up (focused, or showing its Cancel). While it is, the bar has
+    /// no room for the toolbar's calendar and `+`, so leaving for a session ends it
+    /// (`endSearch`): the drawer reopens on the board, not on an old query.
+    @State private var searchPresented = false
     /// The server half of the search ("More Results"), scheduled from here on every
     /// query change so it never waits for its lazy section to be drawn.
     @State private var globalSearch = GlobalSearchModel()
     /// Locate-me flash for a just-created task (scroll target + row tint).
     @State private var highlightedTaskId: String?
-    /// True while the inline add row's field is focused — rapid consecutive
-    /// adds must not yank the scroll position / filter out from under the
-    /// keyboard (Reminders keeps you anchored on the field).
-    @State private var inlineAddActive = false
-    /// Multi-select edit mode (Wave 1): batch complete / delete over the
-    /// partial-success batch endpoints.
-    @State private var editMode: EditMode = .inactive
-    @State private var selectedIds = Set<String>()
-    @State private var batchBusy = false
-    @State private var batchError: String?
-    @State private var confirmBatchDelete = false
-    /// True once the header chrome (nav row / quick add) has scrolled off the top,
-    /// so the compact bar takes over its two jobs (switch filter, add a task) on
-    /// the filters that have one. Driven by `onScrollGeometryChange` with
-    /// hysteresis — see `TasksChromeMetrics`.
-    @State private var chromeCollapsed = false
-    /// Continuous scroll samples live HERE, off the view graph, and the deferred
-    /// publish is coalesced through it — see `ChromeCollapseTracker`.
-    @State private var collapseTracker = ChromeCollapseTracker()
-    /// True once the BOARD's chip row (header row 2) has reached the top edge, so the
-    /// pinned copy stands in for it. A separate state from `chromeCollapsed` because
-    /// it crosses at a different place and for a different reason: the compact bar
-    /// replaces chrome that has fully LEFT, the pinned chips take over the instant
-    /// their own row starts to go under. See `TasksChromeMetrics.chipsPinThreshold`.
+    /// The folded board groups (tier bands, or whole projects), persisted. See
+    /// `BoardCollapse`.
+    @AppStorage(BoardCollapse.storageKey, store: AppPrefs.defaults) private var collapsedRaw = ""
+    /// True once the BOARD's chip row (header row 1) has reached the top edge, so the
+    /// pinned copy stands in for it. See `TasksChromeMetrics.chipsPinThreshold`.
     ///
     /// It is a REFERENCE OBJECT and not a `@State Bool`, and the whole point is that
     /// **nothing in this view's `body` may read it** — the two `BoardBandBar` copies
@@ -95,16 +68,11 @@ struct TasksView: View {
     /// off the view graph (never `@Observable`): a body pass that changes nothing the
     /// bands read must not pay for a rebuild. See `BoardBandsCache`.
     @State private var bandsCache = BoardBandsCache()
-    /// The "Recently opened" drawer (top-left clock, or a swipe in from the left edge).
-    /// A reference model, and nothing in this body reads its fraction: a drag must
-    /// re-render the drawer shell, never the board. See `LeadingDrawerModel`.
-    @State private var recentsDrawer = LeadingDrawerModel()
 
-    // MARK: - Board state (the default filter's bands)
+    // MARK: - Board state
     //
-    // Which band's create row is open, by BAND id rather than per-row view state so a
-    // store refresh can't reset it. (There is no expanded-row state: a row's tap opens
-    // its session — the row itself never grows.)
+    // (There is no expanded-row state: a row's tap opens its session — the row itself
+    // never grows.)
 
     /// The filters menu's `Show done`: every band shows its completed rows.
     ///
@@ -113,9 +81,6 @@ struct TasksView: View {
     /// on every heading: showing finished work is rare, and a `show done (N)` capsule on
     /// each band was noise on the screen whose job is the open rows.
     @AppStorage(BoardFilterPrefs.showDoneKey, store: AppPrefs.defaults) private var showDone = false
-    /// Which band's foot create row is open, by band id (exactly one: two
-    /// keyboards on one list is not a thing).
-    @State private var openCreateBand: String?
     // The board's three view decisions — WHICH TIER (the chip rail), how its rows are
     // headed (grouping), and which dates are admitted — all persisted through @AppStorage,
     // which is how this app already keeps a view preference (SettingsView's mic route,
@@ -146,8 +111,6 @@ struct TasksView: View {
     /// empty one, because two paths deciding what a band contains is how a task went
     /// missing from this screen once already.
     @AppStorage(BoardFilterPrefs.tierScopeKey, store: AppPrefs.defaults) private var tierScopeRaw = ""
-
-    private var isEditing: Bool { editMode == .active }
 
     /// The tier the rail is narrowed to, as the model speaks it.
     private var tierScope: String? { BoardFilterPrefs.scope(tierScopeRaw) }
@@ -182,193 +145,123 @@ struct TasksView: View {
         )
     }
 
-    /// ScrollViewReader id of the first scrollable row, so the compact bar can
-    /// bring the real header back.
+    /// ScrollViewReader id of the first scrollable row, so a chip tap can land at the top
+    /// of what it just asked for.
     static let topAnchorId = "tasks.top"
-
-    /// Where the board's TOP-LEVEL quick add files a task.
-    ///
-    /// One rule, and it is what keeps the row honest: whatever it creates has to be VISIBLE
-    /// on the board that created it, and the board is the pinned working set. So the pin is
-    /// never left to the server default — it is the TIER the rail is scoped to, and
-    /// `BoardModel.defaultTierId` when the rail says `All` (the same band a pin with no
-    /// split lands in, so the row does not visibly hop when the authoritative split
-    /// arrives).
-    ///
-    /// It reads the SCOPE directly, which is the change: it used to derive the tier from
-    /// the selected BAND's `createSeed`, so under `By project` the selected band was a
-    /// `proj:` band that names a project and no tier — and a create made while scoped to
-    /// Focus landed in Satellite. Pass `BoardAssembly.scope`, never the requested id: a
-    /// scope the board did not honour must not reach the wire as a `focus_tier`, which is
-    /// the `focus_tier: "proj:marina"` mistake in its newest disguise.
-    ///
-    /// A static function rather than a lookup inside the body: it is the kind of rule that
-    /// is wrong in one grouping and right in the other, which is what `CreateWithTierTests`
-    /// pins.
-    static func boardQuickAddSeed(scope: String?) -> NewTaskSeed {
-        NewTaskSeed(project: "", pin: .tier(scope ?? BoardModel.defaultTierId))
-    }
 
     var body: some View {
         NavigationStack(path: $navPath) {
             Group {
                 if tasks.notSyncedYet && tasks.tasks.isEmpty {
                     notSyncedState
-                } else if activeFilter == .calendar {
-                    // Full-bleed: the calendar's own views scroll and page
-                    // (hour timelines, day list), which a List row can't host —
-                    // a pager inside a List row has no intrinsic height.
-                    calendarSurface
                 } else {
                     list
-                        // On the list only. The calendar is a root that does not
-                        // scroll as a whole, so nothing on it can bring back a
-                        // search drawer the board's scroll hid, and it does not
-                        // read the query anyway.
-                        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
                 }
             }
             .navigationTitle("Tasks")
-            // A large title follows the scroll view under it, and the calendar
-            // has none the bar tracks: opened from a scrolled board it kept the
-            // board's collapsed bar over room laid out for the large one, a blank
-            // band of about 127 pt (App Store gate, 2026-10-05). The calendar gets
-            // a fixed inline bar instead, the same however the board was left.
-            .navigationBarTitleDisplayMode(activeFilter == .calendar ? .inline : .automatic)
-            // A filter with no header entry any more (Today / In Progress / Done,
-            // whose cards this rebuild removed) would render a header with nothing
-            // selected over a list the user cannot switch away from. Normalising on
-            // appear is the cheapest place to close that: it runs before the first
-            // frame the user sees, and `TasksNavEntry.resolve` is a pure function so
-            // the rule itself is unit-tested rather than trusted.
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                activeFilter = TasksNavEntry.resolve(activeFilter)
-                // "The Tasks screen is on screen" — the ONE thing that should make
-                // the board reconcile because a person is looking at it.
+                // "The board is on screen" — the ONE thing that should make it reconcile
+                // because a person is looking at it.
                 //
-                // `.onAppear`, deliberately, and not the `.task` this used to live in:
-                // a `.task` is tied to the lifetime of a view in the render tree, not
-                // to the screen being visible, and SwiftUI re-arms it whenever the
-                // subtree it sits in is re-evaluated. With a session conversation
-                // pushed over the board that measured 22 re-arms against 2 body
-                // passes, and since the bundle it fired writes the very lists this
-                // screen renders, each fetch bought the next one: five requests every
-                // ~160ms, for as long as the app was open (2026-09-01, 13 minutes,
-                // ~3.7 MB/s of JSON on the production event loop).
+                // `.onAppear`, deliberately, and not a `.task`: a `.task` is tied to the
+                // lifetime of a view in the render tree, not to the screen being visible,
+                // and SwiftUI re-arms it whenever the subtree it sits in is re-evaluated.
+                // With a session conversation pushed over the board that measured 22
+                // re-arms against 2 body passes, and since the bundle it fired writes the
+                // very lists this screen renders, each fetch bought the next one: five
+                // requests every ~160ms, for as long as the app was open (2026-09-01).
                 //
-                // Gated on first activation for the original reason this was a `.task`
-                // (P0-2): a background/prewarm launch must start no network work.
-                // Freshness-gated in the store, so even a chatty appearance signal
-                // cannot become a poll — see `BoardRefreshOrigin.minimumAge`.
+                // The drawer keeps this view mounted while it is shut, so this runs once
+                // per tab visit rather than once per drawer open; a drawer open that wants
+                // fresh rows has pull to refresh.
+                //
+                // Gated on first activation (P0-2): a background/prewarm launch must start
+                // no network work. Freshness-gated in the store, so even a chatty
+                // appearance signal cannot become a poll (`BoardRefreshOrigin.minimumAge`).
                 LaunchGate.shared.whenActive {
                     await tasks.refreshBoard(origin: .boardAppeared)
                 }
             }
-            // Apple Reminders' actual mechanism: the large title collapses to an
-            // inline one as you scroll, and the search field (a nav-bar DRAWER,
-            // not a List row) rides up with it. `.automatic` on the drawer is
-            // what makes the field hide on scroll-down and come back on
-            // scroll-up — a `.always` drawer would pin ~44pt forever.
-            // GHOST PILE-UP fix: a VISIBLE navigation bar background — and ONE line,
-            // never the `ShapeStyle` overload. That is the whole R30 correction, so the
-            // rest of this comment is the two things it has to keep true at once.
+            // GHOST PILE-UP fix: a VISIBLE navigation bar background, and ONE line, never
+            // the `ShapeStyle` overload.
             //
-            // WHY THE BAR NEEDS A BACKGROUND AT ALL. Left at its scroll-edge appearance,
-            // which on iOS 26 is transparent, band headings, task rings and titles read
-            // straight THROUGH the bar and up into the status bar, overlapping the inline
-            // "Tasks" title. The board makes it worse than the same omission elsewhere for
-            // two reasons it also owns: it hides the List's own background and paints its
-            // own page behind full-contrast text (`scrollContentBackground(.hidden)`
-            // below), and the pinned chips overlay sits flush at the top of the content
-            // area, so there is no opaque strip for the glass to sit on. `ChatView`,
-            // `SessionConversationView` and `InboxView` all say exactly this one line and
-            // none of them ghosts.
+            // Left at its scroll-edge appearance, which on iOS 26 is transparent, band
+            // headings, task rings and titles read straight THROUGH the bar. The board
+            // hides the List's own background and paints its own page behind full-contrast
+            // text (`scrollContentBackground(.hidden)` below), and the pinned chips overlay
+            // sits flush at the top of the content area, so there is no opaque strip for
+            // the glass to sit on.
             //
-            // WHY THE COLOUR OVERLOAD IS GONE, and it is not a style preference: with
-            // `.toolbarBackground(BoardBandCard.page, for: .navigationBar)` in front of
-            // it, the large "Tasks" title rendered ZERO pixels. Measured on the pinned
-            // simulator, cold launch, light AND dark, default AND accessibility-XXXL: the
-            // title's own accessibility rect came back a flat 243-246 luminance, i.e. the
-            // page colour and nothing else. `InboxView`, one `.visible` and no colour,
-            // draws its title fine on the same OS — which is what identified the overload
-            // rather than the opacity as the cause. A screen whose title is invisible has
-            // no navigation identity at all, so the colour lost.
-            //
-            // What the colour was FOR was the seam: an opaque bar in a colour other than
-            // the board's page would step against it 44pt down the screen, and in dark
-            // mode the pair actually measured a 31-level step (31.3 grey bar against the
-            // List's 0). Dropping the overload fixes that too, and for the reason the
-            // overload could never have: the platform's own bar background is DERIVED from
-            // whatever it sits over, so there is no second colour left to disagree with
-            // `BoardBandCard.page`. Two numbers that have to match became one number.
-            //
-            // `.visible` needs no availability gate (iOS 16+, deployment target 18.0), so
-            // it ships to every supported OS. `scrollEdgeEffectStyle(.hard, for: .top)` is
-            // the platform's OWN answer on iOS 26 and rides the List below
-            // (`topScrollEdge`), gated — complementary, not alternatives: this one
-            // gives the BAR a background, that one stops the content reading through the
-            // top edge in the first place.
+            // The colour overload is gone for a measured reason: with
+            // `.toolbarBackground(BoardBandCard.page, for: .navigationBar)` the large
+            // "Tasks" title rendered ZERO pixels on the pinned simulator. The platform's
+            // own bar background is DERIVED from what it sits over, so there is no second
+            // colour left to disagree with `BoardBandCard.page`.
             .toolbarBackground(.visible, for: .navigationBar)
             // The bar's appearance is the app's, stated. Left to iOS 26 it is inferred from
-            // what scrolls under the bar, and on the board, once the chip rail stopped being
-            // stretched up under the bar (`BoardBandRailGeometry.railVerticalInset`), it
-            // inferred LIGHT in dark mode: the clock and the inline "Tasks" went dark on the
-            // black page and vanished. The rail's stretched edge layers had been steering
-            // that inference by accident.
+            // what scrolls under the bar, and on the board it inferred LIGHT in dark mode:
+            // the toolbar glyphs went dark on the black page and vanished.
             .toolbarColorScheme(colorScheme, for: .navigationBar)
+            .searchable(
+                text: $searchText, isPresented: $searchPresented,
+                placement: .navigationBarDrawer(displayMode: .automatic),
+                prompt: "Search tasks & sessions"
+            )
+            .onChange(of: router.shownCount) {
+                // After the drawer has shut, not with it: the search's dismissal, run
+                // while the drawer shut, swallowed the tab bar's return
+                // (`TasksTabView.afterDismissal`).
+                DispatchQueue.main.asyncAfter(deadline: .now() + TasksTabView.afterDismissal) {
+                    endSearch()
+                    navPath = []
+                }
+            }
             .toolbar {
-                // Top-left, where the Chat tab keeps its own drawer: everything opened
-                // from here, newest first. A clock rather than the chat's three lines,
-                // because what it holds is history, not a menu.
+                // History: everything opened from this phone, newest first. A page of the
+                // drawer, so Back returns to the board with its scroll and search intact.
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        recentsDrawer.setOpen(!recentsDrawer.isOpen)
+                        guard drawer?.suppressTaps != true else { return }
+                        navPath.append(.recents)
                     } label: {
                         Image(systemName: "clock.arrow.circlepath")
                     }
                     .accessibilityLabel("Recently opened")
                     .accessibilityIdentifier("tasks.recents")
                 }
-                // No server-mode pill here: Live/Replica is plumbing the person adding
-                // a task neither needs nor wants (2026-10-03). Offline still says so,
-                // through the OfflineBanner in the list; Settings keeps the pill.
-                // Multi-select entry — task LIST filters only (sessions aren't
-                // batch-actionable, and the calendar has no rows to select).
-                // "Select" → edit mode with a bottom bar.
-                if activeFilter != .sessions && activeFilter != .calendar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(isEditing ? "Done" : "Select") {
-                            let entering = !isEditing
-                            withAnimation {
-                                editMode = entering ? .active : .inactive
-                                if entering { selectedIds.removeAll() }
-                            }
-                        }
-                        .accessibilityIdentifier("tasks.select")
+                // The calendar opens as a page of its own over the session: its day and
+                // week pagers swipe sideways edge to edge, which inside the drawer would
+                // fight the drawer's close swipe.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        guard drawer?.suppressTaps != true else { return }
+                        onOpenCalendar()
+                    } label: {
+                        Image(systemName: "calendar")
                     }
+                    .accessibilityLabel("Calendar")
+                    .accessibilityIdentifier("tasks.calendar")
                 }
-                // The + IS New Session: one tap lands in the draft chat page. It
-                // used to open a two-item menu (New Task / New Session), and the
-                // menu was a step the user never wanted (2026-10-03: "tap + and
-                // the new session comes up, nothing else"). Task creation keeps
-                // its own rows: the quick-add row at the top of every filter
-                // (Return creates; the slider icon opens the full sheet), the
-                // inline add at the foot of the lists, and the band feet.
-                // Shows on BOTH server modes: the replica relays the launch over
-                // the bridge to the primary box; an old cloud server / old daemon
-                // degrades to a clear error in the page (not_supported_cloud /
+                // The ONE way to make work (the user: one plus is enough): the draft page, where the
+                // project is picked and the text can be saved as a todo instead of starting
+                // a session. Every per-band, per-heading and top-of-list add row is gone.
+                // Shows on BOTH server modes: the replica relays the launch over the
+                // bridge to the primary box; an old cloud server / old daemon degrades to
+                // a clear error in the page (not_supported_cloud /
                 // session_launch_needs_upgrade).
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        guard drawer?.suppressTaps != true else { return }
                         // The toolbar's draft is about no task in particular.
-                        newSessionSeed = BoardModel.BoardDraftSeed.unattached
+                        router.draftSeed = BoardModel.BoardDraftSeed.unattached
                     } label: {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(Theme.tint)
                     }
-                    .accessibilityLabel("New Session")
-                    // The id the Maestro flows and the UI tests already tap to
-                    // start a session; it now opens the page directly.
+                    .accessibilityLabel("New")
+                    // The id the Maestro flows and the UI tests already tap to start a
+                    // session.
                     .accessibilityIdentifier("sessions.new")
                 }
             }
@@ -377,76 +270,45 @@ struct TasksView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
-            // Starting a session lands in a CHAT PAGE with the folder/host and
-            // model pickable there (the phone's version of the web draft column),
-            // instead of a form you fill in before arriving somewhere else. Full
-            // height, not .medium: it hosts a composer, and a keyboard over a
-            // half sheet leaves no room for the launch bar the page is about.
-            // The seed carries the TASK when the draft was reached from a task row, so
-            // `POST /v1/sessions` links the session it creates. Without it a draft
-            // reached by mis-routing a task row (the bug this round fixes) created a
-            // SECOND, unlinked session on a task that already had one — an orphan
-            // nothing points at.
-            .sheet(item: $newSessionSeed) { seed in
-                NavigationStack {
-                    NewSessionChatView(
-                        taskId: seed.taskId,
-                        taskTitle: seed.taskTitle
-                    ) { session in
-                        newSessionSeed = nil
-                        navPath.append(session)
-                    }
+            .navigationDestination(for: TasksDrawerRoute.self) { route in
+                switch route {
+                case .recents:
+                    TasksRecentsPage(
+                        open: { openRecent($0) },
+                        details: { selected = $0 }
+                    )
                 }
-                .presentationDetents([.large])
-            }
-            .sheet(item: $newTaskPresentation) { presentation in
-                // No onCreated action: the store's optimistic insert makes the
-                // new task appear in the list the moment the sheet dismisses.
-                NewTaskSheet(seedText: presentation.text, seed: presentation.seed)
-                    .presentationDetents([.medium, .large])
-            }
-            // Session rows push a full-screen conversation page instead of a sheet.
-            .navigationDestination(for: WalnutSession.self) { session in
-                SessionConversationView(session: session)
-            }
-        }
-        .leadingDrawer(
-            recentsDrawer,
-            canOpen: Self.recentsEdgeSwipeOpens(
-                pushed: !navPath.isEmpty, editing: isEditing, filter: activeFilter
-            ),
-            edgeZone: Self.recentsEdgeZone,
-            identifier: "tasks.recents"
-        ) {
-            TasksRecentsDrawer(model: recentsDrawer) { destination in
-                openRecent(destination)
             }
         }
     }
 
     // MARK: - Recently opened
 
-    /// How far in from the left edge a swipe may start to open the drawer. The List's
-    /// rows begin 16pt in, and a row's own leading swipe completes its task, so the
-    /// drawer only claims the margin beside them and never a drag that starts on a row.
-    static let recentsEdgeZone: CGFloat = 16
-
-    /// May a left-edge swipe open the drawer? Not over a pushed page (that edge is the
-    /// page's back swipe), not mid-selection, and not on the calendar, whose day and
-    /// week pagers swipe sideways from edge to edge. The clock button still opens it
-    /// from the calendar.
-    static func recentsEdgeSwipeOpens(pushed: Bool, editing: Bool, filter: TaskFilter) -> Bool {
-        !pushed && !editing && filter != .calendar
+    /// A session put on the page ends the search and leaves Recently opened
+    /// (`TaskSessionRouter.shownCount`), so the drawer reopens on the board with its
+    /// calendar and `+`. Kept up, the search bar owns the navigation bar, and the
+    /// history page has neither, until a Cancel or a Back was found. Ended when the
+    /// session SHOWS, not at the tap: a hit that has to ask the server spins in place
+    /// until then, and a draft cancelled over the search goes back to it.
+    private func endSearch() {
+        guard searchPresented || !searchText.isEmpty else { return }
+        searchPresented = false
+        searchText = ""
     }
 
-    /// A row of the drawer: go back to what it names.
+    /// Route a task from the drawer to its session (or draft).
+    private func open(_ task: WalnutTask) {
+        router.open(task: task, tasks: tasks, show: onShowSession)
+    }
+
+    /// A row of the history: back to the conversation it names, or to the task's
+    /// session when only the task was opened (a task tap is a session tap).
     private func openRecent(_ destination: RecentDestination) {
-        recentsDrawer.setOpen(false)
         switch destination {
         case .session(let session):
-            navPath.append(session)
+            onShowSession(session)
         case .task(let task):
-            selected = task
+            open(task)
         }
     }
 
@@ -473,21 +335,6 @@ struct TasksView: View {
             || task.project.localizedCaseInsensitiveContains(q)
     }
 
-    /// Case-insensitive substring match across session title, owning-task
-    /// title, host, and cwd.
-    static func sessionMatches(_ session: WalnutSession, query q: String) -> Bool {
-        guard !q.isEmpty else { return true }
-        if session.title?.localizedCaseInsensitiveContains(q) == true { return true }
-        if session.taskTitle?.localizedCaseInsensitiveContains(q) == true { return true }
-        if session.host.localizedCaseInsensitiveContains(q) { return true }
-        if session.cwd?.localizedCaseInsensitiveContains(q) == true { return true }
-        return false
-    }
-
-    private func sessionMatchesSearch(_ session: WalnutSession) -> Bool {
-        Self.sessionMatches(session, query: trimmedQuery)
-    }
-
     // MARK: - List
 
     /// Group already-sorted task rows by project, headers A→Z.
@@ -510,115 +357,41 @@ struct TasksView: View {
             .sorted { $0.project.localizedCaseInsensitiveCompare($1.project) == .orderedAscending }
     }
 
+    /// The open tasks a live query also searches. The board holds only PINNED work, and
+    /// the field promises "Search tasks & sessions": a task the user KNOWS exists came
+    /// back "No local matches" while it sat in the Inbox (dogfood R17).
     private func sections(excluding: Set<String>) -> [(project: String, tasks: [WalnutTask])] {
-        // The field promises "Search tasks & sessions", but the default
-        // (board) filter slices tasks to the PINNED board — a task the user KNOWS
-        // exists showed "No local matches" until they discovered the All segment
-        // (dogfood R17). While a query is typed, search open tasks too.
-        let filter = (activeFilter == .sessions && !trimmedQuery.isEmpty) ? TaskFilter.allOpen : activeFilter
-        return Self.sections(from: tasks.tasks(for: filter), query: trimmedQuery, excluding: excluding)
-    }
-
-    // MARK: - Calendar surface
-
-    /// The Calendar filter renders FULL-BLEED, not as a List row: its four views
-    /// (hour timelines, day list, month grid) own their own scrolling and
-    /// horizontal paging, and a pager nested in a List row has no intrinsic
-    /// height. The nav row stays on top so switching back out is one tap.
-    private var calendarSurface: some View {
-        VStack(spacing: 0) {
-            if !connection.online {
-                OfflineBanner(text: "Offline: tasks are read-only from cache")
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
-            }
-            TasksNavRow(activeFilter: $activeFilter)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-            Divider()
-            CalendarTabView()
-        }
+        Self.sections(from: tasks.tasks(for: .allOpen), query: trimmedQuery, excluding: excluding)
     }
 
     private var list: some View {
         ScrollViewReader { proxy in
-            // Bind the derived sections ONCE per body pass — the old computed-
-            // property form was evaluated at every reference (isEmpty check +
-            // ForEach = 2 full filter+group+sort walks per pass).
-            // Same rule for the board's bands: the band bar, the sections builder
-            // and the search dedup all need them, which is three full join+group
-            // walks per pass if each reads the computed property (the exact
-            // anti-pattern the derived-collection perf gate exists to catch). Only
-            // computed on the board — every other filter would pay for a list it
-            // doesn't render.
-            let assembly = activeFilter == .sessions ? boardAssembly : .empty
-            // ONE assembly, three views of it, all from the same population walk: the TIER
-            // rail (always tiers, never the rendered bands), the bands the scope leaves on
-            // screen, and the scope the board actually honoured — which is what the lit
-            // chip reads, so the bar can never claim a tier the rows disagree with.
-            //
-            // `visibleBands` is no longer a post-filter: the scope narrows the row set at
-            // CONSTRUCTION time (`BoardModel.assemble`), so a project heading's count and
-            // its rows are both the tier's subset. Filtering assembled project bands here
-            // is exactly the shipped defect — under `By project` no band's id is a tier, so
-            // the filter matched nothing and the board showed every tier's projects.
+            // ONE assembly per body pass, three views of it, all from the same population
+            // walk: the TIER rail (always tiers, never the rendered bands), the bands the
+            // scope leaves on screen, and the scope the board actually honoured — which is
+            // what the lit chip reads, so the bar can never claim a tier the rows disagree
+            // with. Every reference to the computed property would re-run the walk (the
+            // derived-collection discipline `TasksDerivedPerfTests` pins).
+            let assembly = boardAssembly
             let bands = assembly.bands
             let chips = assembly.rail
-            let visibleBands = bands
-            // …and `sections` only when something actually renders THEM. The board
-            // builds its OWN bands (tier or project, per the filter bar) and
-            // reaches for `sections` only to append search hits (dogfood R17).
-            // note that `By project` grouping does NOT change this: those bands
-            // come from `BoardModel.projectBands`, which is one walk over the same
-            // rows, not a second grouping pass here. Computing `sections` anyway
-            // cost a full filter+group+sort over the whole projection on every
-            // keystroke, measured as the single largest item in the derived pass
-            // (5.17ms of an 8ms budget), spent on rows the board never draws.
-            // Dedup against what is VISIBLE, not against every band — and "visible"
-            // means `visibleBands`, i.e. WITH the chip selection applied, because the
-            // chips KEEP filtering the board while a query is live. That is the
-            // decision, not an accident: narrowing a search to one tier is useful and
-            // it is what the desktop console does. (An older comment here and on the
-            // bar claimed a query WIDENED the board to every band and that the chip
-            // "stopped deciding anything" — it never did; the code always narrowed,
-            // and the bar dimmed to ~1.3:1 contrast to advertise a rule it wasn't
-            // following. The dimming is gone with the claim.) So a task matching in a
-            // band the chip is hiding is NOT on screen and belongs in the hit list
-            // below.
+            let query = trimmedQuery
+            // What the folds leave on screen. Ignored while a query is live: a hit hidden
+            // inside a folded group would read as "no match".
+            let collapsed = query.isEmpty ? BoardCollapse.decode(collapsedRaw) : []
+            let entries = BoardCollapse.entries(bands, collapsed: collapsed)
+            // Dedup the search hits against what the board SHOWS (with the chip's scope
+            // applied, because the chips keep narrowing while a query is live). Computed
+            // only while a query is live, which is the only time anything reads it.
             //
-            // ONE case still moves the lit chip on its own, and it stays truthful
-            // rather than silent: a query that leaves the scoped TIER with no rows drops
-            // that tier from the rail entirely (`tierBands` keeps no empty bands), so
-            // `BoardAssembly.scope` comes back nil, the `All` chip lights, and the board
-            // shows every band. The bar and the board agree in that state — which is the
-            // property that matters, and the one dimming was standing in for.
-            //
-            // Computed only while a query is live, which is the only time anything
-            // reads it — on the board at rest this set costs a walk over every
-            // visible row for nothing.
-            //
-            // `searchDedupIds`, not `rowIds`: a duplicate has to be silenced whichever
-            // id the row it duplicates happens to be keyed by. The board used to key a
-            // row whose task is missing from the projection by the CLI session UUID, so
-            // the server's hit for that same task matched nothing here and the task drew
-            // TWICE, 55pt apart (R25). The row's key is the owning task id now; this set
-            // also carries the session id so the dedup does not depend on that.
-            //
-            // ONE walk serves both readers. It is a SUPERSET of the row ids, which is
-            // safe for `sections(excluding:)` because everything extra in it is an id no
-            // section row can have: a session UUID, or the owning task id of a
-            // session-only row — and a row is session-only precisely because the
-            // projection those sections are built from does not carry that task.
-            let boardExcluded: Set<String> = (activeFilter == .sessions && !trimmedQuery.isEmpty)
-                ? BoardModel.searchDedupIds(visibleBands) : []
-            let sections = (activeFilter == .sessions && trimmedQuery.isEmpty)
-                ? []
-                : self.sections(excluding: boardExcluded)
+            // `searchDedupIds`, not row ids: a duplicate has to be silenced whichever id
+            // the row it duplicates happens to be keyed by (R25: one task drew TWICE,
+            // 55pt apart, because the board keyed it by the CLI session UUID).
+            let boardExcluded: Set<String> = query.isEmpty ? [] : BoardModel.searchDedupIds(bands)
+            let sections = query.isEmpty ? [] : self.sections(excluding: boardExcluded)
             // Everything the list above ALREADY shows, for the server-hit dedup at the
-            // foot: the board's visible rows plus the local hit rows. Same reason the
-            // sets above are bound once per pass — `GlobalSearchSection` must not
-            // recompute this per row.
-            let alreadyVisibleTaskIds: Set<String> = trimmedQuery.isEmpty
+            // foot. Bound once per pass so `GlobalSearchSection` never recomputes it per row.
+            let alreadyVisibleTaskIds: Set<String> = query.isEmpty
                 ? []
                 : sections.reduce(into: boardExcluded) { ids, section in
                     for task in section.tasks { ids.insert(task.id) }
@@ -630,226 +403,97 @@ struct TasksView: View {
                         .listRowBackground(Color.clear)
                 }
 
-                // ROW 1: the nav pills, at the TOP, scrolling away with the content.
+                // ROW 1: the tier chips, and the only row here that pins.
                 //
-                // This is the user's order and it is worth naming what it replaced: the
-                // board used to open with a clear RESERVE row for a permanently
-                // floating chip bar, so the chips drew ABOVE these pills at scroll-top
-                // (measured 2026-08-29: chips y 236..264, pills y 290..322) — the exact
-                // inverse of what was asked for. The reserve is gone; the chips are an
-                // ordinary row below (see ROW 2) and only their PINNED copy floats.
+                // The row keeps its FIXED height whether or not it is drawing chips: when
+                // the pinned copy has taken over, the content becomes clear space rather
+                // than the row collapsing. A row that changed height mid-scroll would move
+                // every row under it.
+                //
+                // The pinned copy (the overlay below) covers exactly the strip this row
+                // occupies AT THE MOMENT IT CROSSES, because the pin threshold is derived
+                // from this row's own content position (`TasksChromeMetrics.rowOneContentTop`).
+                //
+                // Built UNCONDITIONALLY, and `BoardBandBar.drawsChips` hides whichever copy
+                // is not the live one: a conditional insertion destroyed one copy and built
+                // the other on every crossing, and a rail `ScrollView` that came up measured
+                // at zero width stayed chipless for the life of that instance.
                 Section {
-                    TasksNavRow(activeFilter: $activeFilter)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        // Scroll target for the compact bar's "back to the top"
-                        // (a chip tap, which restores the search field + quick
-                        // add). Must be the FIRST row of the scrollable content on
-                        // every filter that HAS a compact bar.
-                        .id(Self.topAnchorId)
-                }
-                // Header chrome (nav row / quick add) is a TOOLBAR, not a settings
-                // group: the default insetGrouped gap belongs between PROJECTS, and
-                // stacking it under four chrome sections pushed the first task row
-                // 68% down the screen (measured, dogfood R19).
-                .listSectionSpacing(2)
-
-                // ROW 2 (board only): the tier chips, second, and the only row here
-                // that pins.
-                //
-                // The row keeps its FIXED height whether or not it is drawing chips:
-                // when the pinned copy has taken over, the content becomes clear space
-                // rather than the row collapsing. A row that changed height mid-scroll
-                // would move every row under it — the scroll-jump class of bug this
-                // screen has shipped before.
-                //
-                // The constant height is also half of what makes the hand-off invisible:
-                // the pinned bar covers exactly the strip this row occupies AT THE MOMENT
-                // IT CROSSES, and "at the moment it crosses" is the other half — the pin
-                // threshold is derived from this row's own content position
-                // (`TasksChromeMetrics.rowTwoContentTop`), so the two tops meet there
-                // rather than 10.66pt apart.
-                //
-                // Mutually exclusive with the overlay, deliberately: both draw the same
-                // `board.chip.*` ids, and two live copies would make every chip
-                // ambiguous to automation. WHERE that is decided moved, and the move is
-                // the empty-pinned-bar fix: this row is now built UNCONDITIONALLY and
-                // `BoardBandBar.drawsChips` hides whichever copy is not the live one.
-                //
-                // The old shape was `if boardChipsPinned { Color.clear } else { bar }`,
-                // i.e. a conditional INSERTION, so every pin crossing destroyed one
-                // copy and constructed the other — a brand-new `ScrollView` for the
-                // rail each time. One that came up measured at zero width stayed
-                // chipless for the life of that instance (the user's screenshot: a card
-                // and a filters button over a mathematically flat 316pt rail). Two
-                // always-present copies means two `UIScrollView`s whose content is
-                // established once each, and no crossing can leave either wrong.
-                //
-                // It also takes the derive off the scroll path: the pin state is read
-                // INSIDE the bar (`BoardChipsPinLatch`), so a crossing no longer
-                // invalidates this body — see the latch's own header.
-                if activeFilter == .sessions {
-                    Section {
-                        bandBar(
-                            proxy: proxy, selected: assembly.scope, chips: chips,
-                            // The List has ALREADY inset this row (measured
-                            // x 16..386 of a 402pt screen), so the card takes
-                            // the container it is handed whole.
-                            placement: .inlineRow
-                        )
-                        .frame(height: TasksChromeMetrics.bandBar)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                    }
-                    .listSectionSpacing(2)
-
-                    // Row 3: the grouping + date decisions as two inline toggle chips —
-                    // the desktop's own `tier-view-bar`, on the bar rather than one tap
-                    // inside the band bar's filter menu ("它不是在一个菜单里面,它就是在那
-                    // 个 bar 里面"). Same bindings the menu writes, so there is one source
-                    // of truth and no second copy of the state; see `BoardViewBar` for why
-                    // it is a row of its own and not a third zone inside the band bar's
-                    // card.
-                    Section {
-                        BoardViewBar(grouping: grouping, dateFilter: dateFilter)
-                            .frame(height: TasksChromeMetrics.viewBar)
-                            .listRowInsets(EdgeInsets())
-                            // A control strip on the PAGE, not a card: the chips are the
-                            // objects here, and a card behind them would put three stacked
-                            // cards above the board's first task row.
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                    }
-                    .listSectionSpacing(2)
-                }
-
-                // Todoist-grade quick add rides the TOP of EVERY filter, the board
-                // included (R30): type a sentence, hit return, the task appears instantly
-                // (the AI parse upgrades it in place). The expand icon opens the full form
-                // sheet seeded with the sentence.
-                //
-                // ON THE BOARD it is a reversal, so here is what changed. R29 argued the
-                // band feet already carry this component and a top-level copy would be a
-                // seventh create affordance costing 48pt at the top of a screen whose job
-                // is rows. The user then picked the reference screen — which has exactly
-                // this row above its first section — as the style to match, and the
-                // argument does not survive it: a band foot answers "add to THIS band",
-                // which you can only tap after scrolling to the band, while the thing you
-                // usually want is "add something, put it where new work goes". Those are
-                // different questions, and only one of them is answerable from the top of
-                // the screen.
-                //
-                // Same COMPONENT, same flow, one different value: the destination
-                // (`boardQuickAddSeed`). It is not the empty seed the other filters pass,
-                // because the board only shows PINNED work — an unpinned task created here
-                // would be filed correctly and then be invisible on the surface that
-                // created it, which is the "I made it and can't find it" defect the board
-                // has already shipped once. So it pins into the default tier, and when a
-                // band chip is selected it inherits that band's project too.
-                Section {
-                    QuickAddRow(
-                        seed: activeFilter == .sessions
-                            ? Self.boardQuickAddSeed(scope: assembly.scope)
-                            : NewTaskSeed(project: "", pin: .unspecified),
-                        identifier: "tasks.quickAdd",
-                        onExpand: { text, target in
-                            newTaskPresentation = NewTaskPresentation(text: text, seed: target)
-                        }
+                    bandBar(
+                        proxy: proxy, selected: assembly.scope, chips: chips,
+                        // The List has ALREADY inset this row, so the card takes the
+                        // container it is handed whole.
+                        placement: .inlineRow
                     )
+                    .frame(height: TasksChromeMetrics.bandBar)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    // Scroll target for a chip tap ("land at the top of what you asked
+                    // for"). The FIRST row of the scrollable content.
+                    .id(Self.topAnchorId)
+                }
+                // Header chrome is a TOOLBAR, not a settings group: the default
+                // insetGrouped gap belongs between bands (measured, dogfood R19).
+                .listSectionSpacing(2)
+
+                // ROW 2: grouping, date filter and collapse-all as inline toggle chips —
+                // the desktop's own `tier-view-bar`, on the bar rather than one tap inside a
+                // menu (the user: not in a menu, on the bar itself).
+                Section {
+                    BoardViewBar(
+                        grouping: grouping,
+                        dateFilter: dateFilter,
+                        // Disabled while searching: the folds do not apply then, so the
+                        // button would claim a state the rows are not in.
+                        collapse: query.isEmpty && !bands.isEmpty
+                            ? BoardViewBar.Collapse(
+                                allCollapsed: BoardCollapse.allCollapsed(bands, collapsed: collapsed),
+                                toggle: {
+                                    withAnimation(.snappy(duration: 0.25)) {
+                                        collapsedRaw = BoardCollapse.encode(
+                                            BoardCollapse.togglingAll(bands, collapsed: collapsed)
+                                        )
+                                    }
+                                }
+                            )
+                            : nil
+                    )
+                    .frame(height: TasksChromeMetrics.viewBar)
+                    .listRowInsets(EdgeInsets())
+                    // A control strip on the PAGE, not a card.
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
                 .listSectionSpacing(2)
 
-                // Live sessions ride the top of every task filter (except the
-                // board, where every row already carries its own session, and
-                // Calendar, which is a full-bleed month grid).
-                if activeFilter != .sessions && activeFilter != .calendar {
-                    activeSessionsSection
-                    // Pinned tasks float above the project sections (mirrors
-                    // the desktop focus bar). Rows keep full swipe/menu/detail
-                    // behavior; hidden while searching (results replace it).
-                    if trimmedQuery.isEmpty {
-                        pinnedTasksSection
-                    }
-                }
-
-                if activeFilter == .sessions {
-                    // The board's grouping + date pair used to be a List row here
-                    // (`BoardFilterBar`). Both now live in the reserved column at the
-                    // trailing edge of the chip bar (header row 2), which is also where
-                    // band selection lives — ONE set of controls in ONE place, and the
-                    // bar is rendered even when the bands come back EMPTY, so a `Now`
-                    // that hid everything can never also hide the control that turns it
-                    // off.
-                    boardSections(visibleBands)
-                    // Dogfood R17, still true on the board: the field promises
-                    // "Search tasks & sessions", and the board only holds PINNED
-                    // work — so a task the user knows exists would come back "no
-                    // matches" while sitting in the Inbox. Matching open tasks
-                    // render below the bands while a query is live.
-                    //
-                    // These rows are `taskRowButton`s, shared with every other filter,
-                    // and after R29 that is no longer a compromise: the board's own rows
-                    // take the same inset-grouped card, so a hit section below the bands
-                    // is the same object in the same language. Its HEADING is what marks
-                    // it as a different list, which is what a grouped section header is
-                    // for.
-                    if !trimmedQuery.isEmpty {
-                        ForEach(sections, id: \.project) { section in
-                            projectSection(section)
-                        }
-                    }
-                } else if sections.isEmpty {
-                    Section {
-                        Text(emptyText)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 24)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
-                } else {
+                boardSections(entries, isEmpty: bands.isEmpty)
+                // Matching open tasks below the bands while a query is live (dogfood R17).
+                // Its HEADING is what marks it as a different list.
+                if !query.isEmpty {
                     ForEach(sections, id: \.project) { section in
                         projectSection(section)
                     }
                 }
 
-                // Apple Reminders-style inline add — a persistent row at the
-                // BOTTOM of every task list (not the Sessions tab): tap →
-                // inline TextField, Return creates + keeps typing for rapid
-                // consecutive adds. Goes to Inbox; the quick-add row's expand
-                // icon keeps the full sheet for project/priority/due picks.
-                if activeFilter != .sessions {
-                    Section {
-                        InlineAddTaskRow(isActive: $inlineAddActive)
-                    }
-                }
-
-                // "More Results" augments the local matches while a query is typed:
-                // the completed tasks that match (three inline, the rest behind
-                // "Completed (N)"), and the Mac's keyword + semantic search over tasks
-                // and session transcripts, arranged as the web console arranges it
-                // (`SearchArrangement`). Each hit is this list's own task row.
+                // "More Results" augments the local matches while a query is typed: the
+                // completed tasks that match, and the Mac's keyword + semantic search over
+                // tasks and session transcripts (`SearchArrangement`). A hit opens its
+                // task's SESSION like every other task tap on this tab, never a task page
+                // first (the user: a task maps one to one to its session).
                 //
-                // AUGMENTS, so it is handed what is already on screen. `/api/search`
-                // answers a task hit AND the hit for the session that task owns, both
-                // carrying the same taskId, which put one task on screen three times
-                // in one viewport (its board row plus two server rows).
-                // `BoardSearchHitDedup` is where that is decided.
-                if !trimmedQuery.isEmpty {
+                // AUGMENTS, so it is handed what is already on screen (`BoardSearchHitDedup`).
+                if !query.isEmpty {
                     GlobalSearchSection(
-                        query: trimmedQuery,
+                        query: query,
                         search: globalSearch,
                         visibleTaskIds: alreadyVisibleTaskIds,
                         nothingAbove: alreadyVisibleTaskIds.isEmpty,
                         localDone: tasks.tasks(for: .done),
                         storeTasks: tasks.tasks,
                         taskRow: { task, snippet in AnyView(taskRowButton(task, matchSnippet: snippet)) }
-                    ) { taskId in
-                        if let hit = tasks.tasks.first(where: { $0.id == taskId || $0.id.hasPrefix(taskId) }) {
-                            selected = hit
-                        }
+                    ) { hit in
+                        openSearchHit(hit)
                     }
                 }
 
@@ -865,240 +509,64 @@ struct TasksView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            // ONE page colour for every filter, including the board (R29): the board's
-            // bands are inset-grouped cards again, and cards need the grouped page behind
-            // them to read as cards at all.
-            //
-            // Still stated explicitly rather than left to the List's own default, for two
-            // reasons. It is the same SYMBOL the opaque toolbar above takes, so "no seam
-            // under the nav bar" is a property of the code instead of two colour literals
-            // that have to agree; and the List's default background is the platform's to
-            // change (iOS 26 renders plenty of chrome as material), while the cards'
-            // contrast is measured against this exact value.
-            //
-            // Note what did NOT change: `listStyle` is one concrete type for every filter,
-            // because picking a style per filter would mean two `List` expressions, two
-            // List identities, and a rebuilt scroll view (lost offset, re-armed geometry
-            // observer, re-created `.searchable` drawer) on every filter switch. See
-            // `TaskBoardList`'s header for the rest of the mechanism.
+            // The board's bands are inset-grouped cards, and cards need the grouped page
+            // behind them to read as cards at all. Stated explicitly rather than left to the
+            // List's default: the cards' contrast is measured against this exact value.
             .scrollContentBackground(.hidden)
             .background(BoardBandCard.page)
-            // The iOS 26 half of the ghost fix, and the platform's own answer to
-            // "content must not read through the top edge": a HARD scroll edge effect
-            // instead of the default progressive one. The opaque toolbar above already
-            // stops the reported ghost on every supported OS; this stops the content
-            // reading through the edge in the first place where the OS can do it.
-            //
-            // EXCEPT on the board, which keeps the platform's default edge. There the
-            // pinned band bar's own page background already covers the top of the screen
-            // behind the bar, and a HARD edge under it put the bar's glass in its light
-            // appearance in dark mode (a pale `+` on the black page); the board never
-            // showed that before only because the rail's stretched edge layers overrode
-            // it. A value, not a branch, so a filter switch does not rebuild the List.
-            .topScrollEdge(hard: !TasksChromeMetrics.hasPinnedChips(activeFilter))
             .accessibilityIdentifier("tasks.list")
-            // Watch how far the list is scrolled and flip the two floating rows. The
-            // OBSERVER is what makes the header chrome disposable: the nav row, the
-            // quick add and (now) the board's chip row are ordinary List rows, so they
-            // already scroll away — this is what keeps their ACTIONS reachable after
-            // they do, as a compact bar on the list filters and as the pinned chip row
-            // on the board.
-            // The sample is the OFFSET and the INSET, kept apart. It used to be their
-            // sum, and that is the third defect on this handler's path: the search
-            // drawer retracts as soon as a drag starts, so the whole drawer height left
-            // `contentInsets.top` in ONE sample and read as travel nobody performed —
-            // enough to force the chrome collapse and the chip pin together, at the top
-            // of the gesture. `TasksChromeMetrics.travel` makes a sample whose INSET moved
-            // report no travel of its own (the origin moved, not the content) and keeps
-            // the honest `offset + insetTop` everywhere else, so rest still reads exactly
-            // 0; it is the pure rule and the tracker is just its memory.
+            // Watch how far the list is scrolled and pin the chip row once it reaches the
+            // top edge.
             //
-            // NOTE the shape of this handler. Writing @State straight from the
-            // action would publish INTO the layout pass that produced the sample
-            // and re-invalidate the very subtree being measured (P0-2, see
-            // ScrollBottomTracking's header — that feedback did not converge and
-            // spun the main thread at 100%). So: samples land in a reference box
-            // off the view graph, the decision is a pure function, and the ONE
-            // publish that a threshold crossing needs is hopped to the next
-            // runloop and coalesced (a second crossing while one is queued
-            // replaces it rather than stacking).
+            // The sample is the OFFSET and the INSET, kept apart: the search drawer
+            // retracts as soon as a drag starts, so the whole drawer height left
+            // `contentInsets.top` in ONE sample and read as travel nobody performed.
+            // `TasksChromeMetrics.travel` makes a sample whose INSET moved report no travel
+            // of its own.
+            //
+            // Writing state straight from the action would publish INTO the layout pass that
+            // produced the sample and re-invalidate the subtree being measured (P0-2, see
+            // ScrollBottomTracking's header). So: samples land in a reference box off the
+            // view graph, the decision is a pure function, and the ONE publish a crossing
+            // needs is hopped to the next runloop and coalesced.
+            //
+            // The state this publishes into is the LATCH: nothing in `TasksView.body` reads
+            // `isPinned`, so a crossing re-renders the two bars and leaves the board derive
+            // and the List diff alone (`BoardChipsPinLatch`).
             .onScrollGeometryChange(for: BoardScrollSample.self) { geo in
                 BoardScrollSample(offset: geo.contentOffset.y, insetTop: geo.contentInsets.top)
             } action: { _, sample in
                 let scrolled = travelTracker.travel(sample)
-                // Edit mode owns the top of the screen with its own affordances,
-                // and a filter switch mid-selection would silently change what is
-                // selected — so the bar stays out of the way there.
-                let next = !isEditing && TasksChromeMetrics.isCollapsed(
+                let pinned = TasksChromeMetrics.areChipsPinned(
                     scrolled: scrolled,
-                    wasCollapsed: chromeCollapsed,
-                    filter: activeFilter,
+                    wasPinned: chipsPinLatch.isPinned,
                     offline: !connection.online
                 )
-                collapseTracker.request(next, current: chromeCollapsed) { value in
-                    withAnimation(.snappy(duration: 0.2)) { chromeCollapsed = value }
-                }
-                // The board's row 2 crosses at its OWN threshold (the top of the chip
-                // row, not the end of the chrome) and through its own gate, so a
-                // crossing of one never publishes the other.
-                //
-                // Not animated, and that is only safe because the threshold IS the offset
-                // where the two copies occupy the same screen rect
-                // (`TasksChromeMetrics.chipsPinThreshold`, derived from `rowTwoContentTop`).
-                // Animating an invisible swap only makes it visible; animating a swap that
-                // is NOT invisible hides a real defect behind a slide, which is how a
-                // 10.66pt vertical hop survived to a frame audit.
-                //
-                // The state this publishes into is the LATCH, not `@State` on this
-                // view: nothing in `TasksView.body` reads `isPinned`, so a crossing
-                // re-renders the two 44pt bars and leaves the board derive, the chips
-                // and the List diff alone. That is the top-of-list hitch fix, and it is
-                // an invariant rather than an optimisation — see `BoardChipsPinLatch`.
-                let pinned = TasksChromeMetrics.hasPinnedChips(activeFilter)
-                    && TasksChromeMetrics.areChipsPinned(
-                        scrolled: scrolled,
-                        wasPinned: chipsPinLatch.isPinned,
-                        offline: !connection.online
-                    )
                 chipsPinTracker.request(pinned, current: chipsPinLatch.isPinned) { value in
                     chipsPinLatch.isPinned = value
                 }
             }
-            // Leaving edit mode must give the bar back; entering it takes the bar
-            // away. Neither is a scroll event, so neither reaches the handler.
-            .onChange(of: isEditing) { _, editing in
-                if editing, chromeCollapsed { chromeCollapsed = false }
-                // Selection owns the rows: an open group add row would keep a
-                // keyboard over the batch bar and its `+` is already hidden.
-                if editing { openAddGroup = nil }
-            }
-            // Switching filters re-groups everything, so the header that owned
-            // the open row may not exist any more — a row anchored to a vanished
-            // group would file into a group the user can no longer see.
-            .onChange(of: trimmedQuery, initial: true) { _, query in
+            .onChange(of: query, initial: true) { _, query in
                 globalSearch.schedule(query)
             }
-            .onChange(of: activeFilter) { _, _ in
-                openAddGroup = nil
-                // The next filter has its own chrome height and its own drawer, so the
-                // remembered sample describes a list that is no longer on screen: comparing
-                // the next filter's first sample against it would read the whole difference
-                // in chrome height as an inset step and absorb a real scroll position.
-                travelTracker.reset()
-                // The TIER SCOPE deliberately survives a filter switch now. It used to be
-                // cleared here, on the reasoning that a band selection means nothing off
-                // the board — but it is a tier, it is persisted, and a preference that
-                // resets itself every time you glance at another tab is not a preference.
-                // A stale one cannot narrow the board wrongly either: the scope is honoured
-                // only against the rail the board just built.
-                //
-                // Row 2's pin state is about a scroll position on the BOARD. Coming
-                // back with a stale `true` and no scroll sample yet would draw the
-                // pinned copy over the nav pills — the very defect this rebuild
-                // removes — while the inline row held clear space. Unpinned is always
-                // safe to be wrong about: the inline row simply draws the chips where
-                // its own content position puts them, and the next geometry sample
-                // re-pins if the list really is scrolled.
-                chipsPinLatch.isPinned = false
-            }
-            // Switching the board's GROUPING replaces every band id at once
-            // (`focus` → `proj:marina`), so an open create ring is anchored to a
-            // band that no longer exists: the ring vanishes with its keyboard
-            // still up and the typed text goes nowhere. Same reasoning as the
-            // filter switch above, one grouping level down.
+            // The PINNED copy of row 1, and the only floating row on the board.
             //
-            // What is NOT cleared any more is the TIER SCOPE. The old code cleared it here
-            // because the rail's ids changed with the grouping; the rail is always the tier
-            // rail now, so the scope means the same thing on both sides of the switch and
-            // clearing it would throw away the one thing the user did not ask to change.
-            .onChange(of: groupingModesRaw) { _, _ in
-                openCreateBand = nil
-            }
-            // Switching TIERS can change the grouping with it (each tier remembers its own
-            // mode), so the same anchored-ring hazard applies — and a band id from the tier
-            // you just left is not on screen either way.
-            .onChange(of: tierScopeRaw) { _, _ in
-                openCreateBand = nil
-            }
-            // The PINNED copy of row 2, and the only floating row on the board.
-            //
-            // An OVERLAY for the same reason the compact bar is one: anything in the
-            // layout flow that appears or resizes while scrolling changes the List's
-            // visible rect and moves rows. Unlike the old permanent overlay this one
-            // stands in for a real content row and only once that row has reached the
-            // top edge — which is what puts the chips SECOND at rest instead of over
-            // the nav pills.
-            //
-            // No transition: the inline row and this copy are the same bar in the same
-            // place at the crossing, so there is nothing to animate, and an outgoing
-            // transition would briefly put two copies of every `board.chip.*` id on
-            // screen at once.
-            //
-            // "The same place" took two rounds to actually be true, on three axes:
-            //  - X (R26): this overlay is handed the List's FULL width, so the bar insets
-            //    its own card (`placement: .pinnedOverlay`) instead of laying out
-            //    edge-to-edge, which is what used to shift every chip 16pt left.
-            //  - Y (R27): the flip happens at `chipsPinThreshold`, which is DERIVED from
-            //    where the inline row sits in the content (`rowTwoContentTop`) minus this
-            //    overlay's own top inset — so at the crossing frame the two cards have the
-            //    same top. It used to fire `listHeaderPadding` early and hop 10.66pt up.
-            //  - STYLE (R27): the bar carries its own rounded corners and its own opaque
-            //    surface, so neither the radius nor the chips' contrast depends on which
-            //    copy is drawing or on what is behind it.
-            //
-            // `pinnedChipsTopInset` is applied here rather than assumed to be zero: the
-            // threshold subtracts the same constant, so a future inset moves the hand-off
-            // with the bar instead of silently re-opening the hop.
-            //
-            // The condition is FILTER-ONLY (`hasPinnedChips`), and that is the other
-            // half of the empty-pinned-bar fix. It used to be
-            // `showsPinnedChips(filter:pinned:)`, i.e. it also read the pin state, so
-            // this overlay was inserted and removed on every crossing and each insertion
-            // built a fresh rail `ScrollView`. Now the copy exists for as long as the
-            // board does and `BoardBandBar.drawsChips` decides whether it SHOWS —
-            // `showsPinnedChips` is still the composed rule, it just isn't a structural
-            // branch any more. It also means this body no longer depends on the pin
-            // state at all, which is what keeps a crossing off the derive path.
+            // An OVERLAY because anything in the layout flow that appears or resizes while
+            // scrolling changes the List's visible rect and moves rows. No transition: the
+            // inline row and this copy are the same bar in the same place at the crossing,
+            // and an outgoing transition would briefly put two copies of every
+            // `board.chip.*` id on screen. Same X (R26: `.pinnedOverlay` insets its own
+            // card), same Y (R27: `chipsPinThreshold`), same style (R27: one radius, one
+            // opaque surface).
             .overlay(alignment: .top) {
-                if TasksChromeMetrics.hasPinnedChips(activeFilter) {
-                    bandBar(
-                        proxy: proxy, selected: assembly.scope, chips: chips,
-                        placement: .pinnedOverlay
-                    )
-                    .padding(.top, TasksChromeMetrics.pinnedChipsTopInset)
-                }
+                bandBar(
+                    proxy: proxy, selected: assembly.scope, chips: chips,
+                    placement: .pinnedOverlay
+                )
+                .padding(.top, TasksChromeMetrics.pinnedChipsTopInset)
             }
-            // Compact header as an OVERLAY, never a safeAreaInset: an inset that
-            // appears mid-scroll changes the List's visible rect and yanks the
-            // content offset (the scroll-jump class of bug). An overlay costs no
-            // layout and can never move a row.
-            .overlay(alignment: .top) {
-                // Not on the board: its second header row already pins itself, and a
-                // compact bar there would be a second floating row offering a third
-                // copy of the same three destinations.
-                // `TasksChromeMetrics.showsCompactBar` owns that rule so it is
-                // testable without a running app.
-                if TasksChromeMetrics.showsCompactBar(
-                    filter: activeFilter, collapsed: chromeCollapsed
-                ) {
-                    TasksCompactBar(
-                        activeFilter: $activeFilter,
-                        scrollToTop: {
-                            withAnimation(.snappy(duration: 0.3)) {
-                                proxy.scrollTo(Self.topAnchorId, anchor: .top)
-                            }
-                        },
-                        addTask: { newTaskPresentation = NewTaskPresentation() }
-                    )
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            // Batch action bar rides the bottom while selecting.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if isEditing { batchActionBar }
-            }
-            // Failed quick-toggle: the optimistic row already rolled back —
-            // tell the user why (sync-source conflict, offline, …).
+            // Failed quick-toggle: the optimistic row already rolled back — tell the user
+            // why (sync-source conflict, offline, …).
             .alert("Couldn't update task", isPresented: Binding(
                 get: { toggleError != nil },
                 set: { if !$0 { toggleError = nil } }
@@ -1107,287 +575,154 @@ struct TasksView: View {
             } message: {
                 Text(toggleError ?? "")
             }
-            // Batch results: partial failures surface with counts + reason.
-            .alert("Batch action incomplete", isPresented: Binding(
-                get: { batchError != nil },
-                set: { if !$0 { batchError = nil } }
-            )) {
-                Button("OK", role: .cancel) { batchError = nil }
-            } message: {
-                Text(batchError ?? "")
-            }
-            .confirmationDialog(
-                "Delete \(selectedIds.count) task(s)?",
-                isPresented: $confirmBatchDelete, titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    runBatch { await tasks.batchDelete(Array(selectedIds)) }
-                }
-            }
-            // The folder tree rides the same refresh as the lists it groups —
-            // ONE bundle per refresh, never per body pass. `pull` is the one origin
-            // exempt from the funnel's rate floor: the spinner is the user's own
-            // request and it has to end in a real fetch.
+            // `pull` is the one origin exempt from the funnel's rate floor: the spinner is
+            // the user's own request and it has to end in a real fetch.
             .refreshable { await tasks.refreshBoard(origin: .pullToRefresh) }
             // Store-level toast surface (fire-and-forget mutations): a small
-            // auto-dismissing line at the bottom — never a modal.
+            // auto-dismissing line at the bottom, never a modal. Here only while the
+            // drawer is out; shut, the page under it shows the line (`TasksTabView`).
             .overlay(alignment: .bottom) {
-                if let notice = tasks.transientNotice ?? tasks.transientError {
-                    TransientToast(
-                        text: notice,
-                        isError: tasks.transientError != nil
-                    ) {
-                        tasks.transientNotice = nil
-                        tasks.transientError = nil
-                    }
+                TasksToastLayer(drawer: drawer, whileDrawerOpen: true)
                     .padding(.bottom, 12)
-                }
             }
-            .animation(.snappy(duration: 0.25), value: activeFilter)
-            // Locate a just-created task: switch to a filter that shows it,
-            // scroll to it, and flash its row — "created but can't find it"
-            // was a real complaint. Skipped while the inline add row is
-            // focused (rapid consecutive adds must not yank the scroll away
-            // from the keyboard — the row appears in place instead).
+            // Locate a just-created task (a todo saved from the `+` page): flash its row
+            // and scroll to it, in place. The board's rows carry a `task-<id>` anchor
+            // (`TaskBoardList.rowAnchorId`); a task with no board row makes the scroll a
+            // silent no-op. Next runloop: the band it lands in is rebuilt by the store
+            // update that produced this id, and `scrollTo` for an id no view claims does
+            // nothing.
+            //
+            // The drawer opened to show this row, so a board that would not draw it is
+            // widened first: a tier the chips narrowed away goes back to All, and the
+            // group it landed in unfolds (on the next runloop, against the widened board).
             .onChange(of: tasks.lastCreatedTaskId) { _, newId in
                 guard let newId else { return }
-                // Same rule as the bottom inline row: while a group's add row is
-                // open the user is chain-adding into THAT group — switching the
-                // filter and scrolling elsewhere would rip the keyboard away
-                // (and the row is right where they are looking already).
-                //
-                // `openCreateBand` is the board's version of that, and leaving it
-                // out was a real regression caught in the real UI: typing into the
-                // ring at the foot of Backlog created the task AND threw the user
-                // off the board onto All Open, so the one thing the affordance
-                // promises — the new row stays where you made it — was broken by
-                // the locate-me handler that exists to help find it.
-                guard Self.shouldRelocateToNewTask(
-                    inlineAddActive: inlineAddActive,
-                    openAddGroup: openAddGroup,
-                    openCreateBand: openCreateBand,
-                    createdInPlace: tasks.lastCreatedInPlace
-                ) else {
-                    flashHighlight(newId)
-                    return
+                if tierScope != nil, !BoardCollapse.contains(taskId: newId, in: bands) {
+                    tierScopeRaw = BoardFilterPrefs.rawScope(nil)
                 }
-                // NO filter switch any more, and its absence is the point.
-                //
-                // This used to do `activeFilter = .allOpen` whenever the new row wasn't
-                // in the current slice — which was fine while "All Tasks" was a header
-                // pill. That pill is gone ("已经有 pin 了,为什么还会有 all task"), so
-                // the same line would now land the user on a filter with NO chip
-                // selected, over a list they cannot switch away from except through the
-                // `onAppear` fallback: a soft dead end reached by creating a task.
-                //
-                // Locating happens IN PLACE instead. The board's rows carry the same
-                // `task-<id>` anchor the flat list's rows did
-                // (`TaskBoardList.rowAnchorId` exists for exactly this), so a task
-                // created into a band — which is every task created from a band's own
-                // ring — flashes and scrolls where it landed. A task created UNPINNED
-                // from the toolbar `+` has no board row, so the scroll is a silent
-                // no-op and the flash is all the help there is. That is the honest
-                // answer on a pinned-only board: the alternative is teleporting the
-                // user to a list this round deliberately removed.
                 flashHighlight(newId)
-                // Next runloop: the row has to exist before scrollTo can target it —
-                // the band it lands in is rebuilt by the store update that produced
-                // this id, and `scrollTo` for an id no view claims is a silent no-op.
                 DispatchQueue.main.async {
-                    withAnimation(.snappy(duration: 0.35)) {
-                        proxy.scrollTo(TaskBoardList.rowAnchorId(newId), anchor: .center)
+                    let folds = BoardCollapse.decode(collapsedRaw)
+                    let open = BoardCollapse.unfolding(taskId: newId, in: boardAssembly.bands, collapsed: folds)
+                    if open != folds { collapsedRaw = BoardCollapse.encode(open) }
+                    DispatchQueue.main.async {
+                        withAnimation(.snappy(duration: 0.35)) {
+                            proxy.scrollTo(TaskBoardList.rowAnchorId(newId), anchor: .center)
+                        }
                     }
                 }
             }
         }
     }
 
-    // MARK: - Group headers with a `+` (add straight into this group)
-
-    /// A section header that can add INTO its own group.
+    /// A server search hit the phone could not draw as a task row: open its task's
+    /// session, like every other task tap on this tab. A task the local list does not
+    /// carry (completed long ago, filtered out of the projection) still opens: the
+    /// router needs only its id, and the conversation page loads the rest.
     ///
-    /// Interaction: the `+` opens an inline add row as the first row of that
-    /// section — deliberately the SAME affordance the list already ends with
-    /// (`QuickAddRow` at the top, `InlineAddTaskRow` at the bottom), not a third
-    /// pattern. A sheet was the alternative and is worse here: the whole point
-    /// of a header `+` is that the destination is already decided by WHERE you
-    /// tapped, so a modal asking for it again is ceremony, it costs a dismiss
-    /// animation per task, and it breaks the rapid chain-add that keeps focus
-    /// after each Return. The sheet is still one tap away from the row (its
-    /// expand button) for the tasks that need dates and priorities.
-    ///
-    /// The `+` is a `.plain`-styled Button with its own hit shape so it can't
-    /// bubble into the header/section, and the header is
-    /// `.accessibilityElement(children: .contain)` — a container identifier
-    /// otherwise overwrites every descendant's and the `+` becomes unaddressable.
-    /// - Parameter groupName: the group's NAME for the `+`'s accessibility label,
-    ///   when `title` carries decoration a screen reader shouldn't read out
-    ///   ("Focus · 3" → "Add task to Focus").
-    @ViewBuilder
-    private func groupHeader(_ title: String, seed: NewTaskSeed, groupName: String? = nil) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-            Spacer(minLength: 8)
-            // Edit mode owns the rows (selection); adding mid-selection would
-            // change what is selected under the user.
-            if !isEditing {
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    // Toggle: a second tap on the same header puts it away.
-                    openAddGroup = (openAddGroup == seed) ? nil : seed
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.footnote.weight(.bold))
-                        .foregroundStyle(Theme.tint)
-                        // A bigger tap target than the glyph, still inside the
-                        // header's own height so no row moves.
-                        .frame(width: 30, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Add task to \(groupName ?? title)")
-                .accessibilityIdentifier("tasks.groupAdd.\(seed.id)")
-            }
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    /// The inline add row a header `+` opens, rendered inside that section.
-    /// Nothing when this group's `+` isn't the open one, so an unopened header
-    /// costs no row at all.
-    @ViewBuilder
-    private func groupAddRow(_ seed: NewTaskSeed) -> some View {
-        if openAddGroup == seed {
-            QuickAddRow(
-                seed: seed,
-                // The header already states the destination; a chip repeating it
-                // is noise. Re-targeting belongs to the sheet from here.
-                showsDestination: false,
-                identifier: "tasks.groupAdd.\(seed.id).row",
-                onExpand: { text, target in
-                    openAddGroup = nil
-                    newTaskPresentation = NewTaskPresentation(text: text, seed: target)
-                },
-                autoFocus: true,
-                onDismiss: { openAddGroup = nil }
-            )
+    /// A hit in a session's transcript opens THAT session, which need not be the task's
+    /// newest.
+    private func openSearchHit(_ hit: GlobalSearchResult) {
+        guard drawer?.suppressTaps != true, let taskId = hit.ownerTaskId, !taskId.isEmpty else { return }
+        // Exact first: a prefix is only for the short ids an older server sends.
+        let task = tasks.tasks.first(where: { $0.id == taskId })
+            ?? tasks.tasks.first(where: { $0.id.hasPrefix(taskId) })
+            ?? SessionTaskRow.placeholder(id: taskId, title: hit.type == "task" ? hit.title : nil)
+        if hit.type == "session", let sessionId = hit.resultId, !sessionId.isEmpty {
+            router.open(sessionId: sessionId, task: task, tasks: tasks, show: onShowSession)
+        } else {
+            open(task)
         }
     }
 
-    /// One project group: header with its own `+`, the (optional) inline add
-    /// row that `+` opens, then the rows. Both call sites render through here so
-    /// the search results and the normal list get the same affordance.
+    // MARK: - Search hit rows
+
+    /// One project group of search hits: a plain heading, then the rows. No `+`: there
+    /// is one way to make work, the toolbar's.
     @ViewBuilder
     private func projectSection(_ section: (project: String, tasks: [WalnutTask])) -> some View {
-        let seed = NewTaskSeed.project(section.project)
         Section {
-            groupAddRow(seed)
             ForEach(section.tasks) { task in
                 taskRowButton(task)
             }
         } header: {
-            groupHeader(section.project, seed: seed)
+            Text(section.project)
         }
     }
 
-    /// One row of the task list: edit mode = selection toggle; normal = detail
-    /// sheet + swipe/context quick actions.
+    /// One search hit row: a tap opens the task's SESSION, never a task page first; the
+    /// details are in the long-press menu and on the session's title.
     @ViewBuilder
     private func taskRowButton(_ task: WalnutTask, matchSnippet: String? = nil) -> some View {
         Button {
-            if isEditing {
-                if selectedIds.contains(task.id) { selectedIds.remove(task.id) }
-                else { selectedIds.insert(task.id) }
-            } else {
-                selected = task
-            }
+            guard drawer?.suppressTaps != true else { return }
+            open(task)
         } label: {
             HStack(spacing: 10) {
-                if isEditing {
-                    Image(systemName: selectedIds.contains(task.id) ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(selectedIds.contains(task.id) ? Theme.tint : Color(.systemGray3))
-                }
                 TaskRow(task: task, tierBadge: tasks.tierBadge(for: task), matchSnippet: matchSnippet)
+                // The tap is asking the server where this task's session is.
+                if router.resolvingRowId == task.id {
+                    ProgressView().controlSize(.small)
+                }
             }
         }
         .buttonStyle(.plain)
         .id("task-\(task.id)")
-        // Locate-me flash for a just-created task; selection tint in edit mode.
-        .listRowBackground(
-            isEditing && selectedIds.contains(task.id)
-                ? Theme.tintSoft
-                : (task.id == highlightedTaskId ? Theme.tintSoft : nil)
-        )
+        // Locate-me flash for a just-created task.
+        .listRowBackground(task.id == highlightedTaskId ? Theme.tintSoft : nil)
         .accessibilityIdentifier("tasks.row.\(task.id)")
-        // Quick status toggle without opening the sheet: leading swipe =
-        // todo↔done (Reminders muscle memory); long-press menu mirrors it.
-        .swipeActions(edge: .leading, allowsFullSwipe: !isEditing) {
-            if !isEditing {
-                Button {
-                    toggleDone(task)
-                } label: {
-                    Label(
-                        task.isDone ? "Reopen" : "Done",
-                        systemImage: task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle.fill"
-                    )
-                }
-                .tint(task.isDone ? .secondary : Theme.success)
+        // Leading swipe = todo↔done (Reminders muscle memory). No trailing swipe: in the
+        // drawer a leftward drag is the drawer's own close gesture.
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button {
+                toggleDone(task)
+            } label: {
+                Label(
+                    task.isDone ? "Reopen" : "Done",
+                    systemImage: task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle.fill"
+                )
             }
-        }
-        // Trailing swipe: pin/unpin (focus endpoints, optimistic + rollback).
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if !isEditing {
-                Button {
-                    togglePin(task)
-                } label: {
-                    Label(task.pinned == true ? "Unpin" : "Pin",
-                          systemImage: task.pinned == true ? "pin.slash" : "pin")
-                }
-                .tint(Theme.tint)
-            }
+            .tint(task.isDone ? .secondary : Theme.success)
         }
         .contextMenu {
-            if !isEditing {
-                Button {
-                    toggleDone(task)
-                } label: {
-                    Label(
-                        task.isDone ? "Mark as To Do" : "Mark as Done",
-                        systemImage: task.isDone ? "circle" : "checkmark.circle.fill"
-                    )
-                }
-                Button {
-                    togglePin(task)
-                } label: {
-                    Label(task.pinned == true ? "Unpin" : "Pin",
-                          systemImage: task.pinned == true ? "pin.slash" : "pin")
-                }
-                // Tier mover (pinned rows only): mirrors the desktop focus
-                // bar's tier set — built-ins + custom tiers, optimistic.
-                if task.pinned == true {
-                    Menu {
-                        let currentTier = tasks.tierId(for: task.id) ?? "satellite"
-                        ForEach(tasks.allTierChoices, id: \.id) { choice in
-                            Button {
-                                moveTier(task, tier: choice.id)
-                            } label: {
-                                if choice.id == currentTier {
-                                    Label(choice.label, systemImage: "checkmark")
-                                } else {
-                                    Text(choice.label)
-                                }
+            Button {
+                toggleDone(task)
+            } label: {
+                Label(
+                    task.isDone ? "Mark as To Do" : "Mark as Done",
+                    systemImage: task.isDone ? "circle" : "checkmark.circle.fill"
+                )
+            }
+            Button {
+                togglePin(task)
+            } label: {
+                Label(task.pinned == true ? "Unpin" : "Pin",
+                      systemImage: task.pinned == true ? "pin.slash" : "pin")
+            }
+            // Tier mover (pinned rows only): mirrors the desktop focus bar's tier set —
+            // built-ins + custom tiers, optimistic.
+            if task.pinned == true {
+                Menu {
+                    let currentTier = tasks.tierId(for: task.id) ?? "satellite"
+                    ForEach(tasks.allTierChoices, id: \.id) { choice in
+                        Button {
+                            moveTier(task, tier: choice.id)
+                        } label: {
+                            if choice.id == currentTier {
+                                Label(choice.label, systemImage: "checkmark")
+                            } else {
+                                Text(choice.label)
                             }
                         }
-                    } label: {
-                        Label("Move to Tier", systemImage: "square.stack.3d.up")
                     }
-                }
-                Button {
-                    selected = task
                 } label: {
-                    Label("Details", systemImage: "info.circle")
+                    Label("Move to Tier", systemImage: "square.stack.3d.up")
                 }
+            }
+            Button {
+                selected = task
+            } label: {
+                Label("Details", systemImage: "info.circle")
             }
         }
     }
@@ -1402,7 +737,7 @@ struct TasksView: View {
         }
     }
 
-    /// Pin/unpin from a row (swipe / context menu). Optimistic via the store.
+    /// Pin/unpin from a row's context menu. Optimistic via the store.
     private func togglePin(_ task: WalnutTask) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task {
@@ -1412,9 +747,8 @@ struct TasksView: View {
         }
     }
 
-    /// One-tap todo↔done from a row (swipe / context menu). Optimistic via the
-    /// store; a failure surfaces as a transient alert-style banner row is
-    /// overkill here — reuse the store's error line on next refresh instead.
+    /// One-tap todo↔done from a row (swipe / context menu). Optimistic via the store; a
+    /// failure (the row already rolled back) says why in an alert.
     @State private var toggleError: String?
     private func toggleDone(_ task: WalnutTask) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1425,53 +759,6 @@ struct TasksView: View {
         }
     }
 
-    /// Bottom bar in edit mode: Complete / Delete over the selection.
-    private var batchActionBar: some View {
-        HStack(spacing: 12) {
-            Text("\(selectedIds.count) selected")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                runBatch { await tasks.batchSetDone(Array(selectedIds), done: true) }
-            } label: {
-                Label("Complete", systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .accessibilityIdentifier("tasks.batchComplete")
-            Button(role: .destructive) {
-                confirmBatchDelete = true
-            } label: {
-                Label("Delete", systemImage: "trash")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .accessibilityIdentifier("tasks.batchDelete")
-        }
-        .disabled(selectedIds.isEmpty || batchBusy)
-        .overlay(alignment: .center) {
-            if batchBusy { ProgressView().controlSize(.small) }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
-    }
-
-    /// Shared batch runner: busy-gate, run, exit edit mode, surface failures.
-    private func runBatch(_ operation: @escaping () async -> String?) {
-        guard !batchBusy, !selectedIds.isEmpty else { return }
-        batchBusy = true
-        Task {
-            defer { batchBusy = false }
-            let failure = await operation()
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            withAnimation {
-                editMode = .inactive
-                selectedIds.removeAll()
-            }
-            if let failure { batchError = failure }
-        }
-    }
-
     /// Tint the row for a few seconds, then fade the highlight out.
     private func flashHighlight(_ taskId: String) {
         withAnimation(.easeIn(duration: 0.2)) { highlightedTaskId = taskId }
@@ -1479,95 +766,6 @@ struct TasksView: View {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             if highlightedTaskId == taskId {
                 withAnimation(.easeOut(duration: 0.6)) { highlightedTaskId = nil }
-            }
-        }
-    }
-
-    private var emptyText: String {
-        Self.emptyPlaceholder(filter: activeFilter, query: trimmedQuery)
-    }
-
-    /// Should a just-created task pull the user to a filter that shows it?
-    ///
-    /// NO whenever an add row is open, because then the user is chain-adding into
-    /// a place they are already looking at, and relocating them would rip the
-    /// keyboard away from a row that is right there. Pure + static so the rule is
-    /// testable: a real regression (creating from a board band threw the user onto
-    /// All Open) came from this condition missing one of its three inputs.
-    ///
-    /// - Parameter openCreateBand: the board band whose create ring is open, by
-    ///   BAND id (a tier id, or `proj:<name>` under project grouping). Only its
-    ///   presence matters here, never its value.
-    /// - Parameter createdInPlace: typed into a quick-add row, whose field
-    ///   keeps the keyboard for the next entry (`TasksStore.lastCreatedInPlace`).
-    static func shouldRelocateToNewTask(
-        inlineAddActive: Bool, openAddGroup: NewTaskSeed?, openCreateBand: String?,
-        createdInPlace: Bool = false
-    ) -> Bool {
-        !createdInPlace && !inlineAddActive && openAddGroup == nil && openCreateBand == nil
-    }
-
-    /// Empty-state copy for a filter, search-aware. With a query active the
-    /// filter wording ("No agent sessions.", "No open tasks.") reads as "your
-    /// search found nothing" while the real hits sit BELOW in More Results —
-    /// a user could bail before scrolling (2026-08-23 dogfood R11). Say what
-    /// actually happened and point at where the results are.
-    static func emptyPlaceholder(filter: TaskFilter, query: String) -> String {
-        if !query.isEmpty {
-            return "No local matches. See More Results below."
-        }
-        switch filter {
-        case .today: return "Nothing due today."
-        case .inProgress: return "No tasks in progress."
-        case .sessions: return "Nothing pinned yet. Pin a task to put it on the board."
-        case .calendar: return "" // calendar renders its own grid, never this
-        case .allOpen: return "No open tasks."
-        case .done: return "No recent completions."
-        }
-    }
-
-    // MARK: - Pinned tasks (top of every task filter)
-
-    /// Open pinned tasks, capped at 8 — the phone mirror of the desktop
-    /// focus bar. Uses the projection's pinned flag (live via the feed).
-    /// The section's quick-add row creates a task PRE-PINNED (satellite
-    /// tier default) — add straight into the working set from anywhere.
-    @ViewBuilder
-    private var pinnedTasksSection: some View {
-        let pinned = tasks.tasks(for: activeFilter == .done ? .done : .allOpen)
-            .filter { $0.pinned == true && !$0.isDone }
-        if activeFilter != .done {
-            // The Pinned section is the board as a whole, not one tier, so its
-            // add row keeps a destination chip: "pinned" alone doesn't say WHERE,
-            // and Satellite is only the default, not the only answer.
-            Section("Pinned") {
-                ForEach(Array(pinned.prefix(8))) { task in
-                    taskRowButton(task)
-                }
-                QuickAddRow(
-                    seed: NewTaskSeed(project: "", pin: .tier("satellite")),
-                    identifier: "focus.quickAdd",
-                    onExpand: { text, target in
-                        newTaskPresentation = NewTaskPresentation(text: text, seed: target)
-                    }
-                )
-            }
-        }
-    }
-
-    // MARK: - Active sessions (pinned on top of every non-Sessions filter)
-
-    /// Up to 5 alive sessions surfaced above the task list. Prefers pinned-and-
-    /// alive; falls back to the most-recently-active alive sessions when nothing
-    /// pinned is currently running. Hidden entirely when nothing is alive.
-    @ViewBuilder
-    private var activeSessionsSection: some View {
-        let pinnedAlive = tasks.pinnedSessions.filter { $0.statusKind.isAlive }
-        let source = pinnedAlive.isEmpty ? tasks.activeSessions : pinnedAlive
-        let rows = Array(source.filter(sessionMatchesSearch).prefix(5))
-        if !rows.isEmpty {
-            Section("Active Sessions") {
-                ForEach(rows) { session in sessionRow(session) }
             }
         }
     }
@@ -1751,8 +949,8 @@ struct TasksView: View {
     }
 
     @ViewBuilder
-    private func boardSections(_ bands: [BoardBand]) -> some View {
-        if bands.isEmpty {
+    private func boardSections(_ entries: [BoardCollapse.Entry], isEmpty: Bool) -> some View {
+        if isEmpty {
             Section {
                 Text(Self.boardEmptyText(
                     query: trimmedQuery, dateFilter: dateFilter.wrappedValue
@@ -1765,51 +963,36 @@ struct TasksView: View {
             }
         } else {
             TaskBoardList(
-                bands: bands,
+                entries: entries,
                 tierChoices: tasks.allTierChoices,
-                openCreateBand: openCreateBand,
                 newRowId: highlightedTaskId,
                 tierOf: tasks.taskTiers,
                 // The row whose tap is asking the server where to go (spinner in its
                 // leading gutter, where the unread dot sits).
-                resolvingRowId: resolvingRowId,
-                onToggleCreate: { bandId in
+                resolvingRowId: router.resolvingRowId,
+                // Folding only while there is no query (`BoardCollapse.entries`); a
+                // heading tap mid-search would change nothing on screen.
+                onToggleGroup: trimmedQuery.isEmpty ? { key in
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    openCreateBand = (openCreateBand == bandId) ? nil : bandId
-                },
+                    withAnimation(.snappy(duration: 0.25)) {
+                        collapsedRaw = BoardCollapse.encode(
+                            BoardCollapse.toggling(key, in: BoardCollapse.decode(collapsedRaw))
+                        )
+                    }
+                } : nil,
                 onToggleDone: { row in
                     if let task = row.task { toggleDone(task) }
                 },
                 onPickTier: { row, token in pickTier(row, token) },
-                onOpenSession: { row in openSession(row) },
+                onOpenSession: { row in
+                    guard drawer?.suppressTaps != true else { return }
+                    router.open(row, tasks: tasks, show: onShowSession)
+                },
                 onOpenDetail: { row in
                     if let task = row.task {
                         tasks.markRead(taskId: task.id)
                         selected = task
                     }
-                },
-                // The band hands over its OWN seed, so a project heading's ring
-                // files into that project and a tier heading's into that tier.
-                // This used to hardcode `NewTaskSeed.tier(bandId)`, which under
-                // project grouping would have sent `focus_tier: "proj:marina"`,
-                // an unknown tier the create endpoint 400s on (by design: it never
-                // silently downgrades a bad tier, see TaskPinChoice).
-                createRow: { bandId, seed in
-                    AnyView(
-                        QuickAddRow(
-                            seed: seed,
-                            // The band heading already states the destination;
-                            // a chip repeating it is noise.
-                            showsDestination: false,
-                            identifier: "board.createRow.\(TaskBoardList.slug(bandId))",
-                            onExpand: { text, target in
-                                openCreateBand = nil
-                                newTaskPresentation = NewTaskPresentation(text: text, seed: target)
-                            },
-                            autoFocus: true,
-                            onDismiss: { openCreateBand = nil }
-                        )
-                    )
                 }
             )
         }
@@ -1818,9 +1001,7 @@ struct TasksView: View {
     /// What an empty board says, and why the date filter gets a sentence of its
     /// own: `Now` HIDES rows, so "Nothing pinned yet" over a board full of
     /// deferred work is a lie that sends the user looking for a bug. Name the
-    /// filter that did it AND where the control now lives — it used to be a row
-    /// directly above this text and it is now inside the band bar's filter menu,
-    /// so "tap All" alone would send the user hunting.
+    /// filter that did it AND where the control lives.
     static func boardEmptyText(query: String, dateFilter: BoardDateFilter) -> String {
         if !query.isEmpty { return "No matches on the board." }
         if dateFilter == .now {
@@ -1861,92 +1042,6 @@ struct TasksView: View {
         }
     }
 
-    /// The one thing on a board row that genuinely lives elsewhere: the session's
-    /// conversation page.
-    ///
-    /// The DECISION is `BoardModel.tapRoute` (pure, tested); this performs it. It used
-    /// to be `if let session = row.session { push } else { showNewSession }`, which
-    /// read "the session list has no row for this task" as "this task has never had a
-    /// session" — two different facts, and the difference shipped as a bug when the
-    /// server's session projection silently dropped older sessions: a tap on a pinned
-    /// task that HAS a session opened a New Session draft.
-    private func openSession(_ row: BoardRow) {
-        // Opening a task marks it read, whichever destination the tap resolves to
-        // (the web's rule; a draft for a sessionless handed-back task counts too).
-        if let taskId = row.owningTaskId { tasks.markRead(taskId: taskId) }
-        switch BoardModel.tapRoute(row) {
-        case .open(let session):
-            navPath.append(session)
-        case .resolve(let sessionId, let fallback):
-            resolveThenOpen(sessionId: sessionId, row: row, fallback: fallback)
-        case .probe(let taskId, let fallback):
-            probeThenOpen(taskId: taskId, row: row, fallback: fallback)
-        case .draft(let seed):
-            newSessionSeed = seed
-        }
-    }
-
-    /// Open a session the session LIST does not carry, by id.
-    ///
-    /// The failure branch is the point: a 404 (the record really is gone), an offline
-    /// phone or the lookup deadline all land in the draft ATTACHED to the task, never
-    /// in a dead end and never in an unlinked draft. The toast says why, because a tap
-    /// that quietly produces a different destination than the row promised is worse
-    /// than the wait.
-    private func resolveThenOpen(
-        sessionId: String, row: BoardRow, fallback: BoardModel.BoardDraftSeed
-    ) {
-        guard resolvingRowId == nil else { return }
-        resolvingRowId = row.id
-        Task {
-            let resolved = await tasks.resolveSession(id: sessionId, task: row.task)
-            resolvingRowId = nil
-            guard let resolved else {
-                tasks.transientError = "Couldn't open that session. Starting a new one for this task."
-                newSessionSeed = fallback
-                return
-            }
-            navPath.append(resolved)
-        }
-    }
-
-    /// Nothing knows yet whether this task has sessions, so ask before routing.
-    ///
-    /// The slim list projection carries no `session_ids`, so a cold board cannot tell a
-    /// task that never had a session from one whose session aged out of the session
-    /// list. ONE `GET /v1/tasks/:id` settles it, the answer is cached
-    /// (`TasksStore.sessionIdsByTask`) so the next tap on that row spends nothing, and
-    /// the row spins while it runs.
-    ///
-    /// The cost is deliberate and bounded: a tap on a genuinely sessionless task waits
-    /// one round trip (deadline `TasksStore.boardLookupDeadline`) before its draft
-    /// opens. That is the price of never opening a draft on top of a real session, and
-    /// it is paid once per task per app run.
-    private func probeThenOpen(
-        taskId: String, row: BoardRow, fallback: BoardModel.BoardDraftSeed
-    ) {
-        guard resolvingRowId == nil else { return }
-        resolvingRowId = row.id
-        Task {
-            let ids = await tasks.fetchSessionIds(for: taskId)
-            resolvingRowId = nil
-            // A failed probe must not invent an answer: fall through to the draft
-            // (attached), exactly as this row behaved before the probe existed.
-            guard let sessionId = BoardModel.newestSessionId(ids) else {
-                newSessionSeed = fallback
-                return
-            }
-            resolveThenOpen(sessionId: sessionId, row: row, fallback: fallback)
-        }
-    }
-
-    private func sessionRow(_ session: WalnutSession) -> some View {
-        NavigationLink(value: session) {
-            SessionRowView(session: session)
-        }
-        .accessibilityIdentifier("sessions.row.\(session.id)")
-    }
-
     // MARK: - 503 not-synced state
 
     private var notSyncedState: some View {
@@ -1962,173 +1057,37 @@ struct TasksView: View {
     }
 }
 
-// MARK: - Inline add row (Apple Reminders behavior)
-
-/// Persistent "+ New Task" row at the bottom of the task list. Tap → becomes
-/// an inline TextField; Return creates immediately (Inbox, no project) and
-/// KEEPS the field active for rapid consecutive adds — exactly Reminders'
-/// behavior. Tap-away/dismiss with an empty field collapses back to the
-/// button. Creation goes through the same TasksStore.createTask path as the
-/// sheet, so the optimistic insert + pending overlay + locate-me flash all
-/// apply.
-/// One opening of the full NewTaskSheet: the sentence to parse into the form and
-/// the destination it was typed toward. A fresh identity per opening, so two
-/// expands in a row each present their own sheet.
-struct NewTaskPresentation: Identifiable {
-    let id = UUID()
-    var text: String = ""
-    var seed = NewTaskSeed(project: "", pin: .unspecified)
+/// Pages pushed inside the drawer, over the board.
+enum TasksDrawerRoute: Hashable {
+    case recents
 }
-
-struct InlineAddTaskRow: View {
-    /// Bubbles focus state up so the list can suppress its scroll-to-created
-    /// behavior while the user is chain-adding.
-    @Binding var isActive: Bool
-
-    @Environment(TasksStore.self) private var tasks
-
-    @State private var title = ""
-    @State private var editing = false
-    @State private var submitting = false
-    @State private var errorMessage: String?
-    @FocusState private var fieldFocused: Bool
-
-    var body: some View {
-        Group {
-            if editing {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "circle")
-                            .font(.body)
-                            .foregroundStyle(.tertiary)
-                        TextField("New task", text: $title)
-                            .focused($fieldFocused)
-                            .submitLabel(.done)
-                            .onSubmit { submit() }
-                            .disabled(submitting)
-                            .accessibilityIdentifier("tasks.inlineAdd.field")
-                        if submitting {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.caption)
-                            .foregroundStyle(Theme.danger)
-                    }
-                }
-                .onChange(of: fieldFocused) { _, focused in
-                    isActive = focused
-                    // Tap-away with nothing typed = cancel (Reminders behavior).
-                    // Mid-submit blur (keyboard dropped by the async create)
-                    // must not collapse the row before the task lands.
-                    if !focused && !submitting && title.trimmingCharacters(in: .whitespaces).isEmpty {
-                        collapse()
-                    }
-                }
-            } else {
-                Button {
-                    editing = true
-                    errorMessage = nil
-                    // Next runloop: the TextField must exist before focusing.
-                    DispatchQueue.main.async { fieldFocused = true }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.body)
-                            .foregroundStyle(Theme.tint)
-                        Text("New Task")
-                            .foregroundStyle(Theme.tint)
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("tasks.inlineAdd")
-            }
-        }
-    }
-
-    private func collapse() {
-        editing = false
-        title = ""
-        errorMessage = nil
-        isActive = false
-    }
-
-    private func submit() {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        // Return on an empty field = done adding (Reminders behavior).
-        guard !trimmed.isEmpty else { collapse(); return }
-        guard !submitting else { return }
-        submitting = true
-        errorMessage = nil
-        Task {
-            defer { submitting = false }
-            do {
-                _ = try await tasks.createTask(title: trimmed)
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                // Stay active for the next one — clear the text, keep focus.
-                title = ""
-                fieldFocused = true
-            } catch let APIError.server(_, _, msg, _, _) {
-                errorMessage = msg
-                fieldFocused = true
-            } catch {
-                errorMessage = error.localizedDescription
-                fieldFocused = true
-            }
-        }
-    }
-}
-
-// MARK: - The iOS 26 top scroll edge
-
-private extension View {
-    /// `scrollEdgeEffectStyle(.hard, for: .top)` where the OS has it (`.automatic`, the
-    /// platform default, when `hard` is false).
-    ///
-    /// A helper and not an inline `if #available`, because the modifier changes the
-    /// view's TYPE: branching inline would need `AnyView` or a `@ViewBuilder` wrapper at
-    /// the call site, and this is the wrapper.
-    ///
-    /// What it buys on top of the opaque toolbar: the toolbar fix makes the BAR opaque,
-    /// so content can no longer be read through it; this makes the scroll edge itself
-    /// hard, which is the platform's own statement that nothing may read through the top
-    /// edge — the reason `ChatView`'s bar and this one now behave the same way while the
-    /// board keeps its own paper colour underneath.
-    @ViewBuilder
-    func topScrollEdge(hard: Bool) -> some View {
-        if #available(iOS 26.0, *) {
-            self.scrollEdgeEffectStyle(hard ? .hard : .automatic, for: .top)
-        } else {
-            self
-        }
-    }
-}
-
-// The SIX SMART-LIST CARDS are GONE (2026-08-29, T84).
-//
-// They were a horizontally scrolling 2x3 grid of 130pt summary cards, one per
-// `TaskFilter`, each with a big count: 104pt of chrome offering six destinations
-// on the screen whose job is showing rows. The header is now `TasksNavRow` — two
-// compact chips, Pin | Calendar — and the counts that survived are the per-band
-// ones on `BoardBandBar`, which are about the rows you are actually looking at.
-//
-// Two things the cards taught, kept because the replacements inherit them: a
-// fixed-width box cannot hold a four-digit count (`Text` wrapped "2,824" BETWEEN
-// digits, dogfood R19), which is why every count in the chips is
-// `lineLimit(1)` + `monospacedDigit()` on an INTRINSICALLY sized capsule; and the
-// `tasks.card.<filter>` ids they carried are why `TaskFilter`'s cases and
-// `identifierKey` all stayed put (`TasksNavEntry` maps onto them rather than
-// replacing them).
-
 
 // MARK: - Transient toast (fire-and-forget mutation feedback)
 
 /// Small bottom toast for optimistic mutations: info ("Pinned · Focus") or a
 /// subtle failure line after a revert. Auto-dismisses; tap to dismiss early.
 /// Deliberately NOT a modal/alert — instant-first mutations never block.
+/// The store's toast, on whichever of the Tasks tab's two surfaces is in front: the
+/// board while the drawer is out, the page while it is shut. One surface alone hid it:
+/// the board is invisible while shut, and the toast's timer ran out unseen (a failed
+/// delete from a session's task page said nothing). Its own view, so the drawer's
+/// fraction re-renders this line and not the board.
+struct TasksToastLayer: View {
+    @Environment(TasksStore.self) private var tasks
+    let drawer: LeadingDrawerModel?
+    let whileDrawerOpen: Bool
+
+    var body: some View {
+        if (drawer?.isOpen ?? true) == whileDrawerOpen,
+           let notice = tasks.transientNotice ?? tasks.transientError {
+            TransientToast(text: notice, isError: tasks.transientError != nil) {
+                tasks.transientNotice = nil
+                tasks.transientError = nil
+            }
+        }
+    }
+}
+
 struct TransientToast: View {
     let text: String
     let isError: Bool

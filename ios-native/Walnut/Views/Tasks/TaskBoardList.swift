@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The board: one scroll of task rows grouped into sticky bands (pin tier, or
-/// project when the band bar says so), with a create affordance at the foot of
-/// each band that can create there.
+/// project when the band bar says so). Each group's heading folds it down to the
+/// heading alone (`BoardCollapse`); there is no create affordance on a band, because the
+/// toolbar's `+` is the one way to make work.
 ///
 /// Why a `List` with `Section` headers rather than a hand-rolled `LazyVStack` +
 /// pinned headers: `insetGrouped`'s section headers already stick, already float
@@ -12,12 +13,7 @@ import SwiftUI
 /// (see `ScrollBottomTracking`).
 ///
 /// This view knows NOTHING about what a band is grouped by. It reads `bandId` as
-/// an opaque identity and `createSeed` as the whole answer to "what does this
-/// heading's `+` make", which is what lets a project band file into its project
-/// without the layout learning a second mapping (it used to derive the create
-/// affordance from `tierId != BoardModel.activeTierId`, i.e. from the id's
-/// MEANING — and that tail band is gone now, so the view would have been reading a
-/// constant that no longer exists).
+/// an opaque identity, and the fold's group key from `BoardCollapse.groupKey`.
 ///
 /// # R29 "cards": each band is an inset-grouped section again
 ///
@@ -66,12 +62,11 @@ import SwiftUI
 /// colour cost the screen its large title), which is also what removed the seam
 /// the two colours used to have to agree about.
 struct TaskBoardList: View {
-    let bands: [BoardBand]
+    /// The bands as drawn: a folded group is its first band, marked collapsed.
+    let entries: [BoardCollapse.Entry]
     let tierChoices: [(id: String, label: String)]
     // No done toggle on a heading: completed rows fold everywhere by default, and the
     // one switch that shows them is `Show done` in the band bar's filters menu.
-    /// Which band's create row is open, by band id (nil = none).
-    let openCreateBand: String?
     /// Just-created row id — its whole row takes a green tint so its landing place is
     /// visible ("where did it land?" is answered by a place on screen, not a toast).
     let newRowId: String?
@@ -84,21 +79,13 @@ struct TaskBoardList: View {
     /// and a second row spinning would advertise two destinations at once.
     var resolvingRowId: String? = nil
 
-    let onToggleCreate: (String) -> Void
+    /// Fold or unfold a group by its key (`BoardCollapse.groupKey`). nil = the headings
+    /// do not fold (a live search shows every hit).
+    var onToggleGroup: ((String) -> Void)? = nil
     let onToggleDone: (BoardRow) -> Void
     let onPickTier: (BoardRow, BoardModel.TierToken) -> Void
     let onOpenSession: (BoardRow) -> Void
     let onOpenDetail: (BoardRow) -> Void
-    /// The band's create row, rendered by the owner (it needs the store).
-    ///
-    /// Takes the band's own `(bandId, createSeed)`. The SEED is the destination: a
-    /// tier band files into that tier, a project band into that project, and this
-    /// view never has to know which it handed over (it used to pass a tier id
-    /// string, which is exactly the assumption project bands break). The band id
-    /// rides along only because the row's accessibility identifier is built from
-    /// it, and a shipped automation flow taps `board.createRow.backlog`: deriving
-    /// that from the seed instead would rename it.
-    let createRow: (String, NewTaskSeed) -> AnyView
 
     /// The heading dot's diameter, SCALED with the heading's own text style.
     ///
@@ -143,9 +130,11 @@ struct TaskBoardList: View {
     }
 
     var body: some View {
-        ForEach(bands) { band in
+        ForEach(entries) { entry in
+            let band = entry.band
             Section {
-                ForEach(band.rows) { row in
+                // A folded group draws no rows: its heading is the whole group.
+                ForEach(entry.collapsed ? [] : band.rows) { row in
                     TaskBoardRow(
                         row: row,
                         showsProject: !band.headingNamesProject,
@@ -193,13 +182,9 @@ struct TaskBoardList: View {
                     // card, which is exactly the default — so the default is what this row
                     // now takes.
                     //
-                    // Separators BETWEEN cells only. The last TASK row keeps its hairline
-                    // when a create foot follows it inside the same card (the card has not
-                    // ended, so neither has the list of rows), and drops it when it really
-                    // is the card's last cell.
+                    // Separators BETWEEN cells only: the last row is the card's last cell.
                     .listRowSeparator(
-                        row.id == band.rows.last?.id && band.createSeed == nil
-                            ? .hidden : .visible,
+                        row.id == band.rows.last?.id ? .hidden : .visible,
                         edges: .bottom
                     )
                     // And nothing above the first row: the card's own top edge is the
@@ -215,22 +200,8 @@ struct TaskBoardList: View {
                         onOpenDetail: { onOpenDetail(row) }
                     ))
                 }
-                // Create at the FOOT of the band — where the just-created row
-                // then stays put, because a new pin's pin_order is max+1. The
-                // affordance and the outcome are in the same place, which is
-                // what the Reminders behaviour is actually about.
-                //
-                // Every band the board renders carries a seed now (the tail band,
-                // the one band that could not name a destination, is gone), so the
-                // `if` is a guard rather than a branch two band kinds take. It stays
-                // because the alternative is this view deriving the destination from
-                // the band's ID again — the assumption that shipped
-                // `focus_tier: "proj:marina"`.
-                if let seed = band.createSeed {
-                    createFoot(band, seed: seed)
-                }
             } header: {
-                heading(band)
+                heading(entry)
             }
             // ZERO section spacing, and it stays zero now that the bands are cards:
             // the gap between one card and the next heading is the HEADING's own
@@ -297,9 +268,28 @@ struct TaskBoardList: View {
     /// mean the project heading scrolls away while its folder's sticks, which is the
     /// opposite of a hierarchy. In the common case the project's loose band leads and
     /// its own heading IS the project heading, so nothing extra is drawn at all.
+    ///
+    /// # Folding
+    ///
+    /// The heading that NAMES a group is its fold control: a tier or project heading, or
+    /// the project line drawn above a folder band that leads its project. Folder lines
+    /// never fold on their own; a folder belongs to its project's group. A folded group
+    /// draws that one line, with the whole group's count, and nothing under it.
     @ViewBuilder
-    private func heading(_ band: BoardBand) -> some View {
-        if let nest = band.nest {
+    private func heading(_ entry: BoardCollapse.Entry) -> some View {
+        let band = entry.band
+        let groupKey = BoardCollapse.groupKey(band)
+        if entry.collapsed {
+            flatHeading(
+                label: band.nest?.projectLabel ?? band.label,
+                color: Self.bandColor(groupKey),
+                count: entry.groupCount,
+                groupKey: groupKey,
+                collapsed: true,
+                anchorId: Self.anchorId(band.bandId),
+                identifier: "board.heading.\(Self.slug(groupKey))"
+            )
+        } else if let nest = band.nest {
             VStack(alignment: .leading, spacing: 0) {
                 // A project whose loose band is empty (every pinned row filed in a
                 // folder) still gets its heading, on its first folder band.
@@ -309,6 +299,7 @@ struct TaskBoardList: View {
                         // The colour the project's OWN band would have drawn, so the
                         // heading looks the same wherever it happens to be rendered.
                         color: Self.bandColor(nest.projectBandId),
+                        groupKey: nest.projectBandId,
                         identifier: "board.heading.\(Self.slug(nest.projectBandId))"
                     )
                 }
@@ -327,35 +318,60 @@ struct TaskBoardList: View {
                 identifier: "board.folder.\(Self.slug(nest.folderId))"
             ))
         } else {
-            HStack(spacing: 7) {
-                bandDot(band.bandId)
-                Text(band.label)
-                    .font(.system(BoardHeadingType.label, weight: .semibold))
-                    .foregroundStyle(BoardHeadingType.ink)
-                    // The band's NAME wins the line. One line and highest priority, both
-                    // measured: without the priority the control and the count took their
-                    // ideal widths first and the label was squeezed into a hyphenated
-                    // two-line "Fo-cus" at accessibility-XXXL; without `lineLimit(1)` a long
-                    // project name would still wrap under its own dot.
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(2)
-                Spacer(minLength: 6)
-                if BoardHeadingType.showsCount(typeSize) { countLabel(band) }
-            }
-            .padding(.top, Self.headingTopGap)
-            .padding(.bottom, Self.headingLabelToCard)
-            .modifier(BoardHeadingChrome(
+            flatHeading(
+                label: band.label,
+                color: Self.bandColor(band.bandId),
+                count: band.count,
+                groupKey: groupKey,
+                collapsed: false,
                 anchorId: Self.anchorId(band.bandId),
                 identifier: "board.heading.\(Self.slug(band.bandId))"
-            ))
+            )
         }
     }
 
+    /// A tier or project heading: dot, name, count, and the fold chevron.
+    private func flatHeading(
+        label: String, color: Color, count: Int, groupKey: String, collapsed: Bool,
+        anchorId: String, identifier: String
+    ) -> some View {
+        HStack(spacing: 7) {
+            dot(color)
+            Text(label)
+                .font(.system(BoardHeadingType.label, weight: .semibold))
+                .foregroundStyle(BoardHeadingType.ink)
+                // The band's NAME wins the line. One line and highest priority, both
+                // measured: without the priority the control and the count took their
+                // ideal widths first and the label was squeezed into a hyphenated
+                // two-line "Fo-cus" at accessibility-XXXL; without `lineLimit(1)` a long
+                // project name would still wrap under its own dot.
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(2)
+            Spacer(minLength: 6)
+            if BoardHeadingType.showsCount(typeSize) {
+                countLabel(count, identifier: "board.count.\(Self.slug(groupKey))")
+            }
+            foldChevron(collapsed: collapsed)
+        }
+        .padding(.top, Self.headingTopGap)
+        // A folded heading has no card under it, so the gap to the NEXT heading is that
+        // heading's own top gap; the full label-to-card gap here would double it.
+        .padding(.bottom, collapsed ? Self.collapsedHeadingBottom : Self.headingLabelToCard)
+        .modifier(BoardHeadingFold(
+            groupKey: groupKey, collapsed: collapsed, label: label, onToggle: onToggleGroup
+        ))
+        .modifier(BoardHeadingChrome(anchorId: anchorId, identifier: identifier))
+    }
+
+    /// The space under a folded heading: enough that two folded headings in a row read as
+    /// a list of lines, not one block.
+    static let collapsedHeadingBottom: CGFloat = 2
+
     /// One project-heading line, drawn above the folder band that leads its project.
     /// Same type style and dot as an ordinary band heading, because it IS one — it just
-    /// happens to live in a nested band's header.
-    private func headingBar(label: String, color: Color, identifier: String) -> some View {
+    /// happens to live in a nested band's header. It is the project's fold control.
+    private func headingBar(label: String, color: Color, groupKey: String, identifier: String) -> some View {
         HStack(spacing: 7) {
             dot(color)
             Text(label)
@@ -364,13 +380,29 @@ struct TaskBoardList: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)
+            foldChevron(collapsed: false)
         }
         .padding(.top, Self.headingTopGap)
         // NOT `headingLabelToCard`: what follows this line is the folder heading, not the
         // card, and the two labels belong together as one two-line header.
         .padding(.bottom, 3)
-        .accessibilityElement(children: .combine)
+        .modifier(BoardHeadingFold(
+            groupKey: groupKey, collapsed: false, label: label, onToggle: onToggleGroup
+        ))
         .accessibilityIdentifier(identifier)
+    }
+
+    /// Down when open, right when folded: the platform's disclosure language. Hidden when
+    /// the headings cannot fold (a live search).
+    @ViewBuilder
+    private func foldChevron(collapsed: Bool) -> some View {
+        if onToggleGroup != nil {
+            Image(systemName: "chevron.down")
+                .font(.system(BoardHeadingType.count, weight: .semibold))
+                .foregroundStyle(BoardHeadingType.countInk)
+                .rotationEffect(.degrees(collapsed ? -90 : 0))
+                .accessibilityHidden(true)
+        }
     }
 
     /// How much further in each level of folder nesting starts.
@@ -414,7 +446,9 @@ struct TaskBoardList: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)
-            if BoardHeadingType.showsCount(typeSize) { countLabel(band) }
+            if BoardHeadingType.showsCount(typeSize) {
+                countLabel(band.count, identifier: "board.count.\(Self.slug(band.bandId))")
+            }
         }
         .padding(.top, nest.leadsProject || !nest.leadFolders.isEmpty
             ? 1 : Self.headingTopGap - 4)
@@ -454,8 +488,8 @@ struct TaskBoardList: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func countLabel(_ band: BoardBand) -> some View {
-        Text(band.count.formatted(.number))
+    private func countLabel(_ count: Int, identifier: String) -> some View {
+        Text(count.formatted(.number))
             .font(.system(BoardHeadingType.count, weight: .semibold))
             .monospacedDigit()
             // A COUNT MUST NEVER WRAP BETWEEN DIGITS OR TRUNCATE. That is dogfood R19's own
@@ -471,100 +505,16 @@ struct TaskBoardList: View {
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(BoardHeadingType.countInk)
-            .accessibilityIdentifier("board.count.\(Self.slug(band.bandId))")
+            .accessibilityIdentifier(identifier)
     }
 
     /// The band's identity, as a dot: the same colour and the same shape its chip carries
-    /// (`BoardBandBar.chipButton`), so heading and chip are one object.
-    ///
-    /// It replaces a 3x13 accent BAR. The bar was the loud half of the old heading (a bar
-    /// plus bold caps reads as a warning label), and a bar also has to pick a height,
-    /// which is exactly the kind of constant that stops matching its text at
-    /// accessibility sizes. A dot has one number and it scales.
-    private func bandDot(_ bandId: String) -> some View {
-        dot(Self.bandColor(bandId))
-    }
-
+    /// (`BoardBandBar.chipButton`), so heading and chip are one object. A dot has one
+    /// number and it scales.
     private func dot(_ color: Color) -> some View {
         Circle()
             .fill(color)
             .frame(width: headingDot, height: headingDot)
-    }
-
-    // MARK: - Create at the foot
-
-    /// The band's quick add, and it is the LAST CELL OF THE CARD (R29) rather than a
-    /// transparent row sitting under it.
-    ///
-    /// This is the board's answer to the reference page's quick-add capsule, and it is the
-    /// same component (`QuickAddRow`, handed the band's own seed) — the difference being
-    /// that the destination is already decided by WHICH card's foot you tapped, so it files
-    /// into that tier or that project instead of asking. Both cells therefore keep the
-    /// card: `listRowBackground(Color.clear)` here used to be correct over one flat sheet
-    /// and would now punch a hole through the bottom of the card, page colour showing
-    /// through the rounded corners it is supposed to fill.
-    /// The destination the create row WRITES TO, in the words the row should use.
-    ///
-    /// The words come from the SEED, never from `band.label`, and that swap is the whole
-    /// fix (2026-09-03 review). A lone project heading is relabelled to the TIER it sits in
-    /// (`soleHeadingLabel`: with one project on screen its own name says nothing new), while
-    /// the seed underneath still files into that project — so interpolating the heading
-    /// promised "New task in Focus" over a write into `marina`, and the row that opens
-    /// directly below it said "Add to marina…". One control, two answers, and the one the
-    /// user read first was the wrong one. Unscoped it was worse than wrong: the lone heading
-    /// reads "All", so the row offered a destination that does not exist.
-    ///
-    /// The heading keeps its relabel — a heading names the GROUP, and the group really is
-    /// "the whole of Focus" when only one project is in it. Only the create row makes a
-    /// promise about a write, so only the create row has to name a place you can write to.
-    ///
-    /// Same rule `QuickAddRow.placeholder` already applies to the row this opens, which is
-    /// why the closed button and the open field now say the same thing: a tier seed reads
-    /// its name out of `tierChoices` (the registry behind the tier menu, so a `ct_` id never
-    /// reaches the screen), and a project seed needs no lookup because the name IS the
-    /// write. `band` is still taken as the last-resort fallback for a tier the registry has
-    /// not caught up with, where the heading is that same registry's word for it.
-    static func createDestination(
-        _ band: BoardBand, seed: NewTaskSeed, tierChoices: [(id: String, label: String)]
-    ) -> String {
-        if let tier = seed.pin.wireFocusTier {
-            return tierChoices.first { $0.id == tier }?.label ?? band.label
-        }
-        // "" is Inbox, on the wire and only there: it has a name on screen.
-        return seed.project.isEmpty ? NewTaskSeed.inboxHeader : seed.project
-    }
-
-    @ViewBuilder
-    private func createFoot(_ band: BoardBand, seed: NewTaskSeed) -> some View {
-        if openCreateBand == band.bandId {
-            createRow(band.bandId, seed)
-                .listRowSeparator(.hidden)
-        } else {
-            Button {
-                onToggleCreate(band.bandId)
-            } label: {
-                HStack(spacing: 11) {
-                    Circle()
-                        .strokeBorder(Theme.tint, style: StrokeStyle(lineWidth: 1.4, dash: [3, 2.5]))
-                        .frame(width: 21, height: 21)
-                    Text("New task in \(Self.createDestination(band, seed: seed, tierChoices: tierChoices))")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.tint)
-                    Spacer(minLength: 0)
-                }
-                // MIN height, not a fixed one, and the difference is an accessibility bug
-                // the V1 row had: `frame(height: 34)` pinned the cell while the label
-                // inside it scales with Dynamic Type, so at accessibility-XXXL the text
-                // overflowed a box that could not grow. A floor keeps the tap target
-                // honest at default type and lets the row grow at large ones. Shorter than
-                // a task row on purpose: it is an affordance, not an item.
-                .frame(minHeight: 26)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .listRowSeparator(.hidden)
-            .accessibilityIdentifier("board.create.\(Self.slug(band.bandId))")
-        }
     }
 
     // MARK: - Ids and colours
@@ -720,6 +670,39 @@ private struct BoardHeadingChrome: ViewModifier {
     }
 }
 
+/// A heading that folds its group: the whole line is the tap target, and VoiceOver hears
+/// a button that says what it does.
+///
+/// `onTapGesture` and not a `Button`: a Button inside a List section header takes the
+/// header's own highlight and, on iOS 26, its own glass capsule, neither of which a
+/// heading should grow.
+private struct BoardHeadingFold: ViewModifier {
+    let groupKey: String
+    let collapsed: Bool
+    let label: String
+    let onToggle: ((String) -> Void)?
+    @Environment(\.leadingDrawer) private var drawer
+
+    func body(content: Content) -> some View {
+        if let onToggle {
+            content
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // A drawer close drag that started on a heading must not also fold it.
+                    guard drawer?.suppressTaps != true else { return }
+                    onToggle(groupKey)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+                .accessibilityHint(collapsed ? "Shows \(label)" : "Hides \(label)")
+                .accessibilityAction { onToggle(groupKey) }
+        } else {
+            content.accessibilityElement(children: .combine)
+        }
+    }
+}
+
 /// The row's SECOND affordance: everything about the task that isn't "open the
 /// session".
 ///
@@ -752,15 +735,9 @@ private struct BoardRowGestures: ViewModifier {
                 }
                 .tint(row.isDone ? .secondary : Theme.success)
             }
-            // Trailing swipe = the task's own page. The row's tap opens the
-            // SESSION, so this is the other half of the pair the user asked for:
-            // "one is tapping the session, one is going into the task".
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button(action: onOpenDetail) {
-                    Label("Task", systemImage: "info.circle")
-                }
-                .tint(Theme.tint)
-            }
+            // No trailing swipe: in the Tasks drawer a leftward drag is the drawer's own
+            // close gesture. The task's page is the long-press menu's last item, and the
+            // session's title.
             .contextMenu {
                 // THREE answers, not two (`BoardModel.affordance`). A task whose session is
                 // known only by id (aged out of the session list) is a session to OPEN; a

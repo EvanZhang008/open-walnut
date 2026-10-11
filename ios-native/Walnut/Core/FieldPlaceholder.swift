@@ -14,8 +14,7 @@ import SwiftUI
 /// decoration could live with it.
 ///
 /// Ours cannot, because the placeholder is the only thing that says WHERE the typed task
-/// will go: `QuickAddRow`'s reads "Add to Focus…" / "Add to <project>…" and changes with
-/// the destination chip, and the calendar's reads "Add task on Tuesday…". That is
+/// will go: the calendar's reads "Add task on Tuesday…". That is
 /// load-bearing information presented as text, so it is held to the text bar.
 ///
 /// # The numbers, and why they are stated per scheme

@@ -137,6 +137,10 @@ struct ComposerBar: View {
     /// Read-only "where is this served from" for the `+` menu. Absent = the row
     /// is omitted (nothing honest to say).
     var hostProvenance: ComposerHostProvenance? = nil
+    /// The words' OTHER exit, beside send: the new-session draft's "Save as todo". nil =
+    /// none. It follows send's no-loss rule (`deliver`): the field clears at once and the
+    /// words come back when the action answers false.
+    var secondaryAction: ComposerSecondaryAction? = nil
     /// Returns **"are these words safe with you"**, which is deliberately NOT "did
     /// the send succeed". Stores here own no-loss: a dead round trip becomes a
     /// retryable failed bubble that still holds the full text, and that counts as
@@ -975,6 +979,13 @@ struct ComposerBar: View {
             // voice input composes with typed text instead of replacing it.
             // The send button joins it once there's something to send.
             micButton
+            // Beside send, not among the launch settings on the left: it is the
+            // text's other exit (the web draft's rule, user 2026-10-03). Always on
+            // screen, dimmed until there are words to save: a button that appears
+            // only after typing is one nobody finds ("can't find how to make a todo").
+            if let secondaryAction {
+                secondaryButton(secondaryAction)
+            }
             // ONE trailing seat: send, or stop while a turn runs. Never both, so
             // a turn starting cannot shuffle the row's buttons sideways. With
             // nothing to send, the seat offers voice mode where there is one.
@@ -1317,6 +1328,65 @@ struct ComposerBar: View {
         // VoiceOver read the arrow's symbol name, "Up".
         .accessibilityLabel("Send")
         .accessibilityIdentifier("chat.send")
+    }
+
+    /// Words to save, none of them images when the action takes text only, and no turn
+    /// running.
+    private func secondaryEnabled(_ action: ComposerSecondaryAction) -> Bool {
+        !trimmed.isEmpty && !busy && (!action.textOnly || selectedImages.isEmpty)
+    }
+
+    /// The secondary exit: a soft tinted capsule, so it reads as the quieter of the two
+    /// exits next to the filled send circle. Three widths, the widest that fits: the
+    /// full words, the short word, the glyph alone.
+    private func secondaryButton(_ action: ComposerSecondaryAction) -> some View {
+        Button {
+            performSecondary(action)
+        } label: {
+            ViewThatFits(in: .horizontal) {
+                secondaryLabel(action, text: action.title)
+                secondaryLabel(action, text: action.shortTitle)
+                secondaryLabel(action, text: nil)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!secondaryEnabled(action))
+        // The label stays readable while dimmed: it is there to be found.
+        .opacity(secondaryEnabled(action) ? 1 : 0.5)
+        .accessibilityIdentifier(action.accessibilityID)
+        .accessibilityLabel(action.title)
+    }
+
+    private func secondaryLabel(_ action: ComposerSecondaryAction, text: String?) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: action.systemImage)
+                .font(.system(size: 12, weight: .semibold))
+            if let text {
+                Text(text)
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .foregroundStyle(Theme.tint)
+        .padding(.horizontal, text == nil ? 0 : 10)
+        .frame(minWidth: 32, minHeight: 32)
+        .background(Theme.tintSoft, in: Capsule())
+        .contentShape(Capsule())
+    }
+
+    private func performSecondary(_ action: ComposerSecondaryAction) {
+        let text = trimmed
+        guard secondaryEnabled(action) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        refusedNotice = nil
+        Task {
+            let disposition = await Self.deliver(
+                text: text, images: [], draftKey: draftKey, drafts: drafts,
+                onSend: { words, _ in await action.perform(words) }
+            )
+            if disposition == .returnedToDraft { refusedNotice = action.refusedNotice }
+        }
     }
 
     // MARK: - Actions
@@ -2104,4 +2174,20 @@ struct ConfirmationBanner: View {
             onDismiss()
         }
     }
+}
+
+/// A second exit for a composer's words, beside send (the new-session draft's "Save as
+/// todo"). `perform` answers "are these words safe with you", the same contract as
+/// `ComposerBar.onSend`: false puts them back in the field.
+struct ComposerSecondaryAction {
+    let title: String
+    /// The narrow-row word ("Todo").
+    let shortTitle: String
+    let systemImage: String
+    let accessibilityID: String
+    /// Hidden while images are attached: the action has nowhere to put them.
+    var textOnly: Bool = true
+    /// Said when `perform` answers false and the words are back in the field.
+    var refusedNotice: String = ComposerBar.refusedNotice
+    let perform: (String) async -> Bool
 }

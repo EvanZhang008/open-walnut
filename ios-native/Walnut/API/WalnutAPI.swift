@@ -243,16 +243,18 @@ struct WalnutAPI {
     /// `mode` = permission mode (bypass/accept/default/plan); nil = server
     /// default (bypass — same as the web launcher). `model` = a catalog id or a
     /// legacy alias; nil (or "default") = the server's own default, so an old
-    /// client's behavior is unchanged.
+    /// client's behavior is unchanged. `project` files the task the launch creates
+    /// (ignored when `taskId` links an existing one); nil = Inbox, the server default.
     func createSession(
         cwd: String, host: String? = nil, message: String = "",
-        taskId: String? = nil, mode: String? = nil, model: String? = nil
+        taskId: String? = nil, mode: String? = nil, model: String? = nil,
+        project: String? = nil
     ) async throws -> SessionCreated {
         try await send(
             "POST", "/sessions",
             body: Self.createSessionBody(
                 cwd: cwd, host: host, message: message,
-                taskId: taskId, mode: mode, model: model
+                taskId: taskId, mode: mode, model: model, project: project
             ),
             timeout: 60
         )
@@ -269,11 +271,12 @@ struct WalnutAPI {
         let taskId: String?
         let mode: String?
         let model: String?
+        var project: String? = nil
     }
 
     static func createSessionBody(
         cwd: String, host: String?, message: String,
-        taskId: String?, mode: String?, model: String?
+        taskId: String?, mode: String?, model: String?, project: String? = nil
     ) -> CreateSessionBody {
         CreateSessionBody(
             cwd: cwd,
@@ -285,7 +288,11 @@ struct WalnutAPI {
             mode: mode,
             // "default" is the catalog's own no-op row; the server already treats
             // it as absent, so don't spend a wire field on it.
-            model: (model?.isEmpty ?? true) || model == "default" ? nil : model
+            model: (model?.isEmpty ?? true) || model == "default" ? nil : model,
+            // "" is the Inbox, which absent already means; a task-linked launch keeps
+            // its task's project, so the field would only be noise there.
+            project: taskId != nil || (project?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+                ? nil : project
         )
     }
 

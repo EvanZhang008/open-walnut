@@ -398,70 +398,86 @@ final class CreateWithTierTests: XCTestCase {
         _ = try await work.value
     }
 
-    // MARK: - The board's own quick add (R30)
+    // MARK: - Save as todo (the draft's other exit)
 
-    /// The board grew the reference screen's top-level "add a task" row, and on THIS surface
-    /// an unpinned task is an invisible one: the board shows pinned work only, so a row
-    /// created with `.unspecified` would be filed correctly and then vanish from the screen
-    /// that created it. That is the "I made it and can't find it" defect the board has already
-    /// shipped once, which is why the seed is computed rather than empty.
-    func testTheBoardQuickAddAlwaysPinsSomething() {
-        let seed = TasksView.boardQuickAddSeed(scope: nil)
-        XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId),
-            "a board create with the rail on All still has to land in a visible band")
-        XCTAssertEqual(seed.project, "", "All is not a project, so there is none to inherit")
-        XCTAssertTrue(seed.pin.namesTier)
-        XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId)
-    }
-
-    /// With a TIER scoped on the rail the row files into THAT tier, so the task appears
-    /// where the user was looking — and it does so under BOTH groupings, which is the half
-    /// that used to be wrong.
-    ///
-    /// It used to read the tier off the selected BAND's `createSeed`. That agreed with the
-    /// tier band's own `+` under `Custom order` and silently disagreed under `By project`,
-    /// where the selected band is a `proj:` band that names a project and no tier: a create
-    /// made while scoped to Focus landed in the default tier instead. Reading the SCOPE is
-    /// what makes the two groupings answer the same.
-    func testTheBoardQuickAddFollowsTheScopedTierUnderBothGroupings() {
-        let tasks = ["t1", "t2"].map(makePinnedTask)
-        for grouping in BoardGrouping.allCases {
-            let assembly = BoardModel.assemble(
-                tasks: tasks,
-                sessions: [makeSession(id: "s1", taskId: "t1", tier: "focus")],
-                tierOf: ["t1": "focus", "t2": "backlog"],
-                tierOrder: ["focus": ["t1"], "backlog": ["t2"]],
-                customTiers: [], grouping: grouping, scope: "focus"
-            )
-            let seed = TasksView.boardQuickAddSeed(scope: assembly.scope)
-            XCTAssertEqual(seed.pin, .tier("focus"), "\(grouping.rawValue)")
-            XCTAssertEqual(seed.pin.wireFocusTier, "focus", "\(grouping.rawValue)")
-        }
-        // And under `Custom order` it still agrees with the band's own `+`, which is the
-        // property the old shape got right and this must not lose.
-        let bands = BoardModel.bands(
-            tasks: tasks, sessions: [], tierOf: ["t1": "focus", "t2": "backlog"],
-            tierOrder: ["focus": ["t1"], "backlog": ["t2"]], customTiers: []
+    /// The board's add rows are gone; the one `+` opens the draft, whose "Save as todo"
+    /// makes the task. On this surface an unpinned task is an invisible one (the board shows
+    /// pinned work only), so the todo is pinned, into the tier a phone draft's session task
+    /// is born in, and that tier has to be one the create endpoint accepts.
+    func testASavedTodoIsPinnedIntoAResolvableTier() {
+        let pin = TaskPinChoice.tier(NewSessionChatView.todoTier)
+        XCTAssertTrue(pin.namesTier)
+        XCTAssertEqual(pin.wireFocusTier, "focus")
+        XCTAssertTrue(
+            pin.isResolvable(builtinIds: TasksStore.builtinTiers.map(\.id), customTierIds: []),
+            "\(pin) would 400 on every Save as todo"
         )
-        for band in bands {
-            XCTAssertEqual(
-                TasksView.boardQuickAddSeed(scope: band.bandId), band.createSeed,
-                "the top row and \(band.bandId)'s own + must file into the same place"
-            )
-        }
     }
 
-    /// A PROJECT or FOLDER band id can no longer be a scope at all — the rail is always the
-    /// tier rail — and the board only ever hands over a scope it HONOURED
-    /// (`BoardAssembly.scope`, nil for anything the rail has no chip for). Both halves are
-    /// pinned here because the failure they prevent is the same one twice: a band id
-    /// reaching the wire as `focus_tier`, which the create endpoint 400s on by design.
-    ///
-    /// This replaces `testAProjectBandLendsItsProjectAndStillPins`, whose whole premise
-    /// (selecting a `proj:` chip, then inheriting its project into the quick add) was the
-    /// shape the user rejected: the rail listed projects and folders, so the top-level
-    /// create had to guess a tier for a selection that named none.
-    func testABandIdIsNeverHonouredAsAScopeAndNeverReachesTheWire() {
+    /// The web draft's split: the first line is the title, the rest the description.
+    func testATodoTakesItsTitleFromTheFirstLine() {
+        XCTAssertEqual(NewSessionChatView.todoParts("Buy milk").title, "Buy milk")
+        XCTAssertNil(NewSessionChatView.todoParts("Buy milk").description)
+        let parts = NewSessionChatView.todoParts("  Fix the login page \nIt loops on Safari.\n\nRepro: open /login  ")
+        XCTAssertEqual(parts.title, "Fix the login page")
+        XCTAssertEqual(parts.description, "It loops on Safari.\n\nRepro: open /login")
+        // Trailing blank lines are not a description.
+        XCTAssertNil(NewSessionChatView.todoParts("Call the bank\n\n  \n").description)
+    }
+
+    /// Save as todo makes ONE task in the picked project, pinned to Focus, and nothing
+    /// else. `createTodo` is handed the task store alone, so a session launch cannot ride
+    /// along; what this pins is that its one write is the create.
+    func testASavedTodoIsOneTaskInThePickedProject() async throws {
+        let mock = MockTaskTransport()
+        let store = TasksStore(transport: mock)
+        let created = try await NewSessionChatView.createTodo(
+            from: "Buy a garden hose\nThe 50 ft one", project: "Home", in: store
+        )
+        XCTAssertNotNil(created)
+        // The store's background reconcile may read; nothing else may be written.
+        let reads: Set<String> = ["tasks", "taskDetail", "focusTasks", "focusTiers"]
+        XCTAssertEqual(mock.calls.map(\.name).filter { !reads.contains($0) }, ["createTask"])
+        let call = try XCTUnwrap(mock.calls.first { $0.name == "createTask" })
+        XCTAssertEqual(call.args[0], "Buy a garden hose", "the first line is the title")
+        XCTAssertEqual(call.args[1], "Home")
+        XCTAssertEqual(call.args[5], "focus")
+        XCTAssertEqual(call.args[6], "The 50 ft one", "the rest is the description")
+    }
+
+    /// The Inbox ("" on the pill) sends no project at all, which is what the server
+    /// reads as the Inbox.
+    func testATodoSavedToTheInboxSendsNoProject() async throws {
+        let mock = MockTaskTransport()
+        let store = TasksStore(transport: mock)
+        _ = try await NewSessionChatView.createTodo(from: "Return the books", project: "", in: store)
+        XCTAssertEqual(mock.calls.first { $0.name == "createTask" }?.args[1], "-")
+    }
+
+    /// A create that fails gives the words back: the composer clears on tap (send's
+    /// no-loss rule), and the refusal puts the text back where the user can retry it.
+    func testAFailedTodoPutsTheWordsBackInTheComposer() async {
+        struct Down: Error {}
+        let mock = MockTaskTransport()
+        mock.errorsByEndpoint["createTask"] = Down()
+        let store = TasksStore(transport: mock)
+        let key = "test:save-as-todo-refused"
+        ComposerDrafts.shared.clear(key)
+        let outcome = await ComposerBar.deliver(
+            text: "Call the plumber about the dishwasher", images: [], draftKey: key,
+            drafts: ComposerDrafts.shared
+        ) { words, _ in
+            (try? await NewSessionChatView.createTodo(from: words, project: "Home", in: store)) != nil
+        }
+        XCTAssertEqual(outcome, .returnedToDraft)
+        XCTAssertEqual(ComposerDrafts.shared.draft(key), "Call the plumber about the dishwasher")
+        ComposerDrafts.shared.clear(key)
+    }
+
+    /// A PROJECT or FOLDER band id can never be a scope — the rail is always the tier rail —
+    /// and the board only ever reports a scope it HONOURED (`BoardAssembly.scope`, nil for
+    /// anything the rail has no chip for).
+    func testABandIdIsNeverHonouredAsAScope() {
         let tasks = ["t1", "t2"].map(makePinnedTask)
         for grouping in BoardGrouping.allCases {
             for requested in ["proj:Marina", "folder:Home", "ct_gone99", ""] {
@@ -473,23 +489,7 @@ final class CreateWithTierTests: XCTestCase {
                 )
                 XCTAssertNil(assembly.scope,
                     "\(grouping.rawValue): \(requested) is not a tier the rail offers")
-                let seed = TasksView.boardQuickAddSeed(scope: assembly.scope)
-                XCTAssertEqual(seed.pin, .tier(BoardModel.defaultTierId), "\(requested)")
-                XCTAssertEqual(seed.project, "", "\(requested)")
-                XCTAssertEqual(seed.pin.wireFocusTier, BoardModel.defaultTierId,
-                    "a band id must never reach the wire as a tier")
             }
         }
-    }
-
-    /// Whatever the seed says, the create endpoint has to accept it — the fallback tier is a
-    /// wire tier and not a label.
-    func testTheBoardQuickAddSeedIsAlwaysResolvable() {
-        let builtins = TasksStore.builtinTiers.map(\.id)
-        let seed = TasksView.boardQuickAddSeed(scope: nil)
-        XCTAssertTrue(
-            seed.pin.isResolvable(builtinIds: builtins, customTierIds: []),
-            "\(seed.pin) would 400 on every board quick add"
-        )
     }
 }

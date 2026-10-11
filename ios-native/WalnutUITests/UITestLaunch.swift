@@ -54,6 +54,19 @@ enum UITestLaunch {
         return app
     }
 
+    /// The paired server as a test hands it to the app, with a collapsed scheme put back.
+    ///
+    /// The `.xctestrun` held `https://demo.walnut.invalid`, yet the app paired by a test
+    /// sent every request host-less: its request log showed `demo.walnut.invalid` as the
+    /// first PATH segment, and the board sat offline (2026-10-09). The runner had been
+    /// handed `https:/demo.walnut.invalid`, a URL with no host, which pairs nothing.
+    static func pairedServer(_ raw: String) -> String {
+        for scheme in ["https:/", "http:/"] where raw.hasPrefix(scheme) && !raw.hasPrefix(scheme + "/") {
+            return scheme + "/" + raw.dropFirst(scheme.count)
+        }
+        return raw
+    }
+
     /// Kill the app under test. Here so that no test needs to construct a bare
     /// `XCUIApplication()` of its own — that constructor is the one the ratchet forbids,
     /// because an app you can construct is an app you can launch unpinned.

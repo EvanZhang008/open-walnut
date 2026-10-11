@@ -2049,54 +2049,6 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
-    // MARK: - A row created at a band's foot STAYS at that band's foot
-
-    /// The locate-me handler exists to answer "I created it, where did it go?" by
-    /// switching to a filter that shows the new row. On the board that help is the
-    /// opposite of helpful: the row was created at the foot of the band the user is
-    /// looking at, so relocating them throws away the thing the create ring
-    /// promises. Caught in the real UI — typing into the Backlog ring created the
-    /// task and then jumped the screen to All Open.
-    func testCreatingFromABandsFootDoesNotRelocateTheUser() {
-        XCTAssertFalse(
-            TasksView.shouldRelocateToNewTask(
-                inlineAddActive: false, openAddGroup: nil, openCreateBand: "backlog"
-            ),
-            "the row is at the foot of the band the user is looking at — stay there"
-        )
-        // Same under project grouping, where the open band is `proj:<name>`: the
-        // rule reads PRESENCE, never the id's shape, so a project ring behaves
-        // exactly like a tier ring.
-        XCTAssertFalse(
-            TasksView.shouldRelocateToNewTask(
-                inlineAddActive: false, openAddGroup: nil,
-                openCreateBand: BoardModel.projectBandPrefix + "marina"
-            ),
-            "a project band's ring anchors the user just as a tier band's does"
-        )
-    }
-
-    func testEveryOpenAddRowSuppressesTheRelocation() {
-        XCTAssertFalse(TasksView.shouldRelocateToNewTask(
-            inlineAddActive: true, openAddGroup: nil, openCreateBand: nil))
-        XCTAssertFalse(TasksView.shouldRelocateToNewTask(
-            inlineAddActive: false, openAddGroup: .tier("focus"), openCreateBand: nil))
-        XCTAssertFalse(TasksView.shouldRelocateToNewTask(
-            inlineAddActive: false, openAddGroup: nil, openCreateBand: "focus"))
-        // The quick-add row at the top keeps its field focused for the next
-        // entry; scrolling to the new row put the field under the pinned chip
-        // bar while the user kept typing (App Store gate, 2026-10-05).
-        XCTAssertFalse(TasksView.shouldRelocateToNewTask(
-            inlineAddActive: false, openAddGroup: nil, openCreateBand: nil, createdInPlace: true))
-    }
-
-    /// With nothing open the help is still wanted: a task created from the toolbar
-    /// `+` has no on-screen home, so the list should go find it.
-    func testWithNoAddRowOpenTheRelocationStillHappens() {
-        XCTAssertTrue(TasksView.shouldRelocateToNewTask(
-            inlineAddActive: false, openAddGroup: nil, openCreateBand: nil))
-    }
-
     // MARK: - Automation-safe band ids
 
     /// Every band id becomes an accessibility identifier, and automation matches
@@ -2160,15 +2112,14 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// The ids the board actually SHIPS for a CJK project, asserted at the same
-    /// place they are built rather than on `slug` alone: the heading, the count, the
-    /// create ring and the band chip all interpolate it.
+    /// place they are built rather than on `slug` alone: the heading, the count and the
+    /// band chip all interpolate it.
     func testEveryBandIdentifierOfACJKProjectIsAsciiSafe() {
         let bandId = BoardModel.projectBandPrefix + "工作"
         let slug = TaskBoardList.slug(bandId)
         let safe = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]+$")
         for id in ["board.heading.\(slug)",
-                   "board.count.\(slug)", "board.create.\(slug)",
-                   "board.createRow.\(slug)", TaskBoardList.chipId(bandId)] {
+                   "board.count.\(slug)", TaskBoardList.chipId(bandId)] {
             XCTAssertNotNil(
                 safe.firstMatch(in: id, range: NSRange(id.startIndex..., in: id)),
                 "\(id) is not regex-safe"
@@ -2300,106 +2251,6 @@ final class TaskBoardModelTests: XCTestCase {
         let b = BoardModel.projectBandPrefix + "walnut.ios"
         XCTAssertEqual(TaskBoardList.slug(a), TaskBoardList.slug(b))
         XCTAssertNotEqual(TaskBoardList.anchorId(a), TaskBoardList.anchorId(b))
-    }
-}
-
-/// The Tasks tab's TWO header entries, and the fallback for a filter that no longer
-/// has one.
-///
-/// The header was six smart-list cards over `TaskFilter.allCases`, then three chips
-/// (Pin | All Tasks | Calendar), and it is now Pin | Calendar. The enum cases all
-/// stayed (stored preferences, `identifierKey` suffixes in shipped ids, the store's
-/// own slices), so the entry set and the filter set are deliberately different sizes
-/// and this is where that difference is pinned.
-///
-/// # CONTRACT CHANGE this round: "All Tasks" is not a destination any more
-///
-/// "已经有 pin 了,为什么还会有 all task". A flat list of every open task was a SECOND
-/// answer to "what am I working on", and the two disagreed by three thousand rows.
-/// `.allOpen` therefore loses its entry (and with it `tasks.nav.all`, the one shipped
-/// identifier this round retires) and joins Today / In Progress / Done as reachable
-/// STATE with no chip: `resolve` now catches it, so a phone that persisted the old
-/// pill lands on the board instead of on a chipless header.
-final class TasksNavEntryTests: XCTestCase {
-
-    func testThereAreExactlyTwoEntriesInReadingOrder() {
-        XCTAssertEqual(TasksNavEntry.allCases.map(\.title), ["Pin", "Calendar"])
-        XCTAssertEqual(TasksNavEntry.allCases.map(\.filter), [.sessions, .calendar])
-    }
-
-    /// The retired pill, asserted as an ABSENCE rather than left to the count above:
-    /// this is the case that fails if someone adds the destination back without
-    /// re-deciding the question the user asked.
-    func testAllTasksIsNoLongerAHeaderDestination() {
-        XCTAssertFalse(TasksNavEntry.allCases.map(\.filter).contains(.allOpen))
-        XCTAssertNil(TasksNavEntry.entry(for: .allOpen),
-            "the board IS the working set — a flat all-tasks list is a second answer to it")
-        XCTAssertEqual(TasksNavEntry.resolve(.allOpen), TasksNavEntry.pin.filter,
-            "a persisted `allOpen` must land on the board, not on a chipless header")
-        XCTAssertFalse(TasksNavEntry.allCases.map(\.identifier).contains("tasks.nav.all"),
-            "tasks.nav.all is retired, not repointed: an id that resolves to a different destination keeps flows passing while doing something else")
-    }
-
-    /// `Pin` IS the board, and the board is `TaskFilter.sessions` — the case keeps
-    /// its old name so every stored preference and `tasks.compactChip.sessions`-era
-    /// id still resolves.
-    func testPinIsTheBoardFilter() {
-        XCTAssertEqual(TasksNavEntry.pin.filter, TaskFilter.sessions)
-        XCTAssertEqual(TasksNavEntry.entry(for: .sessions), TasksNavEntry.pin)
-    }
-
-    func testEveryFilterWithAnEntryResolvesToItself() {
-        for entry in TasksNavEntry.allCases {
-            XCTAssertEqual(TasksNavEntry.resolve(entry.filter), entry.filter)
-            XCTAssertEqual(TasksNavEntry.entry(for: entry.filter), entry)
-        }
-    }
-
-    /// The fallback. A persisted filter the header can no longer show would leave
-    /// the nav row with nothing selected over a list the user cannot switch away
-    /// from — a soft dead end. Today / In Progress / Done have always been those, and
-    /// `.allOpen` joins them this round.
-    func testAFilterWithNoEntryFallsBackToPin() {
-        for orphan in [TaskFilter.today, .inProgress, .done, .allOpen] {
-            XCTAssertNil(TasksNavEntry.entry(for: orphan), "\(orphan) should have no chip")
-            XCTAssertEqual(TasksNavEntry.resolve(orphan), TasksNavEntry.pin.filter,
-                "\(orphan) must fall back to Pin, not to an unselected header")
-        }
-    }
-
-    /// Every `TaskFilter` either has an entry or resolves to one, so no reachable
-    /// state renders a header with nothing selected. This is the assertion that
-    /// catches a future case being added without a decision about the header.
-    func testEveryFilterIsEitherAnEntryOrResolvesToOne() {
-        for filter in TaskFilter.allCases {
-            XCTAssertNotNil(TasksNavEntry.entry(for: TasksNavEntry.resolve(filter)),
-                "\(filter) resolves to a filter with no header entry")
-        }
-    }
-
-    /// The ids automation taps. ASCII by construction, and spelled out because a
-    /// flow matches them as literal regexes.
-    func testNavEntryIdentifiers() {
-        XCTAssertEqual(TasksNavEntry.pin.identifier, "tasks.nav.pin")
-        XCTAssertEqual(TasksNavEntry.calendar.identifier, "tasks.nav.calendar")
-        let safe = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]+$")
-        for entry in TasksNavEntry.allCases {
-            let id = entry.identifier
-            XCTAssertNotNil(
-                safe.firstMatch(in: id, range: NSRange(id.startIndex..., in: id)), id
-            )
-        }
-    }
-
-    /// The compact bar keys its chips off `TaskFilter.identifierKey`, so those ids
-    /// have to survive the header rebuild verbatim. The `.allOpen` KEY is untouched
-    /// (`TaskFilter` keeps all six cases — they are the store's own slices); what went
-    /// away is the entry that put a chip on screen for it.
-    func testCompactChipIdentifiersAreUnchangedForTheRemainingEntries() {
-        XCTAssertEqual(TasksNavEntry.pin.filter.identifierKey, "sessions")
-        XCTAssertEqual(TasksNavEntry.calendar.filter.identifierKey, "calendarview")
-        XCTAssertEqual(TaskFilter.allOpen.identifierKey, "all",
-            "the filter's own key is a data concern and must not move with the pill")
     }
 }
 

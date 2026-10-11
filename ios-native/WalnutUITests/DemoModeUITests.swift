@@ -41,6 +41,12 @@ final class DemoModeUITests: XCTestCase {
     }
 
     private func tab(_ app: XCUIApplication, _ name: String) {
+        // An open Tasks drawer hides the tab bar (as the Chat drawer does): close it first.
+        let scrim = element(app, "tasks.drawer.scrim")
+        if scrim.exists {
+            scrim.tap()
+            _ = scrim.waitForNonExistence(timeout: 5)
+        }
         let button = app.tabBars.buttons[name]
         XCTAssertTrue(button.waitForExistence(timeout: 20), "no \(name) tab")
         button.tap()
@@ -82,6 +88,36 @@ final class DemoModeUITests: XCTestCase {
         return target.exists && (!bar.exists || target.frame.maxY <= bar.frame.minY - 4)
     }
 
+    /// The Tasks tab's page is a session and the board is its drawer: open the drawer
+    /// unless it already is (a fresh demo has no session to reopen, so it starts open).
+    /// Open is told by the drawer's scrim: the shut drawer stays mounted, so the board's
+    /// list is in the tree either way.
+    private func openBoard(_ app: XCUIApplication) {
+        tab(app, "Tasks")
+        let scrim = element(app, "tasks.drawer.scrim")
+        if scrim.waitForExistence(timeout: 3) { return }
+        let menu = app.buttons["tasks.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "no board button on the Tasks page")
+        menu.tap()
+        XCTAssertTrue(scrim.waitForExistence(timeout: 10), "the board drawer did not open")
+    }
+
+    /// Scroll the board (in the Tasks drawer) down until `target` sits well inside the
+    /// window, in short drags, judged by the row's frame. A full `swipeUp` flings, and in
+    /// the drawer's narrower column, where rows wrap to two lines, a fling could carry
+    /// the row past the window between two looks.
+    private func scrollBoard(to target: XCUIElement, in app: XCUIApplication) {
+        let window = app.windows.firstMatch
+        for _ in 0..<12 {
+            let frame = window.frame
+            if target.exists, target.frame.minY > frame.minY + 140, target.frame.maxY < frame.maxY - 140 {
+                return
+            }
+            let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.7))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)))
+        }
+    }
+
     private func leaveDemo(_ app: XCUIApplication) {
         tab(app, "Settings")
         let leave = app.buttons["settings.leaveDemo"]
@@ -97,6 +133,76 @@ final class DemoModeUITests: XCTestCase {
     /// (`-walnut.demoLatencyScale`, read by Debug builds only), so the first look
     /// happens while the request is still in flight.
     @MainActor
+    /// A session put on the page from a search hit, and one started by the draft's send,
+    /// comes up with the tab bar. Both shut the drawer while something else is dismissed
+    /// (the search, the sheet), and that dismissal swallowed the bar's return (UI QA,
+    /// 2026-10-11). After a session from Recently opened, the drawer reopens on the board.
+    func testASessionFromSearchOrTheDraftKeepsTheTabBar() throws {
+        let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, Self.demoURL])
+        let tryDemo = app.buttons["setup.tryDemo"]
+        if !tryDemo.waitForExistence(timeout: 15) {
+            leaveDemo(app)
+        }
+        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30), "no Try the demo on the pairing screen")
+        tryDemo.tap()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "the demo never opened")
+        openBoard(app)
+
+        func assertTabBar(_ moment: String) {
+            let settings = app.tabBars.buttons["Settings"]
+            let shown = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: settings)
+            XCTAssertEqual(XCTWaiter().wait(for: [shown], timeout: 5), .completed, "\(moment): no tab bar")
+        }
+        func reopenDrawer() {
+            // The search ends, and Recently opened is left, once the drawer has shut.
+            sleep(1)
+            app.buttons["tasks.menu"].tap()
+            XCTAssertTrue(element(app, "tasks.drawer.scrim").waitForExistence(timeout: 5), "the drawer did not open")
+        }
+
+        // A search hit.
+        let search = app.searchFields["Search tasks & sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 30), "no search on the board")
+        search.tap()
+        search.typeText("pricing")
+        let hit = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "Redesign the pricing page")).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 20), "no hit for pricing")
+        hit.tap()
+        XCTAssertTrue(app.buttons["session.menu"].waitForExistence(timeout: 20), "the hit opened no session")
+        assertTabBar("a session from a search hit")
+
+        // The draft's send.
+        reopenDrawer()
+        app.buttons["sessions.new"].tap()
+        let pill = element(app, "newSessionChat.projectPill")
+        XCTAssertTrue(pill.waitForExistence(timeout: 15), "the draft did not open")
+        element(app, "newSessionChat.quickDir").tap()
+        let composer = element(app, "chat.composer")
+        composer.tap()
+        composer.typeText("Plan the garden layout")
+        element(app, "chat.send").tap()
+        XCTAssertTrue(pill.waitForNonExistence(timeout: 30), "the draft stayed up after send")
+        let title = app.buttons["session.title"]
+        let started = expectation(
+            for: NSPredicate(format: "label CONTAINS[c] %@", "garden"), evaluatedWith: title)
+        XCTAssertEqual(XCTWaiter().wait(for: [started], timeout: 20), .completed, "the new session is not on the page")
+        assertTabBar("a session started from the draft")
+
+        // Recently opened, then the drawer again: the board, not the history page.
+        reopenDrawer()
+        app.buttons["tasks.recents"].tap()
+        let firstRecent = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'tasks.recents.row.'")).firstMatch
+        XCTAssertTrue(firstRecent.waitForExistence(timeout: 10), "Recently opened is empty")
+        firstRecent.tap()
+        XCTAssertTrue(element(app, "tasks.drawer.scrim").waitForNonExistence(timeout: 10), "the drawer stayed open")
+        assertTabBar("a session from Recently opened")
+        reopenDrawer()
+        XCTAssertTrue(search.waitForExistence(timeout: 5), "the drawer reopened on Recently opened, not the board")
+        XCTAssertFalse(element(app, "tasks.recents.page").exists, "Recently opened is still on top")
+    }
+
     func testATierMoveLandsWhereTheServerPutsIt() throws {
         let app = UITestLaunch.launch([
             UITestLaunch.serverURLArgument, Self.demoURL, "-walnut.demoLatencyScale", "40",
@@ -108,7 +214,7 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertTrue(tryDemo.waitForExistence(timeout: 30), "no Try the demo on the pairing screen")
         tryDemo.tap()
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "the demo never opened")
-        tab(app, "Tasks")
+        openBoard(app)
 
         // "Localize the settings screen" is the first Satellite row. It was pinned
         // after "Write release notes for 2.4" and before "Get three quotes for the
@@ -120,8 +226,14 @@ final class DemoModeUITests: XCTestCase {
         let above = row("Write release notes for 2.4")
         let below = row("Get three quotes")
         XCTAssertTrue(text(app, containing: "shared album").waitForExistence(timeout: 60), "the sample board is missing")
-        scrollTo(mover, in: app)
-        XCTAssertTrue(mover.exists, "no Localize the settings screen on the board")
+        // The tier split is its own request and can land after the rows: until it does,
+        // every pinned row reads as Satellite (gate run 16 measured the whole board so).
+        XCTAssertTrue(
+            app.descendants(matching: .any)["board.chip.focus"].waitForExistence(timeout: 60),
+            "the board's tiers never arrived"
+        )
+        scrollBoard(to: mover, in: app)
+        XCTAssertTrue(mover.exists, "no Localize the settings screen on the board (frame \(mover.frame))")
         XCTAssertTrue(above.exists && below.exists, "the Focus tail is not beside the first Satellite row")
         XCTAssertGreaterThan(mover.frame.minY, below.frame.minY, "it starts in Satellite, below Focus")
 
@@ -145,7 +257,7 @@ final class DemoModeUITests: XCTestCase {
         // Pull to refresh, then look again.
         for _ in 0..<10 { app.swipeDown() }
         sleep(8)
-        scrollTo(mover, in: app)
+        scrollBoard(to: mover, in: app)
         assertBetween("after a refetch")
 
         leaveDemo(app)
@@ -220,13 +332,13 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertTrue(text(app, containing: "Pebble").waitForExistence(timeout: 15),
                       "the sample notes are missing")
 
-        // Tasks: the board, then a new task.
-        tab(app, "Tasks")
+        // Tasks: the board (the tab's drawer), then a new todo from its one `+`.
+        openBoard(app)
         XCTAssertTrue(text(app, containing: "shared album").waitForExistence(timeout: 15),
                       "the sample board is missing")
         // The board's status badge says Demo, the same word as Settings.
         XCTAssertFalse(app.staticTexts["Live"].exists, "the board says Live in the demo")
-        // The toolbar + opens New Session directly: no menu in between, and with
+        // The toolbar + opens the create page directly: no menu in between, and with
         // the demo's quick folders up the page names the folder by its chip and
         // pill, never by a full path.
         let plus = element(app, "sessions.new")
@@ -234,64 +346,51 @@ final class DemoModeUITests: XCTestCase {
         plus.tap()
         XCTAssertTrue(element(app, "newSessionChat.pathPill").waitForExistence(timeout: 10),
                       "+ did not land in New Session")
+        XCTAssertTrue(element(app, "newSessionChat.projectPill").exists, "no project pill on the create page")
         XCTAssertFalse(app.buttons["sessions.create"].exists, "+ opened a menu instead of the page")
         XCTAssertTrue(element(app, "newSessionChat.quickFolders").waitForExistence(timeout: 10),
                       "the quick-folder row is missing")
         XCTAssertFalse(element(app, "newSessionChat.summary").exists,
                        "the full path is spelled out while a quick-folder chip is lit for it")
-        app.buttons["Cancel"].tap()
-        XCTAssertTrue(element(app, "newSessionChat.pathPill").waitForNonExistence(timeout: 10))
 
-        // The full New Task sheet opens from the quick-add row's expand icon (the
-        // toolbar + is New Session alone since 2026-10-03), seeded with the sentence.
-        let quickAdd = element(app, "tasks.quickAdd.field")
-        XCTAssertTrue(quickAdd.waitForExistence(timeout: 10), "no quick-add row on the board")
-        quickAdd.tap()
-        // Return adds the task and leaves the field where it was, in view and
-        // below the pinned chip bar, for the next entry (App Store gate,
-        // 2026-10-05: the list scrolled to the new row and the field came back
-        // under the bar while the user kept typing).
-        sleep(1)
-        let fieldBefore = quickAdd.frame
-        quickAdd.typeText("Buy oat milk\n")
-        sleep(2)
-        quickAdd.typeText("Order new")
-        XCTAssertTrue(quickAdd.isHittable, "the quick-add field left the screen after Return")
-        XCTAssertEqual(quickAdd.frame.minY, fieldBefore.minY, accuracy: 1, "the quick-add field moved after Return")
-        quickAdd.typeText(" garden hose")
-        let expand = app.buttons["tasks.quickAdd.expand"]
-        XCTAssertTrue(expand.waitForExistence(timeout: 10), "the quick-add row has no expand icon once text is typed")
-        expand.tap()
-        let title = element(app, "newTask.title")
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        XCTAssertEqual(title.value as? String, "Order new garden hose",
-                       "the sheet did not inherit the quick-add sentence")
-        let add = app.buttons["newTask.add"]
-        XCTAssertTrue(add.waitForExistence(timeout: 5))
-        add.tap()
-        // A new task lands in Satellite, below the Focus rows: scroll to it.
+        // The text's other exit: Save as todo, beside send. It makes a task and starts
+        // nothing, and the board comes back with the new row on it.
+        // It is on the page from the first look, named, and waits for words.
+        let saveTodo = app.buttons["newSessionChat.saveAsTodo"]
+        XCTAssertTrue(saveTodo.waitForExistence(timeout: 10), "no Save as todo on the create page")
+        XCTAssertEqual(saveTodo.label, "Save as todo")
+        XCTAssertFalse(saveTodo.isEnabled, "Save as todo is live with nothing to save")
+        let draftComposer = element(app, "chat.composer")
+        XCTAssertTrue(draftComposer.waitForExistence(timeout: 10), "no composer on the create page")
+        draftComposer.tap()
+        draftComposer.typeText("Order new garden hose")
+        XCTAssertTrue(saveTodo.isEnabled, "Save as todo stayed dimmed with words typed")
+        saveTodo.tap()
+        XCTAssertTrue(element(app, "newSessionChat.pathPill").waitForNonExistence(timeout: 10),
+                      "the create page did not close")
         let created = text(app, containing: "Order new garden hose")
-        XCTAssertTrue(add.waitForNonExistence(timeout: 10), "the New Task sheet did not close")
         for _ in 0..<6 where !created.waitForExistence(timeout: 2) {
             app.swipeUp()
         }
-        XCTAssertTrue(created.waitForExistence(timeout: 10), "the new task did not appear on the board")
+        XCTAssertTrue(created.waitForExistence(timeout: 10), "the new todo did not appear on the board")
 
-        // It lands at the foot of Satellite, under the band's last sample row, and
-        // a refetch leaves it there. The demo used to put a new task at the head
-        // of its list, so the next refresh moved it to the top of Satellite and
-        // the reader's next checkbox tap landed on a different task.
+        // It lands at the foot of Focus (where a phone draft's task is born), under the
+        // band's last sample row and above the first Satellite one, and a refetch leaves
+        // it there.
         let newRow = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Order new garden hose")).firstMatch
-        let lastSample = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Call the dentist")).firstMatch
+        let lastFocus = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Get three quotes")).firstMatch
+        let firstSatellite = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Localize the settings screen")).firstMatch
         scrollTo(newRow, in: app)
-        XCTAssertTrue(lastSample.waitForExistence(timeout: 5), "the last Satellite sample row is not beside the new one")
-        XCTAssertGreaterThan(newRow.frame.minY, lastSample.frame.minY, "a new task lands at the foot of Satellite")
+        XCTAssertTrue(lastFocus.waitForExistence(timeout: 5), "the last Focus sample row is not beside the new one")
+        XCTAssertGreaterThan(newRow.frame.minY, lastFocus.frame.minY, "a new todo lands at the foot of Focus")
+        XCTAssertTrue(firstSatellite.exists, "the first Satellite sample row is not beside the new one")
+        XCTAssertLessThan(newRow.frame.minY, firstSatellite.frame.minY, "a new todo lands in Focus, above Satellite")
         // Pull to refresh: the same full refetch the board's poll runs.
         for _ in 0..<10 { app.swipeDown() }
         sleep(2)
         scrollTo(newRow, in: app)
-        XCTAssertTrue(newRow.isHittable && lastSample.exists, "after a refetch the new task is not where it was")
-        XCTAssertGreaterThan(newRow.frame.minY, lastSample.frame.minY, "a refetch moved the new task")
+        XCTAssertTrue(newRow.isHittable && lastFocus.exists, "after a refetch the new todo is not where it was")
+        XCTAssertGreaterThan(newRow.frame.minY, lastFocus.frame.minY, "a refetch moved the new todo")
 
         // Settings: nothing went to another host, then leave.
         tab(app, "Settings")
@@ -435,8 +534,9 @@ final class DemoModeUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(waitForValue(unread, String(beforeOpen - 1)), "opening the letter did not leave it read")
 
-        // Tasks: search finds the finished crash fixes the list does not carry.
-        tab(app, "Tasks")
+        // Tasks: search finds the finished crash fixes the list does not carry. The
+        // board, search included, is the Tasks tab's drawer.
+        openBoard(app)
         XCTAssertTrue(text(app, containing: "shared album").waitForExistence(timeout: 30), "the sample board is missing")
         let search = app.searchFields.firstMatch
         if !search.waitForExistence(timeout: 5) { app.swipeDown() }
@@ -456,33 +556,39 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertTrue(clearOfTheTabBar(fold, in: app),
                       "the fold stays under the tab bar (fold \(fold.frame), bar \(app.tabBars.firstMatch.frame))")
         fold.tap()
+        XCTAssertTrue(waitForValue(fold, "Expanded"), "the Completed fold did not open")
+        // The opened rows can sit below the screen's edge, where a lazy List has not
+        // drawn them yet (gate run 12: the fold at y 863 after its tap).
         let folded = element(app, "tasks.row.t-widget-crash")
-        XCTAssertTrue(folded.waitForExistence(timeout: 10), "the Completed fold did not open")
         scrollClearOfTheTabBar(folded, in: app)
+        XCTAssertTrue(folded.waitForExistence(timeout: 10), "the Completed fold holds no widget crash fix")
         XCTAssertTrue(clearOfTheTabBar(folded, in: app),
                       "the finished task stays under the tab bar (row \(folded.frame), bar \(app.tabBars.firstMatch.frame))")
+        // A task tap opens its session; this one never had one, so its draft opens,
+        // linked to it.
         folded.tap()
-        let opened = element(app, "task.title")
-        XCTAssertTrue(opened.waitForExistence(timeout: 15), "the finished task did not open")
-        XCTAssertTrue(opened.label.contains("home screen widget"), "the page opened \(opened.label)")
-        let done = app.buttons["Done"].firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 10), "no Done on the task page")
-        done.tap()
+        let linked = element(app, "newSessionChat.linkedTask")
+        XCTAssertTrue(linked.waitForExistence(timeout: 15), "the finished task did not open its draft")
+        XCTAssertTrue(linked.label.contains("home screen widget"), "the draft is linked to \(linked.label)")
+        let cancelDraft = app.navigationBars.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancelDraft.waitForExistence(timeout: 10), "no Cancel on the draft")
+        cancelDraft.tap()
+        XCTAssertTrue(linked.waitForNonExistence(timeout: 10), "the draft did not close")
         // iOS 26 ends a search with Close (an xmark) where earlier systems said Cancel;
         // the Recently opened button comes back once the search has ended (run 4).
         let close = app.navigationBars.buttons["Close"].firstMatch
         let cancel = app.buttons["Cancel"].firstMatch
         if close.waitForExistence(timeout: 5) { close.tap() } else if cancel.exists { cancel.tap() }
 
-        // Recently opened: the task just opened on top, then the sample history.
+        // Recently opened, a page of the drawer: the sample history, and a row goes back
+        // to its conversation, which becomes the Tasks tab's page.
         let clock = app.buttons["tasks.recents"]
         XCTAssertTrue(clock.waitForExistence(timeout: 10), "no Recently opened button")
         clock.tap()
-        XCTAssertTrue(element(app, "tasks.recents.drawer").waitForExistence(timeout: 10), "the drawer did not open")
+        XCTAssertTrue(app.navigationBars["Recently opened"].waitForExistence(timeout: 10), "Recently opened did not open")
         let recent = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'tasks.recents.row.'"))
-        XCTAssertTrue(recent.firstMatch.waitForExistence(timeout: 10), "the drawer is empty")
-        XCTAssertEqual(recent.firstMatch.identifier, "tasks.recents.row.t-widget-crash", "the task just opened is not on top")
+        XCTAssertTrue(recent.firstMatch.waitForExistence(timeout: 10), "Recently opened is empty")
         XCTAssertGreaterThanOrEqual(recent.count, 5, "the sample history is missing")
         XCTAssertFalse(element(app, "tasks.recents.empty").exists)
         element(app, "tasks.recents.row.t-crash").tap()
@@ -491,7 +597,8 @@ final class DemoModeUITests: XCTestCase {
                       "the crash row did not go back to its conversation")
         XCTAssertTrue(text(app, containing: "force unwrap on an album").waitForExistence(timeout: 20),
                       "the conversation is not the crash fix")
-        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(element(app, "tasks.drawer.scrim").waitForNonExistence(timeout: 5),
+                      "the drawer stayed open over the conversation")
 
         // Nothing left the demo.
         tab(app, "Settings")

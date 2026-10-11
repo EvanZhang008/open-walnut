@@ -34,6 +34,10 @@ struct CalendarTabView: View {
     /// DEBUG harness override (`-calendar-day <yyyy-MM-dd>`): opens on a given
     /// day instead of today, so non-today selection states are screenshot-able.
     var forcedDay: Date? = nil
+    /// Where a tapped task goes. On the Tasks tab it is the task's SESSION (a task tap is
+    /// a session tap everywhere on that tab); nil keeps the details sheet, for the DEBUG
+    /// harness that shows the calendar on its own.
+    var onOpenTask: ((WalnutTask) -> Void)? = nil
 
     @Environment(TasksStore.self) private var tasks
     /// The demo's is a sample calendar that never touches EventKit (no prompt).
@@ -57,6 +61,10 @@ struct CalendarTabView: View {
 
     private let preference = CalendarViewPreference()
     private let filterPreference = CalendarFilterPreference()
+
+    private func openTask(_ task: WalnutTask) {
+        if let onOpenTask { onOpenTask(task) } else { selectedTask = task }
+    }
 
     var body: some View {
         // Bind derived collections ONCE per body pass (TasksView discipline):
@@ -259,7 +267,7 @@ struct CalendarTabView: View {
                 calendar: calendar,
                 taskBuckets: taskBuckets,
                 eventsByDay: filter.showsEvents ? deviceCalendar.eventsByDay : [:],
-                onTapTask: { selectedTask = $0 },
+                onTapTask: { openTask($0) },
                 onCreate: startCreate,
                 onVisibleRangeChange: warmRange
             )
@@ -271,7 +279,7 @@ struct CalendarTabView: View {
                 taskBuckets: taskBuckets,
                 spanBuckets: spanBuckets,
                 eventsFor: visibleEvents,
-                onTapTask: { selectedTask = $0 },
+                onTapTask: { openTask($0) },
                 onCreate: startCreate,
                 onVisibleRangeChange: warmRange
             )
@@ -282,7 +290,7 @@ struct CalendarTabView: View {
                 taskBuckets: taskBuckets,
                 eventsFor: visibleEvents,
                 showsDeniedHint: deviceCalendar.access == .denied,
-                onTapTask: { selectedTask = $0 },
+                onTapTask: { openTask($0) },
                 onCreate: startCreate,
                 onDrillIntoDay: { day in
                     let outcome = CalendarViewTransition.tappingMonthDay(day, calendar: calendar)

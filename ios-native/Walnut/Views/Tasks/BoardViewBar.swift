@@ -85,6 +85,23 @@ enum BoardViewBarModel {
             )
         }
     }
+
+    /// The fold-everything chip. Unlike the two above it names what a tap DOES, because it
+    /// is an action rather than a mode: there is no third state for it to be "in" between
+    /// every group open and every group folded (the user: one key folds them all).
+    static func collapse(allCollapsed: Bool) -> BoardViewChipSpec {
+        allCollapsed
+            ? BoardViewChipSpec(
+                symbol: "rectangle.expand.vertical",
+                label: "Expand",
+                hint: "Every group is folded to its heading. Tap to open them all."
+            )
+            : BoardViewChipSpec(
+                symbol: "rectangle.compress.vertical",
+                label: "Collapse",
+                hint: "Folds every group to its heading, so the board reads as a list of names."
+            )
+    }
 }
 
 extension BoardFilterChoice {
@@ -102,7 +119,8 @@ extension BoardFilterChoice {
 }
 
 /// The board's VIEW BAR: the grouping and date decisions as TWO inline toggle chips, side
-/// by side, on the bar rather than one tap inside a menu.
+/// by side, on the bar rather than one tap inside a menu, and the collapse-all chip at the
+/// trailing edge.
 ///
 /// # Why it exists, in the user's words
 ///
@@ -115,8 +133,8 @@ extension BoardFilterChoice {
 ///
 /// # Where it sits, and why not inside the band bar
 ///
-/// It is header ROW THREE: band chips (row 2, the only row that pins), then this, then the
-/// quick add. It is NOT a third zone inside the band bar's card, and that is arithmetic
+/// It is header ROW TWO: band chips (row 1, the only row that pins), then this, then the
+/// first band. It is NOT a third zone inside the band bar's card, and that is arithmetic
 /// rather than taste — the band bar's card is partitioned `rail + railSpacing +
 /// filtersColumn`, with the rail holding over 80% of the card width
 /// (`TasksBoardChipRowTests.testTheRailKeepsMostOfTheCard`). Two chips of real words are
@@ -137,37 +155,70 @@ extension BoardFilterChoice {
 /// The height is a constant (`TasksChromeMetrics.viewBar`) because of what this row IS, not
 /// because an arithmetic term needs it: it is a header row on the screen whose job is showing
 /// rows, so a row that grew with the content size category would push every task row down at
-/// accessibility sizes. (`chromeHeight` does count it, but nothing in the app reads the
-/// board's chrome height — the board has no compact bar. Its live threshold is
-/// `chipsPinThreshold`, which counts only what rides above row 2.) So the chips cap their type
+/// accessibility sizes. (The board's live threshold is `chipsPinThreshold`, which counts only
+/// what rides above the chip row, so nothing about this row moves it.) So the chips cap their type
 /// the way the band chips do (`BoardBandBar.chipTypeCap`) instead of the row growing to fit
 /// them, and the bar scrolls horizontally rather than wrapping — a second line would move
 /// every task row under it just as surely.
 struct BoardViewBar: View {
     @Binding var grouping: BoardGrouping
     @Binding var dateFilter: BoardDateFilter
+    /// The collapse-all chip's state and action. nil = no chip (an empty board, or a live
+    /// search, where the folds do not apply).
+    var collapse: Collapse? = nil
+
+    struct Collapse {
+        let allCollapsed: Bool
+        let toggle: () -> Void
+    }
 
     /// Gap between the two chips.
     static let chipSpacing: CGFloat = 8
 
+    /// The drawer the bar is in: a close drag that ends on a chip must not also tap it.
+    @Environment(\.leadingDrawer) private var drawer
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Self.chipSpacing) {
-                chip(
-                    BoardViewBarModel.grouping(grouping),
-                    identifier: "board.view.grouping"
-                ) { grouping = grouping.nextChoice }
-                chip(
-                    BoardViewBarModel.date(dateFilter),
-                    identifier: "board.view.date"
-                ) { dateFilter = dateFilter.nextChoice }
+        HStack(spacing: Self.chipSpacing) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Self.chipSpacing) {
+                    chip(
+                        BoardViewBarModel.grouping(grouping),
+                        identifier: "board.view.grouping"
+                    ) { grouping = grouping.nextChoice }
+                    chip(
+                        BoardViewBarModel.date(dateFilter),
+                        identifier: "board.view.date"
+                    ) { dateFilter = dateFilter.nextChoice }
+                }
+                // The chips line up with the band HEADINGS below them (same content inset),
+                // which is what makes this row read as part of the board's own column rather
+                // than as a floating strip.
+                .padding(.leading, BoardBandCard.headingContentInset)
+                .frame(height: TasksChromeMetrics.viewBar)
             }
-            // The chips line up with the band HEADINGS below them (same content inset),
-            // which is what makes this row read as part of the board's own column rather
-            // than as a floating strip.
-            .padding(.horizontal, BoardBandCard.headingContentInset)
-            .frame(height: TasksChromeMetrics.viewBar)
+            // Only a rail that overflows scrolls; at rest it must not rubber-band under a
+            // drawer drag.
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            // One that does overflow (accessibility sizes) owns the sideways drag that
+            // scrolls it, as the tier chips' rail does.
+            .drawerCloseExempt("board.viewBar")
+            // Outside the scroll, at the trailing edge: it acts on the whole board, so it
+            // must never scroll out of reach behind the two mode chips.
+            // The glyph alone (the ⇕ of the design): in the drawer's width a worded chip
+            // here pushed the date chip half out of the scroll, and at accessibility sizes
+            // clipped "Custom order". Its words stay its accessibility label.
+            if let collapse {
+                chip(
+                    BoardViewBarModel.collapse(allCollapsed: collapse.allCollapsed),
+                    identifier: "board.view.collapse",
+                    iconOnly: true,
+                    cycle: collapse.toggle
+                )
+                .fixedSize()
+            }
         }
+        .padding(.trailing, BoardBandCard.headingContentInset)
         .frame(height: TasksChromeMetrics.viewBar)
         .dynamicTypeSize(...BoardBandBar.chipTypeCap)
         .accessibilityElement(children: .contain)
@@ -178,20 +229,26 @@ struct BoardViewBar: View {
     /// band headings' `show done` control carries, so the board has one word for "this is
     /// a control you can tap" instead of a new one per row.
     private func chip(
-        _ spec: BoardViewChipSpec, identifier: String, cycle: @escaping () -> Void
+        _ spec: BoardViewChipSpec, identifier: String, iconOnly: Bool = false,
+        cycle: @escaping () -> Void
     ) -> some View {
         Button {
+            guard drawer?.suppressTaps != true else { return }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             cycle()
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: spec.symbol)
-                    .font(.caption2.weight(.bold))
-                Text(spec.label)
-                    .font(.footnote.weight(.semibold))
-                    .lineLimit(1)
+                    .font(iconOnly ? .footnote.weight(.bold) : .caption2.weight(.bold))
+                if !iconOnly {
+                    Text(spec.label)
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                }
             }
             .foregroundStyle(Theme.tint)
+            // With the padding, an icon chip is at least 36pt wide.
+            .frame(minWidth: iconOnly ? 16 : nil)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(Theme.tintSoft, in: Capsule())

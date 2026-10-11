@@ -2,26 +2,18 @@ import XCTest
 import SwiftUI
 @testable import Walnut
 
-/// HEADER ORDER, the board's pinned chip row, and the hand-off between its two copies.
+/// The board's pinned chip row, and the hand-off between its two copies.
 ///
-/// The user's spec: row 1 is the `tasks.nav.pin` / `tasks.nav.calendar` pills, at the
-/// top, scrolling away with the content; row 2 is the tier chips, and the chips are the
-/// ONLY floating row. The shipping build had it upside down at scroll-top — the chips
-/// measured y 236..264 and the pills y 290..322 — because the board's content opened
-/// with a clear reserve row and the chips were a PERMANENT overlay pinned to the top of
-/// the list area, a position that cannot be second in anything.
+/// The tier chips are the board's first row (the nav pills that once sat above them
+/// left when the board moved into the Tasks drawer), and they are the ONLY floating row:
+/// an inline row at rest, and a pinned copy once that row reaches the top edge.
 ///
-/// Order is geometry, and geometry needs a running app. What is pinned here is the
-/// arithmetic that makes the order possible, and each case is written so that restoring
-/// the old shape fails it:
+/// Geometry needs a running app. What is pinned here is the arithmetic the hand-off
+/// depends on, and each case is written so that restoring an old shape fails it:
 ///
-///  - the chips pin at the top of THEIR OWN ROW (`rowTwoContentTop`, which is
-///    `listHeaderPadding + navRow + sectionGap`), not after the whole chrome has cleared.
-///    A permanent overlay would be a threshold of 0.
-///  - nothing is pinned at rest, so at scroll-top the chips are an inline row BELOW the
-///    pills rather than an overlay above them.
-///  - while pinned, the nav row is already behind the bar, so the pinned copy never hides
-///    a row the user can still reach.
+///  - the chips pin at the top of THEIR OWN ROW (`chipRowContentTop`, which is
+///    `listHeaderPadding`, plus the offline banner when it shows).
+///  - nothing is pinned at rest, so at scroll-top the chips are an inline row.
 ///  - AT THE CROSSING the two copies are the same bar in the same place — on all THREE
 ///    axes. This is the part that was documentation rather than arithmetic, and it took
 ///    two rounds of frame audit to finish: R26 fixed X (the copies are handed different
@@ -30,8 +22,7 @@ import SwiftUI
 ///    the bar teleported 10.66pt up between two frames, and the pinned card drew square
 ///    corners against the inline row's 10pt rounded ones).
 ///
-/// Split out of `TasksHeaderChromeTests.swift` in R26: that file owns the compact-bar
-/// collapse machine, this one owns the pin. The rail's own geometry (widths, gaps, the
+/// Split out of `TasksHeaderChromeTests.swift` in R26: this file owns the pin. The rail's own geometry (widths, gaps, the
 /// fade, ink) is a third subject and lives in `WalnutTests/TasksBoardChipRowTests.swift`.
 final class TasksBoardChipRowPinTests: XCTestCase {
 
@@ -56,12 +47,12 @@ final class TasksBoardChipRowPinTests: XCTestCase {
         .init(bandId: "ct_deepwork", label: "Deep Work Later", count: 49),
     ]
 
-    /// Content offset of the top of the nav row, i.e. how much rides above it.
+    /// Content offset of the top of the chip row, i.e. how much rides above it.
     ///
     /// `listHeaderPadding` is part of that answer, and leaving it out is exactly the bug
     /// R27 fixed: the List puts it above its first section, so every row below sits that
     /// much lower than the row heights alone predict.
-    private func aboveNavRow(offline: Bool) -> CGFloat {
+    private func aboveChipRow(offline: Bool) -> CGFloat {
         var total = TasksChromeMetrics.listHeaderPadding
         if offline { total += TasksChromeMetrics.offlineBanner + TasksChromeMetrics.sectionGap }
         return total
@@ -71,7 +62,7 @@ final class TasksBoardChipRowPinTests: XCTestCase {
     /// the horizontal half, and the List arithmetic the app derives its threshold from for
     /// the vertical half.
     ///
-    ///  - inline: it RIDES THE CONTENT, so its card top is `rowTwoContentTop - scrolled`.
+    ///  - inline: it RIDES THE CONTENT, so its card top is `chipRowContentTop - scrolled`.
     ///  - pinned: it is an overlay resting at `pinnedChipsTopInset`, at every offset.
     ///
     /// Both are stated in the origin `scrolled` is measured in (the top of the List's
@@ -86,7 +77,7 @@ final class TasksBoardChipRowPinTests: XCTestCase {
         let top: CGFloat
         switch placement {
         case .inlineRow:
-            top = TasksChromeMetrics.rowTwoContentTop(offline: offline) - scrolled
+            top = TasksChromeMetrics.chipRowContentTop(offline: offline) - scrolled
         case .pinnedOverlay:
             top = TasksChromeMetrics.pinnedChipsTopInset
         }
@@ -96,40 +87,24 @@ final class TasksBoardChipRowPinTests: XCTestCase {
         )
     }
 
-    // MARK: - Row 1 above row 2
+    // MARK: - Where the chips pin
 
-    func testTheChipsPinAtTheTopOfTheirOwnRowNotAfterTheWholeChrome() {
+    func testTheChipsPinAtTheTopOfTheirOwnRow() {
         for offline in [false, true] {
-            let pin = TasksChromeMetrics.chipsPinThreshold(offline: offline)
             XCTAssertEqual(
-                pin,
-                aboveNavRow(offline: offline) + TasksChromeMetrics.navRow
-                    + TasksChromeMetrics.sectionGap,
+                TasksChromeMetrics.chipsPinThreshold(offline: offline),
+                aboveChipRow(offline: offline),
                 accuracy: 0.01,
-                "offline=\(offline): the chips are row 2, so exactly row 1 and its gap ride above them"
-            )
-            // A permanent overlay pins at 0. The pills MUST get the top first.
-            XCTAssertGreaterThan(
-                pin, TasksChromeMetrics.navRow,
-                "offline=\(offline): the chips would pin while the nav pills are still on screen"
-            )
-            // And the chips are INSIDE the chrome, not after it: their row sits between the
-            // pin point and the end of the header. What follows it below the pin point is the
-            // chip row itself, the view bar (grouping + date chips) and the board's own
-            // top-level quick add — a row ADDED UNDER the chips cannot move the point where
-            // the chips reach the top edge, which is the property this pairing exists to
-            // state, and it is what the view-bar row was checked against when it landed.
-            let chrome = TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline)
-            XCTAssertLessThan(pin, chrome, "offline=\(offline): the chip row is part of the chrome")
-            XCTAssertEqual(
-                pin + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
-                    + TasksChromeMetrics.viewBar + TasksChromeMetrics.sectionGap
-                    + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
-                chrome,
-                accuracy: 0.01,
-                "offline=\(offline): only the chip row, the view bar and the quick add sit below the pin point"
+                "offline=\(offline): the chips are the first row, so only the List's own padding (and the offline banner) rides above them"
             )
         }
+        // The banner is a row above the chips, so it pushes the pin point down by itself.
+        XCTAssertEqual(
+            TasksChromeMetrics.chipsPinThreshold(offline: true)
+                - TasksChromeMetrics.chipsPinThreshold(offline: false),
+            TasksChromeMetrics.offlineBanner + TasksChromeMetrics.sectionGap,
+            accuracy: 0.01
+        )
     }
 
     func testAtRestTheChipsAreAnInlineRowAndNothingFloats() {
@@ -146,7 +121,6 @@ final class TasksBoardChipRowPinTests: XCTestCase {
                 }
             }
         }
-        XCTAssertFalse(TasksChromeMetrics.showsPinnedChips(filter: .sessions, pinned: false))
     }
 
     func testScrollingThroughTheChipRowPinsIt() {
@@ -156,21 +130,6 @@ final class TasksBoardChipRowPinTests: XCTestCase {
                 TasksChromeMetrics.areChipsPinned(
                     scrolled: pin + 1, wasPinned: false, offline: offline),
                 "offline=\(offline): the chip row reached the top edge and did not pin"
-            )
-        }
-    }
-
-    /// The pinned copy covers the top `bandBar` of the list area, so it must never be on
-    /// screen while the nav row still is. Checked at the WORST case: the unpin threshold,
-    /// which is the lowest scroll offset at which the bar can still be up.
-    func testWhilePinnedTheNavRowIsAlreadyBehindTheBar() {
-        for offline in [false, true] {
-            let unpin = TasksChromeMetrics.chipsUnpinThreshold(offline: offline)
-            let navBottomOnScreen =
-                aboveNavRow(offline: offline) + TasksChromeMetrics.navRow - unpin
-            XCTAssertLessThanOrEqual(
-                navBottomOnScreen, TasksChromeMetrics.bandBar,
-                "offline=\(offline): the pinned chips would cover \(navBottomOnScreen)pt of a nav row that is still on screen"
             )
         }
     }
@@ -217,10 +176,9 @@ final class TasksBoardChipRowPinTests: XCTestCase {
             // The defect, so the fixture is measured against the report rather than
             // against itself: the pre-R27 threshold left the inline row's top a whole
             // `listHeaderPadding` below the pinned copy's resting y at the frame it fired.
-            let oldThreshold = TasksChromeMetrics.navRow + TasksChromeMetrics.sectionGap
-                + (offline
-                    ? TasksChromeMetrics.offlineBanner + TasksChromeMetrics.sectionGap
-                    : 0)
+            let oldThreshold = offline
+                ? TasksChromeMetrics.offlineBanner + TasksChromeMetrics.sectionGap
+                : 0
             let oldHop = cardScreenRect(.inlineRow, scrolled: oldThreshold, offline: offline).minY
                 - pinnedRect.minY
             XCTAssertEqual(
@@ -232,26 +190,14 @@ final class TasksBoardChipRowPinTests: XCTestCase {
     }
 
     /// The threshold is DERIVED, and this is the derivation stated once: everything above
-    /// row 2 in the content, less whatever inset the pinned copy rests at. Nothing here is
-    /// allowed to be a hand-tuned number that happens to look smooth.
+    /// the chip row in the content, less whatever inset the pinned copy rests at. Nothing
+    /// here is allowed to be a hand-tuned number that happens to look smooth.
     func testThePinThresholdIsTheYCoincidenceOffsetAndNothingElse() {
         for offline in [false, true] {
             XCTAssertEqual(
                 TasksChromeMetrics.chipsPinThreshold(offline: offline),
-                TasksChromeMetrics.rowTwoContentTop(offline: offline)
+                TasksChromeMetrics.chipRowContentTop(offline: offline)
                     - TasksChromeMetrics.pinnedChipsTopInset,
-                accuracy: 0.01, "offline=\(offline)"
-            )
-            // `chromeHeight` reads the same "what rides above row 2" answer, which is what
-            // stops the two from drifting apart again. What it adds BELOW row 2 (the chip
-            // row's own height, the view bar's two toggle chips, and since R30 the board's
-            // quick add) is exactly what the pin threshold must NOT include.
-            XCTAssertEqual(
-                TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline),
-                TasksChromeMetrics.rowTwoContentTop(offline: offline)
-                    + TasksChromeMetrics.bandBar + TasksChromeMetrics.sectionGap
-                    + TasksChromeMetrics.viewBar + TasksChromeMetrics.sectionGap
-                    + TasksChromeMetrics.quickAdd + TasksChromeMetrics.sectionGap,
                 accuracy: 0.01, "offline=\(offline)"
             )
         }
@@ -286,15 +232,10 @@ final class TasksBoardChipRowPinTests: XCTestCase {
         )
     }
 
-    /// The dead band exists (no publish per touch-slop wobble) but is deliberately NOT
-    /// `hysteresisBand`: a sticky-to-the-top band would keep the bar over the nav row all
-    /// the way back up, which is the defect above.
-    func testTheChipPinBandIsNarrowEnoughToGiveTheNavRowBack() {
+    /// The dead band exists (no publish per touch-slop wobble), and the unpin point never
+    /// goes below the top of the list.
+    func testTheChipPinBandIsNarrowButNotZero() {
         XCTAssertGreaterThan(TasksChromeMetrics.chipsPinBand, 0, "no band = a publish per wobble")
-        XCTAssertLessThan(
-            TasksChromeMetrics.chipsPinBand, TasksChromeMetrics.hysteresisBand,
-            "the compact bar's band would keep the chips pinned over the nav row"
-        )
         for offline in [false, true] {
             let pin = TasksChromeMetrics.chipsPinThreshold(offline: offline)
             let unpin = TasksChromeMetrics.chipsUnpinThreshold(offline: offline)
@@ -329,8 +270,7 @@ final class TasksBoardChipRowPinTests: XCTestCase {
 
     func testAScrollDownAndBackPinsAndUnpinsExactlyOnce() {
         for offline in [false, true] {
-            let travel = Int(TasksChromeMetrics.chromeHeight(
-                filter: .sessions, offline: offline)) + 200
+            let travel = Int(TasksChromeMetrics.chipsPinThreshold(offline: offline)) + 200
             var pinned = false
             var flips = 0
             for y in 0...travel {
@@ -346,15 +286,6 @@ final class TasksBoardChipRowPinTests: XCTestCase {
             }
             XCTAssertEqual(flips, 2, "offline=\(offline): scrolling back up should unpin exactly once")
             XCTAssertFalse(pinned, "offline=\(offline): still pinned at the top of the list")
-        }
-    }
-
-    func testOnlyTheBoardHasChipsToPin() {
-        for filter in TaskFilter.allCases where filter != .sessions {
-            XCTAssertFalse(
-                TasksChromeMetrics.showsPinnedChips(filter: filter, pinned: true),
-                "\(filter) has no chip row, so it cannot pin one"
-            )
         }
     }
 
@@ -566,29 +497,6 @@ final class TasksBoardChipRowPinTests: XCTestCase {
             // framed correctly all along while only the rail stayed dead: the user's
             // screenshot had the button at its correct trailing x.
             XCTAssertGreaterThan(arrived.filters.minX, degenerate.filters.minX, "\(placement)")
-        }
-    }
-
-    /// The board's pinned copy EXISTS for as long as the board does, and that is a
-    /// filter-only question — `hasPinnedChips`. It used to be
-    /// `showsPinnedChips(filter:pinned:)`, i.e. existence depended on the pin state,
-    /// which is what made the overlay a conditional insertion.
-    ///
-    /// `showsPinnedChips` is now derived from it, so the two can never disagree about
-    /// which filter has chips.
-    func testExistenceOfThePinnedCopyIsAFilterQuestionNotAPinQuestion() {
-        XCTAssertTrue(TasksChromeMetrics.hasPinnedChips(.sessions))
-        for filter in TaskFilter.allCases where filter != .sessions {
-            XCTAssertFalse(TasksChromeMetrics.hasPinnedChips(filter), "\(filter) has no chip row")
-        }
-        for filter in TaskFilter.allCases {
-            for pinned in [false, true] {
-                XCTAssertEqual(
-                    TasksChromeMetrics.showsPinnedChips(filter: filter, pinned: pinned),
-                    TasksChromeMetrics.hasPinnedChips(filter) && pinned,
-                    "\(filter)/pinned=\(pinned): the composed rule drifted from the filter-only one"
-                )
-            }
         }
     }
 

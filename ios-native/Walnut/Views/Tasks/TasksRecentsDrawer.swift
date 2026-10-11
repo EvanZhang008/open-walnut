@@ -2,7 +2,9 @@ import SwiftUI
 
 /// Where a "Recently opened" row goes.
 enum RecentDestination: Equatable {
+    /// The conversation, as it was opened.
     case session(WalnutSession)
+    /// The task, which opens its newest session (or its attached draft).
     case task(WalnutTask)
 }
 
@@ -18,8 +20,8 @@ struct RecentRow: Identifiable, Equatable {
     /// The task, live copy when the list has it.
     let task: WalnutTask?
 
-    /// A tap goes back to the conversation when one was opened, the way a board row's
-    /// tap does, and to the task's details otherwise.
+    /// A tap goes back to the conversation when one was opened, and to the task's
+    /// session otherwise: a task tap is a session tap everywhere on the Tasks tab.
     var primary: RecentDestination? {
         if let session { return .session(session) }
         if let task { return .task(task) }
@@ -75,58 +77,63 @@ struct RecentRow: Identifiable, Equatable {
     }
 }
 
-/// The Tasks tab's left-edge drawer: everything opened from this phone, newest first.
+/// Recently opened: everything opened from this phone, newest first. A page of the Tasks
+/// drawer, pushed from the board's clock button, so Back returns to the board with its
+/// scroll and search intact.
 ///
-/// Same shape as the Chat drawer on purpose (the user's own reference for it): a title,
-/// then a plain list of rows, each a title over one quiet meta line. Nothing else lives
-/// here. The board is already the busy screen; this one answers one question, "what
-/// was I just looking at".
-struct TasksRecentsDrawer: View {
+/// Same rows as the Chat drawer on purpose (the user's own reference for it): a title over
+/// one quiet meta line. The board is already the busy screen; this one answers one
+/// question, "what was I just looking at".
+struct TasksRecentsPage: View {
     @Environment(TasksStore.self) private var tasks
-    let model: LeadingDrawerModel
+    /// The drawer the page is in: a close drag that ends on a row must not also open it.
+    @Environment(\.leadingDrawer) private var drawer
     let open: (RecentDestination) -> Void
+    /// The task's page, from a row's long-press menu.
+    let details: (WalnutTask) -> Void
 
     @State private var confirmClear = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    private static let inset: CGFloat = 20
 
     var body: some View {
         let rows = RecentRow.rows(
             tasks.recents.entries, tasks: tasks.tasks, sessions: tasks.sessions
         )
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                header(hasRows: !rows.isEmpty)
-                if rows.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(rows) { row in
-                        Button {
-                            guard !model.suppressTaps, let destination = row.primary else { return }
-                            open(destination)
-                        } label: {
-                            rowView(row)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu { menu(row) }
-                        .accessibilityIdentifier("tasks.recents.row.\(row.id)")
+        List {
+            if rows.isEmpty {
+                emptyState
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                ForEach(rows) { row in
+                    Button {
+                        guard drawer?.suppressTaps != true, let destination = row.primary else { return }
+                        open(destination)
+                    } label: {
+                        rowView(row)
                     }
+                    .buttonStyle(.plain)
+                    .contextMenu { menu(row) }
+                    .accessibilityIdentifier("tasks.recents.row.\(row.id)")
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, 24)
         }
-        .scrollIndicators(.hidden)
-        // A scrolled row passes behind the status bar over something, not bare
-        // background (the Chat drawer's zero-height trick, same reason).
-        .safeAreaInset(edge: .top, spacing: 0) {
-            Color.clear
-                .frame(height: 0)
-                .background(.bar, ignoresSafeAreaEdges: .top)
+        .listStyle(.plain)
+        .navigationTitle("Recently opened")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            if !rows.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Clear") {
+                        guard drawer?.suppressTaps != true else { return }
+                        confirmClear = true
+                    }
+                    .accessibilityIdentifier("tasks.recents.clear")
+                }
+            }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("tasks.recents.drawer")
+        .accessibilityIdentifier("tasks.recents.page")
         .confirmationDialog(
             "Clear recently opened?", isPresented: $confirmClear, titleVisibility: .visible
         ) {
@@ -136,41 +143,12 @@ struct TasksRecentsDrawer: View {
         }
     }
 
-    /// At the accessibility sizes the title gets a line of its own with Clear under
-    /// it: beside Clear it broke inside its words ("Re- / cently / opene / d" at the
-    /// largest size, App Store gate, 2026-10-09).
-    static func headerStacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
-
     /// A row's line limits, title then meta. At the accessibility sizes both wrap in
     /// full: the drawer is no wider there, and two lines of title and one of meta cut
     /// "Fix the shared albu..." and the project after "2m ago" (App Store r7 gate,
     /// finding 14). The list scrolls, so a taller row costs nothing.
     static func rowLineLimits(_ size: DynamicTypeSize) -> (title: Int?, meta: Int?) {
         size.isAccessibilitySize ? (nil, nil) : (2, 1)
-    }
-
-    private func header(hasRows: Bool) -> some View {
-        let layout = Self.headerStacks(dynamicTypeSize)
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
-            : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
-        return layout {
-            Text("Recently opened")
-                .font(.title2.bold())
-                .accessibilityAddTraits(.isHeader)
-            if !Self.headerStacks(dynamicTypeSize) { Spacer(minLength: 8) }
-            if hasRows {
-                Button("Clear") {
-                    guard !model.suppressTaps else { return }
-                    confirmClear = true
-                }
-                .font(.subheadline)
-                .accessibilityIdentifier("tasks.recents.clear")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Self.inset)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
     }
 
     private var emptyState: some View {
@@ -181,7 +159,6 @@ struct TasksRecentsDrawer: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, Self.inset)
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("tasks.recents.empty")
@@ -206,27 +183,20 @@ struct TasksRecentsDrawer: View {
                 .lineLimit(limits.meta)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
         .contentShape(Rectangle())
     }
 
-    /// Long-press: the other destination, and taking a row off the list.
+    /// Long-press: the task's page, and taking a row off the list.
     @ViewBuilder
     private func menu(_ row: RecentRow) -> some View {
-        if let session = row.session {
-            Button { open(.session(session)) } label: {
-                Label("Open Session", systemImage: "bubble.left.and.text.bubble.right")
-            }
-        }
         if let task = row.task {
-            Button { open(.task(task)) } label: {
+            Button { details(task) } label: {
                 Label("Task Details", systemImage: "info.circle")
             }
+            Divider()
         }
-        Divider()
         Button(role: .destructive) {
             tasks.recents.remove(id: row.id)
         } label: {

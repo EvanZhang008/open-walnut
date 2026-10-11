@@ -41,6 +41,13 @@ struct NewSessionChatView: View {
     /// Its title, for the one line that states the link. Display only.
     var taskTitle: String? = nil
 
+    /// Set by a presenter that offers the text's other exit: "Save as todo" beside send
+    /// creates a task from the words (first line the title, the rest its description)
+    /// in the picked project, starts nothing, and calls this so the presenter can close
+    /// the page. nil = no such exit. A draft about a TASK never offers it: that task
+    /// already exists, and a second one would be a duplicate.
+    var onSavedAsTodo: (() -> Void)? = nil
+
     /// Called with the pre-seeded session once the launch is accepted; the
     /// presenter swaps this page for the session's conversation page.
     let onCreated: (WalnutSession) -> Void
@@ -62,6 +69,11 @@ struct NewSessionChatView: View {
     @State private var creating = false
     @State private var createError: String?
     @State private var didPreselect = false
+    /// The project the new task files under ("" = Inbox, where the server's organize
+    /// pass may still offer a home). Only for a task-less draft: a draft about a task
+    /// keeps that task's project.
+    @State private var project = ""
+    @State private var showProjectPicker = false
 
     /// Same key the sheet uses, so a cached launch-options payload is shared
     /// rather than fetched twice.
@@ -101,10 +113,11 @@ struct NewSessionChatView: View {
                     // choices RIDE the create call. At the accessibility sizes they
                     // sit beside the folder pill instead (`pillRow`): stacked here
                     // they made the box about 180 pt taller (gate r4, F5).
-                    controlsAccessory: dynamicTypeSize.isAccessibilitySize ? nil : AnyView(launchPills),
+                    controlsAccessory: launchPillsInPillRow ? nil : AnyView(launchPills),
                     hostProvenance: connection.map {
                         .chat(status: $0.status, online: $0.online)
                     },
+                    secondaryAction: saveAsTodoAction,
                     onSend: { text, _ in await launch(message: text) }
                 )
             }
@@ -115,6 +128,9 @@ struct NewSessionChatView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Cancel") { dismiss() }.disabled(creating)
             }
+        }
+        .sheet(isPresented: $showProjectPicker) {
+            TaskProjectPicker(current: project) { picked in project = picked }
         }
         .sheet(isPresented: $showPathPicker) {
             SessionPathPicker(
@@ -306,7 +322,24 @@ struct NewSessionChatView: View {
                     )
                 }
                 .accessibilityIdentifier("newSessionChat.pathPill")
-                if dynamicTypeSize.isAccessibilitySize {
+                // WHICH PROJECT the work is filed under, picked here rather than by
+                // where the add started (the user: the project is chosen on the create
+                // page itself). Rides both exits: the session's task and the todo.
+                if isTaskless {
+                    Button {
+                        showProjectPicker = true
+                    } label: {
+                        pill(
+                            project.isEmpty ? NewTaskSeed.inboxHeader : project,
+                            icon: project.isEmpty ? "tray" : "folder",
+                            active: !project.isEmpty
+                        )
+                    }
+                    .disabled(creating)
+                    .accessibilityIdentifier("newSessionChat.projectPill")
+                    .accessibilityLabel("Project: \(project.isEmpty ? NewTaskSeed.inboxHeader : project)")
+                }
+                if launchPillsInPillRow {
                     launchPills
                 }
             }
@@ -445,9 +478,33 @@ struct NewSessionChatView: View {
     /// Why the composer is off before a folder is chosen.
     static let folderNotice = "Choose the folder this session runs in."
 
+    /// The mode and model pills ride the folder pill's row (it scrolls sideways) instead
+    /// of the composer's: at the accessibility sizes, where stacked in the composer they
+    /// made the box about 180 pt taller (gate r4, F5), and whenever Save as todo shares
+    /// the composer's row, where the mode pill was squeezed to one letter beside it
+    /// (2026-10-10).
+    private var launchPillsInPillRow: Bool {
+        dynamicTypeSize.isAccessibilitySize || saveAsTodoAction != nil
+    }
+
     /// The quick folders sit in the page at the accessibility sizes (gate r4, F5).
     private var movesQuickFoldersIntoPage: Bool {
         !quickDirs.isEmpty && dynamicTypeSize.isAccessibilitySize
+    }
+
+    /// No task behind this draft: the launch (or the todo) makes one.
+    private var isTaskless: Bool { (taskId ?? "").isEmpty }
+
+    private var saveAsTodoAction: ComposerSecondaryAction? {
+        guard isTaskless, onSavedAsTodo != nil else { return nil }
+        return ComposerSecondaryAction(
+            title: "Save as todo",
+            shortTitle: "Todo",
+            systemImage: "checklist",
+            accessibilityID: "newSessionChat.saveAsTodo",
+            refusedNotice: "The todo was not saved. Your words are back in the composer.",
+            perform: { text in await saveAsTodo(text) }
+        )
     }
 
     private var hostLabel: String? {
@@ -586,7 +643,10 @@ struct NewSessionChatView: View {
                 // bypass is the server default; send nil so an older server
                 // behaves identically.
                 mode: mode == .bypass ? nil : mode.rawValue,
-                model: model
+                model: model,
+                // Only for a task-less draft, and only when picked: absent keeps the
+                // server's own Inbox + organize behaviour.
+                project: isTaskless && !project.isEmpty ? project : nil
             )
             // ORDER MATTERS (same as NewSessionSheet): stash BEFORE onCreated,
             // because the presenter's push mounts the conversation view whose
@@ -607,7 +667,7 @@ struct NewSessionChatView: View {
                 // The task's real title when this draft was about one; the server's
                 // echo (which for a task-less draft IS the new task's title) otherwise.
                 taskTitle: taskTitle ?? created.title,
-                project: nil,
+                project: isTaskless && !project.isEmpty ? project : nil,
                 host: host,
                 // 'idle' matches the server's pre-seeded record: 'running' would
                 // paint a working badge on a CLI that hasn't spawned.
@@ -634,5 +694,62 @@ struct NewSessionChatView: View {
             createError = error.localizedDescription
             return false
         }
+    }
+
+    // MARK: - Save as todo
+
+    /// The words as a task: the first line its title, the rest its description (the web
+    /// draft's split, `handleDraftSaveAsTask`), in the picked project, born in Focus where
+    /// the board and a new session's task both land, so the todo is on the board at once.
+    /// Answers false (words back in the composer) when the create fails.
+    private func saveAsTodo(_ text: String) async -> Bool {
+        guard let tasks, !creating else { return false }
+        creating = true
+        createError = nil
+        defer { creating = false }
+        do {
+            guard let created = try await Self.createTodo(from: text, project: project, in: tasks) else {
+                return false
+            }
+            AppLog.info("session", "saved a draft as a todo", [
+                "taskId": created.id, "project": project.isEmpty ? "-" : project,
+            ])
+            tasks.transientNotice = "Saved to \(tasks.tierLabel(for: Self.todoTier))"
+            onSavedAsTodo?()
+            return true
+        } catch let APIError.server(_, _, msg, _, _) {
+            createError = msg
+            return false
+        } catch {
+            createError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// The create itself, apart from the page so a test can drive it: one task, no
+    /// session, filed in `project` ("" = Inbox) and pinned to `todoTier`. nil when the
+    /// words hold no title; throws what the create threw.
+    static func createTodo(from text: String, project: String, in tasks: TasksStore) async throws -> WalnutTask? {
+        let (title, description) = todoParts(text)
+        guard !title.isEmpty else { return nil }
+        return try await tasks.createTask(
+            title: title,
+            project: project.isEmpty ? nil : project,
+            description: description,
+            pin: .tier(todoTier)
+        )
+    }
+
+    /// Where a saved todo is pinned: Focus, the tier a phone draft's session task is
+    /// born in (`MOBILE_DRAFT_TIER` server-side), so either exit lands in the same place.
+    static let todoTier = "focus"
+
+    /// First line = title, the rest = description (nil when there is none).
+    static func todoParts(_ text: String) -> (title: String, description: String?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let newline = trimmed.firstIndex(where: \.isNewline) else { return (trimmed, nil) }
+        let title = trimmed[..<newline].trimmingCharacters(in: .whitespaces)
+        let rest = trimmed[newline...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title, rest.isEmpty ? nil : rest)
     }
 }

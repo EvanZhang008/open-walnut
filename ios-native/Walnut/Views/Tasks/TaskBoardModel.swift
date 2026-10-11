@@ -216,14 +216,12 @@ enum BoardDateFilter: String, CaseIterable, Identifiable {
     }
 }
 
-/// One band: a sticky heading plus its rows and a create affordance at the foot.
+/// One band: a sticky heading plus its rows.
 ///
 /// `bandId` is a tier id under `.tier` grouping and `proj:<name>` under
 /// `.project` — it is an IDENTITY, used for the scroll anchor, the accessibility
-/// id and the `hide done` set, and never parsed back apart. What the heading's
-/// `+` files into is stated outright by `createSeed` instead of inferred from the
-/// id, which is what lets a project heading create into that project without the
-/// view learning a second mapping.
+/// id and the `hide done` set, and never parsed back apart. Where a write into the
+/// band would go is stated outright by `createSeed` instead of inferred from the id.
 struct BoardBand: Identifiable, Equatable {
     let bandId: String
     let label: String
@@ -232,10 +230,12 @@ struct BoardBand: Identifiable, Equatable {
     /// which is the DEFAULT (see `bands(showDone:)`): the board's filters menu holds the
     /// one switch that shows them (`Show done`), and no heading carries a control for it.
     let hiddenDone: Int
-    /// What the foot's `+` creates, or nil for a band with no create affordance.
+    /// Where a task made in this band would be filed, or nil for a band with none. The
+    /// board draws no create control any more (one `+` in the toolbar opens the draft
+    /// page), so no view reads this; it stays the band's stated destination.
     ///
-    /// Every band the board renders has one now: a tier band files into its tier, a
-    /// project band into its project. The optional survives because it is what let
+    /// A tier band files into its tier, a project band into its project. The optional
+    /// survives because it is what let
     /// the retired tail band (the COMPLEMENT of the others, so "create here" had no
     /// destination to mean) say so in DATA rather than have the view infer it from
     /// the band's id — the mistake that shipped `focus_tier: "proj:marina"`.
@@ -534,6 +534,20 @@ enum BoardModel {
             latest[taskId] = session
         }
         return latest
+    }
+
+    /// The row a task tapped OUTSIDE the board (a search hit, a calendar item) would be,
+    /// so it routes exactly as a board row does (`tapRoute`): its newest listed session,
+    /// else the session ids its detail reported, else a probe, else an attached draft.
+    static func row(
+        for task: WalnutTask, sessions: [WalnutSession], knownSessionIds: [String]?
+    ) -> BoardRow {
+        let own = sessions.filter { $0.taskId == task.id }
+        return BoardRow(
+            task: task,
+            session: latestSessionByTask(own)[task.id],
+            knownSessionIds: knownSessionIds
+        )
     }
 
     /// The NEWEST session id in a task's `session_ids`, or nil when there is none.
@@ -1296,15 +1310,10 @@ enum BoardModel {
     /// grouped span FEWER THAN TWO projects: with one project there is nothing to group
     /// by, and repeating that project's name over the whole list is noise (the desktop
     /// console gates its project headers on the same `>= 2` rule). The band itself
-    /// survives — it is what carries `show done (N)`, the visible count and the create
-    /// ring — so what changes is only the WORD on it: the tier you are scoped to, or
-    /// `All`. Its `createSeed` still files into the project its rows are in.
-    ///
-    /// Which is why the create row does NOT print this heading: the ring under a band
-    /// relabelled "Focus" writes into `marina`, so its words come from the seed
-    /// (`TaskBoardList.createDestination`). A heading names the group; a create row makes a
-    /// promise about a write, and this label is not a place you can write to (least of all
-    /// `All`).
+    /// survives — it is what carries the visible count — so what changes is only the
+    /// WORD on it: the tier you are scoped to, or `All`. Its `createSeed` still names the
+    /// project its rows are in: a heading names the group, and this label is not a place
+    /// you can write to (least of all `All`).
     ///
     /// The suppression is deliberately narrowed to the FLAT case (one project AND no
     /// folder band on screen). With a folder on screen the project heading is the root
@@ -1488,8 +1497,7 @@ enum BoardModel {
                     // `projectLabel`, never the heading's `label`: a heading whose name was
                     // suppressed as redundant still files into the PROJECT its rows are
                     // in, and filing into a tier name ("Focus") would create a project
-                    // called Focus. The row's WORDS follow this seed rather than the
-                    // heading (`TaskBoardList.createDestination`), so the two cannot drift.
+                    // called Focus.
                     createSeed: isFolder ? nil : NewTaskSeed.project(projectLabel),
                     nest: isFolder ? BoardBandNest(
                         folderId: folderId,

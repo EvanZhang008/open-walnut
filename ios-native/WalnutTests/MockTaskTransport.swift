@@ -75,6 +75,7 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
             title, project ?? "-", priority ?? "-", dueDate ?? "-",
             pin.wirePinned.map(String.init) ?? "-",
             pin.wireFocusTier ?? "-",
+            description ?? "-",
         ])
         if let createTaskResult { return createTaskResult(title, pin) }
         // Default answer mirrors the server's storage convention: a tier IMPLIES

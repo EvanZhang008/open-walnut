@@ -189,25 +189,54 @@ final class RecentOpensTests: XCTestCase {
         XCTAssertEqual(rows.first?.meta, "now")
     }
 
-    // MARK: - The edge swipe
+    // MARK: - The Tasks tab reopens the last session
 
-    func testTheTasksEdgeZoneStaysInTheMarginBesideTheRows() {
-        let zone = TasksView.recentsEdgeZone
-        XCTAssertTrue(ChatDrawerGeometry.tracksDrag(
-            startX: zone, translation: CGSize(width: 40, height: 0), isOpen: false, edgeZone: zone
-        ))
-        XCTAssertFalse(ChatDrawerGeometry.tracksDrag(
-            startX: zone + 1, translation: CGSize(width: 40, height: 0), isOpen: false, edgeZone: zone
-        ), "a drag that starts on a row is the row's swipe")
-        XCTAssertFalse(ChatDrawerGeometry.tracksDrag(
-            startX: 4, translation: CGSize(width: 20, height: 90), isOpen: false, edgeZone: zone
-        ), "a scroll down the edge stays the list's")
+    /// The tab's page IS a session, so a launch reopens the newest one in the history; a
+    /// task opened only through its details sheet has no session to show and is skipped.
+    func testTheTabReopensTheNewestEntryThatHasASession() {
+        var list = RecentOpens.recordingSession(session("s1", taskId: "t1"), at: t0, into: [], cap: 40)
+        list = RecentOpens.recordingTask(task("t2"), at: t0 + 10, into: list, cap: 40)
+        XCTAssertEqual(list.first?.id, "t2", "the details-only open is the newest entry")
+        XCTAssertEqual(TasksTabView.restorableSession(list, liveSessions: [])?.id, "s1")
     }
 
-    func testTheEdgeSwipeOpensOnlyOnTheTabItself() {
-        XCTAssertTrue(TasksView.recentsEdgeSwipeOpens(pushed: false, editing: false, filter: .sessions))
-        XCTAssertFalse(TasksView.recentsEdgeSwipeOpens(pushed: true, editing: false, filter: .sessions))
-        XCTAssertFalse(TasksView.recentsEdgeSwipeOpens(pushed: false, editing: true, filter: .sessions))
-        XCTAssertFalse(TasksView.recentsEdgeSwipeOpens(pushed: false, editing: false, filter: .calendar))
+    /// The history holds a SNAPSHOT; the session list's copy is fresher (status, title).
+    func testTheReopenedSessionIsTheLiveCopyWhenTheListHasIt() {
+        let list = RecentOpens.recordingSession(
+            session("s1", taskId: "t1", status: "idle"), at: t0, into: [], cap: 40)
+        let live = session("s1", taskId: "t1", status: "running")
+        XCTAssertEqual(
+            TasksTabView.restorableSession(list, liveSessions: [live])?.processStatus, "running")
+        XCTAssertEqual(
+            TasksTabView.restorableSession(list, liveSessions: [])?.processStatus, "idle",
+            "a session the list no longer carries still reopens from its snapshot"
+        )
+    }
+
+    /// Nothing opened yet: no page to restore, so the tab opens the board instead.
+    func testAnEmptyHistoryRestoresNothing() {
+        XCTAssertNil(TasksTabView.restorableSession([], liveSessions: [session("s1", taskId: "t1")]))
+        let detailsOnly = RecentOpens.recordingTask(task("t1"), at: t0, into: [], cap: 40)
+        XCTAssertNil(TasksTabView.restorableSession(detailsOnly, liveSessions: []))
+    }
+
+    /// A tap on a task with no session opens its attached draft, the task's page for
+    /// now, so the task is listed as opened.
+    func testOpeningASessionlessTasksDraftListsTheTask() {
+        let store = TasksStore(transport: MockTaskTransport())
+        let router = TaskSessionRouter()
+        router.open(BoardRow(task: task("t1"), session: nil, knownSessionIds: []), tasks: store) { _ in
+            XCTFail("a sessionless task has no session to show")
+        }
+        XCTAssertEqual(router.draftSeed?.taskId, "t1")
+        XCTAssertEqual(store.recents.entries.first?.id, "t1")
+        XCTAssertNil(store.recents.entries.first?.session)
+    }
+
+    /// The demo's history is its sample one, so the demo opens the tab on the board.
+    func testTheDemoReopensNothing() {
+        let list = RecentOpens.recordingSession(session("s1", taskId: "t1"), at: t0, into: [], cap: 40)
+        XCTAssertNil(TasksTabView.restorableSession(list, liveSessions: [], inDemo: true))
+        XCTAssertEqual(TasksTabView.restorableSession(list, liveSessions: [], inDemo: false)?.id, "s1")
     }
 }

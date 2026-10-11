@@ -776,6 +776,10 @@ struct BoardBandBar: View {
                     chips: chips, typeScale: Self.chipTypeScale(typeSize)
                 )
                 card(layout, drawing: drawing)
+                    // In the Tasks drawer, a sideways drag that scrolls the rail must not
+                    // also close the drawer. Only the live copy reports its scroll, so the
+                    // hidden one never blocks a close.
+                    .drawerCloseExempt("board.bandBar.\(placement)", active: drawing)
                     // The card's own inset — 0 inline (the List already did it), 16
                     // pinned. Real layout, not `.offset`: an offset moves pixels while
                     // the reported frame lags behind them.
@@ -923,6 +927,9 @@ struct BoardBandBar: View {
                 .padding(.trailing, layout.railTrailingContentInset)
                 .frame(height: layout.rail.height)
             }
+            // Only a rail that overflows scrolls: chips that fit must not rubber-band
+            // under a sideways drag (in the drawer, that drag would read as dead).
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             // No scroll edge effect on the rail, on ANY edge. The rail never scrolls
             // vertically, so it has no edge for an effect to mark.
             //

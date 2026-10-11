@@ -19,6 +19,9 @@ struct SessionConversationView: View {
 
     let session: WalnutSession
     private let voiceModeOnOpen: VoiceModeOnOpen
+    /// Showing this page counts as opening the session (`RecentOpens`). Off where the
+    /// host records the opens itself (`TasksTabView`).
+    @Environment(\.recordsSessionOpen) private var recordsOpen
 
     /// Optional on purpose: WalnutTests host this page without the app
     /// environment; task affordances just hide there (fixture has no taskId).
@@ -158,17 +161,21 @@ struct SessionConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
+            // The title opens the TASK's page: a task tap lands here, in its session, so
+            // the task's details are one tap away from the session rather than a page
+            // in front of it (the user: the details are there for a second tap). The ⋯ menu's
+            // Task Details is the same sheet.
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(session.rowTitle)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(navSubtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                if session.taskId != nil, tasksStore != nil {
+                    Button { showTask = true } label: {
+                        navTitle(opensTask: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("session.title")
+                    .accessibilityHint("Shows the task's details")
+                } else {
+                    navTitle(opensTask: false)
                 }
-                .frame(maxWidth: 240)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 sessionMenu
@@ -270,7 +277,7 @@ struct SessionConversationView: View {
         // every route that opens a conversation is remembered. `onAppear`, not the
         // `.task` below: a task re-arms whenever its subtree is re-evaluated, and each
         // arm would be another write.
-        .onAppear { tasksStore?.recents.recordSession(session) }
+        .onAppear { if recordsOpen { tasksStore?.recents.recordSession(session) } }
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id
@@ -484,6 +491,29 @@ struct SessionConversationView: View {
     private var linkedTask: WalnutTask? {
         guard let taskId = session.taskId else { return nil }
         return tasksStore?.tasks.first { $0.id == taskId }
+    }
+
+    /// The two-line principal title. A chevron says it opens something when it does.
+    private func navTitle(opensTask: Bool) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 3) {
+                Text(session.rowTitle)
+                    .font(.headline)
+                    .lineLimit(1)
+                if opensTask {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            Text(navSubtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: 240)
+        .contentShape(Rectangle())
     }
 
     /// Nav-bar subtitle: live status + where it runs + the model when known

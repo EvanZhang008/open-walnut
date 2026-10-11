@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Quick-add backfill endpoints (additive /api/v1, docs/reference/api-v1.md)
 //
-// The NL quick-add flow (QuickAddRow → TasksStore.quickAdd) creates the task
+// The NL quick-add flow (TasksStore.quickAdd) creates the task
 // instantly with the raw text, then upgrades it in place once the background
 // quick-parse lands. These are the two wire calls that upgrade path needs
 // beyond what WalnutAPI/Wave1/Wave2 already expose: a PATCH that can carry

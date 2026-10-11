@@ -351,33 +351,6 @@ final class BoardChromeR30Tests: XCTestCase {
         XCTAssertEqual(BoardFilterPrefs.showDoneKey, "tasks.board.showDone")
     }
 
-    // MARK: - The nav row's chips
-
-    /// The fair share: two chips capped at half the row each fit BY ARITHMETIC, which is the
-    /// only cap available without measuring text. It is the last of the row's three layouts,
-    /// so it only bites when even the leanest full-label layout overflows — and there it
-    /// truncates with an ellipsis inside an intact capsule, which is what the sliced capsule
-    /// at x=370 was missing.
-    func testTheNavChipsFairShareAlwaysFitsTheRow() throws {
-        // The real row on this device: 402pt screen, 16pt List margins each side.
-        let width = try XCTUnwrap(TasksNavRow.chipMaxWidth(
-            container: 370, count: 2, spacing: TasksNavRow.chipSpacing))
-        XCTAssertEqual(width, 181, accuracy: 0.01)
-        // Two of them plus the gap is the row, never more than it.
-        XCTAssertLessThanOrEqual(
-            2 * width + TasksNavRow.chipSpacing, 370,
-            "the cap does not actually guarantee a fit"
-        )
-    }
-
-    /// No cap before the row has been measured, and none from a degenerate width: capping to
-    /// a few points would draw two ellipses instead of two words.
-    func testAnUnmeasuredRowDoesNotCapItsChips() {
-        XCTAssertNil(TasksNavRow.chipMaxWidth(container: 0, count: 2, spacing: 8))
-        XCTAssertNil(TasksNavRow.chipMaxWidth(container: 60, count: 2, spacing: 8))
-        XCTAssertNil(TasksNavRow.chipMaxWidth(container: 370, count: 0, spacing: 8))
-    }
-
     // MARK: - Helpers
 
 

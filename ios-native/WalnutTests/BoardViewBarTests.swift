@@ -172,53 +172,30 @@ final class BoardViewBarTests: XCTestCase {
         )
     }
 
-    /// The board never collapses its chrome, at ANY offset — which is why adding a row to it
-    /// is a layout question and not a threshold question.
-    ///
-    /// This replaces an assertion that only restated `chromeHeight`'s own arithmetic (2026-09-02
-    /// review: the board branch of that sum has no reader in the app, because `hasCompactBar`
-    /// is false for the board, so a test agreeing with the sum proved nothing). The invariant
-    /// worth pinning is the one the SCREEN has: one floating row on the board, and no
-    /// whole-body publish on its scroll path for a bar that never draws. It fails the moment
-    /// someone gives the board a compact bar or drops the guard in `isCollapsed`.
-    func testTheBoardNeverCollapsesItsChromeAtAnyOffset() {
-        XCTAssertFalse(
-            TasksChromeMetrics.hasCompactBar(.sessions),
-            "the board's floating row is its pinned chips — a compact bar would be a second one"
-        )
-        for offline in [false, true] {
-            let past = Int(TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline)) + 400
-            for scrolled in stride(from: -80, through: past, by: 7) {
-                for wasCollapsed in [false, true] {
-                    XCTAssertFalse(
-                        TasksChromeMetrics.isCollapsed(
-                            scrolled: CGFloat(scrolled), wasCollapsed: wasCollapsed,
-                            filter: .sessions, offline: offline),
-                        "the board collapsed at \(scrolled) (offline=\(offline))"
-                    )
-                    XCTAssertFalse(
-                        TasksChromeMetrics.showsCompactBar(filter: .sessions, collapsed: wasCollapsed),
-                        "the board drew a compact bar"
-                    )
-                }
-            }
-        }
-    }
-
-    /// And it does NOT move the pin: the band bar is row 2 and this rides below it, so the
-    /// offset where the chips reach the top edge is untouched by its existence.
+    /// The view bar does NOT move the pin: the band bar is row 1 and this rides below it, so
+    /// the offset where the chips reach the top edge is untouched by its existence.
     func testTheViewBarDoesNotMoveThePinThreshold() {
         for offline in [false, true] {
             XCTAssertEqual(
                 TasksChromeMetrics.chipsPinThreshold(offline: offline),
-                TasksChromeMetrics.rowTwoContentTop(offline: offline)
+                TasksChromeMetrics.chipRowContentTop(offline: offline)
                     - TasksChromeMetrics.pinnedChipsTopInset,
                 accuracy: 0.01, "offline=\(offline)"
             )
-            XCTAssertLessThan(
-                TasksChromeMetrics.chipsPinThreshold(offline: offline),
-                TasksChromeMetrics.chromeHeight(filter: .sessions, offline: offline)
-            )
+        }
+    }
+
+    /// The collapse chip names what a tap DOES, both ways, and its two states are told apart
+    /// by more than the word (a different glyph), so the toggle is legible at a glance.
+    func testTheCollapseChipNamesItsActionInBothStates() {
+        let open = BoardViewBarModel.collapse(allCollapsed: false)
+        let folded = BoardViewBarModel.collapse(allCollapsed: true)
+        XCTAssertEqual(open.label, "Collapse")
+        XCTAssertEqual(folded.label, "Expand")
+        XCTAssertNotEqual(open.symbol, folded.symbol)
+        XCTAssertNotEqual(open.hint, folded.hint)
+        for spec in [open, folded] {
+            XCTAssertNotNil(UIImage(systemName: spec.symbol), "\(spec.symbol) is not an SF Symbol")
         }
     }
 

@@ -446,27 +446,3 @@ final class ChatInFlightTurnRowsTests: XCTestCase {
     }
 }
 
-/// Empty-state copy under an active search (2026-08-23 dogfood R11 FRICTION):
-/// the filter's own wording read as "search failed" while the actual matches
-/// were below in the Server Search section.
-final class TasksEmptyPlaceholderTests: XCTestCase {
-    func testFilterWordingWithoutQuery() {
-        // The board's empty state says how to fill it (pin something), not just
-        // that it is empty — an empty board with no next step read as broken.
-        XCTAssertEqual(
-            TasksView.emptyPlaceholder(filter: .sessions, query: ""),
-            "Nothing pinned yet. Pin a task to put it on the board."
-        )
-        XCTAssertEqual(TasksView.emptyPlaceholder(filter: .allOpen, query: ""), "No open tasks.")
-    }
-
-    func testActiveQueryPointsAtServerSearch() {
-        for filter in [TaskFilter.sessions, .allOpen, .today, .inProgress, .done] {
-            XCTAssertEqual(
-                TasksView.emptyPlaceholder(filter: filter, query: "AMD"),
-                "No local matches. See More Results below.",
-                "filter \(filter) must not show its own empty copy while searching"
-            )
-        }
-    }
-}

@@ -171,8 +171,10 @@ struct GlobalSearchSection: View {
     var storeTasks: [WalnutTask] = []
     /// The list's own row for a task, with the snippet when it says more than the title.
     var taskRow: (WalnutTask, String?) -> AnyView
-    /// Open a hit neither the phone nor the response could draw as a task.
-    var onOpenTask: (String) -> Void
+    /// Open a hit neither the phone nor the response could draw as a task. Every server
+    /// row this section draws is about a task (`SearchArrangement` keeps only those), so
+    /// the hit always has an `ownerTaskId`, and the tab opens that task's session.
+    var onOpen: (GlobalSearchResult) -> Void
 
     var body: some View {
         // ONE arrangement per body pass, and the status line reads from the SAME value
@@ -456,13 +458,14 @@ struct GlobalSearchSection: View {
         }
         .padding(.vertical, 2)
 
-        if result.type == "task", let id = result.resultId {
-            Button { onOpenTask(id) } label: { row }
+        // A task hit and a session hit are one destination: the task's session.
+        if let id = result.ownerTaskId {
+            Button { onOpen(result) } label: { row }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("search.result.\(id)")
+                .accessibilityIdentifier("search.result.\(result.resultId ?? id)")
         } else {
-            // Memory/session hits have no dedicated phone surface yet —
-            // render read-only (title + snippet carries the answer).
+            // A memory hit has no phone surface: read-only (title + snippet carries the
+            // answer).
             row
         }
     }

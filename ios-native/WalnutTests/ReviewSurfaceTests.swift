@@ -259,10 +259,15 @@ final class ReviewSurfaceTests: XCTestCase {
     func testTheDraftKeepsItsPageAtTheAccessibilitySizes() throws {
         let draft = try source("Walnut/Views/Sessions/NewSessionChatView.swift")
         XCTAssertTrue(draft.contains("disabledNotice: canLaunch || dynamicTypeSize.isAccessibilitySize ? nil : Self.folderNotice"))
-        XCTAssertTrue(draft.contains("controlsAccessory: dynamicTypeSize.isAccessibilitySize ? nil : AnyView(launchPills)"))
+        // The pills also move up whenever Save as todo shares the composer's row.
+        XCTAssertTrue(draft.contains("controlsAccessory: launchPillsInPillRow ? nil : AnyView(launchPills)"))
+        XCTAssertTrue(draft.contains(
+            "private var launchPillsInPillRow: Bool {\n        dynamicTypeSize.isAccessibilitySize || "
+        ))
         let row = try XCTUnwrap(draft.range(of: "private var pillRow: some View {"))
-        let rowBody = draft[row.upperBound...].prefix(700)
-        XCTAssertTrue(rowBody.contains("if dynamicTypeSize.isAccessibilitySize {\n                    launchPills"))
+        let rowEnd = try XCTUnwrap(draft.range(of: "\n    private ", range: row.upperBound..<draft.endIndex))
+        let rowBody = draft[row.upperBound..<rowEnd.lowerBound]
+        XCTAssertTrue(rowBody.contains("if launchPillsInPillRow {\n                    launchPills"))
         XCTAssertTrue(draft.contains("return ComposerBar.pillLayout(stacked: false) {"))
         XCTAssertTrue(draft.contains("if !quickDirs.isEmpty, !movesQuickFoldersIntoPage {"))
         XCTAssertTrue(draft.contains("!quickDirs.isEmpty && dynamicTypeSize.isAccessibilitySize"))

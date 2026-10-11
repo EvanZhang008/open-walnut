@@ -289,7 +289,7 @@ struct MainTabView: View {
                 .freezeScreen("notes")
                 .tabItem { Label("Notes", systemImage: "doc.text") }
                 .tag(Tab.notes)
-            TasksView()
+            TasksTabView()
                 .freezeScreen("tasks")
                 .tabItem { Label("Tasks", systemImage: "checklist") }
                 .tag(Tab.tasks)
