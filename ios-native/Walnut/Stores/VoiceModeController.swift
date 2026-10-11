@@ -208,7 +208,7 @@ final class VoiceModeController {
     /// before the person leaves Walnut can finish. iOS's expiry ends it too: a
     /// request still out then is suspended with the app, not cut by a kill.
     private func withBackgroundTime<T>(_ name: String, _ work: () async -> T) async -> T {
-        let time = BackgroundTime(name)
+        let time = VoiceBackgroundTime(name)
         defer { time.end() }
         return await work()
     }
@@ -281,7 +281,7 @@ final class VoiceModeController {
             self.activeObserver = nil
         }
         speaker.stop(handoff: false)
-        if recorder.state == .recording { recorder.cancel() }
+        if recorder.state == .recording { recorder.preserveAndStop(reason: "view-dismissed") }
     }
 
     private func evaluate(now: Date) {
@@ -398,25 +398,5 @@ extension VoiceModeController {
         ) { text in
             await store.send(text, voice: true)
         }
-    }
-}
-
-/// One background task asked of iOS for a voice step, ended by its owner or, when
-/// time runs out first, by iOS's expiry handler: an app whose background task is
-/// not ended by then is killed, and one that ends it is only suspended.
-@MainActor
-private final class BackgroundTime {
-    private var id: UIBackgroundTaskIdentifier = .invalid
-
-    init(_ name: String) {
-        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
-            MainActor.assumeIsolated { self?.end() }
-        }
-    }
-
-    func end() {
-        guard id != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(id)
-        id = .invalid
     }
 }

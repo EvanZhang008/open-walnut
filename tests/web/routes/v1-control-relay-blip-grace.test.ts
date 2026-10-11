@@ -35,7 +35,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-control-blip', { CLOUD_MODE: true }))
 
 import {
-  attachBridge, closeAllBridges, addPrimaryBridgeConnectedHandler,
+  attachBridge, closeAllBridges, addPrimaryBridgeConnectedHandler, addPrimaryBridgeActivityHandler,
 } from '../../../src/web/ws/bridge-registry.js'
 import {
   callPrimaryControl, relayControlAction, bridgeBlipGraceMs, DEFAULT_BRIDGE_BLIP_GRACE_MS,
@@ -347,6 +347,29 @@ describe('callPrimaryControl across a bridge blip', () => {
     const out = await callPrimaryControl('detail', 'sid-noserver', undefined, 10_000)
 
     expect(out).toMatchObject({ ok: false, failure: { kind: 'bridge_offline', notSent: true } })
+  })
+})
+
+describe('primary daemon activity wakes pending durable copies', () => {
+  it('paces activity callbacks on a stable link and keeps ping acknowledgement intact', async () => {
+    const seen = vi.fn()
+    const unhook = addPrimaryBridgeActivityHandler(seen)
+    const ws = connectPrimary()
+    try {
+      await vi.advanceTimersByTimeAsync(15_000)
+      ws.inbound({ ev: 'bridge-ping', seq: 10 })
+      expect(seen).toHaveBeenCalledTimes(1)
+      expect(ws.sent.some((f) => f.cmd === 'ping' && f.ackSeq === 10)).toBe(true)
+      ws.inbound({ ev: 'bridge-ping', seq: 11 })
+      expect(seen).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(15_000)
+      ws.inbound({ ev: 'status', sids: [] })
+      expect(seen).toHaveBeenCalledTimes(2)
+      unhook()
+      await vi.advanceTimersByTimeAsync(15_000)
+      ws.inbound({ ev: 'bridge-ping', seq: 12 })
+      expect(seen).toHaveBeenCalledTimes(2)
+    } finally { unhook() }
   })
 })
 

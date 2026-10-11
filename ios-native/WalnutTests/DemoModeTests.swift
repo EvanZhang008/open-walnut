@@ -192,7 +192,16 @@ final class DemoModeTests: XCTestCase {
         // Voice, push and the background reporters.
         let heard = try await api.transcribe(audio: Data(repeating: 0, count: 64), format: "m4a")
         XCTAssertEqual(heard, DemoFixtures.transcriptionSentence(DemoServer.shared.clockNow))
-        _ = try await api.transcribeVoice(audio: Data(repeating: 0, count: 64), format: "m4a")
+        let voiceDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: voiceDirectory) }
+        let voiceStore = VoiceRecordingStore(baseDir: voiceDirectory)
+        let voiceID = UUID().uuidString
+        let voiceURL = voiceStore.newRecordingURL(id: voiceID)
+        try Data(repeating: 0, count: 64).write(to: voiceURL)
+        XCTAssertTrue(voiceStore.preserve(id: voiceID, reason: "recorded"))
+        let voiceRecording = try XCTUnwrap(voiceStore.recording(id: voiceID))
+        let voiceResult = try await api.transcribeVoice(audioURL: voiceURL, recording: voiceRecording)
+        XCTAssertEqual(voiceResult.text, DemoFixtures.transcriptionSentence(DemoServer.shared.clockNow))
         let push = try await api.pushStatus()
         XCTAssertEqual(push.apns?.configured, false, "the demo can never send a notification")
         try await api.registerPushToken(token: "00", environment: "sandbox", mode: "always")

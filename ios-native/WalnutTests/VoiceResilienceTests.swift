@@ -1,4 +1,7 @@
+import AVFoundation
+import UIKit
 import XCTest
+import os
 @testable import Walnut
 
 /// Voice recording resilience — the no-loss state machine.
@@ -9,8 +12,8 @@ import XCTest
 /// 90s hard cap auto-stopped long dictations; (3) stopAndTranscribe deleted
 /// the audio file on EVERY outcome, success or failure.
 ///
-/// The contract under test: audio is deleted only after transcription
-/// succeeded (or explicit user discard); every failure path preserves the
+/// The contract under test: audio and transcripts stay in durable history;
+/// only explicit user discard deletes a take. Every failure preserves the
 /// file for retry. The recorder is protocol-seamed (`AudioCapture`,
 /// `uploadOverride`, injected store dir) so none of this needs a microphone
 /// or a server.
@@ -57,7 +60,7 @@ final class VoiceResilienceTests: XCTestCase {
         return rec
     }
 
-    /// Write a fake m4a into the store and put the recorder into `.recording`.
+    /// Write fake audio into the store and put the recorder into `.recording`.
     @MainActor
     private func beginTake(_ recorder: VoiceRecorder, bytes: Int = 4_000) -> (id: String, url: URL, capture: FakeCapture) {
         let id = UUID().uuidString
@@ -69,7 +72,9 @@ final class VoiceResilienceTests: XCTestCase {
     }
 
     private func audioExists(_ id: String) -> Bool {
-        FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("\(id).m4a").path)
+        ["caf", "m4a"].contains {
+            FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("\(id).\($0)").path)
+        }
     }
 
     /// The recorder's sentence about a take it gave up on is shown ONCE, as the
@@ -96,12 +101,12 @@ final class VoiceResilienceTests: XCTestCase {
     func testStorePreservePendingAndDiscard() {
         let url = store.newRecordingURL(id: "take1")
         try! Data(repeating: 1, count: 2_000).write(to: url)
-        store.preserve(id: "take1", reason: "recording")
+        store.preserve(id: "take1", reason: "interrupted")
 
         let pending = store.pending()
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].id, "take1")
-        XCTAssertEqual(pending[0].reason, "recording")
+        XCTAssertEqual(pending[0].reason, "interrupted")
         XCTAssertEqual(pending[0].bytes, 2_000)
 
         // Re-marking with a new reason must keep the original createdAt.
@@ -121,35 +126,32 @@ final class VoiceResilienceTests: XCTestCase {
         for (i, id) in ["a", "b", "c"].enumerated() {
             let url = store.newRecordingURL(id: id)
             try! Data(repeating: 1, count: 1_500).write(to: url)
-            store.preserve(id: id, reason: "recording",
+            store.preserve(id: id, reason: "interrupted",
                            createdAt: Date(timeIntervalSince1970: Double(100 - i)))
         }
         // c is oldest (t=98), then b, then a.
         XCTAssertEqual(store.pending().map(\.id), ["c", "b", "a"])
     }
 
-    func testStorePruneAgeAndCount() {
-        // One ancient take → pruned by age.
+    func testPruneNeverDeletesOldOrExcessHistory() throws {
         let old = store.newRecordingURL(id: "ancient")
-        try! Data(repeating: 1, count: 1_500).write(to: old)
-        store.preserve(id: "ancient", reason: "recording",
-                       createdAt: Date().addingTimeInterval(-VoiceRecordingStore.maxAge - 60))
+        try Data(repeating: 1, count: 1_500).write(to: old)
+        XCTAssertTrue(store.preserve(id: "ancient", reason: "recording",
+                                     createdAt: Date().addingTimeInterval(-365 * 24 * 3600)))
+        try store.saveTranscription(id: "ancient", text: "Words from a year ago")
 
-        // maxCount+2 fresh takes → 2 oldest pruned by count.
-        let n = VoiceRecordingStore.maxCount + 2
-        for i in 0..<n {
-            let url = store.newRecordingURL(id: "fresh-\(i)")
-            try! Data(repeating: 1, count: 1_500).write(to: url)
-            store.preserve(id: "fresh-\(i)", reason: "recording",
-                           createdAt: Date().addingTimeInterval(Double(i - n)))
+        for i in 0..<25 {
+            let id = "fresh-\(i)"
+            try Data(repeating: 1, count: 1_500).write(to: store.newRecordingURL(id: id))
+            XCTAssertTrue(store.preserve(id: id, reason: "recorded"))
         }
-
-        let removed = store.prune()
-        XCTAssertEqual(removed, 3, "1 by age + 2 over maxCount")
-        XCTAssertEqual(store.pending().count, VoiceRecordingStore.maxCount)
-        XCTAssertFalse(audioExists("ancient"))
-        XCTAssertFalse(audioExists("fresh-0"))
-        XCTAssertFalse(audioExists("fresh-1"))
+        XCTAssertEqual(store.prune(now: Date().addingTimeInterval(365 * 24 * 3600)), 0)
+        VoiceRecordingStore.pruneAtLaunch(protectedDataAvailable: true, store: store)
+        XCTAssertEqual(store.history().count, 26)
+        XCTAssertEqual(store.pending().count, 25)
+        XCTAssertTrue(audioExists("ancient"))
+        XCTAssertTrue(audioExists("fresh-0"))
+        XCTAssertEqual(store.recording(id: "ancient")?.transcript, "Words from a year ago")
     }
 
     func testStoreListsAudioWithoutSidecar() {
@@ -161,7 +163,308 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertEqual(pending[0].reason, "unknown")
     }
 
-    // MARK: - Recorder: failure preserves, success deletes
+    // MARK: - Durable history, migration and local write failures
+
+    @MainActor
+    func testNewTakesUseCrashReadablePCMInCAF() throws {
+        XCTAssertEqual(store.newRecordingURL(id: "pcm").pathExtension, "caf")
+        let settings = VoiceRecorder.captureSettings
+        XCTAssertEqual(settings[AVFormatIDKey] as? Int, Int(kAudioFormatLinearPCM))
+        XCTAssertEqual(settings[AVSampleRateKey] as? Int, 16_000)
+        XCTAssertEqual(settings[AVNumberOfChannelsKey] as? Int, 1)
+        XCTAssertEqual(settings[AVLinearPCMBitDepthKey] as? Int, 16)
+        XCTAssertEqual(settings[AVLinearPCMIsFloatKey] as? Bool, false)
+        XCTAssertEqual(settings[AVLinearPCMIsBigEndianKey] as? Bool, false)
+    }
+
+    @MainActor
+    func testSevenMinuteTakeAndTextSurviveStoreRecreationAfterSuccess() async throws {
+        let recorder = VoiceRecorder(store: store)
+        // Seven minutes of signed 16-bit mono PCM at 16kHz, plus a CAF header.
+        let bytes = 7 * 60 * 16_000 * 2 + 68
+        XCTAssertGreaterThan(bytes, 13_000_000)
+        let take = beginTake(recorder, bytes: bytes)
+        take.capture.currentTime = 420
+        let words = String(repeating: "A complete recorded sentence. ", count: 300)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        recorder.uploadOverride = { data in
+            XCTAssertEqual(data.count, bytes)
+            return words
+        }
+
+        let result = await recorder.stopAndTranscribe()
+        XCTAssertEqual(result, words)
+        // No composer/draft callback runs here. The store is the crash boundary.
+        let restarted = VoiceRecordingStore(baseDir: tempDir)
+        let recovered = try XCTUnwrap(restarted.history().first)
+        XCTAssertEqual(recovered.id, take.id)
+        XCTAssertEqual(recovered.transcript, words)
+        XCTAssertEqual(recovered.durationSeconds, 420)
+        XCTAssertEqual(recovered.bytes, bytes)
+        XCTAssertTrue(recovered.audioAvailable)
+        XCTAssertEqual(try Data(contentsOf: recovered.audioURL), Data(repeating: 0xAB, count: bytes))
+        XCTAssertTrue(restarted.pending().isEmpty)
+    }
+
+    @MainActor
+    func testBackgroundTimeExpirationAndCompletionEndOnlyOnce() {
+        var ended: [UIBackgroundTaskIdentifier] = []
+        let id = UIBackgroundTaskIdentifier(rawValue: 123)
+        let time = VoiceBackgroundTime(identifier: id) { ended.append($0) }
+        time.end() // the expiration handler reaches this same method
+        time.end() // the upload's completion defer may run later
+        XCTAssertEqual(ended, [id])
+        let invalid = VoiceBackgroundTime(identifier: .invalid) { ended.append($0) }
+        invalid.end()
+        XCTAssertEqual(ended, [id])
+    }
+
+    func testHistoryIncludesCompletedAndPendingNewestFirst() throws {
+        for (i, id) in ["old", "new"].enumerated() {
+            try Data([1]).write(to: store.newRecordingURL(id: id))
+            try store.preserveOrThrow(id: id, reason: "recorded", createdAt: Date(timeIntervalSince1970: Double(i)))
+        }
+        try store.saveTranscription(id: "old", text: "Older words")
+        XCTAssertEqual(store.history().map(\.id), ["new", "old"])
+        XCTAssertEqual(store.pending().map(\.id), ["new"])
+        XCTAssertEqual(store.history().last?.transcript, "Older words")
+    }
+
+    func testLiveCaptureDoesNotEnterAnotherComposerRecoveryQueue() throws {
+        let id = "live"
+        try Data([1]).write(to: store.newRecordingURL(id: id))
+        try store.preserveOrThrow(id: id, reason: "recording", surface: "session:other")
+        XCTAssertTrue(store.pending().isEmpty)
+        XCTAssertEqual(store.history().first?.reason, "recording")
+        try store.preserveOrThrow(id: id, reason: "interrupted")
+        XCTAssertEqual(store.pending().map(\.id), [id])
+    }
+
+    func testLegacyM4AAudioAndTranscriptOnlyHistoryRemainDiscoverable() throws {
+        _ = store.newRecordingURL(id: "legacy-audio")
+        let legacy = tempDir.appendingPathComponent("legacy-audio.m4a")
+        try Data([1, 2, 3]).write(to: legacy)
+        try store.preserveOrThrow(id: "legacy-audio", reason: "recorded")
+        XCTAssertEqual(store.recording(id: "legacy-audio")?.format, "m4a")
+        XCTAssertEqual(store.pending().map(\.id), ["legacy-audio"])
+        try store.saveTranscription(id: "legacy-audio", text: "Words survive the missing audio")
+        try FileManager.default.removeItem(at: legacy)
+
+        let restarted = VoiceRecordingStore(baseDir: tempDir)
+        let recording = try XCTUnwrap(restarted.history().first)
+        XCTAssertEqual(recording.transcript, "Words survive the missing audio")
+        XCTAssertEqual(recording.format, "m4a")
+        XCTAssertFalse(recording.audioAvailable)
+        XCTAssertTrue(restarted.pending().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("legacy-audio.json").path))
+    }
+
+    func testV2MetadataDefaultsNewFieldsAndKeepsUnknownOrigin() throws {
+        let url = store.newRecordingURL(id: "v2")
+        try Data([1]).write(to: url)
+        let old: [String: Any] = ["v": 2, "createdAt": 123.0, "reason": "interrupted", "attempts": 3, "verdicts": 1]
+        try JSONSerialization.data(withJSONObject: old).write(to: tempDir.appendingPathComponent("v2.json"))
+        let original = try XCTUnwrap(store.recording(id: "v2"))
+        XCTAssertEqual(original.attempts, 3)
+        XCTAssertEqual(original.verdicts, 1)
+        XCTAssertNil(original.transcript)
+        XCTAssertNil(original.primarySaved)
+        XCTAssertNil(original.archiveState)
+        XCTAssertNil(original.surface)
+        try store.preserveOrThrow(id: "v2", reason: "view-dismissed", surface: "session:new")
+        XCTAssertNil(store.recording(id: "v2")?.surface, "a later caller cannot invent the old recording's origin")
+    }
+
+    func testSidecarWithoutVersionStillDecodes() throws {
+        try Data([1]).write(to: store.newRecordingURL(id: "unversioned"))
+        let old: [String: Any] = ["createdAt": 456.0, "reason": "interrupted"]
+        try JSONSerialization.data(withJSONObject: old).write(to: tempDir.appendingPathComponent("unversioned.json"))
+        let rec = try XCTUnwrap(store.recording(id: "unversioned"))
+        XCTAssertEqual(rec.reason, "interrupted")
+        XCTAssertEqual(rec.createdAt, Date(timeIntervalSinceReferenceDate: 456))
+        XCTAssertNil(rec.transcript)
+        XCTAssertNil(rec.durationSeconds)
+    }
+
+    func testTranscriptFailureLeavesAudioAndDoesNotReportSavedText() throws {
+        let id = "blocked-text"
+        let url = store.newRecordingURL(id: id)
+        try Data([1, 2, 3]).write(to: url)
+        let sidecar = tempDir.appendingPathComponent("\(id).json")
+        // A directory where the final JSON must go makes atomic replacement
+        // actually fail. No injected success or protected-device assumption.
+        try FileManager.default.createDirectory(at: sidecar, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try store.saveTranscription(id: id, text: "Do not lose these words"))
+        XCTAssertTrue(audioExists(id))
+        XCTAssertNil(store.recording(id: id)?.transcript)
+        try FileManager.default.removeItem(at: sidecar)
+        try store.saveTranscription(id: id, text: "Do not lose these words")
+        XCTAssertEqual(store.history().first?.transcript, "Do not lose these words")
+        XCTAssertTrue(audioExists(id))
+    }
+
+    @MainActor
+    func testRecorderReturnsFailureWhenTranscriptCannotBeWritten() async throws {
+        let recorder = VoiceRecorder(store: store)
+        let take = beginTake(recorder)
+        recorder.uploadOverride = { _ in
+            let sidecar = self.tempDir.appendingPathComponent("\(take.id).json")
+            try FileManager.default.removeItem(at: sidecar)
+            try FileManager.default.createDirectory(at: sidecar, withIntermediateDirectories: false)
+            return "The server succeeded but local storage did not"
+        }
+        let result = await recorder.stopAndTranscribe()
+        XCTAssertNil(result, "network success is not local persistence success")
+        XCTAssertTrue(audioExists(take.id))
+        XCTAssertNil(store.history().first?.transcript)
+        XCTAssertNotNil(recorder.errorMessage)
+        XCTAssertEqual(recorder.pendingCount, 1)
+    }
+
+    @MainActor
+    func testBackupMetadataFailureDoesNotLoseDurablySavedText() async throws {
+        let failure = NSError(domain: NSPOSIXErrorDomain, code: 28)
+        store._testBeforeBackupWrite = { throw failure }
+        let recorder = VoiceRecorder(store: store)
+        let take = beginTake(recorder)
+        recorder._testTranscriptionOverride = { url, recording in
+            XCTAssertEqual(url, take.url)
+            XCTAssertEqual(recording.id, take.id)
+            return VoiceTranscriptionResult(text: "Durable words", recordingID: take.id.lowercased(), primarySaved: nil)
+        }
+        let result = await recorder.stopAndTranscribe()
+        XCTAssertEqual(result, "Durable words", "only the secondary backup marker failed")
+        let restarted = VoiceRecordingStore(baseDir: tempDir)
+        let rec = try XCTUnwrap(restarted.recording(id: take.id))
+        XCTAssertEqual(rec.transcript, "Durable words")
+        XCTAssertEqual(rec.archiveState, "failed")
+        XCTAssertNotNil(rec.backupError)
+        XCTAssertNil(rec.serverID, "failed local marker must not claim durable remote success")
+        XCTAssertNil(rec.primarySaved)
+        XCTAssertTrue(rec.audioAvailable)
+        XCTAssertTrue(restarted.pending().isEmpty)
+    }
+
+    @MainActor
+    func testTranscriptionResultCannotSaveUnderADifferentRecordingID() async throws {
+        let recorder = VoiceRecorder(store: store)
+        let take = beginTake(recorder)
+        recorder._testTranscriptionOverride = { _, _ in
+            VoiceTranscriptionResult(text: "Wrong recording", recordingID: "unrelated", primarySaved: true)
+        }
+        let result = await recorder.stopAndTranscribe()
+        XCTAssertNil(result)
+        XCTAssertNil(store.recording(id: take.id)?.transcript)
+        XCTAssertNil(store.recording(id: take.id)?.serverID)
+        XCTAssertTrue(audioExists(take.id))
+        XCTAssertNotNil(recorder.errorMessage)
+    }
+
+    @MainActor
+    func testRecoveredServerTextReturnsToItsComposerWithoutRetranscription() async throws {
+        let recorder = ownedRecorder()
+        let id = UUID().uuidString
+        let url = store.newRecordingURL(id: id)
+        try Data(repeating: 1, count: 2_000).write(to: url)
+        store.preserve(id: id, reason: "recorded", surface: "tab:chat")
+        try store.saveRecoveredTranscription(id: id, text: "Words recovered after a lost response")
+        recorder.uploadOverride = { _ in XCTFail("already saved words must not be transcribed again"); return "" }
+        let result = await recorder.retryPending(userInitiated: false)
+        XCTAssertEqual(result, "Words recovered after a lost response")
+        XCTAssertTrue(store.pending().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testManifestWriteFailureIsObservable() throws {
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let sidecar = tempDir.appendingPathComponent("manifest.json")
+        try FileManager.default.createDirectory(at: sidecar, withIntermediateDirectories: false)
+        XCTAssertFalse(store.preserve(id: "manifest", reason: "recording"))
+        XCTAssertThrowsError(try store.preserveOrThrow(id: "manifest", reason: "recording"))
+    }
+
+    func testConcurrentUpdatesAcrossStoresNeverEraseTranscriptOrBackup() throws {
+        let id = "concurrent"
+        try Data([1]).write(to: store.newRecordingURL(id: id))
+        try store.preserveOrThrow(id: id, reason: "recording", surface: "tab:chat")
+        let second = VoiceRecordingStore(baseDir: tempDir)
+        let failures = OSAllocatedUnfairLock(initialState: [String]())
+        DispatchQueue.concurrentPerform(iterations: 30) { index in
+            do {
+                switch index % 5 {
+                case 0: try second.saveTranscription(id: id, text: "Saved words")
+                case 1: try second.markBackup(id: id, serverID: id, primarySaved: true)
+                case 2: try second.noteDuration(id: id, duration: 420)
+                case 3: try second.preserveOrThrow(id: id, reason: "interrupted", surface: "wrong")
+                default:
+                    if !second.noteAttempt(id: id, reason: "transcribe-failed", kind: .transport, message: "Late failure") {
+                        failures.withLock { $0.append("attempt write failed") }
+                    }
+                }
+            } catch { failures.withLock { $0.append(error.localizedDescription) } }
+        }
+        XCTAssertTrue(failures.withLock { $0 }.isEmpty)
+        let rec = try XCTUnwrap(store.recording(id: id))
+        XCTAssertEqual(rec.transcript, "Saved words")
+        XCTAssertEqual(rec.durationSeconds, 420)
+        XCTAssertEqual(rec.serverID, id)
+        XCTAssertEqual(rec.archiveState, "saved")
+        XCTAssertEqual(rec.primarySaved, true)
+        XCTAssertEqual(rec.surface, "tab:chat")
+        XCTAssertEqual(rec.attempts, 6)
+        XCTAssertTrue(store.pending().isEmpty)
+    }
+
+    func testDuplicateAndLateWritesCannotReplaceSavedWords() throws {
+        let id = "duplicate"
+        try Data([1]).write(to: store.newRecordingURL(id: id))
+        try store.saveTranscription(id: id, text: "First words")
+        try store.saveTranscription(id: id, text: "First words")
+        XCTAssertThrowsError(try store.saveTranscription(id: id, text: "Different late words"))
+        XCTAssertTrue(store.preserve(id: id, reason: "view-dismissed"))
+        XCTAssertTrue(store.noteAttempt(id: id, reason: "transcribe-failed", kind: .transport, message: "Late network failure"))
+        XCTAssertEqual(store.history().first?.transcript, "First words")
+        XCTAssertTrue(store.pending().isEmpty)
+    }
+
+    func testBackupStatusDoesNotPretendUnknownPrimaryWasSaved() throws {
+        let id = "backup"
+        try Data([1]).write(to: store.newRecordingURL(id: id))
+        try store.markBackup(id: id, serverID: id, primarySaved: nil, origin: "https://archive.example")
+        XCTAssertEqual(store.recording(id: id)?.archiveState, "saved")
+        XCTAssertNil(store.recording(id: id)?.primarySaved)
+        let restarted = VoiceRecordingStore(baseDir: tempDir)
+        XCTAssertEqual(restarted.recording(id: id)?.archiveOrigin, "https://archive.example")
+        try store.markBackup(id: id, serverID: id, primarySaved: nil)
+        XCTAssertEqual(store.recording(id: id)?.archiveOrigin, "https://archive.example",
+                       "a missing origin in a later acknowledgement must preserve the saved owner")
+        try store.noteBackupFailure(id: id, message: "Primary unavailable")
+        XCTAssertEqual(store.recording(id: id)?.archiveState, "saved")
+        XCTAssertEqual(store.recording(id: id)?.backupError, "Primary unavailable")
+        try store.clearBackup(id: id)
+        XCTAssertNil(store.recording(id: id)?.serverID)
+        XCTAssertNil(store.recording(id: id)?.archiveOrigin)
+        XCTAssertNil(store.recording(id: id)?.archiveState)
+        XCTAssertTrue(audioExists(id))
+    }
+
+    @MainActor
+    func testRetryNeverUploadsOrDeliversCompletedHistoryAgain() async throws {
+        let recorder = VoiceRecorder(store: store)
+        recorder.uploadOverride = { _ in "Saved once" }
+        let take = beginTake(recorder)
+        let first = await recorder.stopAndTranscribe()
+        XCTAssertEqual(first, "Saved once")
+        recorder.uploadOverride = { _ in XCTFail("completed history must not upload"); return "Wrong new text" }
+        let second = await recorder.retryPending(includeRetired: true)
+        let third = await recorder.retryPending()
+        XCTAssertNil(second)
+        XCTAssertNil(third)
+        XCTAssertEqual(store.recording(id: take.id)?.transcript, "Saved once")
+        XCTAssertTrue(audioExists(take.id))
+    }
+
+    // MARK: - Recorder: success and failure both retain audio
 
     @MainActor
     func testUploadFailurePreservesAudioAndSurfacesRetry() async {
@@ -185,7 +488,7 @@ final class VoiceResilienceTests: XCTestCase {
     }
 
     @MainActor
-    func testUploadSuccessDeletesAudio() async {
+    func testUploadSuccessRetainsAudioAndSavesTextBeforeReturning() async {
         let recorder = VoiceRecorder(store: store)
         recorder.uploadOverride = { _ in "hello world" }
         let take = beginTake(recorder)
@@ -193,7 +496,9 @@ final class VoiceResilienceTests: XCTestCase {
         let text = await recorder.stopAndTranscribe()
 
         XCTAssertEqual(text, "hello world")
-        XCTAssertFalse(audioExists(take.id), "success is the one path that deletes")
+        XCTAssertTrue(audioExists(take.id), "success must retain the original audio")
+        XCTAssertEqual(store.history().first?.transcript, "hello world")
+        XCTAssertTrue(store.pending().isEmpty)
         XCTAssertEqual(recorder.pendingCount, 0)
         XCTAssertEqual(recorder.state, .idle)
     }
@@ -227,16 +532,19 @@ final class VoiceResilienceTests: XCTestCase {
     }
 
     @MainActor
-    func testTooShortTakeIsDiscardedNotPreserved() async {
+    func testSmallTakeIsKeptRatherThanSilentlyDeleted() async {
         let recorder = VoiceRecorder(store: store)
-        recorder.uploadOverride = { _ in XCTFail("sub-1KB take must not upload"); return "" }
+        var uploads = 0
+        recorder.uploadOverride = { _ in uploads += 1; return "" }
         let take = beginTake(recorder, bytes: 500)
 
         let text = await recorder.stopAndTranscribe()
 
         XCTAssertNil(text)
-        XCTAssertFalse(audioExists(take.id), "accidental tap leaves nothing behind")
-        XCTAssertEqual(recorder.pendingCount, 0)
+        XCTAssertEqual(uploads, 1, "file size is not permission to throw away audio")
+        XCTAssertTrue(audioExists(take.id))
+        XCTAssertEqual(recorder.pendingCount, 1)
+        XCTAssertEqual(store.history().first?.bytes, 500)
     }
 
     @MainActor
@@ -246,7 +554,7 @@ final class VoiceResilienceTests: XCTestCase {
 
         recorder.cancel()
 
-        XCTAssertFalse(audioExists(take.id), "user's explicit ✕ is a real delete")
+        XCTAssertFalse(audioExists(take.id), "explicit Cancel is a real delete")
         XCTAssertEqual(recorder.state, .idle)
         XCTAssertTrue(take.capture.stopped)
     }
@@ -285,13 +593,16 @@ final class VoiceResilienceTests: XCTestCase {
 
         XCTAssertEqual(text, "part one part two", "oldest first, joined in spoken order")
         XCTAssertEqual(recorder.pendingCount, 0)
-        XCTAssertFalse(audioExists("first"))
-        XCTAssertFalse(audioExists("second"))
+        XCTAssertTrue(audioExists("first"))
+        XCTAssertTrue(audioExists("second"))
+        XCTAssertEqual(store.recording(id: "first")?.transcript, "part one")
+        XCTAssertEqual(store.recording(id: "second")?.transcript, "part two")
+        XCTAssertTrue(store.pending().isEmpty)
     }
 
     /// THE HEAD-OF-LINE BUG (D2, field report 2026-08-30). The drain used to
     /// `break` at the first failure, so one take the server could not read held
-    /// every recording behind it for the full 7-day retention: the banner
+    /// every recording behind it indefinitely: the banner
     /// counted 3, and every Retry tap reproduced the same head failure and
     /// reached none of the good audio. The poisoned take must not block the
     /// takes behind it.
@@ -321,8 +632,10 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertEqual(text, "second words third words",
                        "the takes behind the failure are recovered, in spoken order")
         XCTAssertTrue(audioExists("poison"), "the failed take stays recoverable")
-        XCTAssertFalse(audioExists("good"))
-        XCTAssertFalse(audioExists("alsoGood"))
+        XCTAssertTrue(audioExists("good"))
+        XCTAssertTrue(audioExists("alsoGood"))
+        XCTAssertEqual(store.recording(id: "good")?.transcript, "second words")
+        XCTAssertEqual(store.recording(id: "alsoGood")?.transcript, "third words")
         XCTAssertEqual(recorder.pendingCount, 1, "only the failed take is left pending")
         XCTAssertEqual(recorder.failedCount, 0, "a 503 is not the audio's fault — it keeps its retries")
     }
@@ -461,7 +774,8 @@ final class VoiceResilienceTests: XCTestCase {
         let text = await recorder.retryPending(includeRetired: true)
         XCTAssertEqual(text, "it worked on a better day",
                        "a ceiling-retired take must stay recoverable by hand")
-        XCTAssertFalse(audioExists("broken"))
+        XCTAssertTrue(audioExists("broken"))
+        XCTAssertEqual(store.recording(id: "broken")?.transcript, "it worked on a better day")
         XCTAssertEqual(recorder.failedCount, 0)
     }
 
@@ -649,7 +963,8 @@ final class VoiceResilienceTests: XCTestCase {
 
         await fulfillment(of: [drained], timeout: 5)
         XCTAssertEqual(viaDraft, "words from the outage")
-        XCTAssertFalse(audioExists("waited"), "recovered audio is deleted like any success")
+        XCTAssertTrue(audioExists("waited"), "recovered audio stays in history")
+        XCTAssertEqual(store.recording(id: "waited")?.transcript, "words from the outage")
         XCTAssertEqual(recorder.pendingCount, 0)
     }
 
@@ -702,7 +1017,8 @@ final class VoiceResilienceTests: XCTestCase {
         )
         await fulfillment(of: [recovered], timeout: 5)
         XCTAssertEqual(uploads, 2)
-        XCTAssertFalse(audioExists("flapping"))
+        XCTAssertTrue(audioExists("flapping"))
+        XCTAssertEqual(store.recording(id: "flapping")?.transcript, "back online")
     }
 
     /// The drain must not wake up for takes it cannot help — a retired take is
@@ -768,7 +1084,8 @@ final class VoiceResilienceTests: XCTestCase {
         chatComposer.uploadOverride = { _ in "back where it belongs" }
         chatComposer.drainPending(trigger: "reconnected")
         await fulfillment(of: [landed], timeout: 5)
-        XCTAssertFalse(audioExists("spoken-into-chat"))
+        XCTAssertTrue(audioExists("spoken-into-chat"))
+        XCTAssertEqual(store.recording(id: "spoken-into-chat")?.transcript, "back where it belongs")
     }
 
     /// A take preserved by a build that predates the origin stamp has no surface at
@@ -817,13 +1134,14 @@ final class VoiceResilienceTests: XCTestCase {
 
         XCTAssertEqual(text, "recovered by hand",
                        "a Retry tap is the human back in the loop, so it is allowed")
-        XCTAssertFalse(audioExists("from-chat"))
+        XCTAssertTrue(audioExists("from-chat"))
+        XCTAssertEqual(store.recording(id: "from-chat")?.transcript, "recovered by hand")
     }
 
     /// SINGLE-FLIGHT ACROSS INSTANCES (the second half of F5). Two mounted
     /// composers each hold their own recorder, so an instance-local "am I already
     /// draining" flag is invisible to the sibling: both could upload the same file
-    /// and the winner would `markTranscribed` it out from under the loser. The
+    /// and deliver the same text twice. The
     /// claim therefore lives on the STORE, where the contention is.
     @MainActor
     func testTwoComposersCannotDrainTheSameTakeAtOnce() async {
@@ -859,7 +1177,8 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertNil(secondResult, "the store-level claim refuses a sibling instance")
         XCTAssertEqual(firstText, "uploaded once")
         XCTAssertEqual(uploads, 1)
-        XCTAssertFalse(audioExists("contested"))
+        XCTAssertTrue(audioExists("contested"))
+        XCTAssertEqual(store.recording(id: "contested")?.transcript, "uploaded once")
     }
 
     /// The other side of the claim, and the last silent no-op left: a Retry TAP that
@@ -1026,10 +1345,11 @@ final class VoiceResilienceTests: XCTestCase {
         let recorder = ownedRecorder()
         let url = store.newRecordingURL(id: "one-verdict-in")
         try! Data(repeating: 7, count: 2_000).write(to: url)
+        // Stamp the origin at capture start, not by guessing it after a failure.
+        store.preserve(id: "one-verdict-in", reason: "recording", surface: "tab:chat")
         // One empty verdict already recorded: the next one retires it.
         store.noteAttempt(id: "one-verdict-in", reason: "transcribe-failed",
                           kind: .empty, message: "no speech")
-        store.preserve(id: "one-verdict-in", reason: "transcribe-failed", surface: "tab:chat")
         recorder.refreshPending()
         XCTAssertEqual(recorder.pendingCount, 1)
         recorder.uploadOverride = { _ in "" }
@@ -1264,7 +1584,8 @@ final class VoiceResilienceTests: XCTestCase {
 
         await fulfillment(of: [landed], timeout: 5)
         XCTAssertEqual(received, "partial words")
-        XCTAssertFalse(audioExists(take.id), "auto-retry succeeded → audio deleted")
+        XCTAssertTrue(audioExists(take.id), "auto-retry success retains audio")
+        XCTAssertEqual(store.recording(id: take.id)?.transcript, "partial words")
     }
 
     @MainActor

@@ -110,9 +110,10 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         // Places: iOS relaunches Walnut in the background to deliver a visit, and
         // only a location manager made during launch receives it. Not behind LaunchGate.
         PlacesRecorder.shared.start()
-        // Voice recordings waiting for a retry are kept at most 7 days, counted
-        // at every launch too, not only when a new recording starts.
-        VoiceRecordingStore.pruneAtLaunch(protectedDataAvailable: application.isProtectedDataAvailable)
+        _ = VoiceHistorySync.shared
+        LaunchGate.shared.whenActive {
+            VoiceHistorySync.shared.start()
+        }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)

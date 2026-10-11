@@ -1020,7 +1020,8 @@ export type SessionControlAction =
   | 'server.health.sync' | 'server.health.status' | 'server.health.settings' | 'server.health.delete'
   // Places (additive 2026-10): the visits the phone records once the user turns
   // Places on, its state, and the delete. Same primary-only store rule as health.
-  | 'server.places.sync' | 'server.places.status' | 'server.places.delete';
+  | 'server.places.sync' | 'server.places.status' | 'server.places.delete'
+  | 'server.voice.archive';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -1615,6 +1616,11 @@ export async function handleSessionControlRelay(
         const sub = action.slice('server.health.'.length);
         if (!isHealthAction(sub)) throw new SessionControlError(`Unknown health action: ${sub}`, 400);
         result = await runHealthAction(sub, p) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.voice.archive': {
+        const { runVoiceArchiveAction } = await import('../../web/routes/voice-archive-v1.js');
+        result = await runVoiceArchiveAction(p) as unknown as Record<string, unknown>;
         break;
       }
       case 'server.places.sync':

@@ -37,7 +37,7 @@ import { resolveSecret } from '../../model/providers/secret.js'
 
 export const sttV1Router = Router()
 
-const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac'])
+const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac', 'caf'])
 // Bridge WS frames are capped at 4MB (security audit) — leave headroom for
 // the JSON envelope. Bigger audio skips the relay and goes straight to the
 // OpenAI fallback (which has no such cap).
@@ -283,6 +283,11 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
       return
     }
     const lang = typeof language === 'string' && language !== '' ? language : undefined
+    const { ingestAudio, saveText } = await import('../../core/stt/voice-archive.js')
+    const recording = await ingestAudio({ audio, format })
+    const { deferVoiceReplication, startVoiceArchiveReplication } = await import('../../core/stt/voice-archive-replication.js')
+    await startVoiceArchiveReplication()
+    deferVoiceReplication(recording.id)
 
     // The engines in order (routeFeature): the leader's, this server's own, a hosted API.
     const { getConfig } = await import('../../core/config-manager.js')
@@ -292,8 +297,10 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
       (err) => isUndecodableAudio(err instanceof Error ? err.message : String(err)))
     const tried = result.attempts.map((a) => `${a.id}:${a.outcome}`)
     if (result.ok) {
-      log.web.info('stt transcribed', { via: result.via, chars: result.output.text.length, tried })
-      res.json({ text: result.output.text, durationMs: result.output.durationMs ?? 0, via: result.via })
+      await saveText(recording.id, result.output.text, result.via)
+      deferVoiceReplication(recording.id)
+      log.web.info('stt transcribed', { recordingId: recording.id, via: result.via, chars: result.output.text.length, tried })
+      res.json({ text: result.output.text, durationMs: result.output.durationMs ?? 0, via: result.via, recordingId: recording.id })
       return
     }
     // Raw text to the log (where the ffmpeg command line is worth having), one

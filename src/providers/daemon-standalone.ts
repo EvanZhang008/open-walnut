@@ -2566,7 +2566,7 @@ function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   const timer = setTimeout(() => {
     controlRelayPending.delete(relayId)
     sendError(ws, id, 'session.control: primary server timed out')
-  }, CONTROL_RELAY_TIMEOUT_MS)
+  }, action === 'server.voice.archive' && params?.operation === 'transcribe' ? 900_000 : CONTROL_RELAY_TIMEOUT_MS)
   controlRelayPending.set(relayId, { ws, id, timer })
   logMsg('info', 'session.control: relaying to primary server', { relayId, action, sid: targetSid })
   sendEvent(target, 'control-request', { relayId, action, sessionId: targetSid, params: params ?? {} })

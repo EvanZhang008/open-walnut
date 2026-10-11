@@ -296,6 +296,43 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     expect((status.answeredHere['primary-silent'] ?? 0) + (status.answeredHere['no-bridge'] ?? 0)).toBeGreaterThanOrEqual(1)
   }, 90_000)
 
+  it('keeps seven-minute voice and completed text on the companion while the Mac sleeps, then copies both after wake', async () => {
+    const id = crypto.randomUUID()
+    const audio = Buffer.alloc(13_440_068, 0x32)
+    const text = 'Seven-minute voice kept across a disconnect. ' + String.fromCodePoint(0x4f60, 0x597d).repeat(1500)
+    const basePath = `/api/v1/stt/recordings/${id}`
+    const audioDigest = crypto.createHash('sha256').update(audio).digest('hex')
+    for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
+    try {
+      let index = 0
+      for (let offset = 0; offset < audio.length; offset += 256 * 1024) {
+        const reply = await phone(basePath + '/chunks', { method: 'POST', body: JSON.stringify({ index: index++, audio: audio.subarray(offset, offset + 256 * 1024).toString('base64'), format: 'caf', createdAt: '2026-10-11T07:00:00Z', durationSeconds: 420 }) })
+        expect(reply.status).toBe(200)
+      }
+      const committed = await phone(basePath + '/commit', { method: 'POST', body: JSON.stringify({ chunkCount: index, audioSizeBytes: audio.length, audioSha256: audioDigest, text }) })
+      expect(committed.status).toBe(200)
+      expect(committed.json).toMatchObject({ id, text, storage: 'companion', primarySaved: false })
+      const disk = JSON.parse(await fsp.readFile(path.join(companion.data, 'voice-archive', id, 'metadata.json'), 'utf8'))
+      expect(disk.record.text).toBe(text)
+      expect((await fsp.readFile(path.join(companion.data, 'voice-archive', id, 'audio'))).equals(audio)).toBe(true)
+      const cached = await phone(basePath + '/transcribe', { method: 'POST', body: '{}' })
+      expect(cached.json).toMatchObject({ text, recordingId: id })
+    } finally {
+      for (const pid of macPids()) process.kill(pid, 'SIGCONT')
+    }
+    const synced = await waitFor(async () => {
+      const reply = await phone(basePath)
+      return reply.status === 200 && reply.json.primarySaved === true ? reply : null
+    }, 180_000, 'the voice archive to copy after the Mac wakes')
+    expect(synced.json).toMatchObject({ text, storage: 'companion', primarySaved: true })
+    const primaryDisk = JSON.parse(await fsp.readFile(path.join(primary.data, 'voice-archive', id, 'metadata.json'), 'utf8'))
+    expect(primaryDisk.record.text).toBe(text)
+    expect(primaryDisk.record.storage).toBe('primary')
+    const copiedAudio = await fsp.readFile(path.join(primary.data, 'voice-archive', id, 'audio'))
+    expect(copiedAudio.equals(audio)).toBe(true)
+    expect(crypto.createHash('sha256').update(copiedAudio).digest('hex')).toBe(audioDigest)
+  }, 300_000)
+
   it('the Mac wakes: the Mac answers again', async () => {
     for (const pid of macPids()) process.kill(pid, 'SIGCONT')
     const r = await waitFor(async () => {

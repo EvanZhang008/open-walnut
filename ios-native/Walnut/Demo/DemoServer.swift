@@ -182,6 +182,7 @@ final class DemoServer: @unchecked Sendable {
         unanswered.withLock { $0.removeAll() }
         streams.reset()
         DemoPlaces.reset()
+        DemoVoice.reset()
     }
 
     /// Read or change the store under the lock.
@@ -271,6 +272,7 @@ final class DemoServer: @unchecked Sendable {
         if s.first == "files" || s.first == "file-content" { return routeFiles(r, s) }
         if s.first == "health" { return routeHealth(r, s) }
         if s.first == "places" { return routePlaces(r, s) }
+        if s.first == "stt" { return routeVoice(r, s) }
         return nil
     }
 

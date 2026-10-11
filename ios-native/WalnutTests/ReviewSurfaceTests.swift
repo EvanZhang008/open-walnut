@@ -131,16 +131,18 @@ final class ReviewSurfaceTests: XCTestCase {
         XCTAssertEqual(real.mode, .bypass)
     }
 
-    // MARK: - Voice retention (PRIVACY.md, "Voice recordings waiting to be transcribed")
+    // MARK: - Durable voice history
 
-    /// The policy says a take kept for retry goes after 7 days, at most 20, and
-    /// the next time the app starts or records: the limits, and the launch prune.
-    func testAVoiceTakeKeptForRetryGoesAfterSevenDaysAndAtLaunch() throws {
-        XCTAssertEqual(VoiceRecordingStore.maxAge, 7 * 24 * 3600)
-        XCTAssertEqual(VoiceRecordingStore.maxCount, 20)
+    /// Launch archives stopped recordings but never expires the user's history.
+    func testVoiceHistoryHasNoAutomaticAgeOrCountDeletion() throws {
+        let store = try source("Walnut/Core/VoiceRecordingStore.swift")
+        XCTAssertFalse(store.contains("static let maxAge"))
+        XCTAssertFalse(store.contains("static let maxCount"))
+        XCTAssertTrue(store.contains("func prune(now: Date = Date()) -> Int { 0 }"))
         let delegate = try source("Walnut/App/QuickActionDelegate.swift")
-        XCTAssertTrue(delegate.contains("VoiceRecordingStore.pruneAtLaunch(protectedDataAvailable: application.isProtectedDataAvailable)"),
-                      "no prune at launch: a take older than 7 days stays until the next recording")
+        XCTAssertTrue(delegate.contains("VoiceHistorySync.shared.start()"),
+                      "launch must resume durable archive sync without deleting local recordings")
+        XCTAssertFalse(delegate.contains("VoiceRecordingStore.pruneAtLaunch("))
     }
     // MARK: - Gate r4 (2026-10-07), turned around by the upload refusal (2026-10-10)
 

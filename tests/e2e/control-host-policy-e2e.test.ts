@@ -42,6 +42,8 @@ import { resolveApiBase } from '../../src/ops/executor.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import { getTask, _resetForTesting } from '../../src/core/task-manager.js'
 import { closeDb } from '../../src/core/task-db.js'
+import { createHash, randomUUID } from 'node:crypto'
+import { voiceArchive } from '../../src/core/stt/voice-archive.js'
 
 interface Daemon { proc: ChildProcess; port: number; dir: string }
 
@@ -207,6 +209,7 @@ describe('session.control over real daemons, by host', () => {
       ['server.chat.turn', '__server__', { text: 'hello' }],
       ['server.human-inbox.send', '__server__', { subject: 'probe', body: 'probe' }],
       ['server.files.list', '__server__', { path: '/' }],
+      ['server.voice.archive', '__server__', { operation: 'get', id: randomUUID() }],
       ['model', 'sess-probe', { model: 'sonnet' }],
       ['terminate', 'sess-probe', {}],
     ]
@@ -228,6 +231,21 @@ describe('session.control over real daemons, by host', () => {
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, result: { applied: true, opId: 'op-ctl-local-1' } })
     _resetForTesting()
     expect(await getTask('ctl-local-1')).toMatchObject({ title: 'Control probe ctl-local-1' })
+  })
+
+  it('copies archived voice and text through the real Mac daemon before acknowledging them', async () => {
+    const id = randomUUID()
+    const audio = Buffer.alloc(300_000, 0x42)
+    const act = (operation: string, body?: unknown) => callPrimaryControl('server.voice.archive', '__server__', { operation, id, body }, 20_000)
+    for (const [index, bytes] of [audio.subarray(0, 200_000), audio.subarray(200_000)].entries()) {
+      expect(await act('chunk', { index, audio: bytes.toString('base64'), format: 'caf', createdAt: '2026-10-11T07:00:00Z' })).toMatchObject({ ok: true, result: { status: 200, body: { id, state: 'uploading' } } })
+    }
+    expect(await act('commit', { chunkCount: 2, audioSizeBytes: audio.length, audioSha256: createHash('sha256').update(audio).digest('hex') })).toMatchObject({ ok: true, result: { status: 200, body: { id, state: 'saved' } } })
+    const text = 'Full transcript retained through a real daemon relay.'
+    expect(await act('text', { text, via: 'test' })).toMatchObject({ ok: true, result: { status: 200, body: { id, text, state: 'transcribed' } } })
+    expect(await act('transcribe', {})).toMatchObject({ ok: true, result: { status: 200, body: { recordingId: id, text } } })
+    expect((await voiceArchive.readAudio(id)).audio.equals(audio)).toBe(true)
+    expect((await voiceArchive.get(id)).text).toBe(text)
   })
 
   it('a session on the remote host still reaches Walnut through the gateway (`walnut tools call`)', async () => {

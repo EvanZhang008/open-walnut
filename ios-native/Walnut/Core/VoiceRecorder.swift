@@ -12,7 +12,7 @@ protocol AudioCapture: AnyObject {
 
 extension AVAudioRecorder: AudioCapture {}
 
-/// Voice-input recorder: mic → m4a (AAC 16kHz mono) → server transcription.
+/// Voice-input recorder: mic → CAF (signed 16-bit PCM, 16kHz mono) → server transcription.
 /// The server routes to the best engine (Mac whisper via bridge when
 /// reachable, OpenAI Whisper as the cloud fallback) — the phone just uploads.
 /// NSObject base is required for AVAudioRecorderDelegate conformance below.
@@ -22,8 +22,8 @@ extension AVAudioRecorder: AudioCapture {}
 ///  - NO duration cap. Recording continues across screen lock / background
 ///    (UIBackgroundModes: audio keeps the process + mic alive).
 ///  - Audio records straight into a persistent store (Application Support via
-///    `VoiceRecordingStore`) and is deleted ONLY after transcription succeeded
-///    and the text was handed back — or on explicit user cancel.
+///    `VoiceRecordingStore`). Both audio and recognized words are retained in
+///    history; only an explicit user cancel or discard deletes them.
 ///  - Every failure path (upload error, interruption, view dismissal, app
 ///    suspension mid-upload, crash) PRESERVES the file; the composer surfaces
 ///    a "saved recording — retry" affordance driven by `pendingCount`.
@@ -46,6 +46,18 @@ final class VoiceRecorder: NSObject {
     }
 
     static let micRouteKey = "walnut.voice.micRoute"
+
+    /// Signed 16-bit PCM in CAF remains readable when capture ends in a crash.
+    static var captureSettings: [String: Any] {
+        [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+    }
 
     /// The sentence for a denied microphone. Named, so a notice can offer the
     /// Settings button beside exactly this one.
@@ -105,7 +117,7 @@ final class VoiceRecorder: NSObject {
     /// In-flight transcription upload; kept referenceable so tests and
     /// diagnostics can see it. Never cancelled by lifecycle anymore — a dying
     /// upload's catch path preserves the audio instead.
-    @ObservationIgnored private var transcriptionTask: Task<String, Error>?
+    @ObservationIgnored private var transcriptionTask: Task<VoiceTranscriptionResult, Error>?
     /// Lazy (audit OBS-5): this recorder is a `@State` default value in
     /// ComposerBar, whose initial-value expression runs on EVERY struct init
     /// — SwiftUI keeps only the first instance, but each throwaway used to
@@ -117,6 +129,9 @@ final class VoiceRecorder: NSObject {
     /// Test seam — replaces the network upload so the persistence/retry state
     /// machine runs without a server. nil in production.
     @ObservationIgnored var uploadOverride: ((Data) async throws -> String)?
+    #if DEBUG
+    @ObservationIgnored var _testTranscriptionOverride: ((URL, VoiceRecordingStore.Recording) async throws -> VoiceTranscriptionResult)?
+    #endif
     /// WHICH COMPOSER owns this recorder (`ComposerSurfaceID.raw`, or the draft
     /// key when the composer declares no surface). Set by the composer on appear.
     ///
@@ -205,18 +220,15 @@ final class VoiceRecorder: NSObject {
             // tmp/ and a purge mid-take was one of the ways audio could die.
             let id = UUID().uuidString
             let url = store.newRecordingURL(id: id)
-            // AAC 16kHz mono — small uploads, and speech models are trained on
-            // 16kHz anyway; higher rates just cost bandwidth.
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 16_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-            ]
-            let rec = try AVAudioRecorder(url: url, settings: settings)
+            // Persist the manifest BEFORE capture. A failed sidecar write must
+            // not leave a success-looking recorder running without metadata.
+            try store.preserveOrThrow(id: id, reason: "recording", surface: originStamp)
+            let rec = try AVAudioRecorder(url: url, settings: Self.captureSettings)
             rec.delegate = self
             guard rec.record() else {
+                store.preserve(id: id, reason: "start-failed")
                 errorMessage = "Could not start recording"
+                deactivateSessionOffMain()
                 return false
             }
             capture = rec
@@ -224,20 +236,7 @@ final class VoiceRecorder: NSObject {
             recordingID = id
             elapsed = 0
             state = .recording
-            // Sidecar from second 0: a crash mid-take still leaves a
-            // discoverable recording for next-launch recovery. The ORIGIN is
-            // stamped here and nowhere else that matters — this is the only
-            // moment at which which-composer-is-speaking is known for certain.
-            store.preserve(id: id, reason: "recording", surface: originStamp)
             startTicker()
-            // Housekeeping off the main actor: age-out stale preserved takes.
-            let storeRef = store
-            Task.detached(priority: .utility) {
-                let removed = storeRef.prune()
-                if removed > 0 {
-                    AppLog.info("voice", "pruned stale recordings", ["count": "\(removed)"])
-                }
-            }
             return true
         } catch {
             errorMessage = Self.diagnosticMessage(prefix: "Recording failed", error)
@@ -371,8 +370,8 @@ final class VoiceRecorder: NSObject {
     }
 
     /// Stop and upload for transcription. Returns the recognized text, or nil
-    /// on failure (with `errorMessage` set). The audio file is deleted ONLY
-    /// on success — every failure keeps it recoverable via `retryPending()`.
+    /// on failure (with `errorMessage` set). Success saves text before returning
+    /// and retains audio. Failures remain recoverable via `retryPending()`.
     func stopAndTranscribe() async -> String? {
         guard state == .recording, let url = fileURL, let id = recordingID else { return nil }
         stopCapture()
@@ -382,6 +381,7 @@ final class VoiceRecorder: NSObject {
             fileURL = nil
             recordingID = nil
             refreshPending()
+            VoiceHistorySync.shared.kick()
         }
         if case .text(let text) = await transcribeOne(url: url, id: id) {
             return text
@@ -407,8 +407,11 @@ final class VoiceRecorder: NSObject {
         guard state == .recording else { return }
         stopCapture()
         if let id = recordingID {
-            store.preserve(id: id, reason: reason, surface: originStamp)
+            if !store.preserve(id: id, reason: reason, surface: originStamp) {
+                errorMessage = "Could not save recording details. Recording kept."
+            }
             AppLog.info("voice", "recording preserved", ["reason": reason, "id": id, "elapsed": String(Int(elapsed))])
+            VoiceHistorySync.shared.kick()
         }
         fileURL = nil
         recordingID = nil
@@ -440,10 +443,8 @@ final class VoiceRecorder: NSObject {
         return !surface.isEmpty && takeSurface == surface
     }
 
-    /// Recount preserved takes (excluding the live one), split into the two
-    /// buckets the UI must not conflate. Synchronous: the store directory is
-    /// capped at `VoiceRecordingStore.maxCount` entries, so this is one tiny
-    /// directory listing.
+    /// Recount unfinished takes (excluding the live one), split into the two
+    /// buckets the UI must not conflate. Completed history is not retryable.
     func refreshPending() {
         let live = recordingID
         let recs = store.pending().filter { $0.id != live }
@@ -453,12 +454,12 @@ final class VoiceRecorder: NSObject {
     }
 
     /// Transcribe every preserved take that still has retries left, oldest
-    /// first (the order they were spoken). Successes are deleted and their text
-    /// concatenated.
+    /// first (the order they were spoken). Successes save their text in history
+    /// before concatenating it; the original audio stays on disk.
     ///
     /// A failure NO LONGER STOPS THE DRAIN. The old loop `break`ed at the first
     /// one, so a single take the engine could not read held every good recording
-    /// behind it hostage for the full 7-day retention: the user saw "3
+    /// behind it indefinitely: the user saw "3
     /// recordings saved — transcription pending" and every Retry tap reproduced
     /// the same head-of-line failure. Each take is now attempted independently
     /// and its verdict recorded on its own sidecar, and takes that have used up
@@ -489,7 +490,10 @@ final class VoiceRecorder: NSObject {
     ) async -> String? {
         guard state == .idle else { return nil }
         let live = recordingID
-        var recs = store.pending().filter { $0.id != live }
+        let storeRef = store
+        var recs = await Task.detached(priority: .utility) { storeRef.pending() }.value
+        guard state == .idle else { return nil }
+        recs = recs.filter { $0.id != live }
         // An automatic drain only works takes THIS composer owns; a manual retry
         // works whatever the visible row is offering (see `ownsForAutomaticDrain`).
         if !userInitiated { recs = recs.filter { ownsForAutomaticDrain($0) } }
@@ -549,7 +553,7 @@ final class VoiceRecorder: NSObject {
                 trigger: userInitiated ? .userRetry : .autoDrain
             ) {
             case .text(let text): parts.append(text)
-            case .discarded: continue // too-short/no-speech: nothing to keep
+            case .alreadySaved: continue
             // The bug fix in one word: keep going. The remaining takes are
             // independent uploads and one bad take is not evidence about them.
             case .failed, .cancelled: failed += 1
@@ -596,18 +600,19 @@ final class VoiceRecorder: NSObject {
     /// share the one recording directory.
     func drainPending(trigger: String, now: Date = Date()) {
         guard state == .idle else { return }
-        let live = recordingID
-        let mine = store.pending().filter {
-            $0.id != live && !$0.isTerminal && ownsForAutomaticDrain($0)
-        }
-        guard !mine.isEmpty else { return }
-        AppLog.info("voice", "auto-drain starting", [
-            "trigger": trigger, "count": String(mine.count),
-            "surface": surface.isEmpty ? "none" : surface,
-            "ownsOrphans": ownsOrphanTakes ? "true" : "false",
-        ])
+        let storeRef = store
         Task { [weak self] in
-            guard let self else { return }
+            let recs = await Task.detached(priority: .utility) { storeRef.pending() }.value
+            guard let self, self.state == .idle else { return }
+            let mine = recs.filter {
+                $0.id != self.recordingID && !$0.isTerminal && self.ownsForAutomaticDrain($0)
+            }
+            guard !mine.isEmpty else { return }
+            AppLog.info("voice", "auto-drain starting", [
+                "trigger": trigger, "count": String(mine.count),
+                "surface": self.surface.isEmpty ? "none" : self.surface,
+                "ownsOrphans": self.ownsOrphanTakes ? "true" : "false",
+            ])
             if let text = await self.retryPending(userInitiated: false, now: now) {
                 self.onDrainedText?(text)
             }
@@ -627,8 +632,7 @@ final class VoiceRecorder: NSObject {
     }
 
     /// Delete the takes that couldn't be transcribed — the primary action on
-    /// the retired row, and the ONLY way those files leave before the 7-day
-    /// age-out.
+    /// the retired row. Only explicit user deletion removes these files.
     func discardFailed() {
         for rec in store.pending() where rec.id != recordingID && rec.isTerminal {
             AppLog.info("voice", "retired recording discarded", [
@@ -644,8 +648,8 @@ final class VoiceRecorder: NSObject {
     // MARK: - Internals
 
     private enum TranscribeOutcome {
-        case text(String)   // success — audio deleted
-        case discarded      // nothing worth keeping (sub-second tap)
+        case text(String)   // transcript saved, audio retained
+        case alreadySaved   // a delayed drain must not deliver text twice
         case failed         // audio preserved, errorMessage set
         case cancelled      // torn down mid-upload — audio preserved
     }
@@ -676,43 +680,63 @@ final class VoiceRecorder: NSObject {
         var isSilent: Bool { self == .autoDrain }
     }
 
-    /// Upload one take. Deletes the audio ONLY on success; every failure
-    /// preserves it, records the attempt on its sidecar (count + classified
+    /// Upload one take. Success durably saves text and retains audio; failure
+    /// preserves audio and records the attempt on its sidecar (count + classified
     /// kind, which is what decides whether a Retry is still honest), and logs
     /// structured diagnostics for the flight recorder.
     private func transcribeOne(
         url: URL, id: String, trigger: AttemptTrigger = .liveTake
     ) async -> TranscribeOutcome {
         do {
-            // Read the recording OFF the MainActor — a long m4a is a real file
-            // read, and this method runs on the actor that draws the UI.
-            let data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: url)
-            }.value
-            guard data.count > 1_000 else {
-                // Sub-second accidental tap — there is no speech to lose. Silent
-                // for an automatic drain for the same reason every other outcome
-                // is: nobody asked, and the row count moving is the whole story.
-                if !trigger.isSilent { errorMessage = "Recording too short" }
-                store.discard(id: id)
-                return .discarded
+            guard let recording = store.recording(id: id) else {
+                throw VoiceRecordingStore.StoreError.recordingMissing
             }
+            // A delayed drain may have already saved this take. Never call the
+            // server again or replace those words with a second result.
+            if let text = recording.transcript {
+                guard recording.reason == "recovered" else { return .alreadySaved }
+                try store.saveTranscription(id: id, text: text)
+                return .text(text)
+            }
+            let bytes = recording.bytes
             // Background grace: if the user locks/switches away right after
             // hitting stop, this assertion buys the upload ~30s to finish
             // instead of dying suspended. If it dies anyway, the catch paths
             // below preserve the audio.
-            let assertion = BackgroundAssertion.begin("voice-transcribe")
-            defer { BackgroundAssertion.end(assertion) }
+            let time = VoiceBackgroundTime("voice-transcribe")
+            defer { time.end() }
             let apiRef = api
             let override = uploadOverride
+            #if DEBUG
+            let resultOverride = _testTranscriptionOverride
+            #endif
             let task = Task {
-                if let override { return try await override(data) }
-                return try await apiRef.transcribeVoice(audio: data, format: "m4a")
+                #if DEBUG
+                if let resultOverride { return try await resultOverride(url, recording) }
+                #endif
+                if let override {
+                    // The whole-file seam is test-only. Production streams
+                    // bounded chunks from the real URL and commits before STT.
+                    let data = try await Task.detached(priority: .userInitiated) {
+                        try Data(contentsOf: url)
+                    }.value
+                    return VoiceTranscriptionResult(
+                        text: try await override(data), recordingID: nil, primarySaved: nil
+                    )
+                }
+                return try await apiRef.transcribeVoice(audioURL: url, recording: recording)
             }
             transcriptionTask = task
             defer { transcriptionTask = nil }
-            let text = try await task.value
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result = try await task.value
+            if let serverID = result.recordingID {
+                guard serverID.lowercased() == (recording.serverID ?? id).lowercased() else {
+                    throw NSError(domain: "VoiceRecording", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "Transcription returned a different recording."
+                    ])
+                }
+            }
+            let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 // The server answered but heard nothing. Keep the audio — an
                 // engine mishearing real speech must not destroy the take — but
@@ -722,16 +746,28 @@ final class VoiceRecorder: NSObject {
                 return note(
                     .empty, id: id, message: "No speech recognized",
                     userNotice: "No speech recognized. Recording kept.",
-                    trigger: trigger, extra: ["bytes": "\(data.count)"]
+                    trigger: trigger, extra: ["bytes": "\(bytes)"]
                 )
             }
-            AppLog.info("voice", "transcribed", ["chars": "\(trimmed.count)", "bytes": "\(data.count)", "id": id])
-            // Freeze-report breadcrumb: a field freeze fired ~5s after a
-            // transcription landed 148 chars in the draft and re-focused the
-            // keyboard, so this edge must be visible in the trail.
+            // This MUST finish before any return or composer callback. A
+            // network success is not a local save, and a failed write is not
+            // success: its catch path keeps the audio and reports the error.
+            try store.saveTranscription(id: id, text: trimmed)
+            if let serverID = result.recordingID {
+                do {
+                    try store.markBackup(
+                        id: id, serverID: serverID, primarySaved: result.primarySaved, origin: result.archiveOrigin, storage: result.storage
+                    )
+                } catch {
+                    // The words are already durable. A secondary marker failure
+                    // cannot turn that into a lost successful transcription.
+                    try? store.noteBackupFailure(id: id, message: error.localizedDescription)
+                    AppLog.warn("voice", "backup metadata save pending", ["id": id, "error": error.localizedDescription])
+                }
+            }
+            AppLog.info("voice", "transcribed", ["chars": "\(trimmed.count)", "bytes": "\(bytes)", "id": id])
             FreezeContext.shared.note("voice-transcribed", trimmed.utf8.count)
-            // The ONE success path that deletes audio: text is in hand.
-            store.markTranscribed(id: id)
+            VoiceHistorySync.shared.kick()
             return .text(trimmed)
         } catch let error as APIError {
             if error.isCancelled { return noteCancelled(id: id, trigger: trigger) }
@@ -764,7 +800,7 @@ final class VoiceRecorder: NSObject {
         // Re-read rather than recompute: the sidecar on disk is the only thing
         // the next drain will consult, so the message the user sees now and the
         // decision the drain makes later cannot disagree.
-        let after = store.pending().first { $0.id == id }
+        let after = store.recording(id: id)
         let attempts = after?.attempts ?? 0
         let retired = after?.isTerminal ?? false
         // An automatic drain says nothing out loud; the row state it produces
@@ -819,8 +855,19 @@ final class VoiceRecorder: NSObject {
     private func stopCapture() {
         tickTask?.cancel()
         tickTask = nil
+        let duration = capture?.currentTime ?? elapsed
         capture?.stop()
         capture = nil
+        elapsed = duration
+        if let id = recordingID {
+            do {
+                try store.noteDuration(id: id, duration: duration)
+                try store.preserveOrThrow(id: id, reason: "recorded")
+            } catch {
+                errorMessage = "Could not save recording details. Recording kept."
+                AppLog.error("voice", "recording stop metadata failed", ["id": id, "error": error.localizedDescription])
+            }
+        }
         deactivateSessionOffMain()
     }
 

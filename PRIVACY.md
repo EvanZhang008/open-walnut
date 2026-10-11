@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: October 9, 2026
+Last updated: October 11, 2026
 
 This policy covers the Open Walnut iPhone app ("the app"). Open Walnut is open-source
 software. The app is a companion for a Walnut server that you install and run
@@ -26,10 +26,11 @@ yourself, on your own computer or on a cloud machine in your own account.
   to be sent, and drafts.
 - **Recently opened**: the last 40 tasks and sessions you opened in the app, and when,
   so the Tasks tab can list them again. The list's Clear button empties it.
-- **Voice recordings waiting to be transcribed**. A recording is deleted once its text
-  has been delivered. A recording that cannot be transcribed is kept for retry for 7
-  days (at most 20 recordings), unless you discard it sooner, and is deleted the next
-  time the app starts or records after that.
+- **Voice recordings and completed transcripts**. Original audio stays on your phone
+  when transcription succeeds, fails, or is interrupted. Completed text is saved before
+  the app hands it to a message draft. Settings, Past Voice lets you review, play, copy
+  and export these records. They do not expire automatically. Canceling or discarding
+  a recording explicitly removes that local recording.
 - **A diagnostic log** of what the app did (screens opened, sends, connection events,
   errors). It is kept on the phone (up to about 16 MB) until it has been uploaded to your
   server.
@@ -57,7 +58,13 @@ Like other app data, this data can be included in your iPhone backups.
 
 - What you do in the app: messages, replies to letters, tasks, notes, photos you
   attach, and the actions you take (for example, allowing a tool request).
-- Voice recordings, so your server can turn them into text.
+- Voice recordings and completed transcripts, so your server can turn audio into text
+  and keep durable copies. If you have configured a cloud companion, the app tries to
+  save there first and the companion copies the recording and text to your main server
+  when it is reachable. If the companion is unavailable, the app may use your main server
+  and retry the cloud copy later. Past Voice shows which copies are confirmed and which
+  are still pending. The server copies have no automatic expiry and stay until you
+  remove them from the server's data directory.
 - Basic device information: the hardware model identifier (for example "iPhone17,1"),
   the iOS version, the app version, and the device name you entered.
 - The diagnostic log described above, including crash and hang reports that iOS
@@ -207,8 +214,8 @@ change any of these permissions in the iOS Settings app at any time.
 
 - **On your phone**: in the app, Settings, Disconnect removes everything the app stored
   on the phone: the server address, the device token, cached conversations, tasks, notes,
-  letters and images, unsent messages and drafts, the recently opened list, recordings
-  waiting for transcription, the diagnostic log, Apple Health sync progress and its
+  letters and images, unsent messages and drafts, the recently opened list, voice
+  recordings and saved transcripts, the diagnostic log, Apple Health sync progress and its
   random value, the places kept on the phone, and app preferences. It also stops Places from recording. Disconnect also asks your server to
   stop sending notifications to the phone. If the server cannot be reached at that
   moment, it keeps sending them until you revoke the phone there, as described below.

@@ -279,6 +279,12 @@ function handleFrame(conn: BridgeConn, raw: string): void {
   conn.lastInbound = Date.now()
   let msg: Record<string, unknown>
   try { msg = JSON.parse(raw) } catch { return }
+  if (conn.hostAlias === PRIMARY_ALIAS && primaryBridgeActivityHandlers.size && Date.now() - primaryBridgeActivityAt >= 15_000) {
+    primaryBridgeActivityAt = Date.now()
+    for (const handler of primaryBridgeActivityHandlers) {
+      try { handler() } catch { log.ws.warn('bridge: primary activity handler failed') }
+    }
+  }
 
   // A paced daemon splits big frames once we asked it to (bridge.peer): the
   // joined parts are the original frame.
@@ -428,6 +434,13 @@ export function setPrimaryBridgeConnectedHandler(handler: (() => void) | null): 
  *  (control-queue) register here so they don't clobber each other. Returns an
  *  unhook function. */
 const primaryBridgeConnectedHandlers = new Set<() => void>()
+const primaryBridgeActivityHandlers = new Set<() => void>()
+let primaryBridgeActivityAt = 0
+
+export function addPrimaryBridgeActivityHandler(handler: () => void): () => void {
+  primaryBridgeActivityHandlers.add(handler)
+  return () => primaryBridgeActivityHandlers.delete(handler)
+}
 
 export function addPrimaryBridgeConnectedHandler(handler: () => void): () => void {
   primaryBridgeConnectedHandlers.add(handler)

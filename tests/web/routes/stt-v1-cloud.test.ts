@@ -13,6 +13,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 vi.mock('../../../src/constants.js', () =>
   createMockConstants('walnut-test-stt-cloud', { CLOUD_MODE: true }));
 
+vi.mock('../../../src/core/stt/voice-archive-replication.js', () => ({
+  deferVoiceReplication: vi.fn(), startVoiceArchiveReplication: vi.fn().mockResolvedValue(undefined),
+}));
 const bridgeRequest = vi.fn();
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: (...args: unknown[]) => bridgeRequest(...args),

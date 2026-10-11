@@ -1888,6 +1888,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // And this server's one view of the leader (core/server-role.ts) follows it.
     startLeaderPresenceTick()
   }
+  // Private, durable voice archive: stays local on the companion before background replication.
+  app.use('/api/v1', (await import('./routes/voice-archive-v1.js')).voiceArchiveV1Router)
+  await (await import('../core/stt/voice-archive-replication.js')).startVoiceArchiveReplication()
   // A browser trading its one-time sign-in code for a device token (public, see auth.ts).
   app.use('/api/v1', (await import('./routes/browser-pair.js')).browserPairV1Router)
   // Frozen REST+SSE facade for mobile clients (see docs/reference/api-v1.md).
@@ -5815,6 +5818,7 @@ export async function stopServer(): Promise<void> {
   // to send, not an error. Also ends a boot stopped before its plugin walk did.
   registry.beginClosing()
   try { (await import('../core/turn-snapshots/settings-push.js')).stopTurnSnapshotSettingsSync() } catch { /* never started */ }
+  try { (await import('../core/stt/voice-archive-replication.js')).stopVoiceArchiveReplication() } catch { /* never started */ }
   if (notificationReconcileTimer) {
     clearInterval(notificationReconcileTimer)
     notificationReconcileTimer = null

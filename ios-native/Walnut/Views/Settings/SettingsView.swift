@@ -5,6 +5,7 @@ import UIKit
 enum SettingsRoute: Hashable {
     case routines
     case connectionRoutes
+    case voiceHistory
 }
 
 /// Settings tab — connection status card, server info (Wave 2 /v1/config),
@@ -73,6 +74,7 @@ struct SettingsView: View {
                 switch route {
                 case .routines: RoutinesView()
                 case .connectionRoutes: ConnectionRoutesView()
+                case .voiceHistory: VoiceHistoryView()
                 }
             }
             .confirmationDialog(
@@ -236,6 +238,10 @@ struct SettingsView: View {
 
     private var voiceSection: some View {
         Section {
+            NavigationLink(value: SettingsRoute.voiceHistory) {
+                Label("Past Voice", systemImage: "waveform")
+            }
+            .accessibilityIdentifier("settings.voiceHistory")
             Picker("Microphone", selection: $micRoute) {
                 Text("Automatic").tag(VoiceRecorder.MicRoute.automatic.rawValue)
                 Text("iPhone Mic Only").tag(VoiceRecorder.MicRoute.builtInMic.rawValue)

@@ -596,6 +596,8 @@ const GITIGNORE_CONTENT = `# Binary / large / ephemeral
 browser/
 images/
 media/
+# Private original recordings use their own durable archive, not git history.
+/voice-archive/
 timeline/
 sessions/streams/
 # Ephemeral working area — daemon stream files (multi-MB, constantly appended).
@@ -835,7 +837,7 @@ sessions.json.*
  */
 const CRITICAL_IGNORE_FILES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'plugin-data/', 'secrets/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -843,7 +845,7 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'plugin-data/', '
  * matcher stays on the bare prefix because `ls-files` prints repo-relative paths
  * (and git would take a leading `/` in that pathspec literally).
  */
-const CRITICAL_IGNORE_LINES: Record<string, string> = { 'health/': '/health/', 'models/': '/models/', 'places/': '/places/' };
+const CRITICAL_IGNORE_LINES: Record<string, string> = { 'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/' };
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,
   ...CRITICAL_IGNORE_DIRS.map((dir) => CRITICAL_IGNORE_LINES[dir] ?? dir),

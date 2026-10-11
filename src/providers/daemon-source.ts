@@ -3698,7 +3698,7 @@ function cmdControlRelay(ws, id, cmd) {
   var timer = setTimeout(function () {
     controlRelayPending.delete(relayId);
     sendError(ws, id, 'session.control: primary server timed out');
-  }, CONTROL_RELAY_TIMEOUT_MS);
+  }, action === 'server.voice.archive' && params && params.operation === 'transcribe' ? 900000 : CONTROL_RELAY_TIMEOUT_MS);
   controlRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
   logMsg('info', 'session.control: relaying to primary server', { relayId: relayId, action: action, sid: targetSid });
   sendEvent(target, 'control-request', { relayId: relayId, action: action, sessionId: targetSid, params: params || {} });

@@ -8,7 +8,7 @@ import os
 /// defect are provable: the banner "1 recording saved — transcription pending"
 /// could never clear. Two independent reasons, both fixed here.
 ///  - The drain stopped at the FIRST failure, so one unreadable take blocked
-///    every good recording behind it for the whole 7-day retention window.
+///    every good recording behind it indefinitely.
 ///  - A take the engine answered with EMPTY text was preserved and marked
 ///    failed, and retrying the same bytes produced the same empty answer
 ///    forever. Nothing in the model could ever say "this one is done".
@@ -91,7 +91,7 @@ enum VoiceRetryPlan {
     ///
     /// Terminal means it leaves "pending" (the copy stops promising a
     /// transcription that will never arrive) — NOT that the audio is deleted.
-    /// The file stays on disk until the user discards it or it ages out, which
+    /// The file stays on disk until the user discards it, which
     /// is the no-loss contract the whole store exists for.
     ///
     /// Two independent routes in, because the two failure shapes look nothing
@@ -143,21 +143,12 @@ enum VoiceRetryPlan {
     }
 }
 
-/// Durable store for voice recordings — the backbone of "voice input never
-/// loses the user's words" (field incident 2026-08-09: a long dictation
-/// vanished when the phone auto-locked; the recorder recorded into tmp/ and
-/// deleted the file on every non-success path).
-///
-/// Contract:
-///  - Recordings are written straight into Application Support (never tmp/,
-///    which iOS purges) as `<id>.m4a` + a `<id>.json` sidecar.
-///  - The sidecar is written when recording STARTS, so a crash mid-recording
-///    still leaves a discoverable orphan for next-launch recovery.
-///  - Audio is deleted ONLY after transcription succeeded and the text was
-///    handed to the composer — or by explicit user discard / age-out pruning.
-///
-/// Not @MainActor: all operations are small synchronous file ops on a ~20-file
-/// directory; callers off the main actor (tests, detached tasks) use it too.
+/// Durable voice history in Application Support, never a purgeable cache.
+/// New takes use CAF and a sidecar written before capture starts. Older m4a
+/// takes remain readable. Transcription atomically saves text without deleting
+/// audio; only an explicit user discard removes a recording. There is no age
+/// or count limit. Metadata updates are serialized across store instances;
+/// unbounded history listings must run off the main actor.
 struct VoiceRecordingStore {
     struct Recording: Identifiable, Equatable {
         let id: String
@@ -190,6 +181,19 @@ struct VoiceRecordingStore {
         var lastError: String? = nil
         var lastErrorKind: VoiceRetryPlan.FailureKind? = nil
         var lastAttemptAt: Date? = nil
+        var transcript: String? = nil
+        var durationSeconds: Double? = nil
+        var serverID: String? = nil
+        var archiveOrigin: String? = nil
+        var archiveStorage: String? = nil
+        /// "saved" only after a durable server acknowledgement.
+        var archiveState: String? = nil
+        /// nil means the primary server's persistence is unknown.
+        var primarySaved: Bool? = nil
+        var backupError: String? = nil
+        var audioAvailable: Bool = true
+
+        var format: String { audioURL.pathExtension.lowercased() }
 
         /// Out of honest retries: the row must stop saying "pending" and offer
         /// Discard instead of a Retry that provably cannot change the answer.
@@ -204,67 +208,13 @@ struct VoiceRecordingStore {
         }
     }
 
-    /// Sidecar payload — versioned so future fields stay decodable.
-    ///
-    /// v2 adds per-recording attempt bookkeeping. The decoder is HAND-WRITTEN
-    /// on purpose: Swift's synthesized `Decodable` throws on a missing key even
-    /// when the property has a default value, so a synthesized decoder would
-    /// have failed on every v1 sidecar already on disk. `readSidecar` swallows
-    /// the error, so the visible damage would have been quiet rather than loud —
-    /// every preserved take losing its `createdAt` and `reason` and reappearing
-    /// as `reason: "unknown"`, which is exactly the kind of silent data
-    /// downgrade this store exists to prevent.
-    private struct Sidecar: Codable {
-        var v: Int = 2
-        var createdAt: Date
-        var reason: String
-        var attempts: Int = 0
-        var verdicts: Int = 0
-        var surface: String? = nil
-        var lastError: String? = nil
-        var lastErrorKind: String? = nil
-        var lastAttemptAt: Date? = nil
-
-        init(
-            createdAt: Date, reason: String, attempts: Int = 0, verdicts: Int = 0,
-            surface: String? = nil, lastError: String? = nil, lastErrorKind: String? = nil,
-            lastAttemptAt: Date? = nil
-        ) {
-            self.createdAt = createdAt
-            self.reason = reason
-            self.attempts = attempts
-            self.verdicts = verdicts
-            self.surface = surface
-            self.lastError = lastError
-            self.lastErrorKind = lastErrorKind
-            self.lastAttemptAt = lastAttemptAt
-        }
-
-        init(from decoder: any Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            // Only these two are required, and even they are the v1 shape — a
-            // sidecar this decoder cannot read is a preserved recording the user
-            // can no longer see the age or reason of.
-            createdAt = try c.decode(Date.self, forKey: .createdAt)
-            reason = try c.decode(String.self, forKey: .reason)
-            v = try c.decodeIfPresent(Int.self, forKey: .v) ?? 1
-            attempts = try c.decodeIfPresent(Int.self, forKey: .attempts) ?? 0
-            verdicts = try c.decodeIfPresent(Int.self, forKey: .verdicts) ?? 0
-            surface = try c.decodeIfPresent(String.self, forKey: .surface)
-            lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
-            lastErrorKind = try c.decodeIfPresent(String.self, forKey: .lastErrorKind)
-            lastAttemptAt = try c.decodeIfPresent(Date.self, forKey: .lastAttemptAt)
-        }
-    }
-
     static let shared = VoiceRecordingStore()
 
-    /// Age-out: recordings older than this are pruned (the user has moved on).
-    static let maxAge: TimeInterval = 7 * 24 * 3600
-    /// Count cap so disk use stays bounded even under repeated failures.
-    static let maxCount = 20
-
-    private let dir: URL
+    let dir: URL
+    #if DEBUG
+    /// A backup-write failure seam, distinct from transcript durability.
+    var _testBeforeBackupWrite: (() throws -> Void)?
+    #endif
 
     /// `baseDir` injection is the test seam — unit tests run against a temp
     /// directory, production uses Application Support (persistent, backed up,
@@ -280,143 +230,80 @@ struct VoiceRecordingStore {
         }
     }
 
-    /// Where a new take records to. Creates the directory on first use.
+    /// CAF is recoverable without an m4a finalization atom. Start must still
+    /// successfully write the sidecar before opening the microphone.
     func newRecordingURL(id: String = UUID().uuidString) -> URL {
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("\(id).m4a")
+        Self.io.sync {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir.appendingPathComponent("\(id).caf")
+        }
     }
 
-    /// Write/overwrite the sidecar. Called at recording start (crash safety)
-    /// and again on failure paths with a more specific reason.
-    ///
-    /// Attempt bookkeeping is CARRIED OVER, never reset: this is called on paths
-    /// that know nothing about attempts (a take being re-preserved because the
-    /// view went away), and a reset there would hand a retired take its retries
-    /// back and revive the permanent banner.
-    /// `surface` is the ORIGIN and is written once: the first `preserve` for a
-    /// take (recording start) sets it, and every later call carries it over even
-    /// if it passes nil. A take cannot change which composer it was spoken into,
-    /// and letting a later preserve re-stamp it would hand the take to whichever
-    /// composer touched it last, which is the bug this field exists to prevent.
-    func preserve(id: String, reason: String, createdAt: Date = Date(), surface: String? = nil) {
-        // Keep the original createdAt when re-marking an existing recording —
-        // age-based pruning must count from the take, not the last failure.
-        let existing = readSidecar(id: id)
-        write(Sidecar(
-            createdAt: existing?.createdAt ?? createdAt, reason: reason,
-            attempts: existing?.attempts ?? 0, verdicts: existing?.verdicts ?? 0,
-            surface: existing?.surface ?? surface,
-            lastError: existing?.lastError, lastErrorKind: existing?.lastErrorKind,
-            lastAttemptAt: existing?.lastAttemptAt
-        ), id: id)
+    /// Compatibility wrapper for lifecycle callers. Start checks the result;
+    /// callers needing the underlying failure use `preserveOrThrow`.
+    @discardableResult
+    func preserve(id: String, reason: String, createdAt: Date = Date(), surface: String? = nil) -> Bool {
+        do {
+            try preserveOrThrow(id: id, reason: reason, createdAt: createdAt, surface: surface)
+            return true
+        } catch {
+            AppLog.error("voice", "recording metadata save failed", ["id": id, "error": error.localizedDescription])
+            return false
+        }
     }
 
-    /// Record one FAILED transcription attempt against a take: bump the count
-    /// and remember how it failed. Preserves the audio exactly like `preserve`.
-    ///
-    /// The count is what lets the drain retire a take that can never succeed;
-    /// the kind is what keeps a network outage from ever being the thing that
-    /// retires one (see `VoiceRetryPlan.FailureKind.isDeterministic`).
+    /// Every update carries over saved words, attempt counts and backup status.
+    /// A legacy origin remains unknown; a later preserve cannot invent one.
+    func preserveOrThrow(id: String, reason: String, createdAt: Date = Date(), surface: String? = nil) throws {
+        try Self.io.sync {
+            let existing = try readSidecarUnlocked(id: id)
+            var side = existing ?? Sidecar(createdAt: createdAt, reason: reason)
+            side.reason = side.transcript == nil ? reason : "transcribed"
+            if existing == nil { side.surface = surface }
+            side.audioFormat = audioURLUnlocked(id: id)?.pathExtension.lowercased() ?? side.audioFormat ?? "caf"
+            side.v = 3
+            try writeUnlocked(side, id: id)
+        }
+    }
+
+    /// Failed attempts update diagnostics, never reset or replace saved text.
+    @discardableResult
     func noteAttempt(
         id: String, reason: String, kind: VoiceRetryPlan.FailureKind,
         message: String, at: Date = Date()
-    ) {
-        let existing = readSidecar(id: id)
-        write(Sidecar(
-            createdAt: existing?.createdAt ?? at, reason: reason,
-            attempts: (existing?.attempts ?? 0) + 1,
-            verdicts: VoiceRetryPlan.verdictCount(previous: existing?.verdicts ?? 0, kind: kind),
-            surface: existing?.surface,
-            lastError: message, lastErrorKind: kind.rawValue, lastAttemptAt: at
-        ), id: id)
-    }
-
-    /// All recoverable recordings, oldest first (retry replays them in the
-    /// order they were spoken). A sidecar without audio is cleaned up; audio
-    /// without a sidecar (pre-fix stragglers) is still listed with epoch-of-
-    /// file as createdAt so nothing silently falls off the recovery surface.
-    func pending() -> [Recording] {
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
-        var out: [Recording] = []
-        for name in names where name.hasSuffix(".m4a") {
-            let id = String(name.dropLast(4))
-            let audio = dir.appendingPathComponent(name)
-            let attrs = try? fm.attributesOfItem(atPath: audio.path)
-            let bytes = (attrs?[.size] as? Int) ?? 0
-            let side = readSidecar(id: id)
-            let created = side?.createdAt
-                ?? (attrs?[.creationDate] as? Date)
-                ?? Date(timeIntervalSince1970: 0)
-            out.append(Recording(
-                id: id, audioURL: audio, createdAt: created,
-                reason: side?.reason ?? "unknown", bytes: bytes,
-                attempts: side?.attempts ?? 0, verdicts: side?.verdicts ?? 0,
-                surface: side?.surface,
-                lastError: side?.lastError,
-                lastErrorKind: side?.lastErrorKind.flatMap(VoiceRetryPlan.FailureKind.init(rawValue:)),
-                lastAttemptAt: side?.lastAttemptAt
-            ))
-        }
-        // Orphaned sidecars (audio gone) serve no one — sweep them here.
-        for name in names where name.hasSuffix(".json") {
-            let id = String(name.dropLast(5))
-            if !names.contains("\(id).m4a") {
-                try? fm.removeItem(at: sidecarURL(id: id))
+    ) -> Bool {
+        do {
+            try update(id: id) { side in
+                side.reason = side.transcript == nil ? reason : "transcribed"
+                side.attempts += 1
+                side.verdicts = VoiceRetryPlan.verdictCount(previous: side.verdicts, kind: kind)
+                side.lastError = message
+                side.lastErrorKind = kind.rawValue
+                side.lastAttemptAt = at
             }
+            return true
+        } catch {
+            AppLog.error("voice", "recording attempt save failed", ["id": id, "error": error.localizedDescription])
+            return false
         }
-        return out.sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// Transcription succeeded and the text reached the composer — the ONLY
-    /// success path that deletes audio.
-    func markTranscribed(id: String) {
-        discard(id: id)
-    }
-
-    /// Explicit removal (user cancel, success, prune).
+    /// Explicit user deletion only, serialized against metadata updates.
     func discard(id: String) {
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(id).m4a"))
-        try? FileManager.default.removeItem(at: sidecarURL(id: id))
-    }
-
-    /// At launch, so a take waiting for a retry goes after `maxAge` even when
-    /// no new recording starts (the prune used to run only then). Only with
-    /// protected data available: before the first unlock a take's sidecar cannot
-    /// be read, and its age would fall back to a guess. Off the main thread.
-    static func pruneAtLaunch(protectedDataAvailable: Bool, store: VoiceRecordingStore = .shared) {
-        guard protectedDataAvailable,
-              ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        Task.detached(priority: .utility) {
-            let removed = store.prune()
-            if removed > 0 {
-                AppLog.info("voice", "pruned stale recordings at launch", ["count": "\(removed)"])
+        Self.io.sync {
+            for format in ["caf", "m4a", "json"] {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(id).\(format)"))
             }
         }
     }
 
-    /// Bound disk usage: drop takes past `maxAge`, then oldest beyond
-    /// `maxCount`. Returns how many were removed (logged by the caller).
+    /// Compatibility with existing launch callers. History is user-managed;
+    /// launching the app must never remove old or excess recordings.
+    static func pruneAtLaunch(protectedDataAvailable: Bool, store: VoiceRecordingStore = .shared) {}
+
+    /// Retained for older callers. No age or count-based deletion.
     @discardableResult
-    func prune(now: Date = Date()) -> Int {
-        var removed = 0
-        var kept: [Recording] = []
-        for rec in pending() {
-            if now.timeIntervalSince(rec.createdAt) > Self.maxAge {
-                discard(id: rec.id)
-                removed += 1
-            } else {
-                kept.append(rec)
-            }
-        }
-        if kept.count > Self.maxCount {
-            for rec in kept.prefix(kept.count - Self.maxCount) {
-                discard(id: rec.id)
-                removed += 1
-            }
-        }
-        return removed
-    }
+    func prune(now: Date = Date()) -> Int { 0 }
 
     // MARK: - Drain gate (process-wide, because the STORE is process-wide)
 
@@ -426,7 +313,7 @@ struct VoiceRecordingStore {
     /// new-session sheet). An instance-local "am I already draining" flag and an
     /// instance-local cooldown are invisible to a sibling composer, so two
     /// mounted composers could upload the SAME file at the same time and the
-    /// winner would delete it from under the loser. The guard has to sit where
+    /// winner would deliver the words twice. The guard has to sit where
     /// the contention is.
     ///
     /// A lock rather than MainActor isolation because the store is deliberately
@@ -479,19 +366,4 @@ struct VoiceRecordingStore {
     }
     #endif
 
-    // MARK: - Internals
-
-    private func sidecarURL(id: String) -> URL {
-        dir.appendingPathComponent("\(id).json")
-    }
-
-    private func write(_ sidecar: Sidecar, id: String) {
-        guard let data = try? JSONEncoder().encode(sidecar) else { return }
-        try? data.write(to: sidecarURL(id: id), options: .atomic)
-    }
-
-    private func readSidecar(id: String) -> Sidecar? {
-        guard let data = try? Data(contentsOf: sidecarURL(id: id)) else { return nil }
-        return try? JSONDecoder().decode(Sidecar.self, from: data)
-    }
 }
