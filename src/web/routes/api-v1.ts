@@ -58,7 +58,7 @@ import {
 } from './cloud-chat-fallback.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
-import { withFileLock } from '../../utils/file-lock.js'
+import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { log } from '../../logging/index.js'
 
 export const apiV1Router = Router()
@@ -3669,13 +3669,13 @@ apiV1Router.put('/notes/content/*path', async (req: Request, res: Response, next
     // Optimistic locking: on mismatch return the server's copy so the client
     // can merge locally without a second round trip.
     //
-    // The compare and the write share ONE file lock — the same `<file>.lock` the
+    // The compare and the write share ONE file lock: the same withUserFileLock the
     // notes-v2 PUT takes, so an agent write and a browser write are mutually
     // exclusive too. A compare-and-set whose check and write are not atomic is
     // not a compare-and-set: three concurrent note_edit calls each read the same
     // hash, each passed the check, and each wrote, so two edits answered 200 and
     // then vanished (found by tests/integration/tracking-note-ops.test.ts).
-    const outcome = await withFileLock(filePath, async (): Promise<
+    const outcome = await withUserFileLock(filePath, async (): Promise<
       | { kind: 'conflict'; serverHash: string; serverContent: string }
       | { kind: 'written'; contentHash: string; updatedAt: string }
     > => {
@@ -3732,7 +3732,7 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
     // lock as the PUT, so "does it exist" and "write it" cannot straddle another
     // writer — two racing creates would otherwise both pass the stat and the
     // loser's bytes would replace a note that already existed.
-    const created = await withFileLock(filePath, async (): Promise<{ contentHash: string; updatedAt: string } | null> => {
+    const created = await withUserFileLock(filePath, async (): Promise<{ contentHash: string; updatedAt: string } | null> => {
       try {
         await fsp.stat(filePath)
         return null

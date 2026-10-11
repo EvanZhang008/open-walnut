@@ -19,7 +19,7 @@
  *     so both histories converge. Logged + reversible (files stay source of truth).
  *
  * Identity guard (shared with the reconciler, §8.3): every disk write is under
- * `withFileLock(<note>.md)` + a re-read-and-hash-recheck, so a migration pass can
+ * `withUserFileLock(<note>.md)` + a re-read-and-hash-recheck, so a migration pass can
  * never clobber an in-flight edit. A note that changes underneath us is skipped
  * and picked up on the next reconcile.
  */
@@ -27,6 +27,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { NOTES_DIR } from '../constants.js'
 import { withFileLock } from '../utils/file-lock.js'
+import { withUserFileLock } from '../utils/user-file-lock.js'
 import { computeContentHash } from '../utils/file-ops.js'
 import {
   parseFrontmatter,
@@ -58,7 +59,7 @@ export interface StampAllResult {
  * Stamp a stable frontmatter id into every id-less note in the vault (batched).
  *
  * - Idempotent: a note that already has an id is left byte-for-byte untouched.
- * - Guarded: the splice happens under `withFileLock` with a hash recheck, so an
+ * - Guarded: the splice happens under `withUserFileLock` with a hash recheck, so an
  *   in-flight edit is never clobbered (the note is skipped, reconciled later).
  * - After each stamp the note is reconciled so the index row matches disk and any
  *   inbound links that named it can resolve.
@@ -89,7 +90,7 @@ export async function stampAllIds(): Promise<StampAllResult> {
     const stampedBytes = stampId(bytes, id)
     let wrote = false
     try {
-      await withFileLock(abs, async () => {
+      await withUserFileLock(abs, async () => {
         const current = await fsp.readFile(abs, 'utf-8')
         if (computeContentHash(current) !== baseHash) return // changed → skip
         await fsp.writeFile(abs, stampedBytes, 'utf-8')
@@ -220,7 +221,7 @@ export async function mergeNoteIds(opts: {
     const bytes = await fsp.readFile(abs, 'utf-8')
     const baseHash = computeContentHash(bytes)
     const rewritten = stampId(stripId(bytes), winnerId)
-    await withFileLock(abs, async () => {
+    await withUserFileLock(abs, async () => {
       const current = await fsp.readFile(abs, 'utf-8')
       if (computeContentHash(current) !== baseHash) return
       await fsp.writeFile(abs, rewritten, 'utf-8')

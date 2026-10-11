@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { withFileLock } from './file-lock.js';
+import { withUserFileLock } from './user-file-lock.js';
 
 // ── Types ──
 
@@ -154,7 +154,8 @@ export class AmbiguousMatchError extends Error {
 /**
  * Edit a file by exact string replacement, with optional hash-based stale check.
  *
- * Runs inside `withFileLock` to prevent concurrent modifications.
+ * Runs inside `withUserFileLock` to prevent concurrent modifications: the same lock the Files
+ * panel and the notes editor take on that file.
  *
  * @param expectedHash — if provided, the file's current hash must match. Pass `undefined` to skip (for file tools).
  * @param replaceAll — if true, replace all occurrences; otherwise require exactly one match.
@@ -165,7 +166,7 @@ export async function editFileContent(
   newContent: string,
   opts?: { expectedHash?: string; replaceAll?: boolean },
 ): Promise<EditFileResult> {
-  return withFileLock(filePath, async () => {
+  return withUserFileLock(filePath, async () => {
     const raw = await fsp.readFile(filePath, 'utf-8');
 
     // Hash check (only if expectedHash provided)
@@ -221,7 +222,7 @@ export async function editFileContent(
 /**
  * Write a file with optional hash-based stale check.
  *
- * Runs inside `withFileLock` to prevent concurrent modifications.
+ * Runs inside `withUserFileLock` to prevent concurrent modifications.
  * If the file doesn't exist and expectedHash is provided, throws StaleHashError
  * (you can't have a valid hash for a non-existent file).
  * If the file doesn't exist and no hash is provided, creates it.
@@ -234,7 +235,7 @@ export async function writeFileChecked(
   // Ensure parent directory exists
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
 
-  return withFileLock(filePath, async () => {
+  return withUserFileLock(filePath, async () => {
     // Hash check (only if expectedHash provided)
     if (opts?.expectedHash != null) {
       let raw: string;

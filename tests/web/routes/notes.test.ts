@@ -16,7 +16,7 @@ import express from 'express';
 import request from 'supertest';
 import { WALNUT_HOME, GLOBAL_NOTES_FILE, NOTES_DIR } from '../../../src/constants.js';
 import { notesRouter } from '../../../src/web/routes/notes.js';
-import { notesV2Router } from '../../../src/web/routes/notes-v2.js';
+import { notesV2Router, settleIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js';
 import { computeContentHash } from '../../../src/utils/file-ops.js';
@@ -50,14 +50,11 @@ beforeEach(async () => {
 
 afterEach(async () => {
   bus.clear();
-  // The notes indexer's debounced update can write into WALNUT_HOME while the
-  // recursive rm is traversing (ENOTEMPTY flake) — settle, then retry once.
-  try {
-    await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-  } catch {
-    await new Promise((r) => setTimeout(r, 400));
-    await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-  }
+  // A notes-v2 request starts the notes index in the background (a rebuild that
+  // writes under the index's file lock). Stop it and wait until that work has
+  // ended and released its lock; only then is WALNUT_HOME safe to remove.
+  await settleIndexBootstrap();
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 // ── B3: PUT /api/notes/global emits bus event ─────────────────────────────
@@ -217,5 +214,37 @@ describe('B4: GET /api/notes-v2 tree includes root global-notes.md', () => {
     expect(res.body.tree).toEqual([
       { name: 'global-notes.md', path: 'global-notes.md', type: 'file', kind: 'note' },
     ]);
+  });
+});
+
+// ── B5: teardown waits for the notes index ──────────────────────────────────
+// A notes-v2 request starts a background rebuild that takes the index's file lock
+// once per note. A teardown that removed WALNUT_HOME while one was in flight hit
+// ENOTEMPTY (the lock dir was being written as rm walked it); no sleep length was
+// ever enough, so teardown awaits settleIndexBootstrap instead.
+
+describe('B5: settleIndexBootstrap waits for the background index work', () => {
+  it('resolves only once the rebuild has stopped taking the index lock', async () => {
+    await fs.mkdir(NOTES_DIR, { recursive: true });
+    for (let i = 0; i < 150; i++) await fs.writeFile(path.join(NOTES_DIR, `n${i}.md`), `# Note ${i}\n`, 'utf-8');
+    const indexLock = path.join(WALNUT_HOME, 'notes-index.sqlite.lock');
+    const lockSteps: string[] = [];
+    let sawLock!: () => void;
+    const lockSeen = new Promise<void>((resolve) => { sawLock = resolve; });
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, 'mkdir').mockImplementation((async (p: Parameters<typeof fs.mkdir>[0], o?: Parameters<typeof fs.mkdir>[1]) => {
+      if (String(p).startsWith(indexLock)) { lockSteps.push(String(p)); sawLock(); }
+      return realMkdir(p, o);
+    }) as typeof fs.mkdir);
+
+    const res = await request(createNotesV2App()).get('/api/notes-v2');
+    expect(res.status).toBe(200);
+    await lockSeen; // the rebuild is under way
+    await settleIndexBootstrap();
+    const atSettle = lockSteps.length;
+    expect(await fs.readdir(WALNUT_HOME)).not.toContain('notes-index.sqlite.lock');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(lockSteps.length).toBe(atSettle);
+    vi.restoreAllMocks();
   });
 });

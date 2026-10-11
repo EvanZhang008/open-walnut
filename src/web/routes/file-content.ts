@@ -28,7 +28,7 @@ import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
 import { CLOUD_MODE, WALNUT_HOME, NOTES_DIR, MEMORY_DIR } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { computeContentHash } from '../../utils/file-ops.js'
-import { withFileLock } from '../../utils/file-lock.js'
+import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { listSnapshots, recordSnapshot, type SnapshotWriter } from '../../core/file-history.js'
 import {
   conditionalFileHit,
@@ -862,10 +862,9 @@ export async function writeFileContentPayload(
     return { ok: true, size: Buffer.byteLength(content, 'utf-8'), contentHash: nextHash }
   }
 
-  // Parent dir must already exist, checked BEFORE taking the lock: withFileLock
-  // mkdir -p's the lock's own parent (`<file>.lock`'s dirname IS the file's
-  // dirname), so entering the lock would silently create the missing directory —
-  // the opposite of this endpoint's contract.
+  // Parent dir must already exist, checked BEFORE taking the lock: for a path in
+  // Walnut's own data the lock is `<file>.lock` and taking it makes the missing
+  // directory, the opposite of this endpoint's contract.
   const parent = path.dirname(filePath)
   try {
     const pstat = await fsp.stat(parent)
@@ -879,8 +878,10 @@ export async function writeFileContentPayload(
   }
 
   // Local: check + write under the file lock, so a concurrent agent write (which
-  // takes the same lock via writeFileChecked) can't slip between them.
-  const conflict = await withFileLock(filePath, async () => {
+  // takes the same lock via writeFileChecked) can't slip between them. A user
+  // file's lock lives under WALNUT_HOME, never beside it (a Gemfile.lock is the
+  // lock path of a Gemfile).
+  const conflict = await withUserFileLock(filePath, async () => {
     let stat
     try {
       stat = await fsp.stat(filePath)

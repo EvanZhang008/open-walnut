@@ -7,7 +7,7 @@ import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { GLOBAL_NOTES_FILE } from '../../constants.js'
 import { computeContentHash } from '../../utils/file-ops.js'
-import { withFileLock } from '../../utils/file-lock.js'
+import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { MAX_NOTE_SIZE, NotesOpError } from './notes-v2.js'
@@ -59,7 +59,7 @@ export async function writeGlobalNotes(
   // check+write under the file lock — the agent's writeFileChecked path
   // locks too, so an agent write can't slip between our check and write.
   await fsp.mkdir(path.dirname(GLOBAL_NOTES_FILE), { recursive: true })
-  const conflict = await withFileLock(GLOBAL_NOTES_FILE, async () => {
+  const conflict = await withUserFileLock(GLOBAL_NOTES_FILE, async () => {
     if (expectedHash && typeof expectedHash === 'string') {
       let currentContent = ''
       try {

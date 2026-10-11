@@ -100,6 +100,7 @@ SOURCES=(
   src/providers/daemon-service-artifact.ts
   src/providers/daemon-service-cli.ts
   src/providers/daemon-service-files.ts
+  src/utils/file-lock.ts
   src/providers/daemon-service-system.ts
   src/providers/daemon-service-handover.ts
   src/providers/host-runtime-core.ts

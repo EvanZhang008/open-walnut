@@ -17,7 +17,7 @@ import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
 import { isFollower } from '../../core/server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
-import { withFileLock } from '../../utils/file-lock.js'
+import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { timed } from '../../core/observability/metrics.js'
@@ -46,6 +46,7 @@ import {
   isRebuilding,
   stopNotesIndexer,
   resetNotesIndexer,
+  settleNotesIndexer,
 } from '../../core/notes-indexer.js'
 import {
   stringSearch,
@@ -70,6 +71,7 @@ import {
   getIndexMeta,
   NOTES_INDEX_SCHEMA_VERSION,
   contentTokens,
+  closeNotesIndexDb,
   type LinkStatus,
 } from '../../core/notes-index.js'
 
@@ -96,11 +98,12 @@ export class NotesOpError extends Error {
 // via the existing NOTES_UPDATED bus event (the fs.watch catch-all lives in
 // notes-watcher.ts). interest-filtered so we don't wake on unrelated events.
 let indexBootstrapped = false
+let bootstrapWork: Promise<void> | null = null
 export function ensureIndexBootstrap(): void {
   if (indexBootstrapped) return
   indexBootstrapped = true
   resetNotesIndexer() // re-arm if a prior lifecycle stopped the reconciler
-  import('../../core/notes-indexer.js')
+  bootstrapWork = import('../../core/notes-indexer.js')
     .then(({ initNotesIndex }) => initNotesIndex())
     .catch((err) => {
       log.memory.warn('notes-index bootstrap failed', {
@@ -123,6 +126,20 @@ export function ensureIndexBootstrap(): void {
     },
     { global: true, interest: [EventNames.NOTES_UPDATED] },
   )
+}
+
+/**
+ * Stop the index bootstrap and wait for everything it started (the index open, a rebuild, a
+ * drain) to finish and release its file locks, then close the index. A teardown that removes
+ * the data dir awaits this first; a sleep is no substitute, the rebuild takes as long as it takes.
+ */
+export async function settleIndexBootstrap(): Promise<void> {
+  const started = bootstrapWork
+  resetIndexBootstrap()
+  bootstrapWork = null
+  await started
+  await settleNotesIndexer()
+  closeNotesIndexDb()
 }
 
 /**
@@ -592,7 +609,7 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
     // locks too, so an agent write can't slip between our check and write.
     await fsp.mkdir(path.dirname(filePath), { recursive: true })
     let created = false
-    const conflict = await withFileLock(filePath, async () => {
+    const conflict = await withUserFileLock(filePath, async () => {
       // A new file changes the tree; an overwrite only changes bytes. Only the
       // former drops the tree snapshot (typing must never trigger a re-walk).
       // The current bytes are read only when the lock or the id needs them.

@@ -108,6 +108,25 @@ describe('event-loop blocking ratchet', () => {
     expect(stale, stale.join('\n')).toEqual([]);
   });
 
+  it('no withFileLockSync call in server-reachable code (its wait blocks the loop up to 10s)', () => {
+    // The sync lock is for a process with no event loop to keep (a hook). On the server, a
+    // contended store lock would hold every route for as long as the holder takes.
+    let out = '';
+    try {
+      out = execFileSync(
+        'git',
+        ['grep', '-nE', 'withFileLockSync ?[(<]', '--', 'src/'],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+    } catch {
+      // git grep exits 1 on no matches.
+    }
+    const calls = out.split('\n').filter(Boolean)
+      .filter((line) => !line.startsWith('src/utils/file-lock.ts:'))
+      .filter((line) => !EXEMPT_PATHS.some((p) => line.startsWith(p)));
+    expect(calls, `withFileLockSync on the server's event loop:\n${calls.join('\n')}\nUse withFileLock.`).toEqual([]);
+  });
+
   it('native ScreenCaptureKit calls stay off the request path (child-process only)', () => {
     // The addon may only be touched inside audio-capture.ts, and its two
     // event-loop-hazard methods (getAudioApps / verifyPermissions) may only

@@ -402,18 +402,28 @@ describe('the Mac checks and writes under the auth lock', () => {
   it('a different phone paired under the name right after the check: the write was inside the lock, so the old phone keeps no row', async () => {
     box.cloud = false
     const realRm = fs.rm.bind(fs) as (...a: unknown[]) => Promise<void>
+    const realRename = fs.rename.bind(fs) as (...a: unknown[]) => Promise<void>
     let armed = true
+    // Right after the register lets go of the auth lock: a write made inside it is older than this re-pair.
+    // The lock is let go by the call that takes its folder off the lock path: the lock renames it
+    // to a grave (src/utils/file-lock.ts release); a lock that removes it in place uses rm.
+    const afterRelease = async (target: unknown): Promise<void> => {
+      if (!armed || String(target) !== LOCK()) return
+      armed = false
+      await rotateDevice('my-phone', { by: LOCAL_ACTOR })
+      await _settleRevokeWorkForTesting()
+      await registerPushToken({ token: OTHER_ROW, platform: 'ios', environment: 'production', keyName: 'my-phone', origin: 'local' })
+    }
     vi.spyOn(fs, 'rm').mockImplementation((async (...a: unknown[]) => {
       const out = await realRm(...a)
-      if (armed && String(a[0]) === LOCK()) {
-        armed = false
-        // Right after the register lets go of the auth lock: a write made inside it is older than this re-pair.
-        await rotateDevice('my-phone', { by: LOCAL_ACTOR })
-        await _settleRevokeWorkForTesting()
-        await registerPushToken({ token: OTHER_ROW, platform: 'ios', environment: 'production', keyName: 'my-phone', origin: 'local' })
-      }
+      await afterRelease(a[0])
       return out
     }) as typeof fs.rm)
+    vi.spyOn(fs, 'rename').mockImplementation((async (...a: unknown[]) => {
+      const out = await realRename(...a)
+      await afterRelease(a[0])
+      return out
+    }) as typeof fs.rename)
     expect((await register(PHONE)).status).toBe(200)
     expect(armed).toBe(false)
     expect((await rows()).map((r) => r.token)).toEqual([OTHER_ROW])

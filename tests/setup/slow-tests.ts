@@ -59,6 +59,7 @@ export const SLOW_TEST_FILES = [
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
   'tests/integration/host-server-twins.test.ts', // ~40s: both daemon twins as processes, a 5s restart backoff, a daemon restart each
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
+  'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────

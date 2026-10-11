@@ -757,12 +757,19 @@ describe('atomic writes stay on the same filesystem (EXDEV)', () => {
     }
 
     expect(renames.length).toBeGreaterThan(0);
-    // Every rename source must sit in the same directory as its destination —
-    // a cross-device rename fails with EXDEV (a temp under the OS tmpdir would).
+    // Every rename source must sit in the same directory as its destination,
+    // inside the memory directory: a cross-device rename fails with EXDEV (a
+    // temp under the OS tmpdir would). The memory file and its backups are
+    // renamed in that directory itself; the file lock's claim renames inside its
+    // own lock folder there (`MEMORY.md.lock/`), on the same filesystem.
+    const memDir = path.dirname(MEMORY_FILE);
+    const lockDir = `${MEMORY_FILE}.lock`;
     for (const [from, to] of renames) {
       expect(path.dirname(from)).toBe(path.dirname(to));
-      expect(path.dirname(from)).toBe(path.dirname(MEMORY_FILE));
+      const dir = path.dirname(from);
+      expect([memDir, lockDir], `${from} -> ${to}`).toContain(dir);
     }
+    expect(renames.some(([, to]) => to === MEMORY_FILE)).toBe(true);
     expect(fs.readdirSync(path.dirname(MEMORY_FILE)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 

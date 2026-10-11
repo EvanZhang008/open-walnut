@@ -133,6 +133,9 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-artifact.ts',
   'src/providers/daemon-service-cli.ts',
   'src/providers/daemon-service-files.ts',
+  // The store lock daemon-service-files.ts takes, bundled into daemon-service-cli.cjs: a lock
+  // change must redeploy every host, or old and new lock code share the service files.
+  'src/utils/file-lock.ts',
   'src/providers/daemon-service-system.ts',
   'src/providers/daemon-service-handover.ts',
   // Host runtime discovery (daemon PATH order, claude/node spawn gate,

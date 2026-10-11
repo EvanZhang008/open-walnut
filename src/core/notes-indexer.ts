@@ -13,7 +13,7 @@
  * - IDENTITY: id stamped at create-time by the route; this reconciler is the
  *   FALLBACK authority for files that arrive without one (git pull / AI write),
  *   with a guarded byte-preserving back-write (never clobbers an in-flight edit).
- * - withFileLock on every sidecar write + every id back-write.
+ * - withFileLock on every index write, withUserFileLock on every id back-write.
  *
  * Files stay the source of truth; the index is rebuildable (rebuildIndex()).
  */
@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { NOTES_DIR, CLOUD_MODE } from '../constants.js'
 import { withFileLock } from '../utils/file-lock.js'
+import { withUserFileLock } from '../utils/user-file-lock.js'
 import {
   NOTES_INDEX_PATH,
   upsertNote,
@@ -252,7 +253,7 @@ async function reconcileNoteInternal(
     const stamped = stampId(bytes, id)
     try {
       let wrote = false
-      await withFileLock(abs, async () => {
+      await withUserFileLock(abs, async () => {
         const current = await fsp.readFile(abs, 'utf-8')
         if (computeContentHash(current) !== fileHash) return // changed → skip, retry next cycle
         await fsp.writeFile(abs, stamped, 'utf-8')
@@ -336,6 +337,14 @@ let stopped = false
 let rebuilding = false
 let rebuildPromise: Promise<void> | null = null
 const DEBOUNCE_MS = 300
+/** Background work running now (a drain, a rebuild, a drift scan), so a stop can wait for it. */
+const inFlight = new Set<Promise<unknown>>()
+
+function track<T>(work: Promise<T>): Promise<T> {
+  inFlight.add(work)
+  void work.finally(() => inFlight.delete(work)).catch(() => { /* the caller sees the error */ })
+  return work
+}
 
 /**
  * Schedule a reconcile of one changed path. Coalesces bursts into a single drain.
@@ -347,7 +356,7 @@ export function scheduleNotesIndexUpdate(relPath: string): void {
   if (!isIndexableRelPath(norm)) return
   dirtyPaths.add(norm)
   if (drainTimer) clearTimeout(drainTimer)
-  drainTimer = setTimeout(() => { void drainQueue() }, DEBOUNCE_MS)
+  drainTimer = setTimeout(() => { void track(drainQueue()) }, DEBOUNCE_MS)
 }
 
 async function drainQueue(): Promise<void> {
@@ -355,7 +364,7 @@ async function drainQueue(): Promise<void> {
   if (draining) {
     // Re-arm so we don't lose the latest burst while a drain is in flight.
     if (drainTimer) clearTimeout(drainTimer)
-    drainTimer = setTimeout(() => { void drainQueue() }, DEBOUNCE_MS)
+    drainTimer = setTimeout(() => { void track(drainQueue()) }, DEBOUNCE_MS)
     return
   }
   draining = true
@@ -389,6 +398,16 @@ export function stopNotesIndexer(): void {
   stopped = true
   if (drainTimer) { clearTimeout(drainTimer); drainTimer = null }
   dirtyPaths.clear()
+}
+
+/**
+ * Stop the reconciler and wait until the work already running (a drain, a rebuild, a drift
+ * scan) has ended, its index writes and the file locks they hold released. After this resolves
+ * nothing of the indexer writes into the data dir, so a teardown can remove it.
+ */
+export async function settleNotesIndexer(): Promise<void> {
+  stopNotesIndexer()
+  while (inFlight.size > 0) await Promise.allSettled([...inFlight])
 }
 
 /** Re-arm the reconciler after a stop (used by tests between cases). */
@@ -526,7 +545,7 @@ export function rebuildIndex(options: RebuildIndexOptions = {}): Promise<void> {
   }
   if (stopped) return Promise.resolve()
 
-  rebuildPromise = performRebuild(options).finally(() => {
+  rebuildPromise = track(performRebuild(options)).finally(() => {
     rebuildPromise = null
   })
   return rebuildPromise
@@ -628,6 +647,7 @@ export async function scanForDrift(): Promise<{ changed: number; deleted: number
 export async function initNotesIndex(): Promise<void> {
   const { getNotesIndexDb, readSchemaVersion, NOTES_INDEX_SCHEMA_VERSION, docCount } =
     await import('./notes-index.js')
+  if (stopped) return // stopped while loading: never open (and create) the index in a torn-down dir
   const persisted = readSchemaVersion()
   // Open (creates tables + records current schema_version).
   getNotesIndexDb()
@@ -646,7 +666,7 @@ export async function initNotesIndex(): Promise<void> {
     // occupancy at DRIFT_SLICE_MS whenever it runs, busy or not.
     const timer = setTimeout(() => {
       if (stopped) return
-      void scanForDrift().catch((err) => {
+      void track(scanForDrift()).catch((err) => {
         log.memory.warn('notes-index: drift scan failed', {
           error: err instanceof Error ? err.message : String(err),
         })

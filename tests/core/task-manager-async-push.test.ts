@@ -16,7 +16,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-test-async-push'));
 
-import { addTask, updateTask, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, updateTask, _resetForTesting, settleBackgroundPushes } from '../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { registry } from '../../src/core/integration-registry.js';
 import { createNoopSync, createMockPlugin } from './plugin-test-utils.js';
@@ -56,9 +56,11 @@ describe('updateTask asyncPush', () => {
   });
 
   afterEach(async () => {
-    // Unblock any background push still parked on the gate before teardown.
+    // Unblock any background push still parked on the gate, then wait until it has written
+    // its result to the task store and released the store's lock: removing WALNUT_HOME while
+    // that write runs fails with ENOTEMPTY (a waited tick was never enough).
     pushGate.resolve({ serverTimestamp: new Date().toISOString() });
-    await new Promise((r) => setTimeout(r, 0));
+    await settleBackgroundPushes();
     await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   });
 
@@ -101,6 +103,22 @@ describe('updateTask asyncPush', () => {
     // The background push was still dispatched.
     pushGate.resolve({ serverTimestamp: new Date().toISOString() });
     await vi.waitFor(() => expect(pushCalls).toBeGreaterThan(before));
+  });
+
+  it('settleBackgroundPushes waits for a background push still running', async () => {
+    // A teardown that removes the data dir awaits this first; returning early lets the push's
+    // store write race the removal (ENOTEMPTY, or a store dir made again after it).
+    const id = await seedPluginTask();
+    const before = pushCalls;
+    await updateTask(id, { title: 'push still out' }, { source: 'api', asyncPush: true });
+    await vi.waitFor(() => expect(pushCalls).toBeGreaterThan(before)); // parked on the gate
+    let settled = false;
+    const settling = settleBackgroundPushes().then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(settled, 'settled while a push was still parked on its remote call').toBe(false);
+    pushGate.resolve({ serverTimestamp: new Date().toISOString() });
+    await settling;
+    expect(settled).toBe(true);
   });
 
   it('does not reject the caller when the background push fails', async () => {

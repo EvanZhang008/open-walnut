@@ -2239,6 +2239,33 @@ export function markPushInflightForTesting(taskId: string): () => void {
   return () => { pushInflight.delete(taskId); };
 }
 
+/** Pushes nobody awaits (asyncPush, trailing re-pushes, raw-update pushes), until they settle. */
+const backgroundPushes = new Set<Promise<unknown>>();
+
+/**
+ * Run a push nobody awaits; settleBackgroundPushes can still wait for it. A failure is logged
+ * under `what`, or left to the sync_error the push stamps itself when `what` is null.
+ */
+function pushInBackground(task: Task, what: string | null): void {
+  const work = autoPushIfConfigured(task).catch((err) => {
+    if (what === null) return;
+    log.task.warn(what, {
+      taskId: task.id, source: task.source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+  backgroundPushes.add(work);
+  void work.finally(() => backgroundPushes.delete(work));
+}
+
+/**
+ * Wait until every background push (and the store writes it makes under the tasks lock) has
+ * ended. A shutdown or a test teardown that removes the data dir awaits this first.
+ */
+export async function settleBackgroundPushes(): Promise<void> {
+  while (backgroundPushes.size > 0) await Promise.allSettled([...backgroundPushes]);
+}
+
 /**
  * Full task push — calls createTask for new tasks or pushes all fields for existing.
  * Replaces the old integration-specific autoPushIfConfigured().
@@ -2268,11 +2295,7 @@ export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
     // If task was updated while push was inflight, re-push with fresh state
     if (pushDirty.delete(task.id)) {
       const freshTask = await getTask(task.id).catch(() => null);
-      if (freshTask) {
-        autoPushIfConfigured(freshTask).catch(err => {
-          log.task.warn('trailing push failed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
-        });
-      }
+      if (freshTask) pushInBackground(freshTask, 'trailing push failed');
     }
   }
 }
@@ -2769,12 +2792,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
   // runs in the background and reconciles ext/external_url/sync_error via TASK_UPDATED.
   // This is what makes web quick-add feel instant even when the target is external.
   if (input.asyncPush) {
-    autoPushIfConfigured(task).catch((err) => {
-      log.task.warn('async task push failed', {
-        taskId: task.id, source: task.source,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    pushInBackground(task, 'async task push failed');
     // syncResult is "accepted, pending" — the caller doesn't block on the round-trip.
     return { task, syncResult: { success: true } as SyncResult };
   }
@@ -4372,12 +4390,7 @@ export async function updateTask(
     // the HTTP response on a 2-3s network round-trip. 2026-07-31 incident: awaited
     // pushes saturated the browser's 6-connection pool and cascaded every other
     // request into 15s client timeouts.
-    autoPushIfConfigured(task).catch((err) => {
-      log.task.warn('async task push failed', {
-        taskId: task.id, source: task.source,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    pushInBackground(task, 'async task push failed');
   } else {
     // Normal (non-migration) sync push — propagate failure to caller. Calls that
     // wrote to plugin-backed tasks must surface push errors (plugin not loaded,
@@ -7815,7 +7828,7 @@ export async function updateTaskRaw(
   // its own TASK_UPDATED internally on every failure path — the UI still shows
   // "didn't sync" even though we swallow the rejection here.
   if (opts?.push && updated.source !== 'local') {
-    autoPushIfConfigured(updated).catch(() => { /* sync_error already stamped inside */ });
+    pushInBackground(updated, null); // sync_error is stamped inside on failure
   }
   if (opts?.emitEvent) {
     const eventName = updated.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;

@@ -118,13 +118,24 @@ describe('applySessionPhase: commit-time guards', () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     let reached!: () => void
     const unlocking = new Promise<void>((resolve) => { reached = resolve })
+    // The lock lets go with the call that takes its folder off the lock path: the lock
+    // renames it to a grave (src/utils/file-lock.ts release); a lock that removes it in
+    // place uses rm. Either one is held at the gate.
     const rm = fsp.rm
+    const rename = fsp.rename
     const spy = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
       if (String(target) === `${TASKS_FILE}.lock`) {
         reached()
         await gate
       }
       return rm(target, options)
+    })
+    const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (String(from) === `${TASKS_FILE}.lock`) {
+        reached()
+        await gate
+      }
+      return rename(from, to)
     })
     const answer = applySessionPhase(taskId, 'session:human-answered', 'test', {
       sessionId: 'sid-unlock', turnGen: 3,
@@ -149,6 +160,7 @@ describe('applySessionPhase: commit-time guards', () => {
       await answer
       await completion
       spy.mockRestore()
+      renameSpy.mockRestore()
     }
     expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
   })

@@ -115,4 +115,26 @@ describe('daemon version hash: the two source lists agree', () => {
     expect(missing, `imported by the standalone twin but not hashed: ${missing.join(', ')}`).toEqual([])
     for (const rel of ['src/providers/fs-ls-core.ts', 'src/providers/git-diff-core.ts']) expect(shell).toContain(rel)
   })
+
+  // Same ratchet for the daemon-service-cli.cjs sidecar, which ships with every daemon and
+  // bundles its whole import tree. src/utils/file-lock.ts was missing, so a lock change left
+  // old and new lock code running side by side on the service files.
+  it('every module bundled into daemon-service-cli.cjs is in BOTH lists', () => {
+    const bundled = new Set<string>()
+    const todo = ['src/providers/daemon-service-cli.ts']
+    while (todo.length > 0) {
+      const rel = todo.pop()!
+      if (bundled.has(rel)) continue
+      bundled.add(rel)
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8')
+      for (const m of src.matchAll(/^import\s+(?!type\b)[\s\S]*?\s+from\s+'(\.{1,2}\/[^']+)\.js'/gm)) {
+        todo.push(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]!)) + '.ts')
+      }
+    }
+    expect(bundled).toContain('src/utils/file-lock.ts')
+    const shell = shellSourceList()
+    const ts = tsSourceList()
+    const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))
+    expect(missing, `bundled into daemon-service-cli.cjs but not hashed: ${missing.join(', ')}`).toEqual([])
+  })
 })

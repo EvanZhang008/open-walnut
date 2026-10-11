@@ -2583,7 +2583,10 @@ describe('ClaudeCodeSession.applyPermissionMode', () => {
 
   it('sends set_permission_mode with the CLI vocabulary (bypass → bypassPermissions)', async () => {
     const { session, writes } = makeSessionWithStubTransport();
-    void session.applyPermissionMode('bypass');
+    // Nothing answers this request, so it rejects when its 15 s timeout fires. Catch
+    // that: an unhandled rejection fails the whole file whenever the file is still
+    // running 15 s later (a slow interrupted-turn case further down can take that long).
+    session.applyPermissionMode('bypass').catch(() => {});
     await new Promise((r) => setTimeout(r, 5));
 
     expect(writes.length).toBe(1);
