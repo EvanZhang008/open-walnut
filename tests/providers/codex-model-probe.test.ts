@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { guardedPath } from '../setup/exec-guard.js'
 
 import {
   probeCodexModels,
@@ -134,7 +135,7 @@ beforeEach(() => {
   // A minimal env built from scratch: nothing of this machine's codex,
   // provider or cloud credentials can reach the stub.
   baseEnv = {
-    PATH: '/usr/bin:/bin',
+    PATH: guardedPath([], ['/usr/bin', '/bin'].join(path.delimiter)),
     HOME: path.join(dir, 'home'),
     STUB_LOG: logPath,
     STUB_PLAN: planPath,

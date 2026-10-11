@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import path from 'node:path'
+import { guardedPath } from '../setup/exec-guard.js'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -14,6 +15,9 @@ import {
   resetEngineModelCatalogCache,
   _seedEngineModelCatalogCache,
 } from '../../src/providers/engine-model-probe.js'
+
+/** A provider's own bin dir, as the user's engine config names it (mock data; the guard rides in front). */
+const PROVIDER_PATH = guardedPath(['/opt/provider/bin'], '')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MOCK_AGENT = path.join(__dirname, 'mock-acp-agent.mjs')
@@ -138,11 +142,11 @@ describe('probeAdapterModels', () => {
 
 describe('getEngineModelCatalog', () => {
   it('resolves the configured Codex executable before querying its catalog', async () => {
-    configHolder.config = { engines: { codex: { env: { WALNUT_CODEX_PATH: '/opt/provider/bin/codex', PATH: '/opt/provider/bin' } } } }
+    configHolder.config = { engines: { codex: { env: { WALNUT_CODEX_PATH: '/opt/provider/bin/codex', PATH: PROVIDER_PATH } } } }
     daemonProbe.resolveCodex.mockReturnValue('/opt/provider/bin/codex')
     daemonProbe.send.mockResolvedValue({ ok: true, models: [{ modelId: 'native-model[low]', name: 'Native Model (low)' }] })
     await getEngineModelCatalog('codex', { env: {} })
-    expect(daemonProbe.resolveCodex).toHaveBeenCalledWith({ env: expect.objectContaining({ WALNUT_CODEX_PATH: '/opt/provider/bin/codex', PATH: '/opt/provider/bin' }), cwd: undefined })
+    expect(daemonProbe.resolveCodex).toHaveBeenCalledWith({ env: expect.objectContaining({ WALNUT_CODEX_PATH: '/opt/provider/bin/codex', PATH: PROVIDER_PATH }), cwd: undefined })
     expect(daemonProbe.send).toHaveBeenCalledWith('acpModelCatalog', expect.objectContaining({ binary: '/opt/provider/bin/codex', env: expect.objectContaining({ CODEX_PATH: '/opt/provider/bin/codex' }) }))
   })
 

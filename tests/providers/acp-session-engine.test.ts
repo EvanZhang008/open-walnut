@@ -21,6 +21,7 @@ import { _resetForTesting } from '../../src/core/task-manager.js';
 import { AcpSession, splitAcpModelId, engineEnvOverlayFromConfig } from '../../src/providers/acp-session.js';
 import { mergeAcpSpawnEnv } from '../../src/providers/acp-worker/protocol.js';
 import type { AcpCapabilitySnapshot } from '../../src/providers/acp-worker/protocol.js';
+import { guardedPath } from '../setup/exec-guard.js';
 
 const ARTIFACTS = { workerCmd: ['worker'], adapterCmd: ['adapter'] };
 
@@ -91,8 +92,8 @@ describe('AcpSession executable configuration', () => {
     const updatedBinary = `${bin}/codex`;
     await fs.symlink(process.execPath, updatedBinary);
     const configRead = vi.spyOn(internal, 'resolveConfiguredEngineEnv')
-      .mockResolvedValueOnce({ WALNUT_CODEX_PATH: process.execPath, PATH: '/missing-provider-bin' })
-      .mockResolvedValueOnce({ WALNUT_CODEX_PATH: updatedBinary, PATH: '/missing-provider-bin' });
+      .mockResolvedValueOnce({ WALNUT_CODEX_PATH: process.execPath, PATH: guardedPath(['/missing-provider-bin'], '') })
+      .mockResolvedValueOnce({ WALNUT_CODEX_PATH: updatedBinary, PATH: guardedPath(['/missing-provider-bin'], '') });
     const send = attachFakeDaemon(session, command => command === 'acpStart'
       ? { ok: true, session: { sessionId: sid }, state: workerState(sid, true) }
       : { ok: true });
