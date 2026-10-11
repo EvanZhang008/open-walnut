@@ -105,6 +105,9 @@ export interface SessionRecord {
   messageCount: number;
   cwd?: string;
   host?: string;
+  /** Set on a session bound to a UI lane: `chat:<agentId>:<conversationId>` for a
+   *  chat's session (the server's session record field, passed through). */
+  lane?: string;
   /** Full hostname resolved from config.hosts (for display tooltips). */
   hostname?: string;
   title?: string;

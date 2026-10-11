@@ -8,6 +8,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from './BackgroundTasksPanel';
 import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
 import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
+import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
 import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
@@ -233,6 +234,9 @@ interface SessionChatHistoryProps {
    * pill: the passage is already on screen and the user is about to type.
    */
   onRequestComposerFocus?: (opts?: { keepTimelinePosition?: boolean }) => void;
+  /** The session runs a chat (a lane session): what the chat said before it is
+   *  shown above its first message (ChatEarlierBlock). */
+  chatLane?: boolean;
 }
 
 // Grouping semantics (task groups / consumed subagent lanes / hidden-parent
@@ -412,7 +416,7 @@ const THREAD_BAR_HIT_PX = 11;
 /** Stable empty mark list for a page (or view) without question marks. */
 const NO_MARKS: MarkSpec[] = [];
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, chatLane }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -1182,6 +1186,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // before deciding the page it wanted is gone).
   const historyComplete = !loading && !phase2Pending && olderHidden === 0 && !olderWindowed;
   useEffect(() => { publishTree(threadTree, historyComplete); }, [publishTree, threadTree, historyComplete]);
+  // Read only once this session's own transcript is in hand from its start: the
+  // chat's earlier part goes above the first row, so it has nowhere to go before.
+  const chatEarlier = useChatEarlier(sessionId, !!chatLane && historyComplete);
 
   /** Tree Mode (the stack) vs Conversation Mode (the default). Only a session WITH
    *  questions (or an Ask pending) has a stack; one without renders exactly as
@@ -2733,7 +2740,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     || deduped.length > 0;
 
   // Suppressed whenever the session has visible content — see history-unavailable.ts.
-  const historyUnavailable = visibleHistoryUnavailable(error, hasContent);
+  // The chat's earlier part is content too: a warm session that never ran a turn
+  // has no transcript file, and "History unavailable" over a readable chat is false.
+  const historyUnavailable = visibleHistoryUnavailable(error, hasContent || chatEarlier.length > 0);
 
   /** Finished live turns and their pages (recorded below, read above it). */
   const turnSegmentsRef = useRef<readonly StreamTurnSegment[]>([]);
@@ -3593,7 +3602,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             Showing cached history — live connection unavailable ({stale}). Reconnecting…
           </div>
         )}
-        {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && (
+        {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && (
           <div className="session-history-empty">
             <p className="text-muted">No conversation history found</p>
           </div>
@@ -3603,6 +3612,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <div className="session-history-empty">
             <p className="text-muted">Loading remote session...</p>
           </div>
+        )}
+        {!onQuestionPage && hiddenOnPage === 0 && chatEarlier.length > 0 && (
+          <ChatEarlierBlock rows={chatEarlier} sessionCwd={sessionCwd} />
         )}
         {/* Persisted history messages — truncated to tail for performance.
             Full messages[] stays in memory; only the visible slice is rendered as DOM. */}

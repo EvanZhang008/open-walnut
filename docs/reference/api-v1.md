@@ -2197,6 +2197,14 @@ an id outside `[A-Za-z0-9_-]`.
   stream. Rows whose content can still change carry `unsettled: true`. When
   the JSONL/journal is unreachable, `200` with `messages: []` +
   `historyUnavailable` (a human-readable reason) rather than an error.
+- `GET /api/v1/sessions/:id/chat-earlier` (additive, 2026-10) → `200 {
+  "agentId", "conversationId", "messages": [rows] }` for a chat's lane
+  session: what the chat said before this session started (the chat history
+  ahead of the lane, then older lane sessions), in the row shape of
+  `GET /conversations/:id/messages`. It is that route's assembly, stopped where
+  the session begins, so a session panel can show an old chat whose transcript
+  lives elsewhere. Not a chat lane session, a replica, or the read past its
+  5 s budget → `200 { "messages": [] }`.
 
 ### Personal AI conversation management (additive, Wave 1 2026-08)
 

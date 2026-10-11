@@ -2520,6 +2520,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             initialPrompt={initialPromptText}
             sessionCwd={session?.cwd}
             sessionHost={session?.host}
+            chatLane={!!session?.lane?.startsWith('chat:')}
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}

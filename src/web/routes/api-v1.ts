@@ -906,6 +906,53 @@ async function laneMessagesForConversation(
 }
 
 /**
+ * The part of a chat that came before one of its lane sessions: the older lane
+ * segments and the chat history ahead of them, in the phone's own assembly. A
+ * session panel shows only its session's transcript, so a chat promoted to an ask
+ * whose main session is a later one (an old phone chat, a lane re-minted after
+ * an archive) opened on the Mac with its whole history missing.
+ *
+ * null = not a chat lane session, or this box cannot say (a replica, the budget).
+ */
+async function chatEarlierThanSession(
+  sessionId: string,
+): Promise<{ agentId: string; conversationId: string; messages: ApiV1Message[] } | null> {
+  if (CLOUD_MODE) return null
+  const { getSessionByClaudeId, listSessionsByLane } = await import('../../core/session-tracker.js')
+  const { parseLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
+  const record = await getSessionByClaudeId(sessionId)
+  const chat = parseLaneKey(record?.lane)
+  const at = Date.parse(record?.startedAt ?? '')
+  if (!record || !chat || !Number.isFinite(at)) return null
+  const bail = deadline(LANE_TRANSCRIPT_DEADLINE_MS)
+  try {
+    const assemble = async (): Promise<ApiV1Message[]> => {
+      const records = await listSessionsByLane(record.lane!)
+      // Cleared before this session started: nothing earlier survives.
+      if (!afterLastClear(records).records.some((r) => r.claudeSessionId === sessionId)) return []
+      const { buildSessionTranscript } = await import('../../core/session-projection.js')
+      // A warm session that never ran a turn may have no transcript at all: then
+      // there is nothing for the prefix to repeat.
+      const head = isPreSpawnSession(record)
+        ? []
+        : await buildSessionTranscript(sessionId, { full: true })
+          .then((t) => laneTranscriptToApiV1(t.messages), () => [])
+      return assembleLaneConversation(chat.agentId, chat.conversationId, records, undefined, { at, head })
+    }
+    const outcome = await Promise.race([assemble(), bail.promise])
+    if (outcome === 'timeout') return null
+    return { ...chat, messages: outcome }
+  } catch (err) {
+    log.web.warn('api-v1 chat-earlier: could not assemble the earlier part of the chat', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  } finally {
+    bail.cancel()
+  }
+}
+
+/**
  * Rows of `entries` inside (`floor`, `cutoff`) — the conversation's pre-lane prefix.
  * `floor` is the "Clear conversation" boundary (0 when the chat was never cleared).
  */
@@ -1015,12 +1062,23 @@ function afterLastClear(records: LaneSegmentRecord[]): { records: LaneSegmentRec
   return { records: records.slice(cut + 1), floor }
 }
 
+/**
+ * Where an assembly stops: everything BEFORE one session of the lane (the part of
+ * the chat a session panel on that session cannot show, chatEarlierThanSession).
+ * `head` is that session's own first rows, which the prefix must not repeat.
+ */
+interface AssemblyUntil {
+  at: number
+  head: Array<Omit<ApiV1Message, 'id'>>
+}
+
 /** The assembly itself (see the block comment). Ordered, append-only, renumbered once. */
 async function assembleLaneConversation(
   agentId: string,
   conversationId: string,
   allRecords: LaneSegmentRecord[],
   snapshot?: { entries?: ChatEntry[] },
+  until?: AssemblyUntil,
 ): Promise<ApiV1Message[]> {
   const { buildSessionTranscript } = await import('../../core/session-projection.js')
 
@@ -1031,8 +1089,9 @@ async function assembleLaneConversation(
   // Read before the prefix because WHERE the prefix ends is decided by where lane
   // content actually begins (see the cutoff note below), not by which records exist.
   const laneRows: Array<Omit<ApiV1Message, 'id'>> = []
-  let cutoff = Number.POSITIVE_INFINITY
+  let cutoff = until ? until.at : Number.POSITIVE_INFINITY
   for (const record of records) {
+    if (until && !(Date.parse(record.startedAt) < until.at)) continue
     // Same short-circuit GET /sessions/:id/transcript takes, for the same reason:
     // the phone polls this route, and a scan for a JSONL that cannot exist yet
     // costs a daemon round trip per poll.
@@ -1084,14 +1143,19 @@ async function assembleLaneConversation(
   )
   if (snapshot) snapshot.entries = entries
   // …minus the rows the first segment repeats verbatim (the eager user message).
-  const rows = dropLeadingOverlap(chatHistoryPrefix(entries, cutoff, floor), laneRows)
+  // With no older segment, the segment that follows the prefix is the one the
+  // assembly stops at.
+  const next = laneRows.length > 0 || !until ? laneRows : until.head
+  const rows = dropLeadingOverlap(chatHistoryPrefix(entries, cutoff, floor), next)
   // Turns the cloud companion answered while this box was unreachable are rows
   // of THIS conversation that no lane transcript will ever contain (the Mac lane
   // only receives them as a stripped catch-up banner on its next turn). Past the
   // cutoff the prefix drops them, so they are slotted into the lane rows by time.
   // Adoption inserts rows mid-list at most once per turn, the same id-shift class
   // as residual R1 above.
-  rows.push(...mergeRowsByTime(laneRows, adoptedCloudRows(entries, cutoff, floor)))
+  const adopted = adoptedCloudRows(entries, cutoff, floor)
+    .filter((row) => !until || Date.parse(row.createdAt ?? '') < until.at)
+  rows.push(...mergeRowsByTime(laneRows, adopted))
   return stampApiV1Ids(rows, new Date().toISOString())
 }
 
@@ -1348,6 +1412,19 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
       }
     }
     res.json(local)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/sessions/:id/chat-earlier
+// What the chat this lane session belongs to said before the session started, in
+// the phone's message shape. A degraded answer is an empty list, never an error:
+// the panel then shows the session alone, as it always did.
+apiV1Router.get('/sessions/:id/chat-earlier', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const earlier = await chatEarlierThanSession(paramStr(req.params.id))
+    res.json(earlier ?? { messages: [] })
   } catch (err) {
     next(err)
   }

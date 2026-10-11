@@ -20,6 +20,7 @@ import {
 } from './threads-fixture'
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
 import { kanbanSeedTasks } from './board-kanban-fixture'
+import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 
@@ -1408,6 +1409,9 @@ await Promise.all([
   fs.writeFile(codexColdDetailJournalPath, seededCodexJournal),
 ])
 const sessionFixtureNow = Date.now()
+// Phone chats older than the lane session an ask opens on (ask-chat-earlier.spec.ts).
+const chatEarlierRoot = path.join(tmpBase, 'projects', 'chat-earlier')
+await fs.mkdir(chatEarlierRoot, { recursive: true })
 const workflowFixtureRoot = path.join(tmpBase, 'projects', 'workflow-fixture')
 const workflowSessionId = 'pw-workflow-session'
 const workflowDir = path.join(
@@ -3423,9 +3427,11 @@ await fs.writeFile(
         title: 'Exec: slot bug test session',
       },
       ...scaleSessions,
+      ...chatEarlierSessionRecords(sessionFixtureNow, chatEarlierRoot),
     ],
   }),
 )
+await writeChatEarlierFiles(tmpBase, sessionFixtureNow, chatEarlierRoot)
 
 // Create test PNG images for lightbox.spec.ts
 // Minimal valid PNG: 2x2 pixels, solid color
