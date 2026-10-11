@@ -1,6 +1,6 @@
 // A stand-in `ssh` with OpenSSH's ControlMaster behaviour, for tests that must not
 // run the real one (tests/setup/exec-guard.ts). State lives in FAKE_SSH_STATE:
-//   calls.jsonl        every invocation (argv), one line each
+//   calls.jsonl        every invocation (argv), one line each, written as it ends
 //   credential-expired present: a new login fails, as with an expired certificate
 //   link-dead          present: a master's process answers but its link carries nothing
 // A master is a real detached process listening on the ControlPath socket, so the
@@ -12,7 +12,6 @@ import { spawn } from 'node:child_process';
 
 const STATE = process.env.FAKE_SSH_STATE;
 const argv = process.argv.slice(2);
-fs.appendFileSync(path.join(STATE, 'calls.jsonl'), JSON.stringify(argv) + '\n');
 
 const opt = (name) => {
   for (let i = 0; i < argv.length - 1; i++) {
@@ -64,4 +63,12 @@ async function main() {
   return 255;
 }
 
-main().then((code) => process.exit(code));
+// The record goes last, so a test that sees it also sees what the call did
+// (an `-O exit` has removed the socket by then).
+let code = 255;
+try {
+  code = await main();
+} finally {
+  fs.appendFileSync(path.join(STATE, 'calls.jsonl'), JSON.stringify(argv) + '\n');
+}
+process.exit(code);

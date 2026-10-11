@@ -1,5 +1,6 @@
 /** Fetch file content for the FileViewer overlay. */
 import { fileDocKey, publishDocSaved } from '@/stores/file-save-signal';
+import { asDeadlineError } from '@/utils/request-failure';
 
 export interface FileContentResponse {
   content: string | null;
@@ -8,6 +9,12 @@ export interface FileContentResponse {
   binary: boolean;
   error?: string;
   extension: string;
+  /** The remote read is still arriving (a slow link that answers) and goes on:
+   *  asking again joins it. `from` is the host's label. Comes with `error`. */
+  loading?: { from: string };
+  /** `host_reconnecting` with `error`: the file's host is not answering now. The
+   *  view asks again on its own until it is back. */
+  code?: string;
   /** Hash of the served bytes — the editor's optimistic-lock token on save.
    *  ABSENT for a truncated read, which is what makes the editor read-only there
    *  (saving the first 512 KB back would delete the file's tail). */
@@ -80,11 +87,16 @@ export async function fetchFileContentConditional(
   if (host) params.set('host', host);
   if (opts.track) params.set('track', opts.track);
 
-  const res = await fetch(`/api/file-content?${params}`, {
-    cache: 'no-store',
-    signal: opts.signal,
-    ...(opts.ifNoneMatch ? { headers: { 'If-None-Match': `"${opts.ifNoneMatch}"` } } : {}),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api/file-content?${params}`, {
+      cache: 'no-store',
+      signal: opts.signal,
+      ...(opts.ifNoneMatch ? { headers: { 'If-None-Match': `"${opts.ifNoneMatch}"` } } : {}),
+    });
+  } catch (err) {
+    throw asDeadlineError(err, opts.signal);
+  }
   if (res.status === 304) return { notModified: true };
   if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
   return { notModified: false, payload: await res.json() };
@@ -119,7 +131,8 @@ export class FileSaveConflictError extends Error {
  *  a refusal (4xx), which is the difference between "try again shortly" and
  *  "tell the user". */
 export class FileSaveHttpError extends Error {
-  constructor(message: string, public status: number) {
+  /** `code` is the server's (`host_reconnecting`: the file's host is not answering, Walnut is). */
+  constructor(message: string, public status: number, public code?: string) {
     super(message);
     this.name = 'FileSaveHttpError';
   }
@@ -156,8 +169,12 @@ export function isNetworkFetchError(err: unknown): boolean {
 async function fetchOrUnreachable(input: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(input, init);
-  } catch (err) {
-    if (err instanceof TypeError) throw new FileSaveUnreachableError(err);
+  } catch (caught) {
+    if (caught instanceof TypeError) throw new FileSaveUnreachableError(caught);
+    // Our own deadline (SAVE_TIMEOUT_MS): the server is there but did not answer.
+    // WebKit says AbortError for it, which reached the user as "Fetch is aborted".
+    const err = asDeadlineError(caught, init.signal);
+    if (err instanceof DOMException && err.name === 'TimeoutError') throw new FileSaveHttpError(SAVE_TIMED_OUT_MESSAGE, 504);
     throw err;
   }
 }
@@ -167,6 +184,19 @@ async function fetchOrUnreachable(input: string, init: RequestInit): Promise<Res
  *  incident put in front of a user verbatim ("Failed to fetch"). */
 export const SAVE_UNREACHABLE_MESSAGE =
   "Can't reach Walnut right now. Your text is still in the editor: check that Walnut is running, then press Save again.";
+
+/**
+ * How long a save waits for its answer. The server bounds a remote save's checks
+ * like every read (60s stream cap, then the link's idle bound) and the write
+ * itself by the daemon's 30s command timeout, so a save on a slow link that
+ * answers is never cut by this; a save nobody answers no longer waits forever.
+ */
+export const SAVE_TIMEOUT_MS = 120_000;
+/** What a save that outlived SAVE_TIMEOUT_MS says (a 504: Live Edit retries it). */
+export const SAVE_TIMED_OUT_MESSAGE =
+  'The save got no answer in time. Your text is still in the editor: press Save again. If the first save landed, you are asked before anything is overwritten.';
+/** How long a create, rename, copy or delete waits (the server answers "still working" by 20s). */
+export const FILE_OP_TIMEOUT_MS = 45_000;
 
 /**
  * Save an edited file. `expectedHash` is the contentHash from the read that
@@ -213,6 +243,7 @@ export async function saveFileContent(
 ): Promise<{ size: number; contentHash: string }> {
   const res = await fetchOrUnreachable('/api/file-content', {
     method: 'PUT',
+    signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       path: filePath,
@@ -235,6 +266,7 @@ export async function saveFileContent(
     throw new FileSaveHttpError(
       typeof body?.error === 'string' ? body.error : `Save failed: ${res.status}`,
       res.status,
+      typeof body?.code === 'string' ? body.code : undefined,
     );
   }
   const result = { size: body.size as number, contentHash: body.contentHash as string };
@@ -375,11 +407,24 @@ async function fileOp(
   op: 'mkdir' | 'create' | 'rename' | 'duplicate' | 'delete',
   body: Record<string, unknown>,
 ): Promise<{ path?: string }> {
-  const res = await fetch(`/api/files/${op}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  const deadline = AbortSignal.timeout(FILE_OP_TIMEOUT_MS);
+  try {
+    res = await fetch(`/api/files/${op}`, {
+      method: 'POST',
+      signal: deadline,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (caught) {
+    // WebKit says AbortError for the deadline (it reached the user as "Fetch is aborted").
+    const err = asDeadlineError(caught, deadline);
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      // The work may still be running where the file lives: say so, as a 202 would.
+      throw new FileOpPending('No answer yet. The tree will refresh if it finishes.');
+    }
+    throw err;
+  }
   const parsed = await res.json().catch(() => ({} as Record<string, unknown>));
   if (res.status === 202) {
     throw new FileOpPending(
@@ -516,17 +561,35 @@ export async function fetchDirList(
   const res = await fetch(`/api/files/list?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
   if (!res.ok) {
     let msg = `Failed to list directory: ${res.status}`;
+    let code: string | undefined;
     try {
       const body = await res.json();
       if (body?.error) msg = body.error;
+      if (typeof body?.code === 'string') code = body.code;
     } catch { /* non-JSON error body */ }
-    throw new Error(msg);
+    throw new DirListError(msg, res.status, code);
   }
   return res.json();
 }
 
-/** One listing in a batch: either the directory, or why it could not be read. */
-export type BatchDirListing = (DirListResponse & { error?: undefined }) | { path: string; error: string };
+/** A listing the server could not make. `code` is the server's (`host_reconnecting`, ...). */
+export class DirListError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = 'DirListError';
+  }
+}
+
+/** The server's code for a host that is not answering now (Walnut is): ask again in a few seconds. */
+export const HOST_RECONNECTING_CODE = 'host_reconnecting';
+
+/** The host is not answering yet (503 host_reconnecting): asking again in a few seconds may list it. */
+export function isHostReconnectingListing(err: unknown): boolean {
+  return err instanceof DirListError && err.code === HOST_RECONNECTING_CODE;
+}
+
+/** One listing in a batch: either the directory, or why it could not be read (`code` as for one listing). */
+export type BatchDirListing = (DirListResponse & { error?: undefined; code?: undefined }) | { path: string; error: string; code?: string };
 
 /** List MANY directories in one request (the tree restore).
  *

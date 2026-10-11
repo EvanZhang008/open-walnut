@@ -59,11 +59,20 @@ filesV1Router.get('/files/list', async (req: Request, res: Response, next: NextF
       return
     }
     const { listSessionFiles, FilesOpError } = await import('./files.js')
+    const { HOST_RECONNECTING, HostReconnectingError } = await import('../../core/hosts/remote-read-bound.js')
     try {
       res.json(await listSessionFiles(req.query.path, host, showHidden, { cwd, sessionId }))
     } catch (err) {
       if (err instanceof FilesOpError) {
         sendError(res, err.statusCode, 'bad_request', err.message)
+        return
+      }
+      // The host is not answering now: the web route's answer (503, the host by
+      // its name), so the phone keeps its tree and retries instead of an error.
+      if (err instanceof HostReconnectingError) {
+        const { markHandledFailure } = await import('../middleware/handled-failure.js')
+        markHandledFailure(res)
+        sendError(res, 503, HOST_RECONNECTING, err.message)
         return
       }
       throw err
@@ -90,11 +99,20 @@ filesV1Router.get('/files/resolve-path', async (req: Request, res: Response, nex
       return
     }
     const { resolveSessionPath, FilesOpError } = await import('./files.js')
+    const { HOST_RECONNECTING, HostReconnectingError } = await import('../../core/hosts/remote-read-bound.js')
     try {
       res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host, sessionId))
     } catch (err) {
       if (err instanceof FilesOpError) {
         sendError(res, err.statusCode, 'bad_request', err.message)
+        return
+      }
+      // The host is not answering now: the web route's answer (503, the host by
+      // its name), so the phone keeps its tree and retries instead of an error.
+      if (err instanceof HostReconnectingError) {
+        const { markHandledFailure } = await import('../middleware/handled-failure.js')
+        markHandledFailure(res)
+        sendError(res, 503, HOST_RECONNECTING, err.message)
         return
       }
       throw err
@@ -177,7 +195,7 @@ filesV1Router.put('/file-content', async (req: Request, res: Response, next: Nex
     }
     const {
       writeFileContentPayload, FileContentError, FileConflictError,
-      logFileWrite, logFileWriteRefused,
+      logFileWrite, logFileWriteRefused, remoteSaveFailure,
     } = await import('./file-content.js')
     // Attributed exactly like the console's write edge. The phone is a REAL second
     // writer of the same files, so leaving it out of the log would make the "who
@@ -202,6 +220,25 @@ filesV1Router.put('/file-content', async (req: Request, res: Response, next: Nex
       }
       if (err instanceof FileContentError) {
         sendError(res, err.statusCode, err.statusCode === 403 ? 'not_supported_cloud' : 'bad_request', err.message)
+        return
+      }
+      // The reads before a remote write got no answer in time: nothing was written.
+      const { HOST_RECONNECTING, HostReconnectingError } = await import('../../core/hosts/remote-read-bound.js')
+      if (err instanceof HostReconnectingError) {
+        const { markHandledFailure } = await import('../middleware/handled-failure.js')
+        markHandledFailure(res)
+        sendError(res, 503, HOST_RECONNECTING, `Nothing was saved. ${err.message}`)
+        return
+      }
+      // The write itself failed on the host or on its link: the same answer as
+      // the console's save (remoteSaveFailure), never "Internal server error".
+      const failure = await remoteSaveFailure(err, host)
+      if (failure) {
+        if (failure.code) {
+          const { markHandledFailure } = await import('../middleware/handled-failure.js')
+          markHandledFailure(res)
+        }
+        sendError(res, failure.status, failure.code ?? 'host_error', failure.message)
         return
       }
       throw err

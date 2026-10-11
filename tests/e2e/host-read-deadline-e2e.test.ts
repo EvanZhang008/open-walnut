@@ -12,6 +12,15 @@
  * while that dial runs answers at once, from cache or degraded. The Files
  * listing and the folder picker (list-dirs without `pending`) are held to the
  * same bound; they took 15 to 30s and named the Cloud host by its internal alias.
+ * So are file content, the slash palette, images, the plan and subagent reads,
+ * the service preview and the code-server embed. Quick-start's "create the
+ * folder" is a user action and waits for the dial (15s at most), then names the
+ * host by its label. A companion that was connected and then went silent is
+ * host-read-silent-link-e2e.test.ts.
+ *
+ * No real ssh is reachable: HOME is a throwaway home (no real ~/.ssh/config, so
+ * none of its hosts is discovered) and the only ssh on PATH are stand-ins
+ * (tests/helpers/isolate-ssh.ts).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
@@ -21,6 +30,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { seedPrimaryPairing } from '../helpers/cloud-box-replica.js'
+import { isolateFromRealSsh, type SshIsolation } from '../helpers/isolate-ssh.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-read-deadline'))
 
@@ -36,11 +46,12 @@ const held = new Set<net.Socket>()
 let silentPort = 0
 const pidFile = () => path.join(base, 'fake-ssh.pids')
 const savedPath = process.env.PATH
+let isolation: SshIsolation | null = null
 
 const CLOUD_SID = '11111111-2222-4333-8444-555555555555'
 const SSH_SID = '66666666-7777-4888-9999-000000000000'
 
-const api = (p: string) => fetch(`http://127.0.0.1:${primaryPort}${p}`)
+const api = (p: string, init?: RequestInit) => fetch(`http://127.0.0.1:${primaryPort}${p}`, init)
 
 async function timed(p: string): Promise<{ status: number; ms: number; body: Record<string, unknown> }> {
   const t0 = Date.now()
@@ -51,6 +62,7 @@ async function timed(p: string): Promise<{ status: number; ms: number; body: Rec
 
 beforeAll(async () => {
   base = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-host-read-deadline-'))
+  isolation = isolateFromRealSsh(base)
   silent = net.createServer((s) => { held.add(s); s.on('close', () => held.delete(s)); s.on('error', () => {}) })
   await new Promise<void>((r) => silent.listen(0, '127.0.0.1', r))
   silentPort = (silent.address() as net.AddressInfo).port
@@ -71,7 +83,7 @@ beforeAll(async () => {
     'exit 255',
     '',
   ].join('\n'), { mode: 0o755 })
-  process.env.PATH = `${bin}${path.delimiter}${savedPath}`
+  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
 
   await fsp.mkdir(path.dirname(TASKS_FILE), { recursive: true })
   await fsp.writeFile(TASKS_FILE, JSON.stringify({ version: 1, tasks: [] }))
@@ -107,6 +119,7 @@ afterAll(async () => {
     await new Promise((r) => setTimeout(r, 250))
   }
   process.env.PATH = savedPath
+  isolation?.restore()
   expect(pids().filter(alive)).toEqual([])
 }, 90_000)
 
@@ -126,9 +139,11 @@ describe.each([
     expect(second.body).toMatchObject({ stale: true, staleReason: `Reconnecting to ${hostLabel}` })
     expect(second.ms).toBeLessThan(1_500)
 
-    // A delta never gets a stale total: it fails in place, fast.
+    // A delta never gets a stale total: it fails in place, fast, as the reconnecting
+    // 503 every other read answers while the dial runs (gate links F9: it was 502).
     const delta = await timed(`/api/sessions/${sid}/history?since=3`)
-    expect(delta.status).toBe(502)
+    expect(delta.status).toBe(503)
+    expect(delta.body).toMatchObject({ code: 'host_reconnecting' })
     expect(delta.ms).toBeLessThan(1_500)
   }, 60_000)
 
@@ -167,5 +182,72 @@ describe.each([
     expect(v1.status).toBe(503)
     expect(v1.body).toEqual({ error: { code: 'host_reconnecting', message: `Reconnecting to ${hostLabel}` } })
     expect(v1.ms).toBeLessThan(1_500)
+  }, 60_000)
+})
+
+// After every case above, so their timing (the first dial, then "Reconnecting")
+// is the one they were written for; by now each host is dialling or its
+// failure is cached.
+describe.each([
+  ['Cloud', CLOUD_SID, 'Cloud', CLOUD_BOX_HOST_ALIAS],
+  ['the SSH host', SSH_SID, 'Dev box', 'devbox'],
+])('%s, the rest of its reads', (_label, sid, hostLabel, host) => {
+  // While the dial runs, or once it failed and the failure is cached: either way
+  // the host cannot be reached now, and no read waits for it.
+  it('every other read on the host answers at once while it cannot be reached, in its own name', async () => {
+    const dir = sid === CLOUD_SID ? '/srv/projects/alpha' : '/home/dev/projects/beta'
+    const e = encodeURIComponent
+    const alias = new RegExp(`\\b${host}\\b`)
+    const post = (body?: unknown): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
+    const v1Code = (b: Record<string, unknown>) => (b.error as { code?: string } | undefined)?.code
+    const rows: Array<[string, string, RequestInit | undefined, (s: number, b: Record<string, unknown>) => void]> = [
+      // The viewer's payload carries its failure in `error`, as it always has.
+      ['file-content', `/api/file-content?path=${e(`${dir}/README.md`)}&host=${host}`, undefined, (s, b) => { expect(s).toBe(200); expect(b.content ?? null).toBeNull(); expect(String(b.error)).toContain(hostLabel) }],
+      ['slash palette', `/api/slash-commands?host=${host}&cwd=${e(dir)}&fresh=1`, undefined, (s, b) => { expect(s).toBe(200); expect(b.degraded).toBe(true) }],
+      ['session slash palette', `/api/sessions/${sid}/slash-commands?fresh=1`, undefined, (s, b) => { expect(s).toBe(200); expect(b.degraded).toBe(true) }],
+      ['v1 media', `/api/v1/media?path=${e(`${dir}/pic.png`)}&session=${sid}`, undefined, (s) => expect(s).toBe(404)],
+      ['local-image', `/api/local-image?path=${e(`${dir}/shot.png`)}&host=${host}`, undefined, (s) => expect(s).toBe(404)],
+      ['v1 plan', `/api/v1/sessions/${sid}/plan`, undefined, (s, b) => { expect(s).toBe(503); expect(v1Code(b)).toBe('host_reconnecting') }],
+      // A lane the session never had: empty, or the degraded answer.
+      ['v1 subagent history', `/api/v1/sessions/${sid}/subagent/abc123/history`, undefined, (s, b) => { expect([200, 503]).toContain(s); if (s === 503) expect(v1Code(b)).toBe('host_reconnecting') }],
+      ['service preview', `/api/sessions/${sid}/service-preview`, post({ url: 'http://localhost:8080/' }), (s, b) => { expect(s).toBe(503); expect(b.code).toBe('host_reconnecting') }],
+      ['vscode embed', `/api/sessions/${sid}/vscode-embed?install=false`, post(), (s, b) => { expect(s).toBe(503); expect(b.code).toBe('host_reconnecting') }],
+    ]
+    for (const [name, p, init, check] of rows) {
+      const t0 = Date.now()
+      const r = await api(p, init)
+      const ms = Date.now() - t0
+      const text = await r.text()
+      const body = (() => { try { return JSON.parse(text) as Record<string, unknown> } catch { return {} } })()
+      check(r.status, body)
+      expect(ms, name).toBeLessThan(1_500)
+      expect(text, name).not.toMatch(alias)
+    }
+  }, 60_000)
+
+  it('quick-start\'s "create the folder" waits for the dial as a send does, then says so in the host\'s name', async () => {
+    const dir = sid === CLOUD_SID ? '/srv/projects/alpha' : '/home/dev/projects/beta'
+    const t0 = Date.now()
+    const r = await api('/api/sessions/quick-start', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cwd: `${dir}/fresh-dir`, host, createCwd: true, message: 'never sent', overrideReadiness: true }),
+    })
+    const ms = Date.now() - t0
+    const body = await r.json() as { error?: string; code?: string }
+    expect(body.error).not.toMatch(new RegExp(`\\b${host}\\b`))
+    if (r.status === 409) {
+      // The pool had just learned the link does not answer (it fails fast): the
+      // Start gate says so at once instead of redialling into the same silence.
+      expect(body.code).toBe('host_unreachable')
+      expect(body.error).toContain(hostLabel)
+      expect(ms).toBeLessThan(1_500)
+      return
+    }
+    // The link, not the folder: the reconnecting category (gate links F10).
+    expect(r.status).toBe(503)
+    expect(body.code).toBe('host_reconnecting')
+    expect(body.error).toBe(`Reconnecting to ${hostLabel}, so the folder was not created. Try again in a moment.`)
+    // A user action, not a background read: at most the 15s it always waited.
+    expect(ms).toBeLessThan(16_500)
   }, 60_000)
 })

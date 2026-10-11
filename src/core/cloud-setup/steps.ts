@@ -20,6 +20,7 @@ import net from 'node:net'
 import os from 'node:os'
 import { getCloudRemoteCredentials, gitSafeAsync, initSync, sync } from '../../integrations/git-sync.js'
 import { log } from '../../logging/index.js'
+import { computerSelfReport } from '../device-self-report.js'
 import type { CloudSetupAwaitingInput, CloudSetupJobState, CloudSetupStepId } from './job-types.js'
 import { getDriver } from './providers/index.js'
 import {
@@ -423,7 +424,9 @@ async function claimAndWire(ctx: StepContext): Promise<StepOutcome> {
   const { status, body } = await fetchJson(`${target.origin}/api/v1/setup/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ setupToken: state.pairingCode, deviceName }),
+    // The self-report makes the claim this Mac's: a claim that says it is a
+    // computer records the claimer as the companion's owner (core/device-claim.ts).
+    body: JSON.stringify({ setupToken: state.pairingCode, deviceName, device: computerSelfReport() }),
     signal: ctx.signal,
   })
   if (status !== 200) {

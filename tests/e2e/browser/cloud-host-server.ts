@@ -5,10 +5,16 @@
  * tunnel end to end. Only the CLI on the box is a mock.
  *
  * Never :3456 and never the developer's data: every HOME, data dir and daemon
- * dir sits under one temp base, removed on shutdown. The primary is an
+ * dir sits under one temp base, removed on shutdown, and the only ssh on PATH
+ * refuses at once (tests/helpers/isolate-ssh.ts). The primary is an
  * ephemeral child (argv) with WALNUT_EPHEMERAL_REMOTE_HOSTS=1; an ephemeral
  * server only ever takes a LOOPBACK companion as its cloud box
  * (core/hosts/cloud-box-probe.ts), which this one is.
+ *
+ * CLOUD_HOST_LINK_CONTROL=1 puts a silent-link proxy (tests/helpers/silent-link-proxy.ts)
+ * between the Mac and the companion, and a loopback control port that switches it
+ * (`GET /mode?m=pass|blackhole|drop-hold|slow`, and for slow `&ms=<delay>&bps=<bytes/s>`),
+ * so a spec can make a connected companion go silent or slow (cloud-host-silent-link.spec.ts).
  *
  * Run: ./node_modules/.bin/tsx tests/e2e/browser/cloud-host-server.ts
  * Reads PW_TEST_PORT (default 3466); prints `CLOUD_HOST_READY <json>`.
@@ -17,7 +23,10 @@ import fs from 'node:fs/promises'
 import { rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import http from 'node:http'
 import { seedPrimaryPairing, startCloudBoxReplica } from '../../helpers/cloud-box-replica.js'
+import { startSilentLinkProxy, type LinkMode } from '../../helpers/silent-link-proxy.js'
+import { isolateFromRealSsh } from '../../helpers/isolate-ssh.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3466)
 if (port === 3456) throw new Error('Production port is forbidden')
@@ -32,10 +41,24 @@ const secondMac = process.env.CLOUD_HOST_SECOND_MAC === '1'
 // The companion first: the Mac's pairing names its port.
 const replica = await startCloudBoxReplica(base, undefined, secondMac ? { machineOwner: 'mac-primary' } : {})
 
+// CLOUD_HOST_LINK_CONTROL=1: the link between the two can be made to go silent.
+const link = process.env.CLOUD_HOST_LINK_CONTROL === '1' ? await startSilentLinkProxy(replica.port) : null
+const control = link ? http.createServer((req, res) => {
+  const q = new URL(req.url ?? '/', 'http://x').searchParams
+  const m = q.get('m')
+  if (m === 'slow') link.setMode('slow', { delayMs: Number(q.get('ms') ?? 300), bytesPerSec: Number(q.get('bps') ?? 64 * 1024) })
+  else if (m === 'pass' || m === 'blackhole' || m === 'drop-hold') link.setMode(m as LinkMode)
+  res.writeHead(200, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ mode: link.mode(), accepted: link.accepted() }))
+}) : null
+if (control) await new Promise<void>((r) => control.listen(0, '127.0.0.1', r))
+const linkControlPort = control ? (control.address() as { port: number }).port : null
+
+const isolation = isolateFromRealSsh(path.join(base, 'mac'))
 Object.assign(process.env, {
   OPEN_WALNUT_HOME: macHome,
-  HOME: path.join(base, 'mac', 'home'),
-  USERPROFILE: path.join(base, 'mac', 'home'),
+  HOME: isolation.home,
+  USERPROFILE: isolation.home,
   WALNUT_DAEMON_DIR: path.join(base, 'mac', 'daemon'),
   WALNUT_STREAMS_DIR: path.join(base, 'mac', 'daemon-streams'),
   WALNUT_SPAWN_JOURNAL: path.join(base, 'mac', 'spawn-journal.jsonl'),
@@ -51,7 +74,7 @@ await fs.writeFile(path.join(macHome, 'tasks', 'tasks.json'), JSON.stringify({ v
 await fs.writeFile(path.join(macHome, 'config.yaml'), JSON.stringify({
   version: 1, user: { name: 'Tester' }, defaults: { priority: 'none' },
 }))
-await seedPrimaryPairing(macHome, `127.0.0.1:${replica.port}`, replica.tokens,
+await seedPrimaryPairing(macHome, `127.0.0.1:${link?.port ?? replica.port}`, replica.tokens,
   secondMac ? { as: 'mac-second', secondMac: replica.tokens.secondMac, cachedMachineToken: false } : {})
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
@@ -91,6 +114,8 @@ const fixture = {
   boxData: replica.box.data, boxHome: replica.box.home,
   // The device ids its auth.json was seeded with (ownership is keyed by them).
   ids: replica.ids,
+  // CLOUD_HOST_LINK_CONTROL=1: the port that switches the link (null otherwise).
+  linkControlPort,
 }
 // Port-keyed, so the spec (which Playwright runs apart from this process) finds it.
 const fixtureFile = path.join(os.tmpdir(), `walnut-cloudhost-pw-${port}.json`)
@@ -104,7 +129,10 @@ const shutdown = async () => {
   // Bounded well inside the config's 45s gracefulShutdown, so the cleanup below
   // runs before Playwright SIGKILLs the group.
   const teardown = (async () => {
+    link?.setMode('pass')
     await replica.stop().catch(() => {}) // the box daemon first: it has no watchdog
+    await link?.close().catch(() => {})
+    if (control) await new Promise<void>((r) => control.close(() => r()))
     await viteServer.close().catch(() => {})
     await stopServer().catch(() => {})
     try {

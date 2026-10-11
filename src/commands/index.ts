@@ -203,9 +203,18 @@ export function registerCommands(program: Command): void {
   deviceCmd
     .command('add <name>')
     .description('Pair a new device — prints its Bearer token ONCE')
-    .action(async (name: string, _options: Record<string, unknown>, cmd: Command) => {
+    .option('--owner', 'On a cloud companion: it is the Mac this companion belongs to')
+    .action(async (name: string, options: { owner?: boolean }, cmd: Command) => {
       const { runDeviceAdd } = await import('./device.js');
-      await runDeviceAdd(name, cmd.optsWithGlobals());
+      await runDeviceAdd(name, cmd.optsWithGlobals(), { owner: options.owner === true });
+    });
+
+  deviceCmd
+    .command('owner <name>')
+    .description('On a cloud companion: name the paired Mac it belongs to')
+    .action(async (name: string, _options: Record<string, unknown>, cmd: Command) => {
+      const { runDeviceOwner } = await import('./device.js');
+      await runDeviceOwner(name, cmd.optsWithGlobals());
     });
 
   deviceCmd

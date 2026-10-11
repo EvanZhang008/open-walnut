@@ -1,62 +1,68 @@
 /**
  * Machine credentials on the companion (device records of kind 'machine', the
- * `bridge-*` tokens daemons dial /bridge and /daemon-tunnel with): who may
- * mint, replace, revoke and adopt them.
- *
- * One companion serves one Mac, as the /bridge model always assumed; these
- * rules make that explicit instead of first come, first served:
- *  - the caller is the paired device its bearer token authenticates as
- *    (device-actor.ts), never a name, and ownership is recorded by that
- *    device's immutable id (`ownerId`), so re-pairing a name inherits nothing;
- *  - only a paired device mints one: never an API key, never a phone (a device
- *    recorded as one at its claim, device-auth.ts setDeviceInfo);
- *  - while any device owns a machine credential here, no other device mints,
- *    replaces, revokes or adopts one. It hears 409 OTHER_MAC_CONNECTED;
- *  - credentials from before ownership was recorded (no owner, or an owner
- *    whose pairing is gone) belong to the Mac that minted them. The proof is
- *    the token of the legacy `bridge-local` itself (MACHINE_PROOF_HEADER),
- *    which only that Mac's own daemon ever held; the token of any other
- *    credential proves nothing, since a remote host's daemon holds its own.
- *    The first successful act with that proof adopts all of them, and the
- *    Mac's tunnel daemon stays the unkeyed one they always used;
- *  - revoking the owner's pairing (device-auth.ts revokeDevice) takes its
- *    machine credentials with it, and the unowned ones. That is how a
- *    companion passes to another Mac: on purpose, and the Mac that loses it
- *    sees its own sync stop, not a silent takeover.
+ * `bridge-*` tokens the daemons of the Mac's computers dial /bridge with): who
+ * may make, replace, remove and adopt them. They are the companion's owner's,
+ * the Mac it belongs to:
+ *  - the caller is the paired device its bearer token authenticates as, never
+ *    a name, and an API key is no device;
+ *  - with an owner recorded (device-store.ts `owner`: the setup claim, the box
+ *    operator, a bridge-local proof, or the first mint below), only the owner
+ *    may. A phone hears 403, a computer that is not the owner 409
+ *    `other_mac_connected` (OTHER_MAC_CONNECTED, or OTHER_COMPUTER_CONNECTED
+ *    when the owner said it is a computer that is not a Mac), any other device
+ *    409 with the owner-only sentence;
+ *  - with none recorded (a companion from before owners were recorded, or its
+ *    owner was unpaired), the rules of the builds before, unchanged: while a
+ *    device owns a machine credential here, no other device may (409
+ *    OTHER_MAC_CONNECTED); credentials from before ownership was recorded
+ *    belong to the Mac whose daemon holds the unowned `bridge-local`, proved by
+ *    its token (MACHINE_PROOF_HEADER); with nothing owned and no such
+ *    `bridge-local`, the first paired device that is not a phone may. Whoever
+ *    MINTS is recorded as the owner then ('mint'; a revoke or an adopt records
+ *    none, only a proof does, 'proof'), never guessed from which record is
+ *    oldest;
+ *  - removing the owner's pairing removes its machine credentials and the
+ *    unowned ones (device-auth.ts), and so does the operator naming another owner;
+ *  - each credential names the companion tunnel daemon that serves it
+ *    (`daemonKey`): the owner's own, or the unkeyed one the credentials from
+ *    before ownership was recorded used.
  *
  * Every check runs inside the auth.json lock together with the write, so two
- * Macs minting at once cannot both win.
+ * Macs asking at once cannot both win.
  */
 
+import { liveOwnerOf, ownerRecord, proofClaim, recordForToken, type DeviceActor } from './device-actor.js'
+import { newMachineRecord, notifyRevoked } from './device-auth.js'
 import {
-  listDeviceRecords, mutateDeviceRecords, newMachineRecord, notifyRevoked, tokenMatchesHash, type DeviceRecord,
-} from './device-auth.js'
-import { isPhoneRecord, liveOwnerOf, recordForToken, type DeviceActor } from './device-actor.js'
+  daemonKeyFor, isMacReport, isPhoneRecord, platformFromInfo, readRegistry, updateAuth,
+  type CompanionOwner, type DeviceRecord, type DeviceRegistry, type LockedAuth,
+} from './device-store.js'
+import { PRIMARY_MACHINE_CREDENTIAL } from './device-actor.js'
 import { log } from '../logging/index.js'
-import { CLOUD_BOX_OTHER_MAC_SENTENCE } from './hosts/cloud-box-host.js'
 
-/** The sentence a second Mac hears (its host card says it too, cloud-box-host.ts). */
-export const OTHER_MAC_CONNECTED = CLOUD_BOX_OTHER_MAC_SENTENCE
-const PHONE_CANNOT = 'A phone cannot mint or revoke a machine credential.'
-const NEEDS_DEVICE = "A machine credential is minted with a paired Mac's own device token."
-const NOT_MACHINE = 'That name belongs to a paired device, not a machine credential.'
+export { MACHINE_PROOF_HEADER, PRIMARY_MACHINE_CREDENTIAL } from './device-actor.js'
 
-/** Request header carrying the legacy `bridge-local` token, as proof of being the Mac that holds it. */
-export const MACHINE_PROOF_HEADER = 'x-walnut-machine-proof'
-
-/** The Mac's own machine credential: its local daemon's, and the only key to /daemon-tunnel. */
-export const PRIMARY_MACHINE_CREDENTIAL = 'bridge-local'
+/** The sentence a second Mac hears. */
+export const OTHER_MAC_CONNECTED = 'Another Mac is connected to this cloud companion. Disconnect it there first.'
+/** The same, when the owner's own report says a computer that is not a Mac (its words are kept true). */
+export const OTHER_COMPUTER_CONNECTED = 'Another computer is connected to this cloud companion. Disconnect it there first.'
+const OWNER_ONLY = 'Only the Mac this cloud companion belongs to can connect computers to it.'
+const NOT_MACHINE = 'That name already belongs to a paired device.'
 
 export type MachineCredentialAction = 'mint' | 'replace' | 'revoke' | 'adopt'
 
-type Refusal = { ok: false; status: 400 | 403 | 409; code: 'machine_needs_device' | 'phone_cannot_mint' | 'other_mac_connected' | 'not_machine'; error: string }
+export type MachineRefusalCode =
+  | 'machine_needs_device' | 'phone_cannot_mint' | 'other_mac_connected' | 'not_companion_owner' | 'not_machine'
+
+type Refusal = { ok: false; status: 400 | 403 | 409; code: MachineRefusalCode; error: string }
 
 export type MachineCredentialDecision =
-  | { ok: true; me: DeviceRecord; adopt: DeviceRecord[] }
+  /** `adopt`: the unowned credentials this act makes `me`'s; `record`: the owner it records (none recorded yet). */
+  | { ok: true; me: DeviceRecord; adopt: DeviceRecord[]; record: CompanionOwner | null }
   | Refusal
 
 export class MachineCredentialRefused extends Error {
-  constructor(public status: 400 | 403 | 409, public code: string, message: string) {
+  constructor(public status: 400 | 403 | 409, public code: MachineRefusalCode, message: string) {
     super(message)
     this.name = 'MachineCredentialRefused'
   }
@@ -65,58 +71,83 @@ export class MachineCredentialRefused extends Error {
 const OTHER_MAC: Refusal = { ok: false, status: 409, code: 'other_mac_connected', error: OTHER_MAC_CONNECTED }
 
 /**
- * The rules above, pure. `by` is the caller, `proof` the legacy bridge-local
- * token it presents. `adopt` lists the unowned credentials this act makes the
- * caller's (its proof was good).
+ * What a computer hears when `owner` has the companion. The code is the same
+ * either way (the Mac's bridge treats it as "belongs to another"); the
+ * sentence says a Mac unless the owner's own report says another computer.
  */
-export function machineCredentialDecision(
-  devices: DeviceRecord[],
-  input: { by: DeviceActor; name: string; action: MachineCredentialAction; proof?: string },
-): MachineCredentialDecision {
-  const me = 'token' in input.by ? recordForToken(devices, input.by.token) : undefined
-  if (!me || me.kind === 'machine' || !me.id) return { ok: false, status: 403, code: 'machine_needs_device', error: NEEDS_DEVICE }
-  if (isPhoneRecord(me)) return { ok: false, status: 403, code: 'phone_cannot_mint', error: PHONE_CANNOT }
-  const owners = new Set<DeviceRecord>()
-  const legacy: DeviceRecord[] = []
-  for (const d of devices) {
-    if (d.kind !== 'machine') continue
-    const owner = liveOwnerOf(d, devices)
-    if (owner) owners.add(owner)
-    else legacy.push(d)
-  }
-  if ([...owners].some((o) => o !== me)) return OTHER_MAC
-  const existing = devices.find((d) => d.name === input.name)
-  if (existing && existing.kind !== 'machine') return { ok: false, status: 400, code: 'not_machine', error: NOT_MACHINE }
-  if (owners.has(me)) return { ok: true, me, adopt: legacy }
-  // Nothing is owned yet. The legacy bridge-local, if there is one, is the
-  // first Mac's: only its token lets a device act (and makes all of them its).
-  const legacyLocal = legacy.find((d) => d.name === PRIMARY_MACHINE_CREDENTIAL)
-  if (legacyLocal) {
-    return input.proof && tokenMatchesHash(input.proof, legacyLocal.tokenHash) ? { ok: true, me, adopt: legacy } : OTHER_MAC
-  }
-  // No bridge-local left to prove with: adopting needs something to adopt.
-  if (input.action === 'adopt') return OTHER_MAC
-  return { ok: true, me, adopt: [] }
-}
-
-/** The tunnel daemon key a new credential of `me` gets: the one it adopted, else its own id. */
-function daemonKeyFor(me: DeviceRecord): string | undefined {
-  return me.tunnelDaemon ? me.tunnelDaemon.key : me.id
+function otherOwnerRefusal(owner: DeviceRecord): Refusal {
+  return owner.platform === 'other' && platformFromInfo(owner.info) === 'other' && !isMacReport(owner.info)
+    ? { ok: false, status: 409, code: 'other_mac_connected', error: OTHER_COMPUTER_CONNECTED }
+    : OTHER_MAC
 }
 
 /**
- * Apply a decision's adoption: the unowned credentials become `me`'s and keep
- * their daemon, and `me` records that daemon as its own (the legacy
- * bridge-local's, the unkeyed one), so a credential it mints later lands there.
+ * The rules above, pure. `by` is the caller, `proof` the unowned bridge-local's
+ * token it presents.
  */
-function adoptInto(devices: DeviceRecord[], me: DeviceRecord, adopt: DeviceRecord[]): DeviceRecord[] {
-  if (adopt.length === 0) return devices
-  const local = adopt.find((d) => d.name === PRIMARY_MACHINE_CREDENTIAL)
-  return devices.map((d) => {
-    if (adopt.includes(d)) return { ...d, ownerId: me.id }
-    if (d === me && !me.tunnelDaemon) return { ...d, tunnelDaemon: local?.daemonKey ? { key: local.daemonKey } : {} }
-    return d
-  })
+export function machineCredentialDecision(
+  reg: DeviceRegistry,
+  input: { by: DeviceActor; name: string; action: MachineCredentialAction; proof?: string },
+): MachineCredentialDecision {
+  const me = 'token' in input.by ? recordForToken(reg.devices, input.by.token) : undefined
+  if (!me || me.kind === 'machine' || !me.id) return { ok: false, status: 403, code: 'machine_needs_device', error: OWNER_ONLY }
+  if (isPhoneRecord(me)) return { ok: false, status: 403, code: 'phone_cannot_mint', error: OWNER_ONLY }
+  const existing = reg.devices.find((d) => d.name === input.name)
+  const notMachine: Refusal = { ok: false, status: 400, code: 'not_machine', error: NOT_MACHINE }
+  const legacy = reg.devices.filter((d) => d.kind === 'machine' && liveOwnerOf(d, reg.devices) === undefined)
+  const recorded = ownerRecord(reg)
+  if (recorded) {
+    if (recorded !== me) {
+      // A computer (by its own word, which decides nothing but these words) hears
+      // that another Mac has the companion; a device that never said what it is,
+      // the plain rule.
+      return me.platform === 'other' ? otherOwnerRefusal(recorded) : { ok: false, status: 409, code: 'not_companion_owner', error: OWNER_ONLY }
+    }
+    if (existing && existing.kind !== 'machine') return notMachine
+    return { ok: true, me, adopt: legacy, record: null }
+  }
+  // No owner recorded: the rules of the builds before owners were recorded.
+  const owners = new Set<DeviceRecord>()
+  for (const d of reg.devices) {
+    const o = d.kind === 'machine' ? liveOwnerOf(d, reg.devices) : undefined
+    if (o) owners.add(o)
+  }
+  const otherOwner = [...owners].find((o) => o !== me)
+  if (otherOwner) return otherOwnerRefusal(otherOwner)
+  if (existing && existing.kind !== 'machine') return notMachine
+  // Only a mint records an owner here: a revoke or an adopt is allowed by the
+  // same rules and records none (cloud-sync.md, "A companion belongs to one Mac").
+  const minting = input.action === 'mint' || input.action === 'replace'
+  const minted: CompanionOwner | null = minting ? { id: me.id, via: 'mint' } : null
+  if (owners.has(me)) return { ok: true, me, adopt: legacy, record: minted }
+  // Nothing is owned yet. The unowned bridge-local, if there is one, is the
+  // first Mac's: only its token lets a device act (and makes all of them its).
+  const legacyLocal = legacy.find((d) => d.name === PRIMARY_MACHINE_CREDENTIAL)
+  if (legacyLocal) {
+    const claim = proofClaim(reg, me, input.proof)
+    return claim ? { ok: true, me, adopt: legacy, record: claim } : OTHER_MAC
+  }
+  // No bridge-local left to prove with: adopting needs something to adopt.
+  if (input.action === 'adopt') return OTHER_MAC
+  // First come: the first paired device that is not a phone to mint, recorded as the owner now.
+  return { ok: true, me, adopt: [], record: minted }
+}
+
+/**
+ * Apply a decision before its write: record the owner it names, make the
+ * unowned credentials `me`'s (they keep their daemon, and `me` records that
+ * daemon as its own: the bridge-local's, the unkeyed one), so a credential it
+ * mints later lands there. Returns the record of `me` inside `auth`.
+ */
+function applyDecision(auth: LockedAuth, decision: Extract<MachineCredentialDecision, { ok: true }>): DeviceRecord {
+  const me = auth.devices.find((d) => d === decision.me)!
+  if (decision.record) auth.owner = decision.record
+  if (decision.adopt.length > 0) {
+    const local = decision.adopt.find((d) => d.name === PRIMARY_MACHINE_CREDENTIAL)
+    for (const d of decision.adopt) d.ownerId = me.id
+    if (!me.tunnelDaemon) me.tunnelDaemon = local?.daemonKey ? { key: local.daemonKey } : {}
+  }
+  return me
 }
 
 function refuse(d: Refusal): never {
@@ -132,26 +163,24 @@ export async function mintMachineCredential(
   name: string,
   opts: { by: DeviceActor; replace?: boolean; proof?: string },
 ): Promise<{ name: string; token: string; createdAt: string; replaced: boolean }> {
-  const out = await mutateDeviceRecords((devices) => {
-    const decision = machineCredentialDecision(devices, { by: opts.by, name, action: opts.replace ? 'replace' : 'mint', proof: opts.proof })
+  const out = await updateAuth((auth) => {
+    const decision = machineCredentialDecision(auth, { by: opts.by, name, action: opts.replace ? 'replace' : 'mint', proof: opts.proof })
     if (!decision.ok) refuse(decision)
-    const existing = devices.find((d) => d.name === name)
-    if (existing && !opts.replace) throw new Error(`Device "${name}" already exists`)
-    const adopted = adoptInto(devices, decision.me, decision.adopt)
-    const me = adopted.find((d) => d.id === decision.me.id)!
+    const existing = auth.devices.find((d) => d.name === name)
+    // Nothing is written for a name that is taken (the builds before wrote nothing either).
+    if (existing && !opts.replace) return { persist: false, result: null }
+    const me = applyDecision(auth, decision)
     // A first mint with nothing adopted takes this Mac's own daemon; the
     // record says so, so a later mint after a revoke lands on it again.
-    const withKey = me.tunnelDaemon ? adopted : adopted.map((d) => (d === me ? { ...d, tunnelDaemon: { key: me.id } } : d))
+    if (!me.tunnelDaemon) me.tunnelDaemon = { key: me.id }
     // A rotation keeps the daemon that serves the credential (its sessions).
-    const daemonKey = existing ? existing.daemonKey : daemonKeyFor(me)
-    const { record, token } = newMachineRecord(name, me.id!, daemonKey)
-    return {
-      devices: [...withKey.filter((d) => d.name !== name), record],
-      result: { name, token, createdAt: record.createdAt, replaced: existing !== undefined, owner: me.name },
-    }
+    const { record, token } = newMachineRecord(name, me.id!, existing ? existing.daemonKey : daemonKeyFor(me))
+    auth.devices = [...auth.devices.filter((d) => d.name !== name), record]
+    return { persist: true, result: { name, token, createdAt: record.createdAt, replaced: existing !== undefined, owner: me.name, recorded: decision.record?.via ?? null } }
   })
+  if (!out) throw new Error(`Device "${name}" already exists`)
   if (out.replaced) notifyRevoked([name])
-  log.web.info('device-auth: machine credential minted', { name, owner: out.owner, replaced: out.replaced })
+  log.web.info('device-auth: machine credential minted', { name, owner: out.owner, replaced: out.replaced, ...(out.recorded ? { ownerRecorded: out.recorded } : {}) })
   return { name: out.name, token: out.token, createdAt: out.createdAt, replaced: out.replaced }
 }
 
@@ -160,12 +189,13 @@ export async function revokeMachineCredential(
   name: string,
   opts: { by: DeviceActor; proof?: string },
 ): Promise<boolean> {
-  const removed = await mutateDeviceRecords((devices) => {
-    if (!devices.some((d) => d.name === name)) return { result: null }
-    const decision = machineCredentialDecision(devices, { by: opts.by, name, action: 'revoke', proof: opts.proof })
+  const removed = await updateAuth((auth) => {
+    if (!auth.devices.some((d) => d.name === name)) return { persist: false, result: null }
+    const decision = machineCredentialDecision(auth, { by: opts.by, name, action: 'revoke', proof: opts.proof })
     if (!decision.ok) refuse(decision)
-    const adopted = adoptInto(devices, decision.me, decision.adopt)
-    return { devices: adopted.filter((d) => d.name !== name), result: decision.me.name }
+    const me = applyDecision(auth, decision)
+    auth.devices = auth.devices.filter((d) => d.name !== name)
+    return { persist: true, result: me.name }
   })
   if (removed === null) return false
   notifyRevoked([name])
@@ -175,22 +205,24 @@ export async function revokeMachineCredential(
 
 /**
  * Become the owner of the credentials from before ownership was recorded,
- * proving it with the legacy bridge-local token. The Mac does this once per
- * start, so a lost token cache later re-mints as the owner instead of hitting
- * OTHER_MAC_CONNECTED. No token and no daemon changes. 'owned' = already the
- * caller's, 'missing' = no credential of that name.
+ * proving it with the unowned bridge-local's token: the Mac's first contact
+ * with such a companion (it sends it once per start,
+ * src/integrations/cloud-bridge-config.ts). No token changes. 'adopted' = this
+ * act made them the caller's, 'owned' = nothing to adopt, 'missing' = no
+ * credential of that name.
  */
 export async function adoptMachineCredential(
   name: string,
   opts: { by: DeviceActor; proof?: string },
 ): Promise<'adopted' | 'owned' | 'missing'> {
-  const outcome = await mutateDeviceRecords((devices) => {
-    const existing = devices.find((d) => d.name === name)
-    if (!existing) return { result: 'missing' as const }
-    const decision = machineCredentialDecision(devices, { by: opts.by, name, action: 'adopt', proof: opts.proof })
+  const outcome = await updateAuth((auth) => {
+    const existing = auth.devices.find((d) => d.name === name)
+    if (!existing) return { persist: false, result: 'missing' as const }
+    const decision = machineCredentialDecision(auth, { by: opts.by, name, action: 'adopt', proof: opts.proof })
     if (!decision.ok) refuse(decision)
-    if (decision.adopt.length === 0 || !decision.adopt.includes(existing)) return { result: 'owned' as const }
-    return { devices: adoptInto(devices, decision.me, decision.adopt), result: 'adopted' as const }
+    if (!decision.adopt.includes(existing)) return { persist: false, result: 'owned' as const }
+    applyDecision(auth, decision)
+    return { persist: true, result: 'adopted' as const }
   })
   if (outcome === 'adopted') log.web.info('device-auth: machine credentials adopted', { name })
   return outcome
@@ -201,6 +233,6 @@ export async function adoptMachineCredential(
  * one, used by a credential from before ownership was recorded, and by none).
  */
 export async function machineCredentialDaemonKey(name: string): Promise<string | undefined> {
-  const d = (await listDeviceRecords()).find((r) => r.name === name)
+  const d = (await readRegistry()).devices.find((r) => r.name === name)
   return d?.kind === 'machine' ? d.daemonKey : undefined
 }

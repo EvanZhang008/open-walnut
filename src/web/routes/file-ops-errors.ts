@@ -12,6 +12,8 @@
  * out of its own error shape.
  */
 
+import { linkFailureKind } from '../../providers/link-failure.js'
+
 export type FileOpErrorCode =
   | 'invalid'
   | 'forbidden'
@@ -116,7 +118,7 @@ export function mapErrno(err: unknown, target: string): FileOpError {
  * daemon's raw text carries that host's absolute paths, which the user never
  * typed and has no business seeing echoed back.
  */
-export function mapRemoteError(err: unknown, target: string): FileOpError {
+export function mapRemoteError(err: unknown, target: string, hostName = 'the remote host'): FileOpError {
   if (err instanceof FileOpError) return err
   const msg = err instanceof Error ? err.message : String(err)
   if ((err as Error)?.name === 'DaemonNeedsUpgradeError') {
@@ -139,5 +141,21 @@ export function mapRemoteError(err: unknown, target: string): FileOpError {
   if (/\(ERR_FS_CP_[A-Z_]+\)/.test(msg)) {
     return new FileOpError(CANNOT_COPY.code, CANNOT_COPY.message(target))
   }
-  return new FileOpError('remote', 'Could not complete on the remote host: ' + msg)
+  // The link failed, not the host (providers/link-failure.ts): say what that
+  // means for the change in plain words. The pool's own text ("DaemonConnection
+  // not connected to Cloud: the link stopped answering", "WebSocket connection
+  // timeout") once reached the tree as the reason (gate review, 2026-10-05).
+  const link = linkFailureKind(err)
+  if (link === 'no-link') {
+    return new FileOpError('remote', `Could not reach ${hostName}, so nothing was changed. Try again once it is back.`)
+  }
+  if (link === 'lost') {
+    return new FileOpError('remote', `Lost the link to ${hostName} before it answered, so this may or may not have happened. Refresh to check.`)
+  }
+  if (link === 'no-answer') {
+    return new FileOpError('remote', `${hostName} did not answer in time, so this may or may not have happened. Refresh to check.`)
+  }
+  // `msg` is the host's own answer, and names the host by its alias; the route's
+  // exit (hostTermsAtExit) puts it in the host's terms.
+  return new FileOpError('remote', `Could not complete on ${hostName}: ${msg}`)
 }

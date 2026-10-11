@@ -16,7 +16,7 @@ import { ProjectPickerFlyout } from '@/components/tasks/TaskKebabMenu';
 import { serverNow, useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { hostDotOf } from '@open-walnut/host-problem';
 import { HostStatusDot } from './path-selector/HostStatusDot';
-import { hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
+import { CLOUD_BOX_ALIAS, hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import type { DraftColumn } from './draft-column';
 import type { DraftDecisionMenu } from './DraftDecisionRow';
 import { DRAFT_MENU_OWNER_ATTR } from './DraftDecisionRow';
@@ -41,10 +41,10 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
   const isFork = !!draft.forkOf;
   const status = useHostStatus(draft.host);
   const hydration = useHostStatusHydration();
-  const host = hostDisplayLabel(draft.host, status?.label, draft.hostLabel);
+  const hostName = hostDisplayLabel(draft.host, status?.label, draft.hostLabel);
   // The picker tab's own verdict and sentence (hostDotOf), so the two never disagree.
   const hostDot = draft.host
-    ? hostDotOf(status, { hydrating: hydration === 'never' || hydration === 'pending', now: serverNow(), label: host })
+    ? hostDotOf(status, { hydrating: hydration === 'never' || hydration === 'pending', now: serverNow(), label: hostName })
     : null;
   const dot = hostDot?.kind ?? 'unknown';
   const saysSomething = !!hostDot && ['warn', 'failed', 'off', 'connecting', 'checking'].includes(dot);
@@ -53,8 +53,9 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
   if (isFork) title = `A fork continues the source session, so it runs in its folder: ${draft.cwd}`;
   else if (!draft.cwd) title = 'Pick the folder this session runs in, on this machine or a remote host';
   else {
-    const alias = draft.host && host !== draft.host ? ` (alias ${draft.host})` : '';
-    const lines = [`Folder: ${draft.cwd}`, `Host: ${draft.host ? host : `${LOCAL_HOST_LABEL} (this machine)`}${alias}`];
+    // An SSH alias that differs from its label is worth knowing; the cloud box's alias is internal.
+    const alias = draft.host && draft.host !== CLOUD_BOX_ALIAS && hostName !== draft.host ? ` (alias ${draft.host})` : '';
+    const lines = [`Folder: ${draft.cwd}`, `Host: ${draft.host ? hostName : `${LOCAL_HOST_LABEL} (this machine)`}${alias}`];
     if (ai) lines.push('Walnut picked this folder from what you typed.');
     // A host with something to say: the same one sentence as its picker tab.
     title = saysSomething ? hostDot!.title : lines.join('\n');
@@ -70,14 +71,14 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
       onClick={isFork ? undefined : onOpenPicker}
       disabled={isFork}
       title={title}
-      aria-label={draft.cwd ? `Folder and host: ${draft.cwd} on ${host}. Change` : 'Choose folder and host'}
+      aria-label={draft.cwd ? `Folder and host: ${draft.cwd} on ${hostName}. Change` : 'Choose folder and host'}
     >
       {draft.cwd ? (
         <>
           {/* The spaces are text for copy and specs; flex drops them visually. */}
           <span className="draft-pill-key">Folder/Host:</span>{' '}
           <span className="draft-pill-name">{basename(draft.cwd)}</span>{' '}
-          <span className="draft-pill-host">· {host}</span>
+          <span className="draft-pill-host">· {hostName}</span>
           {saysSomething && <HostStatusDot dot={hostDot!} host={draft.host ?? undefined} className="draft-pill-dot" />}
         </>
       ) : 'Choose folder and host…'}

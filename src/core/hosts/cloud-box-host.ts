@@ -55,9 +55,11 @@ export const TUNNEL_PROBE_HEADER = 'x-walnut-tunnel-probe'
  *  - ready: the replica advertises `daemonTunnel.enabled`.
  *  - needs_update: its /api/v1/status has no `daemonTunnel` field (an older build).
  *  - exec_off: it has the tunnel but `cloud.exec.enabled` is off there.
- *  - other_mac: it serves another Mac, which holds its machine credential
- *    (core/machine-credentials.ts). Only a mint can tell, so the status probe
- *    never clears it; the next dial asks again.
+ *  - other_mac: it belongs to another Mac, the only one that may connect
+ *    computers to it (core/machine-credentials.ts). Only a mint can tell, so
+ *    the status probe never clears it; the next dial asks again. Never
+ *    "ready": that reads as "can host now", which clears the card's error and
+ *    dials again at once.
  *  - unknown: never answered yet (unreachable, or still probing).
  */
 export type CloudBoxCapability = 'ready' | 'needs_update' | 'exec_off' | 'other_mac' | 'unknown'

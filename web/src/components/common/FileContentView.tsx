@@ -25,8 +25,9 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
-  FileSaveConflictError, isNetworkFetchError, SAVE_UNREACHABLE_MESSAGE, type FileContentResponse,
+  FileSaveConflictError, isNetworkFetchError, SAVE_UNREACHABLE_MESSAGE, HOST_RECONNECTING_CODE, type FileContentResponse,
 } from '@/api/files';
+import { visibleInterval } from '@/utils/page-visibility';
 import {
   getCachedFileContent, setCachedFileContent, storable,
 } from '@/cache/filecontent-idb';
@@ -164,6 +165,10 @@ const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
  *  the panel almost always finds nothing pending, long enough that a typing
  *  burst is one write. */
 const DRAFT_DEBOUNCE_MS = 400;
+/** "Still loading" answers joined in a row (each ~60s at the server) before the last one shows as it is. */
+const MAX_FILE_LOADING_JOINS = 10;
+/** How often a file whose host is not answering now ("Reconnecting to ...") is asked again. */
+const FILE_RECONNECT_RETRY_MS = 5_000;
 
 
 /**
@@ -210,9 +215,17 @@ export function FileContentView({
    */
   const [selfReload, setSelfReload] = useState(0);
   const readToken = reloadToken + selfReload;
+  // The next read is this view asking again while the file's host reconnects:
+  // no "Reloading…" badge, the sentence on screen already says what is going on.
+  const quietReadRef = useRef(false);
+  // A read is under way: the reconnect clock never stacks a second one on it.
+  const readingRef = useRef(false);
   // Re-fetch of the file already on screen (Refresh): keep the old content
   // visible instead of flashing to blank, and show a small "Reloading…" badge.
   const [reloading, setReloading] = useState(false);
+  // A remote file still arriving (slow link that answers): the host's label while
+  // this view joins the server's read again (MAX_FILE_LOADING_JOINS).
+  const [loadingFrom, setLoadingFrom] = useState<string | null>(null);
   // For HTML/Markdown files, default to the rendered preview; toggle to source on demand.
   const [showSource, setShowSource] = useState(false);
   // Fullscreen the preview (md/html) — CSS-fixed overlay, no remount.
@@ -523,10 +536,12 @@ export function FileContentView({
     let cancelled = false;
     const isReload = lastTokenRef.current !== null && lastTokenRef.current !== readToken;
     lastTokenRef.current = readToken;
+    const quiet = quietReadRef.current;
+    quietReadRef.current = false;
     // What the pane held before this read — a reload compares against it to
     // tell "new bytes" (remount) from "same bytes" (leave the editor alone).
     const lockBefore = lockHashRef.current;
-    if (isReload) setReloading(true);
+    if (isReload) { if (!quiet) setReloading(true); }
     else { setLoading(true); setData(null); }
     // Media/PDF/images render straight from the raw-bytes URL — no JSON content
     // fetch (which would whole-file-read a potentially huge binary on the remote
@@ -590,6 +605,7 @@ export function FileContentView({
       if (!opts.provisional) setReloading(false);
     };
 
+    readingRef.current = true;
     void (async () => {
       try {
         // The cached copy and the unsaved draft are both IndexedDB reads and both
@@ -631,10 +647,17 @@ export function FileContentView({
         // `track: 'baseline'` still records what this open found as the file's
         // "Opened" version — an edit is only undoable if the pre-edit state was
         // kept — and the server dedupes by hash, so re-opens add nothing.
-        const res = await fetchFileContentConditional(filePath, host, {
+        let res = await fetchFileContentConditional(filePath, host, {
           ...(cached ? { ifNoneMatch: cached.contentHash } : {}),
           track: 'baseline',
         });
+        // "Still loading": the server's read goes on, and asking again joins it,
+        // so the bytes land the moment they are in, never a sentence to retry by hand.
+        for (let joins = 0; !cancelled && res.payload?.loading && joins < MAX_FILE_LOADING_JOINS; joins++) {
+          setLoadingFrom(res.payload.loading.from);
+          res = await fetchFileContentConditional(filePath, host, { track: 'baseline' });
+        }
+        if (!cancelled) setLoadingFrom(null);
         if (cancelled) return;
 
         if (res.notModified && cachedPayload) {
@@ -675,11 +698,25 @@ export function FileContentView({
           extension: '',
         });
       } finally {
-        if (!cancelled) { setLoading(false); setReloading(false); }
+        if (!cancelled) { setLoading(false); setReloading(false); readingRef.current = false; }
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; readingRef.current = false; };
   }, [filePath, host, readToken, flushDraft]);
+
+  // The file's host is not answering now: ask again until it is back, so a file
+  // opened while it reconnected shows once it answers, with no click (gate
+  // review, 2026-10-07: it kept "Reconnecting to Cloud" until it was clicked).
+  const hostWaiting = !loading && data?.code === HOST_RECONNECTING_CODE && data.content == null;
+  useEffect(() => {
+    if (!hostWaiting) return;
+    const retryMs = (window as unknown as { __filesRetryMs?: number }).__filesRetryMs || FILE_RECONNECT_RETRY_MS;
+    return visibleInterval(() => {
+      if (readingRef.current) return;
+      quietReadRef.current = true;
+      setSelfReload((n) => n + 1);
+    }, retryMs);
+  }, [hostWaiting, filePath, host]);
 
   // Scroll to highlighted line after content renders
   useEffect(() => {
@@ -1819,7 +1856,7 @@ export function FileContentView({
       aria-pressed={live.on}
       title={live.suspended
         ? (live.suspendedReason === 'unreachable'
-          ? "Live edit paused for this file: Walnut couldn't be reached for a minute. Click to resume."
+          ? `Live edit paused for this file: ${live.unreachableHost ?? 'Walnut'} couldn't be reached for a minute. Click to resume.`
           : 'Live edit paused for this file after a conflict — click to resume')
         : live.on
           ? 'Live edit is ON — your changes are written to disk shortly after you stop typing. Click to turn it off.'
@@ -2070,8 +2107,9 @@ export function FileContentView({
       // "Save image as…" / the PDF viewer's own items, which ours can't offer.
       onContextMenu={!raw && !data?.binary ? handleContextMenu : undefined}
     >
-      {loading && <div className="file-viewer-loading">Loading file...</div>}
-      {reloading && <div className="fv-reloading-badge">Reloading…</div>}
+      {loading && <div className="file-viewer-loading">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Loading file...'}</div>}
+      {reloading && <div className="fv-reloading-badge">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Reloading…'}</div>}
+      {!loading && !reloading && loadingFrom && <div className="fv-reloading-badge">Still loading from {loadingFrom}…</div>}
       {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
       {!loading && !raw && data?.binary && (
         <>
@@ -2273,7 +2311,7 @@ export function FileContentView({
           banner, which already says what to do. */}
       {live.unreachable && !saveError && (
         <div className="fv-offline-banner" role="status">
-          Can't reach Walnut right now. Your edits are kept in the editor and will be saved on their own once it is back.
+          Can't reach {live.unreachableHost ?? 'Walnut'} right now. Your edits are kept in the editor and will be saved on their own once it is back.
         </div>
       )}
       {saveError && (

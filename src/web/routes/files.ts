@@ -26,32 +26,38 @@ import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { parsePathRef, isUnsafePathRef } from '../../providers/path-ref-parse.js'
 import { HOST_RECONNECTING, HostReconnectingError, boundHostRead } from '../../core/hosts/remote-read-bound.js'
+import { hostDisplayName } from '../../core/hosts/host-display-name.js'
+import { markHandledFailure } from '../middleware/handled-failure.js'
+import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
 import type { DaemonConnection } from '../../providers/daemon-connection.js'
 
 export const filesRouter = Router()
+// Every sentence these routes answer names a remote host as a person knows it.
+filesRouter.use(hostTermsAtExit)
 
 const MAX_ENTRIES = 1000
 const REMOTE_TIMEOUT_MS = 15_000
 
 /**
- * A remote host's daemon, for a Files request. Within the host-read deadline
- * (remote-read-bound.ts): while the host is connecting this throws
- * HostReconnectingError at once, and a request that starts the dial waits at
- * most its cap. A silent companion used to hold `files/list` for 15 to 30s and
- * then answer "Remote connection to __cloudbox__ timed out", an alias no user
- * knows; every sentence here names the host by its label.
+ * Run `work` on a remote host's daemon, for a Files request, within the
+ * host-read deadline (remote-read-bound.ts), the connection AND its commands:
+ * while the host is connecting this throws HostReconnectingError at once, a
+ * request that starts the dial waits at most its cap, and a connected link
+ * that stopped answering is noticed in seconds. A silent companion used to hold
+ * `files/list` for 15 to 30s (then a sentence naming the host by its internal
+ * alias), and a connected one that went quiet 30s, then a 500. Every sentence
+ * here names the host by its label.
  */
-async function hostConnection(
+async function onHost<T>(
   host: string,
   hostDef: { hostname?: string; user?: string; port?: number; label?: string },
-): Promise<DaemonConnection> {
+  work: (conn: DaemonConnection) => Promise<T>,
+): Promise<T> {
   const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
   const sshTarget = { hostname: hostDef.hostname ?? host, user: hostDef.user, port: hostDef.port }
-  const label = hostDef.label?.trim() || host
-  return boundHostRead(host, () => new Promise<DaemonConnection>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new FilesOpError(`Remote connection to ${label} timed out`, 400)), REMOTE_TIMEOUT_MS)
-    getDaemonConnection(host, sshTarget).then(resolve, reject).finally(() => clearTimeout(timer))
-  }))
+  // No timer of its own: boundHostRead bounds the dial in every pool state (5s
+  // at most), so the old 15s "timed out" sentence could never come first.
+  return boundHostRead(host, async () => work(await getDaemonConnection(host, sshTarget)))
 }
 /** Search budget handed to a REMOTE host's resolver. Larger than the resolver's
  *  in-process default (a remote tree is usually a big monorepo on slower disk),
@@ -126,21 +132,24 @@ async function resolveViaHost(
   const hostDef = config.hosts?.[host]
   if (!hostDef?.hostname) return null
 
-  let conn
+  let res
   try {
-    conn = await hostConnection(host, hostDef)
-  } catch {
+    res = await onHost(host, hostDef, async (conn) => {
+      if (!conn.hasCapability?.('path-resolve-v1')) return null
+      // A remote host's tree is typically a big monorepo on slower storage, and this
+      // is ONE RPC either way, so give the search a wider budget than the in-process
+      // default. Still bounded: expiring degrades to the nearest existing folder.
+      return conn.send('fs.resolvePath', {
+        ref, budgetMs: REMOTE_RESOLVE_BUDGET_MS,
+        ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
+      })
+    })
+  } catch (err) {
+    // Not answering now: the legacy walk would only wait on the same host again.
+    if (err instanceof HostReconnectingError) throw err
     return null
   }
-  if (!conn.hasCapability?.('path-resolve-v1')) return null
-  // A remote host's tree is typically a big monorepo on slower storage, and this
-  // is ONE RPC either way — so give the search a wider budget than the in-process
-  // default. Still bounded: expiring degrades to the nearest existing folder.
-  const res = await conn.send('fs.resolvePath', {
-    ref, budgetMs: REMOTE_RESOLVE_BUDGET_MS,
-    ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
-  })
-  if (!res.ok || typeof res.path !== 'string') return null
+  if (!res?.ok || typeof res.path !== 'string') return null
   return {
     path: res.path,
     resolved: res.resolved === true,
@@ -270,6 +279,19 @@ export async function resolveSessionPath(
     const hostResult = await resolveViaHost(rel, cwd, host, sessionId)
     if (hostResult) return hostResult
   } catch (err) {
+    // The host is not answering: the naive path now (a click still does
+    // something), not a second wait on it through the legacy walk (that made a
+    // lone request 11s on a silent companion: 6s here, then 5s more there).
+    if (err instanceof HostReconnectingError) {
+      const p = parsedRel
+      return {
+        path: p.path.startsWith('/') ? p.path : path.posix.join(cwd.replace(/\/+$/, ''), p.path.replace(/^\.\//, '').replace(/\/+$/, '')),
+        resolved: false, degraded: true,
+        ...(p.line !== undefined ? { line: p.line } : {}),
+        ...(p.column !== undefined ? { column: p.column } : {}),
+        ...(p.endLine !== undefined ? { endLine: p.endLine } : {}),
+      }
+    }
     log.web.info('resolveSessionPath: host resolver unavailable, using legacy walk', {
       host: host ?? 'local', error: err instanceof Error ? err.message : String(err),
     })
@@ -301,50 +323,45 @@ export async function resolveSessionPath(
     if (!hostDef?.hostname) {
       return { path: fallback, resolved: false, ...pos }
     }
-    let conn
-    try {
-      conn = await hostConnection(host, hostDef)
-    } catch {
-      return { path: fallback, resolved: false, ...pos }
-    }
-    // Total time budget across the walk-up stats + the downward find: the
-    // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
-    // and per-RPC timeouts alone don't bound the SUM. Expiring falls back to
-    // the naive cwd-joined path — a click still does something.
-    const resolveDeadline = Date.now() + 10_000
-    let remoteRepoRoot: string | null = null
-    for (const base of bases) {
-      if (Date.now() >= resolveDeadline) {
-        return { path: fallback, resolved: false, ...pos }
+    const unresolved = { path: fallback, resolved: false, ...pos }
+    // The connection and every RPC below share the host-read deadline (onHost);
+    // a host that does not answer degrades to the naive path.
+    return onHost(host, hostDef, async (conn) => {
+      // Total time budget across the walk-up stats + the downward find: the
+      // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
+      // and per-RPC timeouts alone don't bound the SUM. Expiring falls back to
+      // the naive cwd-joined path: a click still does something.
+      const resolveDeadline = Date.now() + 10_000
+      let remoteRepoRoot: string | null = null
+      for (const base of bases) {
+        if (Date.now() >= resolveDeadline) return unresolved
+        const candidate = path.posix.join(base, cleanRel)
+        const st = await conn.send('fs.stat', { path: candidate })
+        if (st.ok && st.exists) {
+          return { path: candidate, resolved: true, ...pos }
+        }
+        // Stop at the repo root (one .git up), remember it for downward search.
+        const git = await conn.send('fs.stat', { path: path.posix.join(base, '.git') })
+        if (git.ok && git.exists) { remoteRepoRoot = base; break }
       }
-      const candidate = path.posix.join(base, cleanRel)
-      const st = await conn.send('fs.stat', { path: candidate })
-      if (st.ok && st.exists) {
-        return { path: candidate, resolved: true, ...pos }
+      if (Date.now() >= resolveDeadline) return unresolved
+      // Downward: one fs.find RPC by basename under the repo root, then keep the
+      // first hit whose full path ends with the requested rel (server-side walk
+      // avoids a round-trip per directory). Only locates files, not bare dirs.
+      const downRoot = remoteRepoRoot ?? bases[bases.length - 1]
+      const baseName = cleanRel.split('/').pop() ?? cleanRel
+      const find = await conn.send('fs.find', { path: downRoot, name: baseName, maxDepth: MAX_DOWNWARD_DEPTH })
+      if (find.ok && Array.isArray(find.files)) {
+        const suffix = '/' + cleanRel
+        const hit = (find.files as string[])
+          .filter((f) => f === path.posix.join(downRoot, cleanRel) || f.endsWith(suffix))
+          .sort((a, b) => a.split('/').length - b.split('/').length)[0]
+        if (hit) {
+          return { path: hit, resolved: true, ...pos }
+        }
       }
-      // Stop at the repo root (one .git up), remember it for downward search.
-      const git = await conn.send('fs.stat', { path: path.posix.join(base, '.git') })
-      if (git.ok && git.exists) { remoteRepoRoot = base; break }
-    }
-    if (Date.now() >= resolveDeadline) {
-      return { path: fallback, resolved: false, ...pos }
-    }
-    // Downward: one fs.find RPC by basename under the repo root, then keep the
-    // first hit whose full path ends with the requested rel (server-side walk
-    // avoids a round-trip per directory). Only locates files, not bare dirs.
-    const downRoot = remoteRepoRoot ?? bases[bases.length - 1]
-    const baseName = cleanRel.split('/').pop() ?? cleanRel
-    const find = await conn.send('fs.find', { path: downRoot, name: baseName, maxDepth: MAX_DOWNWARD_DEPTH })
-    if (find.ok && Array.isArray(find.files)) {
-      const suffix = '/' + cleanRel
-      const hit = (find.files as string[])
-        .filter((f) => f === path.posix.join(downRoot, cleanRel) || f.endsWith(suffix))
-        .sort((a, b) => a.split('/').length - b.split('/').length)[0]
-      if (hit) {
-        return { path: hit, resolved: true, ...pos }
-      }
-    }
-    return { path: fallback, resolved: false, ...pos }
+      return unresolved
+    }).catch(() => unresolved)
   }
 
   // ── Local: walk up first, then search down from the repo root ──
@@ -450,22 +467,28 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
       res.status(404).json({ error: `Unknown host: ${host}` })
       return
     }
-    let conn
+    let result
     try {
-      conn = await hostConnection(host, hostDef)
+      result = await onHost(host, hostDef, async (conn) => {
+        if (!conn.hasCapability?.('grep-v1')) return null
+        return conn.send('fs.grep', {
+          file: filePath, symbol,
+          ...(maxMatches !== undefined ? { maxMatches } : {}),
+          budgetMs: REFERENCE_SEARCH_BUDGET_MS,
+        }, REMOTE_TIMEOUT_MS)
+      })
     } catch (err) {
-      res.status(503).json(err instanceof HostReconnectingError ? { error: err.message, code: HOST_RECONNECTING } : { error: 'host unreachable' })
+      if (err instanceof HostReconnectingError) {
+        markHandledFailure(res).status(503).json({ error: err.message, code: HOST_RECONNECTING })
+      } else {
+        res.status(503).json({ error: `${hostDisplayName(host, hostDef.label)} is unreachable` })
+      }
       return
     }
-    if (!conn.hasCapability?.('grep-v1')) {
+    if (!result) {
       res.status(503).json({ error: 'daemon needs upgrade for reference search' })
       return
     }
-    const result = await conn.send('fs.grep', {
-      file: filePath, symbol,
-      ...(maxMatches !== undefined ? { maxMatches } : {}),
-      budgetMs: REFERENCE_SEARCH_BUDGET_MS,
-    }, REMOTE_TIMEOUT_MS)
     if (!result.ok) {
       res.status(502).json({ error: String(result.error ?? 'reference search failed') })
       return
@@ -591,19 +614,17 @@ async function listOneDir(
     const hostname = hostDef.hostname
     if (!hostname) throw new FilesOpError(`Host "${host}" has no hostname`, 400)
 
-    const conn = await hostConnection(host, hostDef)
-
-    let result = await conn.send('fs.ls', { path: dirPath })
     let remoteSelectedFile: string | undefined
-    // If the path is a file (not a dir), the daemon's readdir fails with ENOTDIR.
-    // Behave like VS Code: list the parent dir and flag the file for preview.
-    // (Detect via the error string — the daemon's fs.stat doesn't report dir-ness,
-    // so this avoids a daemon binary rebuild/redeploy.)
-    if (!result.ok && /ENOTDIR/.test(String(result.error))) {
-      const parent = path.posix.dirname(dirPath)
+    const result = await onHost(host, hostDef, async (conn) => {
+      const first = await conn.send('fs.ls', { path: dirPath })
+      // If the path is a file (not a dir), the daemon's readdir fails with ENOTDIR.
+      // Behave like VS Code: list the parent dir and flag the file for preview.
+      // (Detect via the error string: the daemon's fs.stat doesn't report dir-ness,
+      // so this avoids a daemon binary rebuild/redeploy.)
+      if (first.ok || !/ENOTDIR/.test(String(first.error))) return first
       remoteSelectedFile = path.posix.basename(dirPath)
-      result = await conn.send('fs.ls', { path: parent })
-    }
+      return conn.send('fs.ls', { path: path.posix.dirname(dirPath) })
+    })
     if (!result.ok) {
       throw new FilesOpError(`Cannot list directory: ${result.error ?? dirPath}`, 400)
     }
@@ -680,8 +701,9 @@ filesRouter.get('/list', async (req: Request, res: Response, next: NextFunction)
       return
     }
     if (err instanceof HostReconnectingError) {
-      // The Files tab keeps its cached tree and says the host is reconnecting.
-      res.status(503).json({ error: err.message, code: HOST_RECONNECTING })
+      // The Files tab keeps its cached tree and says the host is reconnecting:
+      // the designed answer, never an endpoint incident card.
+      markHandledFailure(res).status(503).json({ error: err.message, code: HOST_RECONNECTING })
       return
     }
     next(err)
@@ -738,7 +760,7 @@ filesRouter.post('/list-many', async (req: Request, res: Response, next: NextFun
     const wanted = paths.slice(0, LIST_MANY_MAX_PATHS)
 
     const deadline = Date.now() + LIST_MANY_DEADLINE_MS
-    const listings: Array<FileListResult | { path: string; error: string }> = []
+    const listings: Array<FileListResult | { path: string; error: string; code?: string }> = []
     let timedOut = false
     let next_ = 0
     const worker = async (): Promise<void> => {
@@ -751,8 +773,12 @@ filesRouter.post('/list-many', async (req: Request, res: Response, next: NextFun
           listings.push(await listSessionFiles(dirPath, host, showHidden))
         } catch (err) {
           // One unreadable directory must never fail the batch: the tree shows
-          // the others and leaves that node closed.
-          listings.push({ path: dirPath, error: err instanceof Error ? err.message : String(err) })
+          // the others and leaves that node closed. A host not answering now says
+          // so by code, as one listing does, so the tree asks again on its own.
+          listings.push({
+            path: dirPath, error: err instanceof Error ? err.message : String(err),
+            ...(err instanceof HostReconnectingError ? { code: HOST_RECONNECTING } : {}),
+          })
         }
       }
     }

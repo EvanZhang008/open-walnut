@@ -8,6 +8,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionFileExplorer } from '../sessions/SessionFileExplorer';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { remoteHostTag } from '@/utils/host-display-label';
 
 interface FileViewerProps {
   path: string;
@@ -18,6 +20,8 @@ interface FileViewerProps {
 
 export function FileViewer({ path: filePath, line, host, onClose }: FileViewerProps) {
   const [copied, setCopied] = useState(false);
+  const remote = host && host !== '__local__' ? host : null;
+  const hostName = useHostDisplayLabel(remote);
 
   // Escape key closes
   useEffect(() => {
@@ -66,7 +70,7 @@ export function FileViewer({ path: filePath, line, host, onClose }: FileViewerPr
         </div>
         <div className="file-viewer-footer">
           <span className="file-viewer-full-path" title={filePath}>{filePath}</span>
-          {host && <span className="file-viewer-host">SSH: {host}</span>}
+          {remote && <span className="file-viewer-host">{remoteHostTag(remote, hostName)}</span>}
         </div>
       </div>
     </div>

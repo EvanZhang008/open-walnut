@@ -27,7 +27,10 @@ setupRouter.get('/status', async (_req, res, next) => {
   }
 })
 
-// POST /api/v1/setup/claim { setupToken, deviceName } → { deviceName, token }
+// POST /api/v1/setup/claim { setupToken, deviceName, device? } → { deviceName, token }
+// `device` is the claimer's self-report ({ model, os, appVersion }, as POST
+// /api/v1/devices/self takes it): a computer's claim records it as the owner
+// (core/device-claim.ts).
 setupRouter.post('/claim', async (req, res, next) => {
   const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
   try {
@@ -37,7 +40,7 @@ setupRouter.post('/claim', async (req, res, next) => {
       return
     }
 
-    const { setupToken, deviceName } = (req.body ?? {}) as { setupToken?: string; deviceName?: string }
+    const { setupToken, deviceName, device } = (req.body ?? {}) as { setupToken?: string; deviceName?: string; device?: unknown }
     if (!setupToken || typeof setupToken !== 'string' || !deviceName || typeof deviceName !== 'string') {
       recordAuthFailure(ip)
       res.status(400).json({ error: 'Missing setupToken or deviceName' })
@@ -51,8 +54,8 @@ setupRouter.post('/claim', async (req, res, next) => {
     }
 
     try {
-      const { name, token } = await claimInstance(setupToken, deviceName)
-      log.web.info('setup/claim: instance claimed', { deviceName: name, ip })
+      const { name, token, owner } = await claimInstance(setupToken, deviceName, device && typeof device === 'object' ? device : undefined)
+      log.web.info('setup/claim: instance claimed', { deviceName: name, ip, owner })
       // The token is returned ONCE — it is never shown again.
       res.json({ deviceName: name, token })
     } catch (err) {

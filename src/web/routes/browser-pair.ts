@@ -16,7 +16,7 @@
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { consumeBrowserCode, mintBrowserCode } from '../../core/browser-pairing.js'
-import { createDevice, listDevices } from '../../core/device-auth.js'
+import { createDeviceAs, listDevices } from '../../core/device-auth.js'
 import { LOCAL_ACTOR } from '../../core/device-actor.js'
 import { clearAuthFailures, isAuthRateLimited, recordAuthFailure } from '../middleware/auth-rate-limit.js'
 import { getExposeRuntime } from '../expose-runtime.js'
@@ -66,7 +66,7 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
       return
     }
     const name = await freshBrowserName()
-    const device = await createDevice(name, { by: LOCAL_ACTOR })
+    const device = await createDeviceAs(name, { by: LOCAL_ACTOR })
     clearAuthFailures(codeKey)
     clearAuthFailures(ip)
     log.web.info('browser signed in', { device: name })

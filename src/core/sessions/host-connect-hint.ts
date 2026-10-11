@@ -223,10 +223,10 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
     case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (`curl -fsSL https://bun.sh/install | bash`, or Node.js from your package manager), then Retry.'
     case 'daemon': return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
     case 'listing': return `${who} is connected, but this directory could not be listed. Check that the path exists and is readable there, then Retry.`
-    case 'cloud_update': return `The cloud companion at ${hostname} runs an older Walnut build that cannot host this Mac's sessions. Deploy the current build there; ${who} connects on its own once it answers.`
-    case 'cloud_exec_off': return `The cloud companion at ${hostname} is not set up to run sessions. Set \`cloud.exec.enabled: true\` in its config.yaml and restart it, then Retry.`
-    case 'cloud_other_mac': return `The cloud companion at ${hostname} runs sessions for another Mac. To run them from this Mac instead, disconnect that Mac on the companion: \`walnut device list\` names it, \`walnut device revoke <name>\` removes it (its cloud sync stops). Then Retry.`
-    case 'cloud_tunnel': return `Walnut reaches ${who} through the cloud companion's web address (${hostname}), not SSH. Check that the companion is up and this Mac is still paired with it (Settings › Cloud Companion), then Retry.`
+    case 'cloud_update': return `The cloud companion (Settings › Phones & Cloud › Cloud Companion) runs an older Walnut build that cannot host this Mac's sessions. Deploy the current build there; ${who} connects on its own once it answers.`
+    case 'cloud_exec_off': return `The cloud companion (Settings › Phones & Cloud › Cloud Companion) is not set up to run sessions. Set \`cloud.exec.enabled: true\` in its config.yaml and restart it, then Retry.`
+    case 'cloud_other_mac': return `The cloud companion (Settings › Phones & Cloud › Cloud Companion) belongs to another Mac. To run sessions from this Mac instead, hand it to this Mac on the companion: \`walnut device list\` shows this Mac's name, and \`walnut device owner <name>\` makes it the owner (the other Mac's computers are disconnected from it). Then Retry.`
+    case 'cloud_tunnel': return `Walnut reaches ${who} through the cloud companion, not SSH. Check that the companion is up and this Mac is still paired with it (Settings › Phones & Cloud › Cloud Companion), then Retry.`
     case 'unknown':
     default:
       return `Retry, and if it keeps failing run \`ssh ${sshTarget}\` from a terminal to see what SSH itself says.`

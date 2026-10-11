@@ -5,19 +5,22 @@
  * lists the companion's devices with.
  *
  *   adopt   { name, token_hash, id?, platform?, info? } → { name, instance, adopted }
- *   unadopt { token_hash }                              → { name, instance, revoked }
+ *   unadopt { token_hash }                              → { name, instance, revoked, refused }
  *
  * Who may: the same rule as pairing a new device (deviceChangeDecision
- * 'create'): a phone may not (403 phone_cannot_pair); the Mac's token, any
- * other paired non-phone device, an API key or this machine itself may.
+ * 'create'): a phone may not (403 phone_cannot_pair), nor an API key (403
+ * api_key_cannot_pair); the Mac's token, any other paired non-phone device or
+ * this machine itself may.
  * Adopting the same hash again changes nothing; unadopting a hash that is not
- * here answers revoked:false, so both are safe to repeat.
+ * here answers revoked:false, so both are safe to repeat. A pairing this box
+ * keeps (a machine credential, the one with the owner's rights) answers
+ * revoked:false with refused:true: the twin is still here.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { getInstanceId, listDeviceRecords } from '../../core/device-auth.js'
+import { getInstanceId, readDeviceRegistry } from '../../core/device-auth.js'
 import { deviceChangeDecision } from '../../core/device-actor.js'
 import { AdoptionError, adoptDeviceRecord, revokeAdopted } from '../../core/device-adoption.js'
 import { actorOf, sendRefusal } from './devices.js'
@@ -54,12 +57,12 @@ deviceAdoptionRouter.post('/adopt', async (req: Request, res: Response, next: Ne
 
 deviceAdoptionRouter.post('/unadopt', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const decision = deviceChangeDecision(await listDeviceRecords(), actorOf(req), 'create', '', CLOUD_MODE)
+    const decision = deviceChangeDecision(await readDeviceRegistry(), actorOf(req), 'create', '', CLOUD_MODE)
     if (!decision.ok) throw decision.refusal
     // Same as any revoke: the pushes stop too (they may live on the primary).
-    const { name, push } = await revokeAdopted((req.body as Record<string, unknown> | undefined)?.token_hash)
+    const { name, refused, push } = await revokeAdopted((req.body as Record<string, unknown> | undefined)?.token_hash)
     if (name) log.web.info('devices: pairing removed by hash', { name, ...(push?.pending ? { pushRevokePending: push.pending } : {}) })
-    res.json({ name, instance: await getInstanceId(), revoked: name !== null, ...(push?.pending ? { pushRevokePending: true } : {}) })
+    res.json({ name, instance: await getInstanceId(), revoked: name !== null, refused, ...(push?.pending ? { pushRevokePending: true } : {}) })
   } catch (err) {
     if (sendAdoptionError(res, err)) return
     next(err)

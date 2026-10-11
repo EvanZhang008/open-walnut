@@ -19,7 +19,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import {
   createDevice, getInstanceId, listDevices, onCredentialsRevoked, verifyDeviceToken, _resetDeviceAuthForTesting,
 } from '../../src/core/device-auth.js'
-import { AdoptionError, adoptDeviceRecord, revokeAdoptedByHash } from '../../src/core/device-adoption.js'
+import { AdoptionError, adoptDeviceRecord, revokeAdopted, revokeAdoptedByHash } from '../../src/core/device-adoption.js'
 
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 const tok = () => crypto.randomBytes(16).toString('hex')
@@ -115,7 +115,7 @@ describe('adoptDeviceRecord', () => {
     await expect(fs.access(authFile())).rejects.toThrow()
   })
 
-  it('a phone may not adopt (phone_cannot_pair); the Mac\'s token and an API key may', async () => {
+  it('a phone may not adopt (phone_cannot_pair), nor an API key (api_key_cannot_pair); the Mac\'s token may', async () => {
     const phoneTok = tok()
     const macTok = tok()
     await seed([
@@ -125,8 +125,10 @@ describe('adoptDeviceRecord', () => {
     await expect(adoptDeviceRecord({ name: 'laundered', tokenHash: sha(tok()), adoptedFrom: 'primary' }, { by: { token: phoneTok } }))
       .rejects.toMatchObject({ status: 403, code: 'phone_cannot_pair' })
     expect(await adoptDeviceRecord({ name: 'via-mac', tokenHash: sha(tok()), adoptedFrom: 'primary' }, { by: { token: macTok } })).toMatchObject({ adopted: true })
-    expect(await adoptDeviceRecord({ name: 'via-key', tokenHash: sha(tok()), adoptedFrom: 'primary' }, { by: { apiKey: 'script' } })).toMatchObject({ adopted: true })
-    expect((await records()).map((d) => d.name).sort()).toEqual(['mac-primary', 'my-phone', 'via-key', 'via-mac'])
+    // An API key is no device (any paired device may mint one): adopting is pairing, so it may not.
+    await expect(adoptDeviceRecord({ name: 'via-key', tokenHash: sha(tok()), adoptedFrom: 'primary' }, { by: { apiKey: 'script' } }))
+      .rejects.toMatchObject({ status: 403, code: 'api_key_cannot_pair' })
+    expect((await records()).map((d) => d.name).sort()).toEqual(['mac-primary', 'my-phone', 'via-mac'])
   })
 
   it('concurrent adoptions of one hash leave exactly one record', async () => {
@@ -154,8 +156,33 @@ describe('revokeAdoptedByHash', () => {
     expect((await records()).map((d) => d.name)).toEqual(['evan-iphone'])
     expect(await verifyDeviceToken(token)).toBeNull()
     expect(await verifyDeviceToken(keep.token)).toEqual({ name: 'evan-iphone' })
-    // Already gone: null, and nothing else moves.
-    expect(await revokeAdoptedByHash(sha(token))).toBeNull()
+    // Already gone: done (not refused), and nothing else moves.
+    expect(await revokeAdopted(sha(token))).toMatchObject({ name: null, refused: false })
+  })
+
+  it('on the Mac, the pairing a companion took for its owner is removed like any other (F-B: the oldest Mac record is no owner here)', async () => {
+    // auth.json exactly as a build without owners writes it: the LAN Mac paired first, then a phone.
+    const lanMacTok = tok()
+    const phoneTok = tok()
+    await fs.writeFile(authFile(), JSON.stringify({ devices: [
+      { name: 'lan-mac', tokenHash: sha(lanMacTok), createdAt: '2026-09-01T00:00:00.000Z', info: { model: 'Mac15,3', os: 'macOS 26.0' } },
+      { name: 'my-phone', tokenHash: sha(phoneTok), createdAt: '2026-09-02T00:00:00.000Z', info: { model: 'iPhone17,1', os: 'iOS 26.1' } },
+    ] }, null, 2) + '\n', { mode: 0o600 })
+    expect(await verifyDeviceToken(lanMacTok)).toEqual({ name: 'lan-mac' })
+    expect(await revokeAdopted(sha(lanMacTok))).toMatchObject({ name: 'lan-mac', refused: false })
+    expect(await verifyDeviceToken(lanMacTok)).toBeNull()
+    expect((await records()).map((d) => d.name)).toEqual(['my-phone'])
+  })
+
+  it('on the Mac a recorded owner means nothing for a twin removal either (`walnut device owner` run there by mistake writes one)', async () => {
+    const macTok = tok()
+    await fs.writeFile(authFile(), JSON.stringify({ devices: [
+      { name: 'lan-mac', id: 'd00000000000000c1', tokenHash: sha(macTok), createdAt: '2026-09-01T00:00:00.000Z', platform: 'other' },
+      { name: 'my-phone', id: 'd00000000000000c2', tokenHash: sha(tok()), createdAt: '2026-09-02T00:00:00.000Z', platform: 'ios' },
+    ], owner: { id: 'd00000000000000c1', via: 'operator' } }, null, 2) + '\n', { mode: 0o600 })
+    expect(await revokeAdopted(sha(macTok))).toMatchObject({ name: 'lan-mac', refused: false })
+    expect(await verifyDeviceToken(macTok)).toBeNull()
+    expect((await records()).map((d) => d.name)).toEqual(['my-phone'])
   })
 
   it('never removes the pairing that owns this box\'s machine credentials (the Mac on a companion)', async () => {
@@ -164,14 +191,15 @@ describe('revokeAdoptedByHash', () => {
       { name: 'mac-primary', id: 'd00000000000000a1', tokenHash: sha(macTok), createdAt: '2026-09-01T00:00:00.000Z' },
       { name: 'bridge-local', id: 'd00000000000000b2', tokenHash: sha(tok()), createdAt: '2026-09-01T00:00:00.000Z', kind: 'machine', ownerId: 'd00000000000000a1' },
     ])
-    expect(await revokeAdoptedByHash(sha(macTok))).toBeNull()
+    // Refused, and said so: the other box must not count the copy as removed.
+    expect(await revokeAdopted(sha(macTok))).toMatchObject({ name: null, refused: true })
     expect((await records()).map((d) => d.name)).toEqual(['mac-primary', 'bridge-local'])
   })
 
   it('never removes a machine credential, and refuses a malformed hash', async () => {
     const machineTok = tok()
     await seed([{ name: 'bridge-local', id: 'd00000000000000b2', tokenHash: sha(machineTok), createdAt: '2026-09-01T00:00:00.000Z', kind: 'machine' }])
-    expect(await revokeAdoptedByHash(sha(machineTok))).toBeNull()
+    expect(await revokeAdopted(sha(machineTok))).toMatchObject({ name: null, refused: true })
     expect(await records()).toHaveLength(1)
     await expect(revokeAdoptedByHash('nope')).rejects.toBeInstanceOf(AdoptionError)
   })

@@ -29,6 +29,7 @@ import { getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { FileContentView } from '@/components/common/FileContentView';
 import { formatSize } from '@/utils/format';
 import { log } from '@/utils/log';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { recordRecentFolder, getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import { joinPath, parentPath, relativeTo, normalizePath, parseQuery } from './mention-path';
 
@@ -70,6 +71,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
     // The canonical root resolved by the backend (~ → absolute). Selection paths
     // are computed relative to this so inserted refs are short + portable.
     const [rootPath, setRootPath] = useState<string>(cwd);
+    const hostName = useHostDisplayLabels();
     const [browseDir, setBrowseDir] = useState<string>(cwd);
     const [entries, setEntries] = useState<DirEntry[]>([]);
     const [loading, setLoading] = useState(true);
@@ -461,7 +463,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
                     className={`file-mention-item fmp-recent-item${i === selectedIndex ? ' selected' : ''}`}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onMouseDown={(e) => { e.preventDefault(); chooseRecent(r); }}
-                    title={`${r.path}${r.host ? ` (on ${r.host})` : ''}`}
+                    title={`${r.path}${r.host ? ` (on ${hostName(r.host)})` : ''}`}
                   >
                     <span className="fmp-icon">{allRecents.some((recent) => recent.path === r.path) ? '🕘' : '📁'}</span>
                     <span className="fmp-recent">

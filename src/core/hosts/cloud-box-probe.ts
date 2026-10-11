@@ -35,6 +35,8 @@ interface Pairing { domain: string; token: string; secure: boolean }
 
 let timer: ReturnType<typeof setInterval> | null = null
 let inFlight: Promise<CloudBoxState | null> | null = null
+/** The pairing token whose record the companion now knows is a Mac (reportSelfAsMac). */
+let reportedAsMac: string | null = null
 
 function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   let t: ReturnType<typeof setTimeout> | undefined
@@ -109,13 +111,42 @@ async function applyPairing(): Promise<{ pairing: Pairing | null }> {
   return { pairing }
 }
 
+/**
+ * Tell the companion this pairing is a Mac, the way a phone says it is a phone
+ * (POST /api/v1/devices/self, keyed by the bearer token). Its device list then
+ * shows this record under Macs: without it, another Mac's console listed this
+ * Mac as a phone, with a Show QR that re-paired it as one. Once per token per
+ * process; a failed report is tried again at the next probe.
+ */
+export async function reportSelfAsMac(p: Pairing): Promise<boolean> {
+  if (reportedAsMac === p.token) return true
+  // The same report the setup claim carried (core/device-self-report.ts).
+  const { computerSelfReport } = await import('../device-self-report.js')
+  const body = computerSelfReport()
+  try {
+    const res = await fetch(`${p.secure ? 'https' : 'http'}://${p.domain}/api/v1/devices/self`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${p.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (!res.ok) return false
+    reportedAsMac = p.token
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function probeAndApply(pairing: Pairing): Promise<void> {
   let capability = await probeCapability(pairing)
+  // The companion answered: say what this pairing is (in the background, never in the way).
+  if (capability) void reportSelfAsMac(pairing)
   const current = getCloudBoxState()
   if (!capability || !current || current.domain !== pairing.domain) return
   // "Another Mac is connected" comes from a mint, never from the status: a
   // status that says ready does not clear it (the next dial asks again).
-  if (capability === 'ready' && current.capability === 'other_mac') capability = 'other_mac'
+  if (capability === 'ready' && current.capability === 'other_mac') capability = current.capability
   if (capability !== current.capability) {
     log.session.info('cloud box: companion capability', { domain: pairing.domain, capability, was: current.capability })
   }
@@ -188,14 +219,25 @@ function otherMacConnected(): Error {
   return new Error(CLOUD_BOX_OTHER_MAC_SENTENCE)
 }
 
+/**
+ * The companion refused this Mac a machine credential by its ownership rules
+ * (integrations/cloud-bridge-config.ts machineTokenConflict): it belongs to
+ * another Mac. Null: no such refusal.
+ */
+async function ownershipRefusalError(): Promise<Error | null> {
+  const { machineTokenConflict } = await import('../../integrations/cloud-bridge-config.js')
+  return machineTokenConflict('__local__') ? otherMacConnected() : null
+}
+
 /** A second refusal inside the re-mint window: the dead token is gone, and a person's Retry mints the next one. */
 export const CREDENTIAL_AWAITS_RETRY = 'Cloud companion tunnel failed: the companion refused this Mac\'s credential again; Retry to get a new one'
 
 async function endpointFor(pairing: Pairing): Promise<CloudTunnelEndpoint> {
-  const { getPrimaryMachineToken, machineTokenAwaitsRetry, machineTokenConflict } = await import('../../integrations/cloud-bridge-config.js')
+  const { getPrimaryMachineToken, machineTokenAwaitsRetry } = await import('../../integrations/cloud-bridge-config.js')
   const token = await getPrimaryMachineToken(pairing)
   if (!token) {
-    if (machineTokenConflict('__local__')) throw otherMacConnected()
+    const refused = await ownershipRefusalError()
+    if (refused) throw refused
     if (machineTokenAwaitsRetry('__local__')) throw new Error(CREDENTIAL_AWAITS_RETRY)
     throw new Error('Cloud companion tunnel failed: the companion did not issue this Mac a machine credential')
   }
@@ -228,7 +270,7 @@ export async function openCloudTunnel(connect: (endpoint: CloudTunnelEndpoint) =
     const { recoverMachineToken, machineTokenAwaitsRetry } = await import('../../integrations/cloud-bridge-config.js')
     const outcome = await recoverMachineToken('__local__', endpoint.token, pairing)
     if (outcome === 'conflict') throw otherMacConnected()
-    if (outcome !== 'reminted') throw machineTokenAwaitsRetry('__local__') ? new Error(CREDENTIAL_AWAITS_RETRY) : err
+    if (outcome !== 'reminted') throw (await ownershipRefusalError()) ?? (machineTokenAwaitsRetry('__local__') ? new Error(CREDENTIAL_AWAITS_RETRY) : err)
     log.session.info('cloud box: dialling again with a new machine credential', { domain: pairing.domain })
   }
   await connect(await endpointFor(pairing))

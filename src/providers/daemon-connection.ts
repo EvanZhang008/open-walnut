@@ -72,7 +72,9 @@ import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
 // Leaf (no runtime imports): the cloud box alias and the companion's last answer.
-import { CLOUD_BOX_HOST_ALIAS, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
+import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
+import { creditCurrentRead } from '../core/hosts/read-progress.js'
+import { markLinkFailure } from './link-failure.js'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -147,6 +149,8 @@ interface PendingCommand {
   /** The socket the command was written to: the daemon answers on that socket
    *  only, so when it goes the command is failed at once (failPendingOn). */
   socket?: WebSocket
+  /** Rides the bulk socket: a reply that can be MB-scale is arriving ahead of main-socket replies. */
+  bulk?: boolean
 }
 
 // ── Mobile-relay enqueue ledger (post-delivery idempotency) ──
@@ -385,6 +389,34 @@ export class DaemonConnection {
   private _pongPending = false
   /** Consecutive awake ping ticks with the pong still outstanding. */
   private _missedPongs = 0
+  /** The liveness probe running now (probeLiveness), shared by concurrent callers. */
+  private _livenessProbe: Promise<boolean> | null = null
+  /**
+   * The progress clock: bytes heard from the daemon so far, on every socket this
+   * connection has had (main and bulk), counted as they arrive rather than when
+   * a frame completes. A big reply still streaming, a pong, a frame on the bulk
+   * socket: each advances it. Liveness (the probe, the ping loop) and the
+   * deadlines of long commands judge PROGRESS by it, not wall time on one
+   * socket: on a slow link the pong waits behind bulk bytes, and on one shared
+   * bottleneck the main socket can get nothing for seconds while the bulk
+   * socket streams.
+   */
+  private _heardBytes = 0
+  /** The bulk socket's share of _heardBytes (bulk commands' own progress). */
+  private _bulkHeardBytes = 0
+  /** The last probe that found the link silent, and what had been heard by then. */
+  private _silentVerdict: { at: number; heard: number; mainBytes: number } | null = null
+  /**
+   * Round trips measured on the main socket (a ping's own send time rides in
+   * its payload, so a pong that arrives late is still timed right; the hello
+   * handshake seeds it). Kept across reconnects: the path stays the same.
+   */
+  private _rttSamples: number[] = []
+  /** Timed pings on the main socket not answered yet: send time, and the bytes heard by then. */
+  private _timedPings = new Map<number, number>()
+  /** When a round trip was last recorded (0: never), and the quickest pong since that waited behind other bytes. */
+  private _rttRecordedAt = 0
+  private _queuedPongMinMs: number | null = null
   /** Counter of consecutive reconnect attempts since last successful connect. Reset in setConnected(true). */
   private _reconnectAttempts = 0
   /** Consecutive reconnects that failed on a credential wait (index into credentialRetryDelayMs). */
@@ -472,6 +504,16 @@ export class DaemonConnection {
 
   /** Command timeout in ms. Generous for initial deploy operations. */
   private static COMMAND_TIMEOUT_MS = 30_000
+  /**
+   * A bulk command (BULK_COMMANDS) whose socket is still delivering bytes keeps
+   * waiting past its timeout, one timeout at a time: for it the timeout is an
+   * IDLE deadline. A 1MB chunk takes 42s at 32KB/s, so a wall-clock 30s failed
+   * reads that were arriving, and every retry started over. Bounded by this,
+   * so no command waits forever.
+   */
+  private static COMMAND_PROGRESS_CEILING_MS = 5 * 60_000
+  /** What one timeout window must bring to count as the reply arriving (a pong or a keepalive is a few bytes). */
+  private static PROGRESS_MIN_BYTES = 4_096
   /** The companion answers the tunnel upgrade only after its daemon is up (a cold start is ~10s). */
   private static CLOUD_TUNNEL_UPGRADE_TIMEOUT_MS = 30_000
   /**
@@ -502,6 +544,15 @@ export class DaemonConnection {
   private static RECONNECT_STANDING_FAILURE_DELAY_MS = 10 * 60_000
   /** Ping interval for keepalive. */
   private static PING_INTERVAL_MS = 15_000
+  /**
+   * The cloud box's tunnel crosses the public internet and a proxy this Mac does
+   * not control, and its re-dial is one WebSocket upgrade (no SSH, no deploy),
+   * so its keepalive runs tighter: a link that stopped forwarding is dropped
+   * 24 to 32s after it went quiet instead of 45 to 60s. Same 3-miss rule (it
+   * absorbs a stalled event loop at boot). A read that went quiet asks the link
+   * sooner still (probeLiveness).
+   */
+  private static CLOUD_TUNNEL_PING_INTERVAL_MS = 8_000
   /**
    * Periodic bridge.configure re-push interval. The daemon's configure handler
    * is idempotent AND self-healing (reconcile restarts a wedged dial), so
@@ -1400,7 +1451,7 @@ export class DaemonConnection {
     timeoutMs: number = DaemonConnection.COMMAND_TIMEOUT_MS,
   ): Promise<DaemonCommandResult> {
     if (!this._connected || !this.ws) {
-      throw new Error(`DaemonConnection not connected to ${this.hostKey}`)
+      throw markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}`), 'no-link')
     }
 
     const id = ++this.cmdCounter
@@ -1433,27 +1484,77 @@ export class DaemonConnection {
       : null
 
     const startedAt = Date.now()
-    return new Promise<DaemonCommandResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
+    const sentOn = bulkSocket ?? this.ws
+    // A bulk command's own progress: bytes on the socket it rides. The main
+    // socket also carries events and pongs, which say nothing about this reply.
+    const isBulk = DaemonConnection.BULK_COMMANDS.has(cmd)
+    const progressNow = () => (bulkSocket ? this._bulkHeardBytes : this._heardBytes - this._bulkHeardBytes)
+    let progressMark = progressNow()
+    // A main-socket reply on a link it shares with a bulk reply waits behind
+    // that reply's bytes (one ssh stream): what the link brings is its line moving.
+    let linkMark = this._heardBytes
+    // The read this command is for counts the bytes that reach the command
+    // (core/hosts/read-progress.ts): its own socket's, and for a main-socket
+    // command everything the link brings ahead of its reply. Frozen at settle.
+    const sentHeard = this._heardBytes
+    const sentBulkHeard = this._bulkHeardBytes
+    const reachedNow = () => (bulkSocket ? this._bulkHeardBytes - sentBulkHeard : this._heardBytes - sentHeard)
+    let reached: number | null = null
+    creditCurrentRead(() => reached ?? reachedNow())
+    return new Promise<DaemonCommandResult>((resolveCmd, rejectCmd) => {
+      const resolve = (result: DaemonCommandResult) => { reached ??= reachedNow(); resolveCmd(result) }
+      const reject = (error: Error) => { reached ??= reachedNow(); rejectCmd(error) }
+      const onTimeout = () => {
+        const pending = this.pendingCommands.get(id)
+        if (!pending) return
+        const socketStill = bulkSocket ? this.bulkWs === sentOn : this.ws === sentOn
+        const open = socketStill && sentOn.readyState === WebSocket.OPEN
+        const underCeiling = Date.now() - startedAt < DaemonConnection.COMMAND_PROGRESS_CEILING_MS
+        const arriving = progressNow() - progressMark >= DaemonConnection.PROGRESS_MIN_BYTES
+        if (isBulk && open && arriving && underCeiling) {
+          // Its bytes are still arriving: not a timeout, a slow link. Wait one more window.
+          progressMark = progressNow()
+          linkMark = this._heardBytes
+          pending.timer = setTimeout(onTimeout, timeoutMs)
+          return
+        }
+        // In line behind a bulk reply that is still arriving: the line is
+        // moving, so this is a slow link too (2026-10-02: a Files list behind a
+        // 600KB file at 8KB/s answered 503 at 30s, two seconds before its reply).
+        // Only while a bulk reply is ahead of it: with none, its timeout stands.
+        if (!bulkSocket && open && underCeiling && this._heardBytes - linkMark >= DaemonConnection.PROGRESS_MIN_BYTES
+          && this.bulkReplyInFlight(id)) {
+          progressMark = progressNow()
+          linkMark = this._heardBytes
+          pending.timer = setTimeout(onTimeout, timeoutMs)
+          return
+        }
         this.pendingCommands.delete(id)
         // A bulk-routed timeout means the bulk socket may be half-dead
-        // (TCP up, daemon unreachable through it). Terminate it so the next
-        // bulk command falls back to the main WS immediately; the close
-        // handler schedules a redial. Main-socket timeouts keep today's
-        // behavior (ping staleness owns main liveness).
+        // (TCP up, daemon unreachable through it): nothing arrived on it for a
+        // whole window. Terminate it so the next bulk command falls back to the
+        // main WS immediately; the close handler schedules a redial.
+        // Main-socket timeouts keep today's behavior (ping staleness owns main
+        // liveness).
         if (bulkSocket && this.bulkWs === bulkSocket) {
           log.session.warn('DaemonConnection: bulk command timeout — terminating bulk channel', {
             host: this.hostKey, cmd, traceId,
           })
           try { bulkSocket.terminate() } catch {}
         }
-        reject(new Error(`daemon command timeout: ${cmd} (${timeoutMs}ms) [traceId=${traceId}]`))
-      }, timeoutMs)
+        reject(markLinkFailure(new Error(`daemon command timeout: ${cmd} (${timeoutMs}ms) [traceId=${traceId}]`), 'no-answer'))
+      }
+      const timer = setTimeout(onTimeout, timeoutMs)
 
-      const socket = bulkSocket ?? this.ws!
-      this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId, socket })
-      socket.send(message)
+      this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId, socket: sentOn, bulk: !!bulkSocket })
+      sentOn.send(message)
     })
+  }
+
+  /** A command other than `except` waits on the bulk socket now (its reply can be MB-scale). */
+  private bulkReplyInFlight(except: number): boolean {
+    for (const [id, pending] of this.pendingCommands) if (id !== except && pending.bulk) return true
+    return false
   }
 
   /**
@@ -2093,7 +2194,7 @@ export class DaemonConnection {
     // Reject pending commands
     for (const [id, pending] of this.pendingCommands) {
       clearTimeout(pending.timer)
-      pending.reject(new Error('connection closed'))
+      pending.reject(markLinkFailure(new Error('connection closed'), 'lost'))
     }
     this.pendingCommands.clear()
 
@@ -2910,7 +3011,9 @@ export class DaemonConnection {
    */
   private async verifyCapabilities(): Promise<boolean> {
     try {
+      const helloAt = Date.now()
       const res = await this._sendHandshake('hello', {})
+      this.recordRoundTrip(Date.now() - helloAt)
       if (!res.ok) {
         log.session.warn('DaemonConnection: hello returned !ok', {
           host: this.hostKey, reason: res.reason, error: res.error,
@@ -3811,7 +3914,9 @@ export class DaemonConnection {
       }))
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      throw /^Cloud companion/.test(msg) ? err : new Error(`Cloud companion tunnel failed: ${msg}`)
+      // A sentence of its own (another Mac holds the companion) is said as is: the
+      // host card and the session row show it, and the prefix only reads as a fault.
+      throw /^Cloud companion/.test(msg) || msg === CLOUD_BOX_OTHER_MAC_SENTENCE ? err : new Error(`Cloud companion tunnel failed: ${msg}`)
     }
     this.setPhase('handshake')
     this._capabilities = null // so "no hello at all" is told apart from "hello, missing caps"
@@ -3878,6 +3983,8 @@ export class DaemonConnection {
         this.lastPongAt = Date.now()
         this._pongPending = false
         this._missedPongs = 0
+        this._silentVerdict = null
+        this.countHeardBytes(ws, false)
         resolve()
       })
 
@@ -3931,10 +4038,11 @@ export class DaemonConnection {
         this.handleMessage(typeof data === 'string' ? data : data.toString())
       })
 
-      ws.on('pong', () => {
+      ws.on('pong', (data: Buffer) => {
         this.lastPongAt = Date.now()
         this._pongPending = false
         this._missedPongs = 0
+        this.notePongPayload(data)
       })
 
       // Timeout
@@ -4182,6 +4290,7 @@ export class DaemonConnection {
 
     ws.on('open', () => {
       if (!isCurrent()) { try { ws.terminate() } catch {}; return }
+      this.countHeardBytes(ws, true)
       // Verify daemon identity on THIS socket before routing to it. The reply
       // arrives on the bulk socket and resolves via resolveCommandFrame.
       const id = ++this.cmdCounter
@@ -4295,7 +4404,7 @@ export class DaemonConnection {
       clearTimeout(pending.timer)
       this.pendingCommands.delete(id)
       const trace = pending.traceId ? ` [traceId=${pending.traceId}]` : ''
-      pending.reject(new Error(`daemon command lost: ${pending.cmd ?? 'command'}: connection closed before ${this.hostKey} answered${trace}`))
+      pending.reject(markLinkFailure(new Error(`daemon command lost: ${pending.cmd ?? 'command'}: connection closed before ${this.hostKey} answered${trace}`), 'lost'))
     }
   }
 
@@ -5124,11 +5233,218 @@ export class DaemonConnection {
     }
   }
 
+  /**
+   * Is this connected link still answering? Asked by a read that has gone quiet
+   * (core/hosts/remote-read-bound.ts), so a companion or tunnel that stopped
+   * forwarding is noticed in seconds, not after the ping loop's misses.
+   *
+   * Alive: a pong to a ping sent now, or ANY byte from the daemon on ANY of
+   * this host's sockets (main or bulk), within `deadlineMs`. The second half
+   * matters: a big reply in flight holds the pong behind it, and on one shared
+   * bottleneck (a single physical link, or one ssh stream) the main socket can
+   * get nothing at all for seconds while the bulk socket streams. A slow link
+   * is not a dead one. Silent: nothing at all. The cloud box's link is then
+   * closed at once (its re-dial is one WebSocket upgrade; the sessions live on
+   * in its daemon) and every command waiting on it fails now instead of at its
+   * own timeout. Any other host only hears it as one missed pong (a busy daemon
+   * can hold a pong for seconds there too, and its re-dial is not cheap), and
+   * the verdict stands for the next reads until a byte arrives
+   * (linkSilentRecently).
+   * One probe at a time; concurrent callers share it.
+   */
+  probeLiveness(requestedMs: number): Promise<boolean> {
+    const ws = this.ws
+    if (!this._connected || !ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve(false)
+    if (this._livenessProbe) return this._livenessProbe
+    const deadlineMs = this.probeDeadlineMs(requestedMs)
+    const probe = new Promise<boolean>((resolve) => {
+      const heardAtStart = this._heardBytes
+      const mainAtStart = socketBytesRead(ws)
+      const bulkAtStart = socketBytesRead(this.bulkWs)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = (alive: boolean) => {
+        clearTimeout(timer)
+        ws.off('pong', onPong)
+        if (alive) this._silentVerdict = null
+        resolve(alive)
+      }
+      const onPong = () => finish(true)
+      ws.on('pong', onPong)
+      timer = setTimeout(() => {
+        if (this.ws !== ws || !this._connected) { finish(false); return }
+        if (this._heardBytes > heardAtStart || socketBytesRead(ws) > mainAtStart || socketBytesRead(this.bulkWs) > bulkAtStart) {
+          finish(true)
+          return
+        }
+        log.session.warn('DaemonConnection: no answer to a liveness probe', {
+          host: this.hostKey, deadlineMs, roundTripMs: this.roundTripMs, closing: this.isCloudTunnel,
+        })
+        this._silentVerdict = { at: Date.now(), heard: this._heardBytes, mainBytes: socketBytesRead(ws) }
+        if (this.isCloudTunnel) this.dropSilentLink(ws)
+        else this._missedPongs += 1
+        finish(false)
+      }, deadlineMs)
+      try { this.timedPing(ws) } catch { finish(false) }
+    })
+    this._livenessProbe = probe
+    void probe.finally(() => { if (this._livenessProbe === probe) this._livenessProbe = null })
+    return probe
+  }
+
+  /**
+   * Did a probe find this link silent in the last `windowMs`, with nothing at
+   * all heard from the daemon since? Then a read can answer degraded at once
+   * instead of waiting out its own quiet point and probe: one request that
+   * makes two reads (path resolve, the slash palette) took twice the bound.
+   * Any byte clears it (a pong from the ping loop included), and it lapses on
+   * its own, so a wrong verdict costs at most `windowMs`.
+   */
+  linkSilentRecently(windowMs: number): boolean {
+    const v = this._silentVerdict
+    if (!v || !this._connected) return false
+    if (Date.now() - v.at >= windowMs || this._heardBytes !== v.heard || socketBytesRead(this.ws) !== v.mainBytes) {
+      return false
+    }
+    return true
+  }
+
+  /** Bytes heard from the daemon so far on all of this connection's sockets (the progress clock). */
+  get heardBytes(): number {
+    return this._heardBytes
+  }
+
+  /** At most this long for a probe, whatever the round trip (a link slower than that reads as silent). */
+  static readonly PROBE_DEADLINE_MAX_MS = 20_000
+  /** Round trips kept (the longest of them is the link's). */
+  private static readonly RTT_SAMPLES_KEPT = 8
+  /** A longer "round trip" is a sleep or a stall, not the link. */
+  private static readonly RTT_SAMPLE_MAX_MS = 60_000
+  /** No sample counts for more than this. */
+  private static readonly RTT_CAP_MS = 30_000
+
+  /**
+   * The link's round trip: the longest of the last few measured (0 before the
+   * first). A probe's deadline scales with it, so a link with a 7s round trip
+   * answers slowly instead of being called silent and re-dialled every 14 to
+   * 21s (gate review, 2026-10-02).
+   */
+  get roundTripMs(): number {
+    let longest = 0
+    for (const ms of this._rttSamples) if (ms > longest) longest = ms
+    return longest
+  }
+
+  /** A probe asked for `requestedMs`: twice the round trip and half a second more when that is longer, up to PROBE_DEADLINE_MAX_MS. */
+  probeDeadlineMs(requestedMs: number): number {
+    if (this._rttSamples.length === 0) return requestedMs
+    return Math.max(requestedMs, Math.min(DaemonConnection.PROBE_DEADLINE_MAX_MS, 2 * this.roundTripMs + 500))
+  }
+
+  /** Test seam and the handshake: one round trip measured. */
+  recordRoundTrip(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0 || ms > DaemonConnection.RTT_SAMPLE_MAX_MS) return
+    this._rttSamples.push(Math.min(ms, DaemonConnection.RTT_CAP_MS))
+    if (this._rttSamples.length > DaemonConnection.RTT_SAMPLES_KEPT) this._rttSamples.shift()
+    this._rttRecordedAt = Date.now()
+    this._queuedPongMinMs = null
+  }
+
+  /**
+   * A link with no quiet moment for this long is timed by its queued pongs: the
+   * quickest of them since the last sample. On a link that is never quiet every
+   * pong waits behind some reply, so none was clean and the round trip stayed at
+   * what the handshake measured (gate review, 2026-10-03: 510ms through 60s at a
+   * 2s round trip and 150s at 7s; a probe cut to that deadline dropped the link).
+   * The quickest is the least queue and the most link, so one long download
+   * ahead of a single pong does not stretch the deadline.
+   */
+  static QUEUED_PONG_FALLBACK_MS = 30_000
+
+  /** Test seam: a pong `ms` after its ping, with `queued` other bytes heard in between. */
+  notePongForTest(ms: number, queued: boolean): void {
+    this.noteRoundTrip(ms, queued)
+  }
+
+  private noteRoundTrip(ms: number, queued: boolean): void {
+    if (!queued) { this.recordRoundTrip(ms); return }
+    if (!Number.isFinite(ms) || ms < 0 || ms > DaemonConnection.RTT_SAMPLE_MAX_MS) return
+    this._queuedPongMinMs = this._queuedPongMinMs === null ? ms : Math.min(this._queuedPongMinMs, ms)
+    if (Date.now() - this._rttRecordedAt >= DaemonConnection.QUEUED_PONG_FALLBACK_MS) this.recordRoundTrip(this._queuedPongMinMs)
+  }
+
+  /** Unanswered timed pings remembered (the oldest goes first). */
+  private static readonly TIMED_PINGS_KEPT = 4
+  /** Bytes a pong may find heard since its ping and still time the link: the pongs themselves. */
+  private static readonly PONG_SLACK_BYTES = 64
+
+  /** A ping on the main socket that carries its send time, remembered with the bytes heard by then. */
+  private timedPing(ws: WebSocket): void {
+    const at = Date.now()
+    this._timedPings.set(at, this._heardBytes)
+    if (this._timedPings.size > DaemonConnection.TIMED_PINGS_KEPT) {
+      const oldest = this._timedPings.keys().next().value
+      if (oldest !== undefined) this._timedPings.delete(oldest)
+    }
+    ws.ping(timedPingPayload(at))
+  }
+
+  /**
+   * A pong to one of our timed pings: its round trip, when nothing else came
+   * from the daemon between the ping and the pong. A pong that waited behind
+   * other bytes (a reply streaming on the same link) timed that queue, not the
+   * link, and there those bytes already answer a probe. Counted, such samples
+   * made a 20s probe deadline after a slow 600KB read, and a link that then
+   * froze for 30s went unnoticed until it came back (gate review, 2026-10-03).
+   */
+  private notePongPayload(data: Buffer | undefined): void {
+    const sentAt = pingPayloadSentAt(data)
+    if (sentAt === null) return
+    const heardAtPing = this._timedPings.get(sentAt)
+    this._timedPings.delete(sentAt)
+    if (heardAtPing === undefined) return
+    this.noteRoundTrip(Date.now() - sentAt, this._heardBytes - heardAtPing > DaemonConnection.PONG_SLACK_BYTES)
+  }
+
+  /**
+   * Count every byte `ws` brings, as it arrives (`data` on its own net/TLS
+   * socket: no event fires for a frame until all of it is in). A socket the ws
+   * library has not exposed (a test double) is simply not counted.
+   */
+  private countHeardBytes(ws: WebSocket, bulk: boolean): void {
+    const raw = (ws as unknown as { _socket?: { on?: (event: string, fn: (chunk: Buffer) => void) => void } })._socket
+    if (!raw || typeof raw.on !== 'function') return
+    raw.on('data', (chunk: Buffer) => {
+      const n = chunk?.length ?? 0
+      this._heardBytes += n
+      if (bulk) this._bulkHeardBytes += n
+    })
+  }
+
+  /** A link that stopped answering: fail what waits on it, close it, reconnect. */
+  private dropSilentLink(ws: WebSocket): void {
+    for (const [, pending] of this.pendingCommands) {
+      clearTimeout(pending.timer)
+      pending.reject(markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}: the link stopped answering`), 'lost'))
+    }
+    this.pendingCommands.clear()
+    try { ws.terminate() } catch { /* already gone */ }
+    this.handleConnectionLost()
+  }
+
   private startPing(): void {
     if (this.pingTimer) clearInterval(this.pingTimer)
     this._missedPongs = 0
     this._pongPending = false
+    let bytesAtLastTick = socketBytesRead(this.ws)
+    let heardAtLastTick = this._heardBytes
     this.pingTimer = setInterval(() => {
+      // A tick that saw bytes from the daemon heard from it, pong or not, on
+      // ANY of its sockets: a big reply in flight holds the pong behind it, and
+      // on one shared bottleneck the bulk socket's stream is all that arrives.
+      const bytesNow = socketBytesRead(this.ws)
+      const heardFrom = bytesNow > bytesAtLastTick || this._heardBytes > heardAtLastTick
+      bytesAtLastTick = bytesNow
+      heardAtLastTick = this._heardBytes
       // Staleness = 3 consecutive AWAKE intervals with no pong (~45s), counted
       // per timer tick — NOT clock-based. Clock math ("now - lastPongAt > 45s")
       // is sleep-poisoned on Apple Silicon: BOTH Date.now() and hrtime advance
@@ -5138,7 +5454,7 @@ export class DaemonConnection {
       // the process is awake — sleep of any length costs at most one tick.
       // 3x instead of 2x also absorbs transient event-loop stalls at boot
       // (index rebuild, session recovery) that used to cascade into mass reattach.
-      if (this._pongPending) {
+      if (this._pongPending && !heardFrom) {
         this._missedPongs += 1
         if (this._missedPongs >= 3) {
           log.session.warn('DaemonConnection: no pong received, connection stale', {
@@ -5146,6 +5462,11 @@ export class DaemonConnection {
             missedPongs: this._missedPongs,
             lastPongAgoMs: this.lastPongAt > 0 ? Date.now() - this.lastPongAt : null,
           })
+          // The cloud tunnel ends the way a silent probe ends it: what still
+          // waits on this link fails now (its replies can never arrive), not at
+          // each command's own 30s timeout, and the socket goes without a close
+          // handshake a silent peer would never answer.
+          if (this.isCloudTunnel && this.ws) { this.dropSilentLink(this.ws); return }
           this.handleConnectionLost()
           return
         }
@@ -5154,10 +5475,41 @@ export class DaemonConnection {
       }
       if (this.ws?.readyState === WebSocket.OPEN) {
         this._pongPending = true
-        this.ws.ping()
+        this.timedPing(this.ws)
       }
-    }, DaemonConnection.PING_INTERVAL_MS)
+      // The bulk socket too: its pong is not awaited, the ping is for the far
+      // end. The companion keeps a tunnel while bytes come from the Mac on it,
+      // and during a long download nothing else does (2026-10-01: a 4MB history
+      // at 32KB/s lost its bulk tunnel to the companion's heartbeat at 55s, and
+      // every bulk read then queued on the main socket behind it).
+      if (this.bulkWs?.readyState === WebSocket.OPEN) {
+        try { this.bulkWs.ping() } catch { /* closing */ }
+      }
+    }, this.isCloudTunnel ? DaemonConnection.CLOUD_TUNNEL_PING_INTERVAL_MS : DaemonConnection.PING_INTERVAL_MS)
   }
+}
+
+/**
+ * Bytes received so far on a WebSocket's own socket (-1 when unknown). The ws
+ * library keeps the net/TLS socket on `_socket`; reading `bytesRead` there is
+ * the one way to see a reply that is still arriving (no event fires until a
+ * whole frame is in).
+ */
+function socketBytesRead(ws: WebSocket | null | undefined): number {
+  const socket = (ws as unknown as { _socket?: { bytesRead?: unknown } } | null | undefined)?._socket
+  return typeof socket?.bytesRead === 'number' ? socket.bytesRead : -1
+}
+
+/** A ping carries its send time (`t<ms>`): the far end echoes it in the pong (RFC 6455). */
+function timedPingPayload(at: number): Buffer {
+  return Buffer.from(`t${at}`)
+}
+
+/** The send time a pong echoes, or null for a pong to someone else's ping (or none). */
+export function pingPayloadSentAt(data: Buffer | undefined): number | null {
+  const text = data && data.length > 1 && data.length < 32 ? data.toString('latin1') : ''
+  const m = /^t(\d{10,16})$/.exec(text)
+  return m ? Number(m[1]) : null
 }
 
 // ── Pool-level status change callback ──
@@ -5364,6 +5716,12 @@ export function pushTriggersToAllHosts(): void {
  * with repeated SSH timeout attempts when a host is unreachable.
  */
 export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget): Promise<DaemonConnection> {
+  // Every failure here is the LINK's (no connection could be had), tagged so a
+  // request path tells it from a command's own error by kind (link-failure.ts).
+  return getDaemonConnectionOrThrow(hostKey, sshTarget).catch((err) => { throw markLinkFailure(err, 'no-link') })
+}
+
+async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget): Promise<DaemonConnection> {
   // Fast path: already connected
   const existing = connectionPool.get(hostKey)
   if (existing?.connected) return existing
@@ -5674,6 +6032,40 @@ export function daemonConnectWouldWait(hostKey: string): 'connected' | 'fails-fa
   const cached = failureCache.get(hostKey)
   if (cached && Date.now() - cached.time < FAILURE_CACHE_TTL_MS) return 'fails-fast'
   return 'cold'
+}
+
+/**
+ * Ask `hostKey`'s connected link whether it still answers (DaemonConnection
+ * .probeLiveness). False when nothing is connected now. For request-path
+ * deadlines (core/hosts/remote-read-bound.ts).
+ */
+export function probeDaemonLiveness(hostKey: string, deadlineMs: number): Promise<boolean> {
+  const conn = connectionPool.get(hostKey)
+  if (!conn?.connected) return Promise.resolve(false)
+  return conn.probeLiveness(deadlineMs)
+}
+
+/**
+ * Bytes heard so far from `hostKey`'s connected daemon, on all its sockets
+ * (DaemonConnection.heardBytes): a request-path read compares two readings to
+ * tell a reply still arriving from a link that went quiet. -1 when nothing is
+ * connected.
+ */
+export function daemonHeardBytes(hostKey: string): number {
+  const conn = connectionPool.get(hostKey)
+  return conn?.connected ? conn.heardBytes : -1
+}
+
+/** `hostKey`'s connected link round trip in ms (0 before the first measured, or not connected). */
+export function daemonRoundTripMs(hostKey: string): number {
+  const conn = connectionPool.get(hostKey)
+  return conn?.connected ? conn.roundTripMs : 0
+}
+
+/** A probe found `hostKey`'s connected link silent within `windowMs`, and nothing was heard since. */
+export function daemonLinkSilent(hostKey: string, windowMs: number): boolean {
+  const conn = connectionPool.get(hostKey)
+  return conn?.connected ? conn.linkSilentRecently(windowMs) : false
 }
 
 /** The reconnect loop's cause (daemon-reconnect-cause.ts) and the attempt clocks. */

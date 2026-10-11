@@ -11,6 +11,7 @@
 
 import { useCallback, useState } from 'react';
 import type { TerminalOpenPlain, TerminalSshFailed } from '@/api/terminal';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 
 /** Copies exactly `command` (never the surrounding prose). */
 export function CopyCommandButton({ command }: { command: string }) {
@@ -71,10 +72,11 @@ export function TerminalPlainNotice({ plain, retrying, onRetry }: PlainNoticePro
 }
 
 export function TerminalSshFailedCard({ failed, onRetry }: { failed: TerminalSshFailed; onRetry: () => void }) {
+  const hostName = useHostDisplayLabel(failed.host);
   return (
     <div className="session-terminal-error-card" data-testid="terminal-ssh-failed">
       <div className="session-terminal-error-icon">&#x26A0;&#xFE0F;</div>
-      <div className="session-terminal-error-title">Can't start terminal: ssh to {failed.host} failed</div>
+      <div className="session-terminal-error-title">Can't start terminal: ssh to {hostName} failed</div>
       <p className="session-terminal-error-body">{failed.hint}</p>
       {failed.detail && <pre className="session-terminal-ssh-detail">{failed.detail}</pre>}
       <button className="session-terminal-btn session-terminal-retry" onClick={onRetry}>

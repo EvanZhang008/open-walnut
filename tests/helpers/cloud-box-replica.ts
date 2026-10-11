@@ -56,11 +56,18 @@ export interface ReplicaDevice {
 
 export interface ReplicaOptions {
   /**
-   * The paired device that owns the two machine credentials, as a companion
-   * with ownership recorded has it. Absent: they predate ownership (no owner),
-   * as on a companion upgraded from an older build.
+   * The companion's owner, which minted the two machine credentials, as a
+   * current build records it. Absent: an auth.json an older build wrote (no
+   * owner recorded, the credentials carry none), as on a companion upgraded
+   * from it.
    */
   machineOwner?: 'mac-primary' | 'mac-second'
+  /**
+   * A new companion the box operator paired with `walnut device add` (no
+   * `--owner`), exactly as a build without owners writes auth.json: the two
+   * Macs and the phone, no machine credential, no owner. `machineOwner` is ignored.
+   */
+  fresh?: boolean
 }
 
 export interface CloudBoxReplica {
@@ -82,6 +89,13 @@ export interface CloudBoxReplica {
   tunnelDaemon: (owner?: string) => { pid: number | null; instanceId: string | null }
   /** The replica's auth.json as it is now. */
   devices: () => ReplicaDevice[]
+  /** The companion's recorded owner (auth.json `owner`), as it is now. */
+  owner: () => { id: string; via: string } | null | undefined
+  /**
+   * The box operator runs `walnut device <cmd> <name>` on the companion (its
+   * own process, as on the box). Resolves with what it printed and its exit code.
+   */
+  operator: (cmd: 'owner' | 'revoke', name: string) => Promise<{ code: number; out: string }>
   /** End the server only (SIGTERM, as systemd), then start a new one; `release` swaps the daemon build. */
   restart: (release?: DaemonRelease) => Promise<void>
   stop: () => Promise<void>
@@ -123,18 +137,40 @@ export async function startCloudBoxReplica(base: string, release?: DaemonRelease
     `version: 1\nuser:\n  name: Box\ncloud:\n  exec:\n    enabled: true\n    cwd_roots:\n      - ${box.projects}\n`)
   const now = new Date().toISOString()
   const ids: ReplicaIds = { 'mac-primary': deviceId(), 'mac-second': deviceId(), 'my-phone': deviceId(), 'bridge-local': deviceId(), 'bridge-devbox': deviceId() }
-  // Owned, as a current build records it: the owner's id on each credential and
-  // the owner's own tunnel daemon. The phone's platform is the one it claimed.
+  // Owned, as a current build records it: the owner itself, its id on each
+  // credential and its own tunnel daemon. The phone's platform is the one it claimed.
   const ownerId = opts.machineOwner ? ids[opts.machineOwner] : undefined
   const owned = ownerId ? { ownerId, daemonKey: ownerId } : {}
   const ownerOf = (name: string) => (opts.machineOwner === name ? { tunnelDaemon: { key: ownerId } } : {})
-  await fsp.writeFile(path.join(box.data, 'auth.json'), JSON.stringify({ devices: [
-    { name: 'mac-primary', id: ids['mac-primary'], tokenHash: sha(tokens.mac), createdAt: now, ...ownerOf('mac-primary') },
-    { name: 'mac-second', id: ids['mac-second'], tokenHash: sha(tokens.secondMac), createdAt: now, ...ownerOf('mac-second') },
-    { name: 'my-phone', id: ids['my-phone'], tokenHash: sha(tokens.phone), createdAt: now, platform: 'ios', info: { model: 'iPhone17,1', os: 'iOS 26.1', reportedAt: now } },
-    { name: 'bridge-local', id: ids['bridge-local'], tokenHash: sha(tokens.primaryMachine), createdAt: now, kind: 'machine', ...owned },
-    { name: 'bridge-devbox', id: ids['bridge-devbox'], tokenHash: sha(tokens.otherMachine), createdAt: now, kind: 'machine', ...owned },
-  ] }), { mode: 0o600 })
+  if (opts.fresh) {
+    // saveAuth's own format (2-space JSON and a newline), as `walnut device add` leaves it.
+    await fsp.writeFile(path.join(box.data, 'auth.json'), JSON.stringify({ devices: [
+      { name: 'mac-primary', id: ids['mac-primary'], tokenHash: sha(tokens.mac), createdAt: now },
+      { name: 'mac-second', id: ids['mac-second'], tokenHash: sha(tokens.secondMac), createdAt: now, platform: 'other', info: { model: 'Mac', os: 'macOS', reportedAt: now } },
+      { name: 'my-phone', id: ids['my-phone'], tokenHash: sha(tokens.phone), createdAt: now, platform: 'ios', info: { model: 'iPhone17,1', os: 'iOS 26.1', reportedAt: now } },
+    ] }, null, 2) + '\n', { mode: 0o600 })
+  } else {
+    await fsp.writeFile(path.join(box.data, 'auth.json'), JSON.stringify({ ...(ownerId ? { owner: { id: ownerId, via: 'claim' } } : {}), devices: [
+      { name: 'mac-primary', id: ids['mac-primary'], tokenHash: sha(tokens.mac), createdAt: now, ...ownerOf('mac-primary') },
+      // The second Mac has reported itself, as its own Walnut does at its first status probe.
+      { name: 'mac-second', id: ids['mac-second'], tokenHash: sha(tokens.secondMac), createdAt: now, platform: 'other', info: { model: 'Mac', os: 'macOS', reportedAt: now }, ...ownerOf('mac-second') },
+      { name: 'my-phone', id: ids['my-phone'], tokenHash: sha(tokens.phone), createdAt: now, platform: 'ios', info: { model: 'iPhone17,1', os: 'iOS 26.1', reportedAt: now } },
+      { name: 'bridge-local', id: ids['bridge-local'], tokenHash: sha(tokens.primaryMachine), createdAt: now, kind: 'machine', ...owned },
+      { name: 'bridge-devbox', id: ids['bridge-devbox'], tokenHash: sha(tokens.otherMachine), createdAt: now, kind: 'machine', ...owned },
+    ] }), { mode: 0o600 })
+  }
+
+  // The box operator's `walnut device` command, on the same data dir.
+  const operatorScript = path.join(base, 'box-operator.mts')
+  await fsp.writeFile(operatorScript, `
+const c = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/constants.ts'))})
+if (c.WALNUT_HOME !== ${JSON.stringify(box.data)}) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
+const m = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/commands/device.ts'))})
+const [cmd, name] = process.argv.slice(2)
+if (cmd === 'owner') await m.runDeviceOwner(name, {})
+else if (cmd === 'revoke') await m.runDeviceRevoke(name, {})
+else process.exitCode = 2
+`)
 
   const script = path.join(base, 'boot-replica.mts')
   // Refuses to boot unless its data dir is exactly the throwaway one.
@@ -154,34 +190,32 @@ armGracefulSignalExit()
 `)
   let log = ''
 
+  const boxEnv = (rel: DaemonRelease | undefined): NodeJS.ProcessEnv => ({
+    ...process.env,
+    WALNUT_CLOUD_MODE: '1',
+    OPEN_WALNUT_HOME: box.data,
+    HOME: box.home,
+    USERPROFILE: box.home,
+    WALNUT_HOME_OVERRIDE: box.home,
+    SHELL: '/bin/sh',
+    WALNUT_DAEMON_DIR: box.daemonDir,
+    WALNUT_TUNNEL_DAEMON_DIR: box.tunnelDir,
+    ...(rel ? { WALNUT_TUNNEL_DAEMON_BINARY: rel.binary } : {}),
+    // A runtime-versioned test build reports this (cloud-box-daemon-build.ts).
+    ...(rel?.version ? { DAEMON_VERSION: rel.version } : {}),
+    WALNUT_STREAMS_DIR: '',
+    WALNUT_LEGACY_STREAMS_DIR: path.join(base, 'legacy-streams'),
+    WALNUT_SPAWN_JOURNAL: path.join(base, 'box', 'spawn-journal.jsonl'),
+    WALNUT_GIT_HUB_DIR: path.join(base, 'hub'),
+    MOCK_CLAUDE_TRANSCRIPT_DIR: path.join(box.home, '.claude', 'projects'),
+    WALNUT_LOCAL_CLAUDE_PROBE: '0',
+    WALNUT_DISABLE_BACKGROUND_AI: '1',
+    WALNUT_DISABLE_SEARCH: '1',
+    VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', NODE_ENV: 'production',
+  })
+
   async function boot(rel: DaemonRelease | undefined): Promise<{ proc: ChildProcess; port: number }> {
-    const proc = spawn(TSX, [script], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        WALNUT_CLOUD_MODE: '1',
-        OPEN_WALNUT_HOME: box.data,
-        HOME: box.home,
-        USERPROFILE: box.home,
-        WALNUT_HOME_OVERRIDE: box.home,
-        SHELL: '/bin/sh',
-        WALNUT_DAEMON_DIR: box.daemonDir,
-        WALNUT_TUNNEL_DAEMON_DIR: box.tunnelDir,
-        ...(rel ? { WALNUT_TUNNEL_DAEMON_BINARY: rel.binary } : {}),
-        // A runtime-versioned test build reports this (cloud-box-daemon-build.ts).
-        ...(rel?.version ? { DAEMON_VERSION: rel.version } : {}),
-        WALNUT_STREAMS_DIR: '',
-        WALNUT_LEGACY_STREAMS_DIR: path.join(base, 'legacy-streams'),
-        WALNUT_SPAWN_JOURNAL: path.join(base, 'box', 'spawn-journal.jsonl'),
-        WALNUT_GIT_HUB_DIR: path.join(base, 'hub'),
-        MOCK_CLAUDE_TRANSCRIPT_DIR: path.join(box.home, '.claude', 'projects'),
-        WALNUT_LOCAL_CLAUDE_PROBE: '0',
-        WALNUT_DISABLE_BACKGROUND_AI: '1',
-        WALNUT_DISABLE_SEARCH: '1',
-        VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', NODE_ENV: 'production',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const proc = spawn(TSX, [script], { cwd: REPO_ROOT, env: boxEnv(rel), stdio: ['ignore', 'pipe', 'pipe'] })
     proc.stderr!.on('data', (b: Buffer) => { log = (log + b.toString()).slice(-400_000) })
     const port = await new Promise<number>((resolve, reject) => {
       let out = ''
@@ -253,6 +287,14 @@ armGracefulSignalExit()
         return out
       })
     },
+    owner: () => (JSON.parse(fs.readFileSync(path.join(box.data, 'auth.json'), 'utf-8')) as { owner?: { id: string; via: string } | null }).owner,
+    operator: (cmd, name) => new Promise((resolve) => {
+      const p = spawn(TSX, [operatorScript, cmd, name], { cwd: REPO_ROOT, env: boxEnv(release), stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      p.stdout!.on('data', (b: Buffer) => { out += b.toString() })
+      p.stderr!.on('data', (b: Buffer) => { out += b.toString() })
+      p.once('exit', (code) => resolve({ code: code ?? -1, out }))
+    }),
     restart: async (rel) => {
       await endServer(current.proc)
       current = await boot(rel ?? release)

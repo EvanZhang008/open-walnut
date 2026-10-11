@@ -1,22 +1,28 @@
 /**
- * One companion serves one Mac, end to end (core/machine-credentials.ts).
+ * A companion belongs to one Mac, end to end (core/machine-credentials.ts).
  *
  *   this primary (startServer) = the SECOND Mac, `mac-second`, paired with the
  *   companion but holding no machine credential ──▶ replica (real child process,
- *   WALNUT_CLOUD_MODE=1) whose machine credentials belong to `mac-primary`
+ *   WALNUT_CLOUD_MODE=1) that belongs to `mac-primary` (its setup claim)
  *
  * What it proves, on the real auth.json, the real routes and the real tunnel:
  *  1. the second Mac is refused (409, the host card sentence) and never reaches
  *     the first Mac's daemon; a phone is refused minting and revoking outright,
  *     and neither re-pairing the first Mac's name nor removing it gets it anywhere;
  *  2. the second Mac may not remove the first one either (403, from its own
- *     console); the first Mac unpairing itself is the handover: its open tunnel
- *     closes at once (4401), and this Mac mints and gets a daemon of its own, in
- *     its own dir (keyed by its device id), which its session's CLI does not
- *     inherit the daemon's keep switch from;
+ *     console). The first Mac unpairing itself closes its open tunnel at once
+ *     (4401) and leaves the companion with no owner. With none recorded, the
+ *     first Mac to connect after that is the owner (recorded 'mint', the rule
+ *     of the builds before owners were recorded): this Mac mints and gets a
+ *     daemon of its own, in its own dir (keyed by its device id), which its
+ *     session's CLI does not inherit the daemon's keep switch from. The box
+ *     operator's `walnut device owner` then records it by the operator's word;
  *  3. a revoked machine credential closes this Mac's open tunnel at once (a fresh
  *     close, told by the revoke, not the heartbeat); the Mac hears 401, re-mints
- *     once, and is back on the SAME daemon, the session still talkable.
+ *     once, and is back on the SAME daemon, the session still talkable;
+ *  4. this Mac's console lists its own cloud record as itself (the companion
+ *     names it), and after this Mac unpairs itself the list says the companion
+ *     no longer accepts its token instead of showing no phones.
  *
  * Isolation as in cloud-box-tunnel-e2e.test.ts: one temp base, fresh auth.json,
  * no pid in any fixture, only the CLI is a mock.
@@ -31,6 +37,7 @@ import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../helpers/cloud-box-replica.js'
 import { buildTestDaemon, stageDaemonRelease } from '../helpers/cloud-box-daemon-build.js'
+import { isolateFromRealSsh, type SshIsolation } from '../helpers/isolate-ssh.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloudbox-owner'))
 
@@ -40,6 +47,7 @@ import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_PROBE_HEADER
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
 
 let base = ''
+let isolation: SshIsolation | null = null
 let replica: CloudBoxReplica
 let primaryPort = 0
 let companion = ''
@@ -114,6 +122,8 @@ beforeAll(async () => {
   // This Mac is `mac-second`: paired, but it never minted a machine credential here.
   await seedPrimaryPairing(WALNUT_HOME, companion, replica.tokens, { as: 'mac-second', secondMac: replica.tokens.secondMac, cachedMachineToken: false })
 
+  // No real ssh from this server: a throwaway HOME (no real ~/.ssh/config) and a refusing ssh first on PATH.
+  isolation = isolateFromRealSsh(base)
   const server = await startServer({ port: 0, dev: true })
   primaryPort = (server.address() as net.AddressInfo).port
 }, 420_000)
@@ -121,10 +131,11 @@ beforeAll(async () => {
 afterAll(async () => {
   try { await stopServer() } catch { /* already down */ }
   await replica?.stop()
+  isolation?.restore()
   if (process.env.DEBUG_BOX) process.stderr.write(replica?.log().slice(-8000) ?? '')
 }, 60_000)
 
-describe('one companion serves one Mac', () => {
+describe('a companion belongs to one Mac', () => {
   it('a second Mac is refused with the card sentence and never reaches the first Mac\'s daemon', async () => {
     await refreshCloudBoxHost()
     await api(`/api/hosts/${CLOUD_BOX_HOST_ALIAS}/connect`, { method: 'POST' })
@@ -133,7 +144,7 @@ describe('one companion serves one Mac', () => {
       return s && !s.connected && s.kind === 'cloud_other_mac' ? s : null
     }, 60_000, 'the Cloud card to say another Mac is connected')
     expect(st.error).toBe(CLOUD_BOX_OTHER_MAC_SENTENCE)
-    expect(String(st.hint)).toMatch(/runs sessions for another Mac/)
+    expect(String(st.hint)).toMatch(/belongs to another Mac.*`walnut device owner <name>`/)
 
     // Every way a device might take the credential over is refused.
     const s = replica.tokens.secondMac
@@ -157,7 +168,7 @@ describe('one companion serves one Mac', () => {
 
   it('a phone can neither mint nor revoke a machine credential, nor take the Mac\'s pairing', async () => {
     const p = replica.tokens.phone
-    const refused = `Only mac-primary itself or the Mac this companion serves can remove or re-pair mac-primary. On the companion, \`walnut device revoke mac-primary\` works too.`
+    const refused = 'Only mac-primary itself or the Mac this cloud companion belongs to can remove or re-pair mac-primary.'
     // Re-pairing the first Mac's name, or removing it: refused, and its token still works.
     for (const init of [
       { method: 'POST', body: JSON.stringify({ name: 'mac-primary', replace: true }) },
@@ -188,7 +199,7 @@ describe('one companion serves one Mac', () => {
   let sid = ''
   let ownDaemonPid = 0
 
-  it('the first Mac unpairing itself hands the companion over: its tunnel closes at once, this Mac gets a daemon of its own', async () => {
+  it('the first Mac unpairing itself leaves no owner; this Mac connects first, is recorded the owner, and gets a daemon of its own', async () => {
     // The first Mac is on its daemon (its own dir, keyed by its device id).
     const first = await dialTunnel(replica.tokens.primaryMachine)
     expect(first.status).toBe(101)
@@ -197,11 +208,18 @@ describe('one companion serves one Mac', () => {
     expect(fs.existsSync(path.join(`${replica.box.tunnelDir}.by-device`, replica.ids['mac-primary'], 'daemon', 'daemon.pid'))).toBe(true)
     const closed = new Promise<number>((resolve) => first.ws!.once('close', (code) => resolve(code)))
 
+    // This Mac's console lists its own cloud record as itself (the companion
+    // names the record its token matched), never as a phone with a QR.
+    const listed = await (await api('/api/devices')).json() as { cloudDevices: Array<{ name: string; role: string }>; cloudError?: string }
+    expect(listed.cloudDevices.find((d) => d.name === 'mac-second')).toMatchObject({ role: 'self' })
+    expect(listed.cloudDevices.filter((d) => d.role === 'self').map((d) => d.name)).toEqual(['mac-second'])
+    expect(listed.cloudError).toBeUndefined()
+
     // This Mac may not remove the other one: its console relays the companion's 403.
     const refusedHere = await api('/api/devices/mac-primary?target=cloud', { method: 'DELETE' })
     expect(refusedHere.status).toBe(403)
     expect(await refusedHere.json()).toEqual({
-      error: 'Only mac-primary itself or the Mac this companion serves can remove or re-pair mac-primary. On the companion, `walnut device revoke mac-primary` works too.',
+      error: 'Only mac-primary itself or the Mac this cloud companion belongs to can remove or re-pair mac-primary.',
       code: 'device_change_refused',
     })
     expect(replica.devices().map((d) => d.name).sort()).toEqual(['bridge-devbox', 'bridge-local', 'mac-primary', 'mac-second', 'my-phone'])
@@ -213,10 +231,19 @@ describe('one companion serves one Mac', () => {
     expect(await closed).toBe(4401)
     expect(Date.now() - t0).toBeLessThan(5_000)
     expect(replica.devices().map((d) => d.name).sort()).toEqual(['mac-second', 'my-phone'])
+    expect(replica.owner()).toBeUndefined()
 
-    // Retry: this Mac mints and connects, to a daemon in its own dir.
+    // Retry: no owner is recorded, so the first Mac to mint is the owner (never a guess from the records).
     await api(`/api/hosts/${CLOUD_BOX_HOST_ALIAS}/connect`, { method: 'POST' })
     await waitFor(async () => (await cloudStatus())?.connected, 90_000, 'Cloud connected after the handover')
+    expect(replica.owner()).toEqual({ id: replica.ids['mac-second'], via: 'mint' })
+    expect(replica.devices().find((d) => d.name === 'bridge-local')).toMatchObject({ kind: 'machine', ownerId: replica.ids['mac-second'], daemonKey: replica.ids['mac-second'] })
+
+    // The box operator's word records the same owner, and takes nothing from it.
+    const named = await replica.operator('owner', 'mac-second')
+    expect(named, named.out).toMatchObject({ code: 0 })
+    expect(named.out).toContain('This cloud companion now belongs to "mac-second".')
+    expect(replica.owner()).toEqual({ id: replica.ids['mac-second'], via: 'operator' })
     expect(replica.devices().find((d) => d.name === 'bridge-local')).toMatchObject({ kind: 'machine', ownerId: replica.ids['mac-second'], daemonKey: replica.ids['mac-second'] })
     expect(replica.devices().find((d) => d.name === 'mac-second')).toMatchObject({ id: replica.ids['mac-second'], tunnelDaemon: { key: replica.ids['mac-second'] } })
     const mine = replica.tunnelDaemon('mac-second')
@@ -265,4 +292,21 @@ describe('one companion serves one Mac', () => {
     expect(sent.error).toBeUndefined()
     await waitFor(async () => fs.readFileSync(replica.streamFile(sid, 'mac-second'), 'utf-8').includes('"result":"after-the-revoke"'), 90_000, 'a turn after the re-mint')
   }, 300_000)
+
+  it('this Mac unpairing itself from its console: its credentials go with it, and the list says so plainly', async () => {
+    // Settings › Phones & Cloud › This Mac › Unpair this Mac sends exactly this.
+    const r = await api('/api/devices/mac-second?target=cloud', { method: 'DELETE' })
+    expect(r.status).toBe(200)
+    // The companion refusing our token right after our own removal is the unpair itself.
+    expect(await r.json()).toMatchObject({ ok: true, target: 'cloud', unpaired: true })
+    expect(replica.devices().map((d) => d.name)).toEqual(['my-phone'])
+    const listed = await (await api('/api/devices')).json() as {
+      cloudDevices: unknown[]; cloudError?: string; cloudUnpaired?: { origin: string }; targets?: Array<{ kind: string }>
+    }
+    expect(listed.cloudDevices).toEqual([])
+    // Not a warning: a neutral state, and Cloud is no longer a place to pair a phone.
+    expect(listed.cloudError).toBeUndefined()
+    expect(listed.cloudUnpaired?.origin).toMatch(/^https?:\/\//)
+    expect((listed.targets ?? []).some((t) => t.kind === 'cloud')).toBe(false)
+  }, 60_000)
 })

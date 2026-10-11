@@ -257,7 +257,7 @@ export function DraftLaunchBar({
                   disabled={active}
                   onClick={() => pickDir(d)}
                   // The same one sentence as the host's picker tab when the host has something to say.
-                  title={saysSomething ? dot!.title : d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd}
+                  title={saysSomething ? dot!.title : d.host ? `${d.cwd} (on ${hostDisplayLabel(d.host, undefined, d.hostLabel)})` : d.cwd}
                 >
                   {basename(d.cwd)}
                   {chipHostLabel(d) && <>{' '}<span className="draft-quick-chip-host">· {chipHostLabel(d)}</span></>}

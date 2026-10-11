@@ -19,8 +19,8 @@
  *
  * Which daemon: the one of the Mac that owns the credential (its `daemonKey`,
  * core/machine-credentials.ts), in a dir of its own, so a Mac never lands on
- * another Mac's sessions. One companion serves one Mac: a second Mac cannot
- * mint the credential at all (409), and revoking or rotating it closes its
+ * another Mac's sessions. Only the companion's owner mints credentials (a
+ * second Mac hears 409), and revoking or rotating one closes its
  * open tunnel at once (TUNNEL_CLOSE_REVOKED) or, for a revoke made by another
  * process, within one heartbeat.
  */
@@ -73,6 +73,8 @@ const DAEMON_START_DEADLINE_MS = 20_000
 const LOOPBACK_OPEN_DEADLINE_MS = 5_000
 /** The replica's own check on the Mac side, so a vanished Mac frees its daemon socket. */
 const MAC_PING_INTERVAL_MS = 30_000
+/** Data taken by the Mac's side in one beat that proves it is reading (our ping frames are 2 bytes). */
+const MAC_TOOK_MIN_BYTES = 1_024
 /** Same frame ceiling the Mac's DaemonConnection accepts (a git.diff can be ~64MB). */
 const MAX_FRAME_BYTES = 100 * 1024 * 1024
 
@@ -110,6 +112,8 @@ export interface TunnelDeps {
   stillValid: () => Promise<boolean>
   /** Test seam: the heartbeat period (MAC_PING_INTERVAL_MS by default). */
   heartbeatMs: number
+  /** Test seam: what runs the heartbeat every `ms` (an unref'd setInterval by default); returns its stop. */
+  every: (beat: () => void, ms: number) => () => void
   /** Test seam: the daemon start bound (DAEMON_START_DEADLINE_MS by default). */
   daemonStartDeadlineMs: number
 }
@@ -228,10 +232,56 @@ export async function handleDaemonTunnelUpgrade(
       ws.on('ping', (data) => { if (daemon.readyState === WebSocket.OPEN) daemon.ping(data) })
       daemon.on('pong', (data) => { if (ws.readyState === WebSocket.OPEN) ws.pong(data) })
 
+      // The Mac is alive while it makes PROGRESS: a pong, any byte from it (its
+      // own pings, on the bulk tunnel too, and its commands), or data of ours
+      // its side took since the last beat (more than our own ping frames:
+      // MAC_TOOK_MIN_BYTES). Under a big download the ping waits behind the data
+      // on the way down, so a pong alone dropped tunnels that were busy, not
+      // dead. "Took" counts a write once it is done, and one big frame is one
+      // write: it can be in flight for longer than two beats on a thin link,
+      // which is why the Mac pings every socket it has.
       let macAlive = true
+      const raw = (ws as unknown as { _socket?: { bytesRead?: number; bytesWritten?: number; writableLength?: number } })._socket
+      const fromMac = () => (typeof raw?.bytesRead === 'number' ? raw.bytesRead : -1)
+      const takenByMac = () => (typeof raw?.bytesWritten === 'number' ? raw.bytesWritten - (raw.writableLength ?? 0) : -1)
+      let fromMacAtBeat = fromMac()
+      let takenAtBeat = takenByMac()
       ws.on('pong', () => { macAlive = true })
-      const heartbeat = setInterval(() => {
-        if (!macAlive) { ws.terminate(); return }
+      const beatMs = deps.heartbeatMs ?? MAC_PING_INTERVAL_MS
+      let lastBeatAt = Date.now()
+      /** When the window the next verdict judges began (the last verdict's reading). */
+      let windowAt = lastBeatAt
+      const every = deps.every ?? ((fn: () => void, ms: number) => {
+        const t = setInterval(fn, ms)
+        t.unref?.()
+        return () => clearInterval(t)
+      })
+      const stopHeartbeat = every(() => {
+        const at = Date.now()
+        // A beat that ran late cannot judge: this process was stalled, and the
+        // Mac's answer may be sitting unread. It only pings again.
+        const stalled = at - lastBeatAt > 2 * beatMs
+        lastBeatAt = at
+        // A timer runs before the loop reads its sockets: judge after what has
+        // arrived is read (two turns, so an answer to our last frame that was
+        // already on its way counts too).
+        setImmediate(() => setImmediate(() => beat(stalled)))
+      }, beatMs)
+      const beat = (stalled: boolean) => {
+        if (closed) return
+        const heard = fromMac()
+        const taken = takenByMac()
+        if ((heard >= 0 && heard > fromMacAtBeat) || (taken >= 0 && taken - takenAtBeat >= MAC_TOOK_MIN_BYTES)) macAlive = true
+        // A verdict delayed into the next one's turn judges a window of a few
+        // milliseconds, in which a Mac pinging every 20ms can say nothing: such
+        // a window proves nothing, so it keeps counting into the next one.
+        const now = Date.now()
+        if (!macAlive && now - windowAt < beatMs) return
+        windowAt = now
+        fromMacAtBeat = heard
+        takenAtBeat = taken
+        // Said as itself in the log (a terminate alone logs as "mac", the Mac's own close).
+        if (!macAlive && !stalled) { closeBoth('mac-silent'); ws.terminate(); return }
         macAlive = false
         try { ws.ping() } catch { /* closing */ }
         // Off means off for an open tunnel too, not just the next dial: the
@@ -240,14 +290,13 @@ export async function handleDaemonTunnelUpgrade(
         // So is a revoked or rotated credential, even one revoked by another
         // process (the `walnut device` CLI), which the revoke listener misses.
         void stillValid().then((ok) => { if (!ok) closeBoth('credential_revoked', TUNNEL_CLOSE_REVOKED) }, () => {})
-      }, deps.heartbeatMs ?? MAC_PING_INTERVAL_MS)
-      heartbeat.unref?.()
+      }
 
       let closed = false
       const closeBoth = (why: string, code = 1001) => {
         if (closed) return
         closed = true
-        clearInterval(heartbeat)
+        stopHeartbeat()
         liveTunnels.delete(pair)
         log.ws.info('daemon tunnel closed', { why, tunnels: liveTunnels.size })
         // Only the sockets end. The daemon and every CLI it runs stay up, so

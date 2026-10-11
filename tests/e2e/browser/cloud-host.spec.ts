@@ -12,6 +12,8 @@
  *      carries terminal: false).
  *   6. The operator turns cloud.exec off: the real Cloud card names it with
  *      ONE details toggle, and Retry after turning it back on reconnects.
+ *   7. Settings › Phones & Cloud lists the other Mac on the companion as a Mac
+ *      (no phone wording, no Show QR), and this Mac reported itself as one.
  *
  * page.goto only loads the app; everything after is a real click or keystroke.
  * Screenshots are cropped to the picker / the column. CLOUD_HOST_SHOTS picks
@@ -30,10 +32,10 @@ const PORT = Number(process.env.PW_TEST_PORT ?? 3466)
 test.describe.configure({ mode: 'serial' })
 
 /** The fixture's port-keyed file (cloud-host-server.ts). */
-async function fixture(): Promise<{ projects: string; boxConfig: string }> {
+async function fixture(): Promise<{ projects: string; boxConfig: string; boxAuth: string }> {
   const file = path.join(os.tmpdir(), `walnut-cloudhost-pw-${PORT}.json`)
   for (let i = 0; i < 120 && !fs.existsSync(file); i++) await new Promise((r) => setTimeout(r, 250))
-  return JSON.parse(fs.readFileSync(file, 'utf-8')) as { projects: string; boxConfig: string }
+  return JSON.parse(fs.readFileSync(file, 'utf-8')) as { projects: string; boxConfig: string; boxAuth: string }
 }
 /** The box's folders (the replica's projects root). */
 async function projectsDir(): Promise<string> {
@@ -65,8 +67,13 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   await tab.click()
   await expect(tab).toHaveClass(/active/)
   const input = picker(page).locator('.sps-search-input')
-  await input.fill(`${projects}/`)
   const rows = picker(page).locator('.sps-path-item')
+  // Let the box's home list first (its `projects` folder). Typing before that
+  // answer landed raced once in Chromium: the listing asked for the home with
+  // the typed path appended to it, and the folders never showed.
+  await expect(rows.filter({ hasText: 'projects' }).first()).toBeVisible({ timeout: 90_000 })
+  await input.fill(`${projects}/`)
+  await expect(input).toHaveValue(`${projects}/`)
   await expect(rows.filter({ hasText: 'alpha' }).first()).toBeVisible({ timeout: 90_000 })
   await expect(rows.filter({ hasText: 'beta' }).first()).toBeVisible()
   await picker(page).screenshot({ path: path.join(SHOTS, `picker-cloud-folders-${browserName}.png`) })
@@ -113,6 +120,22 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   // Cloud) and checks every streamed message is in it; a miss shows a toast.
   await page.waitForTimeout(17_000)
   await expect(page.getByText('Some session output may not have been saved')).toHaveCount(0)
+
+  // 4b. The host is "Cloud" in words everywhere, never its alias: the column,
+  // and the session finder (it showed "__cloudbox__ · projects/alpha").
+  await expect(column).not.toContainText(CLOUD)
+  // ⌘⇧O is ignored while typing (the composer has the focus after a send).
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('ControlOrMeta+Shift+O')
+  const finder = page.locator('.session-search-panel')
+  await expect(finder).toBeVisible({ timeout: 15_000 })
+  await finder.locator('.session-search-input').fill('alpha')
+  const hit = finder.locator('.session-search-result').filter({ hasText: 'projects/alpha' }).first()
+  await expect(hit).toBeVisible({ timeout: 30_000 })
+  await expect(hit.locator('.session-search-meta')).toContainText('Cloud · ')
+  await expect(finder).not.toContainText(CLOUD)
+  await finder.screenshot({ path: path.join(SHOTS, `session-finder-cloud-${browserName}.png`) })
+  await page.keyboard.press('Escape')
   expect(errors).toEqual([])
 })
 
@@ -164,4 +187,37 @@ test('hosting turned off on the box: the Cloud card says so with ONE details tog
     const s = await (await page.request.get('/api/hosts/status')).json() as { hosts: Array<{ host: string; connected: boolean }> }
     return s.hosts.find((h) => h.host === CLOUD)?.connected
   }, { timeout: 60_000 }).toBe(true)
+})
+
+test('Phones & Cloud lists the other Mac as a Mac, and this Mac told the companion it is one', async ({ page, browserName }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  const { boxAuth } = await fixture()
+  // This Mac reported itself at its first status probe (cloud-box-probe.ts reportSelfAsMac).
+  await expect.poll(() => {
+    const devices = (JSON.parse(fs.readFileSync(boxAuth, 'utf-8')) as { devices: Array<{ name: string; info?: { model?: string } }> }).devices
+    return devices.find((d) => d.name === 'mac-primary')?.info?.model
+  }, { timeout: 60_000 }).toBe('Mac')
+
+  await loadHome(page)
+  await page.getByRole('link', { name: /settings/i }).first().click()
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await page.getByTestId('settings-nav-devices').click()
+  const section = page.locator('#devices')
+  const macs = section.getByTestId('devices-macs')
+  const second = macs.locator('.devices-row[data-device-name="mac-second"]')
+  await expect(second).toBeVisible({ timeout: 30_000 })
+  await expect(second).toHaveAttribute('data-device-role', 'mac')
+  await expect(macs).toContainText('Other Macs')
+  await expect(second).not.toContainText('phone')
+  await expect(second.getByTestId('devices-show-qr')).toHaveCount(0)
+  await expect(second.getByTestId('devices-remove')).toHaveCount(1)
+  // A real phone stays a phone, with its QR.
+  const phone = section.locator('.devices-row[data-device-name="my-phone"]')
+  await expect(phone).toHaveAttribute('data-device-role', 'phone')
+  await expect(phone.getByTestId('devices-show-qr')).toHaveCount(1)
+  await expect(section.locator('.devices-row[data-device-name="mac-second"]')).toHaveCount(1)
+  await macs.scrollIntoViewIfNeeded()
+  await macs.screenshot({ path: path.join(SHOTS, `devices-other-macs-owner-${browserName}.png`) })
+  expect(errors).toEqual([])
 })

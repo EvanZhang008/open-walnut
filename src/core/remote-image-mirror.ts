@@ -197,32 +197,39 @@ export function backfillMirrorSidecar(mirrorPath: string, host: string, remotePa
   writeMirrorSidecar(mirrorPath, { host, remotePath, remoteMtimeMs: 0, remoteSize: -1 })
 }
 
-async function statRemote(host: string, remotePath: string): Promise<{ mtimeMs: number; size: number } | null> {
+type HostDaemon = Awaited<ReturnType<typeof import('../providers/daemon-connection.js').getDaemonConnection>>
+
+/**
+ * `work` on `host`'s daemon within the host-read deadline (hosts/remote-read-bound.ts):
+ * nothing while the host is connecting, at most 5s on a dial this request starts,
+ * and a connected link that stopped answering is noticed in seconds. An <img>
+ * load is not bound by any client timeout, so before this every image of a page
+ * held one of the browser's six connections for DOWNLOAD_TIMEOUT_MS (10s) even
+ * while the pool was mid-dial. Null when the host is not configured; a throw
+ * (HostReconnectingError, a transport failure) is "could not ask" to the callers.
+ */
+async function onHostDaemon<T>(host: string, work: (conn: HostDaemon) => Promise<T>): Promise<T | null> {
   const { getDaemonConnection } = await import('../providers/daemon-connection.js')
   const { getConfig } = await import('./config-manager.js')
   const config = await getConfig()
   const hostDef = config.hosts?.[host]
   if (!hostDef?.hostname) return null
-  const conn = await getDaemonConnection(host, {
+  const { boundHostRead } = await import('./hosts/remote-read-bound.js')
+  return boundHostRead(host, async () => work(await getDaemonConnection(host, {
     hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port,
-  })
-  const result = await conn.send('fs.stat', { path: remotePath })
-  if (!result.ok) return null // old daemon / transient — caller serves cached
+  })))
+}
+
+async function statRemote(host: string, remotePath: string): Promise<{ mtimeMs: number; size: number } | null> {
+  const result = await onHostDaemon(host, (conn) => conn.send('fs.stat', { path: remotePath }))
+  if (!result?.ok) return null // old daemon / transient: caller serves cached
   if (!result.exists) return null // remote deleted — keep serving the mirror
   return { mtimeMs: result.mtimeMs as number, size: result.size as number }
 }
 
 async function fetchRemoteBytes(host: string, remotePath: string): Promise<Buffer | null> {
-  const { getDaemonConnection } = await import('../providers/daemon-connection.js')
-  const { getConfig } = await import('./config-manager.js')
-  const config = await getConfig()
-  const hostDef = config.hosts?.[host]
-  if (!hostDef?.hostname) return null
-  const conn = await getDaemonConnection(host, {
-    hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port,
-  })
-  const result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' })
-  if (!result.ok || typeof result.data !== 'string') return null
+  const result = await onHostDaemon(host, (conn) => conn.send('fs.read', { path: remotePath, encoding: 'base64' }))
+  if (!result?.ok || typeof result.data !== 'string') return null
   return Buffer.from(result.data, 'base64')
 }
 
@@ -387,15 +394,8 @@ async function readRemoteBytes(
   host: string,
   remotePath: string,
 ): Promise<{ bytes: Buffer } | { missing: true } | { unreachable: true }> {
-  const { getDaemonConnection } = await import('../providers/daemon-connection.js')
-  const { getConfig } = await import('./config-manager.js')
-  const config = await getConfig()
-  const hostDef = config.hosts?.[host]
-  if (!hostDef?.hostname) return { unreachable: true }
-  const conn = await getDaemonConnection(host, {
-    hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port,
-  })
-  const result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' })
+  const result = await onHostDaemon(host, (conn) => conn.send('fs.read', { path: remotePath, encoding: 'base64' }))
+  if (!result) return { unreachable: true }
   if (result.ok && typeof result.data === 'string') return { bytes: Buffer.from(result.data, 'base64') }
   return isNotFoundReply(result) ? { missing: true } : { unreachable: true }
 }

@@ -523,7 +523,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error, stale, loadingFrom, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
   // Where each gap inside the loaded rows sits: the index of the row after it.
   const gapAt = useMemo(() => {
     const at = new Map<number, HistoryGap>();
@@ -1476,6 +1476,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           log.warn('session', 'pin jump: target row did not render', { sessionId, msgId, index });
           return;
         }
+        // Leave the bottom again as the jump scrolls, as the reader's own input. Between
+        // the jump and this frame, the scroll event of the write that kept the place as
+        // the page came in (its useLayoutEffect above) can land after that write's 100 ms
+        // quiet window, read "at the bottom" and turn following back on; the scroll
+        // handler's echo guard then put the jump's first scroll frame back at the bottom,
+        // so the row never showed (whale-history.spec.ts:309 on a loaded machine, main
+        // included).
+        isAtBottom.current = false;
+        lastUserInput.current = Date.now();
         if (quote) {
           // The row may have just been revealed by the window expansion above, so
           // its paint doesn't exist yet — re-derive before asking for the Range.
@@ -3572,18 +3581,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {/* Degraded connectivity: content below is the last-good parse; the
             live read (SSH/daemon) is failing. Auto-clears on next healthy fetch. */}
-        {stale && !error && (
+        {/* The host is still sending this history (slow, but answering): what
+            is shown stays, and the content swaps in once the read is in. */}
+        {loadingFrom && !error && (
+          <div className="session-history-loading-line" role="status">
+            Still loading this conversation from {loadingFrom}…
+          </div>
+        )}
+        {stale && !error && !loadingFrom && (
           <div className="session-history-stale-banner" role="status">
             Showing cached history — live connection unavailable ({stale}). Reconnecting…
           </div>
         )}
-        {!error && !hasContent && !loading && !phase2Pending && (
+        {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && (
           <div className="session-history-empty">
             <p className="text-muted">No conversation history found</p>
           </div>
         )}
         {/* Show a subtle loading indicator when Phase 2 (SSH) is still fetching */}
-        {!hasContent && !loading && phase2Pending && (
+        {!hasContent && !loading && phase2Pending && !loadingFrom && (
           <div className="session-history-empty">
             <p className="text-muted">Loading remote session...</p>
           </div>

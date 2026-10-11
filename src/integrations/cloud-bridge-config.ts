@@ -11,6 +11,14 @@
  * kind:'machine' — the hash lands directly in the CLOUD box's auth.json.
  * The plaintext comes back once and is cached under sync/ (gitignored by
  * the `sync/*.json` rule) so reconnects don't re-mint.
+ *
+ * Only the companion's owner may mint (core/machine-credentials.ts): the Mac
+ * that claimed it. A companion from before owners were recorded learns that
+ * this Mac is it from the first `bridge-local` token, which only this Mac's
+ * own daemon ever held: every request that needs ownership carries it
+ * (machineProofHeaders), and once per start it is offered on its own
+ * (adoptOnce), so the console's cloud relay and a lost token cache keep
+ * working after the companion upgrades.
  */
 
 import fs from 'node:fs/promises'
@@ -18,6 +26,7 @@ import path from 'node:path'
 import { WALNUT_HOME, CLOUD_MODE } from '../constants.js'
 import { getCloudRemoteCredentialsAsync } from './git-sync.js'
 import { getConfig } from '../core/config-manager.js'
+import { MACHINE_PROOF_HEADER } from '../core/device-actor.js'
 import { log } from '../logging/index.js'
 
 export interface BridgeConfigPayload {
@@ -50,6 +59,18 @@ async function writeTokenCache(cache: Record<string, string>): Promise<void> {
   await fs.writeFile(file, JSON.stringify(cache, null, 2), { mode: 0o600 })
 }
 
+const PRIMARY_DEVICE_NAME = bridgeDeviceName('__local__')
+
+/**
+ * The header proving this Mac holds its first `bridge-local` token, for a
+ * request to the companion that needs its owner (a mint, a re-pair, a
+ * removal). Empty when this Mac has none cached.
+ */
+export async function machineProofHeaders(): Promise<Record<string, string>> {
+  const local = (await readTokenCache())[PRIMARY_DEVICE_NAME]
+  return local ? { [MACHINE_PROOF_HEADER]: local } : {}
+}
+
 const mintsInFlight = new Map<string, Promise<string | null>>()
 
 /**
@@ -73,46 +94,55 @@ async function ensureMachineToken(
   return mint
 }
 
-/**
- * Names whose last mint the companion refused because another Mac holds its
- * machine credentials (409 other_mac_connected, core/machine-credentials.ts).
- * Cleared by the next successful mint.
- */
-const mintConflicts = new Set<string>()
+type MintRefusal = { status: number; code?: string; error?: string }
 
-/** Did the companion refuse this host's machine token because another Mac is connected? */
+/**
+ * Names whose last mint the companion refused by its ownership rules (403 or
+ * 409, core/machine-credentials.ts), with its code and sentence. Cleared by the
+ * next successful mint.
+ */
+const mintRefusals = new Map<string, MintRefusal>()
+
+/** Why the companion last refused this host's machine token (its code and its sentence), if it did. */
+export function machineTokenRefusal(hostAlias: string): MintRefusal | undefined {
+  return mintRefusals.get(bridgeDeviceName(hostAlias))
+}
+
+/** Did the companion refuse this host's machine token because it belongs to another Mac? */
 export function machineTokenConflict(hostAlias: string): boolean {
-  return mintConflicts.has(bridgeDeviceName(hostAlias))
+  const code = machineTokenRefusal(hostAlias)?.code
+  return code === 'other_mac_connected' || code === 'not_companion_owner'
 }
 
 /** Names already offered for adoption by this process (once per start is enough). */
 const adoptionsSent = new Set<string>()
 
 /**
- * Tokens minted before the companion recorded ownership have no owner there:
- * claim them, with this Mac's own `bridge-local` token as proof (the only one
- * the companion accepts: a remote host's daemon holds its own token), so a
- * lost cache later re-mints as the owner. One call adopts them all.
- * Best-effort and once per start; a companion without the route answers 404,
- * which changes nothing.
+ * Offer the first bridge-local token as proof that this Mac is the companion's
+ * owner, once per start. Best-effort: a companion without the route answers
+ * 404, a companion that already knows answers 'owned', and either changes
+ * nothing.
  */
 function adoptOnce(localToken: string | undefined, cloud: { domain: string; token: string; secure: boolean }): void {
-  const deviceName = bridgeDeviceName('__local__')
-  if (!localToken || adoptionsSent.has(deviceName)) return
-  adoptionsSent.add(deviceName)
+  if (!localToken || adoptionsSent.has(PRIMARY_DEVICE_NAME)) return
+  adoptionsSent.add(PRIMARY_DEVICE_NAME)
   const base = `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`
-  void import('../core/machine-credentials.js').then(({ MACHINE_PROOF_HEADER }) => fetch(`${base}/api/devices/${encodeURIComponent(deviceName)}/adopt`, {
+  void fetch(`${base}/api/devices/${encodeURIComponent(PRIMARY_DEVICE_NAME)}/adopt`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${cloud.token}`, [MACHINE_PROOF_HEADER]: localToken },
     signal: AbortSignal.timeout(10_000),
-  })).then(async (res) => {
-    if (res.status === 200) {
-      const body = await res.json().catch(() => ({})) as { outcome?: string }
-      if (body.outcome === 'adopted') log.session.info('bridge: machine token ownership recorded on the companion', { deviceName })
-    } else if (res.status === 409) {
-      log.session.warn('bridge: the companion says another Mac holds its machine credentials', { deviceName })
-    }
+  }).then(async (res) => {
+    const body = await res.json().catch(() => ({})) as { outcome?: string; error?: string }
+    if (res.status === 200 && body.outcome === 'adopted') log.session.info('bridge: the companion recorded this Mac as its owner', { deviceName: PRIMARY_DEVICE_NAME })
+    else if (res.status === 403 || res.status === 409) log.session.warn('bridge: the companion did not take this Mac as its owner', { status: res.status, error: body.error })
   }).catch(() => { /* offline or an older companion: try again next start */ })
+}
+
+/** A refusal by the companion's ownership rules (not a network or server failure), read from its answer. */
+async function ownershipRefusal(res: Response): Promise<MintRefusal | null> {
+  if (res.status !== 403 && res.status !== 409) return null
+  const body = await res.clone().json().catch(() => ({})) as { code?: string; error?: string }
+  return { status: res.status, code: body.code, error: body.error }
 }
 
 async function mintMachineToken(
@@ -123,7 +153,7 @@ async function mintMachineToken(
 ): Promise<string | null> {
   const cache = await readTokenCache()
   if (cache[deviceName]) {
-    adoptOnce(cache[bridgeDeviceName('__local__')], cloud)
+    adoptOnce(cache[PRIMARY_DEVICE_NAME], cloud)
     return cache[deviceName]
   }
   // A token the companion refused was dropped moments ago and the one re-mint
@@ -135,10 +165,9 @@ async function mintMachineToken(
   if (opts.remint) lastRemintAt.set(deviceName, Date.now())
 
   const base = `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`
-  // Proof that this Mac is the one the companion's older, unowned machine
-  // credentials belong to: its own bridge-local token, the only one that counts.
-  const { MACHINE_PROOF_HEADER } = await import('../core/machine-credentials.js')
-  const proof = cache[bridgeDeviceName('__local__')]
+  // Proof that this Mac is the companion's owner, for a companion from before
+  // owners were recorded: its own first bridge-local token, the only one that counts.
+  const proof = cache[PRIMARY_DEVICE_NAME]
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${cloud.token}`,
@@ -150,12 +179,6 @@ async function mintMachineToken(
     body: JSON.stringify({ name: deviceName, kind: 'machine' }),
     signal: AbortSignal.timeout(10_000),
   })
-  const refusedAsOtherMac = async (res: Response): Promise<boolean> => {
-    if (res.status !== 409) return false
-    const body = await res.clone().json().catch(() => ({})) as { code?: string }
-    return body.code === 'other_mac_connected'
-  }
-
   try {
     let res = await create()
     if (res.status === 400) {
@@ -163,16 +186,17 @@ async function mintMachineToken(
       if (typeof body.error === 'string' && body.error.includes('already exists')) {
         // Cloud has the device but we lost the plaintext (cache wiped / new
         // Mac). Tokens are unrecoverable by design, so revoke and re-mint. The
-        // companion allows that only to the Mac that owns it (409 otherwise).
+        // companion allows that only to its owner, so a refusal ends it here.
         const del = await fetch(`${base}/api/devices/${encodeURIComponent(deviceName)}`, {
           method: 'DELETE', headers, signal: AbortSignal.timeout(10_000),
         })
-        res = await refusedAsOtherMac(del) ? del : await create()
+        res = await ownershipRefusal(del) ? del : await create()
       }
     }
-    if (await refusedAsOtherMac(res)) {
-      mintConflicts.add(deviceName)
-      log.session.warn('bridge: the companion serves another Mac; no machine token for this one', { hostAlias, deviceName })
+    const refused = await ownershipRefusal(res)
+    if (refused) {
+      mintRefusals.set(deviceName, refused)
+      log.session.warn('bridge: the companion refused a machine token for this Mac', { hostAlias, deviceName, status: refused.status, code: refused.code, error: refused.error })
       return null
     }
     if (res.status !== 201) {
@@ -182,7 +206,7 @@ async function mintMachineToken(
     const { token } = await res.json() as { token: string }
     cache[deviceName] = token
     await writeTokenCache(cache)
-    mintConflicts.delete(deviceName)
+    mintRefusals.delete(deviceName)
     log.session.info('bridge: machine token minted', { hostAlias, deviceName })
     return token
   } catch (err) {
@@ -210,7 +234,7 @@ function remintBlocked(deviceName: string): boolean {
 /** Is this host's machine token held back by the re-mint window (its dead token already dropped)? */
 export function machineTokenAwaitsRetry(hostAlias: string): boolean {
   const deviceName = bridgeDeviceName(hostAlias)
-  return remintBlocked(deviceName) && !mintConflicts.has(deviceName)
+  return remintBlocked(deviceName) && !mintRefusals.has(deviceName)
 }
 
 /** A person pressed Retry: the next mint for this host runs now, whatever the window says. */
@@ -221,10 +245,10 @@ export function allowNextRemint(hostAlias: string): void {
 /**
  * The companion refused `deadToken` (401 on the tunnel or the bridge): drop it
  * from the cache and mint a fresh one, once. 'reminted' = the cache now holds a
- * different token (this call's, or a concurrent caller's); 'conflict' = another
- * Mac holds this companion's machine credentials; 'failed' = anything else
- * (the window's one re-mint is spent, the mint failed), and the caller keeps
- * its own error.
+ * different token (this call's, or a concurrent caller's); 'conflict' = the
+ * companion belongs to another Mac; 'failed' = anything else (the window's one
+ * re-mint is spent, the mint failed or was refused for another reason, which
+ * machineTokenRefusal names), and the caller keeps its own error.
  */
 export async function recoverMachineToken(
   hostAlias: string,
@@ -246,7 +270,7 @@ export async function recoverMachineToken(
   log.session.warn('bridge: the companion no longer accepts this machine token, minting a new one', { hostAlias, deviceName })
   const token = await ensureMachineToken(hostAlias, cloud, { remint: true })
   if (token) return 'reminted'
-  return mintConflicts.has(deviceName) ? 'conflict' : 'failed'
+  return machineTokenConflict(hostAlias) ? 'conflict' : 'failed'
 }
 
 /**
@@ -306,11 +330,11 @@ export async function revalidateBridgeToken(hostAlias: string): Promise<boolean>
   return (await recoverMachineToken(hostAlias, token, cloud)) === 'reminted'
 }
 
-/** Test seam: forget the per-process rate limits and conflicts. */
+/** Test seam: forget the per-process rate limits, refusals and adoption offers. */
 export function resetMachineTokenStateForTest(): void {
   lastRemintAt.clear()
   lastTokenProbeAt.clear()
-  mintConflicts.clear()
+  mintRefusals.clear()
   adoptionsSent.clear()
 }
 

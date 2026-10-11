@@ -293,8 +293,18 @@ describe('an open tunnel', () => {
   /** Per-dial overrides, keyed by the bearer the test dials with. */
   const DEPS: Record<string, Partial<TunnelDeps>> = {
     primary: { heartbeatMs: 50 },
+    // A tunnel that must STAY open: four times the beat, so a loaded runner's
+    // jitter (tens of ms) is not two beats of silence (2026-10-02 gate: 2 of 4
+    // runs failed on 50ms beats). The drop cases keep 50ms: late is fine there.
+    steady: { heartbeatMs: 200 },
     'slow-heartbeat': { heartbeatMs: 60_000 },
+    // Beats run by the test itself (manualBeat), so a verdict's timing is exact.
+    manual: { heartbeatMs: 1_000, every: (beat) => { manualBeat = beat; return () => { manualBeat = null } } },
   }
+  /** A daemon that streams frames at the Mac the moment it connects (a big reply on its way down). */
+  let streamer: WebSocketServer
+  /** The 'manual' tunnel's heartbeat, run by the test. */
+  let manualBeat: (() => void) | null = null
 
   beforeAll(async () => {
     // The "daemon": echoes every frame, the way a reply comes back on the real one.
@@ -302,6 +312,14 @@ describe('an open tunnel', () => {
     daemon.on('connection', (s) => s.on('message', (d, isBinary) => s.send(d, { binary: isBinary })))
     await new Promise<void>((resolve) => daemon.once('listening', () => resolve()))
     const daemonUrl = `ws://127.0.0.1:${(daemon.address() as { port: number }).port}`
+    streamer = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+    streamer.on('connection', (s) => {
+      const chunk = Buffer.alloc(8 * 1024, 7)
+      const t = setInterval(() => { if (s.readyState === WebSocket.OPEN) s.send(chunk) }, 20)
+      s.on('close', () => clearInterval(t))
+    })
+    await new Promise<void>((resolve) => streamer.once('listening', () => resolve()))
+    DEPS.streaming = { heartbeatMs: 200, ensureDaemon: async () => `ws://127.0.0.1:${(streamer.address() as { port: number }).port}` }
     server = http.createServer()
     server.on('upgrade', (req, socket, head) => {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? ''
@@ -320,10 +338,12 @@ describe('an open tunnel', () => {
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     await new Promise<void>((resolve) => daemon.close(() => resolve()))
+    for (const c of streamer.clients) c.terminate()
+    await new Promise<void>((resolve) => streamer.close(() => resolve()))
   })
 
-  async function open(token: string): Promise<WebSocket> {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/daemon-tunnel`, { headers: { Authorization: `Bearer ${token}` } })
+  async function open(token: string, opts: { autoPong?: boolean } = {}): Promise<WebSocket> {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/daemon-tunnel`, { headers: { Authorization: `Bearer ${token}` }, ...opts })
     await new Promise<void>((resolve, reject) => { ws.once('open', () => resolve()); ws.once('error', reject) })
     return ws
   }
@@ -342,8 +362,8 @@ describe('an open tunnel', () => {
   })
 
   it('a credential revoked by another process closes its tunnel within one heartbeat', async () => {
-    const ws = await open('primary')
-    await new Promise((r) => setTimeout(r, 200))
+    const ws = await open('steady')
+    await new Promise((r) => setTimeout(r, 500)) // two beats, answered
     expect(ws.readyState).toBe(WebSocket.OPEN)
     const closed = new Promise<number>((resolve) => ws.once('close', (code) => resolve(code)))
     valid = false
@@ -352,14 +372,106 @@ describe('an open tunnel', () => {
     } finally { valid = true }
   })
 
+  // The heartbeat judges PROGRESS: under a big download the replica's ping waits
+  // behind the data on the way down, so "no pong" alone dropped busy tunnels.
+  it('a Mac that answers no ping but keeps talking (its own pings) is alive', async () => {
+    const ws = await open('steady', { autoPong: false })
+    const talk = setInterval(() => { try { ws.ping() } catch { /* closing */ } }, 20)
+    try {
+      await new Promise((r) => setTimeout(r, 1_100)) // five heartbeats
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      clearInterval(talk)
+      ws.terminate()
+    }
+  })
+
+  // A loaded runner delays one verdict into the next one's turn (2026-10-02
+  // gate: 2 failures in 4 runs); the window between the two is then a few ms,
+  // in which a Mac that talks every 20ms can have said nothing.
+  // The same for a beat that itself runs more than two beats late: this process
+  // was stalled, and what the Mac sent may be sitting unread.
+  it('a verdict right after the last one, or one that runs late, judges nothing; a full window of silence still drops the Mac', async () => {
+    const ws = await open('manual', { autoPong: false })
+    const closed = new Promise<void>((resolve) => ws.once('close', () => resolve()))
+    // A beat, then what it reads: two turns of the loop, plus one for a close to land.
+    const tick = async () => {
+      manualBeat?.()
+      for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
+    }
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    try {
+      await tick() // the first window counts the open: alive
+      ws.ping() // the Mac says something
+      await sleep(50)
+      await tick() // heard: alive, and a new window begins
+      await tick() // at once, nothing said since: too short a window to judge
+      await sleep(50)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+      await sleep(2_100) // the next beat comes more than two beats (2s) late: stalled
+      await tick()
+      await sleep(50)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+      await sleep(1_100) // a whole beat of silence, on time
+      await tick()
+      await closed
+    } finally {
+      ws.terminate()
+    }
+  })
+
+  it('a Mac that takes the bytes sent down to it is alive, pong or not', async () => {
+    const ws = await open('streaming', { autoPong: false })
+    let received = 0
+    ws.on('message', (d) => { received += (d as Buffer).length })
+    try {
+      await new Promise((r) => setTimeout(r, 900)) // four heartbeats
+      expect(received).toBeGreaterThan(64 * 1024)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      ws.terminate()
+    }
+  })
+
+  it('a Mac that says nothing, takes nothing and answers no ping is dropped by the heartbeat', async () => {
+    const ws = await open('primary', { autoPong: false })
+    const t0 = Date.now()
+    await new Promise<void>((resolve) => ws.once('close', () => resolve()))
+    // Two 50ms beats when the loop is free; a loaded runner delays it, never by
+    // anything near the next bound (a 60s heartbeat).
+    expect(Date.now() - t0).toBeLessThan(5_000)
+  })
+
+  // End to end, on real timers: the beat right after a stall fires before the
+  // Mac's pong is read, and the tunnel stays. (The rule itself, a late beat
+  // judges nothing, is pinned with exact timing by the manual-beat test above.)
+  it('a Mac whose pong waits while this whole process is stalled stays up', async () => {
+    const ws = await open('steady')
+    let stalledMs = 0
+    // The next ping finds this whole process busy for 600ms (three beats): the
+    // Mac's pong is sent, and the replica's next beat fires before it is read.
+    ws.once('ping', () => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < 600) { /* a stall, on purpose */ }
+      stalledMs = Date.now() - t0
+    })
+    try {
+      await new Promise((r) => setTimeout(r, 1_300))
+      expect(stalledMs).toBeGreaterThanOrEqual(600)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      ws.terminate()
+    }
+  })
+
   it('pipes frames both ways, and closes when hosting is turned off while it is open', async () => {
-    const ws = await open('primary')
+    const ws = await open('steady')
     const echoed = new Promise<string>((resolve) => ws.once('message', (d) => resolve(d.toString())))
     ws.send(JSON.stringify({ type: 'hello' }))
     expect(await echoed).toBe('{"type":"hello"}')
 
-    // Several heartbeats pass with hosting on: the tunnel stays up.
-    await new Promise((r) => setTimeout(r, 300))
+    // Heartbeats pass with hosting on: the tunnel stays up.
+    await new Promise((r) => setTimeout(r, 500))
     expect(ws.readyState).toBe(WebSocket.OPEN)
 
     const closed = new Promise<number>((resolve) => ws.once('close', (code) => resolve(code)))

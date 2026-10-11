@@ -1,11 +1,15 @@
 /**
  * Who may mint, rotate, revoke and adopt a machine credential on the companion
- * (core/machine-credentials.ts): one companion serves one Mac.
+ * (core/machine-credentials.ts): with an owner recorded, that owner only; with
+ * none recorded, the rules of the builds before owners were recorded, and the
+ * device that succeeds is recorded then. Never an owner guessed from which
+ * record is oldest (2026-10-05 gate: on a companion where the Mac was not the
+ * oldest record, a guess handed it to a laptop and locked the Mac out).
  *
- * The caller is the record its bearer token authenticates as (never a name),
- * and ownership is the owner's immutable id. Runs against a real auth.json in a
- * throwaway data dir, through the same locked read-modify-write the routes use;
- * the pure decision is pinned first.
+ * The caller is the record its bearer token authenticates as (never a name).
+ * Runs against a real auth.json in a throwaway data dir, through the same
+ * locked read-modify-write the routes use; the pure decision is pinned first,
+ * with the sentence each kind of caller hears.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -13,19 +17,18 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
-vi.mock('../../src/constants.js', () => createMockConstants('walnut-machine-creds'))
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-machine-creds', { CLOUD_MODE: true }))
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import {
-  _resetDeviceAuthForTesting, createDevice, listDeviceRecords, onCredentialsRevoked, revokeDevice, rotateDevice, setDeviceInfo, verifyDeviceToken,
-  type DeviceRecord,
+  _resetDeviceAuthForTesting, createDevice, listDeviceRecords, readDeviceRegistry, revokeDeviceAs, rotateDevice, setDeviceInfo, verifyDeviceToken,
+  type DeviceRecord, type DeviceRegistry,
 } from '../../src/core/device-auth.js'
 import {
-  MachineCredentialRefused, OTHER_MAC_CONNECTED, PRIMARY_MACHINE_CREDENTIAL, adoptMachineCredential, machineCredentialDaemonKey,
-  machineCredentialDecision, mintMachineCredential, revokeMachineCredential,
+  MachineCredentialRefused, OTHER_MAC_CONNECTED, PRIMARY_MACHINE_CREDENTIAL, adoptMachineCredential, machineCredentialDecision,
+  mintMachineCredential, revokeMachineCredential,
 } from '../../src/core/machine-credentials.js'
-import { isPhoneRecord, type DeviceActor } from '../../src/core/device-actor.js'
-import { CLOUD_BOX_OTHER_MAC_SENTENCE } from '../../src/core/hosts/cloud-box-host.js'
+import type { DeviceActor } from '../../src/core/device-actor.js'
 
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 const now = new Date().toISOString()
@@ -34,6 +37,7 @@ const device = (name: string, extra: Partial<DeviceRecord> = {}): DeviceRecord =
 const machine = (name: string, extra: Partial<DeviceRecord> = {}): DeviceRecord => device(name, { kind: 'machine', ...extra })
 /** The caller holding `<name>-token`. */
 const as = (name: string): DeviceActor => ({ token: `${name}-token` })
+const OWNER_ONLY = 'Only the Mac this cloud companion belongs to can connect computers to it.'
 
 async function refusal(p: Promise<unknown>): Promise<{ status: number; code: string; message: string }> {
   try { await p } catch (err) {
@@ -43,91 +47,104 @@ async function refusal(p: Promise<unknown>): Promise<{ status: number; code: str
   throw new Error('expected a refusal')
 }
 
-async function writeAuth(devices: DeviceRecord[]): Promise<void> {
-  await fs.mkdir(WALNUT_HOME, { recursive: true })
-  await fs.writeFile(path.join(WALNUT_HOME, 'auth.json'), JSON.stringify({ devices }), { mode: 0o600 })
-  _resetDeviceAuthForTesting()
-}
-
 const record = async (name: string) => (await listDeviceRecords()).find((d) => d.name === name)
 
 describe('machineCredentialDecision (pure)', () => {
-  const macA = device('mac-a')
-  const macB = device('mac-b')
-  const phone = device('my-phone', { platform: 'ios', info: { model: 'iPhone17,1', os: 'iOS 26.1' } })
+  const macA = device('mac-a', { platform: 'other' })
+  const macB = device('mac-b', { platform: 'other' })
+  const tablet = device('tablet-new')
+  const phone = device('my-phone', { platform: 'ios' })
+  const owned = (owner: DeviceRecord | null, extra: DeviceRecord[] = []): DeviceRegistry =>
+    ({ devices: [macA, macB, tablet, phone, ...extra], owner: owner ? { id: owner.id!, via: 'claim' } : null })
 
-  it('the answer a second Mac hears is the sentence its host card shows', () => {
-    expect(OTHER_MAC_CONNECTED).toBe(CLOUD_BOX_OTHER_MAC_SENTENCE)
+  it('the words a second Mac hears are the host card\'s (pinned)', () => {
     expect(OTHER_MAC_CONNECTED).toBe('Another Mac is connected to this cloud companion. Disconnect it there first.')
   })
 
-  it('a fresh companion: the first Mac may mint', () => {
-    expect(machineCredentialDecision([macA, macB], { by: as('mac-a'), name: 'bridge-local', action: 'mint' })).toMatchObject({ ok: true, me: macA, adopt: [] })
-  })
-
-  it.each(['mint', 'replace', 'revoke', 'adopt'] as const)('a device recorded as a phone may never %s', (action) => {
-    const devices = [macA, phone, machine('bridge-local', { ownerId: macA.id })]
-    expect(machineCredentialDecision(devices, { by: as('my-phone'), name: 'bridge-local', action })).toMatchObject({ ok: false, status: 403, code: 'phone_cannot_mint' })
-  })
-
-  it('what a phone reports about itself no longer decides it: the recorded platform does', () => {
-    // A phone that cleared its report, or reports a Mac, is still the phone it claimed to be.
-    for (const info of [undefined, { model: 'Mac15,3', os: 'macOS 26.0' }]) {
-      const spoofed = device('my-phone', { platform: 'ios', info })
-      expect(isPhoneRecord(spoofed)).toBe(true)
-      expect(machineCredentialDecision([macA, spoofed], { by: as('my-phone'), name: 'bridge-local', action: 'mint' })).toMatchObject({ ok: false, code: 'phone_cannot_mint' })
+  it('a recorded owner may mint, replace, revoke and adopt', () => {
+    for (const action of ['mint', 'replace', 'revoke', 'adopt'] as const) {
+      expect(machineCredentialDecision(owned(macA), { by: as('mac-a'), name: 'bridge-local', action })).toEqual({ ok: true, me: macA, adopt: [], record: null })
     }
   })
 
-  it('an API key, a machine token, an unknown token or a local caller may not mint either', () => {
-    const devices = [macA, machine('bridge-local', { ownerId: macA.id })]
+  it.each(['mint', 'replace', 'revoke', 'adopt'] as const)('with an owner recorded, everyone else may not %s, each told in its own words', (action) => {
+    const reg = owned(macA, [machine('bridge-local', { ownerId: macA.id })])
+    const d = (who: string) => machineCredentialDecision(reg, { by: as(who), name: 'bridge-local', action })
+    expect(d('mac-b')).toEqual({ ok: false, status: 409, code: 'other_mac_connected', error: OTHER_MAC_CONNECTED })
+    // A device that never said what it is (a tablet, for all the companion knows): not the other-Mac words.
+    expect(d('tablet-new')).toEqual({ ok: false, status: 409, code: 'not_companion_owner', error: OWNER_ONLY })
+    expect(d('my-phone')).toEqual({ ok: false, status: 403, code: 'phone_cannot_mint', error: OWNER_ONLY })
     for (const by of [{ apiKey: 'k' }, as('bridge-local'), as('nobody'), { local: true }] as DeviceActor[]) {
-      expect(machineCredentialDecision(devices, { by, name: 'bridge-local', action: 'mint' })).toMatchObject({ ok: false, status: 403, code: 'machine_needs_device' })
+      expect(machineCredentialDecision(reg, { by, name: 'bridge-local', action })).toEqual({ ok: false, status: 403, code: 'machine_needs_device', error: OWNER_ONLY })
     }
   })
 
-  it.each(['mint', 'replace', 'revoke'] as const)('while one Mac owns a credential, another may not %s any', (action) => {
-    const devices = [macA, macB, machine('bridge-local', { ownerId: macA.id, daemonKey: macA.id })]
-    for (const name of ['bridge-local', 'bridge-devbox']) {
-      expect(machineCredentialDecision(devices, { by: as('mac-b'), name, action })).toEqual({ ok: false, status: 409, code: 'other_mac_connected', error: OTHER_MAC_CONNECTED })
+  it('no sentence about machine credentials, and none said to a phone or tablet about another Mac', () => {
+    const reg = owned(macA)
+    for (const who of ['my-phone', 'tablet-new', 'mac-b']) {
+      const d = machineCredentialDecision(reg, { by: as(who), name: 'bridge-x', action: 'mint' })
+      if (d.ok) throw new Error('expected a refusal')
+      expect(d.error).not.toMatch(/machine credential|mint/i)
+      if (who !== 'mac-b') expect(d.error).not.toBe(OTHER_MAC_CONNECTED)
     }
-    // Even holding the credential's own token does not help: ownership is recorded.
-    expect(machineCredentialDecision(devices, { by: as('mac-b'), name: 'bridge-local', action, proof: 'bridge-local-token' })).toMatchObject({ ok: false, status: 409 })
-    expect(machineCredentialDecision(devices, { by: as('mac-a'), name: 'bridge-local', action })).toMatchObject({ ok: true, me: macA })
+  })
+
+  it('with none recorded and nothing minted: the first paired device that is not a phone may, and is recorded as the owner', () => {
+    for (const who of [macA, macB, tablet]) {
+      expect(machineCredentialDecision(owned(null), { by: as(who.name), name: 'bridge-local', action: 'mint' }))
+        .toEqual({ ok: true, me: who, adopt: [], record: { id: who.id, via: 'mint' } })
+    }
+    expect(machineCredentialDecision(owned(null), { by: as('my-phone'), name: 'bridge-local', action: 'mint' })).toMatchObject({ ok: false, status: 403, code: 'phone_cannot_mint' })
+    // Adopting needs something to adopt.
+    expect(machineCredentialDecision(owned(null), { by: as('mac-a'), name: 'bridge-local', action: 'adopt' })).toEqual({ ok: false, status: 409, code: 'other_mac_connected', error: OTHER_MAC_CONNECTED })
+  })
+
+  it('with none recorded, the device owning the credentials is the one that may; whoever else asks hears another Mac', () => {
+    const legacy = machine('bridge-devbox')
+    const reg = owned(null, [machine('bridge-local', { ownerId: macB.id }), legacy])
+    expect(machineCredentialDecision(reg, { by: as('mac-b'), name: 'bridge-new', action: 'mint' }))
+      .toEqual({ ok: true, me: macB, adopt: [legacy], record: { id: macB.id, via: 'mint' } })
+    for (const who of ['mac-a', 'tablet-new']) {
+      expect(machineCredentialDecision(reg, { by: as(who), name: 'bridge-new', action: 'mint' })).toEqual({ ok: false, status: 409, code: 'other_mac_connected', error: OTHER_MAC_CONNECTED })
+    }
   })
 
   it('ownership is the owner\'s id: a record that only shares the NAME owns nothing', () => {
-    // mac-a re-paired by someone else: same name, new id.
     const repaired = device('mac-a', { id: 'id-new-pairing', tokenHash: sha('stolen-token') })
-    const devices = [repaired, machine('bridge-local', { ownerId: 'id-mac-a', daemonKey: 'id-mac-a' })]
-    // The credential's owner is gone, so it is legacy, and the stolen pairing holds no proof.
-    expect(machineCredentialDecision(devices, { by: { token: 'stolen-token' }, name: 'bridge-local', action: 'replace' })).toMatchObject({ ok: false, status: 409 })
-    expect(machineCredentialDecision(devices, { by: { token: 'stolen-token' }, name: 'bridge-local', action: 'adopt' })).toMatchObject({ ok: false, status: 409 })
+    // The recorded owner and the credential's owner are the old pairing, which is gone.
+    const reg: DeviceRegistry = { devices: [repaired, machine('bridge-local', { ownerId: 'id-mac-a' })], owner: { id: 'id-mac-a', via: 'claim' } }
+    expect(machineCredentialDecision(reg, { by: { token: 'stolen-token' }, name: 'bridge-local', action: 'replace' })).toMatchObject({ ok: false, status: 409, code: 'other_mac_connected' })
   })
 
-  it('an owner whose pairing is gone owns nothing; with no bridge-local left, the next Mac mints', () => {
-    const devices = [macB, machine('bridge-devbox', { ownerId: 'id-gone' })]
-    expect(machineCredentialDecision(devices, { by: as('mac-b'), name: 'bridge-local', action: 'mint' })).toMatchObject({ ok: true, adopt: [] })
-    expect(machineCredentialDecision(devices, { by: as('mac-b'), name: 'bridge-devbox', action: 'adopt' })).toMatchObject({ ok: false, status: 409 })
-  })
-
-  it('credentials from before ownership: only the legacy bridge-local\'s own token proves anything', () => {
+  it('the unowned bridge-local\'s token proves the Mac while none is recorded; another credential\'s token proves nothing', () => {
     const local = machine(PRIMARY_MACHINE_CREDENTIAL)
     const devbox = machine('bridge-devbox')
-    const devices = [macA, macB, local, devbox]
-    for (const action of ['mint', 'replace', 'revoke', 'adopt'] as const) {
+    const legacy: DeviceRegistry = { devices: [macA, macB, local, devbox], owner: null }
+    for (const who of ['mac-a', 'mac-b']) {
       for (const proof of [undefined, 'forged', 'bridge-devbox-token']) {
-        expect(machineCredentialDecision(devices, { by: as('mac-b'), name: action === 'mint' ? 'bridge-new' : 'bridge-local', action, proof }), `${action} ${proof}`).toMatchObject({ ok: false, status: 409, code: 'other_mac_connected' })
+        expect(machineCredentialDecision(legacy, { by: as(who), name: 'bridge-local', action: 'mint', proof }), `${who} ${proof}`).toMatchObject({ ok: false, status: 409, code: 'other_mac_connected' })
       }
     }
-    // The first Mac, with bridge-local's token: every act works, and makes all of them its own.
-    for (const action of ['mint', 'replace', 'revoke', 'adopt'] as const) {
-      expect(machineCredentialDecision(devices, { by: as('mac-a'), name: action === 'mint' ? 'bridge-new' : 'bridge-local', action, proof: 'bridge-local-token' })).toEqual({ ok: true, me: macA, adopt: [local, devbox] })
+    // Wherever the other credential sits, and when bridge-local is gone, its token is still no proof.
+    expect(machineCredentialDecision({ ...legacy, devices: [macA, macB, devbox, local] }, { by: as('mac-b'), name: 'bridge-devbox', action: 'adopt', proof: 'bridge-devbox-token' }))
+      .toMatchObject({ ok: false, status: 409, code: 'other_mac_connected' })
+    expect(machineCredentialDecision({ ...legacy, devices: [macA, macB, devbox] }, { by: as('mac-b'), name: 'bridge-devbox', action: 'adopt', proof: 'bridge-devbox-token' }))
+      .toMatchObject({ ok: false, status: 409, code: 'other_mac_connected' })
+    expect(machineCredentialDecision(legacy, { by: as('mac-b'), name: 'bridge-local', action: 'adopt', proof: 'bridge-local-token' }))
+      .toEqual({ ok: true, me: macB, adopt: [local, devbox], record: { id: macB.id, via: 'proof' } })
+    // Never over a recorded owner, whatever recorded it; never for a phone.
+    for (const via of ['claim', 'operator', 'proof', 'mint'] as const) {
+      expect(machineCredentialDecision({ ...legacy, owner: { id: macA.id!, via } }, { by: as('mac-b'), name: 'bridge-local', action: 'adopt', proof: 'bridge-local-token' })).toMatchObject({ ok: false, status: 409 })
     }
+    expect(machineCredentialDecision({ ...legacy, devices: [...legacy.devices, phone] }, { by: as('my-phone'), name: 'bridge-local', action: 'adopt', proof: 'bridge-local-token' })).toMatchObject({ ok: false, status: 403 })
+    // A bridge-local that has a live owner is no proof either.
+    const stamped: DeviceRegistry = { devices: [macA, macB, machine(PRIMARY_MACHINE_CREDENTIAL, { ownerId: macA.id })], owner: null }
+    expect(machineCredentialDecision(stamped, { by: as('mac-b'), name: 'bridge-local', action: 'adopt', proof: 'bridge-local-token' })).toMatchObject({ ok: false, status: 409 })
   })
 
   it('a device name is never taken over as a machine credential', () => {
-    expect(machineCredentialDecision([macA, macB], { by: as('mac-a'), name: 'mac-b', action: 'replace' })).toMatchObject({ ok: false, status: 400, code: 'not_machine' })
+    expect(machineCredentialDecision(owned(macA), { by: as('mac-a'), name: 'mac-b', action: 'replace' })).toEqual({ ok: false, status: 400, code: 'not_machine', error: 'That name already belongs to a paired device.' })
+    expect(machineCredentialDecision(owned(null), { by: as('mac-a'), name: 'mac-b', action: 'replace' })).toEqual({ ok: false, status: 400, code: 'not_machine', error: 'That name already belongs to a paired device.' })
   })
 })
 
@@ -135,24 +152,29 @@ describe('minting, rotating and revoking on a real auth.json', () => {
   let tokens: Record<string, string>
   const by = (name: string): DeviceActor => ({ token: tokens[name] })
 
+  async function writeAuth(file: unknown): Promise<void> {
+    await fs.mkdir(WALNUT_HOME, { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'auth.json'), JSON.stringify(file), { mode: 0o600 })
+    _resetDeviceAuthForTesting()
+  }
+
   beforeEach(async () => {
-    await writeAuth([])
+    await writeAuth({ devices: [] })
     tokens = {}
-    for (const name of ['mac-a', 'mac-b', 'my-phone']) tokens[name] = (await createDevice(name)).token
+    tokens['mac-a'] = (await createDevice('mac-a', { owner: true })).token
+    for (const name of ['mac-b', 'my-phone']) tokens[name] = (await createDevice(name)).token
     await setDeviceInfo('my-phone', { model: 'iPhone17,1', os: 'iOS 26.1' })
+    await setDeviceInfo('mac-b', { model: 'Mac15,3', os: 'macOS 26.0' })
   })
 
-  it('the first Mac mints and owns it by id; its daemon is its own, recorded on the Mac too', async () => {
+  it('the owner mints; the credential carries its id', async () => {
     const minted = await mintMachineCredential('bridge-local', { by: by('mac-a') })
     expect(await verifyDeviceToken(minted.token)).toEqual({ name: 'bridge-local', kind: 'machine' })
     const mac = (await record('mac-a'))!
-    expect(mac.id).toMatch(/^d[0-9a-f]{16}$/)
-    expect(await record('bridge-local')).toMatchObject({ kind: 'machine', ownerId: mac.id, daemonKey: mac.id })
-    expect(mac.tunnelDaemon).toEqual({ key: mac.id })
-    expect(await machineCredentialDaemonKey('bridge-local')).toBe(mac.id)
+    expect(await record('bridge-local')).toMatchObject({ kind: 'machine', ownerId: mac.id })
   })
 
-  it('a second Mac is refused every way, and the first keeps its token', async () => {
+  it('a second Mac is refused every way, and the owner keeps its token', async () => {
     const first = await mintMachineCredential('bridge-local', { by: by('mac-a') })
     for (const attempt of [
       () => mintMachineCredential('bridge-local', { by: by('mac-b'), replace: true }),
@@ -177,36 +199,12 @@ describe('minting, rotating and revoking on a real auth.json', () => {
     }
   })
 
-  it('the owner rotates it: a new token, the same daemon, and its sockets are told', async () => {
+  it('the owner rotates it: a new token, the old one stops working', async () => {
     const first = await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    const key = await machineCredentialDaemonKey('bridge-local')
-    const heard: string[][] = []
-    const off = onCredentialsRevoked((names) => heard.push(names))
-    try {
-      const second = await mintMachineCredential('bridge-local', { by: by('mac-a'), replace: true })
-      expect(second.replaced).toBe(true)
-      expect(second.token).not.toBe(first.token)
-      expect(await verifyDeviceToken(first.token)).toBeNull()
-      expect(heard).toEqual([['bridge-local']])
-      expect(await machineCredentialDaemonKey('bridge-local')).toBe(key)
-    } finally { off() }
-  })
-
-  it('a rotation keeps the daemon that serves the credential, even when the owner\'s own key differs', async () => {
-    // bridge-devbox from before ownership (the unkeyed daemon), adopted when mac-a minted with proof.
-    const legacyLocal = (await createDevice('bridge-local', { kind: 'machine' })).token
-    await createDevice('bridge-devbox', { kind: 'machine' })
-    await adoptMachineCredential('bridge-local', { by: by('mac-a'), proof: legacyLocal })
-    await revokeMachineCredential('bridge-local', { by: by('mac-a') })
-    // mac-a's own tunnel daemon is the unkeyed one; give it a key of its own the way a first mint does.
-    const records = await listDeviceRecords()
-    const mac = records.find((d) => d.name === 'mac-a')!
-    await writeAuth(records.map((d) => (d.name === 'mac-a' ? { ...d, tunnelDaemon: { key: mac.id } } : d.name === 'bridge-devbox' ? { ...d, daemonKey: 'id-served-daemon' } : d)))
-    await mintMachineCredential('bridge-devbox', { by: by('mac-a'), replace: true })
-    expect(await machineCredentialDaemonKey('bridge-devbox')).toBe('id-served-daemon')
-    // A fresh name gets the owner's.
-    await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    expect(await machineCredentialDaemonKey('bridge-local')).toBe(mac.id)
+    const second = await mintMachineCredential('bridge-local', { by: by('mac-a'), replace: true })
+    expect(second.replaced).toBe(true)
+    expect(second.token).not.toBe(first.token)
+    expect(await verifyDeviceToken(first.token)).toBeNull()
   })
 
   it('without replace an existing name answers "already exists"', async () => {
@@ -214,118 +212,142 @@ describe('minting, rotating and revoking on a real auth.json', () => {
     await expect(mintMachineCredential('bridge-local', { by: by('mac-a') })).rejects.toThrow(/already exists/)
   })
 
-  it('two Macs minting at once: exactly one owns the companion', async () => {
+  it('two Macs minting at once: only the owner gets one', async () => {
     const results = await Promise.allSettled([
-      mintMachineCredential('bridge-local', { by: by('mac-a') }),
       mintMachineCredential('bridge-local', { by: by('mac-b') }),
+      mintMachineCredential('bridge-local', { by: by('mac-a') }),
     ])
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
-    const owners = (await listDeviceRecords()).filter((d) => d.kind === 'machine').map((d) => d.ownerId)
-    expect(owners).toHaveLength(1)
+    expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled'])
+    expect((await listDeviceRecords()).filter((d) => d.kind === 'machine').map((d) => d.ownerId)).toEqual([(await record('mac-a'))!.id])
   })
 
-  it("revoking the owner's pairing takes its credentials, and the unowned ones, so another Mac can take over", async () => {
-    const legacy = (await createDevice('bridge-devbox', { kind: 'machine' })).token
+  it("removing the owner's pairing takes every machine credential and the ownership: nobody is guessed, the next Mac to mint is recorded", async () => {
     const local = await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    const heard: string[][] = []
-    const off = onCredentialsRevoked((names) => heard.push(names))
-    try {
-      // mac-a unpairs itself.
-      expect(await revokeDevice('mac-a', { by: by('mac-a') })).toBe(true)
-    } finally { off() }
-    expect(heard[0]?.sort()).toEqual(['bridge-devbox', 'bridge-local', 'mac-a'])
+    expect(await revokeDeviceAs('mac-a', { by: by('mac-a') })).toBe(true)
     expect(await verifyDeviceToken(local.token)).toBeNull()
-    expect(await verifyDeviceToken(legacy)).toBeNull()
-    // The handover: mac-b mints now, into a daemon of its own.
-    const next = await mintMachineCredential('bridge-local', { by: by('mac-b') })
-    expect(await verifyDeviceToken(next.token)).toEqual({ name: 'bridge-local', kind: 'machine' })
-    expect(await machineCredentialDaemonKey('bridge-local')).toBe((await record('mac-b'))!.id)
+    expect((await readDeviceRegistry()).owner).toBeNull()
+    expect(await refusal(mintMachineCredential('bridge-local', { by: by('my-phone') }))).toMatchObject({ status: 403, code: 'phone_cannot_mint' })
+    expect((await mintMachineCredential('bridge-local', { by: by('mac-b') })).name).toBe('bridge-local')
+    expect((await readDeviceRegistry()).owner).toEqual({ id: (await record('mac-b'))!.id, via: 'mint' })
   })
 
-  it('revoking a device that owns nothing leaves every machine credential alone', async () => {
-    const legacy = (await createDevice('bridge-local', { kind: 'machine' })).token
-    expect(await revokeDevice('mac-b')).toBe(true)
-    expect(await verifyDeviceToken(legacy)).toEqual({ name: 'bridge-local', kind: 'machine' })
+  it('removing a device that is not the owner leaves every machine credential alone', async () => {
+    const local = await mintMachineCredential('bridge-local', { by: by('mac-a') })
+    expect(await revokeDeviceAs('mac-b', { by: by('mac-a') })).toBe(true)
+    expect(await verifyDeviceToken(local.token)).toEqual({ name: 'bridge-local', kind: 'machine' })
   })
 
-  it('a Mac rotating its own pairing stays the owner: same id, same credentials, same daemon', async () => {
+  it('a Mac rotating its own pairing stays the owner: same id, same credentials', async () => {
     const local = await mintMachineCredential('bridge-local', { by: by('mac-a') })
     const id = (await record('mac-a'))!.id
     const rotated = await rotateDevice('mac-a', { by: by('mac-a') })
-    expect(rotated.replaced).toBe(true)
     expect(await verifyDeviceToken(tokens['mac-a'])).toBeNull()
     expect((await record('mac-a'))!.id).toBe(id)
     expect(await verifyDeviceToken(local.token)).toEqual({ name: 'bridge-local', kind: 'machine' })
-    // The new token is the owner now.
     expect((await mintMachineCredential('bridge-local', { by: { token: rotated.token }, replace: true })).replaced).toBe(true)
-    expect(await machineCredentialDaemonKey('bridge-local')).toBe(id)
   })
 
-  it('a rotation of the Mac\'s pairing by anyone else inherits nothing (the takeover)', async () => {
+  it('a re-pair of the owner\'s name by this machine is a NEW pairing: no owner, no credentials, first come again', async () => {
     await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    // Refused for the phone and for the other Mac outright.
-    for (const who of ['my-phone', 'mac-b']) {
-      await expect(rotateDevice('mac-a', { by: by(who) })).rejects.toMatchObject({ status: 403, code: 'device_change_refused' })
-    }
-    // A local re-pair of the name is a NEW pairing: new id, and the old one's credentials go.
-    const oldId = (await record('mac-a'))!.id
     const repaired = await rotateDevice('mac-a', { by: { local: true } })
-    const fresh = (await record('mac-a'))!
-    expect(fresh.id).not.toBe(oldId)
     expect(await record('bridge-local')).toBeUndefined()
-    // The new pairing starts with no ownership; minting now gets it a daemon of its own id.
-    await mintMachineCredential('bridge-local', { by: { token: repaired.token } })
-    expect(await machineCredentialDaemonKey('bridge-local')).toBe(fresh.id)
-    expect(fresh.id).not.toBe(oldId)
+    expect((await readDeviceRegistry()).owner).toBeNull()
+    expect((await mintMachineCredential('bridge-local', { by: { token: repaired.token } })).name).toBe('bridge-local')
+    expect((await readDeviceRegistry()).owner).toEqual({ id: (await record('mac-a'))!.id, via: 'mint' })
+  })
+})
+
+// A companion paired with `walnut device add` and no `--owner` (2026-10-05 gate): nobody is
+// recorded, so the first Mac to mint is, as builds before owners were recorded decided.
+describe('a companion with no owner recorded', () => {
+  let tokens: Record<string, string>
+  const by = (name: string): DeviceActor => ({ token: tokens[name] })
+
+  beforeEach(async () => {
+    await fs.mkdir(WALNUT_HOME, { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'auth.json'), JSON.stringify({ devices: [] }), { mode: 0o600 })
+    _resetDeviceAuthForTesting()
+    tokens = {}
+    // The laptop was paired first; the Mac is not the oldest record.
+    for (const name of ['laptop', 'gate-mac', 'phone-a']) tokens[name] = (await createDevice(name)).token
+    await setDeviceInfo('phone-a', { model: 'iPhone17,1', os: 'iOS 26.1' })
   })
 
-  it('adopting records the owner and the legacy daemon, and keeps the token', async () => {
-    const legacy = (await createDevice('bridge-local', { kind: 'machine' })).token
-    const devbox = (await createDevice('bridge-devbox', { kind: 'machine' })).token
-    expect(await refusal(adoptMachineCredential('bridge-local', { by: by('mac-b') }))).toMatchObject({ status: 409 })
-    // Another legacy credential's token is no proof.
-    expect(await refusal(adoptMachineCredential('bridge-local', { by: by('mac-b'), proof: devbox }))).toMatchObject({ status: 409 })
-    expect(await refusal(mintMachineCredential('bridge-local', { by: by('mac-b'), replace: true, proof: devbox }))).toMatchObject({ status: 409 })
-    expect(await adoptMachineCredential('bridge-local', { by: by('mac-a'), proof: legacy })).toBe('adopted')
-    expect(await adoptMachineCredential('bridge-local', { by: by('mac-a'), proof: legacy })).toBe('owned')
-    expect(await adoptMachineCredential('bridge-none', { by: by('mac-a'), proof: legacy })).toBe('missing')
-    const mac = (await record('mac-a'))!
-    expect(await record('bridge-local')).toMatchObject({ ownerId: mac.id, tokenHash: sha(legacy) })
-    expect(await record('bridge-devbox')).toMatchObject({ ownerId: mac.id })
-    expect((await record('bridge-local'))?.daemonKey).toBeUndefined() // still the daemon it always had
-    expect(mac.tunnelDaemon).toEqual({}) // and that daemon is this Mac's now
-    expect(await verifyDeviceToken(legacy)).toEqual({ name: 'bridge-local', kind: 'machine' })
-    // Now owned: mac-b is refused without any proof question.
-    expect(await refusal(mintMachineCredential('bridge-x', { by: by('mac-b'), proof: legacy }))).toMatchObject({ status: 409 })
+  it('the Mac\'s bridge job mints first and is recorded; then the laptop is refused and removes nobody', async () => {
+    expect((await mintMachineCredential('bridge-local', { by: by('gate-mac') })).name).toBe('bridge-local')
+    expect((await readDeviceRegistry()).owner).toEqual({ id: (await record('gate-mac'))!.id, via: 'mint' })
+    expect(await refusal(mintMachineCredential('bridge-x', { by: by('laptop') }))).toMatchObject({ status: 409, code: 'not_companion_owner' })
+    for (const target of ['gate-mac', 'phone-a']) {
+      await expect(revokeDeviceAs(target, { by: by('laptop') })).rejects.toMatchObject({ status: 403, code: 'device_change_refused' })
+    }
+    expect((await listDeviceRecords()).map((d) => d.name).sort()).toEqual(['bridge-local', 'gate-mac', 'laptop', 'phone-a'])
+    // The owner may.
+    expect(await revokeDeviceAs('phone-a', { by: by('gate-mac') })).toBe(true)
   })
 
-  it('an adopted legacy credential revoked and minted again stays on the legacy daemon', async () => {
-    const legacy = (await createDevice('bridge-local', { kind: 'machine' })).token
-    await adoptMachineCredential('bridge-local', { by: by('mac-a'), proof: legacy })
-    expect(await revokeMachineCredential('bridge-local', { by: by('mac-a') })).toBe(true)
-    await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    expect(await machineCredentialDaemonKey('bridge-local')).toBeUndefined()
+  it('before any mint, nobody but each device itself changes a pairing (no owner is guessed from the order)', async () => {
+    for (const [who, target] of [['laptop', 'gate-mac'], ['laptop', 'phone-a'], ['gate-mac', 'laptop']]) {
+      await expect(revokeDeviceAs(target, { by: by(who) }), `${who} ${target}`).rejects.toMatchObject({ status: 403 })
+    }
+    expect((await readDeviceRegistry()).owner).toBeNull()
+  })
+})
+
+describe('a companion from before owners were recorded', () => {
+  const T = { mac: 'legacy-mac-token', second: 'legacy-second-token', phone: 'legacy-phone-token', local: 'legacy-local-token', devbox: 'legacy-devbox-token' }
+  /** auth.json exactly as a build without owners wrote it: no ids, no platform, no owner. */
+  async function writeLegacy(first: 'mac' | 'phone' = 'mac'): Promise<void> {
+    const mac = { name: 'mac-primary', tokenHash: sha(T.mac), createdAt: now }
+    const phone = { name: 'my-phone', tokenHash: sha(T.phone), createdAt: now, info: { model: 'iPhone17,1', os: 'iOS 26.1' } }
+    await fs.mkdir(WALNUT_HOME, { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'auth.json'), JSON.stringify({ devices: [
+      ...(first === 'mac' ? [mac, phone] : [phone, mac]),
+      { name: 'mac-second', tokenHash: sha(T.second), createdAt: now },
+      { name: 'bridge-local', tokenHash: sha(T.local), createdAt: now, kind: 'machine' },
+      { name: 'bridge-devbox', tokenHash: sha(T.devbox), createdAt: now, kind: 'machine' },
+    ] }), { mode: 0o600 })
+    _resetDeviceAuthForTesting()
+  }
+
+  it.each(['mac', 'phone'] as const)('no owner is guessed (%s first): without the proof nobody mints, as before', async (first) => {
+    await writeLegacy(first)
+    expect((await readDeviceRegistry()).owner).toBeNull()
+    for (const t of [T.mac, T.second]) {
+      expect(await refusal(mintMachineCredential('bridge-newhost', { by: { token: t } }))).toEqual({ status: 409, code: 'other_mac_connected', message: OTHER_MAC_CONNECTED })
+      expect(await refusal(revokeMachineCredential('bridge-local', { by: { token: t } }))).toMatchObject({ status: 409, code: 'other_mac_connected' })
+    }
+    expect(await refusal(mintMachineCredential('bridge-newhost', { by: { token: T.phone } }))).toMatchObject({ status: 403, code: 'phone_cannot_mint' })
+    expect((await readDeviceRegistry()).owner).toBeNull()
   })
 
-  it('a legacy revoke with proof adopts first, so the re-mint stays on the legacy daemon too', async () => {
-    const legacy = (await createDevice('bridge-local', { kind: 'machine' })).token
-    expect(await revokeMachineCredential('bridge-local', { by: by('mac-a'), proof: legacy })).toBe(true)
-    expect((await record('mac-a'))!.tunnelDaemon).toEqual({})
-    await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    expect(await machineCredentialDaemonKey('bridge-local')).toBeUndefined()
-    // mac-b is the other Mac now.
-    expect(await refusal(mintMachineCredential('bridge-y', { by: by('mac-b') }))).toMatchObject({ status: 409 })
+  it('adopting with the unowned bridge-local\'s token records its sender as the owner and marks the old credentials', async () => {
+    await writeLegacy('phone')
+    expect(await adoptMachineCredential('bridge-local', { by: { token: T.mac }, proof: T.local })).toBe('adopted')
+    const reg = await readDeviceRegistry()
+    const mac = reg.devices.find((d) => d.name === 'mac-primary')!
+    expect(reg.owner).toEqual({ id: mac.id, via: 'proof' })
+    expect(reg.devices.filter((d) => d.kind === 'machine').map((d) => d.ownerId)).toEqual([mac.id, mac.id])
+    expect(await adoptMachineCredential('bridge-local', { by: { token: T.mac }, proof: T.local })).toBe('owned')
+    expect(await adoptMachineCredential('bridge-none', { by: { token: T.mac }, proof: T.local })).toBe('missing')
+    // The proof is spent: nobody else can use it now.
+    expect(await refusal(adoptMachineCredential('bridge-local', { by: { token: T.second }, proof: T.local }))).toMatchObject({ status: 409 })
+    expect((await mintMachineCredential('bridge-x', { by: { token: T.mac } })).name).toBe('bridge-x')
   })
 
-  it('the owner revokes its own credential: its sockets are told, and a repeat answers false', async () => {
-    await mintMachineCredential('bridge-local', { by: by('mac-a') })
-    const heard: string[][] = []
-    const off = onCredentialsRevoked((names) => heard.push(names))
-    try {
-      expect(await revokeMachineCredential('bridge-local', { by: by('mac-a') })).toBe(true)
-      expect(heard).toEqual([['bridge-local']])
-      expect(await revokeMachineCredential('bridge-local', { by: by('mac-a') })).toBe(false)
-      expect(heard).toEqual([['bridge-local']])
-    } finally { off() }
+  it('another credential\'s token, or a phone with the right one, records nothing', async () => {
+    await writeLegacy()
+    expect(await refusal(adoptMachineCredential('bridge-local', { by: { token: T.second }, proof: T.devbox }))).toMatchObject({ status: 409, code: 'other_mac_connected' })
+    expect(await refusal(adoptMachineCredential('bridge-local', { by: { token: T.phone }, proof: T.local }))).toMatchObject({ status: 403, code: 'phone_cannot_mint' })
+    expect((await readDeviceRegistry()).owner).toBeNull()
+  })
+
+  it('the lost-cache steps with the proof: the taken name writes nothing, the removal with the proof records the owner', async () => {
+    await writeLegacy('phone')
+    const before = await fs.readFile(path.join(WALNUT_HOME, 'auth.json'), 'utf-8')
+    await expect(mintMachineCredential('bridge-local', { by: { token: T.mac }, proof: T.local })).rejects.toThrow(/already exists/)
+    expect(await fs.readFile(path.join(WALNUT_HOME, 'auth.json'), 'utf-8')).toBe(before)
+    expect(await revokeMachineCredential('bridge-local', { by: { token: T.mac }, proof: T.local })).toBe(true)
+    expect((await readDeviceRegistry()).owner?.via).toBe('proof')
+    expect((await mintMachineCredential('bridge-local', { by: { token: T.mac } })).name).toBe('bridge-local')
   })
 })

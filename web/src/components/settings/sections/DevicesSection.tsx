@@ -4,12 +4,13 @@ import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclos
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
+import { useSettingsSaved } from '../settings-pane-context';
 import { formatAbsoluteTime } from './addons-format';
 import { apiGet, apiDelete } from '@/api/client';
 import { devicesListChanged, fetchDevicesList } from './cloud/devices-list';
 import { log } from '@/utils/log';
 import { PairingQrBlock } from './cloud/PairingQrBlock';
+import { requestFailureText } from '@/utils/request-failure';
 import { deviceNameForServer } from './device-name';
 import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
@@ -18,6 +19,7 @@ import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
 import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
 import type { Config } from '@open-walnut/core';
+import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
 
 import '@/styles/settings-sections-addons.css';
 
@@ -35,7 +37,7 @@ interface DeviceEntry {
   createdAt: string;
   lastUsedAt?: string;
   /** What this credential actually is: not everything in the list is a phone. */
-  role?: 'phone' | 'simulator' | 'self' | 'browser';
+  role?: 'phone' | 'simulator' | 'mac' | 'self' | 'browser';
   info?: DeviceSelfInfo;
 }
 
@@ -58,11 +60,35 @@ export function describeDevice(info?: DeviceSelfInfo): string | null {
   return parts.length > 0 ? parts.join(', ') : null;
 }
 
+/** Said in place of the cloud half after this Mac unpaired itself: a state, not an error. */
+export const CLOUD_UNPAIRED_NOTICE = 'This Mac is no longer paired with the cloud companion.';
+
+/** Settings › Cloud Companion listens, so its "Connected" never outlives an unpair made here. */
+export const DEVICES_CHANGED_EVENT = 'walnut:devices-changed';
+
+
+/** "Mac, Walnut 0.5.1, paired …, last used …": a Mac's row says nothing about phones. */
+export function describeMacRow(d: DeviceEntry): string {
+  const model = humanDeviceModel(d.info?.model);
+  return [
+    ...(model && model !== 'Computer' ? [model] : []),
+    ...(d.info?.appVersion ? [`Walnut ${d.info.appVersion}`] : []),
+    `paired ${formatAbsoluteTime(d.createdAt)}`,
+    ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+  ].join(', ');
+}
+
 const ROLE_NOTE: Record<'simulator' | 'self' | 'browser', string> = {
-  self: 'This computer, used for cloud sync; removing it breaks sync.',
+  self: "This Mac's own pairing with the cloud companion. Cloud sync, your phones' way to this Mac, and the Cloud host run on it.",
   simulator: 'iOS Simulator on this computer (development).',
   browser: 'A browser you signed in with a code; removing it signs that browser out.',
 };
+
+/** Said before "Unpair this Mac" goes through: what stops working, and the way back. */
+export const UNPAIR_SELF_WARNING =
+  'Unpairing this Mac stops cloud sync, cuts your phones off from this Mac through the companion, and takes the Cloud host offline. Pairing it again needs a new token made on the companion.';
+
+type RowError = { name: string; verb: 'remove' | 're-pair' | 'unpair'; message: string };
 
 /**
  * Where a scanned QR points the phone: this network, the tailnet or the cloud.
@@ -100,8 +126,15 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const [nameError, setNameError] = useState<string | null>(null);
   // Minting + QR rendering is shared with the Cloud Companion section.
   const { created, qrDataURL, error, busy, mint, dismiss } = usePairDevice();
-  const [rowError, setRowError] = useState<{ name: string; message: string } | null>(null);
-  const { track } = useSettingsSaved();
+  const [rowError, setRowError] = useState<RowError | null>(null);
+  // The cloud half of the list failed to load (the reason, from the server):
+  // said in the section, never shown as "no phones".
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  // This Mac unpaired itself: the cloud half is gone on purpose, said plainly.
+  const [cloudUnpaired, setCloudUnpaired] = useState(false);
+  // "Unpair this Mac" is two deliberate clicks with the warning between them.
+  const [unpairArmed, setUnpairArmed] = useState(false);
+  const { notifySaved } = useSettingsSaved();
 
   // Reads can land out of order (a pairing's read can beat the pane's first one):
   // only the newest read writes the list.
@@ -109,10 +142,12 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const refresh = useCallback(async () => {
     const seq = ++readSeq.current;
     try {
-      const res = await fetchDevicesList<DevicesListResponse>();
+      const res = await fetchDevicesList<DevicesListResponse & { cloudError?: string; cloudUnpaired?: { origin: string } }>();
       if (seq !== readSeq.current) return;
       setDevices(res.devices);
       setCloudDevices(res.cloudDevices ?? []);
+      setCloudError(res.cloudError ?? null);
+      setCloudUnpaired(Boolean(res.cloudUnpaired));
       const list = res.targets ?? [];
       setTargets(list);
       // Keep the current pick while it is still offered. The first pick is this
@@ -145,7 +180,10 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     // Keep the picker on the device's OWN target — re-pairing a cloud phone
     // must not silently flip the UI back to the Wi-Fi default.
     setTarget(kind);
-    if (await mint({ name, target: kind, replace: true })) await refresh();
+    setRowError(null);
+    // A refusal belongs on the row that was clicked, not under "Device name".
+    const onError = (message: string) => setRowError({ name, verb: 're-pair', message });
+    if (await mint({ name, target: kind, replace: true, onError })) await refresh();
   };
 
   const addDevice = async () => {
@@ -168,18 +206,23 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
    * the cloud has two tokens; killing one and leaving the other would still let
    * the device in, so "Revoke" must mean revoked.
    */
-  const revoke = async (name: string, kinds: TargetKind[]) => {
+  const revoke = async (name: string, kinds: TargetKind[], verb: RowError['verb'] = 'remove') => {
     setRowError(null);
+    let waitedMs = 15_000;
     try {
-      await track((async () => {
-        for (const kind of kinds) {
-          await apiDelete(`/api/devices/${encodeURIComponent(name)}${kind === 'cloud' ? '?target=cloud' : ''}`);
-          devicesListChanged();
-        }
-      })());
+      for (const kind of kinds) {
+        waitedMs = kind === 'cloud' ? CLOUD_CHANGE_CLIENT_TIMEOUT_MS : 15_000;
+        await apiDelete(`/api/devices/${encodeURIComponent(name)}${kind === 'cloud' ? '?target=cloud' : ''}`, { timeoutMs: waitedMs });
+        devicesListChanged();
+      }
+      notifySaved();
       await refresh();
+      window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
     } catch (err) {
-      setRowError({ name, message: saveErrorMessage(err) });
+      // A refused or failed removal is an answer about this device, not an
+      // unsaved settings change: it shows on the row only, and the page's
+      // Saved / Not saved indicator is left as it was.
+      setRowError({ name, verb, message: requestFailureText(err, waitedMs) });
     }
   };
 
@@ -224,14 +267,57 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
       byName.set(d.name, { ...d, kinds: [kind] });
     };
     devices.forEach((d) => add(d, 'lan'));
-    cloudDevices.forEach((d) => add(d, 'cloud'));
+    // This Mac's own cloud record is its own row (renderSelfRow), never merged
+    // with a phone that happens to share its name.
+    cloudDevices.forEach((d) => { if (d.role !== 'self') add(d, 'cloud'); });
     // Real phones first — the row the user came here for shouldn't sit under
     // this Mac's own sync credential.
-    const rank = (r?: string) => (r === 'phone' || !r ? 0 : r === 'simulator' ? 1 : 2);
+    const rank = (r?: string) => (r === 'phone' || !r ? 0 : r === 'mac' ? 1 : r === 'simulator' ? 2 : 3);
     return [...byName.values()].sort((a, b) => rank(a.role) - rank(b.role));
   })();
+  const selfRow = cloudDevices.find((d) => d.role === 'self');
   const phones = rows.filter((r) => (r.role ?? 'phone') === 'phone');
-  const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone');
+  const macs = rows.filter((r) => r.role === 'mac');
+  const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac');
+  const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
+
+  /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
+  const renderSelfRow = (d: DeviceEntry) => (
+    <SettingsRow
+      key="this-mac"
+      className="devices-row devices-row-self"
+      data-device-name={d.name}
+      data-device-role="self"
+      label={
+        <span className="settings-addons-inline devices-name">
+          <span className="settings-addons-ellipsis" title={d.name}>This Mac</span>
+          <SettingsTag>Cloud</SettingsTag>
+        </span>
+      }
+      help={<span className="devices-meta">{`${d.name}: ${ROLE_NOTE.self}`}</span>}
+      error={rowErrorFor(d.name)}
+      control={unpairArmed ? (
+        <>
+          <SettingsButton variant="text" data-testid="devices-unpair-self-cancel" onClick={() => setUnpairArmed(false)}>
+            Cancel
+          </SettingsButton>
+          <SettingsButton
+            variant="danger"
+            data-testid="devices-unpair-self-confirm"
+            onClick={() => { setUnpairArmed(false); void revoke(d.name, ['cloud'], 'unpair'); }}
+          >
+            Unpair this Mac
+          </SettingsButton>
+        </>
+      ) : (
+        <SettingsButton variant="danger" data-testid="devices-unpair-self" onClick={() => { setRowError(null); setUnpairArmed(true); }}>
+          Unpair this Mac
+        </SettingsButton>
+      )}
+    >
+      {unpairArmed && <SettingsNotice kind="warn" role="alert">{UNPAIR_SELF_WARNING}</SettingsNotice>}
+    </SettingsRow>
+  );
 
   const renderRow = (d: typeof rows[number]) => {
     const role = d.role ?? 'phone';
@@ -242,12 +328,13 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           `paired ${formatAbsoluteTime(d.createdAt)}`,
           ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
         ].join(', ')
-      : ROLE_NOTE[role];
+      : role === 'mac' ? describeMacRow(d) : ROLE_NOTE[role];
     return (
       <SettingsRow
         key={d.name}
         className="devices-row"
         data-device-name={d.name}
+        data-device-role={role}
         label={
           <span className="settings-addons-inline devices-name">
             <span className="settings-addons-ellipsis" title={d.name}>{d.name}</span>
@@ -257,7 +344,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           </span>
         }
         help={<span className="devices-meta">{meta}</span>}
-        error={rowError?.name === d.name ? `Couldn't remove: ${rowError.message}` : undefined}
+        error={rowErrorFor(d.name)}
         control={
           <>
             {role === 'phone' && (
@@ -271,8 +358,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
                 onConfirm={() => repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind)))}
               />
             )}
-            {/* This Mac's own sync credential has no QR and must not be
-                casually removed: that silently breaks cloud sync. */}
+            {/* This Mac's own cloud record never reaches here (renderSelfRow). */}
             {role !== 'self' && (
               <InlineConfirmButton
                 aria-label={`Remove ${d.name}`}
@@ -293,21 +379,35 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           {phones.length === 0 && (
             <SettingsEmpty>
               {listState === 'loading' ? 'Loading paired phones...'
-                : listState === 'failed' ? "Couldn't load paired phones." : 'No phones paired yet.'}
+                : listState === 'failed' ? "Couldn't load paired phones."
+                  // The cloud's half is unknown: say only what is known.
+                  : cloudError || cloudUnpaired ? 'No phones paired with this Mac.' : 'No phones paired yet.'}
             </SettingsEmpty>
           )}
           {phones.map(renderRow)}
-          {others.length > 0 && (
+          {cloudUnpaired && <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>}
+          {cloudError && <SettingsNotice kind="error" role="alert">{cloudError}</SettingsNotice>}
+          {(others.length > 0 || selfRow) && (
             <SettingsDisclosure
               id="devices-others"
+              data-testid="devices-others"
               label="Other entries"
-              help="This computer, simulators and signed-in browsers."
-              summary={String(others.length)}
+              help="This Mac, simulators and signed-in browsers."
+              summary={String(others.length + (selfRow ? 1 : 0))}
             >
+              {selfRow && renderSelfRow(selfRow)}
               {others.map(renderRow)}
             </SettingsDisclosure>
           )}
         </SettingsGroup>
+
+        {macs.length > 0 && (
+          // Other Macs paired with the same companion: never phones, so no QR and
+          // no phone wording. Remove stays, under the same rules as any device.
+          <SettingsGroup heading="Other Macs" data-testid="devices-macs">
+            {macs.map(renderRow)}
+          </SettingsGroup>
+        )}
 
         {showRemoteCard && (
           <RemoteAccessCard

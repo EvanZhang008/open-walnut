@@ -33,6 +33,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
+import { markHandledFailure } from '../middleware/handled-failure.js'
 
 export const sessionLifecycleV1Router = Router()
 
@@ -52,6 +53,9 @@ async function sendLocalError(res: Response, next: NextFunction, err: unknown): 
   const { SessionControlError } = await import('../../core/sessions/session-controls.js')
   if (err instanceof SessionControlError) {
     const code = typeof err.extra?.code === 'string' ? err.extra.code : v1ErrorCode(err.statusCode)
+    // A host that is not answering now is the designed degraded answer
+    // (core/hosts/remote-read-bound.ts), never an endpoint incident card.
+    if (code === 'host_reconnecting') markHandledFailure(res)
     sendError(res, err.statusCode, code, err.message)
     return
   }

@@ -754,7 +754,7 @@ export class LocalDaemon {
     // spawn. The daemon inherits this env verbatim, and its spawn preamble looks
     // in the same places this resolver does (PATH, then $HOME/.toolbox/bin,
     // $HOME/.local/bin, …). A miss here means every session will exit 127, so
-    // say it once, loudly, at the moment of spawn — the 2026-08-28 outage
+    // say it once, loudly, at the moment of spawn: the 2026-08-28 outage
     // reported itself only as a per-session "claude: not found" 20 times over.
     // Not fatal: the preamble also sources the user's shell rc, which can still
     // put claude on PATH, so a miss is a strong warning rather than a verdict.
@@ -762,7 +762,7 @@ export class LocalDaemon {
     this._spawnClaudeCli = testRunnerClaude() ?? resolveClaudeCliExecutable(env)
     if (!this._spawnClaudeCli) {
       log.session.error(
-        'spawning the local daemon with an environment where the claude CLI cannot be resolved — '
+        'spawning the local daemon with an environment where the claude CLI cannot be resolved: '
         + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',
         {
           daemonDir: this.daemonDir,

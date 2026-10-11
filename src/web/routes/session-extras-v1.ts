@@ -40,6 +40,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
+import { markHandledFailure } from '../middleware/handled-failure.js'
 
 export const sessionExtrasV1Router = Router()
 
@@ -70,9 +71,11 @@ async function runLocal(
     res.status(successStatus).json(await fn())
   } catch (err) {
     if (err instanceof SessionControlError) {
-      // The host is still connecting: the documented v1 code (api-v1.md), not a generic one.
+      // The host is not answering now: the documented v1 code (api-v1.md), not a
+      // generic one, and the designed answer, never an endpoint incident card.
       const named = err.extra?.code === 'host_reconnecting' ? 'host_reconnecting' : undefined
       const code = named ?? (err.statusCode === 502 ? 'bad_gateway' : v1ErrorCode(err.statusCode))
+      if (named) markHandledFailure(res)
       sendError(res, err.statusCode, code, err.message)
       return
     }

@@ -22,16 +22,24 @@ vi.mock('../../../src/utils/session-liveness.js', () => ({
 
 // Capture daemon RPC calls for the remote branch
 const daemonSendCalls: Array<{ cmd: string; params: Record<string, unknown> }> = [];
+/** The dial fails as the pool's link failure, with the dial's raw words. */
+const dial = vi.hoisted(() => ({ fails: false }));
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
   getDaemonDisconnectedSince: () => null,
   clearDaemonFailureCache: () => {},
-  getDaemonConnection: async () => ({
-    send: async (cmd: string, params: Record<string, unknown>) => {
-      daemonSendCalls.push({ cmd, params });
-      return { ok: true, created: true, resolvedPath: params.path };
-    },
-  }),
+  getDaemonConnection: async () => {
+    if (dial.fails) {
+      const { markLinkFailure } = await import('../../../src/providers/link-failure.js');
+      throw markLinkFailure(new Error('ssh: connect to host testhost.example port 22: Connection refused'), 'no-link');
+    }
+    return {
+      send: async (cmd: string, params: Record<string, unknown>) => {
+        daemonSendCalls.push({ cmd, params });
+        return { ok: true, created: true, resolvedPath: params.path };
+      },
+    };
+  },
 }));
 vi.mock('../../../src/providers/session-manager.js', () => ({
   getRegisteredSessionManager: () => null,
@@ -173,5 +181,21 @@ describe('POST /api/sessions/quick-start — createCwd', () => {
     const mkdirCall = daemonSendCalls.find(c => c.cmd === 'fs.mkdir');
     expect(mkdirCall).toBeTruthy();
     expect(mkdirCall!.params.path).toBe('/home/u/newproj');
+  });
+
+  it('remote host not reachable: 503 host_reconnecting in one plain sentence, a designed answer, nothing sent', async () => {
+    dial.fails = true;
+    try {
+      const app = createApp();
+      const res = await request(app).post('/api/sessions/quick-start')
+        .send({ cwd: '/home/u/unreached', host: 'testhost', message: 'go', createCwd: true });
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ error: 'Reconnecting to testhost, so the folder was not created. Try again in a moment.', code: 'host_reconnecting', host: 'testhost' });
+      expect(res.headers['x-walnut-handled-failure']).toBe('1');
+      expect(JSON.stringify(res.body)).not.toMatch(/ssh|refused|port 22/);
+      expect(daemonSendCalls.find(c => c.params.path === '/home/u/unreached')).toBeUndefined();
+    } finally {
+      dial.fails = false;
+    }
   });
 });

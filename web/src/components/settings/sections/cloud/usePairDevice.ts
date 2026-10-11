@@ -12,6 +12,8 @@ import QRCode from 'qrcode';
 import { apiPost } from '@/api/client';
 import { log } from '@/utils/log';
 import { devicesListChanged } from './devices-list';
+import { requestFailureText } from '@/utils/request-failure';
+import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud-change-timeout';
 
 /**
  * Which address a scanned QR points the phone at: `lan` (same Wi-Fi), `tailnet`
@@ -34,6 +36,13 @@ export interface CreatedDevice {
   server?: string;
 }
 
+export interface MintArgs {
+  name: string;
+  target?: PairTargetKind;
+  replace?: boolean;
+  onError?: (message: string) => void;
+}
+
 export interface UsePairDevice {
   created: CreatedDevice | null;
   qrDataURL: string | null;
@@ -42,18 +51,20 @@ export interface UsePairDevice {
   /**
    * Mint (or with `replace`, rotate) a credential and build its QR.
    * Resolves to the created device, or null when the server rejected it.
+   * With `onError` the caller shows the failure itself (a row's re-pair says
+   * it on that row); without it, the failure lands in `error`.
    */
-  mint: (args: { name: string; target?: PairTargetKind; replace?: boolean }) => Promise<CreatedDevice | null>;
+  mint: (args: MintArgs) => Promise<CreatedDevice | null>;
   dismiss: () => void;
   setError: (message: string | null) => void;
 }
 
 /**
- * Cloud pairing mints ON the cloud box — an internet round-trip that can include
+ * Cloud pairing mints ON the cloud box: an internet round-trip that can include
  * a revoke+re-mint retry. The 15s client default would abort while the server
  * succeeds, orphaning a device nobody has the token for.
  */
-const CLOUD_MINT_TIMEOUT_MS = 45_000;
+const CLOUD_MINT_TIMEOUT_MS = CLOUD_CHANGE_CLIENT_TIMEOUT_MS;
 
 export function usePairDevice(): UsePairDevice {
   const [created, setCreated] = useState<CreatedDevice | null>(null);
@@ -62,7 +73,7 @@ export function usePairDevice(): UsePairDevice {
   const [busy, setBusy] = useState(false);
 
   const mint = useCallback(async (
-    { name, target, replace }: { name: string; target?: PairTargetKind; replace?: boolean },
+    { name, target, replace, onError }: MintArgs,
   ): Promise<CreatedDevice | null> => {
     const trimmed = name.trim();
     if (!trimmed) return null;
@@ -83,7 +94,10 @@ export function usePairDevice(): UsePairDevice {
       log.info('settings', 'device paired', { deviceName: res.name, target: target ?? 'default' });
       return res;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // A deadline the browser hit reads as one, never "signal timed out".
+      const message = requestFailureText(err, target === 'cloud' ? CLOUD_MINT_TIMEOUT_MS : 15_000);
+      if (onError) onError(message);
+      else setError(message);
       return null;
     } finally {
       // Even a failed mint may have written (a timeout the server outlived), so the

@@ -26,6 +26,7 @@ import { hostStatusText, isHostConnecting } from '@/utils/host-connect';
 import { hostRowFor, type BannerRow } from '@/utils/attention-banner-model';
 import { useUserRetryingHosts } from '@/utils/host-user-retrying';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
+import { hostDisplayLabel } from '@/utils/host-display-label';
 import { SingleHostRow } from './HostProblemRows';
 
 /** Settings' word for a host switched off there (RemoteHostStatus DISABLED_TEXT). */
@@ -45,10 +46,10 @@ function HostStatusLine({ daemon, disabled }: { daemon: DaemonHealth; disabled: 
   // A failed connect says why, in the card's own sentence, not a bare 'Disconnected' (N14):
   // here only for a host switched off (disabled) or one the card has no row for.
   const failure = !disabled && !connected && !connecting && (problem?.type === 'connect' || problem?.type === 'reconnecting')
-    ? problem.type === 'connect' ? problem.headline : `Reconnecting to ${status?.label ?? daemon.label ?? daemon.host}`
+    ? problem.type === 'connect' ? problem.headline : `Reconnecting to ${hostDisplayLabel(daemon.host, status?.label, daemon.label)}`
     : null;
   const phase = disabled ? DISABLED_TEXT : connected ? 'Connected' : connecting ? hostStatusText(status) : failure ?? 'Disconnected';
-  const label = daemon.label ?? daemon.host;
+  const label = hostDisplayLabel(daemon.host, undefined, daemon.label);
   // Only a banner problem wears the warn colour; a version floor for one model is a quiet
   // note (the user's rule, N14). A failed connect's words take its red dot's tone (N3-15).
   const bannerKind = problem?.type === 'readiness' && BANNER_READINESS_KINDS.includes(problem.problem.kind);

@@ -28,6 +28,7 @@ import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../helpers/cloud-box-replica.js'
 import { buildTestDaemon, findBun, stageDaemonRelease } from '../helpers/cloud-box-daemon-build.js'
+import { isolateFromRealSsh, type SshIsolation } from '../helpers/isolate-ssh.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloudbox-primary'))
 
@@ -37,6 +38,7 @@ import { CLOUD_BOX_HOST_ALIAS, TUNNEL_REFUSAL_HEADER } from '../../src/core/host
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
 
 let base = ''
+let isolation: SshIsolation | null = null
 let replica: CloudBoxReplica
 let primaryPort = 0
 /** The runtime-versioned daemon build, when bun is here. */
@@ -134,6 +136,8 @@ beforeAll(async () => {
   await fsp.writeFile(path.join(WALNUT_HOME, 'config.yaml'), 'version: 1\nuser:\n  name: Tester\ndefaults:\n  priority: none\n')
   await seedPrimaryPairing(WALNUT_HOME, `127.0.0.1:${proxyPort}`, replica.tokens)
 
+  // No real ssh from this server: a throwaway HOME (no real ~/.ssh/config) and a refusing ssh first on PATH.
+  isolation = isolateFromRealSsh(base)
   const server = await startServer({ port: 0, dev: true })
   primaryPort = (server.address() as net.AddressInfo).port
 }, 420_000)
@@ -143,6 +147,7 @@ afterAll(async () => {
   cutProxy()
   await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()))
   await replica?.stop()
+  isolation?.restore()
   if (process.env.DEBUG_BOX) process.stderr.write(replica?.log().slice(-8000) ?? '')
 }, 60_000)
 
@@ -191,6 +196,8 @@ describe('the cloud box as a host of the Mac', () => {
     // the Mac's record now names as its own.
     expect(local).toEqual({ name: 'bridge-local', id: replica.ids['bridge-local'], kind: 'machine', ownerId: replica.ids['mac-primary'] })
     expect(replica.devices().find((d) => d.name === 'mac-primary')?.tunnelDaemon).toEqual({})
+    // The companion's owner, proved with that token (an older build recorded none).
+    expect(replica.owner()).toEqual({ id: replica.ids['mac-primary'], via: 'proof' })
     expect(fs.existsSync(path.join(replica.box.tunnelDir, 'daemon.pid'))).toBe(true)
     expect(fs.existsSync(`${replica.box.tunnelDir}.by-device`)).toBe(false)
 
@@ -289,7 +296,7 @@ describe('the cloud box as a host of the Mac', () => {
     }, 120_000, 'the daemon on the new build')
     expect(alive(before.pid!)).toBe(false)
     expect(alive(after.pid!)).toBe(true)
-    expect(replica.log()).toMatch(new RegExp(`local daemon version mismatch — restarting[^\\n]*${before.instanceId}`))
+    expect(replica.log()).toMatch(new RegExp(`local daemon version mismatch \u2014 restarting[^\\n]*${before.instanceId}`))
 
     await turnLandsOnSameCli(cliPid, 'after-an-upgrade')
     expect(replica.tunnelDaemon()).toEqual(after)

@@ -154,8 +154,11 @@ want to avoid that.
 Every way a pairing ends drops that device's push rows: the console's
 `DELETE /api/devices/:name`, `walnut device revoke <name>` in a terminal, a revoke
 the other box asks for by hash, and re-pairing the name from another device (a new
-pairing replaces the old one). They all go through one function, `revokePairing`
-in `src/core/device-auth.ts`, so a new revoke path cannot forget it.
+pairing replaces the old one). They all go through one path in
+`src/core/device-auth.ts` (`revokePairing` for this machine's operator,
+`revokePairingAs` for a caller, one function under both; a re-pairing in
+`rotateDevice` runs the same parts, from `src/core/devices/revoke-parts.ts`), so a
+new revoke path cannot forget it.
 `DELETE /api/auth/keys/:name` does the same for an API key. This is a privacy
 operation, not housekeeping: a revoked or lost phone that keeps its row keeps
 showing letter subjects and up to 300 characters of preview on its lock screen,

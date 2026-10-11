@@ -28,7 +28,7 @@ vi.mock('../../../src/core/pairing-targets.js', async (importOriginal) => {
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { createDevice } from '../../../src/core/device-auth.js'
+import { _resetDeviceAuthForTesting, createDevice } from '../../../src/core/device-auth.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
 import { _setTailscaleProbeForTesting } from '../../../src/core/tailnet.js'
 import { _resetDeviceTwinsForTesting } from '../../../src/web/routes/device-twins.js'
@@ -48,6 +48,8 @@ let port = 0
 type StubCall = { path: string; auth: string | undefined; body: Record<string, unknown> }
 const stubCalls: StubCall[] = []
 let adoptStatus = 200
+/** What the stub's /unadopt answers, in order (the last one repeats). */
+let unadoptAnswers: Array<Record<string, unknown>> = []
 let stub: http.Server
 
 beforeAll(async () => {
@@ -64,7 +66,8 @@ beforeAll(async () => {
         return
       }
       if (req.url === '/api/devices/unadopt') {
-        res.end(JSON.stringify({ name: 'whatever', instance: CLOUD_ID, revoked: true }))
+        const answer = unadoptAnswers.length > 1 ? unadoptAnswers.shift()! : unadoptAnswers[0]
+        res.end(JSON.stringify(answer ?? { name: 'whatever', instance: CLOUD_ID, revoked: true, refused: false }))
         return
       }
       res.statusCode = 404
@@ -93,6 +96,7 @@ afterAll(async () => {
 beforeEach(() => {
   stubCalls.length = 0
   adoptStatus = 200
+  unadoptAnswers = []
   cloudEndpoint = null
   _resetDeviceTwinsForTesting()
   _resetAuthRateLimitForTesting()
@@ -244,6 +248,33 @@ describe('the twin goes with the pairing', () => {
     expect(stubCalls.filter((c) => c.path === '/api/devices/unadopt').map((c) => c.body)).toEqual([{ token_hash: sha(token) }])
   })
 
+  it('a companion that kept its copy (refused, or an older one that does not say) is asked again; nothing there is done', async () => {
+    _resetDeviceTwinsForTesting({ retryMs: 30 })
+    withCloud()
+    const unadopts = () => stubCalls.filter((c) => c.path === '/api/devices/unadopt')
+    // Refused, then the bare answer an older companion gives, then removed: three asks, then it stops.
+    unadoptAnswers = [
+      { name: null, instance: CLOUD_ID, revoked: false, refused: true },
+      { name: null, instance: CLOUD_ID, revoked: false },
+      { name: 'kept-phone', instance: CLOUD_ID, revoked: true, refused: false },
+    ]
+    const { token } = await createDevice('kept-phone')
+    await get('/api/v1/routes', bearer(token))
+    expect((await send('DELETE', '/api/devices/kept-phone')).status).toBe(200)
+    await waitFor(() => unadopts().length >= 3)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(unadopts()).toHaveLength(3)
+    // Not there any more (refused: false): done at the first answer.
+    stubCalls.length = 0
+    unadoptAnswers = [{ name: null, instance: CLOUD_ID, revoked: false, refused: false }]
+    const { token: other } = await createDevice('gone-phone')
+    await get('/api/v1/routes', bearer(other))
+    expect((await send('DELETE', '/api/devices/gone-phone')).status).toBe(200)
+    await waitFor(() => unadopts().length >= 1)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(unadopts()).toHaveLength(1)
+  })
+
   it('a re-pair (new QR) removes the old token\'s cloud copy; the new token is adopted on its own', async () => {
     withCloud()
     const { token: oldToken } = await createDevice('reinstalled-phone')
@@ -300,7 +331,52 @@ describe('server.devices.* relayed from the companion (primary side)', () => {
       .toEqual({ ok: true, result: { name: 'cloud-phone', revoked: true } })
     expect((await get('/api/v1/tasks', bearer(cloudPhoneToken))).status).toBe(401)
     expect(await handleSessionControlRelay('server.devices.revoke-by-hash', '__server__', { tokenHash: sha(cloudPhoneToken) }))
-      .toEqual({ ok: true, result: { name: null, revoked: false } })
+      .toEqual({ ok: true, result: { name: null, revoked: false, refused: false } })
+  })
+
+  it('revoke-by-hash of the oldest pairing here, a Mac paired over the LAN, removes it: this Mac has no owner but itself (F-B)', async () => {
+    const file = path.join(WALNUT_HOME, 'auth.json')
+    const saved = await fs.readFile(file, 'utf-8')
+    try {
+      // auth.json as a build without owners writes it: the LAN Mac first, reported as a Mac, then a phone.
+      const macToken = crypto.randomBytes(16).toString('hex')
+      const now = new Date().toISOString()
+      await fs.writeFile(file, JSON.stringify({ ...JSON.parse(saved), devices: [
+        { name: 'lan-mac', id: 'd0000000000000aa1', tokenHash: sha(macToken), createdAt: now, platform: 'other', info: { model: 'Mac15,3', os: 'macOS 26.0' } },
+        { name: 'lan-phone-2', id: 'd0000000000000aa2', tokenHash: sha(crypto.randomBytes(16).toString('hex')), createdAt: now, platform: 'ios' },
+      ] }, null, 2) + '\n', { mode: 0o600 })
+      _resetDeviceAuthForTesting()
+      expect((await get('/api/v1/tasks', bearer(macToken))).status).toBe(200)
+      // The companion revoked it there: the copy here goes, and so does its access.
+      expect(await handleSessionControlRelay('server.devices.revoke-by-hash', '__server__', { tokenHash: sha(macToken) }))
+        .toEqual({ ok: true, result: { name: 'lan-mac', revoked: true } })
+      expect((await get('/api/v1/tasks', bearer(macToken))).status).toBe(401)
+    } finally {
+      await fs.writeFile(file, saved, { mode: 0o600 })
+      _resetDeviceAuthForTesting()
+    }
+  })
+
+  it('revoke-by-hash of a pairing this box keeps (a machine credential) is refused, and says so: the companion asks again', async () => {
+    const file = path.join(WALNUT_HOME, 'auth.json')
+    const saved = await fs.readFile(file, 'utf-8')
+    try {
+      const machineToken = crypto.randomBytes(16).toString('hex')
+      const parsed = JSON.parse(saved) as { devices: unknown[] }
+      await fs.writeFile(file, JSON.stringify({ ...parsed, devices: [
+        ...parsed.devices,
+        { name: 'bridge-kept', id: 'd0000000000000ab1', tokenHash: sha(machineToken), createdAt: new Date().toISOString(), kind: 'machine' },
+      ] }, null, 2) + '\n', { mode: 0o600 })
+      _resetDeviceAuthForTesting()
+      // `refused` rides only on an answer that removed nothing (a removal answers { name, revoked: true }).
+      expect(await handleSessionControlRelay('server.devices.revoke-by-hash', '__server__', { tokenHash: sha(machineToken) }))
+        .toEqual({ ok: true, result: { name: null, revoked: false, refused: true } })
+      const after = JSON.parse(await fs.readFile(file, 'utf-8')) as { devices: Array<{ name: string }> }
+      expect(after.devices.map((d) => d.name)).toContain('bridge-kept')
+    } finally {
+      await fs.writeFile(file, saved, { mode: 0o600 })
+      _resetDeviceAuthForTesting()
+    }
   })
 
   it('bad input is a bad_request, never a write', async () => {

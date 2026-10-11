@@ -191,7 +191,7 @@ describe('a machine token the companion stopped accepting', () => {
     const problem = hostProblemOf(frame)
     expect(problem).toMatchObject({ type: 'connect', kind: 'cloud_other_mac', headline: 'Another Mac is connected to this cloud companion' })
     expect(frame.error).toBe(CLOUD_BOX_OTHER_MAC_SENTENCE)
-    expect(problem && 'hint' in problem ? problem.hint : '').toMatch(/disconnect that Mac on the companion: `walnut device list` names it, `walnut device revoke <name>` removes it/)
+    expect(problem && 'hint' in problem ? problem.hint : '').toMatch(/hand it to this Mac on the companion: `walnut device list` shows this Mac's name, and `walnut device owner <name>` makes it the owner/)
     expect(hostActionsFor(problem, { surface: 'banner' })).toEqual(['retry'])
   })
 

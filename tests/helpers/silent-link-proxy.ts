@@ -8,7 +8,14 @@
  *   drop-hold  close every connection, then hold new ones silent (accepts TCP,
  *              never answers)
  *   slow       forward, but every chunk waits `delayMs` and the link carries at
- *              most `bytesPerSec` each way (a slow link that is still alive)
+ *              most `bytesPerSec` each way, delivered in 4KB slices (a slow
+ *              link that is still alive).
+ *              `shared`: ONE queue per direction for every connection, the way
+ *              one physical link (or one ssh stream) carries both of a host's
+ *              sockets: a pong then waits behind the bulk socket's bytes.
+ *              `queueBytes`: the link pushes back, as TCP does: a sender with
+ *              more than this waiting is paused, so its big write stays in
+ *              flight for as long as the link needs to carry it.
  *   severed    blackhole, and the far side never hears the near side go away: a
  *              client that gives up and closes leaves its upstream socket open.
  *              That is an SSH port forward whose client vanished (a Mac asleep, or
@@ -24,7 +31,7 @@ import net from 'node:net'
 
 export type LinkMode = 'pass' | 'blackhole' | 'drop-hold' | 'slow' | 'severed'
 
-export interface SlowLink { delayMs: number; bytesPerSec: number }
+export interface SlowLink { delayMs: number; bytesPerSec: number; shared?: boolean; queueBytes?: number }
 
 export interface SilentLinkProxy {
   port: number
@@ -50,16 +57,51 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
   const pairs = new Set<Pair>()
   const orphaned = new Set<net.Socket>()
 
+  /** The shared slow link's queue per direction (`slow.shared`). */
+  const SLOW_SLICE_BYTES = 4_096
+  const sharedTail: Record<'up' | 'down', Promise<void>> = { up: Promise.resolve(), down: Promise.resolve() }
+
   /** One direction's writer: in order, with the slow link's delay and rate when it applies. */
-  const writer = (to: net.Socket, pair: Pair) => {
+  const writer = (to: net.Socket, dir: 'up' | 'down', from: net.Socket, pair: Pair) => {
     let tail = Promise.resolve()
+    let waiting = 0
     return (chunk: Buffer) => {
       if (silent(mode) || pair.severed) return
       if (mode !== 'slow') { tail = tail.then(() => { if (!to.destroyed) to.write(chunk) }); return }
-      const { delayMs, bytesPerSec } = slow
-      tail = tail.then(() => new Promise<void>((resolve) => {
-        setTimeout(() => { if (!to.destroyed) to.write(chunk); resolve() }, delayMs + Math.ceil((chunk.length / bytesPerSec) * 1000))
-      }))
+      const { delayMs, bytesPerSec, shared, queueBytes } = slow
+      if (queueBytes !== undefined) {
+        waiting += chunk.length
+        if (waiting > queueBytes && !from.isPaused()) from.pause()
+      }
+      const done = () => {
+        if (queueBytes === undefined) return
+        waiting -= chunk.length
+        if (waiting <= queueBytes && from.isPaused() && !from.destroyed) from.resume()
+      }
+      // The chunk's delay once, then its bytes at the link's rate in small
+      // slices, as a real link delivers them: written whole after len/rate, a
+      // 64KB read showed a 64KB/s link as one second of silence per chunk.
+      // Each slice is due at a time on the clock (the chunk's start plus its
+      // bytes so far at the rate), not one slice's time after the last fired:
+      // on a loaded runner every timer fires late, and chained waits added
+      // that lateness up, so a 64KB/s link carried a 5MB history at half that.
+      const step = () => new Promise<void>((resolve) => {
+        let off = 0
+        const startAt = Date.now() + delayMs
+        const dueAt = (bytes: number) => startAt + Math.ceil((bytes / bytesPerSec) * 1000)
+        const next = () => setTimeout(() => {
+          if (to.destroyed) { done(); resolve(); return }
+          const piece = chunk.subarray(off, off + SLOW_SLICE_BYTES)
+          off += piece.length
+          to.write(piece)
+          if (off >= chunk.length) { done(); resolve(); return }
+          next()
+        }, Math.max(0, dueAt(Math.min(off + SLOW_SLICE_BYTES, chunk.length)) - Date.now()))
+        next()
+      })
+      // Shared: this connection's order AND the link's order (one queue for all).
+      if (shared) { tail = sharedTail[dir] = Promise.all([tail, sharedTail[dir]]).then(step) }
+      else tail = tail.then(step)
     }
   }
 
@@ -83,8 +125,8 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
     pair.upstream = up
     up.on('error', () => client.destroy())
     up.on('close', () => client.destroy())
-    const toUp = writer(up, pair)
-    const toClient = writer(client, pair)
+    const toUp = writer(up, 'up', client, pair)
+    const toClient = writer(client, 'down', up, pair)
     client.on('data', (b: Buffer) => toUp(b))
     up.on('data', (b: Buffer) => toClient(b))
   })

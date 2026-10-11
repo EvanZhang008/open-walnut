@@ -2862,6 +2862,20 @@ select {
   margin: 4px 8px;
 }
 
+/* A slow host still sending the history: a state, not a fault (no warning tint). */
+.session-history-loading-line {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 4px 8px;
+}
+
 .session-msg {
   padding: 10px 14px;
   border-radius: 18px;

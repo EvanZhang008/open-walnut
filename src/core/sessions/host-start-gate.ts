@@ -12,6 +12,13 @@
  *                                       -> host_unreachable with the NEW attempt's
  *                                       kind / headline / hint. Automation judges
  *                                       the current frame: no dial, no state reset.
+ *                                       A link that did not answer (timeout,
+ *                                       tunnel) moments ago, so the pool fails
+ *                                       fast on it, is not a stale frame: the
+ *                                       Start is refused on it at once, not after
+ *                                       a redial that waits 20s for the same no.
+ *                                       A failure a person fixes (a login, a key)
+ *                                       is always redialled.
  *  - blocking readiness              -> a human Start re-checks first (cached
  *                                       answer on timeout); still blocking ->
  *                                       host_not_ready with the problem's sentence
@@ -35,6 +42,8 @@ import type { ConfigHostDef, ConnectNowResult } from '../hosts/host-connect-acti
 export const GATE_CONNECT_DEADLINE_MS = 20_000
 /** A blocking cached answer is re-asked this long before it refuses (C56). */
 export const GATE_CHECK_DEADLINE_MS = 5_000
+/** Failures where the link itself did not answer: no person fixes them between two clicks. */
+const LINK_FAILURE_KINDS: ReadonlySet<string> = new Set(['timeout', 'cloud_tunnel'])
 
 /**
  * 'human': a person pressed Start (web draft, phone, a notification's Fix).
@@ -75,6 +84,8 @@ export interface HostStartGateDeps {
   readinessFor: (host: string, model: string | null) => HostReadiness | undefined
   /** The model a session with no explicit model gets on this host (its CLI's default), when known. */
   cliDefaultModel: (host: string) => Promise<string | undefined>
+  /** The pool's own phase for the host ('fails-fast': it learned the failure moments ago). */
+  wouldWait?: (host: string) => string
   cloudMode?: boolean
   now?: () => number
 }
@@ -82,7 +93,15 @@ export interface HostStartGateDeps {
 async function defaultDeps(): Promise<HostStartGateDeps> {
   const action = await import('../hosts/host-connect-action.js')
   const { hostReadinessForLaunch } = await import('../hosts/host-readiness.js')
+  // A stand-in pool without the reader (a module double) never fails fast here.
+  // Reading a name a test double does not define throws, rather than giving undefined.
+  const pool = await import('../../providers/daemon-connection.js').catch(() => null)
+  let wouldWait: ((host: string) => string) | undefined
+  try {
+    wouldWait = typeof pool?.daemonConnectWouldWait === 'function' ? pool.daemonConnectWouldWait : undefined
+  } catch { wouldWait = undefined }
   return {
+    wouldWait,
     configDef: action.configHostDef,
     frame: (host, def) => action.hostStatusFrame(host, def),
     connect: action.connectHostNow,
@@ -124,15 +143,19 @@ export async function hostStartGate(input: HostStartGateInput, depsArg?: HostSta
 
   if (!status.connected && status.phase === 'failed') {
     let outcome: string | undefined
-    if (source === 'human') {
-      // A deliberate Start is a fresh redial, never a refusal on a stale frame (G2).
+    // A deliberate Start is a fresh redial, never a refusal on a stale frame
+    // (G2). A link that did not answer moments ago is not stale: the pool fails
+    // fast on it, and a redial behind a link that holds connections silent
+    // spent the whole 20s to hear the same answer.
+    const fresh = LINK_FAILURE_KINDS.has(status.kind ?? '') && deps.wouldWait?.(host) === 'fails-fast'
+    if (source === 'human' && !fresh) {
       const r = await deps.connect(host, { deadlineMs: Math.min(GATE_CONNECT_DEADLINE_MS, left()) })
       outcome = r.outcome
       status = r.status ?? deps.frame(host, def)
     }
     if (!status.connected) {
       const kind = status.phase === 'failed' ? status.kind ?? 'unknown' : 'timeout'
-      log.session.info('start refused: host unreachable', { host, kind, outcome, source })
+      log.session.info('start refused: host unreachable', { host, kind, outcome, source, fresh })
       return hostGateBody({ code: 'host_unreachable', host, kind, headline: hostFailureHeadline(kind, label), hint: status.hint })
     }
   }

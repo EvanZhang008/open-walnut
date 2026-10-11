@@ -423,7 +423,7 @@ describe('performFileOp remote branch (injected reader)', () => {
     }
   })
 
-  it('maps any other remote failure to 502 with a plain-language prefix', async () => {
+  it('maps any other remote failure to 502 with a plain-language prefix naming the host', async () => {
     const { reader } = fakeReader({
       renamePath: async () => { throw new Error('ssh tunnel died') },
     })
@@ -434,7 +434,7 @@ describe('performFileOp remote branch (injected reader)', () => {
     expect(res.status).toBe(502)
     expect(res.body).toMatchObject({ code: 'remote' })
     expect((res.body as { error: string }).error).toBe(
-      'Could not complete on the remote host: ssh tunnel died',
+      'Could not complete on marina: ssh tunnel died',
     )
   })
 
@@ -641,7 +641,7 @@ describe('a delete/duplicate past the deadline answers 202 pending', () => {
     expect(res.status).toBe(202)
     expect(res.body).toEqual({
       pending: true,
-      message: 'Still working — this is taking longer than usual. The tree will refresh when it finishes.',
+      message: 'Still working: this is taking longer than usual. The tree will refresh when it finishes.',
     })
     release?.()
     await stillRunning

@@ -305,7 +305,12 @@ export async function readSessionJsonlContent(
     // transfers through a slow corp tunnel need more than the old 30s, which
     // aborted them mid-chunking and made big remote histories unloadable
     // (inc-1783532915925). Local daemon is in-process — 30s stays.
+    // For a remote host the 120s are IDLE time: 120s without bytes from the host
+    // (remote-read-bound.ts boundByProgress). As a total, they cut a 4MB tail at
+    // 32KB/s (about 170s) every time, so the next request started over and
+    // never got it; a read still arriving now finishes, up to 10 minutes.
     const READ_TIMEOUT = host ? 120_000 : 30_000;
+    const READ_CEILING = 600_000;
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
     // Direct paths first: where an earlier read found this file (`knownPath`),
@@ -321,8 +326,7 @@ export async function readSessionJsonlContent(
     const srcLabel: ReadSessionResult['source'] = host ? 'remote' : 'local';
 
     try {
-      const result = await Promise.race([
-        (async () => {
+      const read = (async () => {
           for (const directPath of directPaths) {
             const content = await reader.readFile(directPath);
             if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, directPath, content.length);
@@ -334,11 +338,18 @@ export async function readSessionJsonlContent(
           const findResult = await reader.findSession(sessionId);
           if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), srcLabel, findResult.path, findResult.content.length);
           return null;
-        })(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Session file read timeout (${READ_TIMEOUT / 1000}s)`)), READ_TIMEOUT),
-        ),
-      ]);
+        })();
+      const result = host
+        ? await (await import('./hosts/remote-read-bound.js')).boundByProgress(host, read, {
+          idleMs: READ_TIMEOUT, ceilingMs: READ_CEILING, windowMs: 10_000,
+          message: `Session file read timeout (no data for ${READ_TIMEOUT / 1000}s)`,
+        })
+        : await Promise.race([
+          read,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Session file read timeout (${READ_TIMEOUT / 1000}s)`)), READ_TIMEOUT),
+          ),
+        ]);
       if (result) return result;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -359,7 +370,12 @@ export async function readSessionJsonlContent(
       // through to the streams-capture fallback below (steps 2-3) rather than
       // throwing — the local daemon may be mid-restart while the streams file
       // (written directly by LocalIO) is still readable.
-      if (host) throw new Error(`Remote read failed (${host}): ${errMsg}`);
+      if (host) {
+        // In the host's own name (a person reads this as the stale-history reason).
+        const { hostDisplayNameFor, inHostTerms } = await import('./hosts/host-display-name.js');
+        const name = await hostDisplayNameFor(host);
+        throw new Error(`Remote read failed (${name}): ${inHostTerms(errMsg, host, name)}`);
+      }
       localReadError = errMsg;
     }
   }

@@ -64,14 +64,17 @@ async function fetchViaDaemon(host: string, remotePath: string): Promise<Buffer 
     const config = await getConfig()
     const hostDef = config.hosts?.[host]
     if (!hostDef?.hostname) return null
-    // Within the host-read deadline: a host still connecting gives no image now (boundHostRead).
+    // Within the host-read deadline, the connection and the read: a host still
+    // connecting gives no image now, and a connected link that stopped answering
+    // is noticed in seconds instead of after two 30s command timeouts (boundHostRead).
     const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
-    const conn = await boundHostRead(host, () => getDaemonConnection(host, { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }))
-    let result = await conn.send('fs.readImage', { path: remotePath }).catch(() => null)
-    if (!result?.ok) {
+    const result = await boundHostRead(host, async () => {
+      const conn = await getDaemonConnection(host, { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port })
+      const image = await conn.send('fs.readImage', { path: remotePath }).catch(() => null)
+      if (image?.ok) return image
       // Old daemon without fs.readImage — trusted SSH channel, fs.read is fine.
-      result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' }).catch(() => null)
-    }
+      return conn.send('fs.read', { path: remotePath, encoding: 'base64' }).catch(() => null)
+    })
     if (!result?.ok || typeof result.data !== 'string') return null
     return Buffer.from(result.data, 'base64')
   } catch { return null }

@@ -21,6 +21,8 @@ import { resolveSessionServicePreview, type ServicePreviewInfo } from '@/api/ses
 import { ApiError } from '@/api/client';
 import { normalizeServiceInput } from '@/utils/service-link';
 import { log } from '@/utils/log';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
+import { CLOUD_BOX_ALIAS, remoteHostTag } from '@/utils/host-display-label';
 
 /** The iframe must fire `load` within this after its src is set. */
 const LOAD_TIMEOUT_MS = 20_000;
@@ -59,6 +61,7 @@ function hostPort(url: string): string {
 
 export function SessionWebView({ sessionId, host, request, onNavigate, barRightSlot }: SessionWebViewProps) {
   const [phase, setPhase] = useState<Phase>(request ? 'resolving' : 'empty');
+  const hostName = useHostDisplayLabels();
   const [info, setInfo] = useState<ServicePreviewInfo | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [address, setAddress] = useState(request?.url ?? '');
@@ -145,7 +148,8 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
   }, [info]);
 
   const remote = !!info && info.via === 'tunnel';
-  const hostBadge = info ? (remote ? `SSH: ${info.host}` : 'Local') : '';
+  const tunnelHost = remote ? hostName(info!.host) : '';
+  const hostBadge = info ? (remote ? remoteHostTag(info.host, tunnelHost) : 'Local') : '';
   // "Open in tab" uses the address this machine can actually reach.
   const tabUrl = info?.url ?? requestedUrl;
   const busy = phase === 'resolving' || phase === 'loading';
@@ -167,7 +171,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
             aria-invalid={addressError || undefined}
           />
           {hostBadge && (
-            <span className="session-code-host" title={remote ? `Tunnelled to ${info!.host}:${info!.remotePort} over SSH` : undefined}>
+            <span className="session-code-host" title={remote ? `Tunnelled to ${tunnelHost}:${info!.remotePort}${info!.host === CLOUD_BOX_ALIAS ? '' : ' over SSH'}` : undefined}>
               {hostBadge}
             </span>
           )}
@@ -228,7 +232,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
               <div className="session-code-spinner" />
               <span>
                 {phase === 'resolving'
-                  ? `Connecting to ${hostPort(requestedUrl)}${host && host !== '__local__' ? ` through ${host}` : ''}…`
+                  ? `Connecting to ${hostPort(requestedUrl)}${host && host !== '__local__' ? ` through ${hostName(host)}` : ''}…`
                   : `Loading ${hostPort(requestedUrl)}…`}
               </span>
             </div>

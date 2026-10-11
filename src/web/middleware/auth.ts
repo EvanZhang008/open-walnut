@@ -25,7 +25,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
-import { verifyDeviceToken } from '../../core/device-auth.js'
+import { isPairedDeviceId, verifyDeviceToken } from '../../core/device-auth.js'
 import { recordAuthFailure, isAuthRateLimited } from './auth-rate-limit.js'
 import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
@@ -209,14 +209,19 @@ async function cloudAuthMiddleware(req: Request, res: Response, next: NextFuncti
 }
 
 /**
- * Validate an API key string against config. Returns the key name or null.
+ * Validate an API key string against config. Returns the key name or null. A
+ * key a paired device made works only while that device stays paired, so
+ * removing a device (by the console, the CLI, or a re-pair of its name) ends
+ * its keys too.
  */
 export async function validateApiKey(key: string): Promise<string | null> {
   try {
     const config = await getConfig()
     const keys = config.api_keys ?? []
     const match = keys.find((k) => k.key === key)
-    return match?.name ?? null
+    if (!match) return null
+    if (match.device_id && !(await isPairedDeviceId(match.device_id))) return null
+    return match.name
   } catch {
     return null
   }

@@ -3,6 +3,16 @@
  */
 
 import { apiGet, apiPost, apiDelete } from './client';
+import { asDeadlineError } from '../utils/request-failure';
+
+/** `fetch`, with a deadline that fired named TimeoutError in every engine (WebKit says AbortError). */
+async function sttFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    throw asDeadlineError(err, init.signal);
+  }
+}
 
 export interface TranscribeResult {
   text: string;
@@ -120,7 +130,7 @@ export async function transcribeAudio(
   /** Optional model override — retry with a specific ggml model via whisper-cli */
   model?: string,
 ): Promise<TranscribeResult> {
-  const res = await fetch('/api/stt/transcribe', {
+  const res = await sttFetch('/api/stt/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: audioBase64, format, language, model }),
@@ -207,7 +217,7 @@ export async function draftTranscribe(
   language?: string,
   signal?: AbortSignal,
 ): Promise<{ text: string; durationMs: number }> {
-  const res = await fetch('/api/stt/draft', {
+  const res = await sttFetch('/api/stt/draft', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: audioBase64, format, language }),
@@ -245,7 +255,7 @@ export async function saveRecording(
   /** The final pass failed: stored beside the audio so history can say why. */
   error?: string,
 ): Promise<{ recordingId: string; debugAudioPath: string }> {
-  const res = await fetch('/api/stt/save', {
+  const res = await sttFetch('/api/stt/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: audioBase64, format, text, language, ...(error ? { error } : {}) }),
@@ -299,7 +309,7 @@ export async function startSetup(
   onEvent: (event: SetupEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch('/api/stt/setup', {
+  const res = await sttFetch('/api/stt/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, ...params }),

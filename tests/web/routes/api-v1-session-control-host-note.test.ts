@@ -149,10 +149,11 @@ describe('model-options hostNote, per host class', () => {
     h.alive = false
     const res = await options('note-quiet')
     expect(res.status, res.text).toBe(200)
-    expect(res.body.hostNote).toBe(`Reconnecting to ${LABEL}`)
+    // The quiet-link probe in the read bound answers in seconds. A host other than
+    // the cloud box keeps its link (nothing re-dials it), so the note says the host
+    // is not answering, not that it is reconnecting (remote-read-bound.ts).
+    expect(res.body.hostNote).toBe(`${LABEL} is not answering`)
     expect(res.body.currentEffort, 'the record\'s pick, not a guess').toBeNull()
-    // A quiet-link probe in the read bound answers in seconds; without one the
-    // control's own 20s cap does (session-controls.ts cappedControlRead).
   }, 40_000)
 
   it('a host that answered: no note, the CLI\'s own pick', async () => {

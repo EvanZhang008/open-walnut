@@ -27,6 +27,8 @@ import { deleteFileDraft } from '@/utils/file-drafts';
 import { threeWayMerge, type MergeResult } from '@/utils/three-way-merge';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
+import { getHostStatus } from '@/hooks/useHostStatus';
+import { hostDisplayLabel } from '@/utils/host-display-label';
 import { computeContentHashClient } from '@/utils/content-hash';
 
 /** Global on/off preference ('1'/'0'); absent = off. */
@@ -96,6 +98,26 @@ export function offlineGivesUp(outageSince: number, now: number): boolean {
 export const LIVE_UNREACHABLE_PAUSED_MESSAGE =
   "Live edit is paused for this file: Walnut couldn't be reached for a minute. "
   + 'Your text is still in the editor. Press Save once Walnut is back, or click Live to resume.';
+
+/**
+ * Which hop a write that did not arrive failed at: the file's HOST (Walnut
+ * answered, `host_reconnecting`: the host it reaches the file through did not),
+ * or Walnut itself (no answer at all, or a gateway in front of it).
+ */
+export function failedHop(err: unknown): 'host' | 'walnut' {
+  return err instanceof FileSaveHttpError && err.code === 'host_reconnecting' ? 'host' : 'walnut';
+}
+
+/**
+ * The pause notice, naming the hop that failed. A gate review (2026-10-05) saw
+ * "Walnut couldn't be reached" on a file whose host had gone silent while
+ * Walnut answered every write.
+ */
+export function liveUnreachablePausedMessage(hostLabel?: string): string {
+  if (!hostLabel) return LIVE_UNREACHABLE_PAUSED_MESSAGE;
+  return `Live edit is paused for this file: ${hostLabel} did not answer for a minute. `
+    + `Your text is still in the editor. Press Save once ${hostLabel} is back, or click Live to resume.`;
+}
 
 // ── Per-file suspension ──────────────────────────────────────────────────────
 // A conflict live mode could not merge pauses live writes for THAT FILE ONLY —
@@ -417,6 +439,10 @@ export interface LiveEdit {
   /** The last auto-write did not reach the server and is being retried. Live
    *  mode is still ON; this is a status, not an error. */
   unreachable: boolean;
+  /** The file's host, by its name, when that is the hop that did not answer
+   *  (Walnut did); null when Walnut itself could not be reached. Kept while the
+   *  file stays paused for it. */
+  unreachableHost: string | null;
   /** Transient toolbar note, or null. */
   receipt: string | null;
   toggle: () => void;
@@ -481,6 +507,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   // writes have failed since (the latter picks the backoff). Null = reachable.
   const outageRef = useRef<{ since: number; failures: number } | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  const [unreachableHost, setUnreachableHost] = useState<string | null>(null);
   // Nonce so the same wording twice in a row still restarts the 4s timer.
   const [receipt, setReceipt] = useState<{ text: string; n: number } | null>(null);
   const receiptNRef = useRef(0);
@@ -525,6 +552,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // and learns about the server from its own first write.
     outageRef.current = null;
     setUnreachable(false);
+    setUnreachableHost(null);
     return () => {
       if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
       pullTimerRef.current = null;
@@ -862,6 +890,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         });
         outageRef.current = null;
         setUnreachable(false);
+        setUnreachableHost(null);
         showReceipt('Saved after reconnecting');
       }
     } catch (err) {
@@ -919,11 +948,16 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         const outage = outageRef.current ?? { since: now, failures: 0 };
         outage.failures += 1;
         outageRef.current = outage;
+        // Name the hop that failed: the file's host when Walnut answered for it.
+        const hop = failedHop(err) === 'host'
+          ? hostDisplayLabel(rec.host, rec.host ? getHostStatus(rec.host)?.label : undefined)
+          : null;
+        setUnreachableHost(hop);
         if (offlineGivesUp(outage.since, now)) {
           outageRef.current = null;
           setUnreachable(false);
           suspendHere(rec, 'unreachable');
-          optsRef.current.onError(LIVE_UNREACHABLE_PAUSED_MESSAGE);
+          optsRef.current.onError(liveUnreachablePausedMessage(hop ?? undefined));
           log.error('file-editor', 'live edit paused: the server stayed unreachable', {
             path: rec.path, host: rec.host, error: msg, failures: outage.failures, downMs: now - outage.since,
           });
@@ -1149,6 +1183,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     suspendedReason: suspendedFor,
     writing,
     unreachable,
+    unreachableHost,
     receipt: receipt?.text ?? null,
     toggle,
     noteUserEdit,

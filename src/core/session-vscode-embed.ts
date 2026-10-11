@@ -12,6 +12,8 @@
  */
 import { getConfig } from './config-manager.js'
 import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { HOST_RECONNECTING, HostReconnectingError, boundHostRead, hostLinkAnswers } from './hosts/remote-read-bound.js'
+import { hostDisplayName, inHostTerms } from './hosts/host-display-name.js'
 import {
   ensureCodeServer,
   resolveOpenTarget,
@@ -26,7 +28,7 @@ const REMOTE_ENSURE_TIMEOUT_MS = 120_000
 const REMOTE_ENSURE_NOINSTALL_TIMEOUT_MS = 25_000
 
 export class SessionVscodeEmbedError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 502 | 503, readonly hint?: string) {
+  constructor(message: string, readonly status: 400 | 404 | 502 | 503, readonly hint?: string, readonly code?: typeof HOST_RECONNECTING) {
     super(message)
     this.name = 'SessionVscodeEmbedError'
   }
@@ -98,11 +100,25 @@ export async function buildSessionVscodeEmbed(
     throw new SessionVscodeEmbedError(`Unknown session host alias: ${host}`, 400)
   }
   const target: SshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
+  const name = hostDisplayName(host, hostDef.label)
 
-  const conn = await getDaemonConnection(host, target)
+  // The host-read deadline for the connection (core/hosts/remote-read-bound.ts):
+  // a host still connecting answers at once, not after its dial (30s cold), and
+  // a connected link is asked once whether it still answers before an install
+  // that may run for minutes is started on it (a silent one held this 150s).
+  let conn: Awaited<ReturnType<typeof getDaemonConnection>>
+  try {
+    conn = await boundHostRead(host, () => getDaemonConnection(host, target))
+    if (!(await hostLinkAnswers(host))) throw new HostReconnectingError(host, name)
+  } catch (err) {
+    if (err instanceof HostReconnectingError) {
+      throw new SessionVscodeEmbedError(err.message, 503, 'Retry in a moment.', HOST_RECONNECTING)
+    }
+    throw new SessionVscodeEmbedError(`Could not reach ${name}: ${inHostTerms(err instanceof Error ? err.message : String(err), host, name)}`, 502)
+  }
   if (!conn.hasCapability('vscode-v1')) {
     throw new SessionVscodeEmbedError(
-      `daemon on ${host} needs an upgrade for embedded VS Code`, 503,
+      `daemon on ${name} needs an upgrade for embedded VS Code`, 503,
       'redeploy the daemon (npm run build:daemon), then retry',
     )
   }
@@ -117,12 +133,12 @@ export async function buildSessionVscodeEmbed(
   if (!result.ok || !result.port || !result.token) {
     if (result.installed === false) {
       throw new SessionVscodeEmbedError(
-        `code-server is not installed on ${host}`, 503,
+        `code-server is not installed on ${name}`, 503,
         result.installHint ?? result.error,
       )
     }
     throw new SessionVscodeEmbedError(
-      result.error ?? `code-server failed to start on ${host}`, 502,
+      result.error ?? `code-server failed to start on ${name}`, 502,
     )
   }
 

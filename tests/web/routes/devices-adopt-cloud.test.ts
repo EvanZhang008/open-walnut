@@ -109,7 +109,7 @@ describe('POST /api/devices/adopt and /unadopt on the companion', () => {
   it('a phone is refused (phone_cannot_pair) and nothing is written', async () => {
     const before = await fs.readFile(authFile(), 'utf-8')
     const r = await call('POST', '/api/devices/adopt', T.phone, body(sha(tok())))
-    expect(r).toEqual({ status: 403, body: { error: expect.stringMatching(/^A phone cannot pair other devices/), code: 'phone_cannot_pair' } })
+    expect(r).toEqual({ status: 403, body: { error: 'Pair new devices from the Mac, in Settings › Phones & Cloud, not from a phone.', code: 'phone_cannot_pair' } })
     expect((await call('POST', '/api/devices/unadopt', T.phone, { token_hash: sha(T.mac) })).body.code).toBe('phone_cannot_pair')
     expect((await devices()).map((d) => d.name)).toEqual(['mac-primary', 'my-phone'])
     expect(JSON.parse(await fs.readFile(authFile(), 'utf-8')).devices).toEqual(JSON.parse(before).devices.map((d: Rec) => (d.name === 'my-phone' ? { ...d, lastUsedAt: expect.any(String) } : d)))
@@ -125,13 +125,13 @@ describe('POST /api/devices/adopt and /unadopt on the companion', () => {
     expect((await call('GET', '/api/v1/tasks', phoneToken)).status).toBe(200)
 
     const un = await call('POST', '/api/devices/unadopt', T.mac, { token_hash: sha(phoneToken) })
-    expect(un).toEqual({ status: 200, body: { name: 'mac-phone', instance, revoked: true } })
+    expect(un).toEqual({ status: 200, body: { name: 'mac-phone', instance, revoked: true, refused: false } })
     expect(await find('mac-phone')).toBeUndefined()
     expect((await call('GET', '/api/v1/tasks', phoneToken)).status).toBe(401)
     // Its pushes stop too: the companion relays the device revoke to the primary.
     expect(frames('server.push.revoke-device').map((f) => f.params)).toEqual([{ keyName: 'mac-phone', revokedMsAgo: expect.any(Number) }])
     // Again: nothing there, still a 200.
-    expect(await call('POST', '/api/devices/unadopt', T.mac, { token_hash: sha(phoneToken) })).toEqual({ status: 200, body: { name: null, instance, revoked: false } })
+    expect(await call('POST', '/api/devices/unadopt', T.mac, { token_hash: sha(phoneToken) })).toEqual({ status: 200, body: { name: null, instance, revoked: false, refused: false } })
   })
 
   it('a name taken here gets a suffix; the existing pairing keeps its hash and id', async () => {
@@ -207,8 +207,8 @@ describe('the Mac\'s own pairing on the companion', () => {
     expect(r.status).toBe(200)
     expect(r.body.routes.map((x: { kind: string }) => x.kind)).toEqual(['cloud'])
     expect(frames('server.devices.adopt')).toHaveLength(0)
-    // Unadopting its hash (even by itself) removes nothing.
-    expect((await call('POST', '/api/devices/unadopt', T.mac, { token_hash: sha(T.mac) })).body).toMatchObject({ name: null, revoked: false })
+    // Unadopting its hash (even by itself) removes nothing, and says it refused (the Mac keeps retrying, never counts it done).
+    expect((await call('POST', '/api/devices/unadopt', T.mac, { token_hash: sha(T.mac) })).body).toMatchObject({ name: null, revoked: false, refused: true })
     expect(await find('mac-primary')).toBeDefined()
     expect(await find('bridge-local')).toBeDefined()
   })
@@ -242,6 +242,22 @@ describe('a revoke on the companion reaches the primary\'s copy', () => {
     await waitFor(() => frames('server.devices.revoke-by-hash').length === 1)
     await new Promise((r) => setTimeout(r, 150))
     expect(frames('server.devices.revoke-by-hash')).toHaveLength(1)
+  })
+
+  it('a primary that kept its copy (refused, or an older one answering a bare revoked:false) is asked again; only a removal or "not there" ends it', async () => {
+    _resetDeviceTwinsForTesting({ retryMs: 30 })
+    const answers: Rec[] = [
+      { name: null, revoked: false, refused: true },
+      { name: null, revoked: false },
+      { name: null, revoked: false, refused: false },
+    ]
+    bridgeRequestMock.mockImplementation(async (_a: string, _c: string, frame: { action: string }) => (
+      frame.action === 'server.devices.revoke-by-hash' ? { ok: true, result: answers.length > 1 ? answers.shift() : answers[0] } : { ok: true, result: { removed: 0 } }
+    ))
+    expect((await call('DELETE', '/api/devices/my-phone', T.phone)).status).toBe(200)
+    await waitFor(() => frames('server.devices.revoke-by-hash').length === 3)
+    await new Promise((r) => setTimeout(r, 150))
+    expect(frames('server.devices.revoke-by-hash')).toHaveLength(3)
   })
 
   it('a revoke racing an adoption in flight still ends with the primary\'s copy removed', async () => {

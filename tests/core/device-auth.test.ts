@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -22,10 +23,14 @@ import {
   getSetupTokenIfUnclaimed,
   claimInstance,
   setDeviceInfo,
+  getInstanceId,
   _resetDeviceAuthForTesting,
 } from '../../src/core/device-auth.js';
 
 const authFile = () => path.join(WALNUT_HOME, 'auth.json');
+const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex');
+/** Every file in the data dir whose name starts with `prefix`, sorted. */
+const named = async (prefix: string) => (await fs.readdir(WALNUT_HOME)).filter((f) => f.startsWith(prefix)).sort();
 
 // The provisioned-token path reads two env vars. Snapshot/restore them around
 // EVERY case (not just the provisioning block) so an ambient value on the box
@@ -99,10 +104,17 @@ describe('createDevice / verifyDeviceToken / revokeDevice round-trip', () => {
     }
   });
 
-  it('writes auth.json with mode 0600', async () => {
-    await createDevice('phone');
-    const stat = await fs.stat(authFile());
-    expect(stat.mode & 0o777).toBe(0o600);
+  it('writes auth.json and its .bak with mode 0600, whatever the umask', async () => {
+    // Under the usual umask 077 a 0644 write lands as 0600 too; 022 tells them apart.
+    const before = process.umask(0o022);
+    try {
+      await createDevice('phone');
+      await createDevice('laptop');
+      expect((await fs.stat(authFile())).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(`${authFile()}.bak`)).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(before);
+    }
   });
 });
 
@@ -163,14 +175,82 @@ describe('corrupt / missing auth.json', () => {
     expect(await listDevices()).toEqual([]);
   });
 
-  it('corrupt file → treated as zero devices, claim flow reopens', async () => {
+  it('corrupt file → treated as zero devices, claim flow reopens; the claim sets the corrupt file aside, never over it', async () => {
     await fs.writeFile(authFile(), '{{{not json', 'utf-8');
     expect(await isClaimed()).toBe(false);
+    expect(await fs.readFile(authFile(), 'utf-8')).toBe('{{{not json');
 
     const setup = await getSetupTokenIfUnclaimed();
     const { token } = await claimInstance(setup!.token, 'recovered-phone');
     expect(await verifyDeviceToken(token)).toEqual({ name: 'recovered-phone' });
     expect(await isClaimed()).toBe(true);
+    const aside = await named('auth.json.unreadable-');
+    expect(aside).toHaveLength(1);
+    expect(await fs.readFile(path.join(WALNUT_HOME, aside[0]), 'utf-8')).toBe('{{{not json');
+  });
+
+  it('missing auth.json and a .bak that does not parse: nothing is written by a read or a no-op, the id stays in memory, and the first real change sets the .bak aside', async () => {
+    const truncated = '{"devices":[{"name":"kept","tokenHash":"' + 'c'.repeat(64) + '","createdAt":"x"},{"na';
+    await fs.writeFile(`${authFile()}.bak`, truncated, 'utf-8');
+    expect(await isClaimed()).toBe(false);
+    expect(await listDevices()).toEqual([]);
+    expect(await revokeDevice('nobody')).toBe(false);
+    const id = await getInstanceId();
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+    expect(await getInstanceId()).toBe(id);
+    await expect(fs.stat(authFile())).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(`${authFile()}.bak`, 'utf-8')).toBe(truncated);
+    // A real change writes, and keeps the hand-recoverable bytes beside it.
+    await createDevice('new-phone');
+    expect(JSON.parse(await fs.readFile(authFile(), 'utf-8')).devices.map((d: { name: string }) => d.name)).toEqual(['new-phone']);
+    const aside = await named('auth.json.bak.unreadable-');
+    expect(aside).toHaveLength(1);
+    expect(await fs.readFile(path.join(WALNUT_HOME, aside[0]), 'utf-8')).toBe(truncated);
+  });
+
+  it('corrupt auth.json beside a good .bak: the .bak\'s tokens work, the box stays claimed, and auth.json is left as it is until a real change sets it aside', async () => {
+    await fs.writeFile(authFile(), '{"devices":[{"name":"ph', 'utf-8');
+    await fs.writeFile(`${authFile()}.bak`, JSON.stringify({ devices: [{ name: 'my-mac', id: 'd00000000000000a1', tokenHash: sha('mac-token'), createdAt: 'x' }] }, null, 2) + '\n', 'utf-8');
+    expect(await isClaimed()).toBe(true);
+    expect(await getSetupTokenIfUnclaimed()).toBeNull();
+    await expect(claimInstance('a'.repeat(32), 'intruder')).rejects.toThrow(/already claimed/);
+    expect((await listDevices()).map((d) => d.name)).toEqual(['my-mac']);
+    expect(await fs.readFile(authFile(), 'utf-8')).toBe('{"devices":[{"name":"ph');
+    // The token works; its lastUsedAt write is a real change: auth.json is set aside, then written from the .bak.
+    expect(await verifyDeviceToken('mac-token')).toEqual({ name: 'my-mac' });
+    expect(JSON.parse(await fs.readFile(authFile(), 'utf-8')).devices.map((d: { name: string }) => d.name)).toEqual(['my-mac']);
+    expect(await fs.readFile(path.join(WALNUT_HOME, (await named('auth.json.unreadable-'))[0]), 'utf-8')).toBe('{"devices":[{"name":"ph');
+  });
+
+  it('a no-op on a file an older build wrote writes nothing: no upgrade, no .bak made or rewritten', async () => {
+    const text = JSON.stringify({ devices: [
+      { name: 'old-phone', tokenHash: sha('p'), createdAt: 'x', info: { model: 'iPhone17,1', os: 'iOS 26.1' } },
+      { name: 'old-mac', tokenHash: sha('m'), createdAt: 'x' },
+    ] }, null, 2) + '\n';
+    await fs.writeFile(authFile(), text, { mode: 0o600 });
+    expect(await isClaimed()).toBe(true);
+    expect((await listDevices()).map((d) => d.name)).toEqual(['old-phone', 'old-mac']);
+    expect(await revokeDevice('nobody')).toBe(false);
+    expect(await getSetupTokenIfUnclaimed()).toBeNull();
+    expect(await fs.readFile(authFile(), 'utf-8')).toBe(text);
+    await expect(fs.stat(`${authFile()}.bak`)).rejects.toMatchObject({ code: 'ENOENT' });
+    // With a .bak there (the older build wrote one), it is not rewritten either.
+    await fs.writeFile(`${authFile()}.bak`, text, { mode: 0o600 });
+    const bakBefore = await fs.stat(`${authFile()}.bak`);
+    expect(await revokeDevice('nobody')).toBe(false);
+    expect((await fs.stat(`${authFile()}.bak`)).mtimeMs).toBe(bakBefore.mtimeMs);
+    expect(await fs.readFile(`${authFile()}.bak`, 'utf-8')).toBe(text);
+  });
+
+  it('a locked write that changes nothing leaves a corrupt file and its .bak as they are', async () => {
+    // The upgrade of an older file is written on any locked write; over a file
+    // that does not parse it wrote an empty registry, and the .bak with it.
+    await fs.writeFile(authFile(), '{{{not json', 'utf-8');
+    const bak = JSON.stringify({ devices: [{ name: 'kept', tokenHash: 'b'.repeat(64), createdAt: 'x' }] });
+    await fs.writeFile(`${authFile()}.bak`, bak, 'utf-8');
+    expect(await revokeDevice('nobody')).toBe(false);
+    expect(await fs.readFile(authFile(), 'utf-8')).toBe('{{{not json');
+    expect(await fs.readFile(`${authFile()}.bak`, 'utf-8')).toBe(bak);
   });
 
   it('valid JSON but wrong shape → zero devices', async () => {
@@ -205,6 +285,26 @@ describe('auth.json sidecar backup (a lost device registry is recoverable)', () 
     // Must NOT mistake a fresh install for a loss — that would block claiming.
     expect(await isClaimed()).toBe(false);
     expect(await listDevices()).toEqual([]);
+  });
+
+  it('a crash between the two renames leaves the .bak one write behind: auth.json alone is read, so what that write removed stays removed', async () => {
+    const phone = await createDevice('phone');
+    const laptop = await createDevice('laptop');
+    const before = await fs.readFile(`${authFile()}.bak`, 'utf-8');
+    await revokeDevice('laptop');
+    // saveAuth renames auth.json into place first, then the .bak: a kill between
+    // the two leaves the .bak as it was before the write.
+    await fs.writeFile(`${authFile()}.bak`, before, { mode: 0o600 });
+    _resetDeviceAuthForTesting();
+
+    expect(await verifyDeviceToken(laptop.token)).toBeNull();
+    expect(await verifyDeviceToken(phone.token)).toEqual({ name: 'phone' });
+    expect((await listDevices()).map((d) => d.name)).toEqual(['phone']);
+    // The next real write brings the .bak up to date, and the removed record does not come back.
+    await createDevice('tablet');
+    for (const f of [authFile(), `${authFile()}.bak`]) {
+      expect(JSON.parse(await fs.readFile(f, 'utf-8')).devices.map((d: { name: string }) => d.name)).toEqual(['phone', 'tablet']);
+    }
   });
 
   it('revocation is not resurrected by the sidecar', async () => {

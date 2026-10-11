@@ -737,6 +737,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       if (err instanceof QuickStartError) {
         // The host gate's 409 carries its whole body (code, host, headline,
         // hint, allowOverride): the draft's error bar reads it (C3, C54).
+        // A host not reachable now is the designed 503 every read answers, not an incident.
+        if (err.body?.code === HOST_RECONNECTING) markHandledFailure(res)
         res.status(err.statusCode).json(err.body && typeof err.body.code === 'string' ? { ...err.body, error: err.message } : { error: err.message })
         return
       }
@@ -766,11 +768,14 @@ import {
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
-import { HostReconnectingError, boundHostRead } from '../../core/hosts/remote-read-bound.js'
+import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead } from '../../core/hosts/remote-read-bound.js'
 
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
 function sendControlError(res: Response, err: SessionControlError): void {
   const code = typeof err.extra?.code === 'string' ? err.extra.code : undefined
+  // A host that is not answering now is the designed degraded answer (the tab
+  // says "Reconnecting to Cloud" and polls on), never an endpoint incident card.
+  if (code === HOST_RECONNECTING) markHandledFailure(res)
   res.status(err.statusCode).json({ error: err.message, ...(code ? { code } : {}) })
 }
 
@@ -1049,7 +1054,9 @@ sessionsRouter.post('/:sessionId/vscode-embed', async (req: Request, res: Respon
     res.json(result)
   } catch (err) {
     if (err instanceof SessionVscodeEmbedError) {
-      res.status(err.status).json({ error: err.message, hint: err.hint })
+      // A host that is not answering now is a designed answer, not an incident.
+      if (err.code === HOST_RECONNECTING) markHandledFailure(res)
+      res.status(err.status).json({ error: err.message, hint: err.hint, ...(err.code ? { code: err.code } : {}) })
       return
     }
     next(err)
@@ -1365,8 +1372,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // pulled the whole 9.5 MB remote JSONL over SSH on every cold panel open).
       // A host still connecting answers at once from the caches below, or
       // degraded: this request never waits out a dial (remote-read-bound.ts).
-      const history = await boundHostRead(record?.host, () => readProviderSessionHistory(sessionId, record, record?.host, true,
-        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined))
+      const readHistory = () => readProviderSessionHistory(sessionId, record, record?.host, true,
+        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+      // A full read is shared: one still arriving when this request had to
+      // answer ("Still loading") goes on, and the client's next request joins
+      // it rather than starting over. A delta (?since=) is always fresh.
+      const history = req.query.since === undefined
+        ? await boundSharedHostRead(record?.host, `history\u0000${sessionId}\u0000${tail && tail > 0 ? 'tail' : 'all'}`, readHistory)
+        : await boundHostRead(record?.host, readHistory)
       messages = history.messages
       historySourceAvailable = history.sourceAvailable
       historyWindowed = history.windowed
@@ -1375,6 +1388,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // Surface remote read errors (SSH auth, daemon connection, etc.) to the frontend
       const msg = err instanceof Error ? err.message : String(err)
       log.web.warn('session history read failed', { sessionId, host: record?.host, error: msg })
+      // Still arriving, on a link that answers: the client keeps what it shows
+      // and asks again at once, joining the read (boundSharedHostRead).
+      const loading = err instanceof HostStillLoadingError ? { loading: { from: err.from } } : {}
       // Degraded mode: an SSH-down window shouldn't blank the whole
       // conversation ("Failed to load history" over hours-old streaming
       // blocks — inc-1783406628291). Serve the last successfully parsed
@@ -1392,7 +1408,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           // orphan finished-agent ids are still readable from the WeakMap.
           const staleOrphans = getOrphanFinishedAgentIds(cached)
           res.json({
-            messages: cached, total: cached.length, stale: true, staleReason: condenseStaleReason(msg),
+            messages: cached, total: cached.length, stale: true, staleReason: condenseStaleReason(msg), ...loading,
             ...(staleOrphans && staleOrphans.size > 0 ? { finishedAgentIds: [...staleOrphans].sort() } : {}),
           })
           return
@@ -1405,7 +1421,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             sessionId, host: record?.host, messages: diskCached.messages.length, cachedAt: diskCached.cachedAt,
           })
           res.json({
-            messages: diskCached.messages, total: diskCached.messages.length, stale: true, staleReason: condenseStaleReason(msg),
+            messages: diskCached.messages, total: diskCached.messages.length, stale: true, staleReason: condenseStaleReason(msg), ...loading,
             ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
           })
           return
@@ -1413,14 +1429,22 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         // Nothing cached and the host is still connecting: an empty stale
         // answer, so the client shows "Reconnecting" and retries on its own.
         if (err instanceof HostReconnectingError) {
-          res.json({ messages: [], total: 0, stale: true, staleReason: msg })
+          res.json({ messages: [], total: 0, stale: true, staleReason: msg, ...loading })
           return
         }
       }
       // A failed delta is answered in place: the client keeps its timeline under
       // the stale banner and retries, so it is not an endpoint incident card.
       if (req.query.since !== undefined) markHandledFailure(res)
-      res.status(502).json({ error: condenseStaleReason(msg) })
+      // `loading`: a delta cut while the host still sends; the client says it is
+      // loading (not that the link is down) and joins the full read. A host not
+      // reachable now is the degraded 503 every other read answers; 502 stays for
+      // a read that failed.
+      if (err instanceof HostReconnectingError) {
+        markHandledFailure(res).status(503).json({ error: msg, code: HOST_RECONNECTING, ...loading })
+        return
+      }
+      res.status(502).json({ error: condenseStaleReason(msg), ...loading })
       return
     }
     logMessageOrdering('P2:full', sessionId, messages, record?.host)

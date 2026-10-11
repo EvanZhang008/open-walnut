@@ -21,6 +21,7 @@ import {
   classifyWriteFailure, offlineRetryDelay, offlineGivesUp,
   OFFLINE_RETRY_DELAYS_MS, LIVE_OFFLINE_GIVE_UP_MS, LIVE_UNREACHABLE_PAUSED_MESSAGE,
   suspendLiveEdit, liveSuspensionReason, isLiveSuspended, resumeLiveEdit, clearLiveSuspensions,
+  failedHop, liveUnreachablePausedMessage,
 } from '../../web/src/hooks/useLiveEdit';
 import {
   FileSaveConflictError, FileSaveHttpError, FileSaveUnreachableError, isNetworkFetchError,
@@ -197,5 +198,39 @@ describe('what the user reads', () => {
       expect(text).not.toMatch(/Failed to fetch|Load failed|NetworkError/);
     }
     expect(LIVE_UNREACHABLE_PAUSED_MESSAGE).toMatch(/click Live to resume/);
+  });
+});
+
+describe('the pause names the hop that did not answer', () => {
+  // Gate review (2026-10-05): a cloud file whose host went silent paused with
+  // "Walnut couldn't be reached" while Walnut answered every write.
+  it('the file\'s host when Walnut answered for it; Walnut when nothing answered', () => {
+    expect(failedHop(new FileSaveHttpError("Nothing was saved. Can't reach Cloud right now.", 503, 'host_reconnecting'))).toBe('host');
+    expect(failedHop(new FileSaveHttpError('Bad gateway', 502))).toBe('walnut');
+    expect(failedHop(new FileSaveHttpError('Could not save on Cloud: EACCES', 502, 'host_error'))).toBe('walnut');
+    expect(failedHop(new FileSaveUnreachableError(new TypeError('Load failed')))).toBe('walnut');
+  });
+
+  it('says the host by name, with the same way out', () => {
+    const text = liveUnreachablePausedMessage('Cloud');
+    expect(text).toBe('Live edit is paused for this file: Cloud did not answer for a minute. '
+      + 'Your text is still in the editor. Press Save once Cloud is back, or click Live to resume.');
+    expect(text).not.toMatch(/Walnut/);
+    expect(liveUnreachablePausedMessage()).toBe(LIVE_UNREACHABLE_PAUSED_MESSAGE);
+  });
+
+  it('a save the host could not take carries the server\'s code to the client', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: "Nothing was saved. Can't reach Cloud right now.", code: 'host_reconnecting' }), {
+      status: 503, headers: { 'content-type': 'application/json' },
+    })));
+    try {
+      const err = await saveFileContent('/w/doc.md', 'text', { host: '__cloudbox__' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FileSaveHttpError);
+      expect((err as FileSaveHttpError).code).toBe('host_reconnecting');
+      expect(classifyWriteFailure(err)).toBe('unreachable');
+      expect(failedHop(err)).toBe('host');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

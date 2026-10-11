@@ -26,6 +26,8 @@ import { checkServerIdentity, type TLSSocket } from 'node:tls'
 import os from 'node:os'
 import { getConfig } from './config-manager.js'
 import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { HostReconnectingError, boundHostRead, hostLinkAnswers } from './hosts/remote-read-bound.js'
+import { hostDisplayName, inHostTerms } from './hosts/host-display-name.js'
 import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
 import { bareHost, hostnamesMatch, isLoopbackHostname, parseServiceUrl } from './service-url.js'
@@ -44,11 +46,12 @@ export type ServicePreviewErrorCode =
   | 'unreachable'
   | 'tunnel_failed'
   | 'timeout'
+  | 'host_reconnecting'
 
 export class ServicePreviewError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 404 | 422 | 502 | 504,
+    readonly status: 400 | 404 | 422 | 502 | 503 | 504,
     readonly code: ServicePreviewErrorCode,
     readonly hint?: string,
   ) {
@@ -77,7 +80,7 @@ export interface ServicePreviewResult {
   reachability: 'ok' | 'slow'
 }
 
-interface HostDef { hostname: string; user?: string; port?: number; enabled?: boolean }
+interface HostDef { hostname: string; user?: string; port?: number; enabled?: boolean; label?: string }
 
 export interface ServiceTarget {
   /** Host alias, or `__local__`. */
@@ -289,12 +292,21 @@ async function resolvePreview(session: SessionRecord, url: URL, deps: ServicePre
   if (!def?.hostname) {
     throw new ServicePreviewError(`Unknown session host alias: ${target.host}`, 422, 'unknown_host')
   }
+  const name = hostDisplayName(target.host, def.label)
   let conn: Awaited<ReturnType<typeof getDaemonConnection>>
   try {
-    conn = await getDaemonConnection(target.host, { hostname: def.hostname, user: def.user, port: def.port })
+    // The host-read deadline (core/hosts/remote-read-bound.ts): a host still
+    // connecting answers at once instead of at this route's 30s deadline, and a
+    // connected link is asked once whether it still answers before an ssh
+    // forward is opened on it.
+    conn = await boundHostRead(target.host, () => getDaemonConnection(target.host, { hostname: def.hostname, user: def.user, port: def.port }))
+    if (!(await hostLinkAnswers(target.host))) throw new HostReconnectingError(target.host, name)
   } catch (err) {
+    if (err instanceof HostReconnectingError) {
+      throw new ServicePreviewError(err.message, 503, 'host_reconnecting', 'Retry in a moment.')
+    }
     throw new ServicePreviewError(
-      `Could not reach ${target.host}: ${err instanceof Error ? err.message : String(err)}`, 502, 'tunnel_failed',
+      `Could not reach ${name}: ${inHostTerms(err instanceof Error ? err.message : String(err), target.host, name)}`, 502, 'tunnel_failed',
       'The host is not connected. Check Settings > Remote hosts, then Retry.',
     )
   }
@@ -327,7 +339,7 @@ async function resolvePreview(session: SessionRecord, url: URL, deps: ServicePre
     host: target.host, sessionId: session.claudeSessionId, remotePort, targets: target.targets, error: lastError,
   })
   throw new ServicePreviewError(
-    `Nothing is answering on ${target.host} at port ${remotePort}`, 502, 'unreachable',
+    `Nothing is answering on ${name} at port ${remotePort}`, 502, 'unreachable',
     'Check that the server is still running on that host, then Retry.',
   )
 }

@@ -10,6 +10,7 @@ import {
 } from './types.js';
 import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
+import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
 
 const DEFAULT_CONFIG: Config = {
@@ -302,6 +303,9 @@ export async function getConfig(): Promise<Config> {
  *    pointing at the same dev box); showing the raw FQDN again is just noise.
  */
 async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
+  // A server under test reads no real ~/.ssh/config: its hosts would be swept
+  // over real ssh at startup (src/lib/real-ssh-guard.ts).
+  if (!realSshReachAllowed()) return;
   const discovered = await scanSshConfig();
   if (discovered.size === 0) return;
 

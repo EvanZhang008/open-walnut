@@ -15,7 +15,7 @@
 
 import { CLOUD_MODE } from '../../constants.js'
 import { getInstanceId } from '../device-auth.js'
-import { AdoptionError, adoptDeviceRecord, revokeAdoptedByHash } from '../device-adoption.js'
+import { AdoptionError, adoptDeviceRecord, revokeAdopted } from '../device-adoption.js'
 import { directRoutes, listeningPort } from './routes.js'
 import { peekTailscaleBrief } from '../tailnet.js'
 
@@ -52,9 +52,12 @@ export async function handleDevicesRelayAction(
       }
       case 'revoke-by-hash': {
         // The revoke removes the push rows the phone registered here as itself
-        // (over the LAN route) too: revokePairing owns that for every revoke.
-        const name = await revokeAdoptedByHash(p.tokenHash)
-        return { name, revoked: name !== null }
+        // (over the LAN route) too: device-auth.ts revokePairing owns that for
+        // every revoke. When nothing was removed, `refused` says whether the
+        // twin is still here with its token working (the companion must not
+        // count that done) or is simply not here (done).
+        const { name, refused } = await revokeAdopted(p.tokenHash)
+        return name !== null ? { name, revoked: true } : { name, revoked: false, refused }
       }
       default:
         throw new DevicesRelayError(`unknown devices action: ${sub}`, 'bad_request', 400)

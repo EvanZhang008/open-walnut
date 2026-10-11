@@ -11,7 +11,9 @@
  *     staleReason } serving the last-good parse;
  *   · full fetch + read failure + NO cache → 502 (unchanged — nothing to serve);
  *   · ?since= delta + read failure → 502 even WITH cache (a stale total would
- *     corrupt the client's delta cursor).
+ *     corrupt the client's delta cursor);
+ *   · ?since= delta while the host is not reachable now → 503 host_reconnecting,
+ *     the degraded answer every other host read gives (gate links F9).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -23,11 +25,16 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 const historyBySid = new Map<string, unknown[]>();
 const failingSids = new Set<string>();
 const cacheBySid = new Map<string, unknown[]>();
+const loadingSids = new Set<string>();
+const reconnectingSids = new Set<string>();
 vi.mock('../../../src/core/session-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/session-history.js')>();
+  const { HostReconnectingError, HostStillLoadingError } = await import('../../../src/core/hosts/remote-read-bound.js');
   return {
     ...actual,
     readSessionHistory: async (sessionId: string) => {
+      if (loadingSids.has(sessionId)) throw new HostStillLoadingError('clouddev', 'Dev box');
+      if (reconnectingSids.has(sessionId)) throw new HostReconnectingError('clouddev', 'Dev box');
       if (failingSids.has(sessionId)) throw new Error('Remote read failed (clouddev): Session file read timeout (30s)');
       return historyBySid.get(sessionId) ?? [];
     },
@@ -59,6 +66,8 @@ beforeEach(async () => {
   historyBySid.clear();
   failingSids.clear();
   cacheBySid.clear();
+  loadingSids.clear();
+  reconnectingSids.clear();
 });
 
 afterEach(async () => {
@@ -102,6 +111,42 @@ describe('GET /:sessionId/history — degraded mode on live-read failure', () =>
     const res = await request(app).get('/api/sessions/sid-delta/history?since=1');
     expect(res.status).toBe(502);
     expect(res.body.stale).toBeUndefined();
+  });
+
+  it('a ?since delta cut while the host still sends: 503 with `loading`, so the client says loading (not the stale banner) and joins the full read', async () => {
+    await seedRemoteSession('sid-delta-loading');
+    loadingSids.add('sid-delta-loading');
+    cacheBySid.set('sid-delta-loading', [msg('cached-1')]);
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/sid-delta-loading/history?since=1');
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: 'Still loading from Dev box. Try again in a moment.', code: 'host_reconnecting', loading: { from: 'Dev box' } });
+    // Any other failure of a delta carries no `loading`.
+    failingSids.add('sid-delta');
+    cacheBySid.set('sid-delta', [msg('cached-1')]);
+    await seedRemoteSession('sid-delta');
+    const other = await request(app).get('/api/sessions/sid-delta/history?since=1');
+    expect(other.status).toBe(502);
+    expect(other.body.loading).toBeUndefined();
+    expect(other.body.code).toBeUndefined();
+  });
+
+  it('a ?since delta while the host reconnects: 503 host_reconnecting with the plain sentence, never a 502', async () => {
+    await seedRemoteSession('sid-delta-reconnecting');
+    reconnectingSids.add('sid-delta-reconnecting');
+    cacheBySid.set('sid-delta-reconnecting', [msg('cached-1')]);
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/sid-delta-reconnecting/history?since=1');
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: 'Reconnecting to Dev box', code: 'host_reconnecting' });
+    // A designed answer, not an endpoint incident card.
+    expect(res.headers['x-walnut-handled-failure']).toBe('1');
+    // The full read of the same session still serves its cache, stale.
+    const full = await request(app).get('/api/sessions/sid-delta-reconnecting/history');
+    expect(full.status).toBe(200);
+    expect(full.body.stale).toBe(true);
   });
 
   it('healthy read never reports stale', async () => {

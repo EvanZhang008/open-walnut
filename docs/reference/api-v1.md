@@ -31,7 +31,10 @@ Primary-mode refusals carry a `code`: `not_paired` (no credential) or
 - **Cloud mode** (`WALNUT_CLOUD_MODE=1`): a **device token** obtained through the
   one-time claim flow. See the claim endpoints (implemented in `src/web/routes/setup.ts`):
   - `GET /api/v1/setup/status` → `{ claimed: boolean }` (public)
-  - `POST /api/v1/setup/claim` `{ setupToken, deviceName }` → `{ deviceName, token }` (public, one-shot)
+  - `POST /api/v1/setup/claim` `{ setupToken, deviceName, device? }` → `{ deviceName, token }` (public, one-shot).
+    `device` is the claimer's self-report, in the shape `POST /api/v1/devices/self` takes
+    (`{ model, os, appVersion }`); a claim whose report says a computer records the claimer
+    as the companion's owner, and any other claim records none.
 - **Primary mode**: a device token minted on this machine (Settings > Phones &
   Cloud, or `walnut device add <name>`) or a config.yaml `api_keys[]` entry.
   Apple Health (`/health/*`) is the exception: it takes a device token only.
@@ -77,7 +80,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `host_unreachable` | 409 | `POST /sessions`: a fresh connect attempt to the host just failed; `kind`, `headline` and `hint` describe that attempt |
 | `host_off` | 409 | `POST /sessions`: remote hosts are off on this test server (never dialled) |
 | `host_removed` | 409 | `POST /sessions`: the `host` alias is not an enabled host in Settings (removed, disabled, or never configured) |
-| `host_reconnecting` | 503 | `GET /sessions/:id/history`, `GET /sessions/:id/changes` and `GET /sessions/list-dirs`: the host is still connecting, or did not connect within 5 s of this request starting the dial. Nothing was read. Retry in a few seconds; the dial goes on without the request. Also `POST /sessions/:id/model` and `POST /sessions/:id/effort` when the record says a CLI runs and its host cannot be asked now (`message`: "Can't reach <host> right now"; nothing changed). A stopped session's pick needs no host and is saved for its next start. Through the cloud companion the code and status arrive as the primary sent them |
+| `host_reconnecting` | 503 | `GET /sessions/:id/history`, `GET /sessions/:id/changes`, `GET /sessions/list-dirs`, `GET /sessions/:id/plan`, `GET /sessions/:id/subagent/:agentId/history`, `GET /files/list`, `GET /files/resolve-path` and `PUT /file-content`: the host is not answering now. It is still connecting, or did not connect within 5 s of this request starting the dial, or its last connect failed, or the dial this request started failed (whatever the pool does next), or its link stopped answering (a read quiet for 3 s asks the link once; no answer in 3 s more ends the wait), or it sent nothing for the read's idle bound: 20 s, or four of the link's measured round trips when that is longer. Nothing was read (a save: see `PUT /file-content`). `message` is one plain sentence in the host's own name (its label, else its alias): "Reconnecting to <host>" while it connects or redials, "Can't reach <host> right now." after a connect that failed, "<host> is not answering" when a host other than the cloud box keeps its link but stopped answering (the cloud box's silent link is closed and redialled, so it says reconnecting), "<host> did not answer in time" for a command that timed out on a link that answers. The connect's own words (an errno, a URL, an ssh line) go to the server log only. Retry in a few seconds; the dial goes on without the request. Also `POST /sessions/:id/model` and `POST /sessions/:id/effort` when the record says a CLI runs and its host cannot be asked now (`message`: "Can't reach <host> right now"; nothing changed). A stopped session's pick needs no host and is saved for its next start. Through the cloud companion the code and status arrive as the primary sent them |
+| `host_error` | 502 | `PUT /file-content` on a remote host: the host answered the write with a refusal of its own (`message` says why, in the host's name). Nothing new was written |
 | `task_has_no_session` | 409 | `POST /messages` named a task with nothing running; start one with `POST /tasks/:id/start` |
 | `ambiguous_target` | 400 | `POST /messages` handle matched several sessions/tasks (`candidates`); use a longer id |
 | `unknown_target` | 404 | `POST /messages` handle matched no session, task, or title |
@@ -2024,10 +2028,11 @@ BOTH boxes:
     session's host cannot be asked now, so `current`/`currentEffort` are the
     record's and a pick cannot reach the CLI until it answers. A sentence in the
     host's own name (its label, else its alias): "Can't reach <host> right
-    now", "Reconnecting to <host>", "<host> did not answer in time". Show it
-    with the menu. Absent when the host answered, when no CLI runs (a stopped
-    session's pick needs no host), and for the Mac's own sessions. The menu
-    itself never waits on the host.
+    now", "Reconnecting to <host>", "<host> is not answering" (a host other
+    than the cloud box whose link is up but stopped answering), "<host> did
+    not answer in time". Show it with the menu. Absent when the host
+    answered, when no CLI runs (a stopped session's pick needs no host), and
+    for the Mac's own sessions. The menu itself never waits on the host.
   - `404 not_found` for an unknown session id.
 - `POST /api/v1/sessions/:id/model` body `{ "model" }` →
   `200 { "model", "cliModel", "appliedLive", "effectiveModel"? }`
@@ -2561,6 +2566,12 @@ rejected, 4096-char cap.
   **absent for a truncated or binary read**, which is exactly what marks those
   files non-editable (hashing a served 512 KB prefix would let a save
   round-trip it back over the whole file and delete the tail).
+  **A remote host that is not answering (additive, 2026-10):** still a `200`
+  with `error` set (one plain sentence in the host's name), plus
+  `"code": "host_reconnecting"`; ask again in a few seconds, as the console's
+  viewer does on its own. A read still arriving on a slow link that answers
+  carries `"loading": { "from": "<host label>" }` instead; asking again at once
+  joins that read.
   **REPLICA relay (2026-08):** content reads relay to the target host's
   daemon over the bridge via the narrow `fs.readBounded` command — NOT
   `fs.read`: the daemon enforces a **2 MB cap** and the path sandbox
@@ -2604,7 +2615,13 @@ rejected, 4096-char cap.
   `415` when the target reads as binary; `413` when the submitted content
   exceeds the cap; `404` when the parent directory does not exist (parents are
   never created — that's a typo, not an intent). Creating a NEW file is
-  allowed: a missing target with no `expectedHash` is not a conflict.
+  allowed: a missing target with no `expectedHash` is not a conflict. On a
+  remote host, `503 host_reconnecting` when the host did not answer the reads
+  made before the write in time (bounded like every read), or had no link when
+  the write went out: nothing was written. `503 host_reconnecting` also when the
+  link went away, or nothing answered, while the write was out: it may have
+  landed, and the next save's `expectedHash` makes a landed one a `409`, never
+  a silent overwrite. `502 host_error` when the host refused the write itself.
   **REPLICA:** writes never ride the bridge either — `host=` answers `501
   not_supported_cloud`, and replica-LOCAL writes are refused outright
   (`403`), since the only roots a replica can read ARE its live session state.

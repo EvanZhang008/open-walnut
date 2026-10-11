@@ -2326,7 +2326,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         process.stdout.write([
           '',
           '==============================================================',
-          '  WALNUT CLOUD SETUP — instance is UNCLAIMED',
+          '  WALNUT CLOUD SETUP: instance is UNCLAIMED',
           '',
           '  Setup token provisioned via pairing code (not shown).',
           `  Valid until: ${new Date(setup.expiresAt).toISOString()}`,
@@ -2369,7 +2369,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // local terminals at all. IS_EPHEMERAL stays gated for a second reason: it
       // runs over a SNAPSHOT of production's registry, so its view of "which
       // sessions still exist" is stale by construction.
-      if (!IS_EPHEMERAL && !CLOUD_MODE) {
+      // A server under test sweeps over ssh only behind isolateFromRealSsh():
+      // otherwise its hosts are the developer's real ones (src/lib/real-ssh-guard.ts).
+      const { realSshReachAllowed } = await import('../lib/real-ssh-guard.js')
+      const sshAllowed = realSshReachAllowed()
+      if (!IS_EPHEMERAL && !CLOUD_MODE && !sshAllowed) {
+        log.web.info('terminal sweep skipped: a server under test without ssh isolation never runs ssh')
+      }
+      if (!IS_EPHEMERAL && !CLOUD_MODE && sshAllowed) {
         // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
         import('./terminal/dtach-lifecycle.js')
           .then(({ reapOrphanDtach }) => reapOrphanDtach())

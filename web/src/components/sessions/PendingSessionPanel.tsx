@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useEvent } from '../../hooks/useWebSocket';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
+import { hostDisplayLabel } from '@/utils/host-display-label';
 
 /** Timeout thresholds (ms) */
 const SLOW_THRESHOLD_MS = 20_000;    // 20s → "Taking longer than expected..."
@@ -130,7 +131,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
               <span className="session-panel-title" title={cwd}>{dirName}</span>
               {host && (
                 <span className="session-panel-badge" style={{ color: 'var(--fg-muted)', fontSize: '10px' }}>
-                  {hostLabel ?? host}
+                  {hostDisplayLabel(host, undefined, hostLabel)}
                 </span>
               )}
               <span className="session-panel-badge" style={{ color: 'var(--color-error, #ff3b30)' }}>Failed</span>
@@ -189,7 +190,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
             <span className="session-panel-title" title={cwd}>{dirName}</span>
             {host && (
               <span className="session-panel-badge" style={{ color: 'var(--fg-muted)', fontSize: '10px' }}>
-                {hostLabel ?? host}
+                {hostDisplayLabel(host, undefined, hostLabel)}
               </span>
             )}
             <span className="session-panel-badge" style={{

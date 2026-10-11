@@ -23,6 +23,8 @@ vi.mock('../../../src/utils/session-liveness.js', () => ({
 let connectGate: { resolve: (c: unknown) => void; reject: (e: Error) => void } | null = null;
 let connectState = { phase: 'idle' as string, phaseElapsedMs: 0, error: undefined as string | undefined, retryInMs: undefined as number | undefined };
 const clearFailureCache = vi.fn();
+// The pool's answer to "would a read wait here?" (core/hosts/remote-read-bound.ts).
+let wouldWait: 'cold' | 'fails-fast' | 'dialing' | 'connected' = 'cold';
 
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
@@ -32,9 +34,9 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
   reconnectHostNow: () => null,
   getDaemonConnection: () => new Promise((resolve, reject) => { connectGate = { resolve, reject }; }),
   getDaemonConnectState: (host: string) => ({ host, connected: false, ...connectState }),
-  // No dial running yet: a request without `pending` starts it and waits at most
-  // the host-read cap (core/hosts/remote-read-bound.ts).
-  daemonConnectWouldWait: () => 'cold',
+  // No dial running yet (by default): a request without `pending` starts it and
+  // waits at most the host-read cap (core/hosts/remote-read-bound.ts).
+  daemonConnectWouldWait: () => wouldWait,
 }));
 vi.mock('../../../src/core/config-manager.js', () => ({
   getConfig: async () => ({
@@ -79,6 +81,7 @@ const fakeConn = (dirs: string[]) => ({
 
 beforeEach(() => {
   connectGate = null;
+  wouldWait = 'cold';
   connectState = { phase: 'idle', phaseElapsedMs: 0, error: undefined, retryInMs: undefined };
   clearFailureCache.mockClear();
 });
@@ -111,7 +114,10 @@ describe('GET /api/sessions/list-dirs?pending=1 — remote host still connecting
     expect(res.status).toBe(200);
     expect(res.body.dirs).toEqual([]);
     expect(res.body.pending).toBeUndefined();
-    expect(res.body.hostError).toMatchObject({ kind: 'auth', message: 'Permission denied (publickey).', retryInMs: 58_000 });
+    // The cause is `kind` (the picker's headline) and `hint` (the next step); the
+    // message is the one plain sentence, and the ssh line stays in the log (gate
+    // links P5: it was the pool's own words).
+    expect(res.body.hostError).toMatchObject({ kind: 'auth', message: "Can't reach Big dev box right now.", retryInMs: 58_000 });
     expect(res.body.hostError.hint).toMatch(/ssh me@devbox\.example\.test/);
   });
 
@@ -188,6 +194,22 @@ describe('GET /api/sessions/list-dirs?pending=1 — remote host still connecting
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Could not resolve hostname/);
     expect(res.body.hostError).toBeUndefined();
+  });
+
+  it('WITHOUT pending=1 a host whose last connect failed is the degraded 503, one plain sentence in the host\'s name, not an incident (it was a 400 naming the alias)', async () => {
+    wouldWait = 'fails-fast';
+    connectState = { phase: 'failed', phaseElapsedMs: 0, error: 'ssh: Could not resolve hostname devbox.example.test', retryInMs: 40_000 };
+    const app = createApp();
+    const pending = request(app).get('/api/sessions/list-dirs')
+      .query({ prefix: '~/', host: 'devbox' })
+      .then(r => r);
+    await vi.waitFor(() => { if (!connectGate) throw new Error('not yet'); });
+    connectGate!.reject(new Error('Connection to devbox failed 2s ago: ssh: Could not resolve hostname devbox.example.test'));
+    const res = await pending;
+    expect(res.status).toBe(503);
+    // The ssh line stays in the log; the answer is a sentence (gate links F1).
+    expect(res.body).toEqual({ error: "Can't reach Big dev box right now.", code: 'host_reconnecting' });
+    expect(res.headers['x-walnut-handled-failure']).toBe('1');
   });
 
   it('wait=0 answers pending at once (0 is a real value, not "use the 3s default")', async () => {

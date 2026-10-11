@@ -20,7 +20,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, type DirEntry, type ReferencesResponse } from '@/api/files';
+import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, HOST_RECONNECTING_CODE, type DirEntry, type ReferencesResponse } from '@/api/files';
+import { visibleInterval } from '@/utils/page-visibility';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { useFileContentPrefetch } from '@/hooks/useFileContentPrefetch';
 import { FileContentView } from '@/components/common/FileContentView';
@@ -116,6 +117,8 @@ const LS_TREE_COLLAPSED = 'open-walnut-file-explorer-tree-collapsed';
 // How many persisted-expanded dirs a re-open reconstructs: the cache prime and
 // the eager refetch walk the SAME list, so one bound keeps them in step.
 const MAX_RESTORE_LOADS = 64;
+/** How often a root listing the host could not answer yet ("Reconnecting to ...") is asked again. */
+const ROOT_RECONNECT_RETRY_MS = 5_000;
 const TREE_WIDTH_DEFAULT = 200;
 const TREE_WIDTH_MIN = 140;
 const TREE_WIDTH_MAX = 600;
@@ -180,6 +183,25 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const selectedFileRef = useRef(selectedFile);
   selectedFileRef.current = selectedFile;
   const [rootError, setRootError] = useState<string | null>(null);
+  // The root listing answered "Reconnecting to <host>" (503 host_reconnecting).
+  // The host comes back on its own, so the tree asks again on a clock until it
+  // lists; it used to keep the sentence until Refresh, long after the host was
+  // back (gate review, 2026-10-03: 40s and counting).
+  const [rootReconnecting, setRootReconnecting] = useState(false);
+  // Folders below the root whose listing answered the same: each is asked again on
+  // the root's clock until it lists (gate review, 2026-10-07: a folder expanded
+  // while the link was down kept "Reconnecting to Cloud" until it was clicked).
+  const [reconnectingDirs, setReconnectingDirs] = useState<ReadonlySet<string>>(() => new Set());
+  const reconnectingDirsRef = useRef(reconnectingDirs);
+  reconnectingDirsRef.current = reconnectingDirs;
+  const markReconnecting = useCallback((paths: string[], waiting: boolean) => {
+    setReconnectingDirs((prev) => {
+      if (paths.every((p) => prev.has(p) === waiting)) return prev;
+      const next = new Set(prev);
+      for (const p of paths) { if (waiting) next.add(p); else next.delete(p); }
+      return next;
+    });
+  }, []);
   // The path the user asked for when the backend could only offer a nearby
   // directory instead. Rendered as a calm, dismissible note above the tree — a raw
   // `ENOENT: scandir` was the whole reported complaint. Only set when the answer is
@@ -239,7 +261,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   childrenMapRef.current = childrenMap;
   const inFlightRef = useRef<Set<string>>(new Set());
   // Self-reference for the restore-expanded eager loads inside loadDir's body.
-  const loadDirRef = useRef<((dirPath: string, opts?: { isRoot?: boolean; restoreExpanded?: boolean }) => Promise<void>) | null>(null);
+  const loadDirRef = useRef<((dirPath: string, opts?: { isRoot?: boolean; restoreExpanded?: boolean; noCache?: boolean }) => Promise<void>) | null>(null);
   // Same self-reference, for the ONE batched restore loadDir's body kicks off.
   const loadDirsBatchRef = useRef<((dirPaths: string[]) => Promise<void>) | null>(null);
   // A restored selection awaiting existence-check against its parent listing —
@@ -357,6 +379,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       // Fresh rows are on screen: this dir is no longer a cached guess, and any
       // "couldn't reach the host" note from an earlier attempt is answered.
       clearStale(dirPath, canonical);
+      markReconnecting([dirPath, canonical], false);
       // Persist for the next open. Writes on the noCache path too — a Refresh
       // must correct what a later panel-open will paint from, not bypass it.
       if (!showHidden) void setCachedDirList(host, canonical, res);
@@ -365,6 +388,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       if (isRoot) {
         if (canonical !== root) setRoot(canonical);
         setRootError(null);
+        setRootReconnecting(false);
         if (restoreExpanded) {
           const restored = loadExpandedSet(host, canonical);
           setExpanded(restored);
@@ -422,11 +446,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         setStaleErrors((prev) => new Map(prev).set(dirPath, msg));
       } else if (isRoot) setRootError(msg);
       else setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
+      const waiting = isHostReconnectingListing(err);
+      if (isRoot) {
+        setRootReconnecting(waiting);
+        // The open folders were to be asked with the root's answer: they wait
+        // for the host too, so the clock asks for them as well.
+        if (waiting && restoreExpanded) markReconnecting([...loadExpandedSet(host, dirPath)].slice(0, MAX_RESTORE_LOADS), true);
+      } else markReconnecting([dirPath], waiting);
     } finally {
       inFlightRef.current.delete(dirPath);
       setLoadingPaths((prev) => { const next = new Set(prev); next.delete(dirPath); return next; });
     }
-  }, [host, showHidden, root, cwd, sessionId, clearStale]);
+  }, [host, showHidden, root, cwd, sessionId, clearStale, markReconnecting]);
   loadDirRef.current = loadDir;
 
   /** Refresh every remembered-expanded directory in ONE request.
@@ -464,12 +495,24 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         clearStale(l.path);
         if (!showHidden) void setCachedDirList(host, l.path, l);
       }
+      // Rows that arrived answer an error an earlier attempt left on the folder
+      // (a retry while the host was reconnecting is one of these).
+      if (fresh.length) {
+        setErrorPaths((prev) => {
+          if (!fresh.some((l) => prev.has(l.path))) return prev;
+          const next = new Map(prev);
+          for (const l of fresh) next.delete(l.path);
+          return next;
+        });
+        markReconnecting(fresh.map((l) => l.path), false);
+      }
       for (const l of listings) {
         if (!l.error) continue;
         // Same rule as loadDir: with rows already on screen a failure is a note
         // beside them, never a replacement for them.
         if (stalePathsRef.current.has(l.path)) setStaleErrors((prev) => new Map(prev).set(l.path, l.error));
         else setErrorPaths((prev) => new Map(prev).set(l.path, l.error));
+        markReconnecting([l.path], l.code === HOST_RECONNECTING_CODE);
       }
       if (timedOut) {
         log.info('file-explorer', 'tree restore answered partially', { host, asked: wanted.length, got: fresh.length });
@@ -484,7 +527,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       for (const p of wanted) inFlightRef.current.delete(p);
       setLoadingPaths((prev) => { const next = new Set(prev); for (const p of wanted) next.delete(p); return next; });
     }
-  }, [host, showHidden, clearStale]);
+  }, [host, showHidden, clearStale, markReconnecting]);
   loadDirsBatchRef.current = loadDirsBatch;
 
   // Full reset + load root only when the session (cwd/host) changes or a path is
@@ -502,6 +545,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setErrorPaths(new Map());
     setStalePaths(new Set());
     setStaleErrors(new Map());
+    setRootReconnecting(false);
+    setReconnectingDirs(new Set());
     setSelectedFile(null);
     setFocusedDir(null);
     pendingValidateRef.current = null;
@@ -549,6 +594,22 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     void loadDir(initialRoot, { isRoot: true, restoreExpanded: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, host, openNonce]);
+
+  // While the root, or a folder under it, waits on its host: ask again until it
+  // lists. A tree with no rows yet restores its open folders on the root's answer,
+  // as the first load would; the waiting folders go in one request.
+  const dirsReconnecting = reconnectingDirs.size > 0;
+  useEffect(() => {
+    if (!rootReconnecting && !dirsReconnecting) return;
+    const retryMs = (window as unknown as { __filesRetryMs?: number }).__filesRetryMs || ROOT_RECONNECT_RETRY_MS;
+    return visibleInterval(() => {
+      if (rootReconnecting) {
+        void loadDirRef.current?.(root, { isRoot: true, noCache: true, restoreExpanded: childrenMapRef.current.size === 0 });
+      }
+      const dirs = [...reconnectingDirsRef.current].filter((p) => p !== root).slice(0, MAX_RESTORE_LOADS);
+      if (dirs.length) void loadDirsBatchRef.current?.(dirs);
+    }, retryMs);
+  }, [rootReconnecting, dirsReconnecting, root]);
 
   // Keep the open-state key in sync when ~ resolves to the canonical absolute
   // root, restoring any persisted open sections (survives Refresh + reload) and

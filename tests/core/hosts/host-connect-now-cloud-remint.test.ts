@@ -84,4 +84,14 @@ describe('Retry on the Cloud row', () => {
     expect(allow.calls).toEqual([])
     expect(reconnects.devbox).toHaveBeenCalledTimes(1)
   })
+
+  it('a Retry runs the pooled connection\'s own reconnect, never a new dial (no ssh at all)', async () => {
+    for (const host of HOSTS) await connectHostNow(host)
+    await vi.advanceTimersByTimeAsync(0)
+    for (const host of HOSTS) expect(reconnects[host]).toHaveBeenCalledTimes(1)
+    // A dial would spawn ssh in real time: give it a second to show up. That ssh
+    // is the exec guard's, and its hit fails this test (tests/setup/exec-guard.ts).
+    vi.useRealTimers()
+    await new Promise((r) => setTimeout(r, 1_000))
+  })
 })

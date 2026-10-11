@@ -48,6 +48,7 @@ import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { startNotificationFix } from '@/api/notifications';
 import { log } from '@/utils/log';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { LetterEnvelopeRow } from '@/components/inbox/LetterEnvelopeRow';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
@@ -943,11 +944,12 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
 /** Where the notification came from: session, host, project. */
 function ContextChips({ n }: { n: Notification }) {
   const label = sessionLabelOf(n);
+  const hostName = useHostDisplayLabel(n.host);
   if (!label && !n.host && !n.project) return null;
   return (
     <div className="nfc-card-chips">
       {label && <span className="nfc-chip">{label}</span>}
-      {n.host && <span className="nfc-chip">{n.host}</span>}
+      {n.host && <span className="nfc-chip">{hostName}</span>}
       {n.project && <span className="nfc-chip">{n.project}</span>}
     </div>
   );

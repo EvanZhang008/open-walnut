@@ -135,7 +135,11 @@ apiV1Router.post('/devices/self', async (req: Request, res: Response, next: Next
       return
     }
     const body = (req.body ?? {}) as Record<string, unknown>
-    const updated = await setDeviceInfo(deviceName, {
+    // The record the token matched, looked up again inside the locked write: a
+    // re-pair of this name since the middleware ran makes this a 404, never a
+    // report on the new pairing.
+    const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : ''
+    const updated = await setDeviceInfo({ token: bearer }, {
       model: body.model as string | undefined,
       os: body.os as string | undefined,
       deviceName: body.deviceName as string | undefined,

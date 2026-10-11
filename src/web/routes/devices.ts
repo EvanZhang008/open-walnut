@@ -10,18 +10,15 @@
  * itself is a paired device in cloud mode), except a phone.
  *
  * Changing an EXISTING device (re-pair, remove) is for that device itself, the
- * Mac that owns this companion's machine credentials, or this machine itself
- * (core/device-actor.ts). The caller is the token it presented, never a name.
- *
- * The cloud half (`target: 'cloud'`, `?target=cloud`, `cloudDevices`) is this
- * Mac acting on its companion with its own token there, so it is for this Mac
- * itself only (cloudRelayDecision); everyone else hears 403 first.
+ * companion's owner (the Mac it belongs to), or this machine itself
+ * (core/device-actor.ts). The caller is the token it presented, never a name,
+ * and an API key changes no device.
  */
 
-import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { createDevice, revokePairing, rotateDevice, listDevices, listDeviceRecords, type DeviceInfo } from '../../core/device-auth.js'
-import { DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecision, type DeviceActor, type DeviceChange } from '../../core/device-actor.js'
+import { createDeviceAs, revokePairingAs, rotateDevice, listDevices, listDeviceRecords, readDeviceRegistry, type DeviceInfo, type DeviceSelfInfo } from '../../core/device-auth.js'
+import { DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecision, companionOwnerRecord, recordForToken, type DeviceActor, type DeviceChange } from '../../core/device-actor.js'
+import { CLOUD_UNPAIRED_SENTENCE, isCloudUnpaired, markCloudUnpaired } from '../../core/cloud-unpaired.js'
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
 import { tailscaleSummary } from '../../core/tailnet.js'
 import { CLOUD_MODE } from '../../constants.js'
@@ -31,6 +28,7 @@ import { isLocalOrigin } from '../../lib/caller-origin.js'
 import {
   MACHINE_PROOF_HEADER, MachineCredentialRefused, adoptMachineCredential, mintMachineCredential, revokeMachineCredential,
 } from '../../core/machine-credentials.js'
+import { machineProofHeaders } from '../../integrations/cloud-bridge-config.js'
 
 export const devicesRouter = Router()
 
@@ -42,20 +40,17 @@ export const devicesRouter = Router()
  * made for a session on another exec host or for a paired client is that
  * caller, never this Mac (request-origin.ts: the header only lowers trust).
  * Never this Mac on a companion, whose public traffic reaches it through a
- * local proxy. Else the credential the auth middleware accepted: a paired
- * device by its token, a config.yaml API key by its name. A self-call for a
- * caller off this Mac that carries no credential is its origin alone.
+ * local proxy. Else the paired device whose bearer token the auth middleware
+ * accepted, else an API key (or a bearer the rules do not know). A self-call
+ * for a caller off this Mac that carries no credential is its origin alone.
  */
 export function actorOf(req: Request): DeviceActor {
   const origin = requestOrigin(req)
   if (!CLOUD_MODE && isLocalOrigin(origin)) return LOCAL_ACTOR
-  const named = req as Request & { apiKeyName?: string; deviceName?: string }
+  const r = req as Request & { deviceName?: string; apiKeyName?: string }
   const header = req.headers.authorization
-  if (header?.startsWith('Bearer ')) {
-    // The auth middleware names every credential it accepts and marks the
-    // paired devices among them: a named one that is no device is an API key.
-    return named.apiKeyName && !named.deviceName ? { apiKey: named.apiKeyName } : { token: header.slice(7) }
-  }
+  if (r.deviceName && header?.startsWith('Bearer ')) return { token: header.slice(7) }
+  if (header?.startsWith('Bearer ')) return { apiKey: r.apiKeyName ?? '' }
   return { onBehalfOf: origin }
 }
 
@@ -86,49 +81,149 @@ async function cloudRelayAllowed(req: Request, res: Response, change: DeviceChan
   return false
 }
 
-/** A machine credential's current token, presented as proof of holding it. */
+/** The first bridge-local's token, presented as proof of being the Mac that holds it (device-actor.ts proofClaim). */
 function machineProof(req: Request): string | undefined {
   const v = req.get(MACHINE_PROOF_HEADER)
   return v && v.length <= 128 ? v : undefined
 }
 
+/** What the cloud companion said about its devices, as the console lists them. */
+interface CloudDeviceList {
+  devices: DeviceInfo[]
+  /** The record this Mac's own cloud token matched (the companion says which). */
+  caller?: string
+  /** Why the list is missing, in a sentence; absent when it loaded or no cloud is set up. */
+  error?: string
+  /** This Mac unpaired itself from the companion at this origin (core/cloud-unpaired.ts): nothing to list, nothing wrong. */
+  unpaired?: string
+  /** The companion refused this Mac's token (401) and this Mac did not unpair itself: the operator revoked it there. */
+  refused?: boolean
+}
+
 /**
- * Devices registered on the cloud companion. Best-effort — never throws, so an
- * unreachable cloud degrades to "no cloud devices" instead of a broken list.
+ * A failed fetch in plain words. `AbortSignal.timeout` rejects with "The
+ * operation was aborted due to timeout" and an unreachable host with "fetch
+ * failed": neither means anything to a person reading Settings.
+ */
+export function plainFetchFailure(err: unknown, timeoutMs: number): string {
+  const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } }
+  if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return `timed out after ${Math.round(timeoutMs / 1000)}s`
+  const code = e?.cause?.code ?? ''
+  const byCode: Record<string, string> = {
+    ECONNREFUSED: 'the connection was refused',
+    ECONNRESET: 'the connection was reset',
+    ENOTFOUND: 'its address could not be found',
+    EAI_AGAIN: 'its address could not be found',
+    ETIMEDOUT: `timed out after ${Math.round(timeoutMs / 1000)}s`,
+    UND_ERR_CONNECT_TIMEOUT: `timed out after ${Math.round(timeoutMs / 1000)}s`,
+    EHOSTUNREACH: 'the network has no route to it',
+    ENETUNREACH: 'the network has no route to it',
+  }
+  if (byCode[code]) return byCode[code]
+  if (/certificate|CERT_|SSL|TLS/i.test(`${code} ${e?.cause?.message ?? ''}`)) return 'its TLS certificate was not accepted'
+  return e?.cause?.message ?? e?.message ?? String(err)
+}
+
+/** A computer that runs Walnut, by its own report: another Mac, never a phone. */
+function reportsAsComputer(info?: DeviceSelfInfo): boolean {
+  return /^(Mac|Computer)$/.test(info?.model?.trim() ?? '') || /^macOS\b/i.test(info?.os?.trim() ?? '')
+}
+
+type DeviceRole = 'phone' | 'simulator' | 'browser' | 'mac' | 'self'
+
+/**
+ * What a credential is, for the console. Display only: who may change a
+ * record is device-actor.ts, which this never feeds. A Mac is the companion's
+ * owner (`macs`) or a record that reported itself as a computer; it was listed
+ * as a phone (Show QR, "Model unknown until the app opens on this phone"),
+ * which invited minting a phone QR over a Mac's pairing.
+ */
+function roleOf(d: DeviceInfo & { role?: unknown }, macs: ReadonlySet<string>): DeviceRole {
+  if (d.role === 'mac' || macs.has(d.name) || reportsAsComputer(d.info)) return 'mac'
+  if (/(^|-)sim(-|$)|simulator/i.test(d.name)) return 'simulator'
+  // A browser signed in with a code (routes/browser-pair.ts) is named browser-<6 hex>.
+  return /^browser-[0-9a-f]{6}$/.test(d.name) ? 'browser' : 'phone'
+}
+
+/**
+ * Devices registered on the cloud companion. Never throws: a list that cannot
+ * load comes back empty WITH the reason, so the console says so instead of
+ * showing "no phones" (a 401 here used to read as an empty list).
  * `bridge-*` entries are daemon machine credentials, not user devices.
  */
-async function listCloudDevices(): Promise<DeviceInfo[]> {
+async function listCloudDevices(): Promise<CloudDeviceList> {
   const cloud = getCloudPairingEndpoint()
-  if (!cloud) return []
+  if (!cloud) return { devices: [] }
+  // Our own unpair: the token is revoked there, and asking again only earns the 401.
+  if (isCloudUnpaired(cloud)) return { devices: [], unpaired: cloud.origin }
+  const missing = "so the phones paired there can't be listed."
   try {
     const res = await fetch(`${cloud.origin}/api/devices`, {
       headers: { Authorization: `Bearer ${cloud.token}` },
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(CLOUD_LIST_TIMEOUT_MS),
     })
-    if (!res.ok) return []
-    const body = await res.json() as { devices?: DeviceInfo[] }
-    return (body.devices ?? []).filter((d) => !d.name.startsWith('bridge-'))
+    if (res.status === 401) {
+      return { devices: [], refused: true, error: `The cloud companion no longer accepts this Mac's token, ${missing.slice(0, -1)} (this Mac may have been unpaired there).` }
+    }
+    if (!res.ok) return { devices: [], error: `The cloud companion could not answer just now, ${missing}` }
+    const body = await res.json() as { devices?: Array<DeviceInfo & { role?: unknown }>; caller?: unknown }
+    return {
+      devices: (body.devices ?? []).filter((d) => !d.name.startsWith('bridge-')),
+      ...(typeof body.caller === 'string' ? { caller: body.caller } : {}),
+    }
+  } catch (err) {
+    return { devices: [], error: `Could not reach the cloud companion (${plainFetchFailure(err, CLOUD_LIST_TIMEOUT_MS)}), ${missing}` }
+  }
+}
+
+export const CLOUD_LIST_TIMEOUT_MS = 8_000
+export const CLOUD_CHANGE_TIMEOUT_MS = 15_000
+/**
+ * The longest this Mac waits on its companion for one console request: a
+ * re-pair is a removal and a mint in a row, a removal one call and a list. The
+ * console waits longer (web/src/components/settings/sections/cloud/cloud-change-timeout.ts).
+ */
+export const CLOUD_RELAY_WORST_MS = Math.max(2 * CLOUD_CHANGE_TIMEOUT_MS, CLOUD_CHANGE_TIMEOUT_MS + CLOUD_LIST_TIMEOUT_MS)
+
+/** Pairing targets without Cloud once this Mac unpaired itself from it: a mint there can only fail. */
+function liveTargets<T extends { kind: string }>(targets: T[]): T[] {
+  return isCloudUnpaired(getCloudPairingEndpoint()) ? targets.filter((t) => t.kind !== 'cloud') : targets
+}
+
+/** Pairing again is the one way back, and the token for it is made on the companion. */
+const UNPAIRED_CANNOT = `${CLOUD_UNPAIRED_SENTENCE} Pairing it again needs a new token made on the companion.`
+
+/**
+ * After a removal on the companion: was it this Mac's own record? The
+ * companion then refuses the token we just used (401), and that is recorded,
+ * so every surface says "no longer paired" instead of "connected" or "may have
+ * been unpaired". Any other answer (or none) records nothing.
+ */
+async function noteIfSelfUnpaired(cloud: { origin: string; token: string }): Promise<boolean> {
+  try {
+    const res = await fetch(`${cloud.origin}/api/devices`, {
+      headers: { Authorization: `Bearer ${cloud.token}` },
+      signal: AbortSignal.timeout(CLOUD_LIST_TIMEOUT_MS),
+    })
+    if (res.status !== 401) return false
+    await markCloudUnpaired(cloud)
+    log.web.info('devices: this Mac unpaired itself from the cloud companion', { origin: cloud.origin })
+    return true
   } catch {
-    return []
+    return false
   }
 }
 
 /**
- * Name of the device record this Mac itself authenticates as against the cloud
- * (the credential embedded in the data repo's git remote). That row is
- * infrastructure — revoking it breaks git sync — so the console must not
- * present it as a pairable phone.
+ * On the companion: the name of the record the caller's bearer token matched.
+ * The Mac reads it to find ITS OWN row in the list (its cloud record lives only
+ * in the companion's auth.json, so the Mac cannot look it up itself).
  */
-async function getSelfCloudDeviceName(): Promise<string | null> {
-  const cloud = getCloudPairingEndpoint()
-  if (!cloud) return null
-  const hash = crypto.createHash('sha256').update(cloud.token, 'utf-8').digest('hex')
-  try {
-    for (const d of await listDeviceRecords()) {
-      if (d.tokenHash === hash) return d.name
-    }
-  } catch { /* unreadable auth.json — fall through */ }
-  return null
+async function callerRecordName(req: Request): Promise<string | undefined> {
+  const header = req.headers.authorization
+  if (!header?.startsWith('Bearer ')) return undefined
+  const me = recordForToken(await listDeviceRecords(), header.slice(7))
+  return me && me.kind !== 'machine' ? me.name : undefined
 }
 
 /**
@@ -159,29 +254,30 @@ async function mintOnCloud(
   if (!cloud) {
     return { error: 'Cloud pairing needs a cloud companion first (Settings → Cloud Companion).', status: 400 }
   }
-  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${cloud.token}` }
+  if (isCloudUnpaired(cloud)) return { error: UNPAIRED_CANNOT, status: 400 }
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${cloud.token}`, ...await machineProofHeaders() }
   try {
     if (replace) {
       // Rotate: the old hash must go before the cloud will accept the name.
       const del = await fetch(`${cloud.origin}/api/devices/${encodeURIComponent(name)}`, {
-        method: 'DELETE', headers, signal: AbortSignal.timeout(15_000),
+        method: 'DELETE', headers, signal: AbortSignal.timeout(CLOUD_CHANGE_TIMEOUT_MS),
       }).catch(() => null)
       // The companion's own rules said no (this Mac may not re-pair that device): say its words.
       if (del && (del.status === 403 || del.status === 409)) {
         const body = await del.json().catch(() => ({})) as { error?: string }
-        return { error: body.error ?? `Cloud refused to re-pair ${name} (HTTP ${del.status}).`, status: del.status }
+        return { error: body.error ?? `The cloud companion would not re-pair ${name}.`, status: del.status }
       }
     }
     const res = await fetch(`${cloud.origin}/api/devices`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ name }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(CLOUD_CHANGE_TIMEOUT_MS),
     })
     if (res.status !== 201) {
       const body = await res.json().catch(() => ({})) as { error?: string }
       return {
-        error: body.error ?? `Cloud rejected the pairing request (HTTP ${res.status}).`,
+        error: body.error ?? 'The cloud companion did not accept the pairing.',
         // A duplicate name is the caller's problem; anything else is upstream.
         status: res.status === 400 ? 400 : 502,
       }
@@ -197,9 +293,8 @@ async function mintOnCloud(
       pairingURI: buildPairingURI(body.name, body.token, cloud.origin),
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    log.web.warn('devices: cloud mint failed', { name, error: message })
-    return { error: `Could not reach the cloud companion: ${message}`, status: 502 }
+    log.web.warn('devices: cloud mint failed', { name, error: err instanceof Error ? err.message : String(err) })
+    return { error: `Could not reach the cloud companion: ${plainFetchFailure(err, CLOUD_CHANGE_TIMEOUT_MS)}.`, status: 502 }
   }
 }
 
@@ -219,13 +314,17 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     const origin = `${req.protocol}://${req.get('host') ?? ''}`
     const targets = CLOUD_MODE
       ? [{ kind: 'cloud' as const, origin, label: 'This server', remoteMint: false }]
-      : await getPairingTargets(origin, requestPort(req))
+      : liveTargets(await getPairingTargets(origin, requestPort(req)))
     // Cloud-paired devices live in the cloud's auth.json — fetch them so the
-    // console can list and revoke them (best-effort: a down cloud must not
-    // break the local list). That half is this Mac's view on its companion
-    // (its own token there): for this Mac itself only, like every other relay.
+    // console can list and revoke them (a down cloud must not break the local
+    // list, and says why its half is missing).
+    // The cloud half is this Mac's view on its companion (its own token there):
+    // for this Mac itself only, like every other relay (cloudRelayAllowed).
     const relayed = !CLOUD_MODE && cloudRelayDecision([], actorOf(req), 'list').ok
-    const cloudDevices = relayed ? await listCloudDevices() : []
+    const cloud = relayed ? await listCloudDevices() : { devices: [] } as CloudDeviceList
+    // On the companion, its owner is the Mac it belongs to (recorded, else the one owning its machine credentials).
+    const owner = CLOUD_MODE ? companionOwnerRecord(await readDeviceRegistry()) : undefined
+    const macs = new Set(owner ? [owner.name] : [])
     // Only real, QR-pairable devices reach the console. Daemon bridge
     // credentials (kind:'machine' / the legacy `bridge-*` names) are plumbing —
     // listing them next to a "Show QR" button invited pairing a phone against a
@@ -235,15 +334,19 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     // "device", but only some are phones — this Mac's own cloud credential and
     // the iOS simulator sit in the same list, and rendering all three
     // identically read as "3 phones I don't own" (reported 2026-07-29).
-    const selfName = await getSelfCloudDeviceName()
     const tailscale = CLOUD_MODE ? null : await tailscaleSummary()
-    // A browser signed in with a code (routes/browser-pair.ts) is named browser-<6 hex>.
-    const classify = (name: string) =>
-      name === selfName ? 'self' : /(^|-)sim(-|$)|simulator/i.test(name) ? 'simulator'
-        : /^browser-[0-9a-f]{6}$/.test(name) ? 'browser' : 'phone'
+    // This Mac's own row is the cloud record its token matched, as the
+    // companion says: never a name guess, and never a local lookup.
+    // Other Macs are their own kind too (roleOf): no phone wording, no QR.
     res.json({
-      devices: devices.map((d) => ({ ...d, role: classify(d.name) })),
-      cloudDevices: cloudDevices.map((d) => ({ ...d, role: classify(d.name) })),
+      devices: devices.map((d) => ({ ...d, role: roleOf(d, macs) })),
+      cloudDevices: cloud.devices.map((d) => ({ ...d, role: d.name === cloud.caller ? 'self' : roleOf(d, macs) })),
+      ...(cloud.error ? { cloudError: cloud.error } : {}),
+      ...(cloud.unpaired ? { cloudUnpaired: { origin: cloud.unpaired } } : {}),
+      // So Cloud Companion stops saying "Connected" for a token the companion refuses.
+      ...(cloud.refused ? { cloudRefused: true } : {}),
+      // On the companion: which record the caller is (the Mac reads it, above).
+      ...(CLOUD_MODE ? { caller: await callerRecordName(req) } : {}),
       targets: targets.filter((t) => CLOUD_MODE || relayed || t.kind !== 'cloud').map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
       // So the console can say "install Tailscale" when no tailnet target exists.
       // Absent = say nothing: on a companion, and while the first probe is still out.
@@ -299,7 +402,7 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     // machine's LAN IP (a QR carrying `localhost` points the phone at itself).
     const consoleOrigin = `${req.protocol}://${req.get('host') ?? ''}`
     // `target: 'lan' | 'tailnet'` picks that address for the QR when this Mac has it.
-    const localTargets = CLOUD_MODE ? [] : await getPairingTargets(consoleOrigin, requestPort(req))
+    const localTargets = CLOUD_MODE ? [] : liveTargets(await getPairingTargets(consoleOrigin, requestPort(req)))
     const target = CLOUD_MODE
       ? { origin: consoleOrigin, kind: 'cloud' as const }
       : localTargets.find((t) => t.kind === req.body?.target) ?? localTargets[0]
@@ -308,8 +411,8 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     // none: it silently points the phone at itself.
     const by = actorOf(req)
     if (kind === 'machine' && CLOUD_MODE) {
-      // Machine credentials open /bridge and /daemon-tunnel on this box: who may
-      // mint or rotate one is machine-credentials.ts (one Mac per companion).
+      // Machine credentials open /bridge and /daemon-tunnel on this box: only
+      // the companion's owner may mint or rotate one (machine-credentials.ts).
       const minted = await mintMachineCredential(name, { by, replace, proof: machineProof(req) })
       log.web.info('devices: machine credential created via console', { name, caller: callerDevice(req) })
       res.status(201).json({ name, token: minted.token, pairingURI: buildPairingURI(name, minted.token, target?.origin), createdAt: minted.createdAt, target: target?.kind ?? null, server: target?.origin ?? null })
@@ -317,7 +420,7 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     }
     // A re-pair is one locked step with the rules in it (device-auth.ts
     // rotateDevice), and it removes the old token's copy on the other box too.
-    const { token, createdAt } = replace ? await rotateDevice(name, { by }) : await createDevice(name, { kind, by })
+    const { token, createdAt } = replace ? await rotateDevice(name, { by, proof: machineProof(req) }) : await createDeviceAs(name, { kind, by })
     const pairingURI = buildPairingURI(name, token, target?.origin)
     log.web.info('devices: created via console', { name, kind: kind ?? 'device', target: target?.kind ?? 'none', replace })
     res.status(201).json({
@@ -335,10 +438,10 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
   }
 })
 
-// POST /api/devices/:name/adopt (cloud mode): the calling Mac records itself
-// as the owner of a machine credential from before ownership was recorded,
-// with the credential's current token as proof (machine-credentials.ts).
-// 200 {adopted|owned}, 404 missing, 409 another Mac owns one here.
+// POST /api/devices/:name/adopt (cloud mode): the calling Mac proves it is the
+// owner of a companion from before owners were recorded, with the first
+// bridge-local's token (machine-credentials.ts). 200 {adopted|owned}, 404
+// missing, 403/409 refused.
 devicesRouter.post('/:name/adopt', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!CLOUD_MODE) { res.status(404).json({ error: 'Not found' }); return }
@@ -363,16 +466,22 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
         res.status(400).json({ error: 'Cloud sync is not configured.' })
         return
       }
+      if (isCloudUnpaired(cloud)) {
+        res.status(400).json({ error: UNPAIRED_CANNOT })
+        return
+      }
+      let failure = ''
       const upstream = await fetch(`${cloud.origin}/api/devices/${encodeURIComponent(name)}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${cloud.token}` },
-        signal: AbortSignal.timeout(15_000),
+        headers: { Authorization: `Bearer ${cloud.token}`, ...await machineProofHeaders() },
+        signal: AbortSignal.timeout(CLOUD_CHANGE_TIMEOUT_MS),
       }).catch((err: unknown) => {
         log.web.warn('devices: cloud revoke failed', { name, error: String(err) })
+        failure = plainFetchFailure(err, CLOUD_CHANGE_TIMEOUT_MS)
         return null
       })
       if (!upstream) {
-        res.status(502).json({ error: 'Could not reach the cloud companion.' })
+        res.status(502).json({ error: `Could not reach the cloud companion (${failure}).` })
         return
       }
       if (upstream.status === 404) {
@@ -382,21 +491,23 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
       if (upstream.status === 403 || upstream.status === 409) {
         // The companion's device rules said no: the console shows their sentence.
         const body = await upstream.json().catch(() => ({})) as { error?: string; code?: string }
-        res.status(upstream.status).json({ error: body.error ?? `Cloud refused to remove ${name} (HTTP ${upstream.status}).`, ...(body.code ? { code: body.code } : {}) })
+        res.status(upstream.status).json({ error: body.error ?? `The cloud companion would not remove ${name}.`, ...(body.code ? { code: body.code } : {}) })
         return
       }
       if (!upstream.ok) {
-        res.status(502).json({ error: `Cloud rejected the revoke (HTTP ${upstream.status}).` })
+        res.status(502).json({ error: `The cloud companion could not remove ${name}.` })
         return
       }
       log.web.info('devices: revoked on cloud via console', { name })
-      res.json({ ok: true, target: 'cloud' })
+      // Removing this Mac's own record is an unpair: remember it (noteIfSelfUnpaired).
+      const unpaired = await noteIfSelfUnpaired(cloud)
+      res.json({ ok: true, target: 'cloud', ...(unpaired ? { unpaired: true } : {}) })
       return
     }
     const by = actorOf(req)
     try {
       if (CLOUD_MODE && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')) {
-        // A machine credential: only the Mac that owns it may revoke it.
+        // A machine credential: only the companion's owner may revoke it.
         if (!await revokeMachineCredential(name, { by, proof: machineProof(req) })) {
           res.status(404).json({ error: `Device "${name}" not found` })
           return
@@ -408,17 +519,17 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
       if (sendRefusal(res, err)) return
       throw err
     }
-    // A paired device: revoking it also revokes the machine credentials it
-    // minted (that Mac is disconnected from this companion). Only that device,
-    // the Mac this companion serves, or this machine itself may.
-    let outcome: Awaited<ReturnType<typeof revokePairing>>
+    // A paired device: revoking the owner also revokes every machine
+    // credential (that Mac is disconnected from this companion). Only that
+    // device, the owner, or this machine itself may.
+    let outcome: Awaited<ReturnType<typeof revokePairingAs>>
     try {
       // The revoke also stops the device's PUSHES and removes its copy on the
-      // other box (revokePairing owns both), or a lost phone keeps showing letter
-      // subjects and previews on its lock screen. Best effort by design: the
-      // pairing is gone either way, so a bridge outage reports
-      // `pushRevokePending` (and queues the rest) instead of leaving it paired.
-      outcome = await revokePairing(name, { by })
+      // other box (device-auth.ts revokePairingAs owns both), or a lost phone
+      // keeps showing letter subjects and previews on its lock screen. Best
+      // effort by design: the pairing is gone either way, so a bridge outage
+      // reports `pushRevokePending` (and queues the rest) instead of leaving it paired.
+      outcome = await revokePairingAs(name, { by, proof: machineProof(req) })
     } catch (err) {
       if (sendRefusal(res, err)) return
       throw err

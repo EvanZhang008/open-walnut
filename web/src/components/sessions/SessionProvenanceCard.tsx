@@ -52,6 +52,7 @@ import { sessionStatusStore } from '@/stores/session-status-store';
 import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, noticeText, noticeTitle, useMessageFold } from './message-fold';
 import { MessageFoldSummary } from './MessageFoldSummary';
 import '@/styles/provenance-quote.css';
@@ -164,6 +165,7 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
  */
 function PeerChips({ resolved }: { resolved: ResolvedPeer }) {
   const taskLabel = useTaskLabel(resolved.taskId);
+  const hostName = useHostDisplayLabels();
   const chip = resolved.taskId ? (
     <a
       className="provenance-chip provenance-chip-task task-link"
@@ -183,7 +185,7 @@ function PeerChips({ resolved }: { resolved: ResolvedPeer }) {
   return (
     <div className="provenance-chips">
       {chip}
-      {resolved.host && <span className="provenance-host">{resolved.host}</span>}
+      {resolved.host && <span className="provenance-host">{hostName(resolved.host)}</span>}
     </div>
   );
 }

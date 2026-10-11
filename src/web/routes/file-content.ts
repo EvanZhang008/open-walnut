@@ -36,6 +36,25 @@ import {
   rememberFileValidator,
 } from './file-content-validator.js'
 import { log } from '../../logging/index.js'
+import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, forgetSharedHostRead, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
+import { linkFailureKind } from '../../providers/link-failure.js'
+import { hostDisplayNameFor, inHostTerms } from '../../core/hosts/host-display-name.js'
+import { markHandledFailure } from '../middleware/handled-failure.js'
+import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
+
+/** Why a remote read failed, as the viewer says it: in the host's own name, never its alias. */
+async function remoteReadSentence(host: string, err: unknown): Promise<string> {
+  if (err instanceof HostReconnectingError) return err.message
+  const name = await hostDisplayNameFor(host)
+  return `Cannot reach ${name}: ${inHostTerms(err instanceof Error ? err.message : String(err), host, name)}`
+}
+
+/** A raw remote read that failed: 503 (designed, no incident card) while the host is not answering, else 502. */
+async function sendRemoteReadFailure(res: Response, host: string, err: unknown): Promise<void> {
+  const reconnecting = err instanceof HostReconnectingError
+  if (reconnecting) markHandledFailure(res)
+  res.status(reconnecting ? 503 : 502).type('text/plain').send(await remoteReadSentence(host, err))
+}
 
 /**
  * In CLOUD mode a LOCAL file read (no `host=`) is confined to a small root
@@ -75,8 +94,12 @@ export function isSecretPath(absPath: string): boolean {
 }
 
 export const fileContentRouter = Router()
+// Every sentence these routes answer names a remote host as a person knows it.
+fileContentRouter.use(hostTermsAtExit)
 
 const MAX_FILE_SIZE = 512 * 1024 // 512 KB
+/** Remote files over this read only their first MAX_FILE_SIZE bytes (base64 costs 4/3). */
+const RANGE_READ_ABOVE = Math.ceil((MAX_FILE_SIZE * 4) / 3)
 
 /**
  * Extensions served as byte-exact raw streams with a real Content-Type. Media,
@@ -207,10 +230,9 @@ async function serveRawBytes(
     const reader = (await createFileReader(host)) as DaemonFileReader
     let st: { size: number } | null
     try {
-      st = await reader.stat(filePath)
+      st = await boundHostRead(host, () => reader.stat(filePath))
     } catch (err) {
-      res.status(502).type('text/plain')
-        .send(`Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`)
+      await sendRemoteReadFailure(res, host, err)
       return
     }
     if (st === null) {
@@ -322,6 +344,10 @@ export interface FileContentPayload {
   binary: boolean
   extension: string
   error?: string
+  /** The read is still arriving from this host and goes on: ask again to join it. */
+  loading?: { from: string }
+  /** `host_reconnecting`: the host is not answering now. The viewer asks again on its own. */
+  code?: string
   /**
    * Hash of the bytes served, for the editor's optimistic lock on save. Present
    * only for a complete text read — a TRUNCATED payload deliberately has none,
@@ -395,6 +421,67 @@ export interface FileReadMeta {
   size?: number
 }
 
+/** The shared-read key of a remote file's viewer payload (boundSharedHostRead). */
+function remoteFileReadKey(filePath: string): string {
+  return `file-content:${filePath}`
+}
+
+/**
+ * A remote file as the viewer shows it, plus the stat its validator is built
+ * from. Over RANGE_READ_ABOVE only the bytes the viewer shows cross the link
+ * (one fs.readRange), as the local branch reads only them: a 24MB log at 1MB/s
+ * took 88s whole, to show its first 512KB.
+ */
+async function readRemoteFile(host: string, filePath: string, ext: string): Promise<{ payload: FileContentPayload; stat?: { mtimeMs: number; size: number } }> {
+  const notFound: FileContentPayload = { content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext }
+  const reader = (await createFileReader(host)) as DaemonFileReader
+  // Stat BEFORE the read, never after. Pairing a FRESH (mtimeMs, size) with a
+  // hash taken from OLDER bytes is the one combination that could serve a wrong
+  // 304; taken first, a change mid-read only costs a cache miss later. Failure
+  // here (old daemon without fs.stat) just leaves no validator and no size, so
+  // the whole read below runs. A glob path is never stat'ed (readFile finds it).
+  let stat: { mtimeMs: number; size: number } | undefined
+  if (!filePath.includes('*')) {
+    try {
+      const st = await reader.stat(filePath)
+      if (st === null) return { payload: notFound }
+      stat = { mtimeMs: st.mtimeMs, size: st.size }
+    } catch { /* no validator for this read */ }
+  }
+  // A file the viewer shows only the head of: read only that head. It comes
+  // base64 (4/3 of its size), so below RANGE_READ_ABOVE the whole file as text
+  // is the smaller transfer and stays the read.
+  if (stat && stat.size > RANGE_READ_ABOVE) {
+    try {
+      const part = await reader.readRangeBytes(filePath, 0, MAX_FILE_SIZE)
+      if (part === null) return { payload: notFound }
+      return {
+        stat,
+        // No hash: a truncated payload is never a save base (FileContentPayload.contentHash).
+        payload: { content: part.buf.toString('utf-8'), size: part.fileSize || stat.size, truncated: true, binary: false, extension: ext },
+      }
+    } catch (err) {
+      if (!/unknown command/i.test(err instanceof Error ? err.message : String(err))) throw err
+      /* a daemon without fs.readRange: the whole read below, as before */
+    }
+  }
+  const content = await reader.readFile(filePath)
+  if (content === null) return { stat, payload: notFound }
+  const truncated = content.length > MAX_FILE_SIZE
+  return {
+    stat,
+    payload: {
+      content: truncated ? content.slice(0, MAX_FILE_SIZE) : content,
+      size: content.length,
+      truncated,
+      binary: false,
+      extension: ext,
+      // Only a WHOLE read gets a hash (see FileContentPayload.contentHash).
+      ...(truncated ? {} : { contentHash: computeContentHash(content) }),
+    },
+  }
+}
+
 /**
  * Read a file's text content as the FileViewer JSON payload — the ONE
  * implementation shared by the internal route and GET /api/v1/file-content.
@@ -416,42 +503,29 @@ export async function readFileContentPayload(
   const ext = path.extname(filePath).slice(1).toLowerCase()
 
   if (isRemote) {
-    // Remote file via SSH daemon
+    // Remote file via its host's daemon, within the host-read deadline
+    // (core/hosts/remote-read-bound.ts): a host that is not answering is said at
+    // once, or within seconds when a connected link went quiet; a link still
+    // delivering keeps the read going. Shared: a request for a file whose read
+    // is already running joins it, and one cut short by the deadline leaves its
+    // result to the next request, so a retry on a slow link is not a restart.
     try {
-      const reader = await createFileReader(host as string)
-      // Stat BEFORE the read, never after. Pairing a FRESH (mtimeMs, size) with a
-      // hash taken from OLDER bytes is the one combination that could serve a
-      // wrong 304; taken first, a change mid-read only costs a cache miss later.
-      // Failure here (old daemon without fs.stat, unreachable host) just leaves
-      // meta empty → no validator → the next read is a normal full one.
-      if (meta) {
-        try {
-          const st = await (reader as DaemonFileReader).stat(filePath)
-          if (st) { meta.mtimeMs = st.mtimeMs; meta.size = st.size }
-        } catch { /* no validator for this read */ }
-      }
-      const content = await reader.readFile(filePath)
-      if (content === null) {
-        return { content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext }
-      }
-      const truncated = content.length > MAX_FILE_SIZE
-      return {
-        content: truncated ? content.slice(0, MAX_FILE_SIZE) : content,
-        size: content.length,
-        truncated,
-        binary: false,
-        extension: ext,
-        // Only a WHOLE read gets a hash — see FileContentPayload.contentHash.
-        ...(truncated ? {} : { contentHash: computeContentHash(content) }),
-      }
+      const read = await boundSharedHostRead(host, remoteFileReadKey(filePath), () => readRemoteFile(host as string, filePath, ext))
+      if (meta && read.stat) { meta.mtimeMs = read.stat.mtimeMs; meta.size = read.stat.size }
+      return { ...read.payload }
     } catch (err) {
       return {
         content: null,
         size: 0,
         truncated: false,
         binary: false,
-        error: `Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`,
+        error: await remoteReadSentence(host as string, err),
         extension: ext,
+        // Still arriving on a link that answers: the viewer asks again at once,
+        // which joins the read (boundSharedHostRead), rather than showing this.
+        // Not answering now: the viewer asks again on a clock until it is back.
+        ...(err instanceof HostStillLoadingError ? { loading: { from: err.from } }
+          : err instanceof HostReconnectingError ? { code: HOST_RECONNECTING } : {}),
       }
     }
   }
@@ -610,6 +684,83 @@ export class FileConflictError extends Error {
 }
 
 /**
+ * The reads a remote save makes before it writes: the size guard, the bytes it
+ * replaces (null: a new file), and for a new file that its directory exists.
+ * Run inside boundHostRead by the save, so they answer in time or not at all.
+ */
+async function remoteSaveChecks(host: string, filePath: string): Promise<{ reader: DaemonFileReader; current: string | null }> {
+  const reader = (await createFileReader(host)) as DaemonFileReader
+  // stat FIRST, for the same reason the local branch does: a file bigger than
+  // the editor can load must be refused before we read it, not truncated by the
+  // save. A daemon too old for fs.stat throws; treat that as "can't verify" and
+  // fall through to the read (which is itself size-guarded by readFile).
+  try {
+    const st = await reader.stat(filePath)
+    if (st && st.size > MAX_FILE_SIZE) {
+      throw new FileContentError('File is larger than the editor can load: saving would truncate it', 409)
+    }
+  } catch (err) {
+    if (err instanceof FileContentError) throw err
+    /* stat unavailable: the read below is the fallback guard */
+  }
+  const current = await reader.readFile(filePath)
+  if (current === null) {
+    // Creating a remote file: the daemon's fs.write does `mkdir -p`, so refuse
+    // here if the parent is missing. Matches the local branch: a save into a
+    // directory that doesn't exist is a typo, and silently materializing a tree
+    // on a remote host is worse than a clear error.
+    //
+    // fs.stat (not fs.ls) because it distinguishes absent from empty: listDir
+    // returns [] for BOTH a failed call and an empty directory.
+    let parentExists: boolean
+    try {
+      parentExists = (await reader.stat(path.dirname(filePath))) !== null
+    } catch {
+      parentExists = true // old daemon without fs.stat: don't block the save
+    }
+    if (!parentExists) {
+      throw new FileContentError(`Directory does not exist on ${await hostDisplayNameFor(host)}: ${path.dirname(filePath)}`, 404)
+    }
+  }
+  return { reader, current }
+}
+
+/** How a remote save that failed after its checks is answered (both edges, web and v1). */
+export interface RemoteSaveFailure {
+  status: 502 | 503
+  /** HOST_RECONNECTING for a host not answering now; none for the host's own refusal. */
+  code?: typeof HOST_RECONNECTING
+  message: string
+}
+
+/**
+ * A remote save's failure, told by the error's kind (providers/link-failure.ts),
+ * never by its words, and said in the host's name. Null for a local save, whose
+ * errors are the route's own.
+ *  - no link when the write went out: nothing was written (503, reconnecting);
+ *  - the link went away under the write, or nothing answered it: it may have
+ *    landed (503, reconnecting; the next save is guarded by the lock, so a write
+ *    that did land is asked about, never overwritten blindly);
+ *  - anything else is the host's own answer (502, in its words).
+ * A gate review (2026-10-05) saw a save during an ssh outage answer a raw 500,
+ * "Command failed: ssh ...", which a message pattern here had missed.
+ */
+export async function remoteSaveFailure(err: unknown, host: string | null | undefined): Promise<RemoteSaveFailure | null> {
+  if (!isRemoteHost(host)) return null
+  const name = await hostDisplayNameFor(host)
+  const link = linkFailureKind(err)
+  if (link === 'no-link') return { status: 503, code: HOST_RECONNECTING, message: `Nothing was saved. Can't reach ${name} right now.` }
+  if (link) {
+    return {
+      status: 503, code: HOST_RECONNECTING,
+      message: `${name} stopped answering during the save, so it may not have landed. Your text is still in the editor: press Save again. If it did land, you are asked before anything is overwritten.`,
+    }
+  }
+  const msg = err instanceof Error ? err.message : String(err)
+  return { status: 502, message: `Could not save on ${name}: ${inHostTerms(msg, host, name)}` }
+}
+
+/**
  * Write a file's text content — the editor's save path, shared by the internal
  * route and PUT /api/v1/file-content.
  *
@@ -682,21 +833,11 @@ export async function writeFileContentPayload(
     // Remote: read-compare-write over the daemon. There is no remote file lock,
     // so the hash check is the only guard — same best-effort contract the notes
     // save has, and the window is one WS round-trip.
-    const reader = (await createFileReader(host as string)) as DaemonFileReader
-    // stat FIRST, for the same reason the local branch does: a file bigger than
-    // the editor can load must be refused before we read it, not truncated by the
-    // save. A daemon too old for fs.stat throws; treat that as "can't verify" and
-    // fall through to the read (which is itself size-guarded by readFile).
-    try {
-      const st = await reader.stat(filePath)
-      if (st && st.size > MAX_FILE_SIZE) {
-        throw new FileContentError('File is larger than the editor can load — saving would truncate it', 409)
-      }
-    } catch (err) {
-      if (err instanceof FileContentError) throw err
-      /* stat unavailable — the read below is the fallback guard */
-    }
-    const current = await reader.readFile(filePath)
+    // Everything before the write is a read, bounded like every read
+    // (remote-read-bound.ts): a host still connecting, or a link gone silent,
+    // answers 503 within seconds and NOTHING is written (it took 30 to 60s, then
+    // a 502 naming the alias). Only the write itself runs unbounded.
+    const { reader, current } = await boundHostRead(host as string, () => remoteSaveChecks(host as string, filePath))
     if (current !== null) {
       assertOverwritable(current, filePath)
       // Fill `meta` BEFORE either refusal, so a refused write can still be logged
@@ -713,24 +854,10 @@ export async function writeFileContentPayload(
       }
     } else {
       if (meta) meta.previousHash = null
-      // Creating a remote file: the daemon's fs.write does `mkdir -p`, so refuse
-      // here if the parent is missing. Matches the local branch — a save into a
-      // directory that doesn't exist is a typo, and silently materializing a tree
-      // on a remote host is worse than a clear error.
-      //
-      // fs.stat (not fs.ls) because it distinguishes absent from empty: listDir
-      // returns [] for BOTH a failed call and an empty directory.
-      let parentExists: boolean
-      try {
-        parentExists = (await reader.stat(path.dirname(filePath))) !== null
-      } catch {
-        parentExists = true // old daemon without fs.stat — don't block the save
-      }
-      if (!parentExists) {
-        throw new FileContentError(`Directory does not exist on ${host}: ${path.dirname(filePath)}`, 404)
-      }
     }
     await reader.writeFile(filePath, content)
+    // A read of the old bytes, running or kept for a retry, must not be served after this.
+    forgetSharedHostRead(host as string, remoteFileReadKey(filePath))
     log.web.info('file saved (remote)', { path: filePath, host, size: Buffer.byteLength(content, 'utf-8') })
     return { ok: true, size: Buffer.byteLength(content, 'utf-8'), contentHash: nextHash }
   }
@@ -765,7 +892,7 @@ export async function writeFileContentPayload(
       if (!stat.isFile()) throw new FileContentError('Not a regular file', 400)
       if (stat.size > MAX_FILE_SIZE) {
         throw new FileContentError(
-          'File is larger than the editor can load — saving would truncate it',
+          'File is larger than the editor can load: saving would truncate it',
           409,
         )
       }
@@ -906,16 +1033,13 @@ export async function serveRawFileContent(
   let content: string | null = null
   try {
     if (isRemote) {
-      const reader = await createFileReader(rawHost as string)
-      content = await reader.readFile(filePath)
+      content = await boundHostRead(rawHost as string, async () => (await createFileReader(rawHost as string)).readFile(filePath))
     } else {
       content = await fsp.readFile(filePath, 'utf-8')
     }
   } catch (err) {
-    const msg = isRemote
-      ? `Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`
-      : 'File not found'
-    res.status(isRemote ? 502 : 404).type('text/plain').send(msg)
+    if (isRemote) await sendRemoteReadFailure(res, rawHost as string, err)
+    else res.status(404).type('text/plain').send('File not found')
     return
   }
   if (content === null) {
@@ -1180,12 +1304,20 @@ fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunctio
       res.status(err.statusCode).json({ error: err.message })
       return
     }
-    // A daemon/transport failure on a remote save is the user's problem to see,
-    // not a 500 stack: report it as a bad gateway with the daemon's own message.
-    const msg = err instanceof Error ? err.message : String(err)
-    if (/fs\.write failed|daemon|not connected|timeout/i.test(msg)) {
-      log.web.warn('file save failed (remote transport)', { error: msg })
-      res.status(502).json({ error: `Could not save on the remote host: ${msg}` })
+    // The checks before a remote write could not reach the host in time
+    // (remote-read-bound.ts): nothing was written, and the editor keeps the text.
+    if (err instanceof HostReconnectingError) {
+      log.web.warn('file save not made (host not answering)', { host: hostArg, error: err.message })
+      markHandledFailure(res).status(503).json({ error: `Nothing was saved. ${err.message}`, code: HOST_RECONNECTING })
+      return
+    }
+    // A remote save that failed after its checks: the host's answer, or its link's,
+    // never a 500 stack (remoteSaveFailure tells which by kind).
+    const failure = await remoteSaveFailure(err, hostArg)
+    if (failure) {
+      log.web.warn('file save failed (remote)', { host: hostArg, status: failure.status, error: err instanceof Error ? err.message : String(err) })
+      if (failure.code) markHandledFailure(res)
+      res.status(failure.status).json({ error: failure.message, ...(failure.code ? { code: failure.code } : {}) })
       return
     }
     next(err)

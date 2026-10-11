@@ -15,7 +15,7 @@
  * page can be retried; a transcript that cannot be paged says so instead of showing
  * a dead button; the pages survive leaving the session and coming back.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { WHALE_SESSION, WHALE_TASK, WHALE_TURNS } from './whale-history-fixture';
 
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
@@ -306,7 +306,12 @@ test('once the start is reached, leaving and coming back shows no Load earlier a
   expect((await markers(back))[0]).toBe('ask:0');
 });
 
-test('an outline pin on the first turns pages all the way back and lands on it', async ({ page, baseURL, request }) => {
+/**
+ * Pin turn 5, open the session, click the outline row: the jump pages back and the
+ * row ends up on screen. `cpuRate` slows the page's CPU (Chromium, CDP) before the
+ * session opens, the timing a loaded machine gives every run.
+ */
+async function outlinePinLands(page: Page, baseURL: string, request: APIRequestContext, cpuRate = 1): Promise<void> {
   const EARLY = 5;
   const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString();
   const pin = (t: number) => ({
@@ -321,7 +326,11 @@ test('an outline pin on the first turns pages all the way back and lands on it',
   // and run at the same time, so clearing would pull the pin out from under the other.
   await set([pin(EARLY)]);
   {
-    const panel = await openWhale(page, baseURL!);
+    if (cpuRate > 1) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpuRate });
+    }
+    const panel = await openWhale(page, baseURL);
     const history = panel.locator('.session-history');
     const target = panel.locator(`[data-message-id="msg_whale_${EARLY}_a"]`);
     await expect(target, 'turn 5 is a dozen pages above the tail').toHaveCount(0);
@@ -368,4 +377,16 @@ test('an outline pin on the first turns pages all the way back and lands on it',
       throw new Error(`${(err as Error).message}\n--- console ---\n${consoleLines.join('\n')}\n--- scroll trace (${trace.length}) head ---\n${head}\n--- tail ---\n${tail}`);
     }
   }
+}
+
+test('an outline pin on the first turns pages all the way back and lands on it', async ({ page, baseURL, request }) => {
+  await outlinePinLands(page, baseURL!, request);
+});
+
+// 2026-10-07: on a loaded machine the jump scrolled, and its first scroll frame was put
+// back at the bottom by the timeline's echo guard (main included). A slow CPU gives
+// that timing on every run.
+test('on a slow CPU too, the outline pin\'s jump lands on the row', async ({ page, baseURL, request, browserName }) => {
+  test.skip(browserName !== 'chromium', 'CPU throttling is a Chromium DevTools feature');
+  await outlinePinLands(page, baseURL!, request, 4);
 });

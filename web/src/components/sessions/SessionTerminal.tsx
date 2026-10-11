@@ -28,6 +28,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionTerminal } from '@/hooks/useSessionTerminal';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { remoteHostTag } from '@/utils/host-display-label';
 import { TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard } from './TerminalModeNotices';
 
 interface SessionTerminalProps {
@@ -48,6 +50,10 @@ interface SessionTerminalProps {
 
 export function SessionTerminal({ sessionId, label, host, onClose, embedded = false, barRightSlot }: SessionTerminalProps) {
   const confirm = useConfirm();
+  const remote = host && host !== '__local__' ? host : null;
+  const hostName = useHostDisplayLabel(remote);
+  // A session with no cwd is labelled by its host: by its name then, never its alias.
+  const title = remote && label === remote ? hostName : label;
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -174,8 +180,8 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
         <div className="session-terminal-header">
           <div className="session-terminal-title">
             <span className="session-terminal-icon">&#x2328;</span>
-            <span className="session-terminal-label">{label ?? 'Terminal'}</span>
-            {host && <span className="session-terminal-host">SSH: {host}</span>}
+            <span className="session-terminal-label">{title ?? 'Terminal'}</span>
+            {remote && <span className="session-terminal-host">{remoteHostTag(remote, hostName)}</span>}
             <span className={`session-terminal-status session-terminal-status-${status}`}>{status}</span>
             {plain && <TerminalPlainBadge plain={plain} />}
           </div>

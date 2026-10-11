@@ -118,6 +118,25 @@ describe('hostStartGate', () => {
     expect(seen).toEqual(['claude-sonnet-4-5'])
   })
 
+  it('a link that did not answer moments ago (the pool fails fast on it) is refused at once: no 20s redial into the same silence', async () => {
+    const t0 = Date.now()
+    for (const kind of ['timeout', 'cloud_tunnel'] as const) {
+      const d = deps({ frame: () => frame({ connected: false, phase: 'failed', kind, hint: 'Check the network.' }), wouldWait: () => 'fails-fast' })
+      expect(await hostStartGate({ host: 'buildbox' }, d)).toMatchObject({ code: 'host_unreachable', kind, headline: hostFailureHeadline(kind, 'Build box') })
+      expect(d.connect).not.toHaveBeenCalled()
+    }
+    expect(Date.now() - t0).toBeLessThan(200)
+  })
+
+  it('a failure a person fixes (a login, a key) is redialled even when fresh; a stale link failure is redialled too', async () => {
+    const login = deps({ frame: () => frame({ connected: false, phase: 'failed', kind: 'cert_expired' }), wouldWait: () => 'fails-fast' })
+    expect(await hostStartGate({ host: 'buildbox' }, login)).toBeNull()
+    expect(login.connect).toHaveBeenCalledTimes(1)
+    const stale = deps({ frame: () => frame({ connected: false, phase: 'failed', kind: 'timeout' }), wouldWait: () => 'cold' })
+    expect(await hostStartGate({ host: 'buildbox' }, stale)).toBeNull()
+    expect(stale.connect).toHaveBeenCalledTimes(1)
+  })
+
   it('C46: a failed host is redialled with the 20s deadline, and a success goes on', async () => {
     const d = deps({ frame: () => frame({ connected: false, phase: 'failed', kind: 'cert_expired' }) })
     expect(await hostStartGate({ host: 'buildbox' }, d)).toBeNull()

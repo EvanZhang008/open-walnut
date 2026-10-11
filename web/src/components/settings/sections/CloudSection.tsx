@@ -11,6 +11,9 @@
  *   live job    → step list (+ the manual paste panel while it wants an IP)
  *   done        → success + inline phone pairing
  *   configured  → status card (cloud sync already wired, nothing in flight)
+ *   unpaired    → the same card, saying this Mac unpaired itself (no "Connected")
+ *   (configured or done, refused: "Not accepted" and why, when the companion
+ *   refuses this Mac's token: the operator revoked it there)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -41,6 +44,10 @@ import { CloudManualPaste } from './cloud/CloudManualPaste';
 import { CloudProviderPicker } from './cloud/CloudProviderPicker';
 import { CloudSetupSteps, SetupLog } from './cloud/CloudSetupSteps';
 import { PairPhoneCard } from './cloud/PairPhoneCard';
+import { CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './DevicesSection';
+
+/** The companion refuses this Mac's token: said on the Cloud card in place of "Connected". */
+export const CLOUD_REFUSED_NOTICE = 'The cloud companion no longer accepts this Mac\'s token, so cloud sync and the Cloud host stop. Pairing this Mac again needs a new token made on the companion.';
 
 /** Wizard position while no job exists yet. A live job overrides all of these. */
 type Stage = 'hero' | 'picker' | 'configure';
@@ -71,6 +78,10 @@ export function CloudSection() {
   const [loading, setLoading] = useState(true);
   /** Cloud sync already configured (a `cloud` pairing target exists). */
   const [cloudOrigin, setCloudOrigin] = useState<string | null>(null);
+  /** This Mac unpaired itself from the companion at this origin (the remote is still there). */
+  const [unpairedOrigin, setUnpairedOrigin] = useState<string | null>(null);
+  /** The companion refuses this Mac's token (the operator revoked it there): never "Connected". */
+  const [cloudRefused, setCloudRefused] = useState(false);
 
   /** Last SSE id, so a remount resumes from the ring instead of re-reading all. */
   const lastEventIdRef = useRef<string | undefined>(undefined);
@@ -114,19 +125,25 @@ export function CloudSection() {
     return pending;
   }, [commitJob]);
 
-  // Mount probe: is a job in flight, and is a companion already wired up?
+  // Mount probe: is a job in flight, and is a companion already wired up? Asked
+  // again whenever Phones & Cloud changes a pairing (an unpair ends "Connected").
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const [, targets] = await Promise.all([
-        refreshJob(),
-        fetchDevicesList<{ targets?: { kind: string; origin: string }[] }>().catch(() => ({ targets: [] })),
-      ]);
+    type Listed = { targets?: { kind: string; origin: string }[]; cloudUnpaired?: { origin: string }; cloudRefused?: boolean };
+    const readPairing = async () => {
+      const listed = await fetchDevicesList<Listed>().catch((): Listed => ({ targets: [] }));
       if (cancelled) return;
-      setCloudOrigin(targets.targets?.find((t) => t.kind === 'cloud')?.origin ?? null);
-      setLoading(false);
+      setCloudOrigin(listed.targets?.find((t) => t.kind === 'cloud')?.origin ?? null);
+      setUnpairedOrigin(listed.cloudUnpaired?.origin ?? null);
+      setCloudRefused(listed.cloudRefused === true);
+    };
+    void (async () => {
+      await Promise.all([refreshJob(), readPairing()]);
+      if (!cancelled) setLoading(false);
     })();
-    return () => { cancelled = true; };
+    const onChanged = () => { void readPairing(); };
+    window.addEventListener(DEVICES_CHANGED_EVENT, onChanged);
+    return () => { cancelled = true; window.removeEventListener(DEVICES_CHANGED_EVENT, onChanged); };
   }, [refreshJob]);
 
   // Live progress. Attaching unconditionally (not only while a job runs) means a
@@ -277,7 +294,7 @@ export function CloudSection() {
   /** A finished-unhappily job record. Kept, but it must not outrank reality. */
   const terminalJob = job?.status === 'failed' || job?.status === 'cancelled';
 
-  const view: 'loading' | 'live' | 'done' | 'configured' | Stage = loading
+  const view: 'loading' | 'live' | 'done' | 'configured' | 'unpaired' | Stage = loading
     ? 'loading'
     : isLive(job)
       ? 'live'
@@ -289,11 +306,21 @@ export function CloudSection() {
         // from the configured card below.
         : cloudOrigin
           ? 'configured'
-          : terminalJob
-            ? 'live'
-            : stage;
+          : unpairedOrigin
+            ? 'unpaired'
+            : terminalJob
+              ? 'live'
+              : stage;
 
   const errorNotice = error ? <SettingsNotice kind="error" role="alert">{error}</SettingsNotice> : null;
+  // Revoked on the companion (its CLI, or another Mac removed this one): the
+  // pairing is still configured here, but nothing it carries is accepted there.
+  const connectedTag = cloudRefused
+    ? <SettingsTag tone="warning">Not accepted</SettingsTag>
+    : <SettingsTag tone="success">Connected</SettingsTag>;
+  const refusedNotice = cloudRefused
+    ? <SettingsNotice kind="warn">{CLOUD_REFUSED_NOTICE}</SettingsNotice>
+    : null;
   const liveHead = job?.status === 'failed'
     ? 'Setup stopped at a step that needs attention.'
     : job?.status === 'cancelled'
@@ -410,9 +437,10 @@ export function CloudSection() {
                 help={job.domain
                   ? <><code className="settings-addons-mono">{job.domain}</code>; data sync is wired and the first push succeeded.</>
                   : 'Data sync is wired and the first push succeeded.'}
-                control={<SettingsTag tone="success">Connected</SettingsTag>}
+                control={connectedTag}
               />
             </SettingsGroup>
+            {refusedNotice}
             <PairPhoneCard domain={job.domain} />
             <SettingsGroup>
               <SetupLog lines={logLines} />
@@ -432,8 +460,9 @@ export function CloudSection() {
             <SettingsRow
               label="Cloud sync"
               help={<code className="settings-addons-mono">{cloudOrigin?.replace(/^https?:\/\//, '')}</code>}
-              control={<SettingsTag tone="success">Connected</SettingsTag>}
+              control={connectedTag}
             />
+            {refusedNotice}
             <SettingsRow
               label="Phones"
               help={<>Pair phones under Paired phones; they point at this companion and work off <span className="settings-nowrap">Wi-Fi</span>.</>}
@@ -452,6 +481,20 @@ export function CloudSection() {
           </SettingsGroup>
         )}
         {view === 'configured' && errorNotice}
+
+        {view === 'unpaired' && (
+          <SettingsGroup
+            className="cloud-configured cloud-unpaired"
+            footer="Pairing this Mac again needs a new token made on the companion; to set up a different companion, remove the cloud git remote first."
+          >
+            <SettingsRow
+              label="Cloud sync"
+              help={<code className="settings-addons-mono">{unpairedOrigin?.replace(/^https?:\/\//, '')}</code>}
+              control={<SettingsTag>Not paired</SettingsTag>}
+            />
+            <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>
+          </SettingsGroup>
+        )}
       </div>
     </SectionCard>
   );

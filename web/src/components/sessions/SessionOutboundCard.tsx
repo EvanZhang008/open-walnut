@@ -49,6 +49,7 @@ import { sessionStatusStore } from '@/stores/session-status-store';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
 import { MessageFoldSummary } from './MessageFoldSummary';
 import '@/styles/provenance-fold.css';
@@ -171,6 +172,7 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
  */
 function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
   const taskLabel = useTaskLabel(resolved.taskId);
+  const hostName = useHostDisplayLabels();
   const chip = resolved.taskId ? (
     <a
       className="provenance-chip provenance-chip-task task-link"
@@ -190,7 +192,7 @@ function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
   return (
     <div className="provenance-chips">
       {chip}
-      {resolved.host && <span className="provenance-host">{resolved.host}</span>}
+      {resolved.host && <span className="provenance-host">{hostName(resolved.host)}</span>}
     </div>
   );
 }

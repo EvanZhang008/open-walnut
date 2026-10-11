@@ -81,7 +81,7 @@ import type { CloudSetupJobState, CloudSetupProviderId } from '../../../src/core
 interface FakeBox {
   claimed: boolean
   bootedAfter: number
-  claimCalls: Array<{ setupToken: string; deviceName: string }>
+  claimCalls: Array<{ setupToken: string; deviceName: string; device?: unknown }>
   statusCalls: number
   issuedToken: string
 }
@@ -98,7 +98,7 @@ function installFetchStub(): void {
       })
     }
     if (url.endsWith('/api/v1/setup/claim')) {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { setupToken: string; deviceName: string }
+      const body = JSON.parse(String(init?.body ?? '{}')) as { setupToken: string; deviceName: string; device?: unknown }
       box.claimCalls.push(body)
       if (box.claimed) {
         return new Response(JSON.stringify({ error: 'Instance already claimed' }), { status: 403 })
@@ -264,6 +264,10 @@ describe('happy path (auto-provisioning driver)', () => {
     // The claim carried the code that was baked into the boot script.
     expect(box.claimCalls[0].setupToken).toMatch(/^[0-9a-f]{32}$/)
     expect(box.claimCalls[0].deviceName).toMatch(/^mac-/)
+    // It says what this computer is, the report the Mac sends its companion later:
+    // that is what records the claimer as the owner (core/device-claim.ts).
+    const { computerSelfReport } = await import('../../../src/core/device-self-report.js')
+    expect(box.claimCalls[0].device).toEqual(computerSelfReport())
     // Remote wired with the token the box issued.
     expect(gitCalls.initSync).toHaveLength(1)
     expect(gitCalls.initSync[0]).toContain('walnut:devtok-abc123@127.0.0.1:9/git/data')

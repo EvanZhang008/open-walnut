@@ -157,8 +157,11 @@ async function statForValidator(
 ): Promise<{ mtimeMs: number; size: number } | null> {
   if (host) {
     try {
-      const reader = (await createFileReader(host)) as DaemonFileReader
-      const st = await reader.stat(filePath)
+      // Within the host-read deadline (core/hosts/remote-read-bound.ts): a host
+      // that is not answering costs this revalidation seconds, never the stat's
+      // 30s command timeout. Any failure is "no validator", a plain read follows.
+      const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
+      const st = await boundHostRead(host, async () => ((await createFileReader(host)) as DaemonFileReader).stat(filePath))
       return st ? { mtimeMs: st.mtimeMs, size: st.size } : null
     } catch {
       return null

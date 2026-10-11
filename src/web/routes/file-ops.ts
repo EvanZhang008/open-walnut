@@ -55,6 +55,8 @@ import {
   type FileOpErrorCode,
 } from './file-ops-errors.js'
 import { createFileReader } from '../../core/session-file-reader.js'
+import { hostDisplayNameFor } from '../../core/hosts/host-display-name.js'
+import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 
@@ -99,7 +101,7 @@ const SLOW_OPS: ReadonlySet<FileOpName> = new Set<FileOpName>(['delete', 'duplic
 const REMOTE_FAST_OP_DEADLINE_MS = 8_000
 
 const PENDING_MESSAGE =
-  'Still working — this is taking longer than usual. The tree will refresh when it finishes.'
+  'Still working: this is taking longer than usual. The tree will refresh when it finishes.'
 
 export interface FileOpInput {
   op: FileOpName
@@ -489,7 +491,7 @@ async function execRemote(
         return {}
     }
   } catch (err) {
-    throw mapRemoteError(err, blame)
+    throw mapRemoteError(err, blame, await hostDisplayNameFor(host!))
   }
 }
 
@@ -553,6 +555,8 @@ export async function performFileOp(input: FileOpInput, deps?: FileOpDeps): Prom
 }
 
 export const fileOpsRouter = Router()
+// Every sentence these routes answer names a remote host as a person knows it.
+fileOpsRouter.use(hostTermsAtExit)
 
 for (const op of FILE_OP_NAMES) {
   fileOpsRouter.post(`/${op}`, async (req: Request, res: Response, next: NextFunction) => {

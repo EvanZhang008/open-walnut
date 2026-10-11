@@ -1642,6 +1642,12 @@ export interface ApiKeyEntry {
   name: string;
   key: string;
   created_at: string;
+  /**
+   * The paired device that made it (POST /api/auth/keys on a cloud companion,
+   * by its owner): the key works only while that device stays paired. Absent =
+   * made by this machine itself (the console, or written into config.yaml).
+   */
+  device_id?: string;
 }
 
 export interface PushTokenEntry {

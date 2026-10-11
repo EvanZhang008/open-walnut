@@ -14,8 +14,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-cloud-box-host'))
 
 import { CONFIG_FILE } from '../../../src/constants.js'
+import { OTHER_MAC_CONNECTED } from '../../../src/core/machine-credentials.js'
 import {
-  CLOUD_BOX_HOST_ALIAS, capabilityFromStatus, cloudBoxRefusal, injectCloudBoxHost, onCloudBoxStateChange,
+  CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, capabilityFromStatus, cloudBoxRefusal, injectCloudBoxHost, onCloudBoxStateChange,
   resetCloudBoxStateForTest, setCloudBoxState, tunnelUrlFor, withoutCloudBoxHost, type CloudBoxCapability,
 } from '../../../src/core/hosts/cloud-box-host.js'
 import { getConfig, saveConfig, updateConfig } from '../../../src/core/config-manager.js'
@@ -82,7 +83,11 @@ describe('refusal sentences', () => {
     expect(classifyHostConnectError('Cloud companion tunnel failed: HTTP 502', DOMAIN).kind).toBe('cloud_tunnel')
     expect(hostFailureHeadline('cloud_update', 'Cloud')).toBe('Cloud companion needs an update')
     expect(hostFailureHeadline('cloud_exec_off', 'Cloud')).toBe('Cloud companion has session hosting turned off')
-    for (const s of [update, off]) expect(s).not.toMatch(/[–—]/)
+    for (const s of [update, off]) expect(s).not.toMatch(/[\u2013\u2014]/)
+  })
+
+  it('a second Mac reads on its host card exactly what the companion answered it', () => {
+    expect(CLOUD_BOX_OTHER_MAC_SENTENCE).toBe(OTHER_MAC_CONNECTED)
   })
 
   it("every sentence the cloud box writes keeps its kind whatever the host's names are", () => {

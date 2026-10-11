@@ -22,6 +22,8 @@ import { type VscodeEmbedInfo } from '@/api/sessions';
 import { consumeVscodeEmbed } from './vscodeEmbedPrefetch';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { remoteHostTag } from '@/utils/host-display-label';
 
 /** iframe must emit onload within this after the URL is set. */
 const LOAD_TIMEOUT_MS = 20_000;
@@ -38,6 +40,8 @@ type Phase = 'ensuring' | 'loading' | 'ready' | 'error';
 
 export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeViewProps) {
   const [phase, setPhase] = useState<Phase>('ensuring');
+  const remote = host && host !== '__local__' ? host : null;
+  const hostName = useHostDisplayLabel(remote);
   const [info, setInfo] = useState<VscodeEmbedInfo | null>(null);
   const [error, setError] = useState<{ message: string; hint?: string } | null>(null);
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,7 +105,7 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
         <div className="session-code-title">
           <span className="session-code-label">VS Code</span>
           {openLabel && <span className="session-code-target" title={info?.open.path}>{openLabel}</span>}
-          {host && host !== '__local__' && <span className="session-code-host">SSH: {host}</span>}
+          {remote && <span className="session-code-host">{remoteHostTag(remote, hostName)}</span>}
         </div>
         <div className="session-code-actions">
           {info && phase === 'ready' && (
@@ -126,7 +130,7 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
             <div className="session-code-loading">
               <div className="session-code-spinner" />
               <span>
-                Starting code-server{host && host !== '__local__' ? ` on ${host}` : ''}…
+                Starting code-server{remote ? ` on ${hostName}` : ''}…
                 first use downloads it (~100MB), which can take a minute
               </span>
             </div>

@@ -209,6 +209,10 @@ export interface SessionHistoryResult {
   stale?: boolean;
   /** Human-readable reason for `stale` (the underlying read error). */
   staleReason?: string;
+  /** The read is still arriving from the host (a slow link that answers) and
+   *  goes on there: keep what is shown and ask again at once, which joins it.
+   *  `from` is the host's label. Comes with `stale`. */
+  loading?: { from: string };
   /** Set when session exists but history file is unavailable (remote unreachable, file deleted). */
   historyUnavailable?: string;
   /** True when the payload came from a BOUNDED window read (whale transcript /
@@ -332,7 +336,10 @@ async function fetchSessionHistoryRaw(
   // get a tighter ceiling: the response is bounded, and one unbounded fetch pinning a
   // browser lane for 150s starves everything else on the shared 6-connection pool
   // (that is how STT "timed out" while the server was idle — 2026-08-11).
-  const timeoutMs = source === 'streams' ? 15_000 : (tail ? 60_000 : 150_000);
+  // A tail read on a slow link that answers is cut by the server at 60s plus at
+  // most a probe ("Still loading", remote-read-bound.ts): the client waits
+  // longer than that, or it would cut the answer it waits for.
+  const timeoutMs = source === 'streams' ? 15_000 : (tail ? 90_000 : 150_000);
   const res = await apiGet<{
     messages: SessionHistoryMessage[];
     revisedMessages?: SessionHistoryMessage[];
@@ -342,6 +349,7 @@ async function fetchSessionHistoryRaw(
     delta?: boolean;
     stale?: boolean;
     staleReason?: string;
+    loading?: { from?: unknown };
     historyUnavailable?: string;
     windowed?: boolean;
     initialUserText?: string;
@@ -378,6 +386,7 @@ async function fetchSessionHistoryRaw(
     delta: res.delta,
     stale: res.stale,
     staleReason: res.staleReason,
+    ...(typeof res.loading?.from === 'string' ? { loading: { from: res.loading.from } } : {}),
     windowed: res.windowed,
     initialUserText: res.initialUserText,
     total: res.total,

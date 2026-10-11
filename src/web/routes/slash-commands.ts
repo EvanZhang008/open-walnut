@@ -50,7 +50,6 @@ export interface SlashCommandItem {
   plugin?: string
 }
 
-const REMOTE_TIMEOUT_MS = 15_000
 /**
  * Per-host cache TTL — avoids an ssh round-trip on every "/". Kept short (60s) so a
  * skill just created on the remote host shows up soon without a manual refresh; the
@@ -275,29 +274,29 @@ async function scanRemoteItems(host: string, cwd?: string): Promise<SlashCommand
   const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
   const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
 
-  // The host-read deadline (remote-read-bound.ts): the palette degrades at once
-  // while the host is connecting instead of waiting on its dial.
+  // The host-read deadline (remote-read-bound.ts) over the connection AND the
+  // scan: the palette degrades at once while the host is connecting, and a
+  // connected link that stopped answering is noticed in seconds (it held the
+  // scan for the daemon's 30s command timeout).
   const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
-  const label = hostDef.label?.trim() || host
-  const conn = await boundHostRead(host, () => new Promise<Awaited<ReturnType<typeof getDaemonConnection>>>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Remote connection to ${label} timed out`)), REMOTE_TIMEOUT_MS)
-    getDaemonConnection(host, sshTarget).then(resolve, reject).finally(() => clearTimeout(timer))
-  }))
-
-  const [remoteSkills, remoteProjectCmds, remoteProjectSkills, openWalnutCmds] = await Promise.all([
-    listRemoteSkills(conn).then((all) => all.map(pluginSkillItem)),
-    cwd
-      ? listRemoteProjectCommands(conn, cwd).then((all) =>
-          all.map((c): SlashCommandItem => ({ name: c.name, description: c.description, source: 'project' })),
-        )
-      : Promise.resolve([]),
-    cwd
-      ? listRemoteProjectSkills(conn, cwd).then((all) =>
-          all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description, source: 'project', kind: 'skill' })),
-        )
-      : Promise.resolve([]),
-    localWalnutCommands(),
-  ])
+  const [remoteSkills, remoteProjectCmds, remoteProjectSkills, openWalnutCmds] = await boundHostRead(host, async () => {
+    // No timer of its own: boundHostRead bounds the dial in every pool state.
+    const conn = await getDaemonConnection(host, sshTarget)
+    return Promise.all([
+      listRemoteSkills(conn).then((all) => all.map(pluginSkillItem)),
+      cwd
+        ? listRemoteProjectCommands(conn, cwd).then((all) =>
+            all.map((c): SlashCommandItem => ({ name: c.name, description: c.description, source: 'project' })),
+          )
+        : Promise.resolve([]),
+      cwd
+        ? listRemoteProjectSkills(conn, cwd).then((all) =>
+            all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description, source: 'project', kind: 'skill' })),
+          )
+        : Promise.resolve([]),
+      localWalnutCommands(),
+    ])
+  })
   return [...remoteProjectCmds, ...remoteProjectSkills, ...openWalnutCmds, ...remoteSkills, ...BUILTIN_COMMANDS]
 }
 
@@ -349,8 +348,15 @@ export async function buildSlashCommandItems(opts: {
   host?: string
   /** Force a re-scan, bypassing the per-host cache (manual palette refresh). */
   fresh?: boolean
+  /**
+   * The caller asked this host moments ago, in the same request, and it did not
+   * answer: the cache answers if it can, else the palette degrades now. Asking
+   * again waited out a second probe (a session's palette took 9s on a silent
+   * link where one ask takes 6s).
+   */
+  hostNotAnswering?: boolean
 }): Promise<SlashCommandsPayload> {
-  const { cwd, host, fresh } = opts
+  const { cwd, host, fresh, hostNotAnswering } = opts
 
   // ── Local session ──
   if (!host) {
@@ -359,6 +365,9 @@ export async function buildSlashCommandItems(opts: {
 
   // ── Remote session ──
   try {
+    if (hostNotAnswering && (fresh || !remoteCache.has(`${host}::${cwd ?? ''}`))) {
+      throw new Error('the host did not answer this request')
+    }
     return { items: mergeAndSort([await remoteItemsViaCache(host, cwd, fresh === true)]) }
   } catch (err) {
     // Degrade: never silently fall back to LOCAL skills (they'd misrepresent the
@@ -440,19 +449,29 @@ export async function buildSessionSlashCommandItems(opts: {
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const live = sessionRunner.findByClaudeId(sessionId)
   let cliNames = live?.cliSlashCommands?.names ?? null
+  let hostNotAnswering = false
   if (!cliNames) {
     // Post-restart window: the reattach tails from the end, so the init this
     // process never saw is recovered from the stream tail (bounded, via the
-    // daemon). A session with no stream yet (draft) stays on discovery.
+    // daemon). A session with no stream yet (draft) stays on discovery. The
+    // read is within the host-read deadline: its stats waited on a dial, or on
+    // a silent link's 30s command timeout, before the palette could open. A
+    // host that cannot answer now is "not recovered", and discovery degrades
+    // without asking it a second time.
     const { recoverCliSlashCommandsFromStream } = await import('../../core/sessions/cli-slash-commands-recover.js')
-    const recovered = await recoverCliSlashCommandsFromStream(sessionId, record.host)
+    const { boundHostRead, HostReconnectingError } = await import('../../core/hosts/remote-read-bound.js')
+    const recovered = await boundHostRead(record.host, () => recoverCliSlashCommandsFromStream(sessionId, record.host))
+      .catch((err: unknown) => {
+        if (err instanceof HostReconnectingError) { hostNotAnswering = true; return null }
+        throw err
+      })
     if (recovered) {
       cliNames = recovered.names
       live?.seedCliSlashCommands(recovered.names, Date.now())
     }
   }
   if (!cliNames) {
-    const base = await buildSlashCommandItems({ cwd: record.cwd, host: record.host, fresh })
+    const base = await buildSlashCommandItems({ cwd: record.cwd, host: record.host, fresh, hostNotAnswering })
     return { ...base, source: 'discovery' }
   }
 

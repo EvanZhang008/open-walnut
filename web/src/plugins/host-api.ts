@@ -2,6 +2,7 @@ import { apiGet, apiPost } from '@/api/client'
 import { getDeviceToken } from '@/api/device-token'
 import { wsClient } from '@/api/ws'
 import { getAppInfo } from '@/utils/app-info'
+import { asDeadlineError } from '@/utils/request-failure'
 import { log } from '@/utils/log'
 import { disposable, type WebPluginContext } from './disposable'
 import { APP_PLACEMENTS, appRegistry, assertBadge, type AppBadge, type AppContribution } from '@/apps/registry'
@@ -206,15 +207,17 @@ export function createWebPluginApi(
           const token = getDeviceToken()
           if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
         }
-        const response = await fetch(target, {
-          method: init.method,
-          headers,
-          body: init.body as BodyInit | undefined,
-          signal: AbortSignal.any([
-            context.signal,
-            AbortSignal.timeout(init.timeoutMs ?? 30_000),
-          ]),
-        })
+        const signal = AbortSignal.any([
+          context.signal,
+          AbortSignal.timeout(init.timeoutMs ?? 30_000),
+        ])
+        let response: Response
+        try {
+          response = await fetch(target, { method: init.method, headers, body: init.body as BodyInit | undefined, signal })
+        } catch (err) {
+          // The deadline is a TimeoutError in every engine (WebKit says AbortError).
+          throw asDeadlineError(err, signal)
+        }
         return publicFetchResponse(response)
       },
     },

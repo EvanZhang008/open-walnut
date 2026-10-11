@@ -1,5 +1,6 @@
 import { getDeviceToken } from './device-token';
 import { noteAuthRefusal } from './unpaired';
+import { asDeadlineError } from '../utils/request-failure';
 
 class ApiError extends Error {
   constructor(
@@ -228,7 +229,10 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   let res: Response;
   try {
     res = await fetch(path, opts);
-  } catch (err) {
+  } catch (caught) {
+    // A deadline is a TimeoutError in every engine (WebKit says AbortError), so
+    // the checks below and every caller's `name === 'TimeoutError'` see it.
+    const err = asDeadlineError(caught, signal);
     const elapsed = Math.round(performance.now() - t0);
     // A superseded request (e.g. debounced search) aborts via the caller's
     // signal — that's expected cancellation, not a failure. Don't log it at
@@ -341,8 +345,13 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
   await acquireFetchSlot('normal', `GET ${path}`);
   let res: Response;
+  const deadline = AbortSignal.timeout(opts?.timeoutMs ?? 30_000);
   try {
-    res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000) });
+    try {
+      res = await fetch(url, { method: 'GET', headers, signal: deadline });
+    } catch (err) {
+      throw asDeadlineError(err, deadline);
+    }
     if (!res.ok) {
       let message = res.statusText;
       try {

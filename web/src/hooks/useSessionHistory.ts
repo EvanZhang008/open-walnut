@@ -13,6 +13,31 @@ import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
 import { planDeltaMerge, foldFullPayload, prependOlderPage } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { visibleInterval } from '@/utils/page-visibility';
+import type { SessionHistoryResult } from '@/api/sessions';
+
+/** Still-loading answers joined in a row before the answer counts as stale (each is bounded at ~60s server-side). */
+const MAX_LOADING_JOINS = 12;
+
+/**
+ * A full fetch that rides out "still loading". The server answers a read that
+ * is still arriving at its 60s bound with `loading` and keeps reading; asking
+ * again at once joins that read, so the content arrives the moment it is in
+ * (2026-10-02: the first answer at 60s blanked the view with "No conversation
+ * history found" under a "live connection unavailable" banner, and the 10s
+ * retry came after the read had finished). `onLoading` sees each such answer.
+ */
+async function fetchJoiningLoad(
+  sessionId: string,
+  opts: Parameters<typeof fetchSessionHistory>[1],
+  onLoading: (from: string, partial: SessionHistoryResult) => void,
+  isCancelled: () => boolean,
+): Promise<SessionHistoryResult> {
+  for (let joins = 0; ; joins++) {
+    const result = await fetchSessionHistory(sessionId, opts);
+    if (!result.loading || isCancelled() || joins >= MAX_LOADING_JOINS) return result;
+    onLoading(result.loading.from, result);
+  }
+}
 
 interface UseSessionHistoryReturn {
   messages: SessionHistoryMessage[];
@@ -24,6 +49,10 @@ interface UseSessionHistoryReturn {
    *  read failed — SSH down / daemon timeout). Value = underlying reason.
    *  Content is shown; caller renders a degraded-connectivity banner. */
   stale: string | null;
+  /** Non-null while the host is still sending this history (a slow link that
+   *  answers; the server's read goes on and the next request joins it). Value =
+   *  the host's label. What is shown stays; the caller says it is loading. */
+  loadingFrom: string | null;
   /** Index in messages[] where the fork boundary is (source messages end, forked messages start) */
   forkBoundaryIndex?: number;
   /** Messages that exist at the source but were NOT loaded (lazy tail load).
@@ -110,6 +139,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // daemon timeout). Content renders; caller shows a degraded banner. Distinct
   // from `error` (which blanks the view when there's nothing to show).
   const [stale, setStale] = useState<string | null>(null);
+  const [loadingFrom, setLoadingFrom] = useState<string | null>(null);
   const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
 
   // Cursor = combined-message count the client has synced to. Advances on every
@@ -200,6 +230,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setPhase2Pending(false);
       setError(null);
       setStale(null);
+      setLoadingFrom(null);
       setForkBoundaryIndex(undefined);
       cursorRef.current = 0;
       baseOffsetRef.current = 0;
@@ -218,6 +249,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     const controller = new AbortController();
     setError(null);
     setStale(null);
+    setLoadingFrom(null);
     setForkBoundaryIndex(undefined);
     // Paging state belongs to one session; a version bump (turn boundary) keeps it.
     if (pagedSessionRef.current !== sessionId) {
@@ -252,6 +284,38 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       // Re-ask for the rows we hold an unsettled copy of. The server can't infer these
       // (its own copy is already settled by now), so the client must name them.
       const reviseIds = collectUnsettledIds(messagesRef.current);
+      // A full read replaces what we hold (tail-sliced, never shorter). It joins a
+      // read the host is still sending (fetchJoiningLoad), which a delta cannot.
+      const rebuildFull = () => {
+        fetchJoiningLoad(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal },
+          (from) => { if (!cancelled) setLoadingFrom(from); }, () => cancelled)
+          .then((full) => {
+            if (cancelled) return;
+            setLoadingFrom(null);
+            // A stale rebuild would replace a fresher local view with the
+            // server's old parse AND corrupt the cursor: skip it, the next
+            // healthy turn retries the rebuild.
+            if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
+            setStale(null);
+            const heldLen = messagesRef.current.length;
+            const folded = foldFullPayload(messagesRef.current, full, foldOpts());
+            setMessages(folded.messages);
+            setForkBoundaryIndex(full.forkBoundaryIndex);
+            adoptInitialUserText(full.initialUserText);
+            cursorRef.current = folded.cursor;
+            noteGapFold(folded, heldLen);
+            adoptOffset(folded.messages.length, folded.cursor, full.windowed, folded.kept);
+            setHistoryCache(sessionId, {
+              messages: folded.messages,
+              forkBoundaryIndex: full.forkBoundaryIndex,
+              msgCount: folded.cursor,
+              baseOffset: Math.max(0, folded.cursor - folded.messages.length),
+              initialUserText: full.initialUserText ?? initialUserTextRef.current,
+              gaps: folded.gaps,
+            });
+          })
+          .catch(() => { if (!cancelled) setLoadingFrom(null); /* keep current view; next turn retries */ });
+      };
       fetchSessionHistory(sessionId, {
         since,
         anchorMsgId: anchor.anchorMsgId,
@@ -281,32 +345,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               { baseOffset: baseOffsetRef.current });
             if (plan.kind === 'rebuild') {
               log.warn('session-history', `delta merge inconsistent — rebuilding (${plan.reason}, had=${messagesRef.current.length} +delta=${result.messages.length})`, { sessionId });
-              fetchSessionHistory(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal })
-                .then((full) => {
-                  if (cancelled) return;
-                  // Stale rebuild would replace a fresher local view with the
-                  // server's old parse AND corrupt the cursor — skip; the next
-                  // healthy turn retries the rebuild.
-                  if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
-                  setStale(null);
-                  const heldLen = messagesRef.current.length;
-                  const folded = foldFullPayload(messagesRef.current, full, foldOpts());
-                  setMessages(folded.messages);
-                  setForkBoundaryIndex(full.forkBoundaryIndex);
-                  adoptInitialUserText(full.initialUserText);
-                  cursorRef.current = folded.cursor;
-                  noteGapFold(folded, heldLen);
-                  adoptOffset(folded.messages.length, folded.cursor, full.windowed, folded.kept);
-                  setHistoryCache(sessionId, {
-                    messages: folded.messages,
-                    forkBoundaryIndex: full.forkBoundaryIndex,
-                    msgCount: folded.cursor,
-                    baseOffset: Math.max(0, folded.cursor - folded.messages.length),
-                    initialUserText: full.initialUserText ?? initialUserTextRef.current,
-                    gaps: folded.gaps,
-                  });
-                })
-                .catch(() => { /* keep current view; next turn retries */ });
+              rebuildFull();
               return;
             }
             if (plan.kind === 'merged') {
@@ -351,6 +390,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // full-fetch retry replaces it once the read works again.
           const status = (e as { status?: unknown }).status;
           const timedOut = e.name === 'TimeoutError';
+          // The host is still sending (a slow link that answers): say so, not that
+          // the link is down, and join the full read that goes on server-side.
+          const loadingBody = (e as { body?: { loading?: { from?: unknown } } }).body?.loading;
+          if (typeof loadingBody?.from === 'string') {
+            setLoadingFrom(loadingBody.from);
+            rebuildFull();
+            return;
+          }
           if (timedOut || (typeof status === 'number' && status >= 500)) {
             setStale(timedOut ? 'history read timed out' : (e.message || 'live read failed'));
           } else setError(e.message);
@@ -382,10 +429,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setPhase2Pending(true);
 
       const endP2 = perf.start(`session:full:${sid}`);
-      fetchSessionHistory(sessionId, { tail: refreshTail(cached.messages.length), signal: controller.signal })
+      // The cache stays on screen while the host is still sending (fetchJoiningLoad).
+      fetchJoiningLoad(sessionId, { tail: refreshTail(cached.messages.length), signal: controller.signal },
+        (from) => { if (!cancelled) setLoadingFrom(from); }, () => cancelled)
         .then((result) => {
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
+          setLoadingFrom(null);
           setError(null); // successful fetch clears a previous failure (see above)
           // Degraded payload (live read failed, server sent its last-good
           // parse): our local cache is at least as fresh — keep it, surface
@@ -476,18 +526,29 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
           // to pin one of the browser's 6 connections for 35-150s here.
           const endP2 = perf.start(`session:full:${sid}`);
-          fetchSessionHistory(sessionId, { tail: refreshTail(p1Count), signal: controller.signal })
+          // What is on screen is never replaced by less: a degraded payload
+          // (the server's last-good parse, often empty) only fills a view that
+          // holds fewer rows. Phase 1's rows count before React commits them.
+          const shown = () => Math.max(p1Count, messagesRef.current.length);
+          fetchJoiningLoad(sessionId, { tail: refreshTail(p1Count), signal: controller.signal }, (from, partial) => {
+            if (cancelled) return;
+            setLoadingFrom(from);
+            if (partial.messages.length > shown()) setMessages(partial.messages);
+          }, () => cancelled)
             .then((result) => {
               if (!cancelled) {
                 endP2(`${result.messages.length} msgs`);
+                setLoadingFrom(null);
                 setError(null); // successful fetch clears a previous failure (see above)
                 diagnoseOrdering('P2:full', sid, result.messages);
-                // Degraded payload: render it (beats a blank screen) but do NOT
-                // seed cursor/cache from it — its total is the server's stale
+                // Degraded payload: render it when it beats what is shown, but do
+                // NOT seed cursor/cache from it: its total is the server's stale
                 // count and would corrupt the next ?since= delta.
                 if (result.stale) {
-                  setMessages(result.messages);
-                  setForkBoundaryIndex(result.forkBoundaryIndex);
+                  if (result.messages.length > shown()) {
+                    setMessages(result.messages);
+                    setForkBoundaryIndex(result.forkBoundaryIndex);
+                  }
                   setStale(result.staleReason ?? 'live read failed');
                   return;
                 }
@@ -577,9 +638,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     const retryMs = (typeof window !== 'undefined' && (window as unknown as { __staleRetryMs?: number }).__staleRetryMs) || 10_000;
     // visibleInterval: a hidden tab must not retry full history fetches every
     // 10s for hours (stale remote sessions are exactly the expensive fetch).
+    // One retry at a time: a retry that is joining a read still arriving can
+    // outlast the interval.
+    let busy = false;
     const cancel = visibleInterval(() => {
-      fetchSessionHistory(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal })
+      if (busy) return;
+      busy = true;
+      fetchJoiningLoad(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal },
+        (from) => { if (!cancelled) setLoadingFrom(from); }, () => cancelled)
         .then((result) => {
+          if (!cancelled) setLoadingFrom(null);
           if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
           // Live read recovered → adopt the fresh parse and drop the banner.
           setStale(null);
@@ -600,7 +668,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             gaps: folded.gaps,
           });
         })
-        .catch(() => { /* transient — keep the banner, retry next tick */ });
+        .catch(() => { /* transient: keep the banner, retry next tick */ })
+        .finally(() => { busy = false; });
     }, retryMs);
     return () => { cancelled = true; controller.abort(); cancel(); };
   }, [sessionId, stale, enabled]);
@@ -764,5 +833,5 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // Only the gaps still inside the rows, with their sides read from them.
   const shownGaps = useMemo(() => liveGaps(messages, gaps), [messages, gaps]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap };
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
 }

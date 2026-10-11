@@ -15,6 +15,7 @@ import type { SessionRecord } from '@open-walnut/core';
 import { ICON_SEARCH } from '@/components/common/Icons';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 
 interface SessionSearchPanelProps {
   open: boolean;
@@ -29,6 +30,7 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
   const [results, setResults] = useState<SessionRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const hostName = useHostDisplayLabels();
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   // Monotonic request id — a stale slow response must not clobber a newer one.
@@ -144,7 +146,7 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
               {s.title || s.cwd?.split('/').pop() || s.claudeSessionId.slice(0, 8)}
             </span>
             <span className="session-search-meta">
-              {s.host ? `${s.host} · ` : ''}
+              {s.host ? `${hostName(s.host)} · ` : ''}
               {s.cwd ? `${s.cwd.split('/').slice(-2).join('/')} · ` : ''}
               {timeAgo(s.lastActiveAt)}
             </span>

@@ -428,12 +428,27 @@ describe('an API key deleted on the companion: not a pairing, the same push part
     expect(await queuedRevokeSteps()).toEqual([])
   })
 
+  it('DELETE /api/auth/keys/:name with no caller is refused on the companion: only its owner removes keys (the outage test below runs as the owner)', async () => {
+    await updateConfig({ api_keys: [{ name: 'acme-script', key: `wlnt_sk_${'0'.repeat(48)}`, created_at: new Date().toISOString() }] })
+    const app = express()
+    app.use(express.json())
+    app.use('/api/auth', authRouter)
+    const res = await request(app).delete('/api/auth/keys/acme-script')
+    expect(res.status).toBe(403)
+    expect(res.body).toMatchObject({ code: 'api_keys_refused' })
+    expect((await getConfig()).api_keys?.map((k) => k.name)).toEqual(['acme-script'])
+    expect(await queuedRevokeSteps()).toEqual([])
+    expect(relayed()).toEqual([])
+  })
+
   it('DELETE /api/auth/keys/:name in an outage: says the push part is pending, queues it, and the row on the primary goes once it is back', async () => {
     await updateConfig({ api_keys: [{ name: 'acme-script', key: `wlnt_sk_${'0'.repeat(48)}`, created_at: new Date().toISOString() }] })
     await asPrimary(() => handlePushRelayAction('register', { token: KEY_ROW, platform: 'ios', keyName: 'acme-script' }))
     expect(await keyRows()).toEqual([KEY_ROW])
     const app = express()
     app.use(express.json())
+    // The caller is the companion's owner, as the auth middleware says it: only the owner removes keys on a companion (device-actor.ts apiKeyDecision).
+    app.use((req, _res, next) => { Object.assign(req, { deviceName: 'mac-primary' }); req.headers.authorization = `Bearer ${MAC}`; next() })
     app.use('/api/auth', authRouter)
     const res = await request(app).delete('/api/auth/keys/acme-script')
     expect(res.status).toBe(200)

@@ -408,48 +408,132 @@ Mac server ──wss /daemon-tunnel (machine token)──▶ Caddy ──▶ rep
   4403); the daemon on the box stays up. An older companion
   (no `daemonTunnel` in its status) shows "Cloud companion needs an update".
 - **Who is asking.** Every rule below identifies the caller by the token it
-  presented, never by a device name, and records ownership by the device's
-  `id`, minted at pairing. A device that re-pairs itself keeps its id; any
-  other re-pairing of a name is a new device and owns nothing.
-- **One companion serves one Mac.** A machine credential records the paired
-  device whose token minted it (its owner). While a Mac owns one, no other
-  device may mint, rotate, revoke or adopt any machine credential on that
-  companion: a second Mac hears `409 other_mac_connected`, and its Cloud card
-  says "Another Mac is connected to this cloud companion. Disconnect it there
-  first." A phone is refused outright (`403 phone_cannot_mint`), and so is an
-  API key. A device is a phone when its FIRST self-report (the iOS app sends one
-  on its first launch after pairing) said an iPhone, iPad or iOS; later reports
-  never change that. Credentials minted before the owner was recorded belong to
-  the Mac whose `bridge-local` token they include: the Mac proves it once per
-  start (`POST /api/devices/bridge-local/adopt`, that token in
-  `x-walnut-machine-proof`) and owns all of them from then on. The token of any
-  other credential proves nothing: a remote host's daemon holds its own.
+  presented, never by a device name. Each device has an `id`, minted at
+  pairing: a device that re-pairs itself keeps it, and any other re-pairing of
+  a name is a new device.
+- **A companion belongs to one Mac, its owner.** auth.json records it
+  (`owner`) only from something that proves it: the computer that claimed the
+  companion with its setup token (the setup wizard's claim carries the same
+  self-report the Mac sends later; a claim that says nothing about the device,
+  like the banner's `curl`, or says a phone, records none); the one the box
+  operator names with `walnut device owner <name>` (or
+  `walnut device add <name> --owner`); the Mac that presents the unowned
+  `bridge-local` token (below); or, while none is recorded, the first paired
+  device that is not a phone to mint a machine credential (the first come rule
+  older builds had, now written down when it happens; removing a credential
+  records no one). Nothing a device says about itself, and never which record
+  is the oldest, makes it the owner; a report can only keep one from being it:
+  a phone is never the owner, and an owner whose first report says a phone is
+  none from then on. `walnut device owner` naming the owner the operator
+  already named changes nothing and writes nothing. With an owner recorded,
+  only the owner may mint, rotate, revoke or adopt a machine credential:
+  - a second Mac hears `409 other_mac_connected`, and its Cloud card says
+    "Another Mac is connected to this cloud companion. Disconnect it there
+    first." (when the owner reported itself as a computer that is not a Mac,
+    the companion's own answer says "Another computer" instead);
+  - any other device hears `409 not_companion_owner`, a phone
+    `403 phone_cannot_mint`, and an API key mints nothing.
+
+  With none recorded (a companion from before owners were recorded, one paired
+  with `walnut device add` and no `--owner`, or one whose owner was unpaired),
+  the rules are those of the builds before, unchanged: while a device owns a
+  machine credential there, no other device may mint one (`409
+  other_mac_connected`); credentials from before ownership was recorded belong
+  to the Mac whose daemon holds the unowned `bridge-local` (below); with nothing
+  owned, the first paired device that is not a phone mints, and is recorded as
+  the owner. The device owning the machine credentials also has the owner's
+  other rights there (re-pairing and removing devices, API keys).
+
+  A device is a phone when its first self-report (the iOS app sends one on its
+  first launch after pairing) said an iPhone, iPad or iOS; later reports never
+  change that. It decides wording and that the device pairs nothing, never who
+  the owner is.
+- **Companions from before owners were recorded.** An older build recorded no
+  owner, and none is guessed: such a companion keeps that build's rules until
+  something above records one. The Mac proves itself on first contact: every
+  mint, re-pair or removal it sends carries its first `bridge-local` token in
+  `x-walnut-machine-proof`, and once per start it offers that token on its own
+  (`POST /api/devices/bridge-local/adopt`). While no owner is recorded and no
+  other device owns a machine credential there, that token makes its sender
+  the owner, and the credentials from before become its own. Only the token of
+  that unowned `bridge-local` counts: a remote host's daemon holds its own. A
+  Mac from before the proof (it sends none) mints as those builds did: refused
+  while that unowned `bridge-local` is there.
+- **On the Mac** (its own auth.json) there is no owner: a device that owns
+  machine credentials there has the owner's rights, as before, and removing a
+  twin by hash never removes that device.
 - **Changing a paired device.** Removing a device or showing a new QR for it
   (`DELETE /api/devices/<name>`, `POST /api/devices {name, replace: true}`) is
-  for that device itself, the Mac that owns the companion's machine
-  credentials, or the box itself (`walnut device …`). Anyone else hears
-  `403 device_change_refused`. A phone pairs no devices (`403
-  phone_cannot_pair`).
-- **Handing it to another Mac.** On the companion, `walnut device list` names
-  the old Mac and `walnut device revoke <name>` removes it (the old Mac may
-  also remove itself with its own token). Its machine credentials go with it,
-  its open tunnel closes (at once for a revoke by the companion's server, within
-  one 30 second heartbeat for one by the CLI) and its cloud sync stops; then
-  Retry on the new Mac. A second Mac's Settings › Phones & Cloud cannot remove
-  the first one: that is the takeover these rules exist to stop. A credential
+  for that device itself, the companion's owner, or the box itself
+  (`walnut device …`). Anyone else hears `403 device_change_refused`. A phone
+  pairs no devices (`403 phone_cannot_pair`), and an API key pairs, re-pairs and
+  removes none (`403 api_key_cannot_pair`). In the Mac's Settings › Phones & Cloud, the companion's
+  record for this Mac is "This Mac" under Other entries: the companion's
+  `GET /api/devices` names the record the caller's token matched (`caller`),
+  so the Mac never guesses it. That row has no QR, and "Unpair this Mac" asks
+  again and says what stops working first. When the companion's list cannot
+  load (a 401 after this Mac was unpaired there, or no answer), the section
+  says why (`cloudError`) instead of showing no phones. A 401 nobody on this Mac
+  caused (the operator revoked it there) also sets `cloudRefused`, and the
+  Cloud Companion card says "Not accepted" instead of "Connected".
+- **API keys.** On a companion only its owner makes or removes API keys
+  (`POST /api/auth/keys`, `DELETE /api/auth/keys/<name>`); on a Mac, only the
+  Mac itself. Anyone else hears `403 api_keys_refused`. A key the companion's
+  owner makes is bound to its pairing (`device_id` in config.yaml) and stops
+  working when that pairing is removed or re-paired by anyone but itself. Keys
+  made on a Mac, or written into config.yaml by hand, are bound to nothing.
+- **Only this Mac acts on its companion.** Pairing a phone with Cloud
+  (`POST /api/devices {target: "cloud"}`), re-pairing or removing a device
+  there (`replace: true`, `DELETE /api/devices/<name>?target=cloud`) and the
+  cloud half of `GET /api/devices` are done by the Mac with its own token on
+  the companion, which may change any device there. So only this Mac itself
+  may ask for them: its own console, or a local client. Any paired device
+  (a phone, another Mac) hears `403 device_change_refused` before the companion
+  is asked anything (a phone asking to pair hears `403 phone_cannot_pair`), and
+  its device list has no cloud half and no Cloud target. A device's standing
+  on the companion is its own token there, presented to the companion itself.
+  Removing a cloud device waits up to 15 seconds for the companion; the console
+  waits longer than that, so a timeout reads "Could not reach the cloud
+  companion (timed out after 15s)" in every browser.
+- **Handing it to another Mac.** On the companion, `walnut device list` shows
+  every name (the owner is marked) and `walnut device owner <name>` makes the
+  new Mac the owner. The old Mac's machine credentials go, and its open tunnel
+  closes within one 30 second heartbeat; it stays paired (its cloud sync goes
+  on) until `walnut device revoke <name>` removes it too. Then Retry on the new
+  Mac. When the owner's own pairing is removed (the old Mac unpairs itself, or
+  `walnut device revoke`), its machine credentials go with it (and the unowned
+  ones), its tunnel closes at once for a removal by the companion's server, and
+  the companion has no owner: the next Mac to mint a machine credential there
+  becomes it, unless the operator names one first. A second Mac's Settings ›
+  Phones & Cloud cannot remove the first one:
+  that is the takeover these rules exist to stop. A credential
   that is revoked or rotated while its tunnel is open closes that tunnel. The
   Mac hears 401 on its redial, drops the dead token, mints a new one (once per
   10 minutes on its own; a Retry on the Cloud card mints at once) and dials
-  again; the bridge does the same when the companion refuses its token. If only
-  the unowned credentials are left and this Mac lost its `bridge-local` token,
-  `walnut device revoke bridge-local` on the box clears the way.
+  again; the bridge does the same when the companion refuses its token. If the
+  wrong Mac is the owner, `walnut device owner <name>` on the box settles it.
+- **Removing a pairing's twin.** A pairing copied to the other box (device
+  adoption) is removed there by hash when it is revoked here. The other box
+  keeps a machine credential and the pairing with the owner's rights, and says
+  so (`refused: true`); the box that asked treats that, and an older box's bare
+  `revoked: false`, as not done: it logs that the token still works there and
+  tries again (every minute, 30 times in this process).
+- **When auth.json does not read.** auth.json has a mirror, `auth.json.bak`,
+  rewritten after every change. When auth.json does not parse and the mirror
+  holds devices, the server uses the mirror and leaves auth.json as it is (the
+  log says so; a setup claim is refused, the box is still claimed). When
+  nothing readable is left, it starts with no devices (the setup claim opens
+  again). Reading, and anything that changes nothing, writes nothing. The
+  first real change renames a file that does not parse to
+  `auth.json.unreadable-<time>` (or `auth.json.bak.unreadable-<time>`) before
+  it writes, so what an operator might recover is never overwritten.
 - **Its own daemon.** The replica starts a second daemon for the Mac on the
   first tunnel connect, never the replica's own `__cloud__` daemon: two servers
   never share one daemon. Each owning Mac gets its own dir,
   `~/.local/state/open-walnut/primary-daemon.by-device/<device id>/daemon` of
   the service user (streams beside it in `streams`), so a Mac never lands on
-  another Mac's sessions; a Mac that adopted the credentials from before
-  ownership keeps `primary-daemon` (streams in `primary-daemon-streams`), where
+  another Mac's sessions; the owner of credentials from before owners were
+  recorded keeps `primary-daemon` (streams in `primary-daemon-streams`), where
   its sessions already run, also after it revokes and mints them again. A
   rotation keeps the owner's daemon. The companion builds that daemon from its
   own checkout; the Mac never pushes a binary to it.
@@ -490,13 +574,84 @@ Mac server ──wss /daemon-tunnel (machine token)──▶ Caddy ──▶ rep
   host status carries `terminal: false`, so a Cloud session shows no Terminal
   tab.
 - **A companion that stops answering.** Session history, Changes, the Files
-  tab, the folder picker, path links, the slash command list and phone images
-  never wait out a dial: while Cloud (or any remote host) is connecting, they
-  answer at once, history from its cache or empty with "Reconnecting to Cloud",
-  Changes from its last list, the rest with `503 host_reconnecting` (the picker
-  and the Files tab keep what they showed). A request that starts the dial
-  itself waits at most 5 seconds. Every sentence names the host by its label
-  (Cloud), never by its alias.
+  tab, file content, the folder picker, path links, the slash command list,
+  images, the plan, the service preview and the code-server view never wait
+  out a dial: while Cloud (or any remote host) is connecting, they answer at
+  once, history from its cache or empty with "Reconnecting to Cloud", Changes
+  from its last list, the rest with `503 host_reconnecting` (the picker and the
+  Files tab keep what they showed). A request that starts the dial itself waits
+  at most 5 seconds. Every sentence names the host by its label (Cloud), never
+  by its alias. Creating the folder for a new session is a user action and
+  waits for the dial as a send does (15 seconds at most).
+- **A companion that goes silent while connected** (the tunnel stays up and
+  nothing comes back). A read keeps going while its bytes arrive. After 3
+  seconds with none, the Mac asks the link once; when nothing at all comes from
+  the host within the probe's deadline (no pong, and no byte on any of its
+  sockets), the read answers as above, and the Mac closes the link and dials
+  again at once (its sessions live on in the box daemon). The deadline is 3
+  seconds, or twice the link's round trip and half a second more when that is
+  longer, 20 seconds at most; the round trip is measured at the handshake and
+  on every ping (the ping carries its send time, so a late pong is timed too),
+  except a ping whose pong waited behind other bytes from the host: that timed
+  the queue, and those bytes already answer a probe.
+  For 15 seconds after a verdict, other reads on that host ask the link at once
+  instead of after 3 quiet seconds of their own, and a link that came back
+  since is answered, not the old verdict. With nothing being read, the
+  keepalive (a ping every 8 seconds on Cloud, three missed) drops it within 24
+  to 32 seconds, failing at once what still waited on it. An SSH host keeps its
+  link and its 15 second keepalive: there a silent probe counts as one missed
+  ping, and the read answers "Dev box is not answering" (never "Reconnecting",
+  which only Cloud does). Creating the folder for a new session refuses at
+  once, with the same sentence, while the pool already knows the link failed
+  moments ago.
+- **A link that is slow but alive is not dropped.** What counts is progress,
+  not round trip time: any byte from the host, on either of its sockets, is an
+  answer, so a pong that waits behind a large reply on one shared link still
+  counts. The Mac pings both of its sockets, and the companion's own check of
+  the Mac (every 30 seconds) counts any byte from the Mac and the data the Mac
+  took, not only its pong; a check that runs late (the companion itself was
+  stalled) or that comes too soon after the last one, as a delayed check does,
+  judges nothing. A command the pool gives up on while the link stays
+  up answers "Cloud did not answer in time", never the pool's own words.
+  Measured for 180 seconds on one shared 32 KB/s link (0.5 second round trip),
+  with the Files list asked every 2 seconds, a session history every 5 and a
+  256 KB file every 30: no drop and no new tunnel, all 20 Files lists and all
+  19 histories answered (half within 8 seconds, nine in ten within 16), and the
+  file once in four tries (the others said "Still loading" at 60 seconds: the
+  link was full). Before, the same link dropped 4 times, opened 9 sockets and
+  answered 9 of 32 Files lists. At 64 KB/s on that link every request was
+  answered, half within 0.6 seconds. Round trip time does not decide it
+  either: at 2, 2.8, 3.4 and 5 seconds (64 KB/s) the link stayed up for 180
+  seconds and every request was answered, each in about one round trip. At 7
+  seconds, where a fixed 3 second probe could not tell the link from silence,
+  the probe's deadline grows with the round trip: in 180 seconds the link
+  dropped once (9 times before, with 19 new tunnels), and 50 of 64 reads were
+  answered, half within 7 seconds (before, none: every one said "Reconnecting
+  to Cloud").
+- **Large reads.** A read is cut only when it stops making progress: 20
+  seconds with no byte for it answers "Dev box did not answer in time" (the
+  host's label). Its progress is the bytes that reach its own commands, not
+  the host's: another read streaming on the same host does not keep it
+  waiting. A command whose reply waits on one shared link behind a large reply
+  that is still arriving outlives its own 30 second timeout while that reply
+  arrives, so a Files list behind a slow file is answered when its turn comes.
+  A read still arriving after 60 seconds answers "Still loading from Dev box.
+  Try again in a moment." (with `loading: {from}`) and keeps going, and the
+  next request joins it or gets its result (one read per file or history at a
+  time, at most 16 results kept, each for 30 seconds). The console keeps what
+  it shows, says "Still loading this conversation from Dev box", asks again at
+  once, and shows the content when the read is done; the file viewer does the
+  same. A session history still being read stops only after
+  2 minutes with no data from the host (10 minutes at most). For a file over
+  about 680 KB, the file viewer reads only the 512 KB it shows. Measured on an
+  SSH host: a 24 MB file at 1 MB/s opens in 0.9 seconds (35 seconds before,
+  read whole), an 8 MB file at 128 KB/s in 6.4 seconds (91 before), a 512 KB
+  file at 32 KB/s in 17.8 seconds (as before), and a 4 MB history tail at
+  64 KB/s arrives at 87 seconds after one "Still loading" (87 before). On Cloud
+  at 64 KB/s, a 3 MB history tail arrives at 69 seconds, from one read that
+  the second request joined after one "Still loading" at 60 seconds; before,
+  that first answer was empty and the view showed "No conversation history
+  found".
 
 ## Troubleshooting
 

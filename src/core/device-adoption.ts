@@ -13,8 +13,8 @@
  *  - the name taken by another pairing: the copy gets the first free `name-2`,
  *    `name-3`, ... (the device-name rule allows no spaces or brackets). An
  *    existing record is never replaced, rotated or renamed;
- *  - never a machine credential, and a phone cannot adopt (the same rule as
- *    pairing a new device: deviceChangeDecision 'create');
+ *  - never a machine credential, and neither a phone nor an API key can adopt
+ *    (the same rule as pairing a new device: deviceChangeDecision 'create');
  *  - never a hash revoked here (auth.json `revokedHashes`), however long ago.
  *
  * Revoking works by hash in the other direction: a revoke on one box removes
@@ -25,11 +25,11 @@
 import { CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
 import {
-  listDeviceRecords, mutateDeviceRecords, revokePairing, validateDeviceName,
+  mutateDeviceRecords, readDeviceRegistry, revokePairing, validateDeviceName,
   type DeviceRecord, type DeviceSelfInfo,
 } from './device-auth.js'
 import {
-  LOCAL_ACTOR, deviceChangeDecision, newDeviceId, ownsMachineCredentials, platformFromInfo,
+  deviceChangeDecision, hasOwnerRights, newDeviceId, platformFromInfo,
   type DeviceActor, type DevicePlatform,
 } from './device-actor.js'
 import type { PushRevokeOutcome } from './push/device-revoke.js'
@@ -131,9 +131,9 @@ export async function adoptDeviceRecord(
     throw new AdoptionError('this pairing was revoked here')
   }
 
-  const out = await mutateDeviceRecords((devices, revoked) => {
+  const out = await mutateDeviceRecords((devices, reg, revoked) => {
     if (opts.by) {
-      const decision = deviceChangeDecision(devices, opts.by, 'create', name, CLOUD_MODE)
+      const decision = deviceChangeDecision(reg, opts.by, 'create', name, CLOUD_MODE)
       if (!decision.ok) throw decision.refusal
     }
     // Revoked here for good: the other box may still hold its copy (its removal
@@ -146,7 +146,9 @@ export async function adoptDeviceRecord(
     if (existing) return { result: { name: existing.name, adopted: false } }
     const finalName = freeName(devices, name)
     // Keep the source's id only while no record here uses it as its own or as
-    // an owner: ownership of machine credentials is keyed by id.
+    // an owner: ownership of machine credentials is keyed by id. (The companion's
+    // owner is a record here, so its id is taken too; a vanished owner is
+    // cleared before any rule reads the file, device-store.ts upgrade.)
     const wanted = typeof input.id === 'string' && ID_RE.test(input.id) ? input.id : undefined
     const idFree = wanted !== undefined && !devices.some((d) => d.id === wanted || d.ownerId === wanted)
     const record: DeviceRecord = {
@@ -166,27 +168,43 @@ export async function adoptDeviceRecord(
   return out
 }
 
+/** What a revoke by hash did: removed `name`; nothing was here (done); or it refused (not done). */
+export type RevokeByHashOutcome = { name: string; refused: false } | { name: null; refused: boolean }
+
 /**
  * Revoke the pairing whose token hashes to `tokenHash`, the way any revoke
- * does (revokePairing: its listeners run and its push rows go). Never a
- * machine credential, and never the pairing that owns them (on a companion
- * that is the Mac itself: removing it would cut the Mac's git sync and
- * bridge). Returns the revoked name, or null when no such pairing is here
- * (already gone counts as done).
+ * does (revokePairing: its listeners run and its push rows go). Returns the
+ * revoked name, or null when nothing was removed (revokeAdopted says whether
+ * that is "not here", which is done, or a refusal, which is not).
  */
 export async function revokeAdoptedByHash(tokenHash: unknown): Promise<string | null> {
   return (await revokeAdopted(tokenHash)).name
 }
 
-/** `revokeAdoptedByHash`, with the push outcome for a caller that reports it. */
-export async function revokeAdopted(tokenHash: unknown): Promise<{ name: string | null; push: PushRevokeOutcome | null }> {
+/**
+ * `revokeAdoptedByHash`, with the refusal and the push outcome for a caller
+ * that reports them. Never a machine credential, and never the pairing with
+ * the owner's rights (device-actor.ts hasOwnerRights: on a companion that is
+ * the Mac itself, and removing it would cut the Mac's git sync and bridge; on
+ * the Mac, the rule of the builds before owners were recorded, the pairing that
+ * owns machine credentials there). A pairing that is not here is done; a
+ * refusal is not, and says so (`refused`), so the box that asked does not take
+ * it for a removal.
+ */
+export async function revokeAdopted(tokenHash: unknown): Promise<RevokeByHashOutcome & { push: PushRevokeOutcome | null }> {
   if (!isTokenHash(tokenHash)) throw new AdoptionError('token_hash must be 64 lowercase hex characters')
-  const devices = await listDeviceRecords()
-  const record = devices.find((d) => d.tokenHash === tokenHash)
-  if (!record || record.kind === 'machine' || ownsMachineCredentials(devices, record)) return { name: null, push: null }
+  const reg = await readDeviceRegistry()
+  const record = reg.devices.find((d) => d.tokenHash === tokenHash)
+  if (!record) return { name: null, refused: false, push: null }
+  if (record.kind === 'machine' || hasOwnerRights(reg, record, CLOUD_MODE)) {
+    log.web.warn('device-adoption: a revoke by hash was refused: that pairing is not a twin this box may remove', {
+      name: record.name, machine: record.kind === 'machine',
+    })
+    return { name: null, refused: true, push: null }
+  }
   // Hash-guarded: a re-pairing of the same name in between is a different pairing.
   // `fromTwin`: the box asking is the one holding the other copy, and it removed its own.
-  const out = await revokePairing(record.name, { by: LOCAL_ACTOR, tokenHash, fromTwin: true })
+  const out = await revokePairing(record.name, { tokenHash, fromTwin: true })
   if (out.revoked) log.web.info('device-adoption: twin pairing revoked', { name: record.name, adoptedFrom: record.adoptedFrom ?? null })
-  return out.revoked ? { name: record.name, push: out.push } : { name: null, push: null }
+  return out.revoked ? { name: record.name, refused: false, push: out.push } : { name: null, refused: false, push: null }
 }

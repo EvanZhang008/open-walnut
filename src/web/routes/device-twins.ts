@@ -22,8 +22,8 @@
 import crypto from 'node:crypto'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { listDeviceRecords, type DeviceRecord } from '../../core/device-auth.js'
-import { ownsMachineCredentials } from '../../core/device-actor.js'
+import { readDeviceRegistry, type DeviceRecord } from '../../core/device-auth.js'
+import { hasOwnerRights } from '../../core/device-actor.js'
 import { getCloudPairingEndpointAsync } from '../../core/pairing-targets.js'
 import { wellFormedRoutes, type DeviceRoute } from '../../core/devices/routes.js'
 import { callPrimaryControl } from './v1-control-relay.js'
@@ -149,7 +149,11 @@ async function unadoptOnCloud(hash: string): Promise<boolean> {
       log.web.warn('devices: the cloud companion did not remove its copy of a revoked pairing', { status: res.status })
       return false
     }
-    const body = await res.json().catch(() => ({})) as { name?: unknown }
+    const body = await res.json().catch(() => ({})) as { name?: unknown; revoked?: unknown; refused?: unknown }
+    if (!twinRemovalDone(body)) {
+      log.web.warn('devices: the cloud companion kept its copy of a revoked pairing; its token still works there', { refused: body.refused ?? null })
+      return false
+    }
     log.web.info('devices: cloud copy of a revoked pairing removed', { name: typeof body.name === 'string' ? body.name : null })
     return true
   } catch (err) {
@@ -211,8 +215,22 @@ async function revokeOnPrimary(hash: string): Promise<boolean> {
     log.web.warn('devices: could not remove the primary\'s copy of a revoked pairing', { kind: outcome.failure.kind, error: outcome.failure.message })
     return outcome.failure.kind === 'error' // a domain refusal will not change on retry
   }
+  if (!twinRemovalDone(outcome.result)) {
+    log.web.warn('devices: the primary kept its copy of a revoked pairing; its token still works on the Mac', { refused: outcome.result.refused ?? null })
+    return false
+  }
   log.web.info('devices: primary copy of a revoked pairing removed', { name: typeof outcome.result.name === 'string' ? outcome.result.name : null })
   return true
+}
+
+/**
+ * Did the other box's answer remove the copy? Removed, or not there
+ * (`refused: false`). A refusal is not done (the copy is still there, and its
+ * token still works). An older box answers revoked:false for both and does not
+ * say which, so that counts as not done too: a removal is never assumed.
+ */
+function twinRemovalDone(body: { revoked?: unknown; refused?: unknown }): boolean {
+  return body.revoked === true || (body.revoked === false && body.refused === false)
 }
 
 /**
@@ -222,11 +240,11 @@ async function revokeOnPrimary(hash: string): Promise<boolean> {
  */
 export async function adoptOnPrimary(record: DeviceRecord): Promise<PrimaryAnswer> {
   const hash = record.tokenHash
-  // The pairing that owns this companion's machine credentials is the Mac itself.
+  // The companion's owner is the Mac itself.
   // (Ownership compares records by identity, so look it up in the same read.)
-  const devices = await listDeviceRecords()
-  const self = devices.find((d) => d.tokenHash === hash)
-  if (self && ownsMachineCredentials(devices, self)) return NO_PRIMARY_ANSWER
+  const reg = await readDeviceRegistry()
+  const self = reg.devices.find((d) => d.tokenHash === hash)
+  if (self && hasOwnerRights(reg, self, CLOUD_MODE)) return NO_PRIMARY_ANSWER
   const hit = primaryTwins.get(hash)
   if (hit && Date.now() < hit.expiresAt) return hit.answer
   return dedupe(hash, async (): Promise<PrimaryAnswer> => {
@@ -263,7 +281,13 @@ let removeRetryMs = REMOVE_RETRY_MS
  */
 async function removeTwin(hash: string, attempt = 1): Promise<void> {
   const done = CLOUD_MODE ? await revokeOnPrimary(hash) : await unadoptOnCloud(hash)
-  if (done || attempt >= REMOVE_TRIES) return
+  if (done) return
+  if (attempt >= REMOVE_TRIES) {
+    log.web.error('devices: gave up removing the other box\'s copy of a revoked pairing; its token still works there until it is removed there', {
+      tries: attempt, other: CLOUD_MODE ? 'primary' : 'cloud',
+    })
+    return
+  }
   const timer = setTimeout(() => {
     retryTimers.delete(timer)
     void removeTwin(hash, attempt + 1).catch(() => {})

@@ -20,7 +20,7 @@ import { SessionControlError } from './session-controls.js';
 import { CLAUDE_SESSION_MODES, changeSessionMode, persistSessionModeChange } from './session-lifecycle.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
-import type { SessionEffort, SessionEngine, SessionMode } from '../types.js';
+import type { SessionEffort, SessionEngine, SessionMode, SessionRecord } from '../types.js';
 import { VALID_SESSION_EFFORT_IDS, SESSION_MODE_LABELS } from '../types.js';
 import { listLocalDirs, listRemoteDirs } from './dir-listing.js';
 import { classifyHostConnectError, describeConnectPhase, describeListingError } from './host-connect-hint.js';
@@ -344,6 +344,19 @@ export async function getSessionPlanPayload(sessionId: string): Promise<SessionP
   const planSessionId = hasOwnPlan ? sessionId : (record.fromPlanSessionId ?? sessionId);
   const isFollowedLink = planSessionId !== sessionId;
 
+  // A remote session's plan is read on its host: within the host-read deadline
+  // (remote-read-bound.ts), so a host that is not answering is the degraded 503,
+  // never a 30s wait and then a 500.
+  const { boundHostRead } = await import('../hosts/remote-read-bound.js');
+  return boundHostRead(record.host, () => readPlanPayload(record, planSessionId, isFollowedLink));
+}
+
+async function readPlanPayload(
+  record: SessionRecord,
+  planSessionId: string,
+  isFollowedLink: boolean,
+): Promise<SessionPlanPayload> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
   // Strategy 1: readPlanFromSession (planFile on disk, or JSONL slug → file).
   const { readPlanFromSession } = await import('../../utils/plan-message.js');
   const planResult = await readPlanFromSession(planSessionId);
@@ -389,12 +402,16 @@ export async function getSubagentHistoryPayload(
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   const { readSingleSubagentHistory, rewriteHistoryRemoteImages } = await import('../session-history.js');
-  let messages = await readSingleSubagentHistory(sessionId, agentId, record?.cwd, record?.host, isWorkflow);
-  // Rewrite remote image paths for remote sessions.
-  if (record?.host && messages.length > 0) {
-    messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId, record.cwd);
-  }
-  return { messages };
+  // Read on the session's host, within the host-read deadline (remote-read-bound.ts).
+  const { boundHostRead } = await import('../hosts/remote-read-bound.js');
+  return boundHostRead(record?.host, async () => {
+    let messages = await readSingleSubagentHistory(sessionId, agentId, record?.cwd, record?.host, isWorkflow);
+    // Rewrite remote image paths for remote sessions.
+    if (record?.host && messages.length > 0) {
+      messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId, record.cwd);
+    }
+    return { messages };
+  });
 }
 
 // ── Execute-compact ──────────────────────────────────────────────────────────
@@ -665,7 +682,8 @@ export async function listSessionDirs(
   const dc = await import('../../providers/daemon-connection.js');
   const getDaemonConnectState = route.kind === 'fixture' ? route.state : dc.getDaemonConnectState;
   const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port };
-  const hostLabel = hostDef.label ?? host;
+  const { hostDisplayName, inHostTerms } = await import('../hosts/host-display-name.js');
+  const hostLabel = hostDisplayName(host, hostDef.label);
   const sshTargetText = hostDef.user ? `${hostDef.user}@${hostDef.hostname}` : hostDef.hostname;
   const hostNames = [host, hostDef.label ?? '', hostDef.hostname, hostDef.user ?? ''];
   const hostErrorResult = (hostError: ListDirsHostError): ListDirsResult =>
@@ -711,20 +729,47 @@ export async function listSessionDirs(
       // Same target facts as the connect path: label, hostname and the port (host_key, C37).
       const { kind, hint, retryable } = classifyHostConnectError(message, sshTargetText, hostNames,
         { label: hostLabel, hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port });
-      return hostErrorResult({ message: state.error ?? message, kind, hint, retryable, retryInMs: state.retryInMs });
+      // The picker shows this under a headline for `kind`, with `hint` as the next
+      // step. The message is the one plain sentence every host read says when the
+      // last dial failed (remote-read-bound.ts); the dial's own words (an errno, a
+      // URL, an ssh line) go to the log only (gate links P5).
+      log.web.info('list-dirs: the host connect failed', { host, kind, why: state.error ?? message });
+      return hostErrorResult({ message: `Can't reach ${hostLabel} right now.`, kind, hint, retryable, retryInMs: state.retryInMs });
     }
     // SSH failures are client-visible 400s (matches the web route's contract).
-    throw new SessionControlError(message, 400);
+    throw new SessionControlError(inHostTerms(message, host, hostLabel), 400);
   }
 
   // BFS listing via daemon fs.ls. ENOENT → exists:false (success); other
   // daemon errors throw and map to 400. The host is connected at this point,
-  // so a failure here is about the directory, never about SSH.
+  // so a failure here is about the directory, never about SSH. The listing is
+  // within the host-read deadline too: a connected link that stopped answering
+  // held it for the daemon's 30s command timeout (remote-read-bound.ts).
   let listing;
   try {
-    listing = await listRemoteDirs(conn, dir, depth);
+    const { boundHostRead, HostReconnectingError } = await import('../hosts/remote-read-bound.js');
+    try {
+      listing = route.kind === 'fixture'
+        ? await listRemoteDirs(conn, dir, depth)
+        : await boundHostRead(host, () => listRemoteDirs(conn, dir, depth));
+    } catch (err) {
+      if (!(err instanceof HostReconnectingError)) throw err;
+      if (!opts.pending) throw err;
+      // The picker's progress shape while the host reconnects; a host that is
+      // still connected but did not answer is a listing failure there.
+      const state = getDaemonConnectState(host);
+      if (!state.connected) {
+        return {
+          dirs: [], parent: dir, exists: true,
+          pending: { phase: state.phase, label: describeConnectPhase(state.phase, hostLabel), elapsedMs: state.phaseElapsedMs },
+        };
+      }
+      const { kind, hint, retryable } = describeListingError(hostLabel);
+      return hostErrorResult({ message: err.message, kind, hint, retryable });
+    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof SessionControlError) throw err;
+    const message = inHostTerms(err instanceof Error ? err.message : String(err), host, hostLabel);
     if (opts.pending) {
       const { kind, hint, retryable } = describeListingError(hostLabel);
       return hostErrorResult({ message, kind, hint, retryable });
