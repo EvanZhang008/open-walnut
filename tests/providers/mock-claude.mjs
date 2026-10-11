@@ -24,8 +24,7 @@ import { randomUUID } from 'node:crypto';
 const args = process.argv.slice(2);
 let transcriptParent = null;
 
-function persistMockTurn(sessionId, prompt, answer) {
-  const root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR;
+function persistMockTurn(sessionId, prompt, answer, root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR) {
   if (!root) return;
   const cwd = process.cwd();
   const dir = path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
@@ -917,6 +916,50 @@ if (outputFormat === 'stream-json') {
     //         armSnapshotNextTurn), so a follow-up send can select a different
     //         snapshot mode on the SAME live process — that's how the real CLI
     //         behaves and it keeps an E2E to one CLI process for several turns.
+    // 2a.-1.0. "final-usage-turn:<input>,<cacheWrite>,<cacheRead>" — one turn
+    //          streamed the way Claude Code 2.1.284 streams a Converse model
+    //          through the proxy: message_start carries ZERO input usage, the
+    //          consolidated assistant line (written at content_block_stop) keeps
+    //          those zeros, and only message_delta carries this request's real
+    //          input/cache counters. The transcript files the real counters.
+    //          "final-usage-turn:fail" streams a start, then fails with no final
+    //          usage. Stays alive for the next FIFO turn like snapshot-clean-turn.
+    if (effectiveMessage.startsWith('final-usage-turn:')) {
+      const spec = effectiveMessage.split('\n')[0].slice('final-usage-turn:'.length).trim();
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const wrap = (ev) => ({ type: 'stream_event', event: ev, session_id: sid, parent_tool_use_id: null });
+      const zero = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 };
+      const body = () => {
+        const seq = ++snapshotTurnSeq;
+        const id = `msg_final_usage_${seq}_${process.pid}`;
+        emit(wrap({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: 'mock-model', content: [], usage: zero } }));
+        if (spec === 'fail') {
+          emit({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 40, num_turns: 1, session_id: sid, total_cost_usd: nextSnapshotCost(0), usage: { input_tokens: 0, output_tokens: 0 }, errors: ['upstream stream ended before final usage'] });
+          emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+          armSnapshotNextTurn();
+          return;
+        }
+        const [input, write, read] = spec.split(',').map((n) => Number(n) || 0);
+        const text = `Final usage turn ${seq}.`;
+        emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+        emit(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }));
+        emit(wrap({ type: 'content_block_stop', index: 0 }));
+        const assistant = { id, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: null, usage: zero };
+        emit({ type: 'assistant', message: assistant, session_id: sid, parent_tool_use_id: null });
+        const final = { input_tokens: input, cache_creation_input_tokens: write, cache_read_input_tokens: read, output_tokens: 9 };
+        emit(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: final }));
+        emit(wrap({ type: 'message_stop' }));
+        persistMockTurn(sid, effectiveMessage, { message: { ...assistant, stop_reason: 'end_turn', usage: final } },
+          process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: final });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      setTimeout(body, Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300));
+      return;
+    }
+
     if (effectiveMessage === 'snapshot-clean-turn' || effectiveMessage.startsWith('snapshot-clean-turn:')) {
       // `{env:NAME}` in the text becomes that variable as this CLI sees it
       // (`<unset>` when absent), so a test can check what a spawn passed down.

@@ -2747,6 +2747,65 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
     expect(data?.autoCompactAt).toBe(400_000);
   });
 
+  it('publishes final stream input usage without clearing the badge on zero starts', () => {
+    const { session } = makeSessionWithStubTransport();
+    (session as any).claudeSessionId = 'sid-final-usage';
+    (session as any)._envMaxContextTokens = 1_000_000;
+    (session as any)._autoCompactWindow = 500_000;
+    const seen: Array<{ inputTokens: number; contextPercent: number }> = [];
+    bus.subscribe('main-ai', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_USAGE_UPDATE) seen.push(event.data as typeof seen[number]);
+    });
+    const stream = (event: unknown, parent?: string) => feed(session, {
+      type: 'stream_event', event, parent_tool_use_id: parent ?? null,
+    });
+    const start = () => stream({ type: 'message_start', message: {
+      id: 'msg-final', usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    } });
+    const finish = (usage: unknown) => stream({ type: 'message_delta', usage });
+    for (const usage of [
+      { input_tokens: 436, cache_creation_input_tokens: 488, cache_read_input_tokens: 265328 },
+      { input_tokens: 436, cache_creation_input_tokens: 266262, cache_read_input_tokens: 0 },
+      { input_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 90560 },
+    ]) {
+      const count = seen.length;
+      start();
+      feed(session, { type: 'assistant', message: { id: 'msg-final', role: 'assistant', content: [], usage: { input_tokens: 0 } } });
+      expect(seen).toHaveLength(count);
+      finish(usage);
+    }
+    expect(seen.map((item) => item.inputTokens)).toEqual([266252, 266698, 90562]);
+    expect(seen.map((item) => item.contextPercent)).toEqual([27, 27, 9]);
+    finish({ output_tokens: 30 });
+    stream({ type: 'message_start', message: { id: 'child', usage: { input_tokens: 1 } } }, 'tool-child');
+    stream({ type: 'message_delta', usage: { input_tokens: 1 } }, 'tool-child');
+    expect(seen).toHaveLength(3);
+    (session as any)._consumedOffset = 100;
+    (session as any).handleStreamLine(JSON.stringify({ type: 'stream_event', event: {
+      type: 'message_delta', usage: { input_tokens: 800000 },
+    } }), 50);
+    expect(seen).toHaveLength(3);
+    start();
+    finish({ input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: null });
+    expect(seen.at(-1)?.inputTokens).toBe(10);
+  });
+
+  it('merges final input deltas only with the same message start', () => {
+    const { session } = makeSessionWithStubTransport();
+    (session as any).claudeSessionId = 'sid-partial-usage';
+    const seen: number[] = [];
+    bus.subscribe('main-ai', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_USAGE_UPDATE) seen.push((event.data as { inputTokens: number }).inputTokens);
+    });
+    for (const event of [
+      { type: 'message_start', message: { id: 'one', usage: { input_tokens: 10, cache_read_input_tokens: 100 } } },
+      { type: 'message_delta', usage: { input_tokens: 20 } },
+      { type: 'message_start', message: { id: 'two', usage: { input_tokens: 0 } } },
+      { type: 'message_delta', usage: { input_tokens: 30 } },
+    ]) feed(session, { type: 'stream_event', event });
+    expect(seen).toEqual([120, 30]);
+  });
+
   // ── contextWindowForPercent: the context% denominator ──
   // The denominator is the MODEL'S ABSOLUTE MAX window. An auto-compact setting
   // never moves it: the badge answers "how much of this model am I using", and

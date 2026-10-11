@@ -727,6 +727,7 @@ export class ClaudeCodeSession {
    *  branch dedups by prefix-matching any key with the same msgId prefix, so
    *  index alignment between the two paths is no longer required. */
   private _currentStreamMsgId: string | null = null
+  private _streamInputUsage: Record<string, number> = {}
   /** Scopes we've already warned about this turn (top_level / stream_event / delta
    *  keyed by "scope:type"), so a burst of unknown events doesn't spam the UI. */
   private _warnedUnknownTypes = new Set<string>()
@@ -840,6 +841,22 @@ export class ClaudeCodeSession {
    *  (monotonic) so it survives restarts; seeded from the record on attach.
    *  -1 = no watermark (old daemon / never seen a v). */
   private _consumedOffset = -1
+
+  private emitContextUsage(usage: Record<string, number | null | undefined>, model?: string): void {
+    const totalInput = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+      + (usage.cache_read_input_tokens ?? 0)
+    // A final-only usage stream starts at zero; it is not an empty context.
+    if (!this.claudeSessionId || totalInput <= 0) return
+    if (model && !this._model) this._model = model
+    const { window: contextWindow, autoCompactAt } = this.contextLimits(totalInput)
+    bus.emit(EventNames.SESSION_USAGE_UPDATE, {
+      sessionId: this.claudeSessionId,
+      model: this._model,
+      inputTokens: totalInput,
+      ...(contextWindow != null ? { contextWindow, contextPercent: Math.round(totalInput / contextWindow * 100) } : {}),
+      ...(autoCompactAt != null ? { autoCompactAt } : {}),
+    }, ['main-ai'], { source: 'session-runner' })
+  }
 
   private cancelPendingPermission(requestId: string): void {
     this._resolvedPermissionRequestIds.add(requestId)
@@ -6174,38 +6191,7 @@ export class ClaudeCodeSession {
         //     - cache_read_input_tokens: tokens read from cache
         //   Their sum = total prompt size = context window usage.
         //   NOT capped at 100 — values >100% indicate wrong contextWindowSize detection.
-        if (this.claudeSessionId && msg.message) {
-          const usage = msg.message.usage
-          if (usage) {
-            const totalInput = usage.input_tokens
-              + (usage.cache_creation_input_tokens ?? 0)
-              + (usage.cache_read_input_tokens ?? 0)
-            const { window: contextWindowSize, autoCompactAt } = this.contextLimits(totalInput)
-            // No trustworthy window yet ⇒ no percent. The UI shows the token
-            // count alone rather than a number that will move 5x in a second.
-            const contextPercent = contextWindowSize != null
-              ? Math.round(totalInput / contextWindowSize * 100)
-              : undefined
-            // Use assistant message model only as fallback when init event didn't
-            // provide one. Init model is the source of truth — it reflects the
-            // configured --model flag. Claude Code routes Agent subagent calls to
-            // cheaper models (Haiku), and those appear as assistant messages with a
-            // different model string. Legit model switches (via /model command)
-            // trigger a --resume which fires a new init event, updating _model there.
-            const msgModel = msg.message.model
-            if (typeof msgModel === 'string' && msgModel && !this._model) {
-              this._model = msgModel
-            }
-            bus.emit(EventNames.SESSION_USAGE_UPDATE, {
-              sessionId: this.claudeSessionId,
-              model: this._model,
-              ...(contextPercent != null ? { contextPercent } : {}),
-              inputTokens: totalInput,
-              ...(contextWindowSize != null ? { contextWindow: contextWindowSize } : {}),
-              ...(autoCompactAt != null ? { autoCompactAt } : {}),
-            }, ['main-ai'], { source: 'session-runner' })
-          }
-        }
+        if (msg.message?.usage) this.emitContextUsage(msg.message.usage, msg.message.model)
         break
       }
 
@@ -7185,14 +7171,18 @@ export class ClaudeCodeSession {
         // token-level UI streaming. See claude-stream-event-map.ts for the
         // parse/drop/unknown contract.
         const se = event as unknown as {
+          parent_tool_use_id?: string | null
           event?: {
             type?: string
-            message?: { id?: string }
+            message?: { id?: string; model?: string; usage?: Record<string, number> }
+            usage?: Record<string, number>
             index?: number
             content_block?: { type?: string; id?: string; name?: string; input?: Record<string, unknown> }
             delta?: { type?: string; text?: string; thinking?: string; partial_json?: string }
           }
         }
+        // A subagent's request has its own context; only the main loop's counts.
+        const ownsContext = !se.parent_tool_use_id
         const inner = se.event
         const innerType = inner?.type ?? ''
         if (!innerType) break
@@ -7223,13 +7213,19 @@ export class ClaudeCodeSession {
         // ── message_start: capture msg id for dedup tracking ──
         if (innerType === 'message_start') {
           this._currentStreamMsgId = inner?.message?.id ?? null
+          if (!historic && ownsContext) this._streamInputUsage = { ...inner?.message?.usage }
           break
         }
 
-        // ── message_delta: already handled for usage/stop_reason upstream ──
+        // ── message_delta: final usage and stop_reason ──
         // Capture stop_reason for the forensic per-turn wide event + the
         // truncated-success invariant (success + stopReason=null = truncation).
         if (innerType === 'message_delta') {
+          if (!historic && ownsContext && inner?.usage && ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens']
+              .some((field) => field in inner.usage!)) {
+            this._streamInputUsage = { ...this._streamInputUsage, ...inner.usage }
+            this.emitContextUsage(this._streamInputUsage)
+          }
           const sr = (inner?.delta as { stop_reason?: string | null } | undefined)?.stop_reason
           if (sr !== undefined) this._lastStopReason = sr
           break

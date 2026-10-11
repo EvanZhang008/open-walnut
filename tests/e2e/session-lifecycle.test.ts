@@ -444,6 +444,48 @@ describe('Session send (resume existing session)', () => {
   })
 })
 
+// ── Context usage from final stream counters ──
+
+describe('Context usage from final stream counters', () => {
+  it('publishes each request\'s real input across cache switches, a failed turn and recovery', async () => {
+    const ws = await connectWs()
+    const usage = collectWsEvents(ws, ['session:usage-update'])
+    const inputs = () => usage.map((e) => (e.data as { inputTokens: number }).inputTokens)
+
+    const firstResult = waitForWsEvent(ws, 'session:result')
+    await sendWsRpc(ws, 'session:start', {
+      taskId: 'sess-task-002',
+      message: 'final-usage-turn:436,488,265328',
+      project: 'Walnut',
+    })
+    const sessionId = ((await firstResult).data as { sessionId: string }).sessionId
+    await pollUntil(async () => inputs().includes(266252))
+
+    // [input, cacheWrite, cacheRead] per turn, then the context that turn must show.
+    const turns: Array<[string, number]> = [
+      ['436,266262,0', 266698],   // cold cache after an account switch: a write, no read
+      ['fail', 266698],           // no final usage at all: the badge keeps its value
+      ['2,0,90560', 90562],       // after compaction: a read of the smaller context
+    ]
+    for (const [spec, expected] of turns) {
+      const done = Promise.race([waitForWsEvent(ws, 'session:result'), waitForWsEvent(ws, 'session:error')])
+      const res = await sendWsRpc(ws, 'session:send', { sessionId, message: `final-usage-turn:${spec}` })
+      expect((res as Record<string, unknown>).ok).toBe(true)
+      await done
+      await pollUntil(async () => inputs().at(-1) === expected, 100, 10000)
+    }
+
+    expect(inputs()).toEqual([266252, 266698, 90562])
+    for (const e of usage) {
+      const d = e.data as { sessionId: string; inputTokens: number }
+      expect(d.sessionId).toBe(sessionId)
+      expect(d.inputTokens).toBeGreaterThan(0)
+    }
+    ws.close()
+    await delay(50)
+  })
+})
+
 // ── Multi-client ──
 
 describe('Multi-client session events', () => {
