@@ -142,17 +142,30 @@ final class ReviewSurfaceTests: XCTestCase {
         XCTAssertTrue(delegate.contains("VoiceRecordingStore.pruneAtLaunch(protectedDataAvailable: application.isProtectedDataAvailable)"),
                       "no prune at launch: a take older than 7 days stays until the next recording")
     }
-    // MARK: - Gate r4 (2026-10-07)
+    // MARK: - Gate r4 (2026-10-07), turned around by the upload refusal (2026-10-10)
 
-    /// F16: the App Store app only reads Apple Health, so its Info.plist does not
-    /// carry the write string. Only the DEBUG seeder writes, and Release drops the key.
-    func testTheReleaseBuildDropsTheHealthWriteString() throws {
+    /// The App Store app only reads Apple Health; only the DEBUG seeder asks to
+    /// write. The write string still ships in every configuration. Gate r4 (F16)
+    /// had Release delete it in a build step, and on 2026-10-10 Apple refused
+    /// build 107 at upload: "Missing purpose string in Info.plist ... should
+    /// contain a NSHealthUpdateUsageDescription key". The validator asks for it
+    /// whenever the binary calls `HKHealthStore.requestAuthorization(toShare:read:)`,
+    /// which is also the only way to ask to read.
+    func testEveryBuildKeepsTheHealthWriteString() throws {
+        let wording = "Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data."
         let yml = try source("project.yml")
-        XCTAssertTrue(yml.contains("postBuildScripts:"))
-        XCTAssertTrue(yml.contains(#"if [ "$CONFIGURATION" = "Release" ]; then"#))
-        XCTAssertTrue(yml.contains(#"Delete :NSHealthUpdateUsageDescription"#))
-        // Ordered after the Info.plist is written, in every build.
-        XCTAssertTrue(yml.contains("inputFiles:\n          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"))
+        // No step deletes or rewrites the key: project.yml names it once, as the
+        // Info.plist property, and nowhere else (a script would have to name it).
+        let named = yml.split(separator: "\n").filter { $0.contains("NSHealthUpdateUsageDescription") }
+        XCTAssertEqual(named.map { $0.trimmingCharacters(in: .whitespaces) },
+                       ["NSHealthUpdateUsageDescription: " + wording],
+                       "project.yml names the Health write string outside its Info.plist properties")
+        XCTAssertFalse(yml.contains("Delete :NSHealthUpdateUsageDescription"))
+        XCTAssertFalse(yml.contains("Release drops the Health write string"))
+        // The committed Info.plist carries it too, with the same words.
+        let plist = try XCTUnwrap(NSDictionary(contentsOf: root.appendingPathComponent("Walnut/Support/Info.plist")) as? [String: Any])
+        XCTAssertEqual(plist["NSHealthUpdateUsageDescription"] as? String, wording)
+        XCTAssertNotNil(plist["NSHealthShareUsageDescription"] as? String)
         XCTAssertTrue(try source("Walnut/Health/HealthDebugSeed.swift").hasPrefix("#if DEBUG"))
         // Every other authorization request asks to share nothing.
         let dir = root.appendingPathComponent("Walnut")

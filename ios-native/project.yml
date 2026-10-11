@@ -74,11 +74,13 @@ targets:
             UIApplicationShortcutItemSubtitle: Record and send to your AI
             UIApplicationShortcutItemIconSymbolName: mic.fill
         # Apple Health (Settings, Apple Health): the app READS what the user
-        # allows and keeps their own Walnut server up to date. The update
-        # (write) string exists only for the DEBUG test-data seeder
-        # (HealthDebugSeed.swift), the one code that ever asks to write, and
-        # the Release build drops it (the postBuildScripts below), so the App
-        # Store app does not ask for a write it never makes.
+        # allows and keeps their own Walnut server up to date. Only the DEBUG
+        # test-data seeder (HealthDebugSeed.swift) ever asks to write, yet the
+        # update (write) string stays in every configuration: App Store
+        # validation requires it whenever the binary calls
+        # HKHealthStore.requestAuthorization(toShare:read:), which is also the
+        # only way to ask to read (HealthDataSource asks with toShare: []).
+        # Apple refused build 107 at upload when Release dropped it (2026-10-10).
         NSHealthShareUsageDescription: Walnut reads the Apple Health data you allow, so your AI can answer questions about your sleep, activity, heart and more. It goes only to your own Walnut server, on your Mac or on a cloud machine you run, and from there to the AI provider that server uses.
         NSHealthUpdateUsageDescription: Only Walnut's test builds add sample health data, to check that syncing works. The App Store version never changes your Apple Health data.
         # Places (Settings, Places): off until the user turns it on. iOS visit
@@ -110,29 +112,9 @@ targets:
           # Apple Health: the hourly app refresh that keeps the Mac current
           # when no HealthKit background delivery arrived.
           - fetch
-    # Release only: drop the Health write string from the built Info.plist
-    # (see NSHealthUpdateUsageDescription above), before code signing. The
-    # built Info.plist is the script's input, so the build runs it after the
-    # Info.plist is written: without that an incremental Release build wrote
-    # the plist after the script and kept the key. ReviewSurfaceTests pins it.
-    postBuildScripts:
-      - name: Release drops the Health write string
-        basedOnDependencyAnalysis: false
-        inputFiles:
-          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
-        script: |
-          if [ "$CONFIGURATION" = "Release" ]; then
-            PLIST="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
-            /usr/libexec/PlistBuddy -c "Delete :NSHealthUpdateUsageDescription" "$PLIST" 2>/dev/null || true
-            if /usr/libexec/PlistBuddy -c "Print :NSHealthUpdateUsageDescription" "$PLIST" >/dev/null 2>&1; then
-              echo "error: NSHealthUpdateUsageDescription is still in the Release Info.plist"; exit 1
-            fi
-          fi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios
-        # The one script phase (above) edits the built Info.plist in place.
-        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
         # Points at the hand-written, committed entitlements file. NOT xcodegen's
         # `entitlements:` key — that GENERATES the plist from inline properties
         # and would overwrite the file (losing the comments that explain the APNs
