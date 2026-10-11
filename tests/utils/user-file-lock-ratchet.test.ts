@@ -46,6 +46,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/session-message-queue.ts: SESSION_QUEUE_FILE',      // the session message queue
   'src/core/sessions/cloud-chat-lane.ts: MARKS_FILE',           // chat lane marks
   'src/core/skill-usage.ts: file',                              // skill usage counts
+  "src/core/stt/voice-archive.ts: join(this.dir(id), 'metadata.json')", // WALNUT_HOME/voice-archive/<id>/metadata.json
   'src/core/suggest-accuracy.ts: file',                         // suggestion accuracy stats
   'src/core/task-manager.ts: TASKS_FILE',                       // the task store
   'src/core/triage/runs.ts: file',                              // triage run log
