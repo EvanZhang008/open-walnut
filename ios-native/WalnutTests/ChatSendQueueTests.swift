@@ -832,7 +832,7 @@ final class ChatSendQueueTests: XCTestCase {
         chat.streaming = true
         await expectQueued(chat, "further down the list")
 
-        chat.pruneQueue(against: (0..<50).map { summary("other-\($0)") })
+        chat.pruneQueue(against: (0..<ChatStore.conversationListLimit).map { summary("other-\($0)") })
 
         XCTAssertEqual(chat.queuedSends.map(\.text), ["further down the list"])
     }

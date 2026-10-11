@@ -17,6 +17,23 @@ extension WalnutAPI {
         }
     }
 
+    /// Start an ask that has no session yet (`POST /sessions { walnutAgent, taskId }`):
+    /// the server runs it in its own folder with the ask's agent persona, which
+    /// the task's own stamp decides, so no `agentId` rides along.
+    func launchAsk(taskId: String, message: String) async throws -> SessionCreated {
+        try await send("POST", "/sessions", body: Self.askLaunchBody(taskId: taskId, message: message), timeout: 60)
+    }
+
+    struct AskLaunchBody: Encodable, Equatable {
+        let walnutAgent: Bool
+        let taskId: String
+        let message: String
+    }
+
+    static func askLaunchBody(taskId: String, message: String) -> AskLaunchBody {
+        AskLaunchBody(walnutAgent: true, taskId: taskId, message: message)
+    }
+
     /// The request path. `q` is encoded as a query VALUE (a title search can hold
     /// `&`, `+`, `=` or any script), which the path escaper would pass through.
     static func asksPath(agentID: String, query: String?, limit: Int?) -> String {

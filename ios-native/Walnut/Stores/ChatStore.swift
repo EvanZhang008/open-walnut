@@ -85,6 +85,14 @@ final class ChatStore {
     private var lastFetchSettledTurn: Bool?
 
     var conversations: [ConversationSummary] = []
+    /// The agent's asks exactly as the Mac's Ask drawer lists them
+    /// (`GET /api/v1/asks`): the drawer's Recents. Every chat with a session is one
+    /// of them (it names its `conversationId`), and so is every ask started on the
+    /// Mac, so the two lists are the same list.
+    var asks: [AskSummary] = []
+    /// The server answered the asks list (now or in a cached copy). False on a
+    /// server that predates it, where Recents stays the plain conversation list.
+    var asksListed = false
     var activeID: String?
     var messages: [ChatMessage] = []
     var hasOlder = false
@@ -270,7 +278,9 @@ final class ChatStore {
     /// Rows per page of `/conversations`. Spelled here rather than left to the
     /// API's default because the queue's prune has to know whether the answer it is
     /// judging was TRUNCATED (see `ChatSendQueueRules.pruned`).
-    private static let conversationListLimit = 50
+    /// The server's maximum: the chats that are not asks yet (Earlier) are the
+    /// OLDEST ones, so a shorter page would never reach them.
+    static let conversationListLimit = 200
     private static let cacheTail = 60
 
     // MARK: - Lifecycle
@@ -323,6 +333,11 @@ final class ChatStore {
             guard isActive else { return }
             conversations = cachedList
         }
+        if let cachedAsks = await DiskCache.loadAsync([AskSummary].self, key: asksCacheKey) {
+            guard isActive else { return }
+            asks = cachedAsks
+            asksListed = true
+        }
         guard isActive else { return }
         // Before anything is selected: a queue restored after the first `select`
         // would have no bubbles until the next switch.
@@ -342,6 +357,23 @@ final class ChatStore {
     /// Per-agent persistence keys — each agent remembers its own thread.
     private var activeConversationKey: String { "walnut.activeConversation.\(activeAgentID)" }
     private var conversationsCacheKey: String { "conversations-\(activeAgentID)" }
+    private var asksCacheKey: String { "asks-\(activeAgentID)" }
+
+    /// The chats Recents does not list: ones no session has answered yet (written
+    /// before chats had one, or only the cloud did), the agent's main conversation
+    /// (its background channel, never an ask), and any whose ask is past the list's
+    /// limit. The drawer keeps them under Earlier, so no chat is ever unreachable.
+    var earlierConversations: [ConversationSummary] {
+        Self.earlier(conversations, asks: asks)
+    }
+
+    /// `earlierConversations` as a pure rule: a chat is in Recents only when a
+    /// LISTED ask names it. A chat's own `askTaskId` is not enough: its ask may be
+    /// gone, or beyond the page the server answered.
+    nonisolated static func earlier(_ conversations: [ConversationSummary], asks: [AskSummary]) -> [ConversationSummary] {
+        let listed = Set(asks.compactMap(\.conversationId))
+        return conversations.filter { !listed.contains($0.id) }
+    }
 
     func refreshAgents() async {
         guard isActive else { return }
@@ -369,6 +401,8 @@ final class ChatStore {
         AppPrefs.defaults.set(agentID, forKey: "walnut.activeAgent")
         activeID = nil
         conversations = []
+        asks = []
+        asksListed = false
         messages = []
         localRowConversation.removeAll()
         hasOlder = false
@@ -388,6 +422,12 @@ final class ChatStore {
                self.conversations.isEmpty, key == self.conversationsCacheKey {
                 self.conversations = cached
                 if self.activeID == nil { self.select(cached.first?.id) }
+            }
+            let asksKey = self.asksCacheKey
+            if let cached = await DiskCache.loadAsync([AskSummary].self, key: asksKey),
+               !self.asksListed, asksKey == self.asksCacheKey {
+                self.asks = cached
+                self.asksListed = true
             }
             await self.refreshConversations()
             if self.activeID == nil || !self.conversations.contains(where: { $0.id == self.activeID }) {
@@ -414,6 +454,31 @@ final class ChatStore {
         } catch {
             reportIfNetwork(error)
         }
+        await refreshAsks()
+    }
+
+    /// Re-read the agent's asks. Kept as they were when the server cannot answer:
+    /// nil is a server that predates the list (Recents stays the conversations),
+    /// and a thrown error (the Mac unreachable behind the companion) keeps the
+    /// last list on screen rather than emptying the drawer.
+    func refreshAsks() async {
+        guard isActive else { return }
+        let agentID = activeAgentID
+        do {
+            guard let list = try await api.asks(agentID: agentID, limit: Self.conversationListLimit) else { return }
+            guard isActive, !Task.isCancelled, agentID == activeAgentID else { return }
+            asks = list.asks
+            asksListed = true
+            DiskCache.save(asks, key: asksCacheKey)
+        } catch {
+            reportIfNetwork(error)
+        }
+    }
+
+    /// The ask a conversation is, when it is one.
+    func ask(forConversation id: String?) -> AskSummary? {
+        guard let id else { return nil }
+        return asks.first { $0.conversationId == id }
     }
 
     /// Switch the active conversation: render cache instantly, reconnect SSE,
@@ -490,7 +555,9 @@ final class ChatStore {
     /// Nav-bar title — the agent's name; the conversation title rides subtitle-style.
     var activeTitle: String {
         guard let activeID else { return activeAgentName }
-        return conversations.first(where: { $0.id == activeID })?.title ?? activeAgentName
+        // The ask's title first: it is what the drawer lists and the Mac shows.
+        return ask(forConversation: activeID)?.title
+            ?? conversations.first(where: { $0.id == activeID })?.title ?? activeAgentName
     }
 
     // MARK: - Messages
@@ -2298,6 +2365,8 @@ extension ChatStore {
         closeStream()
         _ = setQueue([])
         conversations = []
+        asks = []
+        asksListed = false
         activeID = nil
         messages = []
         hasOlder = false

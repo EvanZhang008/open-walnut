@@ -76,6 +76,11 @@ struct ConversationSummary: Codable, Identifiable, Equatable {
     let title: String?
     let updatedAt: String
     let messageCount: Int
+    /// The ask this chat is (additive, 2026-10): every chat with a session is one
+    /// of the agent's asks, listed by `GET /api/v1/asks`. Absent = a chat with no
+    /// session yet, or the agent's main conversation. The drawer places chats by
+    /// the asks list, not by this field (see `ChatStore.earlier`).
+    var askTaskId: String? = nil
 }
 
 /// One console agent from GET /api/v1/agents (additive endpoint).

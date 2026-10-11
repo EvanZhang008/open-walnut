@@ -39,6 +39,10 @@ struct AskSummary: Codable, Equatable, Hashable, Identifiable {
     let sessionId: String?
     let phase: String?
     let unread: Bool?
+    /// The chat this ask was written in (additive, 2026-10): the phone opens it
+    /// there, with its whole history and the cloud fallback. Absent for an ask
+    /// started on the Mac, which opens as its session.
+    var conversationId: String? = nil
 }
 
 /// The row's dot, with the Mac's meaning: done = the task is complete, running =

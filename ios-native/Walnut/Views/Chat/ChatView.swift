@@ -15,7 +15,15 @@ import UIKit
 struct ChatView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(ChatStore.self) private var chat
+    @Environment(TasksStore.self) private var tasks: TasksStore?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// An ask started on the Mac, opened from the drawer: it has no chat here, so
+    /// it opens as its session, pushed over the chat.
+    @State private var openedAskSession: WalnutSession?
+    /// An ask with no session yet: its first message here starts one.
+    @State private var sessionlessAsk: AskSummary?
+    @State private var firstMessageDraft = ""
 
     /// How far the drawer is out: 0 shut, 1 open. A fraction rather than a Bool
     /// because the edge swipe tracks the finger and can be released anywhere,
@@ -111,6 +119,9 @@ struct ChatView: View {
                 }
                 MessageListView()
             }
+            .navigationDestination(item: $openedAskSession) { session in
+                SessionConversationView(session: session)
+            }
             // Pin the stack to the height the page offered. `safeAreaInset` places
             // the composer relative to THIS content, so any sibling that reports a
             // taller ideal size than the keyboard-shrunk proposal pushes the
@@ -164,12 +175,72 @@ struct ChatView: View {
                 }
             }
         }
+        .alert(sessionlessAsk?.title ?? "Start this conversation", isPresented: Binding(
+            get: { sessionlessAsk != nil },
+            set: { if !$0 { sessionlessAsk = nil } }
+        )) {
+            TextField("First message", text: $firstMessageDraft)
+            Button("Cancel", role: .cancel) { sessionlessAsk = nil }
+            Button("Send") {
+                let ask = sessionlessAsk
+                let text = firstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                sessionlessAsk = nil
+                guard let ask, !text.isEmpty else { return }
+                firstMessageDraft = ""
+                Task { await startAsk(ask, message: text) }
+            }
+        } message: {
+            Text("This conversation has not started yet. Its first message starts it.")
+        }
+    }
+
+    /// Start a sessionless ask with its first message and open it, the way a
+    /// launch from the Tasks tab hands its session over (stash, then push).
+    private func startAsk(_ ask: AskSummary, message: String) async {
+        do {
+            let created = try await WalnutAPI().launchAsk(taskId: ask.id, message: message)
+            SessionLaunchContext.stash(sessionId: created.sessionId, message: message)
+            let now = ISO8601DateFormatter().string(from: Date())
+            openedAskSession = WalnutSession(
+                id: created.sessionId, title: created.title, taskId: created.taskId,
+                taskTitle: ask.title, project: nil, host: "",
+                processStatus: "idle", model: nil, mode: nil,
+                startedAt: now, lastActiveAt: now, messageCount: 0,
+                cwd: nil, pinned: nil, focusTier: nil, description: nil
+            )
+            if let tasks { Task { await tasks.loadSessions() } }
+            await chat.refreshAsks()
+        } catch {
+            chat.errorMessage = "Couldn't start \"\(ask.title)\": \(error.localizedDescription)"
+        }
+    }
+
+    /// Open an ask that has no chat here as its session: the one the tasks store
+    /// holds, else the board's by-id lookup. A lookup that finds nothing says so
+    /// on the chat's error banner rather than opening an empty page.
+    private func openAsk(_ ask: AskSummary) {
+        guard let sessionId = ask.sessionId, !sessionId.isEmpty else {
+            sessionlessAsk = ask
+            return
+        }
+        if let known = tasks?.sessions.first(where: { $0.id == sessionId }) {
+            openedAskSession = known
+            return
+        }
+        Task {
+            let task = tasks?.tasks.first { $0.id == ask.id }
+            if let session = await tasks?.resolveSession(id: sessionId, task: task) {
+                openedAskSession = session
+            } else {
+                chat.errorMessage = "Couldn't open \"\(ask.title)\". Try again in a moment."
+            }
+        }
     }
 
     // MARK: - Drawer
 
     private var drawerLayer: some View {
-        ChatDrawer(suppressTaps: $suppressDrawerTaps, close: { setDrawer(open: false) })
+        ChatDrawer(suppressTaps: $suppressDrawerTaps, close: { setDrawer(open: false) }, openAsk: openAsk)
             .frame(width: drawerWidth)
             .frame(maxHeight: .infinity, alignment: .top)
             .background {
@@ -244,7 +315,12 @@ struct ChatView: View {
     }
 
     private func setDrawer(open: Bool) {
-        if open { dismissKeyboard() }
+        if open {
+            dismissKeyboard()
+            // An ask started on the Mac since the last read joins the list as
+            // the drawer comes out.
+            if drawer < 1 { Task { await chat.refreshAsks() } }
+        }
         withAnimation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.86)) {
             drawer = open ? 1 : 0
         }
@@ -263,6 +339,11 @@ struct ChatView: View {
                 if isOpen { suppressDrawerTaps = true }
                 if dragOrigin == nil {
                     guard !dragRejected else { return }
+                    // Over a pushed ask, the left edge is the page's back swipe.
+                    guard openedAskSession == nil else {
+                        dragRejected = true
+                        return
+                    }
                     guard ChatDrawerGeometry.tracksDrag(
                         startX: value.startLocation.x,
                         translation: value.translation,

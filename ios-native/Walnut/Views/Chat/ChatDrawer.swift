@@ -1,8 +1,13 @@
 import SwiftUI
 
 /// The Chat tab's left-edge drawer: the wordmark, the agent list (only when
-/// there is more than one agent to be on), the active agent's recent
-/// conversations, with New chat at the top of the scrolling content.
+/// there is more than one agent to be on), the active agent's asks (the SAME
+/// list the Mac's Ask drawer shows: every chat with a session is one, and so is
+/// every ask started on the Mac), the chats that list does not hold under
+/// Earlier, with New chat at the top of the scrolling content.
+///
+/// An ask written here opens in this chat, with its history and the cloud
+/// fallback; an ask started on the Mac opens as its session (`openAsk`).
 ///
 /// Replaced the conversation sheet (`ConversationListView`, deleted): ALL agent
 /// and conversation switching now happens behind the one top-left control, which
@@ -15,6 +20,9 @@ import SwiftUI
 /// only writes this view can make, and nothing reaches them by accident.
 struct ChatDrawer: View {
     @Environment(ChatStore.self) private var chat
+    /// Optional so WalnutTests can host the drawer without the app environment;
+    /// renaming or deleting an ask needs it, and those rows hide the menu there.
+    @Environment(TasksStore.self) private var tasks: TasksStore?
     /// Up while a drawer drag is being tracked, and EVERY action in here is behind
     /// it. A leftward close drag starts on a row, the row is a full-width button,
     /// and the finger never leaves its bounds, so SwiftUI still fires it on
@@ -24,10 +32,14 @@ struct ChatDrawer: View {
     @Binding var suppressTaps: Bool
     /// Slide the drawer away.
     let close: () -> Void
+    /// Open an ask that has no chat here (one started on the Mac) as its session.
+    var openAsk: (AskSummary) -> Void = { _ in }
 
     @State private var renameTarget: ConversationSummary?
     @State private var renameDraft = ""
     @State private var deleteTarget: ConversationSummary?
+    @State private var renameAskTarget: AskSummary?
+    @State private var deleteAskTarget: AskSummary?
     @State private var actionError: String?
 
     /// Leading inset for headers; rows reach the same 20pt via their own 8pt
@@ -99,6 +111,34 @@ struct ChatDrawer: View {
         } message: {
             Text(verbatim: "This permanently deletes \"\(deleteTarget?.title ?? "this conversation")\" and its history.")
         }
+        .alert("Rename Conversation", isPresented: Binding(
+            get: { renameAskTarget != nil },
+            set: { if !$0 { renameAskTarget = nil } }
+        )) {
+            TextField("Title", text: $renameDraft)
+            Button("Cancel", role: .cancel) { renameAskTarget = nil }
+            Button("Rename") {
+                let target = renameAskTarget
+                let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                renameAskTarget = nil
+                guard let target, !title.isEmpty else { return }
+                Task { actionError = await renameAsk(target, title: title) }
+            }
+        }
+        .alert("Delete Conversation?", isPresented: Binding(
+            get: { deleteAskTarget != nil },
+            set: { if !$0 { deleteAskTarget = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { deleteAskTarget = nil }
+            Button("Delete", role: .destructive) {
+                let target = deleteAskTarget
+                deleteAskTarget = nil
+                guard let target else { return }
+                Task { actionError = await deleteAsk(target) }
+            }
+        } message: {
+            Text(verbatim: "This permanently deletes \"\(deleteAskTarget?.title ?? "this conversation")\" and its history, on this phone and on the Mac.")
+        }
         .alert("Couldn't update conversation", isPresented: Binding(
             get: { actionError != nil },
             set: { if !$0 { actionError = nil } }
@@ -116,7 +156,12 @@ struct ChatDrawer: View {
                 // Only when there is a choice: on a server with one agent an
                 // "Agents" section is a heading over a single fact.
                 if chat.agents.count > 1 { agentsSection }
-                recentsSection
+                if chat.asksListed {
+                    asksSection
+                    earlierSection
+                } else {
+                    recentsSection
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -229,6 +274,132 @@ struct ChatDrawer: View {
                 }
             }
         }
+    }
+
+    /// Recents on a server that lists asks: the Mac's list, in the Mac's order.
+    private var asksSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Recents")
+            if chat.asks.isEmpty {
+                if !chat.loadingList { emptyRecents }
+            } else {
+                ForEach(Self.uniqueAsks(chat.asks)) { ask in
+                    Button {
+                        guard !suppressTaps else { return }
+                        if let conversationId = ask.conversationId {
+                            chat.select(conversationId)
+                        } else {
+                            openAsk(ask)
+                        }
+                        close()
+                    } label: {
+                        askRow(ask)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { askMenu(ask) }
+                    .accessibilityIdentifier("chat.drawer.ask.\(ask.id)")
+                }
+            }
+        }
+    }
+
+    /// The chats Recents does not list (`ChatStore.earlier`): not answered by a
+    /// session yet, the agent's main conversation, or past the list's limit.
+    /// Nothing at all when there are none: an empty heading would head nothing.
+    @ViewBuilder
+    private var earlierSection: some View {
+        let earlier = Self.uniqueByID(chat.earlierConversations)
+        if !earlier.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionLabel("Earlier")
+                    .padding(.top, 14)
+                ForEach(earlier) { conversation in
+                    Button {
+                        guard !suppressTaps else { return }
+                        chat.select(conversation.id)
+                        close()
+                    } label: {
+                        conversationRow(conversation)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { rowMenu(conversation) }
+                    .accessibilityIdentifier("chat.drawer.conversation.\(conversation.id)")
+                }
+            }
+        }
+    }
+
+    /// Same row as a conversation's: the title over its time. The time is the
+    /// one the list sorts by, so the column reads in order down the list.
+    private func askRow(_ ask: AskSummary) -> some View {
+        let isActive = ask.conversationId != nil && ask.conversationId == chat.activeID
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: ask.title)
+                .font(.subheadline)
+                .fontWeight(isActive ? .semibold : .regular)
+                .foregroundStyle(isActive ? Theme.tint : .primary)
+                .lineLimit(2)
+            Text(verbatim: RelativeTime.short(ask.activityAt))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            isActive ? Theme.tintSoft : Color.clear,
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+    }
+
+    /// An ask is a task: renaming or deleting it acts on the task, and the server
+    /// carries the change to its chat. No Pin: the list's order is the Mac's.
+    @ViewBuilder
+    private func askMenu(_ ask: AskSummary) -> some View {
+        if tasks != nil {
+            Button {
+                renameDraft = ask.title
+                renameAskTarget = ask
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Divider()
+            Button(role: .destructive) {
+                deleteAskTarget = ask
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private func renameAsk(_ ask: AskSummary, title: String) async -> String? {
+        guard let tasks else { return nil }
+        do {
+            _ = try await tasks.updateTask(id: ask.id, edit: TasksStore.TaskEdit(title: title))
+            await chat.refreshConversations()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func deleteAsk(_ ask: AskSummary) async -> String? {
+        guard let tasks else { return nil }
+        // Force: an ask's session is usually idle-but-alive, and the user asked
+        // for the conversation to go, not for a second confirmation about it.
+        if let error = await tasks.deleteTask(id: ask.id, force: true) { return error }
+        if ask.conversationId != nil, ask.conversationId == chat.activeID { chat.startNewConversation() }
+        await chat.refreshConversations()
+        return nil
+    }
+
+    /// `uniqueByID` for asks: one row per task, first occurrence wins.
+    static func uniqueAsks(_ asks: [AskSummary]) -> [AskSummary] {
+        var seen = Set<String>()
+        return asks.filter { seen.insert($0.id).inserted }
     }
 
     /// The list `ForEach` iterates, with repeated ids dropped (first occurrence
