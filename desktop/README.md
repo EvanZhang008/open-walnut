@@ -85,7 +85,7 @@ cp -r Walnut.app ~/Applications # or install for the current user
 ```
 
 `build-release.sh` additionally produces `Walnut.dmg` (or `Walnut-<arch>.dmg`
-when it carries a release) — a drag-to-Applications disk image you can hand to
+when it carries a release): a drag-to-Applications disk image you can hand to
 other users.
 
 ## First run
@@ -112,7 +112,7 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
 
 `main.swift` is the whole app (one file, AppKit). Key pieces:
 
-- **Setup** — a first launch runs the bundled `install.sh` (`BundledRuntime.swift`)
+- **Setup**: a first launch runs the bundled `install.sh` (`BundledRuntime.swift`)
   on the release the app carries for this Mac, as a `file://` base, or else on
   the GitHub release (reading the download's percentage off its progress bar),
   and the server then
