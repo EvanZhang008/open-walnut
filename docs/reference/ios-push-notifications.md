@@ -293,7 +293,8 @@ the token or a slice of it, and any text a push service sends back is scrubbed o
 the token before it is logged. No HTTP response or WebSocket frame carries a token
 either. `GET /api/config` and every `config:changed` broadcast that carries the
 config give the same view of it (`configForClients`, src/core/config-broadcast.ts):
-every `push_tokens[].token` masked in every mode, every secret masked on a replica.
+every `push_tokens[].token` masked in every mode (with the secret-shaped values of
+the free-form maps, a plugin's settings among them), every secret masked on a replica.
 The WebSocket exit applies that view to each `config:changed` frame again, whoever
 emitted it. `PUT /api/config` ignores `push_tokens` (the push registry is their
 only writer), and the status route names rows by `token_tag`. A relayed row's

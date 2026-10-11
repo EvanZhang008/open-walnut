@@ -48,9 +48,11 @@ export function getWebAssetsReport(): WebAssetsReport | null {
 // every config:changed broadcast carries the same view this route answers with.
 // CLOUD-mode rationale: `GET /api/config` is reachable by ANY paired device there,
 // so returning the replica's plaintext provider keys / bearer tokens would hand a
-// phone token holder its Bedrock credentials. On the trusted-LAN Mac only the
-// push device tokens are masked.
+// phone token holder its Bedrock credentials. On the trusted-LAN Mac the push
+// device tokens and the secret-shaped values in the free-form maps (a plugin's
+// settings, say) are masked; the typed fields Settings edits are not.
 import { configForClients, emitConfigChanged } from '../../core/config-broadcast.js'
+import { restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
@@ -122,8 +124,9 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     const hosts = withoutCloudBoxHost(config.hosts)
     const shown = hosts === config.hosts ? config : { ...config, hosts }
     // The client view (core/config-broadcast.ts), the same every config:changed
-    // carries: push device tokens masked in every mode, every secret on a replica,
-    // since any paired device can read this route there.
+    // carries: push device tokens and secret-shaped values in the free-form maps
+    // masked in every mode, every secret on a replica, since any paired device can
+    // read this route there.
     res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
   } catch (err) {
     next(err)
@@ -558,7 +561,11 @@ configRouter.post('/test-provider', async (req: Request, res: Response, next: Ne
 // PUT /api/config
 configRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const body = req.body
+    // A client saves back what it read, and GET masks secrets (core/config-broadcast.ts):
+    // every mask in the write becomes the value stored at the same place again, so a
+    // round trip never replaces a secret with its mask. Before any check below, which
+    // compares sections with what is stored.
+    const body = restoreMaskedSecrets(req.body, await getConfig())
 
     if (body.version !== undefined && body.version !== 1) {
       res.status(400).json({ error: 'version must be 1' })

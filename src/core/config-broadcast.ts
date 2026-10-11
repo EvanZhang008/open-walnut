@@ -5,10 +5,14 @@
  * `config:changed` reaches the `web-ui` subscriber, which sends it as it is to
  * every connected web client (src/web/server.ts), and every global subscriber
  * on this server. A config it carries is therefore an answer like
- * `GET /api/config`, and gets the same view, which that route uses too:
- * push device tokens masked and their claims dropped on every box, every secret
- * masked on a replica, where any paired device can read it. The server modules
- * that act on the event read the config from disk, never from the event.
+ * `GET /api/config`, and gets the same view, which that route uses too. On
+ * every box: push device tokens masked and their claims dropped, and every
+ * secret-shaped value inside the free-form maps masked (a plugin's settings, a
+ * provider's headers, a host server's build env, a tunnel's options, a hook
+ * action). On a replica, where any paired device can read it: every secret, by
+ * name or by shape. The server modules that act on the event read the config
+ * from disk, never from the event. A mask a client saves back is put back to
+ * its stored value (`restoreMaskedSecrets`, core/config-secret-shape.ts).
  *
  * Two guards keep it that way:
  *  - tests/core/config-broadcast-ratchet.test.ts fails on any emit of
@@ -18,12 +22,12 @@
  *    re-emits an event under a computed name cannot carry a raw config out.
  */
 import { CLOUD_MODE } from '../constants.js'
-import { maskPushTokens, redactConfig } from './config-redact.js'
+import { maskForMacClients, redactConfig } from './config-redact.js'
 import { bus, EventNames, type EmitOptions } from './event-bus.js'
 
 /** The config as a client may see it: the view `GET /api/config` answers with. */
 export function configForClients<T>(config: T): T {
-  return CLOUD_MODE ? redactConfig(config) as T : maskPushTokens(config)
+  return CLOUD_MODE ? redactConfig(config) as T : maskForMacClients(config)
 }
 
 /** A `config:changed` payload as a client may see it: its `config`, if any, in the client view. */

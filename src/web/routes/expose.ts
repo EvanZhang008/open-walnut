@@ -14,6 +14,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
+import { maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
@@ -49,7 +50,9 @@ exposeRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
       settings: {
         enabled: cfg.enabled === true,
         provider: cfg.provider ?? null,
-        options: cfg.options ?? {},
+        // A provider's options are a free-form map (a tunnel name, say, or its token):
+        // secret-shaped values masked, as in GET /api/config. PUT puts a mask back.
+        options: maskSecretShapes(cfg.options ?? {}),
         ...(cfg.port ? { port: cfg.port } : {}),
       },
     })
@@ -86,6 +89,8 @@ exposeRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
     const before = (await getConfig()).expose ?? {}
+    // The form saves every option back, a masked one too: that one keeps its stored value.
+    if (options) options = restoreMaskedSecrets(options, before.options ?? {})
     const nextExpose = {
       ...before,
       ...(body.enabled !== undefined ? { enabled: body.enabled as boolean } : {}),

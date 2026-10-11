@@ -8,6 +8,13 @@
  * every connected /ws client, provider keys included: the one path that handed
  * a device off the Mac secrets the GET hides (gate I1).
  *
+ * A plugin's own settings are masked by the shape of their keys, wherever they
+ * stand (`client_secret`, `access_token`, `refresh_token`, a `private_key`
+ * nested two objects down), and a whole round trip of what GET answered writes
+ * every stored secret back unchanged: a mask that is saved back keeps the value
+ * stored at its place (`restoreMaskedSecrets`). That round trip used to write
+ * the masks into the companion's config.yaml in place of the provider keys.
+ *
  * A real startServer in CLOUD_MODE, a real WebSocket client with a device
  * token, and the real routes. The last case emits the raw on-disk config under
  * a computed event name, as a relay would: only the WebSocket exit stands
@@ -34,7 +41,12 @@ const API_KEY = `acme-provider-key-${crypto.randomBytes(8).toString('hex')}`
 const AWS_SECRET = `acme-aws-secret-${crypto.randomBytes(8).toString('hex')}`
 const PUSH = crypto.randomBytes(32).toString('hex')
 const CLAIM = crypto.randomBytes(16).toString('hex')
-const SECRETS = [BEARER, API_KEY, AWS_SECRET, PUSH, CLAIM]
+const CLIENT_SECRET = `acme-client-secret-${crypto.randomBytes(8).toString('hex')}`
+const ACCESS_TOKEN = `acme-access-${crypto.randomBytes(8).toString('hex')}`
+const REFRESH_TOKEN = `acme-refresh-${crypto.randomBytes(8).toString('hex')}`
+const NESTED_KEY = `acme-nested-${crypto.randomBytes(8).toString('hex')}`
+const PLUGIN_SECRETS = [CLIENT_SECRET, ACCESS_TOKEN, REFRESH_TOKEN, NESTED_KEY]
+const SECRETS = [BEARER, API_KEY, AWS_SECRET, PUSH, CLAIM, ...PLUGIN_SECRETS]
 const masked = (v: string) => `\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${v.slice(-4)}`
 
 let server: HttpServer
@@ -84,6 +96,12 @@ function expectRedactedFrame(): void {
   expect(config.providers.bedrock.aws_secret_access_key).toBe(masked(AWS_SECRET))
   expect(config.push_tokens.map((r: { token: string }) => r.token)).toEqual([masked(PUSH)])
   expect(config.push_tokens.filter((r: object) => 'claims' in r)).toEqual([])
+  // A plugin's settings, by the shape of each key, at any depth.
+  expect(config.plugins['acme-sync']).toEqual({
+    enabled: true, client_id: 'id-of-the-app', base_url: 'https://acme.invalid',
+    client_secret: masked(CLIENT_SECRET), access_token: masked(ACCESS_TOKEN), refresh_token: masked(REFRESH_TOKEN),
+    oauth: { signing: { private_key: masked(NESTED_KEY) } },
+  })
   // Non-secret fields ride as they are, so the client still has a config to read.
   expect(config.providers.openai.api).toBe('openai-chat')
 }
@@ -110,6 +128,13 @@ beforeAll(async () => {
     push_tokens: [
       { token: PUSH, platform: 'ios', kind: 'apns', environment: 'production', key_name: 'acme-phone', registered_at: new Date().toISOString(), origin: 'relay', claims: [CLAIM] },
     ],
+    plugins: {
+      'acme-sync': {
+        enabled: true, client_id: 'id-of-the-app', base_url: 'https://acme.invalid',
+        client_secret: CLIENT_SECRET, access_token: ACCESS_TOKEN, refresh_token: REFRESH_TOKEN,
+        oauth: { signing: { private_key: NESTED_KEY } },
+      },
+    },
   }), 'utf-8')
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as AddressInfo).port
@@ -141,6 +166,13 @@ describe('a companion web client, connected with a device token', () => {
     expect(leakIn(text)).toBeNull()
     const { config } = JSON.parse(text) as { config: Record<string, any> }
     expect(config.provider.bedrock_bearer_token).toBe(masked(BEARER))
+    expect(config.plugins['acme-sync'].client_secret).toBe(masked(CLIENT_SECRET))
+  })
+
+  it('GET /api/v1/config carries none of the secrets', async () => {
+    const res = await api('/api/v1/config')
+    expect(res.status).toBe(200)
+    expect(leakIn(await res.text())).toBeNull()
   })
 
   it('a Settings save (PUT /api/config) sends config:changed redacted', async () => {
@@ -189,8 +221,37 @@ describe('a companion web client, connected with a device token', () => {
     expectRedactedFrame()
   })
 
+  it('a Settings save of the providers section, as GET answered it, keeps the provider keys on disk', async () => {
+    // What the companion's Settings sends after a provider edit: the section from a fresh GET.
+    const { config } = await (await api('/api/config')).json() as { config: Record<string, any> }
+    expect(config.providers.openai.api_key).toBe(masked(API_KEY))
+    const put = await api('/api/config', { method: 'PUT', body: JSON.stringify({ providers: config.providers }) })
+    expect(put.status).toBe(200)
+    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as Record<string, any>
+    expect(onDisk.providers.openai.api_key).toBe(API_KEY)
+    expect(onDisk.providers.bedrock.aws_secret_access_key).toBe(AWS_SECRET)
+  })
+
+  it('a whole round trip (GET, then PUT of everything it answered) keeps every stored secret, and its broadcast is redacted', async () => {
+    const read = await api('/api/config')
+    const { config } = await read.json() as { config: Record<string, any> }
+    expect(JSON.stringify(config)).toContain('\u2022')
+    const before = configFrames().length
+    const put = await api('/api/config', { method: 'PUT', body: JSON.stringify(config) })
+    expect(put.status).toBe(200)
+    await untilConfigFrames(before + 1)
+    expectRedactedFrame()
+    const text = await fs.readFile(CONFIG_FILE, 'utf-8')
+    expect(text).not.toContain('\u2022')
+    const onDisk = yaml.load(text) as Record<string, any>
+    expect(onDisk.provider.bedrock_bearer_token).toBe(BEARER)
+    expect(onDisk.providers.openai.api_key).toBe(API_KEY)
+    expect(onDisk.providers.bedrock.aws_secret_access_key).toBe(AWS_SECRET)
+    expect(onDisk.plugins['acme-sync']).toMatchObject({ client_secret: CLIENT_SECRET, access_token: ACCESS_TOKEN, refresh_token: REFRESH_TOKEN, oauth: { signing: { private_key: NESTED_KEY } } })
+  })
+
   it('no frame the client received carries a secret, and the box kept every one', async () => {
-    expect(configFrames().length).toBeGreaterThanOrEqual(4)
+    expect(configFrames().length).toBeGreaterThanOrEqual(6)
     expect(frames.map((t, i) => ({ i, leak: leakIn(t) })).filter((f) => f.leak)).toEqual([])
     const onDisk = await fs.readFile(CONFIG_FILE, 'utf-8')
     for (const s of SECRETS) expect(onDisk).toContain(s)

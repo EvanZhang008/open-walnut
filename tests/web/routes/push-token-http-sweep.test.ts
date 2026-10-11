@@ -16,7 +16,9 @@
  *
  * A relayed row's `claims` (core/push/claims.ts) are forbidden the same way:
  * each claim whole and every 10-character window of it, whatever field would
- * carry it.
+ * carry it. So are a plugin's own secrets (`plugins.<id>.client_secret`,
+ * `access_token`, `refresh_token`, a token inside its `auth` object): any
+ * paired device can read every one of these routes.
  *
  * A real WebSocket client is connected the whole time, as a console window is.
  * Every frame it receives, during the sweep and the writes after it (a Settings
@@ -89,6 +91,9 @@ const windowsOf = (secrets: string[]) =>
 /** Every 10-character window of each secret part (the Expo head is a fixed public string). */
 const WINDOWS = windowsOf([APNS, EXPO_INNER, RELAYED])
 const CLAIM_WINDOWS = windowsOf(CLAIMS)
+/** A plugin's own secrets, in its free-form settings: client secret, access, refresh, and a nested auth token. */
+const PLUGIN_SECRETS = Array.from({ length: 4 }, () => crypto.randomBytes(16).toString('hex'))
+const PLUGIN_WINDOWS = windowsOf(PLUGIN_SECRETS)
 
 /** What a body leaks, if anything: a token or a claim, whole or a 10-character window. */
 function leakIn(text: string): string | null {
@@ -100,7 +105,9 @@ function leakIn(text: string): string | null {
   const w = WINDOWS.find((x) => lower.includes(x))
   if (w) return w
   const c = CLAIM_WINDOWS.find((x) => lower.includes(x))
-  return c ? `claim window ${c}` : null
+  if (c) return `claim window ${c}`
+  const p = PLUGIN_WINDOWS.find((x) => lower.includes(x))
+  return p ? `plugin secret window ${p}` : null
 }
 
 function joinPath(a: string, b: string): string {
@@ -216,6 +223,12 @@ beforeAll(async () => {
       { token: RELAYED, platform: 'ios', kind: 'apns', environment: 'production', key_name: TABLET, registered_at: now, mode: 'always', origin: 'relay', claims: CLAIMS },
     ],
     hosts: { [HOST]: { hostname: 'acme-box.invalid', label: 'Acme box', enabled: false } },
+    plugins: {
+      'acme-sync': {
+        client_id: 'acme-client-id', client_secret: PLUGIN_SECRETS[0], access_token: PLUGIN_SECRETS[1],
+        refresh_token: PLUGIN_SECRETS[2], auth: { type: 'api-token', token: PLUGIN_SECRETS[3] },
+      },
+    },
   }))
   // What a build without token tags left on disk before this fix: raw slices under its `m_` keys.
   const day = now.slice(0, 10)
@@ -352,9 +365,12 @@ describe('the routes that carry a row, by shape', () => {
     } finally {
       bus.unsubscribe('sweep-config-probe')
     }
-    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { push_tokens: Array<{ token: string; claims?: string[] }> }
+    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { push_tokens: Array<{ token: string; claims?: string[] }>; plugins: Record<string, any> }
     expect(onDisk.push_tokens.map((r) => r.token)).toEqual([APNS, EXPO, RELAYED])
     expect(onDisk.push_tokens[2]?.claims).toEqual(CLAIMS)
+    // The plugin's secrets were read masked and saved back as masks: each kept its stored value.
+    const plugin = onDisk.plugins['acme-sync']
+    expect([plugin.client_secret, plugin.access_token, plugin.refresh_token, plugin.auth.token]).toEqual(PLUGIN_SECRETS)
     const broadcast = changed.find((c) => c.includes('push_tokens'))
     expect(broadcast).toBeDefined()
     expect(broadcast).toContain('\u2022')

@@ -82,6 +82,8 @@ curl -s -X PUT "$base/api/config" \
   -d "{\"plugins\":$merged}"
 ```
 
+A secret already stored comes back from `GET /api/config` masked (bullets, then its last 4 characters). Send it back as it is: the server keeps the stored value for every mask it receives.
+
 Never place a secret in a command line if a safer interactive or Settings path is available. Verify that status changes to `loaded`.
 
 ## Check, update, and remove

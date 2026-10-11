@@ -16,6 +16,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig, updateHostServerConfig } from '../../core/config-manager.js'
+import { maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom } from '../../core/host-server/index.js'
@@ -39,7 +40,13 @@ async function hostEntry(hostKey: string) {
   return {
     hostKey,
     label: host.label?.trim() || hostKey,
-    settings: { enabled: settings.enabled, expose: settings.expose, ...(settings.node ? { node: settings.node } : {}) },
+    // The tunnel provider's options are a free-form map: secret-shaped values masked,
+    // as in GET /api/config. PUT puts a mask back.
+    settings: {
+      enabled: settings.enabled,
+      expose: { ...settings.expose, options: maskSecretShapes(settings.expose.options) },
+      ...(settings.node ? { node: settings.node } : {}),
+    },
     view: getHostServerManager()?.view(hostKey) ?? null,
   }
 }
@@ -94,7 +101,8 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
       patch.expose = {
         enabled: e.enabled !== undefined ? e.enabled : before.enabled,
         ...((e.provider !== undefined ? e.provider : before.provider) ? { provider: e.provider !== undefined ? e.provider : before.provider } : {}),
-        options: e.options !== undefined ? options : before.options,
+        // The form saves every option back, a masked one too: that one keeps its stored value.
+        options: e.options !== undefined ? restoreMaskedSecrets(options, before.options) : before.options,
       }
     }
     await updateHostServerConfig(hostKey, patch)

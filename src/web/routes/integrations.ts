@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { registry } from '../../core/integration-registry.js';
 import { getUnconfiguredPlugins } from '../../core/integration-loader.js';
 import { getConfig } from '../../core/config-manager.js';
+import { maskPluginFormValues } from '../../core/config-secret-shape.js';
 import { getSyncHealth } from '../../core/plugin-sync-health.js';
 import type { RegisteredPlugin } from '../../core/integration-types.js';
 import { log } from '../../logging/index.js';
@@ -48,16 +49,14 @@ integrationsRouter.get('/task-fields', (_req, res) => {
   res.json({ fields });
 });
 
-// Secret-ish config keys are masked in the response (values still editable via config API).
-const SENSITIVE_KEY = /token|secret|password|api_key|apikey/i;
+// Secret-shaped config values are masked in the response, at any depth (core/config-secret-shape.ts);
+// a save that carries the mask back keeps the stored value (PUT /api/config).
 
 integrationsRouter.get('/settings', async (_req, res) => {
   const config = await getConfig();
   const pluginConfigs = (config.plugins ?? {}) as Record<string, Record<string, unknown>>;
 
-  const maskValues = (values: Record<string, unknown>): Record<string, unknown> =>
-    Object.fromEntries(Object.entries(values).map(([k, v]) =>
-      [k, SENSITIVE_KEY.test(k) && typeof v === 'string' && v ? '••••••' : v]));
+  const maskValues = maskPluginFormValues;
 
   const loaded = registry.getAll()
     .filter(p => p.id !== 'local')

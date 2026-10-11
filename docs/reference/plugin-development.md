@@ -644,6 +644,8 @@ Plugin files live under `~/.open-walnut/plugin-data/<id>/`. That directory is ma
 
 Credentials belong in `walnut.secrets`, never in `walnut.storage`, `manifest.json`, source code, synced config, logs, notifications, or task fields. Report key names when you need to show state, never values.
 
+A plugin that still keeps one in `plugins.<id>` is masked by the shape of its key wherever a client reads the config: a key whose words name a secret (`client_secret`, `access_token`, `refreshToken`, `api_key`, `password`, `private_key`, and their kin, at any depth) reaches `GET /api/config`, every `config:changed`, and the generated settings form as bullets and, outside the form, its last 4 characters (src/core/config-secret-shape.ts). A save that carries the mask back keeps the stored value, so a settings round trip never loses it. Your server code reads `walnut.config` unmasked. Name a setting that is not a secret so it does not read as one: `token_url` and `token_type` are known, but a text setting called `token_label` would be shown masked (numbers and booleans never are).
+
 ## Native web entry: the App
 
 A native web entry runs inside Walnut's React tree and shares the host's React, ReactDOM, JSX runtime, and theme. Import React normally: `walnut-plugin build` rewrites React, ReactDOM, and JSX runtime imports to host shims, so the built module uses Walnut's exact runtime instead of bundling a second React (two Reacts break hooks and context).

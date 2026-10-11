@@ -2802,7 +2802,8 @@ usual (absent → `general`).
   canonical route is `/api/search-index/status`.
 - `GET /api/v1/integrations` → `[{ id, name, description, badge, … }]`;
   `GET /api/v1/integrations/settings` → per-plugin configSchema + uiHints +
-  current values with secret-ish keys masked (`••••••`). Class A.
+  current values with secret-shaped keys masked (`••••••`) at any depth, by
+  the rule GET /api/config uses (src/core/config-secret-shape.ts). Class A.
 - Life Tracker timeline (**REPLICA: 501** — the capture dir holds screenshots
   of the primary Mac and is deliberately excluded from git-sync):
   - `GET /api/v1/timeline?date=YYYY-MM-DD` → `{ date, entries, summary,

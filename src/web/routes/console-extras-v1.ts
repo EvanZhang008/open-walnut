@@ -191,8 +191,8 @@ consoleExtrasV1Router.get('/integrations', async (_req: Request, res: Response, 
   }
 })
 
-// Secret-ish config keys are masked in the response (same rule as the web route).
-const SENSITIVE_KEY = /token|secret|password|api_key|apikey/i
+// Secret-shaped config values are masked in the response, at any depth (same rule as the web
+// route, core/config-secret-shape.ts).
 
 // GET /api/v1/integrations/settings — full plugin settings metadata (schema +
 // uiHints + masked current values) for a data-driven settings form.
@@ -204,9 +204,7 @@ consoleExtrasV1Router.get('/integrations/settings', async (_req: Request, res: R
     const config = await getConfig()
     const pluginConfigs = (config.plugins ?? {}) as Record<string, Record<string, unknown>>
 
-    const maskValues = (values: Record<string, unknown>): Record<string, unknown> =>
-      Object.fromEntries(Object.entries(values).map(([k, v]) =>
-        [k, SENSITIVE_KEY.test(k) && typeof v === 'string' && v ? '••••••' : v]))
+    const { maskPluginFormValues: maskValues } = await import('../../core/config-secret-shape.js')
 
     const loaded = registry.getAll()
       .filter((p) => p.id !== 'local')
