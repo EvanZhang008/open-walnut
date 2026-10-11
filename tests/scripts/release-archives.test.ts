@@ -22,7 +22,7 @@ import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, prun
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
 import { BUNDLE_ID, DMG_ARCHES, cask, dmgName } from '../../scripts/homebrew/cask.mjs'
 import { carriedFor, readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
-import { archiveTarget, carryRelease } from '../../scripts/desktop-carry-release.mjs'
+import { archiveTarget, carryRelease, isMachOHeader } from '../../scripts/desktop-carry-release.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 
@@ -438,8 +438,15 @@ describe('the Mac app', () => {
     const build = read('desktop/build-release.sh')
     expect(build).toContain('node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE"')
     expect(build).toContain('DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"')
-    // Carried before the app is signed: the archive is part of what is sealed and notarized.
-    expect(build.indexOf('desktop-carry-release.mjs')).toBeLessThan(build.indexOf('codesign --force --options runtime'))
+    // Carried once the identity is chosen, with its binaries signed by it, and the
+    // app signed again over it before it is notarized: the archive is part of what
+    // is sealed, and notarization looks inside it (2026-10-11: refused for 27
+    // unsigned add-ons in it).
+    const carry = build.indexOf('desktop-carry-release.mjs" --app')
+    expect(carry).toBeGreaterThan(build.indexOf('done <<< "$CANDIDATES"'))
+    expect(build).toContain('CARRY_SIGN=(--sign "$SIGNED_WITH"')
+    expect(build.indexOf('sign_app "$SIGNED_WITH"', carry)).toBeGreaterThan(carry)
+    expect(build.indexOf('sign_app "$SIGNED_WITH"', carry)).toBeLessThan(build.indexOf('notarize "$APP_ZIP"'))
     // Where the app looks for it is where the carrier puts it.
     expect(swift).toContain('resources + "/release"')
     expect(swift).toContain('"open-walnut-\\(version)-darwin-\\(arch).tar.gz"')
@@ -472,6 +479,72 @@ describe('the Mac app', () => {
       fs.writeFileSync(other, 'x')
       expect(() => carryRelease({ app, archive: other, sums })).toThrow('names no open-walnut-0.9.2-darwin-x64.tar.gz')
       expect(archiveTarget('open-walnut-0.9.1-darwin-x64.tar.gz')).toEqual({ version: '0.9.1', arch: 'x64' })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a Developer ID app carries the archive with every binary in it signed, and checksums of its own', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-sign-'))
+    try {
+      const top = 'open-walnut-0.9.1-darwin-arm64'
+      const tree = path.join(dir, 'src', top)
+      const put = (rel: string, bytes: Buffer | string) => {
+        fs.mkdirSync(path.dirname(path.join(tree, rel)), { recursive: true })
+        fs.writeFileSync(path.join(tree, rel), bytes)
+      }
+      const macho = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01, 0, 0, 0, 0])
+      const fat = Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2, 0, 0, 0, 0])
+      const javaClass = Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 0, 0, 0])
+      put('runtime/bin/node', macho)
+      put('runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/better_sqlite3.node', macho)
+      put('runtime/lib/node_modules/open-walnut/node_modules/@esbuild/darwin-arm64/bin/esbuild', fat)
+      put('runtime/lib/node_modules/open-walnut/node_modules/x/Thing.class', javaClass)
+      put('runtime/lib/node_modules/open-walnut/package.json', '{}')
+      fs.symlinkSync('better_sqlite3.node', path.join(tree, 'runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/link.node'))
+      const archive = path.join(dir, `${top}.tar.gz`)
+      execFileSync('tar', ['-czf', archive, '-C', path.join(dir, 'src'), top])
+      const sums = path.join(dir, 'SHA256SUMS')
+      fs.writeFileSync(sums, `${createHash('sha256').update(fs.readFileSync(archive)).digest('hex')}  ${top}.tar.gz\n`)
+      const app = path.join(dir, 'Walnut.app')
+      fs.mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
+
+      // Node comes signed for notarization by its project; the rest is unsigned.
+      const calls: string[][] = []
+      const codesign = (args: string[], opts?: { probe?: boolean }) => {
+        calls.push(args)
+        if (!opts?.probe) { fs.appendFileSync(args.at(-1)!, 'SIGNED'); return '' }
+        return args.at(-1)!.endsWith('/bin/node')
+          ? 'CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+7 location=embedded\nAuthority=Developer ID Application: Node.js Foundation (TEAMID)\nTimestamp=Sep 23, 2026\n'
+          : `${args.at(-1)}: code object is not signed at all\n`
+      }
+      const out = carryRelease({ app, archive, sums, identity: 'Developer ID Application: Example (TEAMID)', keychain: '/k.keychain-db', codesign })
+      expect(out.signed.sort()).toEqual([
+        `${top}/runtime/lib/node_modules/open-walnut/node_modules/@esbuild/darwin-arm64/bin/esbuild`,
+        `${top}/runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/better_sqlite3.node`,
+      ])
+      const signs = calls.filter((a) => a[0] === '--force')
+      expect(signs).toHaveLength(2)
+      expect(signs[0].slice(0, 6)).toEqual(['--force', '--options', 'runtime', '--timestamp', '--keychain', '/k.keychain-db'])
+      expect(signs[0].slice(6, 8)).toEqual(['--sign', 'Developer ID Application: Example (TEAMID)'])
+
+      // The carried archive holds the signed binaries; its checksums are its own.
+      const carried = path.join(app, 'Contents', 'Resources', 'release', 'v0.9.1')
+      const name = `${top}.tar.gz`
+      const sumsLine = fs.readFileSync(path.join(carried, 'SHA256SUMS'), 'utf8')
+      expect(sumsLine).toBe(`${createHash('sha256').update(fs.readFileSync(path.join(carried, name))).digest('hex')}  ${name}\n`)
+      const back = path.join(dir, 'back')
+      fs.mkdirSync(back)
+      execFileSync('tar', ['-xzf', path.join(carried, name), '-C', back])
+      const rel = (p: string) => fs.readFileSync(path.join(back, top, p))
+      expect(rel('runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/better_sqlite3.node').toString('latin1')).toMatch(/SIGNED$/)
+      expect(rel('runtime/bin/node').equals(macho)).toBe(true)
+      expect(rel('runtime/lib/node_modules/open-walnut/node_modules/x/Thing.class').equals(javaClass)).toBe(true)
+      expect(fs.lstatSync(path.join(back, top, 'runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/link.node')).isSymbolicLink()).toBe(true)
+      // The release's own archive is untouched.
+      expect(createHash('sha256').update(fs.readFileSync(archive)).digest('hex')).toBe(fs.readFileSync(sums, 'utf8').split(' ')[0])
+      expect(isMachOHeader(javaClass)).toBe(false)
+      expect(isMachOHeader(fat)).toBe(true)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

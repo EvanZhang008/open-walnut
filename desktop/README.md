@@ -11,8 +11,10 @@ codebase. This wrapper only:
   Node inside) with the `install.sh` it carries in `Contents/Resources`, the same
   script `curl … | sh` runs, into `~/.local/share/open-walnut` (also linking
   `walnut` into `~/.local/bin`). A release's app carries that Walnut too
-  (`Contents/Resources/release/`, one DMG per Mac architecture), so this takes a
-  few seconds and no network; one without it for this Mac downloads it (about
+  (`Contents/Resources/release/`, one DMG per Mac architecture; a signed build
+  signs every binary inside that archive too, since notarization looks inside
+  it), so this takes a few seconds and no network; one without it for this Mac
+  downloads it (about
   300 MB, with a progress bar). Nothing else needs to be installed. That copy
   updates itself; the app is never modified.
   Or point it at an existing `~/.open-walnut` install or a source checkout.

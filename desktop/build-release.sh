@@ -77,21 +77,6 @@ lipo -archs "$MACOS/$APP_NAME"
 cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
 chmod 755 "$RESOURCES/install.sh"
 
-# The release it installs, inside it: one app, and one DMG, per Mac architecture.
-if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
-    CARRIED=$(node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE" \
-        --archive "$WALNUT_APP_RUNTIME" --sums "${WALNUT_APP_RUNTIME_SUMS:?WALNUT_APP_RUNTIME_SUMS must name the SHA256SUMS of that release}")
-    CARRIED_ARCH="${CARRIED%% *}"
-    CARRIED_VERSION="${CARRIED#* }"
-    if [ "$CARRIED_VERSION" != "$APP_VERSION" ]; then
-        echo "Walnut.app $APP_VERSION would carry Walnut $CARRIED_VERSION" >&2
-        exit 1
-    fi
-    DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"
-    rm -f "$DMG_OUT"
-    echo "Carries: $(basename "$WALNUT_APP_RUNTIME") ($(du -h "$WALNUT_APP_RUNTIME" | cut -f1))"
-fi
-
 # Create Info.plist
 cat > "$CONTENTS/Info.plist" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -191,12 +176,16 @@ else
         | { grep -o '"Developer ID Application[^"]*"' || true; } | tr -d '"')
 fi
 
+# The hardened runtime and a secure timestamp: notarization takes nothing less.
+sign_app() {
+    codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
+        "${KEYCHAIN_ARGS[@]+"${KEYCHAIN_ARGS[@]}"}" --sign "$1" "$APP_BUNDLE"
+}
+
 SIGNED_WITH=""
 while IFS= read -r ID; do
     [ -n "$ID" ] || continue
-    # The hardened runtime and a secure timestamp: notarization takes nothing less.
-    if ! codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
-            "${KEYCHAIN_ARGS[@]+"${KEYCHAIN_ARGS[@]}"}" --sign "$ID" "$APP_BUNDLE"; then
+    if ! sign_app "$ID"; then
         echo "  Skipping identity (codesign failed): $ID"
         continue
     fi
@@ -224,6 +213,28 @@ if [ -z "$SIGNED_WITH" ]; then
     echo "  xattr -dr com.apple.quarantine Walnut.app). This is expected and safe;"
     echo "  an Apple Development cert is deliberately NOT used here (see above)."
     codesign --force --sign - "$APP_BUNDLE"
+fi
+
+# The release it installs, inside it: one app, and one DMG, per Mac architecture.
+# Carried once the identity is known: a Developer ID build signs the binaries
+# inside the archive with it (notarization looks inside), and the app is then
+# signed again over what it now carries.
+if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
+    CARRY_SIGN=()
+    [ -n "$SIGNED_WITH" ] && CARRY_SIGN=(--sign "$SIGNED_WITH" ${WALNUT_SIGN_KEYCHAIN:+--keychain "$WALNUT_SIGN_KEYCHAIN"})
+    CARRIED=$(node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE" \
+        --archive "$WALNUT_APP_RUNTIME" --sums "${WALNUT_APP_RUNTIME_SUMS:?WALNUT_APP_RUNTIME_SUMS must name the SHA256SUMS of that release}" \
+        "${CARRY_SIGN[@]+"${CARRY_SIGN[@]}"}")
+    CARRIED_ARCH="${CARRIED%% *}"
+    CARRIED_VERSION="${CARRIED#* }"
+    if [ "$CARRIED_VERSION" != "$APP_VERSION" ]; then
+        echo "Walnut.app $APP_VERSION would carry Walnut $CARRIED_VERSION" >&2
+        exit 1
+    fi
+    DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"
+    rm -f "$DMG_OUT"
+    echo "Carries: $(basename "$WALNUT_APP_RUNTIME") ($(du -h "$WALNUT_APP_RUNTIME" | cut -f1))"
+    if [ -n "$SIGNED_WITH" ]; then sign_app "$SIGNED_WITH"; else codesign --force --sign - "$APP_BUNDLE"; fi
 fi
 codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 

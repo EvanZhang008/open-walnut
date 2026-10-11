@@ -192,8 +192,12 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   builds, and one prebuilt native module has no header room for that, so `brew install` failed.
 - **The Mac app**: job `mac-app` (`.github/workflows/mac-app.yml`) builds one `Walnut.app` per
   Mac architecture from the release's tag, each carrying that release's archive for it
-  (`Contents/Resources/release/v<version>/`, beside the release's `SHA256SUMS`;
-  `scripts/desktop-carry-release.mjs`), signs it with the Developer ID Application identity
+  (`Contents/Resources/release/v<version>/`; `scripts/desktop-carry-release.mjs`). Apple's notary
+  service opens archives inside an app and refuses one with any unsigned binary in them, so the
+  signed build first signs every Mach-O in the archive (the native add-ons and tools in
+  `node_modules`; Node's own binary comes signed by its project and keeps that signature) and
+  carries checksums of its own for the repacked archive, both sealed by the app's signature. It
+  then signs the app with the Developer ID Application identity
   (hardened runtime, `desktop/Walnut.entitlements`), notarizes and staples the app and then its
   DMG, has Gatekeeper assess the DMG with a browser's quarantine mark on it, launches the mounted
   app on a fresh `HOME`, and only then attaches `Walnut-arm64.dmg` and `Walnut-x64.dmg`. On the
