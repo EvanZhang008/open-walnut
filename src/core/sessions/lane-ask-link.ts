@@ -41,6 +41,7 @@
 
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
+import { answeredSegments, deleteAskTask, releaseIdleSegments } from './lane-ask-repair.js';
 import { log } from '../../logging/index.js';
 import type { ConversationMeta, SessionRecord, Task, TaskPhase } from '../types.js';
 import { askProjectFor, resolveAskAgent, type AskAgentRef } from './ask-agent.js';
@@ -286,6 +287,12 @@ export interface LaneAskReport {
   noSession: number;
   /** The agent's main conversation, which is never an ask. */
   main: number;
+  /** Chats that never recorded a message: their lane session is a warm mint, no ask. */
+  unanswered: number;
+  /** Asks that gave back an empty warm session that had taken over (lane-ask-repair.ts). */
+  released: number;
+  /** Asks removed because their chat never recorded a message. */
+  removed: number;
 }
 
 /** The phase an old chat is filed in: running if it is, needing the user when
@@ -304,7 +311,10 @@ function backfillPhase(meta: ConversationMeta, current: SessionRecord | undefine
  * loop's critical path.
  */
 export async function linkLaneAsks(opts: { now?: number } = {}): Promise<LaneAskReport> {
-  const report: LaneAskReport = { chats: 0, created: 0, adopted: 0, linkedSessions: 0, dismissed: 0, noSession: 0, main: 0 };
+  const report: LaneAskReport = {
+    chats: 0, created: 0, adopted: 0, linkedSessions: 0, dismissed: 0, noSession: 0, main: 0,
+    unanswered: 0, released: 0, removed: 0,
+  };
   if (CLOUD_MODE) return report;
   const now = opts.now ?? Date.now();
   const { listChatLaneSessions } = await import('../session-tracker.js');
@@ -332,8 +342,38 @@ export async function linkLaneAsks(opts: { now?: number } = {}): Promise<LaneAsk
 
     for (const meta of metas) {
       if (meta.isMain) { report.main++; continue; }
-      const segments = byLane.get(personalAiLaneKey(agentId, meta.id));
-      if (!segments?.length) { report.noSession++; continue; }
+      const all = byLane.get(personalAiLaneKey(agentId, meta.id));
+      if (!all?.length) { report.noSession++; continue; }
+      // A chat is filed by the sessions that answered it. An older chat whose
+      // history predates its lane has only the lane's own session, where its
+      // next turn goes; a chat that never recorded a message is no ask. An empty
+      // warm session is taken back from an ask it joined (lane-ask-repair.ts).
+      const toFile = (m: ConversationMeta) => {
+        const answered = answeredSegments(m, all);
+        return answered.length ? answered : m.messageCount ? [...all] : [];
+      };
+      let segments = toFile(meta);
+      if (meta.askTaskId && answeredSegments(meta, all).length < all.length) {
+        const laneKey = personalAiLaneKey(agentId, meta.id);
+        await serialized(laneKey, async () => {
+          const fresh = (await conversationMeta(agentId, meta.id)) ?? meta;
+          const answered = answeredSegments(fresh, all);
+          segments = toFile(fresh);
+          const idle = all.filter((s) => !answered.includes(s));
+          const outcome = await releaseIdleSegments(agentId, fresh, idle).catch((err) => {
+            log.session.warn('chat: taking empty warm sessions back from its ask failed', {
+              agentId, conversationId: meta.id, error: err instanceof Error ? err.message : String(err),
+            });
+            return 'none' as const;
+          });
+          // Given back: never linked again by this pass (the chat's next real
+          // message adopts it).
+          if (outcome === 'released') { report.released++; segments = answered; }
+          if (outcome === 'removed') { report.removed++; meta.askTaskId = undefined; }
+          return '';
+        });
+      }
+      if (!segments.length) { report.unanswered++; continue; }
       report.chats++;
       await serialized(personalAiLaneKey(agentId, meta.id), async () => {
         const found = await existingAsk(meta, segments);
@@ -408,29 +448,10 @@ export async function linkLaneAsks(opts: { now?: number } = {}): Promise<LaneAsk
     if (bindings.size) await setConversationAskTasks(agentId, bindings);
   }
 
-  if (report.created || report.adopted || report.linkedSessions) {
+  if (report.created || report.adopted || report.linkedSessions || report.released || report.removed) {
     log.session.info('chats linked to their asks', { ...report });
   }
   return report;
-}
-
-/** Delete an ask task, stopping its sessions first (the force path of DELETE /tasks). */
-async function deleteAskTask(taskId: string): Promise<void> {
-  const tm = await import('../task-manager.js');
-  let result: { task: Task };
-  try {
-    result = await tm.deleteTask(taskId);
-  } catch (err) {
-    if (!(err instanceof tm.ActiveSessionError)) throw err;
-    const { completeTaskSessions } = await import('../session-tracker.js');
-    await completeTaskSessions(err.activeSessionIds);
-    for (const sid of err.activeSessionIds) {
-      await tm.clearSessionSlot(taskId, sid).catch(() => {});
-      await tm.clearSession(taskId, sid).catch(() => {});
-    }
-    result = await tm.deleteTask(taskId);
-  }
-  bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui'], { source: SOURCE });
 }
 
 /** The phone deleted a chat: its ask goes too. */

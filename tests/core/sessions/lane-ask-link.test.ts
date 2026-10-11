@@ -91,32 +91,40 @@ afterEach(async () => {
   await resetAll();
 });
 
-/** A chat as the phone leaves it: an index row with its own dates. */
-async function makeChat(agentId: string, title: string, dates?: { createdAt: string; lastMessageAt: string }) {
+/** A chat as the phone leaves it: an index row with its own dates, and the
+ *  messages it recorded (two by default; 0 is a chat opened and never used). */
+async function makeChat(
+  agentId: string, title: string, dates?: { createdAt: string; lastMessageAt: string }, messages = 2,
+) {
   const meta = await createConversation(agentId, title);
+  const file = conversationIndexFile(agentId);
+  const index = JSON.parse(await fsp.readFile(file, 'utf-8')) as ConversationIndex;
+  const row = index.conversations.find((c) => c.id === meta.id)!;
   if (dates) {
-    const file = conversationIndexFile(agentId);
-    const index = JSON.parse(await fsp.readFile(file, 'utf-8')) as ConversationIndex;
-    const row = index.conversations.find((c) => c.id === meta.id)!;
     row.createdAt = dates.createdAt;
     row.lastMessageAt = dates.lastMessageAt;
-    await fsp.writeFile(file, JSON.stringify(index));
   }
-  return meta;
+  row.messageCount = messages;
+  await fsp.writeFile(file, JSON.stringify(index));
+  return { ...meta, ...(dates ?? {}), messageCount: messages };
 }
 
 /** A lane session the chat already had (minted before asks existed). */
-async function makeLaneSession(agentId: string, conversationId: string, opts: { taskId?: string; archived?: boolean } = {}) {
+async function makeLaneSession(
+  agentId: string,
+  conversationId: string,
+  opts: { taskId?: string; archived?: boolean; startedAt?: string; forkedFrom?: string } = {},
+) {
   const sid = randomUUID();
   await createSessionRecord(sid, opts.taskId ?? '', '', WALNUT_HOME, {
     title: 'Main AI chat',
     lane: personalAiLaneKey(agentId, conversationId),
     initialProcessStatus: 'idle',
   });
-  if (opts.archived) {
-    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
-    await updateSessionRecord(sid, { archived: true, archive_reason: 'test' });
-  }
+  const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
+  if (opts.archived) await updateSessionRecord(sid, { archived: true, archive_reason: 'test' });
+  if (opts.startedAt) await updateSessionRecord(sid, { startedAt: opts.startedAt });
+  if (opts.forkedFrom) await updateSessionRecord(sid, { forkedFromSessionId: opts.forkedFrom });
   return sid;
 }
 
@@ -256,9 +264,9 @@ describe('the pass over chats that already had sessions', () => {
     const recent = await makeChat('general', 'Dishwasher drain fault', {
       createdAt: '2026-10-10T02:50:00.000Z', lastMessageAt: '2026-10-10T17:30:00.000Z',
     });
-    const archivedSid = await makeLaneSession('general', old.id, { archived: true });
-    const oldSid = await makeLaneSession('general', old.id);
-    const recentSid = await makeLaneSession('general', recent.id);
+    const archivedSid = await makeLaneSession('general', old.id, { archived: true, startedAt: '2026-10-01T10:00:05.000Z' });
+    const oldSid = await makeLaneSession('general', old.id, { startedAt: '2026-10-02T10:00:00.000Z' });
+    const recentSid = await makeLaneSession('general', recent.id, { startedAt: '2026-10-10T03:00:00.000Z' });
     // A chat with no session at all has no transcript an ask could open.
     const bare = await makeChat('general', 'Cloud only');
 
@@ -308,7 +316,7 @@ describe('the pass over chats that already had sessions', () => {
     const chat = await makeChat('general', 'Aespa tickets', {
       createdAt: '2026-10-01T10:00:00.000Z', lastMessageAt: '2026-10-01T11:00:00.000Z',
     });
-    const sid = await makeLaneSession('general', chat.id);
+    const sid = await makeLaneSession('general', chat.id, { startedAt: '2026-10-01T10:30:00.000Z' });
     await linkLaneAsks({ now: NOW });
     const taskId = (await chatMeta('general', chat.id))!.askTaskId!;
     // The delete guard refuses a task whose session may be alive; the user's
@@ -333,6 +341,113 @@ describe('the pass over chats that already had sessions', () => {
     const meta = await chatMeta('general', chat.id);
     expect(meta?.askTaskId).toBe(minted);
     expect((await queryTasks({})).filter((t) => t.walnut_agent).map((t) => t.id)).toEqual([minted]);
+  });
+
+  // The phone persists the user's message (touching the chat) just before the
+  // lane mints its session, so the session that answered a one-exchange chat
+  // starts a second after the chat's last message (seen on real data).
+  it('files a chat whose session started just after its last message', async () => {
+    const chat = await makeChat('general', 'Frozen dumplings', {
+      createdAt: '2026-10-09T10:00:00.000Z', lastMessageAt: '2026-10-09T10:00:00.000Z',
+    });
+    const sid = await makeLaneSession('general', chat.id, { startedAt: '2026-10-09T10:00:01.000Z' });
+    const report = await linkLaneAsks({ now: NOW });
+    expect(report).toMatchObject({ created: 1 });
+    expect((await getTask((await chatMeta('general', chat.id))!.askTaskId!)).session_id).toBe(sid);
+  });
+
+  // A chat opened on the phone and never written in has a lane session (the
+  // model pill warmed it) and nothing else. As an ask it was an empty row
+  // ("Ask Walnut", the Mac opened an empty page); a dozen of them came from the
+  // first pass. A fork is the exception: its session carries the copied chat.
+  it('files no ask for a chat that never recorded a message, and removes one an older pass filed', async () => {
+    const empty = await makeChat('general', 'New Conversation', undefined, 0);
+    const warm = await makeLaneSession('general', empty.id);
+    const fork = await makeChat('general', 'Fork of Glycine', undefined, 0);
+    await makeLaneSession('general', fork.id, { forkedFrom: randomUUID() });
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ created: 1, unanswered: 1 });
+    expect((await chatMeta('general', empty.id))?.askTaskId).toBeUndefined();
+    expect((await chatMeta('general', fork.id))?.askTaskId).toBeTruthy();
+
+    // What the first pass did: the empty chat filed with its warm session.
+    const { task: junk } = await addTask({ title: 'Ask Walnut', project: 'Ask Walnut', source: 'local' });
+    const { linkSession, updateTaskRaw } = await import('../../../src/core/task-manager.js');
+    await updateTaskRaw(junk.id, { walnut_agent: true });
+    await linkSession(junk.id, warm);
+    const { linkSessionToTask, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
+    await linkSessionToTask(warm, junk.id);
+    await updateSessionRecord(warm, { process_status: 'stopped' });
+    const { setConversationAskTask } = await import('../../../src/core/conversations.js');
+    await setConversationAskTask('general', empty.id, junk.id);
+
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ removed: 1, created: 0 });
+    await expect(getTask(junk.id)).rejects.toThrow();
+    const after = await chatMeta('general', empty.id);
+    expect(after).toBeTruthy();
+    expect(after?.askTaskId).toBeUndefined();
+    expect((await getSessionByClaudeId(warm))?.taskId).toBeFalsy();
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ removed: 0, created: 0 });
+
+    // Unbound, not a tombstone: its first real message makes a fresh ask.
+    await getOrCreateLaneSession('general', empty.id, { firstMessage: 'hello' });
+    const fresh = (await chatMeta('general', empty.id))?.askTaskId;
+    expect(fresh).toBeTruthy();
+    expect(fresh).not.toBe(junk.id);
+    expect((await getTask(fresh!)).session_id).toBe(warm);
+  });
+
+  // Seen live: a chat promoted to a work task long ago was opened on the phone;
+  // its warm session became the task's main session (the Mac opened an empty
+  // page) and moved the task to the top of both lists.
+  it('gives back a warm session that took over an ask with sessions of its own', async () => {
+    const chat = await makeChat('general', 'Burndown progress', {
+      createdAt: '2026-09-20T10:00:00.000Z', lastMessageAt: '2026-09-23T07:50:00.000Z',
+    });
+    const { task } = await addTask({ title: 'Pipeline watch', project: 'Planning', source: 'local' });
+    const { linkSession } = await import('../../../src/core/task-manager.js');
+    const { linkSessionToTask, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
+    const answered = await makeLaneSession('general', chat.id, {
+      taskId: task.id, archived: true, startedAt: '2026-09-20T10:00:05.000Z',
+    });
+    const work = randomUUID();
+    await createSessionRecord(work, task.id, 'Planning', WALNUT_HOME, { title: 'work', initialProcessStatus: 'idle' });
+    await updateSessionRecord(work, { startedAt: '2026-09-23T07:00:00.000Z', process_status: 'stopped' });
+    await linkSession(task.id, answered);
+    await linkSession(task.id, work);
+    const { setConversationAskTask } = await import('../../../src/core/conversations.js');
+    await setConversationAskTask('general', chat.id, task.id);
+    // The warm mint as it was before the fix: the runner linked it as main.
+    const warm = await makeLaneSession('general', chat.id, { startedAt: '2026-10-11T09:39:04.000Z' });
+    await linkSessionToTask(warm, task.id);
+    await updateSessionRecord(warm, { process_status: 'stopped' });
+    await linkSession(task.id, warm);
+
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ released: 1, removed: 0 });
+    const after = await getTask(task.id);
+    expect(after.session_id).toBe(work);
+    expect(after.session_ids).toEqual([answered, work]);
+    expect(after.last_session_update).toBe('2026-09-23T07:50:00.000Z');
+    expect((await getSessionByClaudeId(warm))?.taskId).toBeFalsy();
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ released: 0, removed: 0, linkedSessions: 0 });
+
+    // Talking in the chat again is where it moves on, and the ask with it.
+    await getOrCreateLaneSession('general', chat.id, { firstMessage: 'any update?' });
+    expect((await getTask(task.id)).session_id).toBe(warm);
+  });
+
+  // History older than the chat's lane lives in the chat store, so its only lane
+  // session is one opened later. That session is where its next turn goes: the
+  // ask keeps it (taking it back would take the chat off the Mac's list).
+  it('keeps an older chat whose only lane session came after its history', async () => {
+    const chat = await makeChat('general', 'Eye exam notes', {
+      createdAt: '2026-08-28T00:00:00.000Z', lastMessageAt: '2026-08-28T01:17:00.000Z',
+    }, 12);
+    const sid = await makeLaneSession('general', chat.id, { startedAt: '2026-08-28T03:44:00.000Z' });
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ created: 1 });
+    const askId = (await chatMeta('general', chat.id))!.askTaskId!;
+    expect((await getTask(askId)).session_id).toBe(sid);
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ released: 0, removed: 0, created: 0 });
+    expect((await getTask(askId)).session_id).toBe(sid);
   });
 });
 

@@ -761,6 +761,30 @@ export async function setConversationAskTasks(
 }
 
 /**
+ * Forget a conversation's ask, only while it still names `taskId`. The one
+ * exception to write-once: an ask filed for a chat no session had answered
+ * (only an empty warm session, lane-ask-repair.ts) was never the chat's, so its
+ * next real message must make a fresh ask instead of finding a tombstone. A
+ * person's delete keeps the binding.
+ */
+export async function clearConversationAskTask(
+  agentId: string,
+  conversationId: string,
+  taskId: string,
+): Promise<boolean> {
+  validateConversationId(conversationId);
+  await migrateIfNeeded(agentId);
+  return withIndexLock(agentId, async () => {
+    const index = await readIndex(agentId);
+    const meta = collapseTwinsForWrite(index, conversationId);
+    if (!meta || meta.askTaskId !== taskId) return false;
+    delete meta.askTaskId;
+    await writeIndex(agentId, index);
+    return true;
+  });
+}
+
+/**
  * Rename a conversation.
  *
  * `opts.auto` distinguishes the LLM auto-titler from a user rename — BOTH set
