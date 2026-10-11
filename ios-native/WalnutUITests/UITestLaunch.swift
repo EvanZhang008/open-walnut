@@ -33,6 +33,12 @@ enum UITestLaunch {
     /// The launch-argument name `AppConfig.serverURL` reads through `NSArgumentDomain`.
     static let serverURLArgument = "-walnut.serverUrl"
 
+    /// Every launch keeps its device token apart from the real one
+    /// (`KeychainHelper.Namespace`): "Try the demo" saves a pairing and "Leave demo"
+    /// deletes one, and the Keychain they write is the simulator's, which no stage
+    /// restores (2026-10-11).
+    static let keychainArguments = ["-walnut.uiTestKeychain", "YES"]
+
     /// An app configured to reach nothing, plus whatever this test asked for.
     ///
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
@@ -43,7 +49,7 @@ enum UITestLaunch {
         // for one key in the argument domain and make the winner an ordering detail.
         let pinsItsOwnServer = arguments.contains(serverURLArgument)
         app.launchArguments =
-            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + arguments
+            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + keychainArguments + arguments
         return app
     }
 

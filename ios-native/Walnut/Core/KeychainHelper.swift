@@ -14,10 +14,44 @@ import os
 /// UserDefaults so the app keeps working; a properly signed device build still
 /// uses the Keychain.
 enum KeychainHelper {
+    #if DEBUG
+    /// The names the store lives under. A test process gets a pair of its own, so no
+    /// test can read, write or delete the real device token or its fallback copy. The
+    /// Keychain belongs to the simulator, outside the app container that a test stage
+    /// backs up and restores: every DemoModeUITests run wrote the demo token over the
+    /// shared simulator's real pairing, or deleted it (2026-10-11).
+    struct Namespace: Equatable {
+        let service: String
+        let fallbackPrefix: String
+
+        static let real = Namespace(service: "dev.openwalnut.ios", fallbackPrefix: "walnut.keychainFallback.")
+        static let tests = Namespace(
+            service: "dev.openwalnut.ios.tests", fallbackPrefix: "walnut.tests.keychainFallback.")
+
+        /// The launch argument every UI test passes (`UITestLaunch.app`), read through
+        /// the argument domain.
+        static let uiTestArgument = "walnut.uiTestKeychain"
+
+        /// A hosted unit-test process (xcodebuild puts `XCTestConfigurationFilePath` in
+        /// its environment) or an app launched by a UI test.
+        static func resolve(environment: [String: String], defaults: UserDefaults) -> Namespace {
+            if environment["XCTestConfigurationFilePath"] != nil { return .tests }
+            return defaults.bool(forKey: uiTestArgument) ? .tests : .real
+        }
+    }
+
+    /// Decided once per process, before the first token read.
+    static let namespace = Namespace.resolve(
+        environment: ProcessInfo.processInfo.environment, defaults: .standard)
+    private static var service: String { namespace.service }
+    /// UserDefaults key prefix for the fallback store.
+    static var fallbackPrefix: String { namespace.fallbackPrefix }
+    #else
     private static let service = "dev.openwalnut.ios"
     /// UserDefaults key prefix for the fallback store (namespaced to avoid
     /// colliding with the app's other prefs).
     private static let fallbackPrefix = "walnut.keychainFallback."
+    #endif
 
     static func set(_ value: String, forKey key: String) {
         let data = Data(value.utf8)

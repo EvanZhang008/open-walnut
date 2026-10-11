@@ -610,18 +610,17 @@ final class DemoModeTests: XCTestCase {
         let scratch = try LocalDataResetTests.scratchLocations()
         LocalDataReset.locationsOverrideForTesting = scratch.locations
         let saved = LocalDataReset.registrationForTesting
-        // Connect and disconnect write the container's real pairing; put back
-        // whatever this simulator was paired to.
+        // Connect and disconnect write the container's pairing prefs; put back whatever
+        // this simulator was paired to. The token needs no such care: a test process
+        // keeps it under names of its own (`KeychainHelper.Namespace`).
         let pairedURL = UserDefaults.standard.string(forKey: "walnut.serverUrl")
         let pairedName = UserDefaults.standard.string(forKey: "walnut.deviceName")
-        let pairedToken = KeychainHelper.get("walnut.deviceToken")
         defer {
             LocalDataReset.locationsOverrideForTesting = nil
             LocalDataReset.registrationForTesting = saved
             try? FileManager.default.removeItem(at: scratch.root)
             if let pairedURL { UserDefaults.standard.set(pairedURL, forKey: "walnut.serverUrl") }
             if let pairedName { UserDefaults.standard.set(pairedName, forKey: "walnut.deviceName") }
-            if let pairedToken { KeychainHelper.set(pairedToken, forKey: "walnut.deviceToken") }
             AppConfig.resetTokenCacheForTesting()
         }
         let connection = ConnectionStore()

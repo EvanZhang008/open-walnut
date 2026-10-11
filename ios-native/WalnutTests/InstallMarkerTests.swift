@@ -91,17 +91,18 @@ final class InstallMarkerTests: XCTestCase {
         XCTAssertEqual(InstallMarker.decide(persistent: nil, file: .absent, protectedDataAvailable: true), .freshInstall)
     }
 
-    /// The real token store: removing the left token takes the Keychain item and
-    /// the fallback copy kept in the preferences when the Keychain is unavailable.
+    /// The token store: removing the left token takes the Keychain item and the
+    /// fallback copy kept in the preferences when the Keychain is unavailable. (A test
+    /// process stores under its own names, `KeychainHelper.Namespace`.)
     func testRemovingTheLeftTokenTakesTheKeychainItemAndTheFallback() {
         let account = "walnut.installMarkerTest.\(UUID().uuidString)"
         defer { KeychainHelper.delete(account) }
         KeychainHelper.set("left-by-an-earlier-install", forKey: account)
-        UserDefaults.standard.set("fallback-copy", forKey: "walnut.keychainFallback." + account)
+        UserDefaults.standard.set("fallback-copy", forKey: KeychainHelper.fallbackPrefix + account)
         XCTAssertNotNil(KeychainHelper.get(account))
         KeychainHelper.delete(account)
         XCTAssertNil(KeychainHelper.get(account))
-        XCTAssertNil(UserDefaults.standard.object(forKey: "walnut.keychainFallback." + account))
+        XCTAssertNil(UserDefaults.standard.object(forKey: KeychainHelper.fallbackPrefix + account))
     }
 
     /// The marker is decided where the app object exists, never in `WalnutApp.init`.
