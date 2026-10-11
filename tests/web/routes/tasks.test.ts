@@ -305,6 +305,22 @@ describe('GET /api/tasks — canonical query params', () => {
     await expect400('?completedWithinDays=-1');
   });
 
+  it('completedWithinDays keeps old completed asks: the Ask drawer lists every ask', async () => {
+    const { completeTask, updateTaskRaw } = await import('../../../src/core/task-manager.js');
+    const { task: filed } = await addTask({ title: 'Old chat filed as an ask', project: 'Ask Walnut' });
+    const { task: born } = await addTask({ title: 'Old ask born in the drawer' });
+    const { task: plain } = await addTask({ title: 'Old plain task' });
+    for (const t of [filed, born, plain]) await completeTask(t.id);
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    for (const t of [filed, born, plain]) await updateTaskRaw(t.id, { completed_at: sixtyDaysAgo });
+    await updateTaskRaw(born.id, { walnut_agent: true });
+
+    const res = await request(createApp()).get('/api/tasks?fields=list&completedWithinDays=7');
+    expect(res.status).toBe(200);
+    expect(new Set((res.body.tasks as { id: string }[]).map((t) => t.id))).toEqual(new Set([filed.id, born.id]));
+    expect(res.body.completedHidden).toBe(1);
+  });
+
   it('parent_task_id is an EXACT match on REST', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });

@@ -9,6 +9,19 @@ const NOW = Date.parse('2026-09-29T12:00:00.000Z')
 const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString()
 
 describe('recentCompletedWindow', () => {
+  it('keeps every ask whatever its age: the Ask drawer lists them all, as the phone does', () => {
+    const tasks = [
+      { id: 'born-ask', status: 'done', phase: 'COMPLETE', completed_at: daysAgo(60), walnut_agent: true },
+      { id: 'filed-ask', status: 'done', phase: 'COMPLETE', completed_at: daysAgo(60), project: 'Ask Walnut' },
+      { id: 'mentor-ask', status: 'done', phase: 'COMPLETE', completed_at: daysAgo(60), project: '  ask Mentor ' },
+      { id: 'not-an-ask', status: 'done', phase: 'COMPLETE', completed_at: daysAgo(60), project: 'Asking' },
+      { id: 'plain', status: 'done', phase: 'COMPLETE', completed_at: daysAgo(60), walnut_agent: false, project: 'Walnut' },
+    ]
+    const { tasks: kept, completedHidden } = recentCompletedWindow(tasks, 7, NOW)
+    expect(kept.map((t) => t.id)).toEqual(['born-ask', 'filed-ask', 'mentor-ask'])
+    expect(completedHidden).toBe(2)
+  })
+
   it('keeps open tasks and recent completions, drops old completions and counts them', () => {
     const tasks = [
       { id: 'open', status: 'todo', phase: 'TODO', updated_at: daysAgo(400) },
