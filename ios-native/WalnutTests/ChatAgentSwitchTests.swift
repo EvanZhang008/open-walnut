@@ -74,4 +74,32 @@ final class ChatAgentSwitchTests: XCTestCase {
         XCTAssertEqual(store.activeID, "c-saved")
         XCTAssertEqual(AppPrefs.defaults.string(forKey: "walnut.activeConversation.\(first)"), "c-saved")
     }
+
+    /// Back to an agent the user left on a new chat: still a new chat. Opening its
+    /// newest chat instead put the next message into an old conversation (gate).
+    func testReturningToANewChatStaysANewChat() async {
+        let store = makeStore()
+        store.switchAgent(first)
+        store.conversations = [chat("c-1"), chat("c-2")]
+        store.select(nil)
+
+        store.switchAgent(second)
+        store.switchAgent(first)
+        try? await Task.sleep(for: .milliseconds(600))
+        XCTAssertNil(store.activeID)
+        XCTAssertEqual(store.conversations.map(\.id), ["c-1", "c-2"])
+    }
+
+    /// …and back to an agent left on one of its chats: that chat.
+    func testReturningToAChatReopensIt() async {
+        let store = makeStore()
+        store.switchAgent(first)
+        store.conversations = [chat("c-1"), chat("c-2")]
+        store.select("c-2")
+
+        store.switchAgent(second)
+        store.switchAgent(first)
+        try? await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(store.activeID, "c-2")
+    }
 }

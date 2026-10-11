@@ -145,10 +145,16 @@ final class ChatStore {
     /// must not lower it under the new agent, or a quick second tap showed "No
     /// conversations yet" while that agent's list was still on its way.
     @ObservationIgnored private var listReadGeneration = 0
+    /// Which agent switch is current. A switch's task can outlive two more
+    /// switches that land back on the SAME agent, so the agent id alone cannot
+    /// tell it is stale (it then reopened that agent's newest chat).
+    @ObservationIgnored private var agentSwitchGeneration = 0
     /// The lists each agent showed when the user left it, so switching back
     /// paints them at once: the disk cache read alone left the drawer blank for a
     /// frame or two on every switch (gate, 12 of 12).
-    @ObservationIgnored private var listsByAgent: [String: (chats: [ConversationSummary], asks: [AskSummary]?)] = [:]
+    /// `open` is the chat that agent had open (nil: a new chat), so a return puts
+    /// the user back where they were instead of in its newest old chat.
+    @ObservationIgnored private var listsByAgent: [String: (chats: [ConversationSummary], asks: [AskSummary]?, open: String?)] = [:]
     var loadingMessages = false
     /// True from the instant a conversation is selected until its first page
     /// RESOLVES — landed, empty, or failed.
@@ -405,7 +411,9 @@ final class ChatStore {
     /// Switch console agent: park the current stream, swap conversation scope.
     func switchAgent(_ agentID: String) {
         guard agentID != activeAgentID else { return }
-        listsByAgent[activeAgentID] = (conversations, asksListed ? asks : nil)
+        listsByAgent[activeAgentID] = (conversations, asksListed ? asks : nil, activeID)
+        agentSwitchGeneration &+= 1
+        let thisSwitch = agentSwitchGeneration
         activeAgentID = agentID
         AppPrefs.defaults.set(agentID, forKey: "walnut.activeAgent")
         activeID = nil
@@ -424,16 +432,20 @@ final class ChatStore {
         // every switch). refreshConversations clears this when its read is in.
         listReadGeneration &+= 1
         loadingList = true
-        if let kept = listsByAgent[agentID] {
+        let kept = listsByAgent[agentID]
+        if let kept {
             conversations = kept.chats
             if let keptAsks = kept.asks {
                 asks = keptAsks
                 asksListed = true
             }
-        }
-        if let saved = AppPrefs.defaults.string(forKey: activeConversationKey) {
+            // Back where the user left this agent, a new chat included: picking
+            // its newest chat put the next message into an old conversation.
+            if let open = kept.open { select(open) }
+        } else if let saved = AppPrefs.defaults.string(forKey: activeConversationKey) {
             select(saved)
         }
+        let returning = kept != nil
         trackTask { [weak self] in
             guard let self else { return }
             // Cached lists first (off-main), then the network truth. Both caches
@@ -444,24 +456,24 @@ final class ChatStore {
             let asksKey = self.asksCacheKey
             let cachedChats = await DiskCache.loadAsync([ConversationSummary].self, key: key)
             let cachedAsks = await DiskCache.loadAsync([AskSummary].self, key: asksKey)
-            // Another switch since: this task speaks for an agent no longer shown.
+            // Another switch since: this task speaks for a switch no longer current.
             // Selecting from here wrote over the new agent's saved chat (gate).
-            guard agentID == self.activeAgentID else { return }
+            guard thisSwitch == self.agentSwitchGeneration else { return }
             if let cachedAsks, !self.asksListed {
                 self.asks = cachedAsks
                 self.asksListed = true
             }
             if let cachedChats, self.conversations.isEmpty {
                 self.conversations = cachedChats
-                if self.activeID == nil { self.select(cachedChats.first?.id) }
+                if self.activeID == nil, !returning { self.select(cachedChats.first?.id) }
             }
             await self.refreshConversations()
-            guard agentID == self.activeAgentID else { return }
+            guard thisSwitch == self.agentSwitchGeneration else { return }
             // An empty list here may be a read that failed: keep the saved chat
             // rather than forget it. A saved chat the list no longer holds gives
-            // way to the newest one.
+            // way to the newest one; a return to a new chat stays a new chat.
             if !self.conversations.isEmpty,
-               self.activeID == nil || !self.conversations.contains(where: { $0.id == self.activeID }) {
+               self.activeID.map({ id in !self.conversations.contains(where: { $0.id == id }) }) ?? !returning {
                 self.select(self.conversations.first?.id)
             }
         }
@@ -473,6 +485,7 @@ final class ChatStore {
         let generation = listReadGeneration
         loadingList = true
         defer { if generation == listReadGeneration { loadingList = false } }
+        var asksRead = false
         do {
             let agentID = activeAgentID
             let fetched = try await api.conversations(
@@ -481,13 +494,20 @@ final class ChatStore {
             guard isActive, !Task.isCancelled else { return }
             connection?.reportReachability(true, source: "chat-rest")
             guard agentID == activeAgentID else { return }
+            // An agent's first lists land together: its chats alone would list as
+            // Recents for the frame before its asks (gate, a first visit to Mentor).
+            if !asksListed {
+                await refreshAsks()
+                asksRead = true
+                guard isActive, !Task.isCancelled, agentID == activeAgentID else { return }
+            }
             conversations = fetched
             DiskCache.save(conversations, key: conversationsCacheKey)
             pruneQueue(against: fetched)
         } catch {
             reportIfNetwork(error)
         }
-        await refreshAsks()
+        if !asksRead { await refreshAsks() }
     }
 
     /// Re-read the agent's asks. Kept as they were when the server cannot answer:
