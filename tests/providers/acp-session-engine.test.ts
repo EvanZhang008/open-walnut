@@ -77,6 +77,66 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('AcpSession executable configuration', () => {
+  it('uses the configured executable override on cold establish and restart', async () => {
+    const sid = 'configured-codex';
+    const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex' });
+    const internal = session as unknown as {
+      resolveArtifacts(): Promise<typeof ARTIFACTS>;
+      resolveConfiguredEngineEnv(): Promise<Record<string, string>>;
+    };
+    vi.spyOn(internal, 'resolveArtifacts').mockResolvedValue(ARTIFACTS);
+    const bin = `${WALNUT_HOME}/provider-bin`;
+    await fs.mkdir(bin);
+    const updatedBinary = `${bin}/codex`;
+    await fs.symlink(process.execPath, updatedBinary);
+    const configRead = vi.spyOn(internal, 'resolveConfiguredEngineEnv')
+      .mockResolvedValueOnce({ WALNUT_CODEX_PATH: process.execPath, PATH: '/missing-provider-bin' })
+      .mockResolvedValueOnce({ WALNUT_CODEX_PATH: updatedBinary, PATH: '/missing-provider-bin' });
+    const send = attachFakeDaemon(session, command => command === 'acpStart'
+      ? { ok: true, session: { sessionId: sid }, state: workerState(sid, true) }
+      : { ok: true });
+    expect(await session.establish()).toBe(sid);
+    expect(await session.restart()).toBe(sid);
+    const starts = send.mock.calls.filter(([command]) => command === 'acpStart');
+    expect(starts).toHaveLength(2);
+    expect((starts[0][1]?.env as Record<string, string>).CODEX_PATH).toBe(process.execPath);
+    expect((starts[1][1]?.env as Record<string, string>).CODEX_PATH).toBe(updatedBinary);
+    expect(configRead).toHaveBeenCalledTimes(2);
+    expect(starts[1][1]?.providerSessionId).toBe(sid);
+  });
+
+  it('discovers Codex from the configured PATH on a cold launch', async () => {
+    const bin = `${WALNUT_HOME}/path-bin`;
+    await fs.mkdir(bin);
+    const binary = `${bin}/codex`;
+    await fs.symlink(process.execPath, binary);
+    const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex' });
+    const internal = session as unknown as {
+      resolveArtifacts(): Promise<typeof ARTIFACTS>;
+      resolveConfiguredEngineEnv(): Promise<Record<string, string>>;
+    };
+    vi.spyOn(internal, 'resolveArtifacts').mockResolvedValue(ARTIFACTS);
+    vi.spyOn(internal, 'resolveConfiguredEngineEnv').mockResolvedValue({ PATH: bin, WALNUT_CODEX_PATH: '' });
+    const send = attachFakeDaemon(session, () => ({ ok: true, session: { sessionId: 'path-codex' } }));
+    expect(await session.establish()).toBe('path-codex');
+    expect((send.mock.calls[0][1]?.env as Record<string, string>).CODEX_PATH).toBe(binary);
+  });
+
+  it('rejects a missing configured executable before creating a worker', async () => {
+    const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex' });
+    const internal = session as unknown as {
+      resolveArtifacts(): Promise<typeof ARTIFACTS>;
+      resolveConfiguredEngineEnv(): Promise<Record<string, string>>;
+    };
+    vi.spyOn(internal, 'resolveArtifacts').mockResolvedValue(ARTIFACTS);
+    vi.spyOn(internal, 'resolveConfiguredEngineEnv').mockResolvedValue({ WALNUT_CODEX_PATH: '/missing-provider-bin/codex' });
+    const send = attachFakeDaemon(session, () => ({ ok: true }));
+    await expect(session.establish()).rejects.toThrow(/WALNUT_CODEX_PATH/);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe('AcpSession engine identity', () => {
   it('defaults to codex and never degrades an unknown engine to a native one', () => {
     const base = { taskId: '', project: '', cwd: '/tmp', mode: 'default' as const, artifacts: ARTIFACTS };
@@ -270,6 +330,43 @@ describe('AcpSession advertised model name', () => {
     expect(record?.acpModel).toBe('mock-gpt-best');
     expect(record?.acpModelName).toBe('Mock GPT Best');
   });
+});
+
+it('persists the provider model after replaying the saved selection on restart', async () => {
+  const sid = 'replayed-model';
+  const runtimeId = 'acp-replayed-model';
+  await createSessionRecord(sid, '', '', '/tmp', { engine: 'codex', acpRuntimeId: runtimeId, initialProcessStatus: 'idle' });
+  await updateSessionRecord(sid, { acpConfig: { model: 'selected', reasoning_effort: 'low' } });
+  const options = [
+    { id: 'model', name: 'Model', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'selected', name: 'Selected' }] },
+    { id: 'reasoning_effort', name: 'Reasoning', type: 'select', currentValue: 'high', options: [{ value: 'high', name: 'High' }, { value: 'low', name: 'Low' }] },
+  ];
+  const catalog = { currentModelId: 'default[high]', availableModels: [{ modelId: 'selected[low]', name: 'Selected (low)' }] };
+  const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex', providerSessionId: sid, runtimeId, artifacts: ARTIFACTS });
+  attachFakeDaemon(session, (command, params) => command === 'acpStart'
+    ? { ok: true, state: { ...(workerState(sid, true) as object), configOptions: options, models: catalog } }
+    : { ok: true, result: { models: { ...catalog, currentModelId: params?.configId === 'model' ? 'selected[high]' : 'selected[low]' } } });
+  await session.establish();
+  const record = await getSessionByClaudeId(sid);
+  expect(record?.acpModel).toBe('selected[low]');
+  expect(record?.acpModelName).toBe('Selected (low)');
+});
+
+it('does not persist a guessed model when replay responses omit the catalog', async () => {
+  const sid = 'replay-no-catalog';
+  const runtimeId = 'acp-replay-no-catalog';
+  await createSessionRecord(sid, '', '', '/tmp', { engine: 'codex', acpRuntimeId: runtimeId, initialProcessStatus: 'idle' });
+  await updateSessionRecord(sid, { acpConfig: { model: 'selected', reasoning_effort: 'low' } });
+  const options = [
+    { id: 'model', name: 'Model', type: 'select', currentValue: 'default', options: [{ value: 'selected', name: 'Selected' }] },
+    { id: 'reasoning_effort', name: 'Reasoning', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }] },
+  ];
+  const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex', providerSessionId: sid, runtimeId, artifacts: ARTIFACTS });
+  attachFakeDaemon(session, command => command === 'acpStart'
+    ? { ok: true, state: { ...(workerState(sid, true) as object), configOptions: options, models: { currentModelId: 'default[high]', availableModels: [] } } }
+    : { ok: true, result: {} });
+  await session.establish();
+  expect((await getSessionByClaudeId(sid))?.acpModel).toBe('default[high]');
 });
 
 it('adopts dependent controls from config responses, including an empty default value', async () => {

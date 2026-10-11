@@ -48,6 +48,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { getDirectDaemonConnection } from '../../src/providers/daemon-connection.js'
 import { localDaemon } from '../../src/providers/local-daemon.js'
+import { getConfig, updateConfig } from '../../src/core/config-manager.js'
 import { resetEngineModelCatalogCache } from '../../src/providers/engine-model-probe.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { getSessionsForTask } from '../../src/core/session-tracker.js'
@@ -300,7 +301,7 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-native-model-'))
     const binary = path.join(stubDir, 'codex')
     const callsFile = path.join(stubDir, 'calls.jsonl')
-    const oldBinary = process.env.WALNUT_CODEX_PATH
+    const previousEngines = (await getConfig()).engines
     const oldFixture = process.env.WALNUT_ENGINE_PROBE_ALL
     vi.spyOn(localDaemon, 'wsUrl', 'get').mockReturnValue(daemonWsUrl)
     try {
@@ -316,7 +317,7 @@ rl.on('line', line => {
   else { process.stdout.write(JSON.stringify({id:msg.id,error:{code:-32601,message:'unexpected method'}})+'\\n'); return; }
   process.stdout.write(JSON.stringify({id:msg.id,result})+'\\n');
 });`, { mode: 0o755 })
-      process.env.WALNUT_CODEX_PATH = binary
+      await updateConfig({ engines: { ...previousEngines, codex: { env: { WALNUT_CODEX_PATH: binary } } } })
       delete process.env.WALNUT_ENGINE_PROBE_ALL
       resetEngineModelCatalogCache()
       const response = await fetch(apiUrl(`/api/engines/codex/models?cwd=${encodeURIComponent(stubDir)}&refresh=1`))
@@ -328,8 +329,7 @@ rl.on('line', line => {
       expect(methods).toEqual(['initialize', 'initialized', 'config/read', 'model/list'])
     } finally {
       vi.restoreAllMocks()
-      if (oldBinary === undefined) delete process.env.WALNUT_CODEX_PATH
-      else process.env.WALNUT_CODEX_PATH = oldBinary
+      await updateConfig({ engines: previousEngines ?? {} })
       if (oldFixture === undefined) delete process.env.WALNUT_ENGINE_PROBE_ALL
       else process.env.WALNUT_ENGINE_PROBE_ALL = oldFixture
       resetEngineModelCatalogCache()

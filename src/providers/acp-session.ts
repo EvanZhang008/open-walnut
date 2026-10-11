@@ -58,6 +58,7 @@ import type {
   WorkerStateSnapshot,
 } from './acp-worker/protocol.js'
 import {
+  mergeAcpSpawnEnv,
   resolveWalnutMcpServers,
   snapshotAcpConfigOptions,
   snapshotAcpModels,
@@ -1071,8 +1072,11 @@ export class AcpSession {
    * otherwise outranks the profile the operator configured (real failure:
    * goose sent a bearer Authorization header → IncompleteSignatureException).
    */
-  private async buildAdapterEnv(providerExecutable: string | undefined): Promise<Record<string, string> | undefined> {
-    const overlay = await this.resolveConfiguredEngineEnv()
+  private async buildAdapterEnv(
+    providerExecutable: string | undefined,
+    config?: { overlay?: Record<string, string> },
+  ): Promise<Record<string, string> | undefined> {
+    const overlay = config ? config.overlay : await this.resolveConfiguredEngineEnv()
     if (this.engineId !== 'codex') {
       const managed = buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId, walnutApiEnv: walnutApiEnvForSession(this.host) })
       const provider = this.engineId === 'pi' && providerExecutable
@@ -1164,8 +1168,10 @@ export class AcpSession {
     // Production always passes a validated system Codex path — omitting
     // CODEX_PATH would make codex-acp silently use its bundled dependency.
     // Tests that inject a mock adapter do not need a Codex executable.
+    const overlay = await this.resolveConfiguredEngineEnv()
+    const configuredEnv = mergeAcpSpawnEnv(process.env, overlay)
     const providerExecutable = !this.cfg.artifacts && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
-      ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd })
+      ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd, env: configuredEnv })
       : undefined
 
     // Concurrent with ensureConn: the mount list is a small config read and must
@@ -1175,7 +1181,7 @@ export class AcpSession {
       this.resolveMcpServers(),
       this.ensureConn(),
     ])
-    const adapterEnv = await this.buildAdapterEnv(providerExecutable)
+    const adapterEnv = await this.buildAdapterEnv(providerExecutable, { overlay })
     // Adapters that answer `loadSession: false` (gemini) can NEVER resume a
     // provider thread: acpStart would run session/load, get load_failed, and
     // fall back to a fresh session on EVERY worker respawn. Pre-empt that round
@@ -1267,6 +1273,7 @@ export class AcpSession {
     const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
     const wanted = record?.acpConfig ?? this.cfg.acpConfig
     if (!wanted || this._configOptions.length === 0) return
+    let modelReplayed = false
     for (const [configId, value] of Object.entries(wanted)) {
       const control = this._configOptions.find((c) => c.id === configId)
       if (!control || control.currentValue === value) continue
@@ -1282,6 +1289,9 @@ export class AcpSession {
         this._configOptions = result?.configOptions ?? this._configOptions.map((c) =>
           c.id === configId ? { ...c, currentValue: value } : c)
         this._models = result?.models ?? (configId === 'model' ? { ...this._models, currentModelId: value } : this._models)
+        if (configId === 'model' || configId === 'reasoning_effort') {
+          modelReplayed = Boolean(result?.models?.currentModelId)
+        }
         log.session.info('acp: replayed persisted config after worker spawn', {
           runtimeId: this.runtimeId, configId, value,
         })
@@ -1298,6 +1308,12 @@ export class AcpSession {
           error: (resp as { error?: string }).error,
         })
       }
+    }
+    if (modelReplayed && this._models.currentModelId) {
+      await updateSessionRecord(this.trackingId(), {
+        acpModel: this._models.currentModelId,
+        ...this.acpModelNamePatch(this._models.currentModelId),
+      }).catch(() => {})
     }
   }
 

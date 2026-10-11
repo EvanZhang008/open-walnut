@@ -251,12 +251,12 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
     overlay = engineEnvOverlayFromConfig(await getConfig(), engine)
   } catch { /* unreadable config = no overlay, same as the launch path */ }
   const configuredEnv = mergeAcpSpawnEnv(process.env, overlay)
-  const codexPath = engine === 'codex' ? resolveSystemCodexPath() : undefined
+  const codexPath = engine === 'codex' ? resolveSystemCodexPath({ env: configuredEnv, cwd: probeCwd }) : undefined
   const managed = engine === 'codex'
     ? buildAcpAdapterEnv(codexPath, { sessionId: `model-probe-${engine}`, baseConfig: parseCodexBaseConfig(configuredEnv.CODEX_CONFIG) })
     : buildAcpAdapterEnv(undefined, { sessionId: `model-probe-${engine}` })
   const provider = engine === 'pi'
-    ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd }) }
+    ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd, env: configuredEnv }) }
     : undefined
   const env = mergeAcpSpawnEnv(process.env, { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) })
   if (codexPath) {

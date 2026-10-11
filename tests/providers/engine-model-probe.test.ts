@@ -29,6 +29,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
 
 const daemonProbe = vi.hoisted(() => ({
   ensureRunning: vi.fn(async () => {}),
+  resolveCodex: vi.fn(() => '/usr/local/bin/codex'),
   send: vi.fn(),
   hasCapability: vi.fn(() => true),
 }))
@@ -43,7 +44,7 @@ vi.mock('../../src/providers/acp-session.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/providers/acp-session.js')>()
   return {
     ...actual,
-    resolveSystemCodexPath: () => '/usr/local/bin/codex',
+    resolveSystemCodexPath: daemonProbe.resolveCodex,
     resolveAcpArtifacts: (engine: Parameters<typeof actual.resolveAcpArtifacts>[0], options: Parameters<typeof actual.resolveAcpArtifacts>[1]) => engine === 'codex'
       ? { workerCmd: [], adapterCmd: [process.execPath, new URL('./mock-acp-agent.mjs', import.meta.url).pathname] }
       : actual.resolveAcpArtifacts(engine, options),
@@ -54,6 +55,7 @@ beforeEach(() => {
   resetEngineModelCatalogCache()
   configHolder.config = {}
   daemonProbe.ensureRunning.mockClear()
+  daemonProbe.resolveCodex.mockReset().mockReturnValue('/usr/local/bin/codex')
   daemonProbe.send.mockReset()
   daemonProbe.hasCapability.mockReset().mockReturnValue(true)
 })
@@ -135,6 +137,22 @@ describe('probeAdapterModels', () => {
 })
 
 describe('getEngineModelCatalog', () => {
+  it('resolves the configured Codex executable before querying its catalog', async () => {
+    configHolder.config = { engines: { codex: { env: { WALNUT_CODEX_PATH: '/opt/provider/bin/codex', PATH: '/opt/provider/bin' } } } }
+    daemonProbe.resolveCodex.mockReturnValue('/opt/provider/bin/codex')
+    daemonProbe.send.mockResolvedValue({ ok: true, models: [{ modelId: 'native-model[low]', name: 'Native Model (low)' }] })
+    await getEngineModelCatalog('codex', { env: {} })
+    expect(daemonProbe.resolveCodex).toHaveBeenCalledWith({ env: expect.objectContaining({ WALNUT_CODEX_PATH: '/opt/provider/bin/codex', PATH: '/opt/provider/bin' }), cwd: undefined })
+    expect(daemonProbe.send).toHaveBeenCalledWith('acpModelCatalog', expect.objectContaining({ binary: '/opt/provider/bin/codex', env: expect.objectContaining({ CODEX_PATH: '/opt/provider/bin/codex' }) }))
+  })
+
+  it('does not start a catalog query when the executable override is rejected', async () => {
+    configHolder.config = { engines: { codex: { env: { WALNUT_CODEX_PATH: '/missing-provider-bin/codex' } } } }
+    daemonProbe.resolveCodex.mockImplementation(() => { throw new Error('WALNUT_CODEX_PATH is not executable') })
+    await expect(getEngineModelCatalog('codex', { env: {} })).rejects.toThrow(/WALNUT_CODEX_PATH/)
+    expect(daemonProbe.send).not.toHaveBeenCalled()
+  })
+
   it('reads Codex models through the daemon without establishing a session', async () => {
     configHolder.config = { engines: { codex: { env: { MODEL_PROVIDER: 'local-gateway', CODEX_CONFIG: '{"model_provider":"local-gateway"}' } } } }
     daemonProbe.send.mockResolvedValue({ ok: true, models: [{ modelId: 'native-model[low]', name: 'Native Model (low)' }], currentModelId: 'native-model[low]' })
