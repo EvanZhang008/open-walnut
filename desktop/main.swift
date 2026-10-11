@@ -101,6 +101,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // is looking (see WebContentPolicy.swift for why a long-lived WKWebView
     // needs this and a browser tab does not).
     var webContentWatchdog: WebContentWatchdog?
+    // The app's own update (AppUpdater.swift, T3 Code's flow): checks quietly,
+    // the user downloads it from the rail or the app menu, it installs on restart.
+    var appUpdater: AppUpdater?
+    var updateMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DesktopLogger.shared.log("app_launched", fields: [
@@ -109,6 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
 
         setupMainMenu()
+        startAppUpdater()
 
         if WebContentPolicy.isEnabled(UserDefaults.standard) {
             webContentWatchdog = WebContentWatchdog(
@@ -146,7 +151,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             walnutSourceDir = config.walnutSourceDir
             runtime = config.runtimeDir.map { BundledRuntime(installDir: $0) }
             showLoadingScreen()
-            startServer()
+            // An updated app carries a newer Walnut than the one installed: put it
+            // in first (offline, seconds), so the update brings both.
+            if let rt = runtime, let carried = carriedReleaseForThisMac(),
+               RuntimeUpgrade.shouldInstallCarried(carried: carried.version, installed: installedRuntimeVersion(rt)) {
+                upgradeRuntime(rt, to: carried)
+            } else {
+                startServer()
+            }
         } else {
             // A first launch starts by itself, like any app: it installs the
             // self-contained Walnut (or finds the one install.sh put here) and
@@ -312,9 +324,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let home = NSHomeDirectory()
         let dataHome = home + "/.open-walnut"
         // A release build carries this Mac's archive: installed from the app, offline.
-        let carried = Bundle.main.resourcePath.flatMap {
-            BundledRuntime.carriedRelease(resources: $0, arch: BundledRuntime.machineArch(), list: BundledRuntime.listDirectory)
-        }
+        let carried = carriedReleaseForThisMac()
         let env = BundledRuntime.installEnvironment(base: ProcessInfo.processInfo.environment, home: home, carried: carried)
         let bundled = BundledRuntime(installDir: env["OPEN_WALNUT_INSTALL_DIR"]!)
         try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
@@ -362,6 +372,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     self.showError("Walnut could not be downloaded. Check the internet connection and try again.", details: result.output)
                 }
+            }
+        }
+    }
+
+    func carriedReleaseForThisMac() -> BundledRuntime.CarriedRelease? {
+        return Bundle.main.resourcePath.flatMap {
+            BundledRuntime.carriedRelease(resources: $0, arch: BundledRuntime.machineArch(), list: BundledRuntime.listDirectory)
+        }
+    }
+
+    func installedRuntimeVersion(_ rt: BundledRuntime) -> String? {
+        return RuntimeUpgrade.installedVersion(packageJSON: FileManager.default.contents(atPath: rt.packageRoot + "/package.json"))
+    }
+
+    /// The relaunch after an app update: install the Walnut this app carries over
+    /// the older one with the same install.sh (it swaps only a copy that runs, so a
+    /// failure leaves the old one), then start the server either way.
+    func upgradeRuntime(_ rt: BundledRuntime, to carried: BundledRuntime.CarriedRelease) {
+        guard let script = Bundle.main.path(forResource: "install", ofType: "sh") else { startServer(); return }
+        var base = ProcessInfo.processInfo.environment
+        base["OPEN_WALNUT_INSTALL_DIR"] = rt.installDir
+        let env = BundledRuntime.installEnvironment(base: base, home: NSHomeDirectory(), carried: carried)
+        let from = installedRuntimeVersion(rt) ?? "unknown"
+        statusLabel?.stringValue = "Updating Walnut to \(carried.version)..."
+        DesktopLogger.shared.log("runtime_upgrade_started", fields: ["from": from, "to": carried.version, "dir": rt.installDir])
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = BundledRuntime.runInstaller(script: script, environment: env, onProgress: { _ in })
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.appendToBootstrapLog("install.sh (upgrade \(from) -> \(carried.version))", result.output)
+                DesktopLogger.shared.log("runtime_upgrade_finished", fields: [
+                    "ok": String(result.success), "installed": self.installedRuntimeVersion(rt) ?? "unknown",
+                ])
+                self.statusLabel?.stringValue = "Starting Walnut server..."
+                self.startServer()
             }
         }
     }
@@ -1251,6 +1296,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // data-theme or the OS switching under 'system') so the strip never
         // disagrees with the page under it.
         config.userContentController.add(self, name: "walnutChrome")
+        // The app's update (AppUpdater.swift): the page asks with
+        // webkit.messageHandlers.walnutUpdate.postMessage({op}) and gets a promise;
+        // every state change arrives as a `walnut:app-update` event.
+        config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "walnutUpdate")
+        addAppUpdateTestScript(to: config.userContentController)
         let reportChrome = """
         (() => {
           const send = () => {
@@ -1794,6 +1844,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "About Walnut", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(updateMenuAction), keyEquivalent: "")
+        appMenu.addItem(updateItem)
+        updateMenuItem = updateItem
         appMenu.addItem(NSMenuItem.separator())
         // ⌘, follows the macOS convention: open Settings (the web UI's settings
         // page). It must NEVER be a destructive action — it used to trigger
@@ -1976,6 +2029,7 @@ extension AppDelegate: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webContentWatchdog?.pageDidFinishLoading()
+        if let state = appUpdater?.state { pushAppUpdateState(state) }
     }
 
     /// Without this a killed page process leaves a blank white window that only

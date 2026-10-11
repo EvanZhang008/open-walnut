@@ -9,6 +9,7 @@ set -euo pipefail
 # notarization requires. Knobs (the release workflow, .github/workflows/mac-app.yml,
 # sets them all):
 #   WALNUT_APP_VERSION            CFBundleShortVersionString (default: package.json)
+#   WALNUT_APP_UPDATE_FEED        where the app checks for its updates (default: the GitHub releases)
 #   WALNUT_SIGN_IDENTITY          the identity to use, instead of searching
 #   WALNUT_SIGN_KEYCHAIN          the keychain that holds it
 #   WALNUT_REQUIRE_DEVELOPER_ID=1 fail rather than fall back to ad-hoc
@@ -52,18 +53,20 @@ swiftc -O -o "$MACOS/${APP_NAME}_arm64" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
-    "$SCRIPT_DIR/BundledRuntime.swift" \
+    "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -target arm64-apple-macos12.0
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -target arm64-apple-macos12.0
 
 echo "Compiling for x86_64..."
 swiftc -O -o "$MACOS/${APP_NAME}_x86_64" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
-    "$SCRIPT_DIR/BundledRuntime.swift" \
+    "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -target x86_64-apple-macos12.0
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -target x86_64-apple-macos12.0
 
 echo "Creating universal binary..."
 lipo -create "$MACOS/${APP_NAME}_arm64" "$MACOS/${APP_NAME}_x86_64" \
@@ -76,6 +79,9 @@ lipo -archs "$MACOS/$APP_NAME"
 # every release attaches, so the app and `curl … | sh` install the same way.
 cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
 chmod 755 "$RESOURCES/install.sh"
+# The app's update swaps itself with this once it has quit (AppUpdater.swift).
+cp "$SCRIPT_DIR/apply-update.sh" "$RESOURCES/apply-update.sh"
+chmod 755 "$RESOURCES/apply-update.sh"
 
 # Create Info.plist
 cat > "$CONTENTS/Info.plist" << 'EOF'
@@ -93,6 +99,10 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
     <string>@APP_VERSION@</string>
     <key>CFBundleShortVersionString</key>
     <string>@APP_VERSION@</string>
+    <!-- Where the app looks for its own updates (AppUpdater.swift): a GitHub
+         releases page; a local build (build.sh) has none and never updates. -->
+    <key>WalnutUpdateFeed</key>
+    <string>@UPDATE_FEED@</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
@@ -128,6 +138,8 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
 </plist>
 EOF
 sed -i '' "s/@APP_VERSION@/$APP_VERSION/g" "$CONTENTS/Info.plist"
+UPDATE_FEED="${WALNUT_APP_UPDATE_FEED:-https://github.com/EvanZhang008/open-walnut/releases}"
+sed -i '' "s#@UPDATE_FEED@#$UPDATE_FEED#g" "$CONTENTS/Info.plist"
 
 # Create .icns from the PNG icon — first rounding it into the macOS Big Sur
 # icon shape (824pt squircle on a transparent 1024 canvas), so it sits in the

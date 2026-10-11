@@ -10,6 +10,7 @@ import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
+import { AppUpdateRow } from '../AppUpdateRow';
 import '@/styles/settings-sections-configure.css';
 
 export type SaveOpts = { rowKey?: string };
@@ -254,6 +255,7 @@ export function GeneralSection({ config, onSave }: Props) {
           }
         />
         <UpdateOnStartRow config={config} save={save} />
+        <AppUpdateRow />
       </SettingsGroup>
       <SettingsGroup heading="Chat notifications" footer="Background notifications that appear in chat.">
         {UI_ONLY_CATEGORIES.map((cat) => (

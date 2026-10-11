@@ -31,3 +31,9 @@ swiftc \
     "$ROOT/tests/desktop/bundled-runtime-tests.swift" \
     -o "$OUT_DIR/walnut-bundled-runtime-tests"
 "$OUT_DIR/walnut-bundled-runtime-tests"
+
+swiftc \
+    "$ROOT/desktop/AppUpdateMachine.swift" \
+    "$ROOT/tests/desktop/app-update-tests.swift" \
+    -o "$OUT_DIR/walnut-app-update-tests"
+"$OUT_DIR/walnut-app-update-tests"

@@ -212,10 +212,11 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   key with the Developer role) are secrets of the `release` environment, which only `main` may
   deploy to; the identity goes into a keychain made for the job and deleted after it. Without
   them the apps are built ad-hoc and kept as workflow artifacts, never attached. A release older
-  than the carrying app gets none. The app is a signed shell that is never modified: its first
-  launch starts by itself (no setup screen), runs the bundled `install.sh` on what it carries (or
-  downloads it with a progress bar read off curl's, `OPEN_WALNUT_PROGRESS=1`) and opens the
-  console, and the runtime it installed updates itself like any archive install. A team's first
+  than the carrying app gets none. The app's first launch starts by itself (no setup screen),
+  runs the bundled `install.sh` on what it carries (or downloads it with a progress bar read off
+  curl's, `OPEN_WALNUT_PROGRESS=1`) and opens the console, and the runtime it installed updates
+  itself like any archive install. The app updates itself from these same DMGs (see Updates
+  below), so their names and the app's `WalnutUpdateFeed` must stay as they are. A team's first
   notarizations can take over an hour, later ones minutes: a job that waited 45 minutes fails
   naming the submission, and runs again once `xcrun notarytool info <id>` says Accepted.
 - **The cask**: once both DMGs are attached, job `cask` downloads them back from the release,
@@ -228,6 +229,12 @@ darwin-x64, so that archive goes without semantic search and Walnut answers with
   (`src/core/self-update/install-kind.ts`) sees it and installs a newer release with the
   archive's own Node and npm into the archive's own prefix (`walnut update`, and on start), never
   with whatever `npm` is first on PATH. A Homebrew install updates the same way, inside its keg.
+  The Mac app updates itself as a whole, T3 Code's flow (`desktop/AppUpdater.swift`,
+  `desktop/README.md#updates`): it checks the releases page 15 seconds after launch and every 4
+  minutes, offers `Walnut-<arch>.dmg` once the release has it, downloads it when the user says
+  so, accepts it only when it satisfies the running app's designated requirement, and on
+  "Restart to update" swaps itself and relaunches; the new app then installs the Walnut it carries
+  over an older one. The cask says `auto_updates true` for it.
 
 ## Cutting a stable release by hand
 

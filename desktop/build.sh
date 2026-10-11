@@ -24,14 +24,18 @@ swiftc -O -o "$MACOS/$APP_NAME" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
-    "$SCRIPT_DIR/BundledRuntime.swift" \
+    "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security
 
 # The installer a first launch runs (BundledRuntime.swift): the same install.sh
 # every release attaches, so the app and `curl … | sh` install the same way.
 cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"
 chmod 755 "$RESOURCES/install.sh"
+# The app's update swaps itself with this once it has quit (AppUpdater.swift).
+cp "$SCRIPT_DIR/apply-update.sh" "$RESOURCES/apply-update.sh"
+chmod 755 "$RESOURCES/apply-update.sh"
 
 # Create Info.plist
 cat > "$CONTENTS/Info.plist" << 'EOF'
@@ -46,9 +50,9 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
     <key>CFBundleIdentifier</key>
     <string>com.local.walnut-desktop</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>@APP_VERSION@</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>@APP_VERSION@</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
@@ -83,6 +87,9 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
 </dict>
 </plist>
 EOF
+
+# WALNUT_APP_VERSION: a test of the app's update builds two versions.
+sed -i '' "s/@APP_VERSION@/${WALNUT_APP_VERSION:-1.0}/g" "$CONTENTS/Info.plist"
 
 # Create .icns from the PNG icon — first rounding it into the macOS Big Sur
 # icon shape (824pt squircle on a transparent 1024 canvas), so it sits in the

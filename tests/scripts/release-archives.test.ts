@@ -199,6 +199,8 @@ describe('cask.mjs', () => {
     expect(rb).toContain('app "Walnut.app"')
     // Homebrew 4.x reads a bare symbol as "this or newer"; the string form is deprecated.
     expect(rb).toContain('depends_on macos: :monterey')
+    // The app updates itself (desktop/AppUpdater.swift): brew upgrade must not fight it.
+    expect(rb).toContain('auto_updates true')
   })
 
   it('zaps only what the app itself writes, never the user\'s data or the shared runtime', () => {
@@ -207,6 +209,8 @@ describe('cask.mjs', () => {
     expect(paths.length).toBeGreaterThan(0)
     for (const p of paths) expect(p).toMatch(/^~\/Library\//)
     expect(paths).toContain('~/Library/Application Support/Walnut')
+    // Where the app keeps its downloaded updates.
+    expect(paths).toContain('~/Library/Caches/Walnut')
   })
 
   it('names the bundle id the release build gives the app', () => {

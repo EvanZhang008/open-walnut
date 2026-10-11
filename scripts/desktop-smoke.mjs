@@ -102,6 +102,11 @@ export function carriedFor(app, arch = machineArch()) {
   return null
 }
 
+/** Whether the app installs a newer carried Walnut over an older one on launch (an app update's relaunch). */
+export function upgradesCarriedRuntime(binary) {
+  return fs.readFileSync(binary).includes('runtime_upgrade_started')
+}
+
 /**
  * Whether the app at `binary` still asks for its setup choice on a first launch:
  * an app built before the no-click first launch (797b3ec9, so 0.6.8 and older)
@@ -227,6 +232,29 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
       const after = (desktopLog().match(/runtime_install_started/g) ?? []).length
       if (after !== before) throw new Error('the second launch ran install.sh again')
     })
+    // An app update's relaunch (desktop/AppUpdater.swift): the new app carries a
+    // newer Walnut than the installed one and installs it before the server
+    // starts. Made here by marking the installed copy older than the one carried.
+    // An app built before this has no such step (mac-app.yml drives older apps).
+    if (carried && upgradesCarriedRuntime(binary)) {
+      await step('the server goes when the app does (again)', appGone)
+      await step('an updated app installs the newer Walnut it carries before the server starts', async () => {
+        const pkgFile = path.join(home, '.local', 'share', 'open-walnut', 'app', 'runtime', 'lib', 'node_modules', 'open-walnut', 'package.json')
+        const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
+        fs.writeFileSync(pkgFile, JSON.stringify({ ...pkg, version: '0.0.1' }, null, 2))
+        app = launch('app-3.log')
+        await until('the console after the upgrade', 3 * 60_000, () => answers(port))
+        serverPid = Number(listener(port))
+        const records = desktopLog().split('\n').map((l) => { try { return JSON.parse(l) } catch { return null } })
+        const startedUp = records.filter((r) => r?.event === 'runtime_upgrade_started').at(-1)
+        const finished = records.filter((r) => r?.event === 'runtime_upgrade_finished').at(-1)
+        if (!startedUp || startedUp.from !== '0.0.1' || startedUp.to !== version) throw new Error(`no upgrade 0.0.1 -> ${version} started: ${JSON.stringify(startedUp)}`)
+        if (!finished || finished.ok !== 'true' || finished.installed !== version) throw new Error(`the upgrade did not finish on ${version}: ${JSON.stringify(finished)}`)
+        const now = JSON.parse(fs.readFileSync(pkgFile, 'utf8')).version
+        if (now !== version) throw new Error(`the installed copy is ${now}, not ${version}`)
+        return `0.0.1 -> ${version} from the app, then served`
+      })
+    }
   } finally {
     if (app) await appGone().catch(() => {})
     // The session daemon outlives its server on purpose; this one is ours, in our
@@ -238,7 +266,7 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
     process.stdout.write(`\n${table.join('\n')}\n`)
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Walnut.app first launch (${version})\n\n${table.join('\n')}\n\n`)
     if (results.some((r) => !r.ok)) {
-      for (const f of ['app-1.log', 'app-2.log']) {
+      for (const f of ['app-1.log', 'app-2.log', 'app-3.log']) {
         const p = path.join(work, f)
         if (fs.existsSync(p)) process.stdout.write(`\n── ${f} (tail) ──\n${fs.readFileSync(p, 'utf8').split('\n').slice(-40).join('\n')}\n`)
       }

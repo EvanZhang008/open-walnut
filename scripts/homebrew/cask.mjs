@@ -11,7 +11,9 @@
  * Homebrew picks the DMG for the Mac it runs on. The app carries that
  * release's Walnut for its architecture: its first launch installs it into
  * ~/.local/share/open-walnut with no download, and that copy then updates
- * itself, so the cask never needs `auto_updates`. `zap` removes only what the app
+ * itself. The app updates itself too (desktop/AppUpdater.swift, from the same
+ * releases), so the cask says `auto_updates true`: `brew upgrade` leaves an app
+ * that already moved on alone. `zap` removes only what the app
  * itself writes under ~/Library; the user's data (~/.open-walnut) and the runtime
  * a `curl | sh` install shares are left alone.
  */
@@ -45,12 +47,14 @@ cask "walnut" do
   desc "Personal AI: tasks, notes and Claude Code sessions on your own machine"
   homepage "${REPO_URL}"
 
+  auto_updates true
   depends_on macos: :monterey
 
   app "Walnut.app"
 
   zap trash: [
     "~/Library/Application Support/Walnut",
+    "~/Library/Caches/Walnut",
     "~/Library/Caches/${BUNDLE_ID}",
     "~/Library/HTTPStorages/${BUNDLE_ID}",
     "~/Library/Preferences/${BUNDLE_ID}.plist",

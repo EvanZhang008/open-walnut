@@ -20,6 +20,7 @@ import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
+import { SidebarAppUpdate } from './SidebarAppUpdate';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 import { bellPresentation } from '@/utils/host-banner-placement';
@@ -357,6 +358,8 @@ export function Sidebar({
             <span className="sidebar-label">{formatDuration(audio.totalDuration)}</span>
           </button>
         )}
+        {/* The Mac app's own update: only while there is one to download or install. */}
+        <SidebarAppUpdate />
         {/* Plugin status items (a live ring each), above Voice; nothing when none is live. */}
         <SidebarStatusItems collapsed={collapsed} />
         <button

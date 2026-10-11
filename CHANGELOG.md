@@ -6,6 +6,10 @@ breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- The Mac app updates itself: a quiet check, a download you start from the sidebar, and Restart to update
+
 ## [0.6.8] - 2026-10-11
 
 ### Added

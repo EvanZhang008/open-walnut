@@ -16,7 +16,10 @@ codebase. This wrapper only:
   it), so this takes a few seconds and no network; one without it for this Mac
   downloads it (about
   300 MB, with a progress bar). Nothing else needs to be installed. That copy
-  updates itself; the app is never modified.
+  also updates itself with its own npm.
+- Updates itself the way T3 Code's app does: a quiet check 15 seconds after
+  launch and every 4 minutes, an update item in the sidebar once there is one,
+  a download you start, and **Restart to update** (see [Updates](#updates)).
   Or point it at an existing `~/.open-walnut` install or a source checkout.
 - For a source checkout, locates a suitable **Node.js** (mise / nvm / fnm /
   Homebrew / system, newest first, requires **Node 22+**) and **Git**.
@@ -112,7 +115,7 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
 
 ## How it works
 
-`main.swift` is the whole app (one file, AppKit). Key pieces:
+`main.swift` is the app (AppKit), with a few files beside it. Key pieces:
 
 - **Setup**: a first launch runs the bundled `install.sh` (`BundledRuntime.swift`)
   on the release the app carries for this Mac, as a `file://` base, or else on
@@ -130,6 +133,43 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
   reclaims it if it's an *orphaned* Walnut process (parent PID 1).
 - **Window** — a `WKWebView` pointed at `http://localhost:<port>`; external
   links open in the default browser.
+
+## Updates
+
+The app updates itself as a whole, T3 Code's flow (`AppUpdater.swift`, with
+the state and its rules in `AppUpdateMachine.swift`, a port of T3's
+`updateMachine.ts`):
+
+1. **Check.** 15 seconds after launch, then every 4 minutes, the app asks the
+   releases page for the newest release (`releases/latest`, the redirect to its
+   tag; no API call, so no rate limit) and whether that release has a DMG for
+   this Mac yet. Nothing shows while there is nothing to do.
+2. **Download.** An update item appears in the sidebar above Voice ("Update
+   available"); **Check for Updates…** in the app menu and the row in Settings →
+   General do the same. A click downloads `Walnut-<arch>.dmg` (a ring fills as
+   it comes in), copies the app out of it and checks that the new app is valid
+   and satisfies the running app's designated requirement: only a build signed
+   by the same developer, with the same bundle id and the expected version, can
+   replace it. A failed download offers a retry.
+3. **Restart to update.** After the app's confirmation, the app stops its server
+   (5 seconds at most), hands the swap to `apply-update.sh` and quits. The
+   script waits for the app to exit, swaps the new app into place with two
+   renames (the old one comes back if anything fails) and opens it. Sessions
+   run in the session daemon, so they keep going across the restart.
+4. **The Walnut inside.** The new app carries the new release's Walnut. On its
+   first launch it installs that copy over the older one before the server
+   starts (offline, a few seconds), and never over a newer one (a runtime that
+   updated itself, or follows the nightly channel, keeps its own).
+
+Updates are off in a build with no feed (`build.sh`; a release build names the
+GitHub releases page in Info.plist as `WalnutUpdateFeed`), in an ad-hoc signed
+build, with `WALNUT_DISABLE_AUTO_UPDATE=1`, and in an app that runs from the DMG
+or from App Translocation (move it to Applications). Downloads are kept in
+`~/Library/Caches/Walnut/Updates`. Test knobs: `WALNUT_UPDATE_FEED_URL`,
+`WALNUT_UPDATE_STARTUP_DELAY_MS`, `WALNUT_UPDATE_POLL_MS`; and
+`scripts/desktop-update-e2e.mjs` runs the whole flow between two local builds
+signed with the same identity, with a local releases page and the page's own
+update item clicked by the app (`WALNUT_DESKTOP_E2E_UPDATE_CLICKS=1`).
 
 Config (chosen home, source dir and, for the self-contained copy, its install
 dir) is stored at `~/Library/Application Support/Walnut/config.json`. Use **Reset Setup…** from the
