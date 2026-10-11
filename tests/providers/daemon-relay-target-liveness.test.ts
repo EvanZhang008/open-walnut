@@ -252,7 +252,9 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
 // there until it woke (2026-10-11: the takeover e2e on CI, whose takeover window
 // is shorter than three beats). A takeover is longer than three beats by default,
 // so here the beat is long and the window short: suspect from 2.7s, quiet at 6s,
-// the lead claimable from 3s.
+// the lead claimable from 3s. The Mac holds two sockets, as a Walnut server
+// does: the one its leader.configure named, and its bulk channel, which names
+// no Walnut (with only the first held to it, CI still failed: cf87118c).
 describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as const))('relay target while the companion leads (%s twin)', (twin) => {
   const LONG_BEAT_MS = 2_000
   const TAKEOVER_MS = 3_000
@@ -261,6 +263,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
   let cloud: WebSocketServer
   let bridgeSide: WebSocket | null = null
   let mac: WebSocket | null = null
+  let bulk: WebSocket | null = null
 
   beforeAll(async () => {
     cloud = new WebSocketServer({ port: 0, host: '127.0.0.1' })
@@ -281,6 +284,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
 
   afterAll(async () => {
     try { mac?.terminate() } catch { /* gone */ }
+    try { bulk?.terminate() } catch { /* gone */ }
     await stopDaemon(daemon)
     await new Promise<void>((r) => cloud.close(() => r()))
   })
@@ -291,8 +295,14 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
     mac.on('message', (d: Buffer) => { try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'message-request') seen++ } catch { /* frame */ } })
     const conf = await rpc(mac, 'leader.configure', { home: '/fixture/relay-home', walnutId: WALNUT_ID, backup: true })
     expect(conf.ok, JSON.stringify(conf)).toBe(true)
+    // The Mac's second socket, its bulk channel: it only says hello, so the
+    // daemon never learns which Walnut it is (the socket the CI send went to).
+    bulk = await connect(daemon.port)
+    bulk.on('message', (d: Buffer) => { try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'message-request') seen++ } catch { /* frame */ } })
+    expect((await rpc(bulk, 'hello')).ok).toBe(true)
     const asleepAt = Date.now()
     ;(mac as unknown as { _socket: { pause: () => void } })._socket.pause()
+    ;(bulk as unknown as { _socket: { pause: () => void } })._socket.pause()
     // The companion claims the lead once the takeover window has passed.
     let claimed: Record<string, unknown> = {}
     await waitFor(() => Date.now() - asleepAt > TAKEOVER_MS + 100, 10_000, 'the takeover window')

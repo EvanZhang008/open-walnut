@@ -45,7 +45,11 @@ const B = 'bbbbbbbb-2222-4222-8222-222222222222'
 /** A second session on oldbox, for the stop (A and B keep running for the wake). */
 const C = 'cccccccc-3333-4333-8333-333333333333'
 const T = 6_000
-const BEAT = 2_500
+// Three beats (12 s) outlast the takeover window (T), so the companion leads
+// while the sleeping Mac's sockets are suspect, not yet quiet, and the phone's
+// send below lands in that window on every run. With a 2.5 s beat it did only
+// on a fast runner (2026-10-11: the send went to the Mac asleep and waited).
+const BEAT = 4_000
 
 const MOCK_CLI = `
 const fs = require('fs')
@@ -103,7 +107,16 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false> | T | 
     try { const v = await fn(); if (v) return v as T } catch (e) { last = e }
     await sleep(200)
   }
-  throw new Error(`timed out waiting for ${what}${last ? `: ${String(last)}` : ''}\n--- companion ---\n${companion.log.slice(-2500)}\n--- primary ---\n${primary.log.slice(-2500)}`)
+  throw new Error(`timed out waiting for ${what}${last ? `: ${String(last)}` : ''}\n--- companion ---\n${logTail(companion.log)}\n--- primary ---\n${logTail(primary.log)}`)
+}
+
+/**
+ * A server's log without this test's own polls (a wait asks every 200 ms, so a
+ * plain tail was nothing but GETs: 2026-10-11, the send that was held never
+ * showed in the CI log).
+ */
+function logTail(log: string, chars = 3_500): string {
+  return log.split('\n').filter((l) => !/INF \[web\] GET \/api\/(v1\/sessions\/[^ ]+|leader) → 200/.test(l)).join('\n').slice(-chars)
 }
 
 let base = ''

@@ -202,10 +202,16 @@ export function createLeaderBook(deps: LeaderBookDeps) {
     return rec && rec.holder === 'backup' && rec.backup ? { walnutId: rec.walnutId, epoch: rec.epoch } : null
   }
 
+  /** Whether the companion leads any Walnut on this host. */
+  function anyBackupLead(): boolean {
+    for (const rec of records.values()) if (rec.holder === 'backup' && rec.backup) return true
+    return false
+  }
+
   load()
 
   return {
-    configure, primaryClaim, witness, backupClaim, fence, backupLead, noteHeard, primaryAgeMs,
+    configure, primaryClaim, witness, backupClaim, fence, backupLead, anyBackupLead, noteHeard, primaryAgeMs,
     recordOf: (home: string) => records.get(home) ?? null,
   }
 }

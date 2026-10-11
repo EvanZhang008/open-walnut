@@ -2644,6 +2644,13 @@ var TRUSTED_CLIENT_QUIET_MS = TRUSTED_CLIENT_BEAT_MS * 3;
 function isQuietTrustedClient(client) {
   return typeof client.lastHeardAt === 'number' && Date.now() - client.lastHeardAt > TRUSTED_CLIENT_QUIET_MS;
 }
+// A suspect client of a Walnut the companion leads is no target until it
+// speaks; one with no Walnut named (a server's bulk channel) neither, while the
+// companion leads any. See the standalone twin.
+function ledAway(client) {
+  var home = gatewayClientHomes.get(client);
+  return home ? leaderBook.backupLead(home) !== null : leaderBook.anyBackupLead();
+}
 function pickTrustedClient() {
   var now = Date.now();
   var fresh = null, suspect = null, quietAt = null, quiet = 0;
@@ -2656,9 +2663,7 @@ function pickTrustedClient() {
       if (quietAt === null || at > quietAt) quietAt = at;
     } else if (silentMs <= TRUSTED_CLIENT_FRESH_MS) {
       if (!fresh) fresh = client;
-    } else if (!suspect && !leaderBook.backupLead(gatewayClientHomes.get(client))) {
-      // A primary the companion took the lead from is a target again once it
-      // speaks, never while it only has not gone quiet yet (see the standalone twin).
+    } else if (!suspect && !ledAway(client)) {
       suspect = client;
     }
   }

@@ -1228,6 +1228,20 @@ function isQuietTrustedClient(client: ServerWebSocket<WsData>): boolean {
   const at = client.data?.lastHeardAt
   return typeof at === 'number' && Date.now() - at > TRUSTED_CLIENT_QUIET_MS
 }
+/**
+ * A suspect client (past one beat, not yet quiet) of a Walnut the companion
+ * leads: that Walnut's server has gone silent (that is how the lead was won),
+ * so it is a target again once it speaks, never before. A takeover shorter than
+ * three beats left a window where a phone send went to a Mac asleep and waited
+ * there for it to wake (2026-10-11, the takeover e2e on CI). A client with no
+ * Walnut named is held to it too while the companion leads any: a server's
+ * second socket (its bulk channel) never says which Walnut it is, and it was
+ * that socket of the sleeping Mac the send went to.
+ */
+function ledAway(client: ServerWebSocket<WsData>): boolean {
+  const home = gatewayClientHomes.get(client)
+  return home ? leaderBook.backupLead(home) !== null : leaderBook.anyBackupLead()
+}
 function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: number; quietForMs: number | null } {
   const now = Date.now()
   let fresh: ServerWebSocket<WsData> | null = null
@@ -1243,12 +1257,7 @@ function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: n
       if (quietAt === null || at > quietAt) quietAt = at
     } else if (silentMs <= TRUSTED_CLIENT_FRESH_MS) {
       if (!fresh) fresh = client
-    } else if (!suspect && !leaderBook.backupLead(gatewayClientHomes.get(client))) {
-      // A primary the companion took the lead from has gone silent (that is how
-      // the lead was won): it is a target again once it speaks, never while it
-      // only has not gone quiet yet. A takeover shorter than three beats left a
-      // window where a phone send went to a Mac asleep and waited there for it
-      // to wake (2026-10-11, the takeover e2e on CI).
+    } else if (!suspect && !ledAway(client)) {
       suspect = client
     }
   }
