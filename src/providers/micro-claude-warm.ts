@@ -44,6 +44,8 @@ export interface WarmSpec {
   model: string;
   /** CLI tool names to keep; [] = none. */
   tools: string[];
+  /** --effort level; undefined = the CLI's own default for the model. */
+  effort?: string;
 }
 
 export interface WarmRunOptions extends WarmSpec {
@@ -91,7 +93,7 @@ let reapTimer: ReturnType<typeof setTimeout> | null = null;
 
 function specKey(spec: WarmSpec): string {
   return createHash('sha256')
-    .update(`${spec.model}|${spec.tools.join(',')}|${spec.system}`)
+    .update(`${spec.model}|${spec.effort ?? ''}|${spec.tools.join(',')}|${spec.system}`)
     .digest('hex');
 }
 
@@ -132,6 +134,7 @@ function spawnStreamChild(spec: WarmSpec): PooledChild | null {
     '--setting-sources', '',
     '--bare',
   ];
+  if (spec.effort) args.push('--effort', spec.effort);
   // The user's modelOverrides, so the alias resolves as their CLI resolves it.
   const settings = slimChildSettingsArg();
   if (settings) args.push('--settings', settings);
@@ -204,7 +207,10 @@ process.once('exit', () => { disposePooled(); });
 /** One micro-Claude turn on a stream-json child — pooled when available,
  *  cold-spawned otherwise. Always pre-warms a replacement for the NEXT call. */
 export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunResult> {
-  const spec: WarmSpec = { system: opts.system, model: opts.model, tools: opts.tools };
+  const spec: WarmSpec = {
+    system: opts.system, model: opts.model, tools: opts.tools,
+    ...(opts.effort ? { effort: opts.effort } : {}),
+  };
   const key = specKey(spec);
   let taken: PooledChild | null = null;
   let warm = false;

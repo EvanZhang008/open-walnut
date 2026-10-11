@@ -35,6 +35,8 @@ export interface MicroClaudeOptions {
   prompt: string;
   /** CLI model name (sonnet/haiku/opus or a full id). Default: sonnet. */
   model?: string;
+  /** --effort level; unset = the CLI's own default for the model. */
+  effort?: string;
   timeoutMs?: number;
   /** CLI tool names to keep. Default NONE — each tool manual costs prefix
    *  tokens in every round. ['Bash'] covers most utility children. */
@@ -79,6 +81,7 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
       system: opts.system,
       model: opts.model ?? DEFAULT_MODEL,
       tools: opts.tools ?? [],
+      ...(opts.effort ? { effort: opts.effort } : {}),
       prompt: opts.prompt,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,
@@ -100,6 +103,7 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
     toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,
     slim: true,
     thinking: opts.thinking ?? false,
+    ...(opts.effort ? { effort: opts.effort } : {}),
     ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
     ...(opts.onBlock ? { onBlock: opts.onBlock } : {}),
   });

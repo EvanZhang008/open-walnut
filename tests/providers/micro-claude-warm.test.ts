@@ -139,6 +139,20 @@ describe('warm micro-claude pool', () => {
     expect((await done).warm).toBe(false);
   });
 
+  it('an effort rides --effort and is part of the pool key', async () => {
+    const procs: FakeProc[] = [];
+    spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
+    prewarmMicroClaude(SPEC); // no effort
+    expect(spawnMock.mock.calls[0][1]).not.toContain('--effort');
+    const done = runWarmMicroClaude({ ...SPEC, effort: 'medium', prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w4' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(procs[0].stdin.write).not.toHaveBeenCalled(); // different effort, not reused
+    const args = spawnMock.mock.calls[1][1] as string[];
+    expect(args[args.indexOf('--effort') + 1]).toBe('medium');
+    feedResult(procs[1]);
+    expect((await done).warm).toBe(false);
+  });
+
   it('streams tool_call blocks to onBlock and writes ONLY the prompt on stdin (no injections)', async () => {
     const procs: FakeProc[] = [];
     spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });

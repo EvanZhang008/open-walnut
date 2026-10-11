@@ -61,6 +61,8 @@ export interface InlineSubagentOptions {
   /** Restrict the CLI's toolset (--tools). [] = no tools at all;
    *  undefined = the full default set (~20k tokens of tool manuals). */
   tools?: string[];
+  /** --effort level; undefined = the CLI's own default for the model. */
+  effort?: string;
   /** --setting-sources value. '' = load NO settings and NO CLAUDE.md chain
    *  (the cwd's project CLAUDE.md alone can be tens of KB). undefined = CLI
    *  default (load everything). */
@@ -225,6 +227,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
     '--allow-dangerously-skip-permissions',
     '--permission-mode', permissionMode,
   ];
+  if (opts.effort) args.push('--effort', opts.effort);
   if (systemPrompt) {
     args.push(systemPromptMode === 'replace' ? '--system-prompt' : '--append-system-prompt', systemPrompt);
   }
