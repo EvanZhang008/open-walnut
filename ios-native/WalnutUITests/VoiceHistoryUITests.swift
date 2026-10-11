@@ -35,7 +35,7 @@ final class VoiceHistoryUITests: XCTestCase {
         XCTAssertTrue(element(app, "voiceHistory.list").waitForExistence(timeout: 10))
     }
 
-    private func launchArguments() -> [String] {
+    private func isolatedServerArguments() -> [String] {
         guard let server = ProcessInfo.processInfo.environment["WALNUT_UITEST_SERVER"],
               let token = ProcessInfo.processInfo.environment["WALNUT_UITEST_TOKEN"] else {
             XCTFail("An isolated server and test token are required")
@@ -46,7 +46,7 @@ final class VoiceHistoryUITests: XCTestCase {
 
     @MainActor
     func testRecordedAudioAndTranscriptAreAvailableFromSettingsAfterRelaunch() throws {
-        let app = UITestLaunch.launch(launchArguments())
+        let app = UITestLaunch.launch(isolatedServerArguments())
         continueAfterFailure = false
         addUIInterruptionMonitor(withDescription: "System dictation") { alert in
             guard alert.buttons["Not Now"].exists else { return false }
