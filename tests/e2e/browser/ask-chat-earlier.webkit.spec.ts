@@ -4,7 +4,9 @@
  */
 import fs from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { SHOTS, continuedChatPutsTheEarlierPartAboveTheSession, oldChatOpensWithItsHistory } from './ask-chat-earlier-helpers'
+import {
+  SHOTS, aDegradedAnswerIsAskedAgain, continuedChatPutsTheEarlierPartAboveTheSession, oldChatOpensWithItsHistory,
+} from './ask-chat-earlier-helpers'
 
 test.use({ browserName: 'webkit' })
 test.describe.configure({ mode: 'serial' })
@@ -23,4 +25,9 @@ test('an old phone chat opens with its history above a session that never ran a 
 test('a continued chat shows its earlier part above the session, once', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await continuedChatPutsTheEarlierPartAboveTheSession(page, 'webkit')
+})
+
+test('a degraded first answer is asked again, and the earlier part still shows', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await aDegradedAnswerIsAskedAgain(page, 'webkit')
 })

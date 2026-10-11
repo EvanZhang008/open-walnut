@@ -159,3 +159,28 @@ export async function continuedChatPutsTheEarlierPartAboveTheSession(page: Page,
   await expect(session.getByText('Ferns, hostas and hellebores.')).toHaveCount(1)
   await session.screenshot({ path: `${SHOTS}/${engine}-02-continued-chat.png` })
 }
+
+/**
+ * The first read of a cold chat can run out the server's budget (live: 5 s, then
+ * 1 s). That answer says `degraded`, and the panel asks again instead of keeping
+ * nothing for as long as it is open.
+ */
+export async function aDegradedAnswerIsAskedAgain(page: Page, engine: string): Promise<void> {
+  let reads = 0
+  await page.route('**/api/v1/sessions/*/chat-earlier', async (route) => {
+    reads += 1
+    if (reads === 1) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages: [], degraded: true }) })
+      return
+    }
+    await route.fallback()
+  })
+  await addEarlierAsks(page)
+  const session = await openAsk(page, CONT_ASK.title, EARLIER_CONT_SESSION)
+  await expect(session.getByText('Hellebores flower in late winter.')).toBeVisible({ timeout: 20_000 })
+  const block = session.locator('[data-testid="chat-earlier"]')
+  await expect(block).toBeVisible({ timeout: 15_000 })
+  expect(await earlierTexts(block)).toEqual(['Which plants like shade?', 'Ferns, hostas and hellebores.'])
+  expect(reads).toBe(2)
+  await session.screenshot({ path: `${SHOTS}/${engine}-03-after-degraded-retry.png` })
+}

@@ -25,10 +25,17 @@ const NO_ROWS: ChatEarlierMessage[] = [];
 /** Rows shown before "Show earlier" is needed: a long chat stays cheap to render. */
 export const CHAT_EARLIER_PAGE = 40;
 
+/** How many times a degraded or failed read is asked again, and after how long. */
+const CHAT_EARLIER_RETRIES = 2;
+const CHAT_EARLIER_RETRY_MS = 2_000;
+
 /**
  * Fetched once per session, and only when asked (`enabled`: a chat lane session
- * whose own history has been read from its start). Any failure reads as "nothing
- * earlier", and the panel shows the session alone, as before.
+ * whose own history has been read from its start). A server that ran out of time
+ * says `degraded`, and a read that failed says nothing either way: both are asked
+ * again a couple of times, because the first read of a cold chat can take the
+ * server's whole budget and the next one a second (live, 2026-10-11). After that
+ * it reads as "nothing earlier", and the panel shows the session alone, as before.
  */
 export function useChatEarlier(sessionId: string, enabled: boolean): ChatEarlierMessage[] {
   const [state, setState] = useState<{ sessionId: string; rows: ChatEarlierMessage[] } | null>(null);
@@ -36,16 +43,30 @@ export function useChatEarlier(sessionId: string, enabled: boolean): ChatEarlier
   useEffect(() => {
     if (!enabled || fetched) return;
     let cancelled = false;
-    apiGet<{ messages?: ChatEarlierMessage[] }>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/chat-earlier`, undefined, { priority: 'low' },
-    ).then(
-      (body) => { if (!cancelled) setState({ sessionId, rows: Array.isArray(body.messages) ? body.messages : [] }); },
-      (err: unknown) => {
-        log.warn('session', 'chat-earlier fetch failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
-        if (!cancelled) setState({ sessionId, rows: [] });
-      },
-    );
-    return () => { cancelled = true; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = (attempt: number) => {
+      const again = (why: string) => {
+        if (cancelled) return;
+        if (attempt < CHAT_EARLIER_RETRIES) {
+          timer = setTimeout(() => read(attempt + 1), CHAT_EARLIER_RETRY_MS);
+          return;
+        }
+        log.warn('session', 'chat-earlier gave up', { sessionId, why, attempts: attempt + 1 });
+        setState({ sessionId, rows: [] });
+      };
+      apiGet<{ messages?: ChatEarlierMessage[]; degraded?: boolean }>(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/chat-earlier`, undefined, { priority: 'low' },
+      ).then(
+        (body) => {
+          if (cancelled) return;
+          if (body.degraded) { again('degraded'); return; }
+          setState({ sessionId, rows: Array.isArray(body.messages) ? body.messages : [] });
+        },
+        (err: unknown) => again(err instanceof Error ? err.message : String(err)),
+      );
+    };
+    read(0);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [sessionId, enabled, fetched]);
   return state && fetched ? state.rows : NO_ROWS;
 }

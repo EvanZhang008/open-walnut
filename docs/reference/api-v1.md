@@ -2203,8 +2203,9 @@ an id outside `[A-Za-z0-9_-]`.
   ahead of the lane, then older lane sessions), in the row shape of
   `GET /conversations/:id/messages`. It is that route's assembly, stopped where
   the session begins, so a session panel can show an old chat whose transcript
-  lives elsewhere. Not a chat lane session, a replica, or the read past its
-  5 s budget → `200 { "messages": [] }`.
+  lives elsewhere. Not a chat lane session, or a replica → `200 { "messages":
+  [] }`. The read past its 5 s budget, or failing → `200 { "messages": [],
+  "degraded": true }`: ask again later.
 
 ### Personal AI conversation management (additive, Wave 1 2026-08)
 

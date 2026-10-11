@@ -5,7 +5,9 @@
  */
 import fs from 'node:fs'
 import { test } from '@playwright/test'
-import { SHOTS, continuedChatPutsTheEarlierPartAboveTheSession, oldChatOpensWithItsHistory } from './ask-chat-earlier-helpers'
+import {
+  SHOTS, aDegradedAnswerIsAskedAgain, continuedChatPutsTheEarlierPartAboveTheSession, oldChatOpensWithItsHistory,
+} from './ask-chat-earlier-helpers'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(120_000)
@@ -19,4 +21,9 @@ test('an old phone chat opens with its history above a session that never ran a 
 test('a continued chat shows its earlier part above the session, once', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await continuedChatPutsTheEarlierPartAboveTheSession(page, 'chromium')
+})
+
+test('a degraded first answer is asked again, and the earlier part still shows', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await aDegradedAnswerIsAskedAgain(page, 'chromium')
 })

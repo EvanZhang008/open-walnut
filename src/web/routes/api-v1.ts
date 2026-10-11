@@ -912,11 +912,13 @@ async function laneMessagesForConversation(
  * whose main session is a later one (an old phone chat, a lane re-minted after
  * an archive) opened on the Mac with its whole history missing.
  *
- * null = not a chat lane session, or this box cannot say (a replica, the budget).
+ * null = not a chat lane session, or a replica (it cannot say). 'degraded' = this
+ * box could not answer in time: the client asks again rather than keep nothing
+ * (live: the first read of a cold chat took the whole 5 s budget, the next 1 s).
  */
 async function chatEarlierThanSession(
   sessionId: string,
-): Promise<{ agentId: string; conversationId: string; messages: ApiV1Message[] } | null> {
+): Promise<{ agentId: string; conversationId: string; messages: ApiV1Message[] } | 'degraded' | null> {
   if (CLOUD_MODE) return null
   const { getSessionByClaudeId, listSessionsByLane } = await import('../../core/session-tracker.js')
   const { parseLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
@@ -926,27 +928,28 @@ async function chatEarlierThanSession(
   if (!record || !chat || !Number.isFinite(at)) return null
   const bail = deadline(LANE_TRANSCRIPT_DEADLINE_MS)
   try {
+    // The session's own first rows, read alongside the rest and awaited only
+    // when no older segment follows the prefix. A warm session that never ran a
+    // turn may have no transcript at all: then there is nothing to repeat.
+    const head: Promise<Array<Omit<ApiV1Message, 'id'>>> = isPreSpawnSession(record)
+      ? Promise.resolve([])
+      : import('../../core/session-projection.js')
+        .then(({ buildSessionTranscript }) => buildSessionTranscript(sessionId, { full: true }))
+        .then((t) => laneTranscriptToApiV1(t.messages), () => [])
     const assemble = async (): Promise<ApiV1Message[]> => {
       const records = await listSessionsByLane(record.lane!)
       // Cleared before this session started: nothing earlier survives.
       if (!afterLastClear(records).records.some((r) => r.claudeSessionId === sessionId)) return []
-      const { buildSessionTranscript } = await import('../../core/session-projection.js')
-      // A warm session that never ran a turn may have no transcript at all: then
-      // there is nothing for the prefix to repeat.
-      const head = isPreSpawnSession(record)
-        ? []
-        : await buildSessionTranscript(sessionId, { full: true })
-          .then((t) => laneTranscriptToApiV1(t.messages), () => [])
       return assembleLaneConversation(chat.agentId, chat.conversationId, records, undefined, { at, head })
     }
     const outcome = await Promise.race([assemble(), bail.promise])
-    if (outcome === 'timeout') return null
+    if (outcome === 'timeout') return 'degraded'
     return { ...chat, messages: outcome }
   } catch (err) {
     log.web.warn('api-v1 chat-earlier: could not assemble the earlier part of the chat', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     })
-    return null
+    return 'degraded'
   } finally {
     bail.cancel()
   }
@@ -1065,11 +1068,12 @@ function afterLastClear(records: LaneSegmentRecord[]): { records: LaneSegmentRec
 /**
  * Where an assembly stops: everything BEFORE one session of the lane (the part of
  * the chat a session panel on that session cannot show, chatEarlierThanSession).
- * `head` is that session's own first rows, which the prefix must not repeat.
+ * `head` is that session's own first rows, which the prefix must not repeat: a read
+ * started up front and awaited only when no older segment follows the prefix.
  */
 interface AssemblyUntil {
   at: number
-  head: Array<Omit<ApiV1Message, 'id'>>
+  head: Promise<Array<Omit<ApiV1Message, 'id'>>>
 }
 
 /** The assembly itself (see the block comment). Ordered, append-only, renumbered once. */
@@ -1145,7 +1149,7 @@ async function assembleLaneConversation(
   // …minus the rows the first segment repeats verbatim (the eager user message).
   // With no older segment, the segment that follows the prefix is the one the
   // assembly stops at.
-  const next = laneRows.length > 0 || !until ? laneRows : until.head
+  const next = laneRows.length > 0 || !until ? laneRows : await until.head
   const rows = dropLeadingOverlap(chatHistoryPrefix(entries, cutoff, floor), next)
   // Turns the cloud companion answered while this box was unreachable are rows
   // of THIS conversation that no lane transcript will ever contain (the Mac lane
@@ -1419,12 +1423,12 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
 
 // GET /api/v1/sessions/:id/chat-earlier
 // What the chat this lane session belongs to said before the session started, in
-// the phone's message shape. A degraded answer is an empty list, never an error:
-// the panel then shows the session alone, as it always did.
+// the phone's message shape. A degraded answer is an empty list marked
+// `degraded`, never an error: the panel shows the session alone and asks again.
 apiV1Router.get('/sessions/:id/chat-earlier', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const earlier = await chatEarlierThanSession(paramStr(req.params.id))
-    res.json(earlier ?? { messages: [] })
+    res.json(earlier === 'degraded' ? { messages: [], degraded: true } : earlier ?? { messages: [] })
   } catch (err) {
     next(err)
   }
