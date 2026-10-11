@@ -66,7 +66,7 @@ const reported = (r: object | null | undefined) =>
 
 /** `list` defaults to exactly the report's files; null = `vitest list` fails. */
 function run(mode: 'check' | 'record', opts: {
-  report?: object | null; list?: string[] | null; baseline?: object; minFiles?: number; runOut?: string; args?: string[]
+  report?: object | null; list?: string[] | null; baseline?: object; minFiles?: number; runOut?: string; args?: string[]; env?: Record<string, string>
 }): Promise<{ code: number; out: string }> {
   const list = opts.list === undefined ? reported(opts.report) : opts.list
   const reportFile = path.join(tmp, 'report.json')
@@ -89,6 +89,8 @@ function run(mode: 'check' | 'record', opts: {
         WALNUT_BASELINE_FILE: baselineFile,
         WALNUT_BASELINE_MIN_FILES: String(opts.minFiles ?? 2),
         ...(opts.runOut ? { WALNUT_BASELINE_RUN_OUT: opts.runOut } : {}),
+        GITHUB_ACTIONS: '',
+        ...opts.env,
       },
     }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1) : 0
@@ -155,6 +157,43 @@ describe('test-baseline.mjs check', () => {
     expect(r.code).toBe(1)
     expect(r.out).toContain(`↳ AssertionError: expected [] to have a length of 1 but got +0 | at ${B}:568:21`)
     expect(r.out).not.toContain('@vitest/expect')
+  })
+
+  it('prints a new failure\'s whole message, the server logs a live e2e put in it included, folded on GitHub', async () => {
+    // 2026-10-11: a takeover e2e failed three times on CI, and its log said only
+    // "timed out waiting for B's prompt in the detail | --- companion ---".
+    const root = fs.realpathSync(tmp)
+    const rep = report([A, B]) as { testResults: FileResult[] }
+    rep.testResults[1].status = 'failed'
+    rep.testResults[1].assertionResults.push({
+      fullName: 'the prompt', status: 'failed', failureMessages: [[
+        "Error: timed out waiting for B's prompt in the detail",
+        '--- companion ---',
+        'WRN [bridge] oldbox link closed {"code":1006}',
+        '--- primary ---',
+        'INF [leader] frozen',
+        `    at waitFor (${root}/${B}:106:9)`,
+        `    at file://${root}/node_modules/@vitest/runner/dist/chunk-hooks.js:155:11`,
+      ].join('\n')],
+    })
+    const r = await run('check', { report: rep, baseline: baseline([]), env: { GITHUB_ACTIONS: 'true' } })
+    expect(r.code).toBe(1)
+    expect(r.out).toContain(`::group::Full message: ${B} :: the prompt`)
+    expect(r.out).toContain('WRN [bridge] oldbox link closed {"code":1006}')
+    expect(r.out).toContain('INF [leader] frozen')
+    expect(r.out).toContain(`at waitFor (${root}/${B}:106:9)`)
+    expect(r.out).not.toContain('@vitest/runner')
+    expect(r.out.indexOf('::endgroup::')).toBeGreaterThan(r.out.indexOf('INF [leader] frozen'))
+
+    // A huge one keeps its head and its tail; off GitHub there is no group.
+    rep.testResults[1].assertionResults.at(-1)!.failureMessages = [`Error: head\n${'x'.repeat(50_000)}\ntail of the log`]
+    const big = await run('check', { report: rep, baseline: baseline([]) })
+    expect(big.out).toContain(`── Full message: ${B} :: the prompt`)
+    expect(big.out).not.toContain('::group::')
+    expect(big.out).toContain('Error: head')
+    expect(big.out).toContain('tail of the log')
+    expect(big.out).toMatch(/characters cut/)
+    expect(big.out.length).toBeLessThan(20_000)
   })
 
   it('counts a file that failed to load', async () => {

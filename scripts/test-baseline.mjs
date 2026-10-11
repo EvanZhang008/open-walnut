@@ -135,6 +135,20 @@ const firstLine = (msgs) => {
   if (!own) return lines.slice(0, 3).join(' | ').slice(0, 400);
   return `${lines.filter((l) => !isFrame(l)).slice(0, 2).join(' | ').slice(0, 340)} | at ${own}`;
 };
+// The whole message too, for a new failure's log: a live e2e puts the logs of
+// the servers it ran into its message, and the one-line reason cuts them off
+// (2026-10-11: a takeover e2e failed three times on CI, and the log said only
+// "timed out waiting for B's prompt in the detail | --- companion ---").
+const MESSAGE_CAP = 8_000;
+const fullMessages = new Map();
+const wholeMessage = (msgs) => {
+  const text = (Array.isArray(msgs) ? msgs : [msgs])
+    .filter((x) => typeof x === 'string' && x.trim())
+    // The matcher's and the runner's own frames say nothing about the failure.
+    .map((m) => m.split('\n').filter((l) => !(l.trim().startsWith('at ') && l.includes('/node_modules/'))).join('\n'))
+    .join('\n\n');
+  return text.length > MESSAGE_CAP ? `${text.slice(0, MESSAGE_CAP / 2)}\n… (${text.length - MESSAGE_CAP} characters cut) …\n${text.slice(-MESSAGE_CAP / 2)}` : text;
+};
 const report = JSON.parse(fs.readFileSync(reportFile, 'utf-8'));
 for (const file of report.testResults ?? []) {
   const rel = fileKey(file.name);
@@ -144,6 +158,7 @@ for (const file of report.testResults ?? []) {
     const key = `${rel} :: ${a.fullName}`;
     failures.add(key);
     reasons.set(key, firstLine(a.failureMessages));
+    fullMessages.set(key, wholeMessage(a.failureMessages));
   }
 
   // A file that dies at IMPORT/COLLECTION time reports status:'failed' with an
@@ -158,6 +173,7 @@ for (const file of report.testResults ?? []) {
     const key = `${rel} :: <file failed to load or collect>`;
     failures.add(key);
     reasons.set(key, firstLine(file.message));
+    fullMessages.set(key, wholeMessage(file.message));
   }
 }
 const filesInRun = new Set((report.testResults ?? []).map((file) => fileKey(file.name)));
@@ -245,5 +261,14 @@ regressions.forEach((f) => {
   console.log(`    ${f}`);
   if (reasons.get(f)) console.log(`        ↳ ${reasons.get(f)}`);
 });
+// Each one's whole message, folded on GitHub so the list above stays short.
+const ci = process.env.GITHUB_ACTIONS === 'true';
+for (const f of regressions.slice(0, 10)) {
+  const full = fullMessages.get(f);
+  if (!full) continue;
+  console.log(ci ? `::group::Full message: ${f}` : `\n── Full message: ${f}`);
+  console.log(full);
+  if (ci) console.log('::endgroup::');
+}
 console.log('\nFix them, or if they are genuinely pre-existing, re-record the baseline and explain why.');
 process.exit(1);
