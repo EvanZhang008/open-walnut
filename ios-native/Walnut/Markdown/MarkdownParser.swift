@@ -59,7 +59,7 @@ enum MarkdownParser {
         // (clip-limit CJK) rows always fits: cost-cap eviction on a coverable
         // page was the "round-trip scroll re-parses everything" freeze
         // mechanism (2026-08-07 repro: 400x64KB rows = 25s round trip).
-        // Realistic pages (4KB server-clipped rows) use <1M of this budget;
+        // Realistic pages (mostly short rows, the odd 16K reply) use <1M of this budget;
         // memory pressure still purges via NSCache.
         c.totalCostLimit = 8_000_000
         return c
@@ -72,9 +72,11 @@ enum MarkdownParser {
     /// page (the "scrolling a streaming session freezes" mechanism).
     enum CacheMode { case shared, skip }
 
-    /// Defensive clip for oversized rows (Characters). Transcript rows are
-    /// server-clipped at 4KB, so anything past this is legacy/foreign data —
-    /// clip to keep one row's parse cost AND its cache cost bounded. Above
+    /// Defensive clip for oversized rows (Characters). It is ALSO the server's
+    /// live-read prose budget (core/sessions/transcript-clip.ts
+    /// TRANSCRIPT_LIVE_TEXT_MAX): a session's rich read clips replies here so a
+    /// long one arrives whole, so the two must move together. Anything past it is
+    /// clipped to keep one row's parse cost AND its cache cost bounded. Above
     /// LiveMarkdownWindow.windowKeep would defeat the point; live segments
     /// opt out instead (clipOversized: false) since the window already bounds
     /// them.

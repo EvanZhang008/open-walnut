@@ -16,8 +16,8 @@ import Foundation
 /// The fix is structural, not a tuning knob:
 ///  1. WINDOW — only the newest `windowKeep` chars of the live text are
 ///     rendered (a clipped-prefix chip marks the rest). History is never
-///     affected: transcript rows are server-clipped at 4KB, so the live row
-///     was the only unbounded render path in the app.
+///     affected: transcript rows are server-clipped (16K prose, the history
+///     row clip), so the live row was the only unbounded render path in the app.
 ///  2. SPLIT — the window is split at a QUANTIZED, fence-safe paragraph
 ///     boundary into a stable `head` and a small `tail`. Quantizing the split
 ///     keeps `head` byte-identical across many ticks, so `.equatable()` +

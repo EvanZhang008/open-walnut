@@ -433,7 +433,7 @@ struct ChatMarkdownBody: View, Equatable {
 }
 
 /// Markdown body for the LIVE (streaming) turn row — the one text in the app
-/// with no upper bound (transcript rows are server-clipped at 4KB).
+/// with no upper bound (transcript rows are server-clipped).
 ///
 /// Rendering the whole in-flight reply through ChatMarkdownBody re-parsed and
 /// re-laid-out ALL of it on every ~8Hz delta flush (the parse cache can't hit:

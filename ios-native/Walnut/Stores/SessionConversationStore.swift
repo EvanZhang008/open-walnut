@@ -498,7 +498,7 @@ final class SessionConversationStore {
 
     private func reconcileTracked(_ transcript: SessionTranscript) {
         let wasPinned = bottomPinned
-        let incoming = transcript.messages.map { Self.row(from: $0) }
+        let incoming = Self.keepingWholeText(transcript.messages, held: historyMessages)
         var merged: [ChatMessage]
         // Whether the head of what is held is still the head after the merge:
         // then `olderExists` keeps describing it. Otherwise the window decides.
@@ -638,8 +638,9 @@ final class SessionConversationStore {
         return !words.isEmpty && sameWords(row.text.trimmingCharacters(in: .whitespacesAndNewlines), words)
     }
 
-    /// Equal, or the transcript's clip of it: user text is clipped at 4 KB + "…"
-    /// (session-projection TEXT_MAX), so a long bubble never equals its row.
+    /// Equal, or the transcript's clip of it: user text is clipped + "…" (4K on a
+    /// swept read, 16K on a live one; core/sessions/transcript-clip.ts), so a long
+    /// bubble never equals its row.
     private static func sameWords(_ row: String, _ bubble: String) -> Bool {
         if row == bubble { return true }
         guard row.hasSuffix("…"), row.count > 1 else { return false }
@@ -785,13 +786,50 @@ final class SessionConversationStore {
         }
     }
 
+    /// The incoming rows, except that a CLIPPED copy of a text row never replaces
+    /// the whole text this page already holds for it.
+    ///
+    /// Reads clip at different budgets: a rich read (open, turn end, Load earlier)
+    /// at the phone's row bound, 16K, while the slim 5s poll, the cached first
+    /// phase and a replica's synced file keep the pushed tail's 4K
+    /// (core/sessions/transcript-clip.ts on the server). Without this, a degraded
+    /// page cut a reply the rich read had delivered whole back to its first 4,000
+    /// characters plus "…" on every poll. Same row = same role and time, a text
+    /// row on both sides, a held text longer than the server's smallest budget
+    /// (nothing shorter was ever clipped, so a reply that really ends in "…" is
+    /// left alone), and the clipped text minus its "…" starts the held one. The
+    /// prefix is compared in Unicode scalars: the server cuts on a code-point
+    /// boundary, which can fall inside a grapheme cluster. A provisional reply is
+    /// never a source: it holds the whole turn's streamed text, which can span
+    /// several of the server's rows.
+    static func keepingWholeText(_ messages: [SessionTranscript.Message],
+                                 held: [ChatMessage]) -> [ChatMessage] {
+        func clipped(_ m: SessionTranscript.Message) -> Bool {
+            m.kind == nil && m.text.unicodeScalars.last == "\u{2026}"
+        }
+        guard messages.contains(where: clipped) else { return messages.map { row(from: $0) } }
+        var whole: [String: [String]] = [:]
+        for m in held where m.kind == nil && !isProvisional(m) && m.text.utf16.count > slimTextMax {
+            whole["\(m.role)|\(m.createdAt)", default: []].append(m.text)
+        }
+        guard !whole.isEmpty else { return messages.map { row(from: $0) } }
+        return messages.map { m in
+            guard clipped(m), let candidates = whole["\(m.role)|\(m.timestamp)"] else { return row(from: m) }
+            let head = m.text.unicodeScalars.dropLast()
+            let longer = candidates.first {
+                $0.utf8.count > m.text.utf8.count && $0.unicodeScalars.starts(with: head)
+            }
+            return row(from: m, text: longer)
+        }
+    }
+
     /// One transcript row as a timeline message. Ids are assigned after a merge
     /// (`assignStableIDs`), because they must be unique across it.
-    private static func row(from m: SessionTranscript.Message) -> ChatMessage {
+    private static func row(from m: SessionTranscript.Message, text: String? = nil) -> ChatMessage {
         ChatMessage(
             id: "",
             role: m.role,
-            text: m.text,
+            text: text ?? m.text,
             createdAt: m.timestamp,
             kind: mapKind(m.kind),
             detail: m.detail,
@@ -803,12 +841,43 @@ final class SessionConversationStore {
         )
     }
 
-    /// Mirror of the server transcript clip (session-projection TEXT_MAX):
-    /// keep the FIRST 4K chars + "…" so the provisional row is byte-identical
-    /// to the canonical row the refetch swaps in (identical text → identical
-    /// stable id → no visible flash).
+    /// Mirror of the server's LIVE transcript budget (core/sessions/transcript-clip.ts
+    /// `'live'`, which the turn-end rich refetch uses): keep a reply up to the
+    /// phone's own row bound whole, so the provisional row is byte-identical to the
+    /// canonical row the refetch swaps in (identical text → identical stable id →
+    /// no visible flash). This used to mirror the pushed tail's 4K, and that was the
+    /// "the reply turns into … halfway" report (2026-10-10): every reply past 4,000
+    /// characters streamed in whole, then snapped to its head plus "…" here.
+    /// Lengths are UTF-16 units, as the server counts them.
+    static let liveTextMax = MarkdownParser.oversizedRowClipLimit
+    static let liveRichTextMax = LiveMarkdownWindow.windowMax
+    /// The server's pushed-tail budget (TRANSCRIPT_TEXT_MAX): it only ever clips
+    /// a text longer than this.
+    static let slimTextMax = 4_000
+
     static func clipProvisional(_ text: String) -> String {
-        text.count > 4_000 ? String(text.prefix(4_000)) + "…" : text
+        guard text.utf16.count > liveTextMax else { return text }
+        let limit = looksLikeMarkup(text) ? liveRichTextMax : liveTextMax
+        guard text.utf16.count > limit else { return text }
+        // Where the server cuts (core/text-cut.ts cutEnd): `limit` UTF-16 units,
+        // one back when that splits a surrogate pair. A markup reply past 48K also
+        // loses its unfinished trailing tag on the server, which this does not
+        // copy: the refetch then swaps the row once.
+        let utf16 = text.utf16
+        var cut = utf16.index(utf16.startIndex, offsetBy: limit)
+        if cut.samePosition(in: text.unicodeScalars) == nil { cut = utf16.index(before: cut) }
+        return String(String.UnicodeScalarView(text.unicodeScalars[..<cut])) + "…"
+    }
+
+    /// The server's choice of budget (transcript-clip.ts `looksLikeMarkup`): a
+    /// closing tag, a start tag with an attribute, or a self-closing tag. Ported
+    /// rather than approximated with `RichHTMLSegments.isRich`, which skips tags in
+    /// code and so picks the prose budget for a reply the server gives 48K.
+    static func looksLikeMarkup(_ text: String) -> Bool {
+        guard text.utf8.contains(UInt8(ascii: "<")) else { return false }
+        return text.range(of: #"</[a-zA-Z]"#, options: .regularExpression) != nil
+            || text.range(of: #"<[a-zA-Z][a-zA-Z0-9:-]*\s[^<>]*>"#, options: .regularExpression) != nil
+            || text.range(of: #"<[a-zA-Z][a-zA-Z0-9:-]*\s*/>"#, options: .regularExpression) != nil
     }
 
     private static func mapKind(_ raw: String?) -> ChatMessage.Kind? {
@@ -1630,14 +1699,14 @@ final class SessionConversationStore {
         let wasPinned = bottomPinned
         streaming = false
         activity = nil
-        // Clip to the transcript's own row limit (session-projection TEXT_MAX =
-        // 4KB + "…"): the refetch below replaces this row with the clipped
-        // canonical version anyway, and parsing a multi-MB reply as ONE static
-        // markdown row here was the second unbounded main-thread parse on the
-        // page (the windowed live row being the first).
+        // Clip to the rich read's row limit (clipProvisional: 16K prose, 48K
+        // markup): the refetch below replaces this row with the canonical
+        // version anyway, and parsing a multi-MB reply as ONE static markdown row
+        // here was the second unbounded main-thread parse on the page (the
+        // windowed live row being the first).
         // Truncated liveText lost the reply's HEAD — clipProvisional takes a
         // PREFIX, which would no longer match the canonical transcript row
-        // (server clips the FIRST 4K), so the stable-id swap would flash a
+        // (the server keeps the reply's FIRST 16K/48K), so the stable-id swap would flash a
         // mismatched bubble. Skip the provisional row and let the refetch
         // below paint the canonical one (a brief gap on multi-100KB replies
         // is acceptable; a wrong-text flash is not).

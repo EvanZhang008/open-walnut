@@ -71,10 +71,11 @@ enum TimelineMetrics {
     /// web view so nothing is unreachable. Deliberately far above the web
     /// console's 1600pt island cap: a nested scroller is much worse on a phone
     /// than in a mouse-driven pane (a vertical pan that starts inside the card
-    /// steals the transcript's own scroll), so the cap is set past what a
-    /// transcript row can even hold — a row's markup is clipped server-side at
-    /// 12 KB — and a tall card scrolls WITH the conversation. The nested-scroll
-    /// path survives only as the "someone found a way" backstop.
+    /// steals the transcript's own scroll), so the cap is set past what almost
+    /// any card reaches and a tall card scrolls WITH the conversation. A row's
+    /// markup is clipped server-side at 48K characters (the window the live row
+    /// already renders), so a very long card can still pass it; the nested-scroll
+    /// path is the backstop for that one.
     static let richMaxHeight: CGFloat = 4000
     /// Height of the "building interactive block…" placeholder shown while an
     /// island is still arriving.
