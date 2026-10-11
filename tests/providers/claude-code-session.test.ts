@@ -1491,6 +1491,33 @@ describe('ClaudeCodeSession.attachToExisting', () => {
     session.detach();
   });
 
+  it('keeps a dotted model id and the stored window, so an attached session shows its percent at once', async () => {
+    const session = await ClaudeCodeSession.attachToExisting({
+      claudeSessionId: 'attach-dotted-model',
+      taskId: 'task-attach-dotted',
+      project: 'proj',
+      process_status: 'running',
+      mode: 'default',
+      startedAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+      messageCount: 1,
+      pid: 99999,
+      outputFile: '/tmp/nonexistent.jsonl',
+      model: 'gpt-6.1-sol',
+      modelMaxWindow: 1000000,
+    } as any, MOCK_CLI, daemonUrl());
+    const seen: Array<Record<string, unknown>> = [];
+    bus.subscribe('main-ai', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_USAGE_UPDATE) seen.push(event.data as Record<string, unknown>);
+    });
+    const line = (event: unknown) => (session as any).handleStreamLine(JSON.stringify({ type: 'stream_event', event }));
+    line({ type: 'message_start', message: { id: 'm1', usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } });
+    line({ type: 'message_delta', usage: { input_tokens: 436, cache_creation_input_tokens: 488, cache_read_input_tokens: 265328 } });
+
+    expect(seen.at(-1)).toMatchObject({ model: 'gpt-6.1-sol', inputTokens: 266252, contextWindow: 1000000, contextPercent: 27 });
+    session.detach();
+  });
+
   it('inherits the requested MCP mounts from the record (attach must not blind the mount check)', async () => {
     // An attach builds a FRESH session object, so without this the requested-mount
     // list is empty and every init seen after an attach (server restart, reconnect,

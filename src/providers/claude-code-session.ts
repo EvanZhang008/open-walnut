@@ -2807,8 +2807,12 @@ export class ClaudeCodeSession {
       // De-duplicate [1m][1m] from old resume bug before processing
       const cleanModel = record.model.replace(/(\[1m\])+$/, '[1m]')
       session._initModel = cleanModel
-      const shortModel = cleanModel.replace(/^.*\./, '').replace(/[-_]v\d+(\[1m\])?$/, '$1') || cleanModel
-      session._model = shortModel
+      session._model = shortModelId(cleanModel)
+    }
+    // The model's own window: without it an attached session has no denominator
+    // until its current turn ends, and a long turn shows no percent at all.
+    if (typeof record.modelMaxWindow === 'number' && record.modelMaxWindow > 0) {
+      session._cliRawContextWindow = record.modelMaxWindow
     }
     if (record.cliModel) {
       session._cliModel = record.cliModel
