@@ -1,7 +1,6 @@
 /**
- * Draft-time engine model catalog — a one-shot ACP handshake against an
- * engine's adapter (initialize → session/new → read the advertised models →
- * kill), so the DRAFT composer can list real models before any session exists.
+ * Draft-time engine model catalog. Codex uses the daemon's read-only model/list;
+ * other adapters advertise models through an ACP session/new handshake.
  *
  * The live path discovers models the same way, but only after establish; a
  * draft has no session to ask, and "models are discovered at session start"
@@ -19,11 +18,13 @@ import { spawn } from 'node:child_process'
 import readline from 'node:readline'
 import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import { engineCaps, isAcpEngine } from '../core/agents/engine-registry.js'
 import type { SessionEngine } from '../core/types.js'
 import {
   resolveAcpArtifacts,
   resolveSystemCodexPath,
+  parseCodexBaseConfig,
   resolveEngineExecutable,
   buildAcpAdapterEnv,
   engineEnvOverlayFromConfig,
@@ -34,6 +35,8 @@ import {
   type AcpModelInfo,
 } from './acp-worker/protocol.js'
 import { log } from '../logging/index.js'
+import { localDaemon } from './local-daemon.js'
+import { getDirectDaemonConnection } from './daemon-connection.js'
 
 export interface EngineModelCatalog {
   engine: SessionEngine
@@ -234,7 +237,7 @@ async function configuredAdapterCmd(engine: SessionEngine): Promise<string[] | u
 async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineModelCatalog> {
   // A draft can point at a folder that doesn't exist yet ("Create folder &
   // start") — probe from $HOME then instead of failing the spawn on ENOENT.
-  const probeCwd = cwd && fs.existsSync(cwd) ? cwd : undefined
+  const probeCwd = cwd && path.isAbsolute(cwd) && await fs.promises.stat(cwd).then((stat) => stat.isDirectory(), () => false) ? cwd : undefined
   const { adapterCmd } = resolveAcpArtifacts(engine, {
     configuredAdapterCmd: await configuredAdapterCmd(engine),
   })
@@ -247,13 +250,26 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
     const { getConfig } = await import('../core/config-manager.js')
     overlay = engineEnvOverlayFromConfig(await getConfig(), engine)
   } catch { /* unreadable config = no overlay, same as the launch path */ }
+  const configuredEnv = mergeAcpSpawnEnv(process.env, overlay)
+  const codexPath = engine === 'codex' ? resolveSystemCodexPath() : undefined
   const managed = engine === 'codex'
-    ? buildAcpAdapterEnv(resolveSystemCodexPath(), { sessionId: `model-probe-${engine}` })
+    ? buildAcpAdapterEnv(codexPath, { sessionId: `model-probe-${engine}`, baseConfig: parseCodexBaseConfig(configuredEnv.CODEX_CONFIG) })
     : buildAcpAdapterEnv(undefined, { sessionId: `model-probe-${engine}` })
   const provider = engine === 'pi'
     ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd }) }
     : undefined
   const env = mergeAcpSpawnEnv(process.env, { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) })
+  if (codexPath) {
+    if (!localDaemon.wsUrl) await localDaemon.ensureRunning()
+    if (!localDaemon.wsUrl) throw new Error('local daemon not running')
+    const conn = await getDirectDaemonConnection('__local__', localDaemon.wsUrl)
+    if (conn.hasCapability('acp-model-catalog-v1')) {
+      const response = await conn.send('acpModelCatalog', { binary: codexPath, cwd: probeCwd, env: { ...(overlay ?? {}), ...(managed ?? {}) } })
+      if (!response.ok) throw new Error(response.error || 'Codex model catalog failed')
+      const result = response as unknown as { models: AcpModelInfo[]; currentModelId?: string }
+      return { engine, models: result.models, currentModelId: result.currentModelId, fetchedAt: Date.now(), source: 'probe' }
+    }
+  }
   const { models, currentModelId } = await probeAdapterModels(adapterCmd, { env, cwd: probeCwd })
   return { engine, models, currentModelId, fetchedAt: Date.now(), source: 'probe' }
 }
@@ -297,7 +313,14 @@ export async function getEngineModelCatalog(
   if (inflight.size >= MAX_INFLIGHT_PROBES) {
     throw new Error(`too many engine model probes in flight (${inflight.size}) — retry shortly`)
   }
-  const probe = probeEngine(engine, options.cwd)
+  let deadline: ReturnType<typeof setTimeout>
+  const work = probeEngine(engine, options.cwd)
+  const probe = Promise.race([
+    work,
+    new Promise<EngineModelCatalog>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error('engine model catalog timed out')), PROBE_TIMEOUT_MS + 5_000)
+    }),
+  ])
     .then((result) => {
       cache.set(key, { at: Date.now(), result })
       return result
@@ -308,7 +331,10 @@ export async function getEngineModelCatalog(
       log.session.warn('engine model probe failed', { engine, cwd: options.cwd, error: message })
       throw err instanceof Error ? err : new Error(message)
     })
-    .finally(() => { inflight.delete(key) })
+    .finally(() => { clearTimeout(deadline) })
   inflight.set(key, probe)
+  // A request deadline does not free a child that is still running.
+  const release = () => { if (inflight.get(key) === probe) inflight.delete(key) }
+  void work.then(release, release)
   return probe
 }

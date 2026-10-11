@@ -4,7 +4,7 @@
  * probe test (tests/providers/mock-acp-agent.mjs, the same mock the worker
  * suite uses) — only the provider binary is mocked, never the protocol.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -27,10 +27,38 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
   return { ...actual, getConfig: async () => configHolder.config }
 })
 
+const daemonProbe = vi.hoisted(() => ({
+  ensureRunning: vi.fn(async () => {}),
+  send: vi.fn(),
+  hasCapability: vi.fn(() => true),
+}))
+vi.mock('../../src/providers/local-daemon.js', () => ({
+  localDaemon: { ensureRunning: daemonProbe.ensureRunning, wsUrl: 'ws://127.0.0.1:19001' },
+}))
+vi.mock('../../src/providers/daemon-connection.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/providers/daemon-connection.js')>(),
+  getDirectDaemonConnection: async () => ({ send: daemonProbe.send, hasCapability: daemonProbe.hasCapability }),
+}))
+vi.mock('../../src/providers/acp-session.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/providers/acp-session.js')>()
+  return {
+    ...actual,
+    resolveSystemCodexPath: () => '/usr/local/bin/codex',
+    resolveAcpArtifacts: (engine: Parameters<typeof actual.resolveAcpArtifacts>[0], options: Parameters<typeof actual.resolveAcpArtifacts>[1]) => engine === 'codex'
+      ? { workerCmd: [], adapterCmd: [process.execPath, new URL('./mock-acp-agent.mjs', import.meta.url).pathname] }
+      : actual.resolveAcpArtifacts(engine, options),
+  }
+})
+
 beforeEach(() => {
   resetEngineModelCatalogCache()
   configHolder.config = {}
+  daemonProbe.ensureRunning.mockClear()
+  daemonProbe.send.mockReset()
+  daemonProbe.hasCapability.mockReset().mockReturnValue(true)
 })
+
+afterEach(() => { vi.useRealTimers() })
 
 describe('probeAdapterModels', () => {
   it('reads the advertised catalog out of session/new and exits', async () => {
@@ -107,6 +135,57 @@ describe('probeAdapterModels', () => {
 })
 
 describe('getEngineModelCatalog', () => {
+  it('reads Codex models through the daemon without establishing a session', async () => {
+    configHolder.config = { engines: { codex: { env: { MODEL_PROVIDER: 'local-gateway', CODEX_CONFIG: '{"model_provider":"local-gateway"}' } } } }
+    daemonProbe.send.mockResolvedValue({ ok: true, models: [{ modelId: 'native-model[low]', name: 'Native Model (low)' }], currentModelId: 'native-model[low]' })
+    const [first, second] = await Promise.all([
+      getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv, cwd: process.cwd() }),
+      getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv, cwd: process.cwd() }),
+    ])
+    expect(first).toEqual(second)
+    expect(first.models).toEqual([{ modelId: 'native-model[low]', name: 'Native Model (low)' }])
+    expect(daemonProbe.send).toHaveBeenCalledTimes(1)
+    expect(daemonProbe.send).toHaveBeenCalledWith('acpModelCatalog', expect.objectContaining({
+      binary: '/usr/local/bin/codex', cwd: process.cwd(),
+      env: expect.objectContaining({ MODEL_PROVIDER: 'local-gateway', CODEX_CONFIG: '{"model_provider":"local-gateway"}' }),
+    }))
+    await getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv, cwd: process.cwd() })
+    expect(daemonProbe.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps an unfinished daemon probe deduped after the response deadline', async () => {
+    vi.useFakeTimers()
+    let complete!: (result: unknown) => void
+    daemonProbe.send.mockImplementation(() => new Promise((resolve) => { complete = resolve }))
+    const first = getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv })
+    const rejected = expect(first).rejects.toThrow('engine model catalog timed out')
+    await vi.advanceTimersByTimeAsync(20_001)
+    await rejected
+    const retried = getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv, refresh: true })
+    await expect(retried).rejects.toThrow('engine model catalog timed out')
+    expect(daemonProbe.send).toHaveBeenCalledTimes(1)
+    complete({ ok: true, models: [{ modelId: 'late[low]', name: 'Late' }] })
+    await vi.advanceTimersByTimeAsync(0)
+    daemonProbe.send.mockResolvedValue({ ok: true, models: [{ modelId: 'fresh[low]', name: 'Fresh' }] })
+    expect((await getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv, refresh: true })).models[0].modelId).toBe('fresh[low]')
+    vi.useRealTimers()
+  })
+
+  it('uses the ACP handshake when an older daemon has no read-only catalog capability', async () => {
+    daemonProbe.hasCapability.mockReturnValue(false)
+    const catalog = await getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv })
+    expect(catalog.models.map((model) => model.modelId)).toEqual(['mock-gpt-best', 'mock-gpt-fast'])
+    expect(daemonProbe.send).not.toHaveBeenCalled()
+  })
+
+  it('reports a daemon model failure and retries after the operator fixes it', async () => {
+    daemonProbe.send.mockResolvedValue({ ok: false, error: 'provider unavailable' })
+    await expect(getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv })).rejects.toThrow('provider unavailable')
+    daemonProbe.send.mockResolvedValue({ ok: true, models: [{ modelId: 'recovered[low]', name: 'Recovered' }] })
+    await expect(getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv })).rejects.toThrow('provider unavailable')
+    expect((await getEngineModelCatalog('codex', { env: {} as NodeJS.ProcessEnv, refresh: true })).models[0].modelId).toBe('recovered[low]')
+  })
+
   it('answers the fixture mock under WALNUT_ENGINE_PROBE_ALL=1 without spawning', async () => {
     const catalog = await getEngineModelCatalog('opencode', {
       env: { WALNUT_ENGINE_PROBE_ALL: '1' } as NodeJS.ProcessEnv,

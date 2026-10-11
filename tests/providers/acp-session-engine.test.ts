@@ -109,6 +109,20 @@ describe('AcpSession engine identity', () => {
     expect(isSame({ engine: 'goose', acpRuntimeId: 'acp-goose-runtime', taskId: 'task-2' })).toBe(false);
   });
 
+  it('preserves the operator Codex provider config alongside managed instructions', async () => {
+    const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex', artifacts: ARTIFACTS });
+    const providerConfig = { model_provider: 'local-gateway', model_providers: { 'local-gateway': { base_url: 'http://127.0.0.1:8402/openai/v1', wire_api: 'responses', requires_openai_auth: false } } };
+    const adapter = session as unknown as {
+      resolveConfiguredEngineEnv(): Promise<Record<string, string>>;
+      buildAdapterEnv(executable: string): Promise<Record<string, string>>;
+    };
+    vi.spyOn(adapter, 'resolveConfiguredEngineEnv').mockResolvedValue({ CODEX_CONFIG: JSON.stringify(providerConfig), MODEL_PROVIDER: 'local-gateway' });
+    const env = await adapter.buildAdapterEnv('/usr/local/bin/codex');
+    expect(JSON.parse(env.CODEX_CONFIG)).toMatchObject(providerConfig);
+    expect(env.MODEL_PROVIDER).toBe('local-gateway');
+    expect(env.CODEX_PATH).toBe('/usr/local/bin/codex');
+  });
+
   it('stamps the record with its own engine and sends only walnut env for non-codex adapters', async () => {
     const session = new AcpSession({
       taskId: '',

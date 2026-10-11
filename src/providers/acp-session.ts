@@ -1080,7 +1080,9 @@ export class AcpSession {
         : undefined
       return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) }
     }
-    const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
+    const parsedBaseConfig = parseCodexBaseConfig(
+      overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : process.env.CODEX_CONFIG,
+    )
     // Startup approval preset: the session's OWN persisted choice wins (it is
     // replayed post-establish by replayPersistedConfig); only a session with
     // no saved mode inherits the default from ~/.codex/config.toml (respect

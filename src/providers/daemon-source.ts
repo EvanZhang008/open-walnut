@@ -197,7 +197,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'acp-model-catalog-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3304,6 +3304,12 @@ function dispatchCommand(ws, id, cmd) {
     // it (every remote source deploy) answers with a structured errorKind so walnut
     // can tell "host can't do ACP" from a transient failure.
     // Keep this case list in sync with daemon-standalone.ts + daemon-capabilities.ts.
+    case 'acpModelCatalog': {
+      if (!acp || typeof acp.modelCatalog !== 'function') return acpUnsupported(ws, id);
+      if (typeof cmd.binary !== 'string' || !path.isAbsolute(cmd.binary)) return sendError(ws, id, 'acpModelCatalog: missing absolute binary');
+      return acp.modelCatalog(cmd.binary, { cwd: cmd.cwd, env: cmd.env })
+        .then(function (result) { sendOk(ws, id, result); }, function (error) { sendError(ws, id, error.message); });
+    }
     case 'acpStart': return acp ? cmdAcpStart(ws, id, cmd) : acpUnsupported(ws, id);
     case 'acpSend': return acp ? cmdAcpOp(ws, id, cmd, 'prompt') : acpUnsupported(ws, id);
     case 'acpSteer': return acp ? cmdAcpOp(ws, id, cmd, 'steer') : acpUnsupported(ws, id);
@@ -9790,6 +9796,7 @@ function daemonCapabilities() {
     const cronIndex = caps.indexOf('cron-metadata-v1');
     if (cronIndex !== -1) caps.splice(cronIndex, 1);
   }
+  if (acp && typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1');
   if (changesCore) caps.push('changes-v1');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');

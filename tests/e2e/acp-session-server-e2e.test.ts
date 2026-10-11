@@ -47,6 +47,8 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { getDirectDaemonConnection } from '../../src/providers/daemon-connection.js'
+import { localDaemon } from '../../src/providers/local-daemon.js'
+import { resetEngineModelCatalogCache } from '../../src/providers/engine-model-probe.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { getSessionsForTask } from '../../src/core/session-tracker.js'
 import { addTask, getTask, listTasks } from '../../src/core/task-manager.js'
@@ -292,6 +294,47 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     expect((await search.json() as { results: unknown[] }).results).toEqual([
       expect.objectContaining({ type: 'task', taskId, sessionId }),
     ])
+  }, 30_000)
+
+  it('loads draft Codex models through the real server and daemon without starting a thread', async () => {
+    const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-native-model-'))
+    const binary = path.join(stubDir, 'codex')
+    const callsFile = path.join(stubDir, 'calls.jsonl')
+    const oldBinary = process.env.WALNUT_CODEX_PATH
+    const oldFixture = process.env.WALNUT_ENGINE_PROBE_ALL
+    vi.spyOn(localDaemon, 'wsUrl', 'get').mockReturnValue(daemonWsUrl)
+    try {
+      fs.writeFileSync(binary, `#!${process.execPath}\nconst fs = require('node:fs');
+const rl = require('node:readline').createInterface({ input: process.stdin });
+rl.on('line', line => {
+  const msg = JSON.parse(line); fs.appendFileSync(${JSON.stringify(callsFile)}, line + '\\n');
+  if (msg.id === undefined) return;
+  let result;
+  if (msg.method === 'initialize') result = {};
+  else if (msg.method === 'config/read') result = {config:{model:'native-test',model_reasoning_effort:'high'}};
+  else if (msg.method === 'model/list') result = {data:[{id:'native-test',displayName:'Native Test',description:'Read-only catalog',defaultReasoningEffort:'low',isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'low',description:'Fast'},{reasoningEffort:'high',description:'Deep'}]}],nextCursor:null};
+  else { process.stdout.write(JSON.stringify({id:msg.id,error:{code:-32601,message:'unexpected method'}})+'\\n'); return; }
+  process.stdout.write(JSON.stringify({id:msg.id,result})+'\\n');
+});`, { mode: 0o755 })
+      process.env.WALNUT_CODEX_PATH = binary
+      delete process.env.WALNUT_ENGINE_PROBE_ALL
+      resetEngineModelCatalogCache()
+      const response = await fetch(apiUrl(`/api/engines/codex/models?cwd=${encodeURIComponent(stubDir)}&refresh=1`))
+      expect(response.status).toBe(200)
+      const catalog = await response.json() as { models: Array<{modelId:string}>; currentModelId:string }
+      expect(catalog.currentModelId).toBe('native-test[high]')
+      expect(catalog.models.map(row => row.modelId)).toEqual(['native-test[low]', 'native-test[high]'])
+      const methods = fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line).method)
+      expect(methods).toEqual(['initialize', 'initialized', 'config/read', 'model/list'])
+    } finally {
+      vi.restoreAllMocks()
+      if (oldBinary === undefined) delete process.env.WALNUT_CODEX_PATH
+      else process.env.WALNUT_CODEX_PATH = oldBinary
+      if (oldFixture === undefined) delete process.env.WALNUT_ENGINE_PROBE_ALL
+      else process.env.WALNUT_ENGINE_PROBE_ALL = oldFixture
+      resetEngineModelCatalogCache()
+      fs.rmSync(stubDir, { recursive: true, force: true })
+    }
   }, 30_000)
 
   it('discovers ACP models, switches live, and persists acpModel', async () => {

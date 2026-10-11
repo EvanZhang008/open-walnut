@@ -2984,6 +2984,21 @@ describe('session.message relay daemon-standalone vs daemon-source parity', () =
 // reload, the four commands, the invalid-config reason, the scheduler and its
 // cleanup — and NONE of it may be reachable from the public cloud bridge (a
 // check is an arbitrary shell command on the host).
+describe('read-only ACP model catalog daemon parity', () => {
+  it('both twins dispatch the read-only catalog and keep it off the public bridge', () => {
+    const standalone = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    const source = readFile(sourcePath)
+    for (const text of [standalone, source]) {
+      expect(text).toContain("case 'acpModelCatalog':")
+      expect(text).toContain('acp.modelCatalog(cmd.binary,')
+      const allowlist = /BRIDGE_ALLOWED_COMMANDS = new Set\(\[([\s\S]*?)\]\)/.exec(text)
+      expect(allowlist).not.toBeNull()
+      expect(allowlist![1]).not.toContain('acpModelCatalog')
+    }
+    expect(source).toContain("typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1')")
+  })
+})
+
 describe('walnut-trigger daemon parity', () => {
   const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
   const templateSrc = readFile(sourcePath)

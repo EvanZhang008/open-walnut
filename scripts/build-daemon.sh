@@ -63,6 +63,7 @@ SOURCES=(
   src/ops/op-help.ts
   src/providers/mcp-cli-args.ts
   src/providers/acp-daemon.ts
+  src/providers/codex-model-probe.ts
   src/providers/agent-command-map.ts
   src/providers/acp-worker/worker.ts
   src/providers/acp-worker/worker-main.ts

@@ -419,6 +419,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // an old daemon answers unknown-command, and AcpSession.steer() degrades to
   // the queue-until-turn-end path (pre-steering behavior).
   'acpSteer',
+  'acp-model-catalog-v1',
   // 'send-markers-v1': send accepts markers and writes them after the body enters the pipe but before the newline; an old daemon ignores the field and keeps using the appendUserMarker RPC after delivery.
   'send-markers-v1',
   // 'send-dedupe-v1': send accepts `dedupe:true` (a resend of a line that may already

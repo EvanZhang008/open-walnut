@@ -2132,6 +2132,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'replica.put': return cmdReplica(ws, id as number, 'put', cmd)
     case 'replica.drop': return cmdReplica(ws, id as number, 'drop', cmd)
     case 'replica.status': return cmdReplica(ws, id as number, 'status', cmd)
+    case 'acpModelCatalog': {
+      if (typeof cmd.binary !== 'string' || !path.isAbsolute(cmd.binary)) return sendError(ws, id as number, 'acpModelCatalog: missing absolute binary')
+      return acp.modelCatalog(cmd.binary, { cwd: cmd.cwd as string | undefined, env: cmd.env as Record<string, string> | undefined })
+        .then((result) => sendOk(ws, id as number, result), (error) => sendError(ws, id as number, error.message))
+    }
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpSteer': return cmdAcpOp(ws, id as number, cmd, 'steer')

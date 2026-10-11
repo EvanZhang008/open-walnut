@@ -26,6 +26,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
+import { probeCodexModels } from './codex-model-probe.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
 // A turn parked on a permission request produces ZERO journal/RPC traffic, so
@@ -742,6 +743,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   }
 
   return {
+    modelCatalog: (binary: string, options: { cwd?: string; env?: Record<string, string> }) =>
+      probeCodexModels(binary, { cwd: options.cwd, env: mergeAcpSpawnEnv(process.env, options.env) }),
     acpStart,
     acpOp,
     acpAbortTurn,
