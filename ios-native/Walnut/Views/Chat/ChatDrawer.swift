@@ -271,23 +271,27 @@ struct ChatDrawer: View {
         .contentShape(Rectangle())
     }
 
+    @ViewBuilder
     private var recentsSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionLabel("Recents")
-            if chat.conversations.isEmpty {
-                if !chat.loadingList { emptyRecents }
-            } else {
-                ForEach(Self.uniqueByID(chat.conversations)) { conversation in
-                    Button {
-                        guard !suppressTaps else { return }
-                        chat.select(conversation.id)
-                        close()
-                    } label: {
-                        conversationRow(conversation)
+        // While the list loads there is nothing to head: no lone "Recents" label.
+        if !(chat.conversations.isEmpty && chat.loadingList) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionLabel("Recents")
+                if chat.conversations.isEmpty {
+                    emptyRecents
+                } else {
+                    ForEach(Self.uniqueByID(chat.conversations)) { conversation in
+                        Button {
+                            guard !suppressTaps else { return }
+                            chat.select(conversation.id)
+                            close()
+                        } label: {
+                            conversationRow(conversation)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu { rowMenu(conversation) }
+                        .accessibilityIdentifier("chat.drawer.conversation.\(conversation.id)")
                     }
-                    .buttonStyle(.plain)
-                    .contextMenu { rowMenu(conversation) }
-                    .accessibilityIdentifier("chat.drawer.conversation.\(conversation.id)")
                 }
             }
         }

@@ -141,6 +141,14 @@ final class ChatStore {
     private var initialPaintDone = false
 
     var loadingList = false
+    /// Which list read owns `loadingList`. A read an agent switch has made stale
+    /// must not lower it under the new agent, or a quick second tap showed "No
+    /// conversations yet" while that agent's list was still on its way.
+    @ObservationIgnored private var listReadGeneration = 0
+    /// The lists each agent showed when the user left it, so switching back
+    /// paints them at once: the disk cache read alone left the drawer blank for a
+    /// frame or two on every switch (gate, 12 of 12).
+    @ObservationIgnored private var listsByAgent: [String: (chats: [ConversationSummary], asks: [AskSummary]?)] = [:]
     var loadingMessages = false
     /// True from the instant a conversation is selected until its first page
     /// RESOLVES — landed, empty, or failed.
@@ -397,6 +405,7 @@ final class ChatStore {
     /// Switch console agent: park the current stream, swap conversation scope.
     func switchAgent(_ agentID: String) {
         guard agentID != activeAgentID else { return }
+        listsByAgent[activeAgentID] = (conversations, asksListed ? asks : nil)
         activeAgentID = agentID
         AppPrefs.defaults.set(agentID, forKey: "walnut.activeAgent")
         activeID = nil
@@ -410,27 +419,49 @@ final class ChatStore {
         // the reset too — otherwise the outgoing conversation's in-flight flag
         // would keep a skeleton up over the new agent's (empty) resting state.
         firstPageInFlight = false
+        // The lists are being read: the drawer must not say "No conversations
+        // yet" over an agent with 153 asks while they load (gate: 151 ms of it on
+        // every switch). refreshConversations clears this when its read is in.
+        listReadGeneration &+= 1
+        loadingList = true
+        if let kept = listsByAgent[agentID] {
+            conversations = kept.chats
+            if let keptAsks = kept.asks {
+                asks = keptAsks
+                asksListed = true
+            }
+        }
         if let saved = AppPrefs.defaults.string(forKey: activeConversationKey) {
             select(saved)
         }
         trackTask { [weak self] in
             guard let self else { return }
-            // Cached list first (off-main), then the network truth. Only adopt
-            // the cache while nothing canonical has landed.
+            // Cached lists first (off-main), then the network truth. Both caches
+            // are read before either is shown: the chats alone would list as
+            // Recents (or all under Earlier) for the frame before the asks land.
+            // Only adopt a cache while nothing canonical has landed.
             let key = self.conversationsCacheKey
-            if let cached = await DiskCache.loadAsync([ConversationSummary].self, key: key),
-               self.conversations.isEmpty, key == self.conversationsCacheKey {
-                self.conversations = cached
-                if self.activeID == nil { self.select(cached.first?.id) }
-            }
             let asksKey = self.asksCacheKey
-            if let cached = await DiskCache.loadAsync([AskSummary].self, key: asksKey),
-               !self.asksListed, asksKey == self.asksCacheKey {
-                self.asks = cached
+            let cachedChats = await DiskCache.loadAsync([ConversationSummary].self, key: key)
+            let cachedAsks = await DiskCache.loadAsync([AskSummary].self, key: asksKey)
+            // Another switch since: this task speaks for an agent no longer shown.
+            // Selecting from here wrote over the new agent's saved chat (gate).
+            guard agentID == self.activeAgentID else { return }
+            if let cachedAsks, !self.asksListed {
+                self.asks = cachedAsks
                 self.asksListed = true
             }
+            if let cachedChats, self.conversations.isEmpty {
+                self.conversations = cachedChats
+                if self.activeID == nil { self.select(cachedChats.first?.id) }
+            }
             await self.refreshConversations()
-            if self.activeID == nil || !self.conversations.contains(where: { $0.id == self.activeID }) {
+            guard agentID == self.activeAgentID else { return }
+            // An empty list here may be a read that failed: keep the saved chat
+            // rather than forget it. A saved chat the list no longer holds gives
+            // way to the newest one.
+            if !self.conversations.isEmpty,
+               self.activeID == nil || !self.conversations.contains(where: { $0.id == self.activeID }) {
                 self.select(self.conversations.first?.id)
             }
         }
@@ -438,8 +469,10 @@ final class ChatStore {
 
     func refreshConversations() async {
         guard isActive else { return }
+        listReadGeneration &+= 1
+        let generation = listReadGeneration
         loadingList = true
-        defer { loadingList = false }
+        defer { if generation == listReadGeneration { loadingList = false } }
         do {
             let agentID = activeAgentID
             let fetched = try await api.conversations(
