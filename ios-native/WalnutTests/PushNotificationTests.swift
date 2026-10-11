@@ -235,16 +235,29 @@ final class PushNotificationTests: XCTestCase {
         let composite = PushRegistration.uploadMemo(token: Self.token, server: Self.primary)
         let described = PushRegistration.describeMemo(composite)
         XCTAssertEqual(described.server, Self.primary?.absoluteString)
-        XCTAssertEqual(described.tokenPrefix, String(Self.token.prefix(12)))
+        XCTAssertEqual(described.tokenTag, PushRegistration.tokenTag(Self.token))
     }
 
-    /// A legacy memo is 64 hex chars with no separator; the prefix still has to be
-    /// usable, since it is what lines up with the server's own push log.
-    func testDescribeMemoKeepsATokenPrefixForALegacyValue() {
-        XCTAssertEqual(
-            PushRegistration.describeMemo(Self.token).tokenPrefix,
-            String(Self.token.prefix(12))
-        )
+    /// A legacy memo is 64 hex chars with no separator. It is logged as the token's
+    /// tag, the value the server's own push lines use, and never as a slice of it:
+    /// these lines are uploaded, and a token is a send capability.
+    func testDescribeMemoLogsATagNotATokenSliceForALegacyValue() {
+        let described = PushRegistration.describeMemo(Self.token)
+        XCTAssertEqual(described.tokenTag, PushRegistration.tokenTag(Self.token))
+        XCTAssertFalse(Self.token.contains(described.tokenTag), "a tag is a hash, not a slice of the token")
+    }
+
+    // MARK: - The token tag (shared with the server)
+
+    /// The server computes `token_tag` and its log tags as the first 8 hex
+    /// characters of the token's SHA-256 (`tokenTag()` in core/push/send.ts). The
+    /// same vectors are pinned in tests/core/push-token-tag.test.ts, so a change on
+    /// either side fails one of the two.
+    func testTokenTagMatchesTheServersHash() {
+        let vector = String(repeating: "0123456789abcdef", count: 4)
+        XCTAssertEqual(PushRegistration.tokenTag(vector), "a8ae6e6e")
+        XCTAssertEqual(PushRegistration.tokenTag(Self.token), "271a413b")
+        XCTAssertNotEqual(PushRegistration.tokenTag(vector), String(vector.prefix(8)))
     }
 
     /// A raw status number in a log tells nobody whether permission was granted.
@@ -302,12 +315,22 @@ final class PushNotificationTests: XCTestCase {
         PushRegistration.shouldReregister(after: status, myToken: myToken)
     }
 
-    /// One `tokens` row as the server ships it: 12 characters of the stored token
-    /// plus a literal `"..."` (`tokenPrefix()` in core/push/send.ts).
+    /// One `tokens` row as a server older than token tags ships it: 12 characters
+    /// of the stored token plus a literal `"..."`, and no `token_tag`.
     private func row(prefixOf token: String, length: Int = 12) -> String {
         #"{"platform":"ios","kind":"apns","key_name":"phone-a","origin":"local","#
             + #""registered_at":"2026-09-01T00:00:00.000Z","mode":"always","#
             + #""token_prefix":"\#(String(token.prefix(length)))..."}"#
+    }
+
+    /// One `tokens` row as the current server ships it: the tag of `tagged`, and the
+    /// legacy 8-character prefix of `prefixed` (the same token unless a test is
+    /// proving which field decides).
+    private func row(tagOf tagged: String, prefixOf prefixed: String? = nil) -> String {
+        #"{"platform":"ios","kind":"apns","key_name":"phone-a","origin":"local","#
+            + #""registered_at":"2026-09-01T00:00:00.000Z","mode":"always","#
+            + #""token_tag":"\#(PushRegistration.tokenTag(tagged))","#
+            + #""token_prefix":"\#(String((prefixed ?? tagged).prefix(8)))..."}"#
     }
 
     /// The old-server shape, and the only case the NAME rule still decides: no
@@ -408,6 +431,55 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertEqual(status.tokens?.first?.tokenPrefix, "aba...")
         XCTAssertNil(PushRegistration.comparablePrefix("aba..."), "3 characters decide nothing")
         XCTAssertTrue(shouldReregister(status))
+    }
+
+    // MARK: - Deciding by TAG (servers with token tags)
+
+    /// The current server names my row by my token's tag: a confirmation.
+    func testMyRowIsFoundByItsTag() throws {
+        let status = try pushStatus(#"{"registered":true,"count":1,"tokens":[\#(row(tagOf: Self.token))]}"#)
+        XCTAssertEqual(status.tokens?.first?.tokenTag, PushRegistration.tokenTag(Self.token))
+        XCTAssertFalse(shouldReregister(status))
+    }
+
+    /// The tag decides, not the prefix: a row whose tag names another phone is not
+    /// mine even when its legacy prefix happens to match my token.
+    func testATagForAnotherPhoneIsNotMineEvenWhenThePrefixMatches() throws {
+        let other = String(repeating: "cd", count: 32)
+        let status = try pushStatus(#"{"count":1,"tokens":[\#(row(tagOf: other, prefixOf: Self.token))]}"#)
+        XCTAssertTrue(shouldReregister(status), "the prefix is only for servers that send no tag")
+    }
+
+    /// And the other way round: my tag beside a prefix that does not match is mine.
+    func testMyTagWinsOverAPrefixThatDoesNotMatch() throws {
+        let other = String(repeating: "cd", count: 32)
+        let status = try pushStatus(#"{"count":1,"tokens":[\#(row(tagOf: Self.token, prefixOf: other))]}"#)
+        XCTAssertFalse(shouldReregister(status))
+    }
+
+    /// The app uploads its token lowercase; a token compared in another case is
+    /// still the same token, as it always was for the prefix rule.
+    func testTagComparisonIgnoresTheCaseOfMyToken() throws {
+        let status = try pushStatus(#"{"count":1,"tokens":[\#(row(tagOf: Self.token.lowercased()))]}"#)
+        XCTAssertFalse(shouldReregister(status, myToken: Self.token.uppercased()))
+    }
+
+    /// The current server's wire shape. `token_prefix` is now 8 characters, which
+    /// builds that predate token tags (107 and earlier) still accept
+    /// (`minComparablePrefix`), so the server keeps answering them while no longer
+    /// showing 12 characters of anyone's token.
+    func testTheTaggedServerShapeDecodes() throws {
+        let status = try pushStatus("""
+        {"registered":true,"registeredThisDevice":true,"count":1,
+         "tokens":[{"platform":"ios","kind":"apns","key_name":"phone-a","origin":"local",
+                    "registered_at":"2026-09-01T00:00:00.000Z","mode":"always",
+                    "token_tag":"271a413b","token_prefix":"abababab..."}]}
+        """)
+        XCTAssertEqual(status.tokens?.first?.tokenTag, "271a413b")
+        XCTAssertFalse(shouldReregister(status))
+        XCTAssertEqual(PushRegistration.comparablePrefix("abababab..."), "abababab",
+                       "an 8-character legacy prefix still decides for builds that read it")
+        XCTAssertTrue(shouldReregister(status, myToken: String(repeating: "cd", count: 32)))
     }
 
     /// The wire shape, byte for byte from `pushRegistrationStatus`. If the server

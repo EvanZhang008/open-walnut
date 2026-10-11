@@ -362,27 +362,31 @@ Each row carries:
 
 - `token_tag`: the first 8 hex characters of the SHA-256 of the token
   (`tokenTag` in `src/core/push/send.ts`, the same value server log lines use).
-  The app builds released so far do not read it. A build that does computes it
-  for its own token and finds its row by comparing tags, and falls back to
-  `token_prefix` only against a server too old to send `token_tag`.
+  A tag-matching build (one made from a tree whose `PushLaunchDecision.swift`
+  has `tokenTag`) computes it for its own token and finds its row by comparing
+  tags, and falls back to `token_prefix` only for a row with no `token_tag`, that
+  is, against a server older than token tags. App Store build 107 and every build
+  before it are not tag-matching and do not read it.
 - `token_prefix`: legacy, the token's first 8 characters plus `"..."` (it was 12
-  before token tags). Every app build that predates token tags reads it: it strips
+  before token tags). Builds that are not tag-matching (107 and earlier) read it
+  for every row, and tag-matching builds only for a row with no tag: it strips
   the trailing dots, lowercases it, refuses it under 8 characters, and matches it
   against the start of its own token (`comparablePrefix` and `minComparablePrefix`
   in `PushLaunchDecision.swift`), so 8 is the least that still works for those
   builds. `tests/core/push-status-old-app.test.ts` reads that rule from the Swift
   source and checks the server's rows against it.
 
-**When `token_prefix` can go:** once every paired phone runs a build that matches
-by `token_tag`. The first such build is named here when it ships. Both conditions
-have to hold:
+**When `token_prefix` can go:** once every paired phone runs a tag-matching
+build. The first one is the first build uploaded from a tree that has `tokenTag`
+in `PushLaunchDecision.swift` (App Store build 107 predates it); write its number
+here when it ships. Both conditions have to hold:
 
-1. TestFlight builds expire 90 days after upload, so 90 days after the last build
-   without tag matching was uploaded, no TestFlight install can run one.
+1. TestFlight builds expire 90 days after upload, so 90 days after the last
+   upload of a build that is not tag-matching, no TestFlight install can run one.
 2. An App Store install never expires, so read what the phones report: every
-   phone sends `appVersion` (for example `"1.0.0 (104)"`) at each launch, and the
+   phone sends `appVersion` (for example `"1.0.0 (107)"`) at each launch, and the
    paired devices list (`GET /api/devices`) shows it. When every device there
-   reports a build that matches by tag, delete `token_prefix` together with
+   reports a tag-matching build, delete `token_prefix` together with
    `legacyTokenPrefix` and `LEGACY_TOKEN_PREFIX_CHARS`.
 
 ## When nothing arrives

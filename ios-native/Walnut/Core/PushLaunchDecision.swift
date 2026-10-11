@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What a fresh APNs token means for this launch, decided by pure functions.
@@ -48,10 +49,21 @@ extension PushRegistration {
         return status.tokens == nil ? .identity : .token
     }
 
-    /// A row's `token_prefix` reduced to something safe to compare, or nil when it
-    /// cannot carry a decision.
+    /// How a device token is named anywhere but the APNs request itself: the first
+    /// 8 hex characters of its SHA-256. The server computes the same value
+    /// (`tokenTag()` in core/push/send.ts) for each row's `token_tag` and for its
+    /// own log lines, so a phone finds its row without the server ever showing a
+    /// slice of the token, and the app's log lines line up with the server's.
+    nonisolated static func tokenTag(_ token: String) -> String {
+        let hex = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+        return String(hex.prefix(8))
+    }
+
+    /// A row's legacy `token_prefix` reduced to something safe to compare, or nil
+    /// when it cannot carry a decision. Read only for a row with no `token_tag`,
+    /// that is, from a server older than token tags.
     ///
-    /// The stored value is 12 hex characters plus a literal `"..."`. Anything short
+    /// The stored value is hex characters plus a literal `"..."`. Anything short
     /// enough to collide by accident is worse than useless here (it would confirm a
     /// row that belongs to another phone), so a stripped prefix under
     /// `minComparablePrefix` is dropped rather than compared.
@@ -76,13 +88,23 @@ extension PushRegistration {
     /// token itself decides, since that is the one value that means the same thing on
     /// every box. The name rule survives only as the fallback for a server too old to
     /// list rows, and no answer at all decides nothing.
+    ///
+    /// A row is matched by its `token_tag` when it has one. Only a row without a tag
+    /// (a server older than token tags) falls back to the legacy prefix, so a tag
+    /// that names another phone is a "not mine" even when the prefixes agree.
     nonisolated static func shouldReregister(
         after status: WalnutAPI.PushStatus?, myToken: String
     ) -> Bool {
         guard let status else { return false }
         guard let rows = status.tokens else { return status.registeredThisDevice == false }
         let mine = myToken.lowercased()
+        // The app uploads its token lowercase; the second tag keeps a case
+        // difference from reading as "not my row", as the prefix rule always has.
+        let myTags: Set<String> = [tokenTag(myToken), tokenTag(mine)]
         return !rows.contains { row in
+            if let tag = row.tokenTag?.lowercased(), !tag.isEmpty {
+                return myTags.contains(tag)
+            }
             guard let prefix = comparablePrefix(row.tokenPrefix) else { return false }
             return mine.hasPrefix(prefix)
         }

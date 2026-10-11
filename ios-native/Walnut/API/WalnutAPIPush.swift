@@ -89,16 +89,21 @@ extension WalnutAPI {
         let configured: Bool?
     }
 
-    /// One stored row, reduced to the only field that identifies a device.
+    /// One stored row, reduced to the fields that identify a device.
     ///
-    /// The server never ships a full token (it is a send capability), so the row
-    /// carries the first 12 characters plus a literal `"..."` (`tokenPrefix()` in
-    /// core/push/send.ts, decorated in `pushRegistrationStatus`). The other fields
-    /// are a human diagnostic and are deliberately left undecoded.
+    /// The server never ships a full token (it is a send capability). It names a
+    /// row by `token_tag`, the first 8 hex characters of the token's SHA-256
+    /// (`tokenTag()` in core/push/send.ts), which the app computes for its own
+    /// token. `token_prefix` is the legacy field: a raw slice of the token plus a
+    /// literal `"..."`, 12 characters on servers before token tags and 8 after,
+    /// read only when a server sends no tag. The other fields are a human
+    /// diagnostic and are deliberately left undecoded.
     struct PushTokenRow: Decodable {
+        let tokenTag: String?
         let tokenPrefix: String?
 
         enum CodingKeys: String, CodingKey {
+            case tokenTag = "token_tag"
             case tokenPrefix = "token_prefix"
         }
     }

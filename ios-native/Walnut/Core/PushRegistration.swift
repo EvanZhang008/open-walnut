@@ -97,22 +97,23 @@ final class PushRegistration {
         "\(server?.absoluteString ?? "unpaired")|\(token)"
     }
 
-    /// Split a stored memo for logging: which server it names, and a token prefix.
+    /// Split a stored memo for logging: which server it names, and the token's tag.
     ///
     /// The point is to make the three "nothing happened" states tellable apart in a
     /// log: `none` (never uploaded), `legacy-no-server` (a pre-relay bare-hex memo,
     /// the state that heals on this launch), or a real server that may or may not be
-    /// the one the app is paired to now. The token itself is logged as a prefix
-    /// because these entries are uploaded to the server, and the server's own push
-    /// logs use the same 12-char prefix, so the two sides still line up.
-    nonisolated static func describeMemo(_ memo: String?) -> (server: String, tokenPrefix: String) {
+    /// the one the app is paired to now. The token is logged only as its tag
+    /// (`tokenTag`, a short hash): these entries are uploaded to the server, a token
+    /// is a send capability, and the server's own push lines name a device by the
+    /// same tag, so the two sides still line up.
+    nonisolated static func describeMemo(_ memo: String?) -> (server: String, tokenTag: String) {
         guard let memo, !memo.isEmpty else { return ("none", "none") }
         guard let separator = memo.lastIndex(of: "|") else {
-            return ("legacy-no-server", String(memo.prefix(12)))
+            return ("legacy-no-server", tokenTag(memo))
         }
         return (
             String(memo[memo.startIndex..<separator]),
-            String(memo[memo.index(after: separator)...].prefix(12))
+            tokenTag(String(memo[memo.index(after: separator)...]))
         )
     }
 
@@ -417,7 +418,7 @@ final class PushRegistration {
             "paired": AppConfig.isConfigured ? "true" : "false",
             "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
             "memoServer": memo.server,
-            "memoTokenPrefix": memo.tokenPrefix,
+            "memoTokenTag": memo.tokenTag,
         ])
     }
 
@@ -470,7 +471,7 @@ final class PushRegistration {
         deviceToken = hex
         lastError = nil
         AppLog.info("push", "apns token minted", [
-            "tokenPrefix": String(hex.prefix(12)),
+            "tokenTag": Self.tokenTag(hex),
             "environment": Self.environment,
         ])
         let alreadyUploaded = AppPrefs.defaults.string(forKey: Self.uploadedTokenKey)
@@ -479,7 +480,7 @@ final class PushRegistration {
             // The quiet, correct case — but say so, or a launch that legitimately
             // sends nothing is indistinguishable from one that failed to.
             AppLog.info("push", "token already uploaded to this server (no POST)", [
-                "tokenPrefix": String(hex.prefix(12)),
+                "tokenTag": Self.tokenTag(hex),
                 "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
             ])
         }
@@ -527,7 +528,7 @@ final class PushRegistration {
         let memo = Self.uploadMemo(token: token)
         guard uploadInFlight != memo else {
             AppLog.info("push", "token upload already in flight — skipping duplicate", [
-                "tokenPrefix": String(token.prefix(12)),
+                "tokenTag": Self.tokenTag(token),
                 "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
             ])
             return
