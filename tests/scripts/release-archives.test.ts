@@ -20,6 +20,7 @@ import { parse as parseYaml } from 'yaml'
 import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, shipsNativeBinary, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
 import { BUNDLE_ID, cask } from '../../scripts/homebrew/cask.mjs'
+import { readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 
@@ -423,6 +424,26 @@ describe('the Mac app', () => {
     // Any node script a step runs from the tag's tree is the release's own code, not a check.
     for (const s of job.steps) {
       for (const m of (s.run ?? '').matchAll(/\bnode (\S+\.mjs)/g)) expect(m[1], s.name).toMatch(/^harness\//)
+    }
+  })
+
+  it('starts an app older than the harness unattended, and a newer one with no knob', () => {
+    // 2026-10-11: the 0.6.8 app, built from a commit before the no-click first
+    // launch, sat on its setup choice for 20 minutes under main's smoke, which no
+    // longer passed WALNUT_DESKTOP_AUTOSETUP. A release's app may be days older than main.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-knob-'))
+    try {
+      const older = path.join(dir, 'older'), newer = path.join(dir, 'newer')
+      fs.writeFileSync(older, Buffer.concat([Buffer.alloc(4096), Buffer.from('WALNUT_DESKTOP_AUTOSETUP\0'), Buffer.alloc(4096)]))
+      fs.writeFileSync(newer, Buffer.concat([Buffer.alloc(4096), Buffer.from('WALNUT_DESKTOP_PORTS\0'), Buffer.alloc(4096)]))
+      expect(readsAutosetupKnob(older)).toBe(true)
+      expect(readsAutosetupKnob(newer)).toBe(false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+    // The app main builds starts by itself, so the smoke runs it with no knob and proves it.
+    for (const f of fs.readdirSync(path.join(ROOT, 'desktop')).filter((n) => n.endsWith('.swift'))) {
+      expect(fs.readFileSync(path.join(ROOT, 'desktop', f), 'utf8'), f).not.toContain('WALNUT_DESKTOP_AUTOSETUP')
     }
   })
 

@@ -71,6 +71,17 @@ function listener(port) {
 }
 
 /**
+ * Whether the app at `binary` still asks for its setup choice on a first launch:
+ * an app built before the no-click first launch (797b3ec9, so 0.6.8 and older)
+ * shows it and starts unattended only with WALNUT_DESKTOP_AUTOSETUP=1, which it
+ * reads by name. mac-app.yml runs this harness from main against the app of the
+ * release it builds, which may be days older (0.6.8 waited 20 minutes for a click).
+ */
+export function readsAutosetupKnob(binary) {
+  return fs.readFileSync(binary).includes('WALNUT_DESKTOP_AUTOSETUP')
+}
+
+/**
  * The three steps against one Walnut.app, in `work`. `releaseUrl` is a mirror
  * laid out like GitHub Releases (the rehearsal's); without one, install.sh
  * takes `version` from GitHub. Resolves with the steps' results; rejects on
@@ -101,6 +112,8 @@ export async function smokeDesktopApp({ app: appBundle, work: made, version, rel
   }
   env.OPEN_WALNUT_VERSION = version
   const binary = path.join(appBundle, 'Contents', 'MacOS', 'Walnut')
+  // A newer app starts by itself and has to show that here, with no knob.
+  if (readsAutosetupKnob(binary)) env.WALNUT_DESKTOP_AUTOSETUP = '1'
   const results = []
   const step = async (name, fn) => {
     const t0 = Date.now()
