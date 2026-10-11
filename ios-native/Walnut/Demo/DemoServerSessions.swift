@@ -8,7 +8,7 @@ extension DemoServer {
             return .encoded(SessionsResponse(sessions: list, syncedAt: nowISO))
         }
         if match2(r, "POST", s, "sessions") { return createSession(r) }
-        if match2(r, "GET", s, "sessions", "launch-options") { return .encoded(DemoFixtures.launchOptions) }
+        if match2(r, "GET", s, "sessions", "launch-options") { return .encoded(DemoFixtures.launchOptions(clockNow)) }
         if match2(r, "GET", s, "sessions", "list-dirs") { return listDirs(r) }
         guard s.count >= 2 else { return nil }
         let id = s[1]
@@ -40,12 +40,12 @@ extension DemoServer {
         case ("GET", "stream"):
             return DemoReply(status: 200, body: .stream(.session(id), lastEventID: r.lastEventID))
         case ("POST", "messages"):
-            let text = r.string("text") ?? ""
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return .error(400, "bad_request", "A message needs some text.")
+            // As the real server: a photo with no words is a turn of its own.
+            guard let text = r.messageText else {
+                return .error(400, "bad_request", "A message needs some text or a photo.")
             }
             let messageID = r.string("messageId") ?? withState { $0.nextID("qm") }
-            sendToSession(id, text: text)
+            sendToSession(id, text: withPhotoPaths(text, r.usableImages))
             return .object(["messageId": messageID], status: 202)
         case ("POST", "permission"):
             let requestID = r.string("requestId") ?? ""
@@ -101,7 +101,7 @@ extension DemoServer {
             let question = r.string("question") ?? ""
             let answer = SideQuestion(
                 id: withState { $0.nextID("sq") }, question: question,
-                answer: "Short answer: yes. The change only touches the album screen and its tests, so nothing else in the app is affected.",
+                answer: DemoReplies.sideAnswer(to: question, session: id),
                 createdAt: nowISO, promotedTaskId: nil
             )
             withState { state in state.sideQuestions[id, default: []].append(answer) }
@@ -109,6 +109,56 @@ extension DemoServer {
         default:
             return nil
         }
+    }
+
+    // MARK: - Photos
+
+    /// What a session's transcript shows for a message with photos, written the
+    /// way the real server writes it (`withImagePaths` in cloud-images.ts): an
+    /// "[Images attached" line, one saved path per photo, a blank line, then the
+    /// words. The app shows the photos from `GET /media`, as from a real server.
+    func withPhotoPaths(_ text: String, _ images: [(data: String, mediaType: String)]) -> String {
+        guard !images.isEmpty else { return text }
+        let paths = withState { state -> [String] in
+            let paths = images.map { image -> String in
+                let ext = image.mediaType == "image/png" ? "png" : image.mediaType == "image/gif" ? "gif"
+                    : image.mediaType == "image/webp" ? "webp" : "jpg"
+                let path = "\(Self.photoFolder)/\(state.nextID("photo")).\(ext)"
+                state.sessionPhotos.append((path, Data(base64Encoded: image.data) ?? Data(), image.mediaType))
+                return path
+            }
+            if state.sessionPhotos.count > 10 { state.sessionPhotos.removeFirst(state.sessionPhotos.count - 10) }
+            return paths
+        }
+        return "[Images attached]\n" + paths.map { "- \($0)" }.joined(separator: "\n") + "\n\n" + text
+    }
+
+    /// Where the demo says it saved a photo (the real server saves into its home).
+    static let photoFolder = "/Users/demo/.open-walnut/images"
+
+    /// `withPhotoPaths` read back: how many photos a session message names, and
+    /// its words.
+    static func photoParts(_ text: String) -> (photos: Int, words: String) {
+        let header = "[Images attached]\n"
+        guard text.hasPrefix(header) else { return (0, text) }
+        var lines = text.dropFirst(header.count).components(separatedBy: "\n")
+        var photos = 0
+        while let line = lines.first, line.hasPrefix("- ") {
+            photos += 1
+            lines.removeFirst()
+        }
+        if lines.first == "" { lines.removeFirst() }
+        return (photos, lines.joined(separator: "\n"))
+    }
+
+    /// `GET /media?path=`: a photo sent in this run, or the demo's sample picture.
+    func media(_ r: DemoRequest) -> DemoReply {
+        if let path = r.query["path"],
+           let photo = withState({ state in state.sessionPhotos.last { $0.path == path } }),
+           !photo.data.isEmpty {
+            return DemoReply(status: 200, body: .bytes(photo.data, contentType: photo.mediaType))
+        }
+        return DemoReply(status: 200, body: .bytes(DemoImage.png, contentType: "image/png"))
     }
 
     // MARK: - Projections

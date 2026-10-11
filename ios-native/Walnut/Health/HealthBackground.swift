@@ -6,12 +6,12 @@ import UIKit
 /// The on switch and the shared engine.
 enum HealthSync {
     /// The user turned Apple Health on in Settings. Erased with every other
-    /// preference by Disconnect.
+    /// preference by Disconnect; in the demo it is the demo's own (`AppPrefs`).
     static let enabledKey = "walnut.health.enabled"
 
     static var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: enabledKey) }
-        set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+        get { AppPrefs.defaults.bool(forKey: enabledKey) }
+        set { AppPrefs.defaults.set(newValue, forKey: enabledKey) }
     }
 
     /// The one engine every trigger feeds (foreground, HealthKit background
@@ -29,6 +29,7 @@ enum HealthSync {
             deviceModel: DeviceIdentity.model,
             deviceOS: "iOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion).\(ProcessInfo.processInfo.operatingSystemVersion.minorVersion)"
         ),
+        salt: HealthCharacteristicSalt.shared,
         onProgress: { progress in
             // A background launch that never became active hydrates no UI
             // state (see LaunchGate); the screen reads the saved state when it opens.
@@ -40,12 +41,14 @@ enum HealthSync {
     )
 
     /// Disconnect (LocalDataReset) and "Delete Health Data on Mac": stop every
-    /// trigger and forget every anchor. The preference itself is cleared by the
-    /// caller (Disconnect removes all of them).
+    /// trigger and forget every anchor, and the characteristic salt in the
+    /// Keychain with them. The preference itself is cleared by the caller
+    /// (Disconnect removes all of them).
     @MainActor
     static func eraseLocalState() {
         HealthBackground.shared.stopObserving()
         HealthSyncStateStore.shared.eraseAll()
+        HealthCharacteristicSalt.shared.delete()
         HealthSyncStore.shared.eraseLocalState()
     }
 }

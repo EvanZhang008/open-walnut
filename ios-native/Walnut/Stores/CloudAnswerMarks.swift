@@ -32,11 +32,13 @@ struct CloudAnswerMarks {
     static let matchWindowMs: Double = 15 * 60 * 1000
 
     private(set) var marks: [Mark]
-    private let defaults: UserDefaults
+    private let storedDefaults: UserDefaults
+    /// The app's own follow the demo scope (`AppPrefs`).
+    private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
 
     init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        if let data = defaults.data(forKey: Self.storageKey),
+        self.storedDefaults = defaults
+        if let data = AppPrefs.resolve(defaults).data(forKey: Self.storageKey),
            let stored = try? JSONDecoder().decode([Mark].self, from: data) {
             marks = stored
         } else {

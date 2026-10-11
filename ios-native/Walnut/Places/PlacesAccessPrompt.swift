@@ -68,16 +68,22 @@ final class PlacesAccessPrompt {
         Task { @MainActor in await self.consider() }
     }
 
+    /// What the prompt sees right now.
+    func currentState() -> PlacesAccessDecision.State {
+        PlacesAccessDecision.State(
+            // Paired with a real Mac: the demo never asks iOS for location.
+            available: !DemoMode.isActive && AppConfig.serverURL != nil && !(AppConfig.token ?? "").isEmpty,
+            enabled: PlacesSettings.isEnabled, access: PlacesRecorder.shared.access, askedAlways: PlacesSettings.askedAlways,
+            busy: PlacesStore.shared.busy != nil, quietUntil: quietUntil, lastNudgeAt: lastNudgeAt, now: Date()
+        )
+    }
+
     func consider() async {
         guard !busy else { return }
         busy = true
         defer { busy = false }
         let recorder = PlacesRecorder.shared
-        let state = PlacesAccessDecision.State(
-            available: AppConfig.serverURL != nil && !(AppConfig.token ?? "").isEmpty,
-            enabled: PlacesSettings.isEnabled, access: recorder.access, askedAlways: PlacesSettings.askedAlways,
-            busy: PlacesStore.shared.busy != nil, quietUntil: quietUntil, lastNudgeAt: lastNudgeAt, now: Date()
-        )
+        let state = currentState()
         let action = PlacesAccessDecision.decide(state)
         guard action != .nothing else { return }
         AppLog.info("places", "access prompt", ["action": action.rawValue, "access": state.access.rawValue])
@@ -109,7 +115,7 @@ final class PlacesAccessPrompt {
 
     private func announce() {
         if PlacesRecorder.shared.access == .always {
-            HealthToast.show("Places is on. Walnut records the places you visit from now on, and keeps them on your Mac.")
+            HealthToast.show("Places is on. Walnut records the places you visit from now on, and sends them to your Walnut server.")
         }
     }
 
@@ -124,7 +130,7 @@ final class PlacesAccessPrompt {
             case .turnOn:
                 alert = UIAlertController(
                     title: "Turn On Places?",
-                    message: "Your AI is asking about places you went, and Places is off, so nothing is recorded. Turn it on and Walnut records the places you visit from now on. They go only to your Mac.",
+                    message: "Your AI is asking about places you went, and Places is off, so nothing is recorded. Turn it on and Walnut records the places you visit from now on. " + ConsentCopy.places,
                     preferredStyle: .alert
                 )
                 yes = UIAlertAction(title: "Turn On", style: .default) { _ in done.resume(returning: true) }

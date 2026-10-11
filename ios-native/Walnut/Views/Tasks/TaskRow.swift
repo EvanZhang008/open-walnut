@@ -84,19 +84,40 @@ struct TaskRow: View {
     }
 
     static func dueText(_ date: Date) -> String {
-        if Calendar.current.isDateInToday(date) { return "Today" }
-        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
-        if Calendar.current.isDateInTomorrow(date) { return "Tomorrow" }
+        if AppClock.isToday(date) { return "Today" }
+        if AppClock.isYesterday(date) { return "Yesterday" }
+        if AppClock.isTomorrow(date) { return "Tomorrow" }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
 }
 
 /// Read-only status indicator — open circle (todo), tinted half circle
-/// (in progress), filled checkmark (done).
+/// (in progress), filled checkmark (done). VoiceOver reads the status, not the
+/// symbol's name ("circle.lefthalf.filled", gate r4, F10).
 struct StatusCircle: View {
     let status: TaskStatus
 
+    /// What VoiceOver says for a status.
+    static func spoken(_ status: TaskStatus) -> String {
+        switch status {
+        case .done: return "Done"
+        case .inProgress: return "In progress"
+        case .todo, .unknown: return "To do"
+        }
+    }
+
+    /// The status toggle's VoiceOver label, value and hint: one tap flips
+    /// to do and done.
+    static func toggleAccessibility(_ status: TaskStatus) -> (label: String, value: String, hint: String) {
+        ("Status", spoken(status), status == .done ? "Marks the task as to do." : "Marks the task as done.")
+    }
+
     var body: some View {
+        symbol.accessibilityLabel(Self.spoken(status))
+    }
+
+    @ViewBuilder
+    private var symbol: some View {
         switch status {
         case .done:
             Image(systemName: "checkmark.circle.fill")

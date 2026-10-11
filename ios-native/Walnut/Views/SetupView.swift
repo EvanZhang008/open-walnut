@@ -33,6 +33,15 @@ struct SetupView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Color(.systemBackground))
+            // The page runs up behind the empty bar and the status bar, so a
+            // scrolled form never shows under the Dynamic Island (AX5 App Store
+            // gate, r5b: Connect slid up under the clock).
+            .barPage(Color(.systemBackground))
+            // The diagnostic heartbeat names the screen on show. Without a name
+            // here, the pairing screen (where Disconnect lands) kept reporting
+            // a tab of the tab view it replaced. A ROOT screen, because those
+            // retained tabs can still run their appear hooks after this one.
+            .freezeRootScreen("setup")
             .alert("Walnut", isPresented: .init(
                 get: { alertMessage != nil },
                 set: { if !$0 { alertMessage = nil } }
@@ -141,20 +150,39 @@ struct SetupView: View {
             .disabled(busy)
             .accessibilityIdentifier("setup.connect")
 
-            HStack(spacing: 16) {
-                Button("Test connection", action: testConnection)
-                    .disabled(busy)
-                    .accessibilityIdentifier("setup.test")
-                Text("·").foregroundStyle(.tertiary)
-                Button("Paste pairing link", action: pastePairingLink)
-                    .disabled(busy)
+            // One line while both fit; stacked when they do not (AX5 broke
+            // "Test connection" into four lines beside its neighbour).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    testButton
+                    Text("·").foregroundStyle(.tertiary)
+                    pasteButton
+                }
+                VStack(spacing: 14) {
+                    testButton
+                    pasteButton
+                }
             }
             .font(.subheadline.weight(.medium))
+            .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
 
             DemoEntryButton(disabled: busy)
+
+            PrivacyPolicyLink()
         }
+    }
+
+    private var testButton: some View {
+        Button("Test connection", action: testConnection)
+            .disabled(busy)
+            .accessibilityIdentifier("setup.test")
+    }
+
+    private var pasteButton: some View {
+        Button("Paste pairing link", action: pastePairingLink)
+            .disabled(busy)
     }
 
     @ViewBuilder

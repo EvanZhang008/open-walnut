@@ -46,7 +46,7 @@ struct SessionRowView: View {
                         chip(WalnutSession.shortModelName(model), icon: nil)
                     }
                     if let when = session.lastActiveValue {
-                        Text(when.formatted(.relative(presentation: .named)))
+                        Text(AppClock.relativeNamed(when))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }

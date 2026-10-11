@@ -66,8 +66,9 @@ struct VoiceAskPage: View {
         }
         .task {
             guard voice == nil else { return }
-            // No bubble exists before the launch, so the controller keeps unsent words.
-            voice = VoiceModeController(sessionID: "ask-\(agentID)", rows: [], keepsUnsentText: true) { text in
+            // No bubble exists before the launch, so the controller keeps unsent
+            // words (its default: the owner shows no copy of its own).
+            voice = VoiceModeController(sessionID: "ask-\(agentID)", rows: []) { text in
                 await launch(text)
             }
         }

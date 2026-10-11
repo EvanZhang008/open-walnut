@@ -60,12 +60,64 @@ final class PlacesTests: XCTestCase {
         let q = PlacesQueueStore(fileURL: nil)
         let sent = q.record(event(arrival: t0, departure: t0.addingTimeInterval(60)), now: t0, timeZone: zone)!
         q.record(event(arrival: t0.addingTimeInterval(7200), departure: t0.addingTimeInterval(7300), lat: 40, lon: -8), now: t0, timeZone: zone)
-        q.markSent([sent.id: sent.version], generation: q.generation)
+        q.markSent([sent.id: sent.version], generation: q.generation, now: t0)
+        XCTAssertEqual(q.read().visits.count, 2, "a visit the Mac just got went at once while Places is on")
         q.record(event(arrival: t0.addingTimeInterval(15 * 86_400), departure: nil, lat: 39, lon: -9),
                  now: t0.addingTimeInterval(15 * 86_400), timeZone: zone)
         let ids = q.read().visits.map(\.id)
         XCTAssertFalse(ids.contains(sent.id))
         XCTAssertEqual(ids.count, 2)
+    }
+
+    /// The two weeks hold with no new visit: a launch, or the Mac taking the
+    /// next visit, forgets what is due (App Store gate, r5b: nothing was pruned
+    /// unless iOS reported a new visit).
+    func testASentVisitIsForgottenAfterTwoWeeksWithNoNewVisit() {
+        let q = PlacesQueueStore(fileURL: nil)
+        let sent = q.record(event(arrival: t0, departure: t0.addingTimeInterval(600)), now: t0, timeZone: zone)!
+        let unsent = q.record(event(arrival: t0.addingTimeInterval(7200), departure: nil, lat: 40, lon: -8), now: t0, timeZone: zone)!
+        q.markSent([sent.id: sent.version], generation: q.generation, now: t0.addingTimeInterval(3600))
+        // Thirteen days on, at a launch: still kept.
+        q.prune(now: t0.addingTimeInterval(13 * 86_400), keepSent: true)
+        XCTAssertEqual(Set(q.read().visits.map(\.id)), [sent.id, unsent.id])
+        // Fifteen days on, at a launch: the sent one goes, the unsent one stays.
+        q.prune(now: t0.addingTimeInterval(15 * 86_400), keepSent: true)
+        XCTAssertEqual(q.read().visits.map(\.id), [unsent.id])
+        // The Mac takes it more than two weeks after it ended: it goes then.
+        q.markSent([unsent.id: unsent.version], generation: q.generation, now: t0.addingTimeInterval(16 * 86_400))
+        XCTAssertTrue(q.read().visits.isEmpty)
+    }
+
+    /// Turn Off Places forgets on the phone every visit the Mac has, at once; one
+    /// the Mac does not have yet goes as soon as it is sent.
+    func testTurningPlacesOffForgetsTheVisitsTheMacHas() async {
+        let q = PlacesQueueStore(fileURL: nil)
+        let sent = q.record(event(arrival: t0, departure: t0.addingTimeInterval(600)), now: t0, timeZone: zone)!
+        q.record(event(arrival: t0.addingTimeInterval(7200), departure: nil, lat: 40, lon: -8), now: t0, timeZone: zone)
+        q.markSent([sent.id: sent.version], generation: q.generation, now: t0.addingTimeInterval(3600))
+        q.prune(now: t0.addingTimeInterval(3700), keepSent: false)
+        XCTAssertEqual(q.read().visits.count, 1)
+        XCTAssertTrue(q.read().visits[0].needsSend, "turning off dropped a visit the Mac does not have")
+        // The turn-off sync sends it, and the phone keeps none of it after.
+        let t = FakePlacesTransport()
+        t.replies = [.stored]
+        let result = await engine(q, t, state: PlacesPhoneState(enabled: false, access: .always)).run(reason: "turned-off")
+        XCTAssertEqual(result, .synced)
+        XCTAssertEqual((t.bodies.first?["visits"] as? [Any])?.count, 1)
+        XCTAssertTrue(q.read().visits.isEmpty, "Places is off and the phone still keeps a visit the Mac has")
+    }
+
+    /// The queue is pruned at launch and at Turn Off, in the recorder itself.
+    func testTheRecorderPrunesAtLaunchAndAtTurnOff() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Walnut/Places/PlacesRecorder.swift"), encoding: .utf8)
+        func body(of signature: String) -> String {
+            guard let start = source.range(of: signature) else { return "" }
+            let rest = source[start.upperBound...]
+            return String(rest[..<(rest.range(of: "\n    }\n")?.lowerBound ?? rest.endIndex)])
+        }
+        XCTAssertTrue(body(of: "func start() {").contains("PlacesQueueStore.shared.prune(keepSent: PlacesSettings.isEnabled)"))
+        XCTAssertTrue(body(of: "func turnOff() {").contains("PlacesQueueStore.shared.prune(keepSent: false)"))
     }
 
     func testEraseWinsOverASyncThatWasInFlight() {
@@ -324,6 +376,19 @@ final class PlacesTests: XCTestCase {
         XCTAssertEqual(absolute.arrival, Date(timeIntervalSince1970: 1_789_990_000))
     }
     #endif
+
+    /// Gate r4, F13: Disconnect wiped the preferences, then Places' erase wrote
+    /// `walnut.places.enabled = false` back, so one preference outlived it.
+    @MainActor
+    func testErasingPlacesLeavesNoSwitchBehind() {
+        let key = PlacesSettings.enabledKey
+        let before = AppPrefs.defaults.object(forKey: key)
+        defer { AppPrefs.defaults.set(before, forKey: key) }
+        AppPrefs.defaults.set(true, forKey: key)
+        PlacesRecorder.shared.eraseLocalState()
+        XCTAssertNil(AppPrefs.defaults.object(forKey: key), "the erase wrote the switch back")
+        XCTAssertFalse(PlacesSettings.isEnabled)
+    }
 }
 
 /// A scripted Mac for Places. Records every sync body, decoded.

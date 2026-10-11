@@ -25,8 +25,19 @@ struct HealthSyncSnapshot: Codable, Equatable, Sendable {
     var bucketEarliest: [String: Date] = [:]
     /// Bucket types: the high-water mark, when buckets were last recomputed and sent.
     var bucketSentThrough: [String: Date] = [:]
-    /// Characteristic name → uuid last sent (`char-<name>-<code>`).
+    /// Characteristic name → uuid last sent, `char-<name>-h<digest>`: the digest
+    /// is a salted hash of the value (`HealthCharacteristicKey`), so this file
+    /// never holds a value. Before r7 the uuid was `char-<name>-<code>`, the value
+    /// in the clear (a date of birth as yyyymmdd); `migrateLegacyCharacteristics`
+    /// drops those the first time the file is read. The salt is NOT here: it is
+    /// in the Keychain (`HealthCharacteristicSalt`), so this file alone cannot be
+    /// tried against every value. An r7 file that still has one is rewritten
+    /// without it on its first read (`droppedSaltKey`).
     var characteristicUUIDs: [String: String] = [:]
+    /// Characteristics whose pre-r7 row is still on the Mac under the old uuid.
+    /// Names only: the next send of each also deletes that row, under a uuid
+    /// rebuilt from the value read then.
+    var legacyCharacteristicNames: Set<String>?
     var lastFullSyncAt: Date?
     var lastSuccessAt: Date?
     var lastRunAt: Date?
@@ -57,6 +68,20 @@ struct HealthSyncSnapshot: Codable, Equatable, Sendable {
         primed.subtract(names)
         completed.subtract(names)
         bucketPendingDeletes.subtract(names)
+    }
+
+    /// Drops every uuid that carries its value (the pre-r7 `char-<name>-<digits>`)
+    /// and remembers, by name only, that the Mac still has a row under it.
+    /// Returns whether anything changed.
+    @discardableResult
+    mutating func migrateLegacyCharacteristics() -> Bool {
+        let legacy = characteristicUUIDs.compactMap { name, uuid in
+            HealthCharacteristicKey.isLegacy(uuid, name: name) ? name : nil
+        }
+        guard !legacy.isEmpty else { return false }
+        for name in legacy { characteristicUUIDs[name] = nil }
+        legacyCharacteristicNames = (legacyCharacteristicNames ?? []).union(legacy)
+        return true
     }
 
     /// The Mac's store changed: start over under the new id, keep only the install id.
@@ -177,7 +202,21 @@ final class HealthSyncStateStore: @unchecked Sendable {
         }
         do {
             let data = try Data(contentsOf: fileURL)
-            snapshot = try JSONDecoder().decode(HealthSyncSnapshot.self, from: data)
+            var decoded = try JSONDecoder().decode(HealthSyncSnapshot.self, from: data)
+            let droppedKeys = decoded.migrateLegacyCharacteristics()
+            let droppedSalt = Self.hasSaltKey(data)
+            if droppedKeys || droppedSalt {
+                // Written at once: a characteristic value, or the salt next to
+                // its fingerprints, must not stay on disk. Without that salt the
+                // characteristics are sent once more, each old row deleted.
+                snapshot = decoded
+                writeLocked()
+                AppLog.info("health", "dropped characteristic keys or salt from the sync state", [
+                    "legacyKeys": "\(decoded.legacyCharacteristicNames?.count ?? 0)",
+                    "salt": String(droppedSalt),
+                ])
+            }
+            snapshot = decoded
         } catch let error as DecodingError {
             // A file this build cannot read is worth nothing: start over (the
             // Mac dedupes whatever is sent again).
@@ -187,6 +226,14 @@ final class HealthSyncStateStore: @unchecked Sendable {
             // Protected data unavailable (before the first unlock): try again later.
             loadFailed = true
         }
+    }
+
+    /// The r7 file kept the characteristic salt under this key.
+    static let droppedSaltKey = "characteristicSalt"
+
+    static func hasSaltKey(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return object[droppedSaltKey] != nil
     }
 
     private func writeLocked() {

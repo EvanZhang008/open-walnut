@@ -55,10 +55,10 @@ extension DemoServer {
 
     // MARK: - Personal AI chat
 
-    func startChatTurn(conversationID id: String, turnID: String, userText: String) {
+    func startChatTurn(conversationID id: String, turnID: String, userText: String, images: Int = 0) {
         let key = "c:\(id)"
         let channel = DemoStreams.Channel.conversation(id)
-        let reply = DemoReplies.chat(for: userText)
+        let reply = DemoReplies.chat(for: userText, images: images, clock: clockNow)
         withState { state in state.liveTurnIDs[key] = turnID }
         var script = DemoScript()
         script.after(0.35) { self.frame(channel, "message-start", ["turnId": turnID], turnStart: true) }
@@ -123,6 +123,21 @@ extension DemoServer {
 
     /// A message into a session: runs now, or after the turn in flight.
     func sendToSession(_ id: String, text: String) {
+        guard beginSessionTurn(id, text: text) else { return }
+        // A message with photos names them in an "[Images attached]" header
+        // (`withPhotoPaths`); the reply answers its words and its photos.
+        let parts = Self.photoParts(text)
+        let reply = withState { state in
+            DemoReplies.session(
+                for: parts.words, images: parts.photos, cwd: state.sessions[state.sessionIndex(id)!].cwd
+            )
+        }
+        playSessionTurn(id, reply: reply)
+    }
+
+    /// Put `text` in the transcript and mark the session running, when nothing
+    /// else is in flight there. False = queued behind the turn in flight.
+    func beginSessionTurn(_ id: String, text: String) -> Bool {
         let key = "s:\(id)"
         let startNow = withState { state -> Bool in
             guard let i = state.sessionIndex(id) else { return false }
@@ -138,11 +153,18 @@ extension DemoServer {
             state.liveTurns[key] = ""
             return true
         }
-        guard startNow else { return }
-        publishSession(id)
-        let reply = withState { state in
-            DemoReplies.session(for: text, cwd: state.sessions[state.sessionIndex(id)!].cwd)
-        }
+        if startNow { publishSession(id) }
+        return startNow
+    }
+
+    /// Stream `reply` as the session's turn, then write it down. `effects` runs
+    /// in the same state update as the transcript, for what the finished work
+    /// changes elsewhere, and returns the tasks it touched.
+    func playSessionTurn(
+        _ id: String, reply: DemoReplies.Session, summary: String? = nil,
+        effects: ((inout DemoState) -> [String])? = nil
+    ) {
+        let key = "s:\(id)"
         let channel = DemoStreams.Channel.session(id)
         let toolUseID = withState { $0.nextID("tu") }
         var script = DemoScript()
@@ -175,37 +197,41 @@ extension DemoServer {
                                           detail: reply.tool.detail, resultPreview: reply.tool.result,
                                           inputPreview: reply.tool.input),
                 SessionTranscript.Message(role: "assistant", text: reply.text, timestamp: at, kind: nil),
-            ])
+            ], summary: summary, effects: effects)
         }
         play(script, key: key)
     }
 
     /// Write a finished turn into the transcript, then end it on the stream and
     /// start whatever was queued behind it.
-    private func finishSessionTurn(_ id: String, rows: [SessionTranscript.Message], summary: String? = nil) {
+    private func finishSessionTurn(
+        _ id: String, rows: [SessionTranscript.Message], summary: String? = nil,
+        effects: ((inout DemoState) -> [String])? = nil
+    ) {
         let key = "s:\(id)"
-        let next = withState { state -> String? in
+        let (next, touched) = withState { state -> (String?, [String]) in
             state.liveTurns[key] = nil
-            guard let i = state.sessionIndex(id) else { return nil }
+            guard let i = state.sessionIndex(id) else { return (nil, []) }
             state.sessions[i].transcript.append(contentsOf: rows)
             state.sessions[i].processStatus = "idle"
             state.sessions[i].lastActiveAt = nowISO
+            var touched: [String] = []
             if let summary, let taskID = state.sessions[i].taskId, let t = state.taskIndex(taskID) {
                 state.tasks[t].summary = summary
                 state.tasks[t].updatedAt = nowISO
+                touched.append(taskID)
             }
-            guard var queue = state.sessionQueue[id], !queue.isEmpty else { return nil }
+            touched += effects?(&state) ?? []
+            guard var queue = state.sessionQueue[id], !queue.isEmpty else { return (nil, touched) }
             let first = queue.removeFirst()
             state.sessionQueue[id] = queue
-            return first
+            return (first, touched)
         }
         let channel = DemoStreams.Channel.session(id)
         frame(channel, "turn-end", [:], turnEnd: true)
         frame(channel, "status", ["processStatus": "idle"])
         publishSession(id)
-        if summary != nil, let taskID = withState({ $0.sessions.first { $0.id == id }?.taskId }) {
-            publishTask(taskID)
-        }
+        for taskID in Set(touched) { publishTask(taskID) }
         if let next { sendToSession(id, text: next) }
     }
 
@@ -244,7 +270,7 @@ extension DemoServer {
             }
             rows.append(SessionTranscript.Message(role: "assistant", text: reply, timestamp: at, kind: nil))
             self.finishSessionTurn(id, rows: rows, summary: allow
-                ? "Both alerts are live and a test page reached your phone."
+                ? "Both alerts are live."
                 : "Rules are written. They load the next time the alert agent restarts.")
         }
         play(script, key: key)

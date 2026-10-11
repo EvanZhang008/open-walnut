@@ -79,7 +79,8 @@ final class PlacesQueueStore: @unchecked Sendable {
     /// A departure this close in time to an arrival already kept is that visit.
     static let sameArrivalWindow: TimeInterval = 120
     static let sameArrivalMeters: CLLocationDistance = 500
-    /// A visit the Mac has is kept this long, then forgotten here.
+    /// A visit the Mac has is kept this long while Places is on, then forgotten
+    /// here. With Places off it is forgotten at once: no departure can come for it.
     static let keepSentFor: TimeInterval = 14 * 86_400
     static let maxKept = 3_000
 
@@ -158,20 +159,27 @@ final class PlacesQueueStore: @unchecked Sendable {
                 state.visits.append(record)
                 kept = record
             }
-            Self.prune(&state, now: now)
+            Self.prune(&state, now: now, keepSent: true)
         }
         return kept
     }
 
-    /// The Mac has these versions now.
-    func markSent(_ sent: [String: Int], generation: Int) {
+    /// The Mac has these versions now. `keepSent` is false while Places is off.
+    func markSent(_ sent: [String: Int], generation: Int, now: Date = Date(), keepSent: Bool = true) {
         update(generation: generation) { state in
             for i in state.visits.indices {
                 if let version = sent[state.visits[i].id], version > state.visits[i].sentVersion {
                     state.visits[i].sentVersion = min(version, state.visits[i].version)
                 }
             }
+            Self.prune(&state, now: now, keepSent: keepSent)
         }
+    }
+
+    /// Forget what is due, with no new visit to trigger it: at launch, and when
+    /// Places is turned off (`keepSent: false`, every visit the Mac has goes).
+    func prune(now: Date = Date(), keepSent: Bool) {
+        update { Self.prune(&$0, now: now, keepSent: keepSent) }
     }
 
     func erase() {
@@ -205,8 +213,8 @@ final class PlacesQueueStore: @unchecked Sendable {
             .distance(from: CLLocation(latitude: event.latitude, longitude: event.longitude))
     }
 
-    static func prune(_ state: inout Snapshot, now: Date) {
-        state.visits.removeAll { !$0.needsSend && now.timeIntervalSince($0.lastMoment) > keepSentFor }
+    static func prune(_ state: inout Snapshot, now: Date, keepSent: Bool) {
+        state.visits.removeAll { !$0.needsSend && (!keepSent || now.timeIntervalSince($0.lastMoment) > keepSentFor) }
         if state.visits.count > maxKept {
             // The oldest the Mac already has go first; unsent ones only past the cap.
             let excess = state.visits.count - maxKept

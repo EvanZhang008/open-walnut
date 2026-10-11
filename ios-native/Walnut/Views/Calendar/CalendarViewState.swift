@@ -61,10 +61,12 @@ enum CalendarViewMode: String, CaseIterable, Identifiable {
 struct CalendarViewPreference {
     static let key = "walnut.calendar.viewMode"
 
-    private let defaults: UserDefaults
+    private let storedDefaults: UserDefaults
+    /// The app's own follow the demo scope (`AppPrefs`).
+    private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
 
     init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+        self.storedDefaults = defaults
     }
 
     /// Restore the last view, defaulting to Day (Apple's default and the one

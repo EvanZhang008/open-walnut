@@ -1,5 +1,17 @@
 import Foundation
 import Observation
+import UIKit
+
+/// What voice mode reads answers with: `SpeechOutput` in the app, a stand-in that
+/// records what it was asked to say in tests.
+@MainActor
+protocol VoiceSpeaker: AnyObject {
+    var isSpeaking: Bool { get }
+    func speak(_ text: String, language: String, id: String) async
+    func stop(handoff: Bool)
+}
+
+extension SpeechOutput: VoiceSpeaker {}
 
 /// Voice mode on a session page: talk to the session, hear its answer.
 ///
@@ -17,6 +29,10 @@ import Observation
 /// What is never read: anything already on the page when voice mode was turned
 /// on (the baseline), and anything read before. A turn that ends while the person
 /// is recording is held, not dropped: Replay reads it.
+///
+/// Nothing new starts speaking while Walnut is away (the phone locked, another app
+/// in front): an answer that becomes due then is read when Walnut is back. An
+/// answer already being read when the person leaves is read to its end.
 @Observable
 @MainActor
 final class VoiceModeController {
@@ -30,10 +46,16 @@ final class VoiceModeController {
     }
 
     let recorder: VoiceRecorder
-    private let speaker: SpeechOutput
+    private let speaker: any VoiceSpeaker
     /// Delivers one spoken message to the session (`voice: true`). Answers false
-    /// when the send did not go through; the page shows its own error then.
+    /// when the send did not go through.
     private let send: (String) async -> Bool
+    /// Whether the owner shows these words as a failed message of its own (a
+    /// session page's failed bubble, with Retry). Words that could not be sent
+    /// and are not shown there are kept here (`unsentText`).
+    private let ownerShowsUnsent: (String) -> Bool
+    /// Walnut is in front of the person (the app is active).
+    private let isAppActive: () -> Bool
 
     /// The newest answer this controller knows, for Replay.
     private(set) var lastAnswer: ChatMessage?
@@ -42,10 +64,12 @@ final class VoiceModeController {
     /// True from a voice send until the next answer arrives.
     private(set) var awaitingAnswer = false
     /// Words that were transcribed but could not be sent, kept for Send again.
-    /// Only for an owner that keeps no copy of its own (the ask launch): a session
-    /// page keeps the failed bubble, with its own Retry.
+    /// Only when the owner shows no copy of its own (`ownerShowsUnsent`): the ask
+    /// launch has no bubble before it starts, and a session page shows none when
+    /// it takes no message at all (a session that cannot be woken). Otherwise the
+    /// page's failed bubble, with its own Retry, is the one copy. Nothing said is
+    /// lost without a trace.
     private(set) var unsentText: String?
-    private let keepsUnsentText: Bool
 
     /// Answer rows present when voice mode was turned on: never read.
     @ObservationIgnored private var baseline: Set<String> = []
@@ -68,6 +92,9 @@ final class VoiceModeController {
 
     /// Permission and question cards already announced, by request id.
     @ObservationIgnored private var announcedRequests: Set<String> = []
+    /// Walnut coming back to the front (`appBecameActive`); removed by `shutDown`.
+    @ObservationIgnored private var activeObserver: NSObjectProtocol?
+    private let notifications: NotificationCenter
 
     /// Said when the session stops to ask the person something on screen.
     static let needsAnswerLine = "It needs your answer on the screen."
@@ -79,22 +106,31 @@ final class VoiceModeController {
         sessionID: String,
         rows: [ChatMessage],
         awaitingAnswer: Bool = false,
-        keepsUnsentText: Bool = false,
+        ownerShowsUnsent: @escaping (String) -> Bool = { _ in false },
         // Optional, built here: a default argument is evaluated outside the
-        // main actor, where neither can be made.
+        // main actor, where none of these can be made.
         recorder: VoiceRecorder? = nil,
-        speaker: SpeechOutput? = nil,
+        speaker: (any VoiceSpeaker)? = nil,
+        isAppActive: (() -> Bool)? = nil,
+        notifications: NotificationCenter = .default,
         send: @escaping (String) async -> Bool
     ) {
         self.recorder = recorder ?? VoiceRecorder()
-        self.speaker = speaker ?? .shared
+        self.speaker = speaker ?? SpeechOutput.shared
         self.send = send
+        self.ownerShowsUnsent = ownerShowsUnsent
+        self.isAppActive = isAppActive ?? { UIApplication.shared.applicationState == .active }
+        self.notifications = notifications
         self.awaitingAnswer = awaitingAnswer
-        self.keepsUnsentText = keepsUnsentText
         self.recorder.surface = "voice:\(sessionID)"
         baseline = Set(rows.filter(Self.isAnswer).map(\.id))
         lastAnswer = rows.last(where: Self.isAnswer)
         latestRows = rows
+        activeObserver = notifications.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appBecameActive() }
+        }
     }
 
     var phase: Phase {
@@ -133,13 +169,18 @@ final class VoiceModeController {
     }
 
     private func finishTake() async {
-        guard let text = await recorder.stopAndTranscribe() else {
-            // The recorder kept the audio (or there was nothing to keep) and set
-            // its own sentence; the notice rows show it with Retry.
-            if recorder.errorMessage == nil { notice = "No speech heard. Tap the mic and try again." }
-            return
+        // Background time from Stop to the send's answer: the person may lock the
+        // phone or switch apps right after tapping send. The recorder's own
+        // assertion ends with the transcription, before the words go out.
+        await withBackgroundTime("voice-take") {
+            guard let text = await recorder.stopAndTranscribe() else {
+                // The recorder kept the audio (or there was nothing to keep) and set
+                // its own sentence; the notice rows show it with Retry.
+                if recorder.errorMessage == nil { notice = "No speech heard. Tap the mic and try again." }
+                return
+            }
+            await deliver(text)
         }
-        await deliver(text)
     }
 
     /// A saved take the person retried from the notice rows.
@@ -156,10 +197,20 @@ final class VoiceModeController {
         awaitingAnswer = true
         sawTurnSinceSend = false
         unsentText = nil
-        if !(await send(trimmed)) {
+        let sent = await withBackgroundTime("voice-send") { await send(trimmed) }
+        if !sent {
             awaitingAnswer = false
-            if keepsUnsentText { unsentText = trimmed }
+            if !ownerShowsUnsent(trimmed) { unsentText = trimmed }
         }
+    }
+
+    /// Runs `work` with background time asked of iOS, so a send started just
+    /// before the person leaves Walnut can finish. iOS's expiry ends it too: a
+    /// request still out then is suspended with the app, not cut by a kill.
+    private func withBackgroundTime<T>(_ name: String, _ work: () async -> T) async -> T {
+        let time = BackgroundTime(name)
+        defer { time.end() }
+        return await work()
     }
 
     /// Send the kept words again (the person tapped Send again).
@@ -192,7 +243,10 @@ final class VoiceModeController {
     func announceWaitingOnYou(requestIDs: [String]) async {
         let fresh = Self.newRequests(requestIDs, announced: announcedRequests)
         announcedRequests.formUnion(requestIDs)
-        guard let first = fresh.first, recorder.state == .idle, !speaker.isSpeaking else { return }
+        // Not while Walnut is away either: nothing new is read then. The card and
+        // the status line are on the page when the person is back.
+        guard let first = fresh.first, recorder.state == .idle, !speaker.isSpeaking,
+              isAppActive() else { return }
         await speaker.speak(Self.needsAnswerLine, language: "en-US", id: "needs-answer-\(first)")
     }
 
@@ -202,7 +256,14 @@ final class VoiceModeController {
 
     /// Stop the voice (the person tapped Stop).
     func stopSpeaking() {
-        speaker.stop()
+        speaker.stop(handoff: false)
+    }
+
+    /// Walnut is back in front of the person: an answer that became due while it
+    /// was away is read now. Also when nothing on the page changes on return (the
+    /// provisional row's grace ran out while away, and its canonical row is late).
+    func appBecameActive() {
+        evaluate(now: Date())
     }
 
     /// Read the newest answer again, or for the first time if it arrived while
@@ -215,7 +276,11 @@ final class VoiceModeController {
     /// Voice mode is closing: silence, and no take left running.
     func shutDown() {
         provisionalTimer?.cancel()
-        speaker.stop()
+        if let activeObserver {
+            notifications.removeObserver(activeObserver)
+            self.activeObserver = nil
+        }
+        speaker.stop(handoff: false)
         if recorder.state == .recording { recorder.cancel() }
     }
 
@@ -244,6 +309,12 @@ final class VoiceModeController {
                 }
             }
         case .speak(let row):
+            // Away (the phone locked, another app in front): nothing new starts
+            // speaking. The answer is not taken yet, so `appBecameActive` (or the
+            // rows the page reads on return) reads it then. Before this, the
+            // provisional row's grace timer could fire away from the page and read
+            // a new answer in the background (App Store gate r9, LOW 2).
+            guard isAppActive() else { return }
             provisionalSince = nil
             spokenIDs.insert(row.id)
             if Self.isProvisional(row) { provisionalTexts.insert(Self.textKey(row.text)) }
@@ -308,5 +379,44 @@ final class VoiceModeController {
         }
         if provisionalTexts.contains(textKey(row.text)) { return .replacesReadProvisional(row) }
         return .speak(row)
+    }
+}
+
+extension VoiceModeController {
+    /// Voice mode on a session page (`SessionConversationView`): the words go to
+    /// `store` as spoken sends, and a send that failed leaves its bubble there, with
+    /// Retry, as the one copy. The other arguments are the WalnutTests seams.
+    static func sessionPage(
+        _ store: SessionConversationStore, sessionID: String, awaitingAnswer: Bool,
+        speaker: (any VoiceSpeaker)? = nil, isAppActive: (() -> Bool)? = nil,
+        notifications: NotificationCenter = .default
+    ) -> VoiceModeController {
+        VoiceModeController(
+            sessionID: sessionID, rows: store.messages, awaitingAnswer: awaitingAnswer,
+            ownerShowsUnsent: { store.showsFailedSend(of: $0) },
+            speaker: speaker, isAppActive: isAppActive, notifications: notifications
+        ) { text in
+            await store.send(text, voice: true)
+        }
+    }
+}
+
+/// One background task asked of iOS for a voice step, ended by its owner or, when
+/// time runs out first, by iOS's expiry handler: an app whose background task is
+/// not ended by then is killed, and one that ends it is only suspended.
+@MainActor
+private final class BackgroundTime {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+
+    init(_ name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }

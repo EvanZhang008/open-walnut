@@ -146,8 +146,9 @@ enum TimelineRowContent {
     /// Code fence: monospace, horizontal scroll, no wrapping.
     case code(text: String, contentSize: CGSize)
     /// Inline image (assistant output or historical user image send).
-    /// Fixed-height slot; the cell aspect-fits the loaded image.
-    case image(raw: String, alt: String)
+    /// Fixed-height slot; the cell aspect-fits the loaded image. `spoken`: what
+    /// VoiceOver says for it, set for the user's own photo (nil: as before).
+    case image(raw: String, alt: String, spoken: String? = nil)
     /// Local (just-sent) user image thumbnails — JPEG datas from the picker.
     case localImages(datas: [Data], dimmed: Bool)
     /// Markdown table — hosted grid (rare; bounded by maxRenderedTableRows).
@@ -250,6 +251,18 @@ enum TimelineLoadEarlierState: Int, Hashable {
 }
 
 extension TimelineRowContent {
+    /// What VoiceOver says for a row that draws no text of its own: the user's own
+    /// photos. A photo sent with no words drew no text, so its rows had no
+    /// accessibility element and VoiceOver went past the user's own message (App
+    /// Store r7 gate, finding 11). nil for every other row.
+    var spokenLabel: String? {
+        switch self {
+        case .image(_, _, let spoken): return spoken
+        case .localImages(let datas, _): return TimelineRowBuilder.sentPhotosLabel(count: datas.count)
+        default: return nil
+        }
+    }
+
     /// Cell-reuse bucket.
     var reuseKind: String {
         switch self {
@@ -302,9 +315,10 @@ extension TimelineRowContent {
             hasher.combine(stacked)
         case .code(let text, _):
             hasher.combine(text)
-        case .image(let raw, let alt):
+        case .image(let raw, let alt, let spoken):
             hasher.combine(raw)
             hasher.combine(alt)
+            hasher.combine(spoken)
         case .localImages(let datas, let dimmed):
             hasher.combine(datas.count)
             for data in datas { hasher.combine(data.count) }

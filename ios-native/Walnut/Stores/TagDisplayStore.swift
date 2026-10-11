@@ -28,7 +28,9 @@ final class TagDisplayStore {
     /// When the server last answered, for this server. nil = never in this process.
     private(set) var lastRead: Date?
 
-    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let storedDefaults: UserDefaults
+    /// The app's own follow the demo scope (`AppPrefs`).
+    private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
     @ObservationIgnored private let fetch: () async throws -> TagDisplayState
     @ObservationIgnored private let currentServer: () -> String
     @ObservationIgnored private let now: () -> Date
@@ -47,7 +49,7 @@ final class TagDisplayStore {
         currentServer: @escaping () -> String = { AppConfig.serverURL?.absoluteString ?? "" },
         now: @escaping () -> Date = Date.init
     ) {
-        self.defaults = defaults
+        self.storedDefaults = defaults
         self.fetch = fetch
         self.currentServer = currentServer
         self.now = now

@@ -46,11 +46,40 @@ final class DemoModeUITests: XCTestCase {
         button.tap()
     }
 
-    /// Scroll Settings until `target` is on screen.
+    /// Scroll until `target` can be tapped, in short slow drags toward it. A full
+    /// swipe flings: on the board it carried a row from under the tab bar to
+    /// under the sticky chip bar in one move, where it cannot be tapped either,
+    /// and the next swipe went past it.
     private func scrollTo(_ target: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<8 where !target.isHittable {
-            app.swipeUp()
+        for _ in 0..<20 where !target.isHittable {
+            // Not drawn yet means further down; drawn but hidden at the top
+            // means a step back up.
+            let down = !target.exists || target.frame.midY > app.frame.midY
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.62 : 0.38))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.38 : 0.62))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.1)
         }
+    }
+
+    /// `scrollTo`, then on until `target` is drawn whole above the tab bar. iOS 26's
+    /// tab bar floats over the list and XCUITest calls a row under it hittable, so a
+    /// tap on that row lands on the bar (r9 run ui-r9-1: the Completed fold at y 789
+    /// to 841 under the bar at y 791 stayed Collapsed after its tap).
+    private func scrollClearOfTheTabBar(_ target: XCUIElement, in app: XCUIApplication) {
+        scrollTo(target, in: app)
+        let bar = app.tabBars.firstMatch
+        for _ in 0..<6 {
+            guard target.exists, bar.exists, target.frame.maxY > bar.frame.minY - 4 else { return }
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.1)
+        }
+    }
+
+    /// True when `target` is drawn whole above the tab bar (or there is no bar).
+    private func clearOfTheTabBar(_ target: XCUIElement, in app: XCUIApplication) -> Bool {
+        let bar = app.tabBars.firstMatch
+        return target.exists && (!bar.exists || target.frame.maxY <= bar.frame.minY - 4)
     }
 
     private func leaveDemo(_ app: XCUIApplication) {
@@ -133,12 +162,20 @@ final class DemoModeUITests: XCTestCase {
         }
         XCTAssertTrue(tryDemo.waitForExistence(timeout: 15), "no Try the demo on the pairing screen")
         XCTAssertEqual(tryDemo.label, "Try the demo")
+        // The privacy policy, right under Try the demo (guideline 5.1.1).
+        let setupPolicy = element(app, "setup.privacyPolicy")
+        scrollTo(setupPolicy, in: app)
+        XCTAssertTrue(setupPolicy.isHittable, "no Privacy Policy link on the pairing screen")
+        XCTAssertEqual(setupPolicy.label, "Privacy Policy")
+        XCTAssertGreaterThan(setupPolicy.frame.minY, tryDemo.frame.minY, "the policy link is not under Try the demo")
+        scrollTo(tryDemo, in: app)
         tryDemo.tap()
 
         // Chat opens on the sample conversation, with the Demo label up.
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 30), "the demo never opened")
         XCTAssertTrue(element(app, "demo.banner").waitForExistence(timeout: 10), "no Demo label")
-        XCTAssertTrue(text(app, containing: "realistic plan for today").waitForExistence(timeout: 20),
+        // "for today", or "for tomorrow" late in the day.
+        XCTAssertTrue(text(app, containing: "realistic plan for").waitForExistence(timeout: 20),
                       "the sample conversation did not open")
 
         // Send a message and see the reply stream in.
@@ -149,7 +186,7 @@ final class DemoModeUITests: XCTestCase {
         let send = app.buttons["chat.send"]
         XCTAssertTrue(send.waitForExistence(timeout: 10))
         send.tap()
-        let reply = text(app, containing: "Riverside Kitchens")
+        let reply = text(app, containing: "butcher block for 1,800")
         XCTAssertTrue(reply.waitForExistence(timeout: 30), "the streamed reply never appeared")
 
         // The keyboard covers the tab bar, as on a phone: drag the transcript
@@ -160,10 +197,23 @@ final class DemoModeUITests: XCTestCase {
         }
         XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "the keyboard stayed up")
 
-        // Inbox.
+        // Inbox: answer the headline letter. The session that asked does the
+        // work and writes back in the letter's thread.
         tab(app, "Inbox")
-        XCTAssertTrue(text(app, containing: "onboarding headline").waitForExistence(timeout: 15),
-                      "the sample letters are missing")
+        let headline = text(app, containing: "onboarding headline should ship")
+        XCTAssertTrue(headline.waitForExistence(timeout: 15), "the sample letters are missing")
+        headline.tap()
+        let optionB = text(app, containing: "Ship option B")
+        XCTAssertTrue(optionB.waitForExistence(timeout: 15), "the headline letter has no options")
+        optionB.tap()
+        XCTAssertTrue(app.navigationBars["Answered"].waitForExistence(timeout: 15), "the letter did not take the answer")
+        sleep(6)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(headline.waitForExistence(timeout: 10))
+        headline.tap()
+        XCTAssertTrue(text(app, containing: "now say").waitForExistence(timeout: 15),
+                      "the session never wrote back in the letter's thread")
+        app.navigationBars.buttons.firstMatch.tap()
 
         // Notes.
         tab(app, "Notes")
@@ -174,6 +224,8 @@ final class DemoModeUITests: XCTestCase {
         tab(app, "Tasks")
         XCTAssertTrue(text(app, containing: "shared album").waitForExistence(timeout: 15),
                       "the sample board is missing")
+        // The board's status badge says Demo, the same word as Settings.
+        XCTAssertFalse(app.staticTexts["Live"].exists, "the board says Live in the demo")
         // The toolbar + opens New Session directly: no menu in between, and with
         // the demo's quick folders up the page names the folder by its chip and
         // pill, never by a full path.
@@ -195,7 +247,18 @@ final class DemoModeUITests: XCTestCase {
         let quickAdd = element(app, "tasks.quickAdd.field")
         XCTAssertTrue(quickAdd.waitForExistence(timeout: 10), "no quick-add row on the board")
         quickAdd.tap()
-        quickAdd.typeText("Order new garden hose")
+        // Return adds the task and leaves the field where it was, in view and
+        // below the pinned chip bar, for the next entry (App Store gate,
+        // 2026-10-05: the list scrolled to the new row and the field came back
+        // under the bar while the user kept typing).
+        sleep(1)
+        let fieldBefore = quickAdd.frame
+        quickAdd.typeText("Buy oat milk\n")
+        sleep(2)
+        quickAdd.typeText("Order new")
+        XCTAssertTrue(quickAdd.isHittable, "the quick-add field left the screen after Return")
+        XCTAssertEqual(quickAdd.frame.minY, fieldBefore.minY, accuracy: 1, "the quick-add field moved after Return")
+        quickAdd.typeText(" garden hose")
         let expand = app.buttons["tasks.quickAdd.expand"]
         XCTAssertTrue(expand.waitForExistence(timeout: 10), "the quick-add row has no expand icon once text is typed")
         expand.tap()
@@ -235,12 +298,224 @@ final class DemoModeUITests: XCTestCase {
         let leave = app.buttons["settings.leaveDemo"]
         XCTAssertTrue(leave.waitForExistence(timeout: 10))
         XCTAssertEqual(leave.value as? String, "blocked 0", "the demo refused a request for another host")
-        scrollTo(leave, in: app)
+        // There is no server, so no server status: the status says Demo, and no
+        // server version is shown.
+        let status = element(app, "settings.status")
+        scrollTo(status, in: app)
+        XCTAssertTrue(status.exists, "no Status row")
+        let reads = "\(status.label) \((status.value as? String) ?? "")"
+        XCTAssertTrue(reads.contains("Demo") && !reads.contains("Live"), "the status reads \(reads)")
+        // Nothing on the whole page claims a server: no connection test (it said
+        // "Connected: LIVE"), no Disconnect, no upload, no notification setting.
+        let serverWords = ["LIVE", "Live", "Connected", "Test Connection", "Disconnect", "Server version",
+                           "Send Diagnostics", "Letter Notifications", "v0.6.0", "Uptime"]
+        for _ in 0..<8 {
+            for word in serverWords {
+                let hit = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", word)).firstMatch
+                XCTAssertFalse(hit.exists, "Settings in the demo shows \"\(word)\": \(hit.exists ? hit.label : "")")
+            }
+            app.swipeUp()
+        }
+        // The Privacy Policy row opens Safari, in the demo too, and the demo
+        // refused nothing for it: the address never went through the app.
+        let policy = element(app, "settings.privacyPolicy")
+        scrollTo(policy, in: app)
+        XCTAssertTrue(policy.isHittable, "no Privacy Policy row in Settings")
+        XCTAssertEqual(policy.label, "Privacy Policy")
+        checkThePrivacyPolicyOpensInSafari(app, policy)
+        for _ in 0..<10 where !leave.isHittable { app.swipeDown() }
+        XCTAssertEqual(leave.value as? String, "blocked 0", "the policy link went through the demo's server")
         leave.tap()
 
         // Back on the pairing screen, with no demo left behind.
         XCTAssertTrue(app.buttons["setup.tryDemo"].waitForExistence(timeout: 15), "Leave demo did not return to pairing")
         XCTAssertFalse(element(app, "demo.banner").exists)
         XCTAssertFalse(app.tabBars.firstMatch.exists)
+    }
+
+    private func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 15) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if (element.value as? String) == value { return true }
+            usleep(200_000)
+        }
+        return (element.value as? String) == value
+    }
+
+    /// The screens added after the first submission, in the demo: Inbox letters marked
+    /// without opening them (a right swipe, Select, two fingers dragged down the rows),
+    /// the Tasks search finding finished work behind "Completed (1)", and the Recently
+    /// opened drawer, which starts from the demo's sample history and goes back to a
+    /// conversation. Nothing leaves the demo: Settings still says "blocked 0".
+    @MainActor
+    func testTheDemoMarksLettersFindsFinishedWorkAndReopensRecents() throws {
+        let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, Self.demoURL])
+        let tryDemo = app.buttons["setup.tryDemo"]
+        if !tryDemo.waitForExistence(timeout: 15) {
+            leaveDemo(app)
+        }
+        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30), "no Try the demo on the pairing screen")
+        tryDemo.tap()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "the demo never opened")
+
+        // Inbox: three unread letters to start with.
+        tab(app, "Inbox")
+        let unread = element(app, "inbox.filter.unread")
+        XCTAssertTrue(unread.waitForExistence(timeout: 20), "no Unread chip")
+        XCTAssertTrue(waitForValue(unread, "3"), "the demo inbox does not start with three unread letters")
+
+        // A right swipe marks a letter read without opening it, and a second one unread.
+        let merge = element(app, "inbox.row.l-merge")
+        XCTAssertTrue(merge.waitForExistence(timeout: 15), "no ready-to-merge letter")
+        func swipeRead(_ row: XCUIElement) {
+            row.swipeRight(velocity: .fast)
+            let button = element(app, "inbox.swipe.read")
+            if button.waitForExistence(timeout: 1), button.isHittable { button.tap() }
+        }
+        swipeRead(merge)
+        XCTAssertTrue(waitForValue(unread, "2"), "a right swipe did not mark the letter read")
+        XCTAssertFalse(element(app, "inbox.letter.menu").exists, "the swipe opened the letter")
+        swipeRead(merge)
+        XCTAssertTrue(waitForValue(unread, "3"), "a second right swipe did not mark it unread")
+
+        // Select, pick two, Mark Read.
+        element(app, "inbox.select").tap()
+        XCTAssertTrue(app.navigationBars["Select Letters"].waitForExistence(timeout: 5), "Select did not open")
+        element(app, "inbox.row.l-headline").tap()
+        element(app, "inbox.row.l-pricing").tap()
+        XCTAssertTrue(app.navigationBars["2 Selected"].waitForExistence(timeout: 5), "the title does not count the picks")
+        XCTAssertFalse(element(app, "inbox.letter.menu").exists, "a tap in Select mode opened a letter")
+        element(app, "inbox.selection.markRead").tap()
+        XCTAssertTrue(element(app, "inbox.select").waitForExistence(timeout: 5), "Mark Read did not leave Select mode")
+        XCTAssertTrue(waitForValue(unread, "1"), "Mark Read did not mark the two letters read")
+
+        // Two fingers dragged down the rows start Select mode with those rows picked;
+        // Mark Unread puts them back. The demo's letters are tall (a title over two
+        // lines of preview), so the drag runs from the first row on screen to the last
+        // one, slowly: from the first to the third it picked one row (first run).
+        let rows = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'inbox.row.'"))
+            .allElementsBoundByIndex.filter(\.isHittable).sorted { $0.frame.minY < $1.frame.minY }
+        XCTAssertGreaterThanOrEqual(rows.count, 3, "fewer than three letters on screen")
+        let first = rows[0], last = rows[rows.count - 1]
+        try MultiTouch.twoFingerDrag(
+            from: CGPoint(x: first.frame.midX - 20, y: first.frame.minY + 24),
+            to: CGPoint(x: first.frame.midX - 20, y: last.frame.midY),
+            duration: 2.4
+        )
+        XCTAssertTrue(element(app, "inbox.selectDone").waitForExistence(timeout: 5),
+                      "two fingers dragged down the rows did not start Select mode")
+        let title = app.navigationBars.firstMatch.identifier
+        let picked = Int(title.split(separator: " ").first ?? "") ?? 0
+        XCTAssertGreaterThanOrEqual(picked, 2, "the drag picked fewer than two rows (title \(title))")
+        element(app, "inbox.selection.markUnread").tap()
+        XCTAssertTrue(element(app, "inbox.select").waitForExistence(timeout: 5), "Mark Unread did not leave Select mode")
+        XCTAssertNotEqual(unread.value as? String, "1", "Mark Unread changed nothing")
+
+        // Opening an unread letter reads it, and it stays read once the letter's own
+        // answer arrives: the reader asks for the letter as it marks it, and that
+        // answer, made before the read landed, used to put it back (r8 gate).
+        let beforeOpen = Int(unread.value as? String ?? "") ?? 0
+        XCTAssertGreaterThan(beforeOpen, 0, "no unread letter left to open")
+        // The drag can leave the list scrolled, with this row under the pinned filter
+        // bar, where a tap on its middle lands on the bar (App Store r6 gate, run 2:
+        // the row at y 121 to 249 under the All chip at y 148 to 178). Scroll back
+        // until the whole row is below the bar, then open it.
+        let target = element(app, "inbox.row.l-merge")
+        func clearOfTheBar() -> Bool {
+            target.exists && target.isHittable && target.frame.minY > unread.frame.maxY + 4
+        }
+        for _ in 0..<5 where !clearOfTheBar() { app.swipeDown() }
+        XCTAssertTrue(clearOfTheBar(), "the letter stays under the filter bar (row \(target.frame), bar \(unread.frame))")
+        target.tap()
+        XCTAssertTrue(element(app, "inbox.letter.subject").waitForExistence(timeout: 10), "the letter did not open")
+        // The demo answers each request after a random 50 to 160 ms: let both land.
+        // A letter answer slower than the read's is the case that went wrong.
+        Thread.sleep(forTimeInterval: 2)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(waitForValue(unread, String(beforeOpen - 1)), "opening the letter did not leave it read")
+
+        // Tasks: search finds the finished crash fixes the list does not carry.
+        tab(app, "Tasks")
+        XCTAssertTrue(text(app, containing: "shared album").waitForExistence(timeout: 30), "the sample board is missing")
+        let search = app.searchFields.firstMatch
+        if !search.waitForExistence(timeout: 5) { app.swipeDown() }
+        XCTAssertTrue(search.waitForExistence(timeout: 10), "no search field on the board")
+        search.tap()
+        search.typeText("crash")
+        let inline = element(app, "tasks.row.t-upload-crash")
+        XCTAssertTrue(inline.waitForExistence(timeout: 20), "search did not find the finished upload crash fix")
+        // The keyboard covers the lower half, where `scrollTo` drags: its Search key
+        // puts it away and keeps the results (run 3 found no fold behind it).
+        let searchKey = app.keyboards.buttons["Search"].firstMatch
+        if searchKey.waitForExistence(timeout: 3) { searchKey.tap() }
+        let fold = element(app, "search.fold.completed")
+        scrollClearOfTheTabBar(fold, in: app)
+        XCTAssertTrue(fold.waitForExistence(timeout: 10), "no Completed fold")
+        XCTAssertTrue(fold.label.contains("Completed (1)"), "the fold reads \(fold.label)")
+        XCTAssertTrue(clearOfTheTabBar(fold, in: app),
+                      "the fold stays under the tab bar (fold \(fold.frame), bar \(app.tabBars.firstMatch.frame))")
+        fold.tap()
+        let folded = element(app, "tasks.row.t-widget-crash")
+        XCTAssertTrue(folded.waitForExistence(timeout: 10), "the Completed fold did not open")
+        scrollClearOfTheTabBar(folded, in: app)
+        XCTAssertTrue(clearOfTheTabBar(folded, in: app),
+                      "the finished task stays under the tab bar (row \(folded.frame), bar \(app.tabBars.firstMatch.frame))")
+        folded.tap()
+        let opened = element(app, "task.title")
+        XCTAssertTrue(opened.waitForExistence(timeout: 15), "the finished task did not open")
+        XCTAssertTrue(opened.label.contains("home screen widget"), "the page opened \(opened.label)")
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "no Done on the task page")
+        done.tap()
+        // iOS 26 ends a search with Close (an xmark) where earlier systems said Cancel;
+        // the Recently opened button comes back once the search has ended (run 4).
+        let close = app.navigationBars.buttons["Close"].firstMatch
+        let cancel = app.buttons["Cancel"].firstMatch
+        if close.waitForExistence(timeout: 5) { close.tap() } else if cancel.exists { cancel.tap() }
+
+        // Recently opened: the task just opened on top, then the sample history.
+        let clock = app.buttons["tasks.recents"]
+        XCTAssertTrue(clock.waitForExistence(timeout: 10), "no Recently opened button")
+        clock.tap()
+        XCTAssertTrue(element(app, "tasks.recents.drawer").waitForExistence(timeout: 10), "the drawer did not open")
+        let recent = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'tasks.recents.row.'"))
+        XCTAssertTrue(recent.firstMatch.waitForExistence(timeout: 10), "the drawer is empty")
+        XCTAssertEqual(recent.firstMatch.identifier, "tasks.recents.row.t-widget-crash", "the task just opened is not on top")
+        XCTAssertGreaterThanOrEqual(recent.count, 5, "the sample history is missing")
+        XCTAssertFalse(element(app, "tasks.recents.empty").exists)
+        element(app, "tasks.recents.row.t-crash").tap()
+        // The conversation's More menu (its Session Info item stays inside it).
+        XCTAssertTrue(element(app, "session.menu").waitForExistence(timeout: 20),
+                      "the crash row did not go back to its conversation")
+        XCTAssertTrue(text(app, containing: "force unwrap on an album").waitForExistence(timeout: 20),
+                      "the conversation is not the crash fix")
+        app.navigationBars.buttons.firstMatch.tap()
+
+        // Nothing left the demo.
+        tab(app, "Settings")
+        let leave = app.buttons["settings.leaveDemo"]
+        XCTAssertTrue(leave.waitForExistence(timeout: 10))
+        // The demo has no token, so Settings shows no masked one (r6 gate).
+        XCTAssertTrue(text(app, containing: "no server").waitForExistence(timeout: 5), "no demo address row")
+        XCTAssertFalse(text(app, containing: "\u{2022}\u{2022}\u{2022}\u{2022}").exists,
+                       "the demo's Settings shows a token the demo does not have")
+        XCTAssertEqual(leave.value as? String, "blocked 0", "the demo refused a request for another host")
+        scrollTo(leave, in: app)
+        leave.tap()
+        XCTAssertTrue(app.buttons["setup.tryDemo"].waitForExistence(timeout: 15), "Leave demo did not return to pairing")
+    }
+
+    /// Taps the Privacy Policy row and sees Safari come up, then returns to the app
+    /// and closes Safari. The ONE place a UI test may attach to Safari, and only to
+    /// wait for it and terminate it (UITestLaunchRatchetTests, by this name).
+    private func checkThePrivacyPolicyOpensInSafari(_ app: XCUIApplication, _ policy: XCUIElement) {
+        policy.tap()
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 20), "Privacy Policy did not open Safari")
+        app.activate()
+        safari.terminate()
+        XCTAssertTrue(policy.waitForExistence(timeout: 15), "the app did not come back from Safari")
     }
 }

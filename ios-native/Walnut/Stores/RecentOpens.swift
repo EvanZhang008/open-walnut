@@ -64,20 +64,24 @@ final class RecentOpens {
     func hydrate() async {
         guard !persists else { return }
         let started = generation
-        let cached = await DiskCache.loadAsync([RecentOpen].self, key: Self.cacheKey) ?? []
+        let file = await DiskCache.loadAsync([RecentOpen].self, key: Self.cacheKey)
         guard started == generation else { return }
-        let merged = Self.merged(newer: entries, older: cached, cap: Self.cap)
+        let cached = file ?? []
+        // Nothing saved yet: in the demo the list starts from its sample history
+        // (`DemoEntry.sampleRecentOpens`), and outside it from nothing.
+        let saved = file ?? DemoEntry.sampleRecentOpens()
+        let merged = Self.merged(newer: entries, older: saved, cap: Self.cap)
         persists = true
         if merged != entries { entries = merged }
         // Also when nothing was on disk: visits made before the read are only in memory.
         if merged != cached { persist() }
     }
 
-    func recordSession(_ session: WalnutSession, at now: Date = .now) {
+    func recordSession(_ session: WalnutSession, at now: Date = AppClock.now()) {
         apply(Self.recordingSession(session, at: now, into: entries, cap: Self.cap))
     }
 
-    func recordTask(_ task: WalnutTask, at now: Date = .now) {
+    func recordTask(_ task: WalnutTask, at now: Date = AppClock.now()) {
         apply(Self.recordingTask(task, at: now, into: entries, cap: Self.cap))
     }
 

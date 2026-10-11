@@ -38,6 +38,16 @@ enum CalendarLayout {
         return minutesIntoDay(now, day: day, calendar: calendar)
     }
 
+    /// How long the now-line waits before its next tick: until just past the
+    /// next whole minute, so its bubble turns over with the status bar clock.
+    /// A fixed 60 s from whenever the view appeared lagged the clock by up to a
+    /// minute (App Store gate, 2026-10-05).
+    static func secondsToNextMinute(after now: Date) -> TimeInterval {
+        let t = now.timeIntervalSince1970
+        let next = (t / 60).rounded(.down) * 60 + 60
+        return next - t + 0.05
+    }
+
     // MARK: - Cross-day clipping
 
     /// One span's footprint inside a single day column.

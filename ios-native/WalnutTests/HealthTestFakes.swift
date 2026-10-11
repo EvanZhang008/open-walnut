@@ -240,3 +240,26 @@ extension HealthTypeSpec {
                        unit: unit, scale: 1, isGeneric: generic, bucketStat: .sum, immediateDelivery: false)
     }
 }
+
+/// Tests: a salt in memory, shared by every engine one test makes.
+final class MemoryHealthSalt: HealthSaltStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: Data?
+    private var count = 0
+    /// How many salts it has made.
+    var made: Int { lock.withLock { count } }
+
+    func salt() -> Data {
+        lock.withLock {
+            if let kept { return kept }
+            let salt = HealthCharacteristicKey.newSalt()
+            kept = salt
+            count += 1
+            return salt
+        }
+    }
+
+    func delete() {
+        lock.withLock { kept = nil }
+    }
+}

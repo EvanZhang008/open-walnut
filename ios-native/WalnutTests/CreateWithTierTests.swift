@@ -185,6 +185,7 @@ final class CreateWithTierTests: XCTestCase {
         XCTAssertEqual(store.tierId(for: "t-focus-1"), "focus")
         XCTAssertEqual(store.tasks.first?.pinned, true, "a tier implies pinned locally too")
         XCTAssertEqual(store.lastCreatedTaskId, "t-focus-1")
+        XCTAssertFalse(store.lastCreatedInPlace, "a task made from the sheet is still scrolled to")
         XCTAssertTrue(store.pendingCreatedIds.contains("t-focus-1"),
             "REPLICA refreshes must keep the row until the projection has it")
     }

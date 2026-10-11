@@ -50,6 +50,16 @@ struct WalnutApp: App {
             "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?",
             "memoryMB": String(FreezeContext.residentMemoryMB()),
         ])
+        // The demo server lives in memory and starts again from its sample data
+        // on every launch; the demo's cached copies go with it, before any store
+        // reads them, so a relaunch is the same fresh demo and not a mix of the
+        // last run's changes and the sample data.
+        if DemoMode.isActive {
+            // The demo's clock pin (Debug builds only) before anything reads the
+            // demo server, which times its sample data from it.
+            AppClock.applyDemoPin()
+            DemoEntry.startFreshAtLaunch()
+        }
         let connection = ConnectionStore()
         let chat = ChatStore()
         let notes = NotesStore()

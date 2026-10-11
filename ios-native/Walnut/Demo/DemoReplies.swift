@@ -22,9 +22,15 @@ enum DemoReplies {
         let text: String
     }
 
-    static func chat(for message: String) -> Chat {
+    /// `clock` is the demo's: the plan names the same times as the calendar.
+    /// `images`: how many photos came with the message.
+    static func chat(for message: String, images: Int = 0, clock: DemoClock = DemoClock()) -> Chat {
         let lower = message.lowercased()
         func has(_ words: String...) -> Bool { words.contains { lower.contains($0) } }
+        // A photo with no words (the real server takes it as a turn of its own).
+        if images > 0, message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return photoReply
+        }
         // A request to remember something comes first, whatever it is about: the
         // demo's own voice sentence ("Remind me to send the counter quotes...")
         // names the kitchen, and used to get the kitchen status report instead.
@@ -35,10 +41,10 @@ enum DemoReplies {
                 text: """
                 Two of the three counter quotes are in:
 
-                - **Stone & Co:** quartz, installed in 3 weeks
-                - **Riverside Kitchens:** laminate, installed in 10 days, the lowest price
+                - **Counter Works:** quartz for 2,950, installed in 4 weeks
+                - **Oak Lane:** butcher block for 1,800, installed in 2 weeks, the lowest price
 
-                The third shop said they would call back by Thursday. The task is due **Friday**, so there is still time. Want me to draft a short follow-up message to them?
+                Stone & Co said they would call back by \(clock.weekdayName(DemoClock.quotesCallbackInDays)). The task is due **\(clock.weekdayName(DemoClock.quotesDueInDays))**, so there is still time. Want me to draft a short follow-up message to them?
                 """
             )
         }
@@ -60,26 +66,43 @@ enum DemoReplies {
             return Chat(
                 thinking: "Check the Travel project and the trip note.",
                 text: """
-                For the October trip, two things are open:
+                For the coast trip, two things are open:
 
-                1. **Book train tickets to the coast**, due in 3 days. Morning trains still have seats.
-                2. **Make a packing list**, in your backlog. I can start one from last year's list in your notes.
+                1. **Book train tickets to the coast**, due in \(DemoClock.trainDueInDays) days. Morning trains still have seats.
+                2. **Make a packing list**, in your backlog. I can start one from the packing line in your trip note.
 
                 Should I pin the tickets task to Focus so it stays in view?
                 """
             )
         }
-        if has("today", "plan", "focus", "priorit", "what should") {
+        // A question about the calendar is answered from the calendar, for the day
+        // it names, not with the plan.
+        if has("calendar", "schedule", "agenda", "appointment", "meeting") {
+            return calendar(lower, clock: clock)
+        }
+        if has("today", "tomorrow", "plan", "focus", "priorit", "what should") {
+            // The same plan as the sample conversation's: late in the day it is
+            // tomorrow's, and the reply says so.
+            let plan = clock.plan()
+            // Asked about tomorrow while the plan is for today: answer for tomorrow.
+            if plan.day == 0, askedDay(lower, clock: clock) == 1 {
+                return tomorrowFocus(clock: clock)
+            }
+            let day = clock.dayWord(plan.day, saidAt: clock.now)
+            let call = clock.when(plan.call, planDay: plan.day)
+            let review = clock.when(plan.review, planDay: plan.day)
+            let lead = day == "today" ? "Here is today at a glance:" : "It is late in the day, so here is tomorrow at a glance:"
+            let rest = "Everything else in Focus can wait until \(clock.restWaitsUntil(planDay: plan.day))."
             return Chat(
-                thinking: "Read the Focus tier and today's calendar.",
+                thinking: "Read the Focus tier and the calendar for \(day).",
                 text: """
-                Here is today at a glance:
+                \(lead)
 
-                1. **Review the crash fix** (pull request #318), blocked out at 2:00 PM
+                1. **Review the crash fix** (pull request #318), blocked out \(review)
                 2. **Pick an onboarding headline**: three options are waiting in your Inbox
-                3. **Call the dentist** at 10:30 AM
+                3. **Call the dentist** \(call)
 
-                Everything else in Focus can wait until tomorrow.
+                \(rest)
                 """
             )
         }
@@ -143,9 +166,86 @@ enum DemoReplies {
             .min()
     }
 
-    static func session(for message: String, cwd: String) -> Session {
+    /// The answer to a side question ("ask without interrupting the work"):
+    /// from what the session did, picked by what was asked. One fixed sentence
+    /// answered every question the same way (App Store gate, 2026-10-05).
+    static func sideAnswer(to question: String, session id: String) -> String {
+        let q = question.lowercased()
+        func asks(_ words: String...) -> Bool { words.contains { q.contains($0) } }
+        let facts = SideFacts.of(id)
+        if asks("file", "where", "line", "which code", "what code") { return facts.file }
+        if asks("test") { return facts.tests }
+        if asks("why", "cause", "reason", "what happened", "root") { return facts.cause }
+        if asks("risk", "safe", "break", "affect", "side effect", "anything else", "regress") { return facts.risk }
+        if asks("pull request", " pr", "pr ", "review", "merge", "ship") { return facts.review }
+        if asks("how long", "when", "time", "eta", "done", "finish", "status", "progress") { return facts.status }
+        let quoted = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "This is the demo, so this session can only answer \"\(quoted)\" from its sample work. \(facts.status)"
+    }
+
+    /// What each demo session can say about its own work, consistent with its
+    /// transcript. Plain text: the Side Questions sheet shows an answer as it is,
+    /// so a code span would show its backticks.
+    private struct SideFacts {
+        let file, tests, cause, risk, review, status: String
+
+        static func of(_ id: String) -> SideFacts {
+            switch id {
+            case "s-crash":
+                return SideFacts(
+                    file: "Sources/Albums/AlbumViewModel.swift, line 57: store.album(id: albumID!). The fix replaced it with a wait for the album.",
+                    tests: "All 24 album tests pass, including the new testOpenFromNotificationBeforeSync in Tests/AlbumTests.swift, which opens an album from a notification before it has synced.",
+                    cause: "The notification router opened the album screen before the shared album had synced, so albumID was still nil and the force unwrap crashed.",
+                    risk: "Low. The change is in the album screen and its tests only (+18, -4), so nothing else in the app is affected.",
+                    review: "Pull request #318 is open and a review is requested. It can ship in the next TestFlight build once it is approved.",
+                    status: "The fix and its test are done; pull request #318 is waiting for a review."
+                )
+            case "s-offline":
+                return SideFacts(
+                    file: "The cache is new, in Sources/Grid/ThumbnailCache.swift; the grid reads it in Sources/Grid/PhotoGrid.swift.",
+                    tests: "All 31 grid tests pass.",
+                    cause: "Without a disk cache, the grid had nothing to show offline, so it showed spinners.",
+                    risk: "Low. The cache is bounded to the last 500 thumbnails (about 40 MB) and only the grid reads it.",
+                    review: "It is ready to merge into the 2.4 branch; the letter in your Inbox asks you to confirm.",
+                    status: "The offline grid works and the offline banner is in; it is waiting on your go to merge."
+                )
+            case "s-copy":
+                return SideFacts(
+                    file: "The headline is in Sources/Onboarding/WelcomeView.swift.",
+                    tests: "Only text changes, so the existing onboarding tests cover it.",
+                    cause: "The welcome screen needs a shorter headline for the 2.4 release.",
+                    risk: "None to speak of: it is a text change on the welcome screen and in the App Store text.",
+                    review: "Three options are waiting in your Inbox; pick one and the session updates the app and the App Store text.",
+                    status: "Three headline options are drafted and waiting for your pick."
+                )
+            case "s-cache":
+                return SideFacts(
+                    file: "Three call sites changed, among them Sources/Grid/ThumbnailCache.swift.",
+                    tests: "All 212 tests pass.",
+                    cause: "The old major version of the image cache library held more memory while scrolling.",
+                    risk: "Low. The upgrade needed two renamed options and the shared pipeline, and memory while scrolling dropped by 38%.",
+                    review: "It is merged.",
+                    status: "Done and merged: all 212 tests pass and scrolling uses 38% less memory."
+                )
+            default:
+                return SideFacts(
+                    file: "This is the demo, so no real files change here; the session's last messages say what it touched.",
+                    tests: "This is the demo, so no tests run here; on your computer the session runs them and reports the result.",
+                    cause: "This is the demo, so the session answers from its sample work; its last messages explain what it found.",
+                    risk: "This is the demo, so nothing changes here; on your computer the session says what a change affects before it makes it.",
+                    review: "This is the demo, so nothing is up for review here.",
+                    status: "It is idle in the demo; its last messages say where it stopped."
+                )
+            }
+        }
+    }
+
+    static func session(for message: String, images: Int = 0, cwd: String) -> Session {
         let lower = message.lowercased()
         let root = cwd.isEmpty ? DemoFixtures.macCodeRoot : cwd
+        if images > 0, message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return sessionPhoto(cwd: cwd)
+        }
         if lower.contains("test") {
             return Session(
                 thinking: "Run the test suite and report what fails.",
@@ -172,15 +272,95 @@ enum DemoReplies {
         )
     }
 
-    static let uptimeRestartOutput = "alert-agent.service restarted\nLoaded 2 rules: site-down, api-down\nTest page sent"
+    /// What a session does with a letter answer: the answer arrives as its next
+    /// turn (the real server delivers it the same way), the agent acts on it,
+    /// and writes back in the letter's thread.
+    struct LetterTurn {
+        /// The user row the session shows for the delivered answer.
+        let delivered: String
+        let reply: Session
+        /// The task's summary once the work is done.
+        let summary: String
+        /// The task is finished by this answer.
+        let completes: Bool
+        /// The agent's line in the letter thread.
+        let threadReply: String
+        /// A release plan checklist line the work ticks, if any.
+        let ticks: String?
+    }
 
+    static func letterTurn(letterID: String, actionID: String, label: String, description: String?, cwd: String) -> LetterTurn? {
+        let root = cwd.isEmpty ? DemoFixtures.macCodeRoot : cwd
+        switch (letterID, actionID) {
+        case ("l-headline", _):
+            let headline = description ?? label
+            return LetterTurn(
+                delivered: "From your Inbox: \(label), \"\(headline)\".",
+                reply: Session(
+                    thinking: "Put the chosen headline on the welcome screen and in the App Store text.",
+                    tool: Tool(
+                        name: "Edit", detail: "Sources/Onboarding/WelcomeView.swift",
+                        input: "file_path: \(root)/Sources/Onboarding/WelcomeView.swift",
+                        result: "Updated WelcomeView.swift (+1, -1)"
+                    ),
+                    text: "Done. The welcome screen now says **\(headline)**, and the App Store subtitle matches. The copy review is complete."
+                ),
+                summary: "Shipped \"\(headline)\" on the welcome screen and in the App Store subtitle.",
+                completes: true,
+                // Plain text: a thread turn's text is shown as written.
+                threadReply: "Done: the welcome screen and the App Store subtitle now say \"\(headline)\".",
+                ticks: "New onboarding headline"
+            )
+        case ("l-merge", "merge"):
+            return LetterTurn(
+                delivered: "From your Inbox: \(label).",
+                reply: Session(
+                    thinking: "Merge the offline grid branch into the 2.4 branch.",
+                    tool: Tool(
+                        name: "Bash", detail: "Merge into the 2.4 branch",
+                        input: "command: git checkout release/2.4 && git merge --no-ff offline-grid\ndescription: Merge into the 2.4 branch",
+                        result: "Merge made by the 'ort' strategy."
+                    ),
+                    text: "Merged offline mode into the 2.4 branch. It goes out with the next TestFlight build."
+                ),
+                summary: "Merged into the 2.4 branch.",
+                completes: true,
+                threadReply: "Merged into the 2.4 branch.",
+                ticks: "Offline mode for the photo grid"
+            )
+        case ("l-merge", _):
+            return LetterTurn(
+                delivered: "From your Inbox: \(label).",
+                reply: Session(
+                    thinking: "Check where the crash fix is before merging.",
+                    tool: Tool(
+                        name: "Bash", detail: "Check the crash fix pull request",
+                        input: "command: gh pr view 318 --json state\ndescription: Check the crash fix pull request",
+                        result: "state: OPEN, review requested"
+                    ),
+                    text: "Okay. Pull request #318 is still in review, so I will merge offline mode after it lands."
+                ),
+                summary: "Ready to merge after the crash fix lands.",
+                completes: false,
+                threadReply: "Okay, I will merge it after the crash fix lands.",
+                ticks: nil
+            )
+        default:
+            return nil
+        }
+    }
+
+    static let uptimeRestartOutput = "alert-agent.service restarted\nLoaded 2 rules: site-down, api-down"
+
+    /// Nothing is paged in the demo, so the reply does not claim a test page:
+    /// the reader would look for a notification that never comes.
     static let uptimeAllowed = """
     Done. The alert agent restarted and loaded both rules:
 
     - **site-down:** the website has not answered for 2 minutes
     - **api-down:** the API has not answered for 2 minutes
 
-    I sent a test page to confirm alerts reach your phone.
+    Both are live now. You get a page only if the site or the API stays down for two minutes.
     """
 
     static let uptimeDenied = """

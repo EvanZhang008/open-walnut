@@ -93,6 +93,10 @@ struct QuickAddRow: View {
                     // Expand to the full form (project/priority/date pickers),
                     // carrying the sentence AND the destination along.
                     Button {
+                        // The sheet takes the entry over, so the field lets go of
+                        // the keyboard. Kept, it came back the moment the sheet
+                        // closed and covered half the board under the new task.
+                        focused = false
                         onExpand(text, destination)
                         text = ""
                     } label: {

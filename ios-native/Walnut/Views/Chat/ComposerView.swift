@@ -1012,6 +1012,9 @@ struct ComposerBar: View {
                                 .foregroundStyle(.white, .black.opacity(0.55))
                                 .padding(3)
                         }
+                        // The symbol alone read "Close", the same as the recording's
+                        // cancel (App Store r7 gate, finding 11).
+                        .accessibilityLabel("Remove photo")
                         .accessibilityIdentifier("chat.imageRemove")
                     }
                 }
@@ -1039,6 +1042,7 @@ struct ComposerBar: View {
                     .frame(width: 32, height: 32)
                     .background(Color(.tertiarySystemFill), in: Circle())
             }
+            .accessibilityLabel("Cancel recording")
             .accessibilityIdentifier("chat.voiceCancel")
 
             // The caption states what STOPPING will do, so it has to track the
@@ -1075,6 +1079,7 @@ struct ComposerBar: View {
                     .frame(width: 32, height: 32)
                     .background(Theme.tint, in: Circle())
             }
+            .accessibilityLabel(quickAction.autoSendArmed ? "Send" : "Stop Recording")
             .accessibilityIdentifier("chat.voiceStop")
         }
         .padding(.horizontal, 12)
@@ -1309,6 +1314,8 @@ struct ComposerBar: View {
                 .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
         }
         .disabled(!canSend)
+        // VoiceOver read the arrow's symbol name, "Up".
+        .accessibilityLabel("Send")
         .accessibilityIdentifier("chat.send")
     }
 
@@ -1420,6 +1427,11 @@ struct ComposerBar: View {
         ) {
         case .present:
             cameraNotice = nil
+            // Put the keyboard away first: UIKit gives focus back to the field
+            // that had it when the cover goes, and the keyboard came up again
+            // over the tab bar after a cancel (gate r4, F12).
+            focused = false
+            longDraftFocused = false
             showPhotoPicker = false
             showCamera = true
         case .notice(let text):
@@ -1790,6 +1802,7 @@ struct ComposerBar: View {
                     Image(systemName: Symbol.cancel)
                         .font(.caption2)
                 }
+                .accessibilityLabel("Dismiss")
             }
         }
         .foregroundStyle(.secondary)
@@ -1833,7 +1846,12 @@ private struct RecordingIndicator: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("chat.voiceRecordingCaption")
+                #if DEBUG
+                // For VoiceQuickActionUITests only: which path started this take.
+                // A Release build has no such value, so VoiceOver reads none
+                // (gate r4, F9).
                 .accessibilityValue(deliverySource ?? "mic-button")
+                #endif
         }
         .onAppear { phase = scenePhase == .active }
         .onChange(of: scenePhase) { _, phaseState in

@@ -167,7 +167,7 @@ struct RoutinesView: View {
                                          : status == "error" ? Theme.danger : .secondary)
                 }
                 if let last = state.lastRunDate {
-                    Text("Last run \(last.formatted(.relative(presentation: .named)))")
+                    Text("Last run \(AppClock.relativeNamed(last))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -175,8 +175,8 @@ struct RoutinesView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                if job.enabled, let next = state.nextRunDate, next > Date() {
-                    Text("· next \(next.formatted(.relative(presentation: .named)))")
+                if job.enabled, let next = state.nextRunDate, next > AppClock.now() {
+                    Text("· next \(AppClock.relativeNamed(next))")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

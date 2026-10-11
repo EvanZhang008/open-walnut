@@ -29,7 +29,7 @@ struct CalendarListView: View {
     @State private var daysForward = 180
     /// Anchor is captured on appear so growing the window never re-centres the
     /// list under the user's finger.
-    @State private var anchor = Date()
+    @State private var anchor = AppClock.now()
     @State private var didAutoScroll = false
 
     private var windowStart: Date {
@@ -131,7 +131,7 @@ struct CalendarListView: View {
     // MARK: - Header
 
     private func sectionHeader(_ day: Date) -> some View {
-        let isToday = calendar.isDateInToday(day)
+        let isToday = AppClock.isToday(day, calendar: calendar)
         let key = CalendarLogic.dayKey(day, calendar: calendar)
         return HStack(spacing: 6) {
             Text(day.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))

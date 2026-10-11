@@ -154,6 +154,14 @@ struct AppConfig {
         cachedToken.withLock { $0 = .some(nil) }
     }
 
+    /// A fresh install found a device token an earlier, deleted install left in
+    /// the Keychain (see `InstallMarker`). Nothing else of that install is left:
+    /// the address and name went with its preferences.
+    static func removeTokenLeftByEarlierInstall() {
+        KeychainHelper.delete(tokenKey)
+        cachedToken.withLock { $0 = .some(nil) }
+    }
+
     #if DEBUG
     /// Tests only — force the next `token` read back to the Keychain.
     static func resetTokenCacheForTesting() {

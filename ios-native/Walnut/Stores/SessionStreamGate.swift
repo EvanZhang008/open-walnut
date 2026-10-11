@@ -244,12 +244,14 @@ final class SessionStreamResumeIDs {
     /// full replay, which the gate and the refresh coalescing already make safe.
     static let maxEntries = 64
 
-    private let defaults: UserDefaults?
+    private let storedDefaults: UserDefaults?
+    /// The app's own follow the demo scope (`AppPrefs`).
+    private var defaults: UserDefaults? { storedDefaults.map(AppPrefs.resolve) }
     private var entries: [String: Entry] = [:]
 
     init(defaults: UserDefaults?) {
-        self.defaults = defaults
-        if let data = defaults?.data(forKey: Self.defaultsKey),
+        self.storedDefaults = defaults
+        if let data = defaults.map(AppPrefs.resolve)?.data(forKey: Self.defaultsKey),
            let stored = try? JSONDecoder().decode([String: Entry].self, from: data) {
             entries = stored
         }

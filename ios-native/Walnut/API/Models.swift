@@ -444,12 +444,12 @@ extension WalnutTask {
     /// Due before the start of today (and still open).
     var isOverdue: Bool {
         guard !isDone, let due = dueDateValue else { return false }
-        return due < Calendar.current.startOfDay(for: Date())
+        return due < AppClock.startOfToday()
     }
 
     var isDueToday: Bool {
         guard let due = dueDateValue else { return false }
-        return Calendar.current.isDateInToday(due)
+        return AppClock.isToday(due)
     }
 
     /// Open-task order: pinned first, then priority, then most-recently updated.

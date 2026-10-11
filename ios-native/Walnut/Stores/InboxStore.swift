@@ -16,7 +16,10 @@ import Observation
 @MainActor
 final class InboxStore {
     private let api: InboxTransport
-    private let defaults: UserDefaults
+    private let storedDefaults: UserDefaults
+    /// The app's own follow the demo scope (`AppPrefs`): this store is made at
+    /// launch and outlives entering and leaving the demo.
+    private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
     weak var connection: ConnectionStore?
 
     /// False while the app is backgrounded. Every async completion re-checks it
@@ -76,14 +79,25 @@ final class InboxStore {
     }
     @ObservationIgnored private var readIntents: [String: ReadIntent] = [:]
     @ObservationIgnored private var readGeneration = 0
+    /// How new each letter's read flag is: the stamp (`readClock`) of the word it
+    /// came from. Every request takes a stamp when it is ASKED and every read write
+    /// takes one when it LANDS, so an answer is only as new as its asking. An answer
+    /// asked before the flag's word was had (a write that landed meanwhile, or an
+    /// answer asked after it that arrived first) keeps the row's flag
+    /// (`adoptRead`): the reader asks for the letter and marks it read at the same
+    /// moment, and the letter's answer, made with the old flag, can arrive last
+    /// (App Store gates r8 and r6). Answers asked later always win, so a letter
+    /// another device flips back is shown flipped.
+    @ObservationIgnored private var readFreshness: [String: Int] = [:]
+    @ObservationIgnored private var readClock = 0
     @ObservationIgnored private var retryTask: Task<Void, Never>?
 
     /// `transport` nil (production) = a WalnutAPI instance. WalnutTests pass a
     /// scripted transport and their own defaults suite.
     init(transport: InboxTransport? = nil, defaults: UserDefaults = .standard) {
         self.api = transport ?? WalnutAPI()
-        self.defaults = defaults
-        self.filter = InboxFilter(stored: defaults.string(forKey: InboxFilter.storageKey))
+        self.storedDefaults = defaults
+        self.filter = InboxFilter(stored: AppPrefs.resolve(defaults).string(forKey: InboxFilter.storageKey))
         LifecycleHub.shared.register(self)
     }
 
@@ -134,10 +148,11 @@ final class InboxStore {
         guard isActive else { return }
         loading = true
         defer { loading = false }
+        let asked = stamp()
         do {
             let response = try await api.letters(archived: false)
             guard isActive, !Task.isCancelled else { return }
-            letters = InboxListing.inboxOrder(response.letters.map(overlayInFlightRead))
+            letters = InboxListing.inboxOrder(response.letters.map { adoptRead($0, askedAt: asked) })
             errorMessage = nil
             connection?.reportReachability(true, source: "inbox-rest")
             DiskCache.save(letters, key: "inbox-letters")
@@ -156,10 +171,13 @@ final class InboxStore {
         guard isActive else { return }
         loadingArchived = true
         defer { loadingArchived = false }
+        // The same read-freshness rule as the inbox list: an Archived list asked
+        // before a read landed must not undo it (App Store r7 gate, probe P6).
+        let asked = stamp()
         do {
             let response = try await api.letters(archived: true)
             guard isActive, !Task.isCancelled else { return }
-            archivedLetters = InboxListing.inboxOrder(response.letters)
+            archivedLetters = InboxListing.inboxOrder(response.letters.map { adoptRead($0, askedAt: asked) })
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
             guard isActive else { return }
@@ -178,9 +196,10 @@ final class InboxStore {
     /// (an html digest embeds its audio) and the thread grows behind our back
     /// whenever the agent replies.
     func detail(id: String) async throws -> Letter {
+        let asked = stamp()
         do {
-            let letter = try await api.letter(id: id)
-            if isActive { merge(overlayInFlightRead(letter)) }
+            let letter = adoptRead(try await api.letter(id: id), askedAt: asked)
+            if isActive { merge(letter) }
             connection?.reportReachability(true, source: "inbox-rest")
             return letter
         } catch {
@@ -321,7 +340,9 @@ final class InboxStore {
             guard readIntents[id]?.generation == generation else { return }
             readIntents[id] = nil
             readRetryIds.remove(id)
-            merge(keepingNewerReadStamp(updated))
+            let settled = keepingNewerReadStamp(updated)
+            merge(settled)
+            readFreshness[id] = stamp()
             if persist { DiskCache.save(letters, key: "inbox-letters") }
             connection?.reportReachability(true, source: "inbox-rest")
         } catch {
@@ -404,6 +425,31 @@ final class InboxStore {
         return row
     }
 
+    /// The next `readClock` stamp: taken when a request is asked, and when a read
+    /// write lands.
+    private func stamp() -> Int {
+        readClock += 1
+        return readClock
+    }
+
+    /// An answer to a request asked at stamp `askedAt`, before it reaches a row.
+    /// When the row's read flag comes from a newer word (a read write that landed
+    /// after the asking, or an answer asked later that arrived first), the answer
+    /// keeps the row's flag and stamp: it was made before that word. Otherwise its
+    /// flag is the newest the store has, and the in-flight overlay applies.
+    private func adoptRead(_ letter: Letter, askedAt: Int) -> Letter {
+        if let fresh = readFreshness[letter.id], fresh > askedAt {
+            guard let current = self.letter(id: letter.id), letter.read != current.read || letter.readAt != current.readAt
+            else { return letter }
+            var row = letter
+            row.read = current.read
+            row.readAt = current.readAt
+            return row
+        }
+        readFreshness[letter.id] = askedAt
+        return overlayInFlightRead(letter)
+    }
+
     /// The write's answer, keeping a local stamp that is newer than the server's
     /// (the console's rule in mergeLetterPatch: `readAt` only moves forward).
     private func keepingNewerReadStamp(_ updated: Letter) -> Letter {
@@ -441,8 +487,9 @@ final class InboxStore {
                 letters = InboxListing.inboxOrder(letters)
             }
         }
+        let asked = stamp()
         do {
-            let updated = try await api.setLetterArchived(id: id, archived: archived)
+            let updated = adoptRead(try await api.setLetterArchived(id: id, archived: archived), askedAt: asked)
             guard isActive, !Task.isCancelled else { return }
             merge(updated)
             DiskCache.save(letters, key: "inbox-letters")
@@ -497,10 +544,11 @@ final class InboxStore {
             apply(&row)
             merge(row)
         }
+        let asked = stamp()
         do {
-            let updated = try await call()
+            let updated = adoptRead(try await call(), askedAt: asked)
             guard isActive, !Task.isCancelled else { return }
-            merge(overlayInFlightRead(updated))
+            merge(updated)
             DiskCache.save(letters, key: "inbox-letters")
         } catch {
             guard isActive else { return }
@@ -593,6 +641,7 @@ extension InboxStore {
         retryTask?.cancel()
         retryTask = nil
         readIntents = [:]
+        readFreshness = [:]
         keptReadIds = []
         readRetryIds = []
         letters = []
@@ -600,5 +649,11 @@ extension InboxStore {
         errorMessage = nil
         loading = false
         loadingArchived = false
+    }
+
+    /// The filter read again from the preferences now in force, after an
+    /// erase: leaving the demo must not keep the demo's choice on screen.
+    func reloadPreferences() {
+        filter = InboxFilter(stored: defaults.string(forKey: InboxFilter.storageKey))
     }
 }

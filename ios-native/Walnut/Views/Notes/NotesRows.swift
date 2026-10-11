@@ -8,9 +8,11 @@ struct FolderRow: View {
     var body: some View {
         NavigationLink(value: NotesRoute.folder(node.path)) {
             HStack(spacing: 12) {
+                // VoiceOver read the `folder` symbol as "Move" (gate r4, F11).
                 Image(systemName: "folder")
                     .foregroundStyle(Theme.tint)
                     .font(.body)
+                    .accessibilityLabel("Folder")
                 Text(node.name)
                     .lineLimit(1)
                 Spacer()
@@ -18,8 +20,13 @@ struct FolderRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
                     .monospacedDigit()
+                    .accessibilityLabel(Self.countLabel(NotesStore.noteCount(in: node)))
             }
         }
+    }
+
+    static func countLabel(_ count: Int) -> String {
+        count == 1 ? "1 note" : "\(count) notes"
     }
 }
 
@@ -113,10 +120,10 @@ struct NoteCellContent: View {
     }
 
     static func shortDate(_ date: Date) -> String {
-        if Calendar.current.isDateInToday(date) {
+        if AppClock.isToday(date) {
             return date.formatted(date: .omitted, time: .shortened)
         }
-        if Calendar.current.isDateInYesterday(date) {
+        if AppClock.isYesterday(date) {
             return "Yesterday"
         }
         return date.formatted(.dateTime.month(.abbreviated).day())

@@ -91,6 +91,10 @@ final class SessionConversationStore {
     private(set) var historyMessages: [ChatMessage] = []
     /// Optimistic user bubbles not yet reflected in the transcript.
     private var pendingUser: [ChatMessage] = []
+    /// The user rows on the page when each bubble's send went out (their stable ids),
+    /// keyed by bubble id and kept across retries: a bubble gives way only to a row
+    /// its own send made (`bubblesAbsorbed`).
+    @ObservationIgnored private var sendBaselines: [String: Set<String>] = [:]
 
     /// Live turn accumulation (mirrors ChatStore.streamText / .activity).
     var streaming = false
@@ -286,7 +290,7 @@ final class SessionConversationStore {
         // blank. reconcile() absorbs the bubble once the transcript has it.
         pendingUser.append(ChatMessage(
             id: "launch-\(sessionId)", role: "user", text: launch,
-            createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+            createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
         ))
         awaitingFirstTurn = true
         streaming = true
@@ -469,7 +473,7 @@ final class SessionConversationStore {
     }
 
     /// Rebuild history from the transcript and drop optimistic bubbles that the
-    /// transcript now contains (matched by user text — robust to reordering).
+    /// transcript now contains (each by its own send, see `bubblesAbsorbed`).
     ///
     /// MERGE, don't replace: the two sources cover different windows. The
     /// exported file tail = last ~100 rows of the FULL history; the bridge
@@ -573,30 +577,73 @@ final class SessionConversationStore {
         // Canonical row heights can displace the viewport; restore only sticky
         // intent captured before mutation. First paint always establishes bottom.
         if isActive && (firstPaint || (changed && wasPinned)) { scrollToBottomSignal += 1 }
-        let seen = Set(transcript.messages.filter { $0.role == "user" }.map(\.text))
-        // Failed bubbles are exempt: their text was NOT delivered — a match
-        // here is an older identical message, and absorbing the failed bubble
-        // would silently lose the pending retry.
-        //
-        // Prefix fallback: the transcript clips user text at 4 KB + "…"
-        // (session-projection TEXT_MAX), so a long bubble never equals its
-        // transcript row — exact-match alone left the message on screen twice
-        // forever. A clipped row (trailing "…") whose body prefixes the bubble
-        // is the same message.
-        // Check-before-mutate: a mutating method on an @Observable array
-        // registers a mutation even when it removes nothing, so an
-        // unconditional removeAll re-invalidated `messages` readers on every
-        // 5s poll. Compute the survivors first; write only on a real change.
-        let survivors = pendingUser.filter { bubble in
-            guard bubble.failed != true else { return true }
-            if seen.contains(bubble.text) { return false }
-            return !seen.contains { row in
-                row.hasSuffix("…") && bubble.text.hasPrefix(row.dropLast())
-            }
+        absorbDelivered()
+    }
+
+    /// Drop the bubbles whose own row the page now shows. Runs on every transcript
+    /// read and when a send is accepted (its row can land before the answer does).
+    /// Check-before-mutate: a mutating method on an @Observable array registers a
+    /// mutation even when it removes nothing, so an unconditional removeAll
+    /// re-invalidated `messages` readers on every 5s poll.
+    private func absorbDelivered() {
+        guard !pendingUser.isEmpty else { return }
+        let gone = Self.bubblesAbsorbed(pendingUser, baselines: sendBaselines, rows: historyMessages)
+        guard !gone.isEmpty else { return }
+        pendingUser.removeAll { gone.contains($0.id) }
+        for id in gone { sendBaselines[id] = nil }
+    }
+
+    /// The bubbles the page's rows now show, each matched by its OWN send:
+    ///  - a bubble whose POST is still out, or failed, is never absorbed: the server
+    ///    holds no message under its id yet (or never will), and absorbing a failed
+    ///    one would silently lose its retry;
+    ///  - an accepted one gives way only to a user row that was not on the page when
+    ///    its send went out (`baselines`), of its own shape: a photo row (the
+    ///    server's "[Images attached" header and saved paths, cloud-images.ts
+    ///    withImagePaths) with the same words for a photo (or the words alone, when
+    ///    the server could not save the photo), a plain row with the same text for a
+    ///    text;
+    ///  - each row stands for one bubble, oldest first, so a second "ok" waits for
+    ///    its own row.
+    /// Equal text alone never matches, empty words included (App Store r7 gate: a
+    /// photo sent with no words was absorbed by an earlier photo's empty words while
+    /// its POST was out, and when the POST failed no "Not sent" was left on screen).
+    private static func bubblesAbsorbed(
+        _ bubbles: [ChatMessage], baselines: [String: Set<String>], rows: [ChatMessage]
+    ) -> Set<String> {
+        let userRows = rows.filter { $0.isUser && $0.kind == nil }
+        var used = Set<String>()
+        var gone = Set<String>()
+        for bubble in bubbles where bubble.pending != true && bubble.failed != true {
+            let before = baselines[bubble.id] ?? []
+            guard let row = userRows.first(where: {
+                !used.contains($0.id) && !before.contains($0.id) && rowShows(bubble, row: $0)
+            }) else { continue }
+            used.insert(row.id)
+            gone.insert(bubble.id)
         }
-        if survivors.count != pendingUser.count {
-            pendingUser = survivors
+        return gone
+    }
+
+    /// Whether a transcript row has this bubble's shape and words.
+    private static func rowShows(_ bubble: ChatMessage, row: ChatMessage) -> Bool {
+        let parts = MessageRow.imageSendParts(row.text)
+        guard bubble.localImages?.isEmpty == false else {
+            return parts == nil && sameWords(row.text, bubble.text)
         }
+        let words = bubble.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parts { return sameWords(parts.text, words) }
+        // A server that could not save the photo sends the words alone
+        // (session-send-v1.ts), so a new plain row with them is this send too.
+        return !words.isEmpty && sameWords(row.text.trimmingCharacters(in: .whitespacesAndNewlines), words)
+    }
+
+    /// Equal, or the transcript's clip of it: user text is clipped at 4 KB + "…"
+    /// (session-projection TEXT_MAX), so a long bubble never equals its row.
+    private static func sameWords(_ row: String, _ bubble: String) -> Bool {
+        if row == bubble { return true }
+        guard row.hasSuffix("…"), row.count > 1 else { return false }
+        return bubble.hasPrefix(row.dropLast())
     }
 
     /// Held rows the incoming window does not cover: every row strictly older
@@ -783,15 +830,24 @@ final class SessionConversationStore {
     /// SAME id. The server's durable queue dedupes on it, so a retry after a
     /// lost ack collapses onto the original row instead of delivering the turn
     /// twice. See SendRetryPolicy.
+    ///
+    /// The page need not be on screen. Voice mode's words are often in hand only
+    /// after the person locked the phone or switched apps (the recorder holds
+    /// background time for exactly that), and a guard on the page state here
+    /// returned before any bubble existed: the words went nowhere, and their
+    /// recording was already deleted (App Store gate r9, finding 1). The bubble
+    /// and the POST are this store's own state, an acceptance while away is
+    /// written as any other (`deliver`), and a failure leaves the failed bubble,
+    /// to retry under the same id when the page is back.
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = [], voice: Bool = false) async -> Bool {
-        guard isActive, canSend else { return false }
+        guard canSend else { return false }
         errorMessage = nil
         let jpegDatas = images.map(\.jpegData)
         var optimistic = ChatMessage(
             id: "pending-\(Date().timeIntervalSince1970)",
             role: "user", text: text,
-            createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+            createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
         )
         optimistic.pending = true
         optimistic.clientMessageId = SendRetryPolicy.newMessageId()
@@ -801,6 +857,7 @@ final class SessionConversationStore {
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
+        sendBaselines[optimistic.id] = Set(historyMessages.lazy.filter(\.isUser).map(\.id))
         pendingUser.append(optimistic)
         // Sending explicitly accepts a re-pin: the user wants to see their own
         // message land even if they were reading history.
@@ -823,10 +880,12 @@ final class SessionConversationStore {
     ) async -> Bool {
         let payloads = await Self.buildImagePayloads(jpegDatas)
         // Encoding is a real suspension point (5 large photos take a moment).
-        // If the store went inactive meanwhile, do NOT fire the request: leave
-        // the text as a retryable failed bubble instead of writing UI state
-        // into a store whose screen is gone / whose process is suspended.
-        guard isActive, !Task.isCancelled else {
+        // If this attempt was cancelled meanwhile, do NOT fire the request:
+        // leave it as a retryable failed bubble. A page that went away does not
+        // stop it: the message is the person's, the bubble is this store's own
+        // state (see `send`), and a running process can post it. Automatic
+        // retries never start while away (`scheduleRetry`, `cancelRetryTasks`).
+        guard !Task.isCancelled else {
             settleFailed(bubbleID)
             return false
         }
@@ -836,16 +895,30 @@ final class SessionConversationStore {
                 voice: voiceBubbleIDs.contains(bubbleID)
             )
             voiceBubbleIDs.remove(bubbleID)
-            guard isActive, !Task.isCancelled else { return true }
+            // Accepted: the server holds the message under this bubble's id, so
+            // what follows is written whatever the page is doing: on screen, in the
+            // background, closed, or this attempt's task cancelled (a manual retry
+            // superseded an automatic one). All three steps are the store's own
+            // state and start nothing. An early return here once skipped them while
+            // the page was away, and a bubble left pending is never absorbed
+            // (`bubblesAbsorbed`) and cannot be retried: its row and a grey copy
+            // both stayed on the page for good (App Store gate r8, finding 1).
+            //
+            // 1. The bubble stops "sending".
             if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
                 pendingUser[idx].pending = false
                 pendingUser[idx].failed = false
                 pendingUser[idx].retryNotice = nil
             }
-            // A relayed 202 proves the bridge is up: clear an outage a previous
-            // attempt raised, same reasoning as a delivered snapshot. A BANKED
-            // 202 proves the opposite (the replica queued it because the bridge
-            // is down), so it leaves the link state alone.
+            // 2. Its row may already be on the page: the turn can write it before
+            // the answer to the POST arrives. Otherwise the next transcript read
+            // (resume, open) absorbs it.
+            absorbDelivered()
+            // 3. A relayed 202 proves the bridge is up: clear an outage a previous
+            // attempt raised, same reasoning as a delivered snapshot, so a page that
+            // comes back shows no stale outage. A BANKED 202 proves the opposite
+            // (the replica queued it because the bridge is down), so it leaves the
+            // link state alone. Away, there is no stream and no grace timer to stop.
             if !receipt.queued { noteBridgeUp() }
             return true
         } catch {
@@ -1014,6 +1087,12 @@ final class SessionConversationStore {
         )
     }
 
+    /// The page shows these words as a failed message the person can retry (or
+    /// delete): voice mode then keeps no second copy of them.
+    func showsFailedSend(of text: String) -> Bool {
+        pendingUser.contains { $0.failed == true && $0.text == text }
+    }
+
     func discardFailed(_ message: ChatMessage) {
         // Deleting the bubble must also kill its pending automatic retry, or a
         // timer would re-deliver text the user just threw away.
@@ -1021,6 +1100,7 @@ final class SessionConversationStore {
         retryTasks[message.id] = nil
         voiceBubbleIDs.remove(message.id)
         pendingUser.removeAll { $0.id == message.id }
+        sendBaselines[message.id] = nil
     }
 
     // MARK: - SSE
@@ -1571,7 +1651,7 @@ final class SessionConversationStore {
             if !dup {
                 let provisional = ChatMessage(
                     id: "provisional-\(finished.hashValue)", role: "assistant",
-                    text: finished, createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+                    text: finished, createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
                 )
                 historyMessages.append(provisional)
             }

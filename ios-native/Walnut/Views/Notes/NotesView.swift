@@ -52,7 +52,7 @@ struct FolderContentView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(NotesStore.self) private var notes
 
-    @AppStorage("notes.pinnedCollapsed") private var pinnedCollapsed = false
+    @AppStorage("notes.pinnedCollapsed", store: AppPrefs.defaults) private var pinnedCollapsed = false
     @State private var showCreate = false
     @State private var newNoteName = ""
     @State private var deleteCandidate: String?

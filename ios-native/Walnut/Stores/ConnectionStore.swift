@@ -91,6 +91,9 @@ final class ConnectionStore {
 
     /// Setup flow: probe /status with the candidate URL + token, persist on success.
     func connect(serverURL rawURL: String, token: String, deviceName name: String?) async throws {
+        // A real server never runs on the demo's pinned clock (Debug builds only),
+        // whatever left the pin set.
+        if !DemoMode.isDemoURL(rawURL) { AppClock.clearDemoPin() }
         let started = Date()
         let probed = try await api.testStatus(serverURL: rawURL, token: token)
         AppConfig.save(serverURL: rawURL, token: token, deviceName: name)
@@ -230,10 +233,13 @@ final class ConnectionStore {
         PushRegistration.shared.unregisterFromServer()
         LifecycleHub.shared.teardownAll()
         let wasDemo = DemoMode.isActive
+        // Leaving the demo: the shown clock is the device's again, before the
+        // demo server reseeds itself below.
+        if wasDemo { AppClock.clearDemoPin() }
         AppConfig.clear()
         routing.reset()
         DiskCache.clearAll()
-        LocalDataReset.eraseAll(reason: wasDemo ? "leave-demo" : "disconnect")
+        LocalDataReset.eraseAll(reason: wasDemo ? "leave-demo" : "disconnect", scope: wasDemo ? .demo : .real)
         isConfigured = false
         serverURL = ""
         deviceName = ""

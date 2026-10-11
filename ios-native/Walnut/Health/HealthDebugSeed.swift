@@ -9,7 +9,8 @@ import HealthKit
 ///
 /// This is the ONLY code in the app that asks to WRITE to Health, and why
 /// NSHealthUpdateUsageDescription exists in Info.plist. A Release build never
-/// compiles it, so the shipped app only ever asks to read.
+/// compiles it and drops that string from its Info.plist (project.yml,
+/// postBuildScripts), so the shipped app only ever asks to read.
 ///
 /// Every sample carries a sync identifier made from its kind and day, so seeding
 /// again the same day replaces instead of duplicating.

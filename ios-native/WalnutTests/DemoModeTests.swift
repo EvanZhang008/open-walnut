@@ -120,6 +120,11 @@ final class DemoModeTests: XCTestCase {
         _ = try await api.sessionDetail(id: "s-crash")
         _ = try await api.sessionTranscript(id: "s-crash")
         _ = try await api.sessionTranscript(id: "s-crash", fresh: true, rich: true)
+        // The session page reads its transcript in pages (Load earlier).
+        let page = try await api.sessionTranscriptPage(id: "s-crash", before: nil, since: nil, visible: 20)
+        let oldest = try XCTUnwrap(page.messages.first?.timestamp)
+        _ = try await api.sessionTranscriptPage(id: "s-crash", before: oldest, since: nil, visible: 50)
+        _ = try await api.sessionTranscriptPage(id: "s-crash", before: nil, since: page.messages.last?.timestamp, visible: 0)
         _ = try await api.sessionModelOptions(id: "s-crash")
         _ = try await api.setSessionModel(id: "s-crash", model: "claude-sonnet-5-5")
         _ = try await api.setSessionEffort(id: "s-crash", effort: "high")
@@ -161,8 +166,8 @@ final class DemoModeTests: XCTestCase {
         try await api.deleteNote(path: "Inbox/Route check.md")
         _ = try await api.searchNotes(query: "kitchen")
         _ = try await api.favoriteNotes()
-        _ = try await api.addFavoriteNote(path: "Travel/October trip.md")
-        _ = try await api.removeFavoriteNote(path: "Travel/October trip.md")
+        _ = try await api.addFavoriteNote(path: "Travel/Coast trip.md")
+        _ = try await api.removeFavoriteNote(path: "Travel/Coast trip.md")
         _ = try await api.uploadAttachment(notePath: "Inbox.md", data: DemoImage.png, mediaType: "image/png")
 
         // Inbox.
@@ -186,7 +191,7 @@ final class DemoModeTests: XCTestCase {
 
         // Voice, push and the background reporters.
         let heard = try await api.transcribe(audio: Data(repeating: 0, count: 64), format: "m4a")
-        XCTAssertEqual(heard, DemoFixtures.transcriptionSentence)
+        XCTAssertEqual(heard, DemoFixtures.transcriptionSentence(DemoServer.shared.clockNow))
         _ = try await api.transcribeVoice(audio: Data(repeating: 0, count: 64), format: "m4a")
         let push = try await api.pushStatus()
         XCTAssertEqual(push.apns?.configured, false, "the demo can never send a notification")
@@ -221,7 +226,34 @@ final class DemoModeTests: XCTestCase {
         guard case .ok = probe else { return XCTFail("the identity probe got \(probe)") }
 
         XCTAssertEqual(DemoServer.shared.unansweredRoutes, [], "every route above has a demo answer")
-        XCTAssertEqual(DemoURLProtocol.blockedRequests, [], "nothing went to any other host")
+        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest, [], "nothing went to any other host")
+    }
+
+    /// Load earlier reads a session's transcript in pages. The demo's
+    /// conversations are short and its answer never says it pages, so the
+    /// session page gets the whole conversation in its first read and shows no
+    /// Load earlier row; an older page asked anyway is the same whole answer.
+    func testTheDemoSessionPageReadsOneWholePageAndOffersNoLoadEarlier() async throws {
+        let whole = try await api.sessionTranscript(id: "s-crash", fresh: true, rich: true)
+        let first = try await api.sessionTranscriptPage(id: "s-crash", before: nil, since: nil, visible: 20)
+        XCTAssertEqual(first.messages.map(\.timestamp), whole.messages.map(\.timestamp),
+                       "the first page is the whole demo conversation")
+        XCTAssertNil(first.pageable, "the demo never offers older pages")
+        XCTAssertFalse(first.truncated)
+        let oldest = try XCTUnwrap(first.messages.first?.timestamp)
+        let older = try await api.sessionTranscriptPage(id: "s-crash", before: oldest, since: nil, visible: 50)
+        XCTAssertNil(older.pageable)
+
+        let listed = try await api.sessions().sessions
+        let session = try XCTUnwrap(listed.first { $0.id == "s-crash" })
+        let store = SessionConversationStore(session: session, resumeIDs: SessionStreamResumeIDs(defaults: nil))
+        await store.open()
+        XCTAssertFalse(store.messages.isEmpty, "the page shows the demo conversation")
+        XCTAssertFalse(store.canPage)
+        XCTAssertFalse(store.showsLoadEarlier, "no Load earlier row in the demo")
+        store.close()
+        XCTAssertEqual(DemoServer.shared.unansweredRoutes, [])
+        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest, [], "nothing went to any other host")
     }
 
     func testUnknownRouteIsAClearNotFoundNotAHang() async throws {
@@ -257,8 +289,11 @@ final class DemoModeTests: XCTestCase {
         _ = try await api.answerLetter(id: "l-headline", actionId: "b")
         let headline = try await api.letter(id: "l-headline")
         XCTAssertEqual(headline.answered?.actionId, "b")
+        // The answer reaches the copy session as its next turn; once that turn
+        // is done, so is the task it was about.
+        settleTurns()
         let afterAnswer = try await api.tasks().tasks
-        XCTAssertEqual(afterAnswer.first { $0.id == "t-copy" }?.phase, "IN_PROGRESS",
+        XCTAssertEqual(afterAnswer.first { $0.id == "t-copy" }?.phase, "COMPLETE",
                        "the decision moves the task it was about")
         _ = try await api.replyToLetter(id: "l-pricing", text: "Ship it")
         settleTurns()
@@ -370,6 +405,134 @@ final class DemoModeTests: XCTestCase {
         XCTAssertTrue(upserted, "got \(log.names())")
     }
 
+    // MARK: - Search and the completed-task window
+
+    /// Ids of the four crash fixes finished weeks ago (`DemoFixtures.tasks`).
+    private static let oldCrashFixes: Set<String> = ["t-upload-crash", "t-delete-crash", "t-restore-crash", "t-widget-crash"]
+
+    /// The task list and the events feed carry open tasks and 14 days of completed
+    /// ones, as the real server's projection does; older completed tasks are left on
+    /// the server. Search still finds them and names them in its answer, the Tasks
+    /// tab arranges them as three inline hits and "Completed (1)", and each opens.
+    func testOldCompletedTasksAreFoundBySearchNotListed() async throws {
+        let listed = try await api.tasks().tasks
+        let listedIds = Set(listed.map(\.id))
+        XCTAssertTrue(listedIds.isDisjoint(with: Self.oldCrashFixes), "the list carries a task finished weeks ago")
+        for recent in ["t-cache", "t-links", "t-library"] {
+            XCTAssertTrue(listedIds.contains(recent), "\(recent) was finished this week and belongs in the list")
+        }
+        XCTAssertEqual(listed.count, DemoFixtures.seed().tasks.count - Self.oldCrashFixes.count)
+
+        // The feed's snapshot is the same list.
+        let url = try XCTUnwrap(WalnutAPI.eventsFeedURL())
+        let log = EventLog()
+        let client = SSEClient(url: url, token: DemoMode.token, onEvent: { log.add($0) }, onConnectionChange: { _ in })
+        client.start()
+        defer { client.stop() }
+        let gotSnapshot = await waitFor(5) { log.names().contains("snapshot") }
+        XCTAssertTrue(gotSnapshot)
+        let snapshot = try XCTUnwrap(log.all.first { $0.event == "snapshot" })
+        XCTAssertTrue(snapshot.data.contains("\"t-cache\""))
+        for id in Self.oldCrashFixes {
+            XCTAssertFalse(snapshot.data.contains("\"\(id)\""), "the feed's snapshot carries \(id)")
+        }
+
+        // Search answers them, with the tasks they name.
+        let answer = try await api.globalSearch(query: "crash")
+        let named = Set((answer.tasks ?? []).map(\.id))
+        XCTAssertTrue(Self.oldCrashFixes.isSubset(of: named), "the answer does not name the old crash fixes: \(named)")
+        XCTAssertTrue((answer.tasks ?? []).filter { Self.oldCrashFixes.contains($0.id) }.allSatisfy(\.isDone))
+
+        // The Tasks tab's arrangement. The open crash task is on the board above, so
+        // the section holds the old fixes, the three most recently finished inline and
+        // the fourth behind "Completed (1)", then the two open tasks whose summaries
+        // name the crash fix.
+        let onBoard = Set(listed.filter { !$0.isDone && SearchRelevance.taskMatchesLiterally($0, lowerQuery: "crash") }.map(\.id))
+        XCTAssertEqual(onBoard, ["t-crash"])
+        let arrangement = SearchArrangement.arrange(
+            query: "crash", serverRows: answer.results, responseTasks: answer.tasks ?? [],
+            storeTasks: listed, localDone: listed.filter(\.isDone),
+            visibleTaskIds: onBoard, nothingAbove: false
+        )
+        let inline = Array(arrangement.primary.prefix(SearchArrangement.inlineCompletedHits))
+        XCTAssertEqual(inline.map(\.id), ["t-upload-crash", "t-delete-crash", "t-restore-crash"])
+        XCTAssertTrue(inline.allSatisfy { !$0.isOpen && $0.task != nil }, "an inline completed hit has no task row")
+        let openHits = arrangement.primary.dropFirst(SearchArrangement.inlineCompletedHits)
+        XCTAssertEqual(Set(openHits.map(\.id)), ["t-notes", "t-testflight"])
+        XCTAssertTrue(openHits.allSatisfy(\.isOpen))
+        XCTAssertEqual(arrangement.completed.map(\.id), ["t-widget-crash"], "no Completed (1) fold for crash")
+        XCTAssertTrue(arrangement.related.isEmpty)
+
+        // Each opens: the detail route answers a task the list does not carry.
+        for id in Self.oldCrashFixes {
+            let detail = try await api.taskDetail(id: id)
+            XCTAssertEqual(detail.phase, "COMPLETE")
+        }
+        XCTAssertEqual(DemoServer.shared.unansweredRoutes, [])
+        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest, [], "nothing went to any other host")
+    }
+
+    /// Search reads an id that starts another (6 characters or more) as the same task,
+    /// the server's short id for the board's full one (`BoardSearchHitDedup`), and drops
+    /// it under the board row. No two demo tasks may read that way: "t-crash-upload"
+    /// vanished under the open "t-crash" in the first run of the test above.
+    func testNoDemoTaskIdStartsAnother() {
+        let ids = DemoFixtures.seed().tasks.map(\.id)
+        for a in ids {
+            for b in ids where a != b {
+                XCTAssertFalse(BoardSearchHitDedup.sameTask(a, b), "\(a) and \(b) read as one task in search")
+            }
+        }
+    }
+
+    /// The window is the server's: completed 13 days ago is listed, 15 days ago is not,
+    /// and an open task is listed however old.
+    func testTheListKeepsFourteenDaysOfCompletedTasks() {
+        let now = Date()
+        func task(_ id: String, phase: String, doneDaysAgo: Double?) -> DemoTask {
+            let at = DemoClock.iso(now.addingTimeInterval(-(doneDaysAgo ?? 60) * 86_400))
+            return DemoTask(
+                id: id, title: id, phase: phase, priority: "none", project: "", createdAt: at, updatedAt: at,
+                completedAt: doneDaysAgo == nil ? nil : at, pinned: false
+            )
+        }
+        var state = DemoState()
+        state.tasks = [
+            task("open-old", phase: "TODO", doneDaysAgo: nil),
+            task("done-13", phase: "COMPLETE", doneDaysAgo: 13),
+            task("done-15", phase: "COMPLETE", doneDaysAgo: 15),
+        ]
+        XCTAssertEqual(state.listedTasks(now: now).map(\.id), ["open-old", "done-13"])
+    }
+
+    // MARK: - Recently opened
+
+    /// The drawer's sample history names things the demo has, newest first, and each
+    /// row goes somewhere: the two conversations to their session, the two task pages
+    /// to their task (the cache upgrade reads Done).
+    func testTheSampleHistoryOpensWhatTheDemoHas() throws {
+        let state = DemoFixtures.seed()
+        let clock = DemoClock()
+        let entries = DemoFixtures.recentOpens(state, clock)
+        XCTAssertEqual(entries.map(\.id), ["t-crash", "t-copy", "t-quotes", "t-cache"])
+        XCTAssertEqual(entries.map(\.openedAt), entries.map(\.openedAt).sorted(by: >), "newest first")
+        let rows = RecentRow.rows(
+            entries, tasks: state.listedTasks(now: clock.now).map(\.wire),
+            sessions: state.visibleSessions.map { state.wireSession($0) }, now: clock.now
+        )
+        XCTAssertEqual(rows.count, 4)
+        guard case .session(let crash) = rows[0].primary else { return XCTFail("the crash row does not open its session") }
+        XCTAssertEqual(crash.id, "s-crash")
+        guard case .session(let copy) = rows[1].primary else { return XCTFail("the headline row does not open its session") }
+        XCTAssertEqual(copy.id, "s-copy")
+        guard case .task(let quotes) = rows[2].primary else { return XCTFail("the quotes row does not open its task") }
+        XCTAssertEqual(quotes.id, "t-quotes")
+        XCTAssertEqual(rows[1].title, "Review the onboarding copy changes", "a row reads as its task")
+        XCTAssertTrue(rows[3].isDone)
+        XCTAssertTrue(rows[3].meta.hasSuffix("Done"), rows[3].meta)
+        XCTAssertFalse(rows.contains { $0.title == "Untitled" })
+    }
+
     func testSessionStreamShowsTheWaitingPermissionOnAttach() async throws {
         let url = try XCTUnwrap(WalnutAPI.sessionStreamURL(id: "s-uptime"))
         let log = EventLog()
@@ -396,7 +559,7 @@ final class DemoModeTests: XCTestCase {
                 XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet)
             }
         }
-        XCTAssertEqual(DemoURLProtocol.blockedRequests.map(\.host), ["example.com", "example.com"])
+        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest.map(\.host), ["example.com", "example.com"])
         DemoURLProtocol.resetLog()
     }
 
@@ -468,9 +631,11 @@ final class DemoModeTests: XCTestCase {
         let inbox = InboxStore()
         LocalDataReset.register(tasks: tasks, chat: chat, notes: notes, inbox: inbox, filePreview: nil)
 
-        try await DemoEntry.enter(connection: connection)
+        try await DemoEntry.enter(connection: connection, recents: tasks.recents)
         XCTAssertTrue(connection.isConfigured)
         XCTAssertTrue(DemoMode.isActive)
+        // The Tasks drawer starts from the demo's sample history.
+        XCTAssertEqual(tasks.recents.entries.map(\.id), ["t-crash", "t-copy", "t-quotes", "t-cache"])
         let created = try await api.createTask(title: "Only in this demo run")
         tasks.tasks = try await api.tasks().tasks
         XCTAssertTrue(tasks.tasks.contains { $0.id == created.id })
@@ -479,10 +644,17 @@ final class DemoModeTests: XCTestCase {
 
         XCTAssertFalse(connection.isConfigured)
         XCTAssertTrue(tasks.tasks.isEmpty, "the board forgets the demo")
+        XCTAssertTrue(tasks.recents.entries.isEmpty, "the drawer forgets the demo")
+        // This class pins the process at the demo's address; outside it, nothing.
+        let pinned = AppConfig.processServerURLOverride
+        AppConfig.processServerURLOverride = URL(string: "http://127.0.0.1:9")
+        XCTAssertFalse(DemoMode.isActive)
+        XCTAssertEqual(DemoEntry.sampleRecentOpens().count, 0, "outside the demo there is no sample history")
+        AppConfig.processServerURLOverride = pinned
         XCTAssertEqual(DemoServer.shared.streams.subscriberCount(.events), 0)
         let after = try await api.tasks().tasks
         XCTAssertFalse(after.contains { $0.id == created.id }, "the demo server is back to its fixtures")
-        XCTAssertEqual(after.count, DemoFixtures.seed().tasks.count)
+        XCTAssertEqual(after.count, DemoFixtures.seed().listedTasks(now: Date()).count)
     }
 
     // MARK: - Fixture hygiene

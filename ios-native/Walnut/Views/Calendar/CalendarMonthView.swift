@@ -23,10 +23,10 @@ struct CalendarMonthView: View {
 
     /// The month on screen. Tracks the selected day but moves independently
     /// while the user pages months without picking a day.
-    @State private var anchorMonth = Date()
+    @State private var anchorMonth = AppClock.now()
     /// The day previewed in the agenda below the grid (first tap); a second tap
     /// on the same day drills in.
-    @State private var previewDay = Date()
+    @State private var previewDay = AppClock.now()
 
     private var previewDayKey: String { CalendarLogic.dayKey(previewDay, calendar: calendar) }
 
@@ -151,7 +151,7 @@ struct CalendarMonthView: View {
     @ViewBuilder
     private func dayCell(_ day: CalendarLogic.GridDay, taskCount: Int, eventCount: Int) -> some View {
         let isPreviewed = day.dayKey == previewDayKey
-        let isToday = calendar.isDateInToday(day.date)
+        let isToday = AppClock.isToday(day.date, calendar: calendar)
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             // Second tap on the already-previewed day drills into Day view;
@@ -275,7 +275,7 @@ struct CalendarMonthView: View {
     }
 
     private var shortDayLabel: String {
-        if calendar.isDateInToday(previewDay) { return "today" }
+        if AppClock.isToday(previewDay, calendar: calendar) { return "today" }
         return previewDay.formatted(.dateTime.month(.abbreviated).day())
     }
 

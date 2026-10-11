@@ -8,6 +8,7 @@ final class HealthSyncEngineTests: XCTestCase {
     private var transport: FakeHealthTransport!
     private var state: HealthSyncStateStore!
     private var clock: FakeHealthClock!
+    private var salt: MemoryHealthSalt!
     private let now = Date(timeIntervalSince1970: 1_790_478_000)
 
     override func setUp() {
@@ -15,11 +16,13 @@ final class HealthSyncEngineTests: XCTestCase {
         transport = FakeHealthTransport()
         state = HealthSyncStateStore(fileURL: nil)
         clock = FakeHealthClock(now)
+        salt = MemoryHealthSalt()
     }
 
     private func engine(_ catalog: [HealthTypeSpec], demo: Bool = false, enabled: Bool = true) -> HealthSyncEngine {
         HealthSyncEngine(source: source, transport: transport, state: state,
-                         environment: .test(clock: clock, enabled: enabled, demo: demo), catalog: catalog)
+                         environment: .test(clock: clock, enabled: enabled, demo: demo), salt: salt,
+                         catalog: catalog)
     }
 
     private func uuids(_ body: [String: Any]) -> [String] {
@@ -353,7 +356,7 @@ final class HealthSyncEngineTests: XCTestCase {
                                        .testRaw("q.Height", generic: true, unit: "m")]
         let progressBox = ProgressBox()
         let engine = HealthSyncEngine(source: source, transport: transport, state: state,
-                                      environment: .test(clock: clock), catalog: specs,
+                                      environment: .test(clock: clock), salt: salt, catalog: specs,
                                       onProgress: { progressBox.set($0) })
         let outcome = await engine.run(reason: "test", budget: 60)
         XCTAssertEqual(outcome, .synced, "a declined type does not fail the run")
@@ -451,7 +454,9 @@ final class HealthSyncEngineTests: XCTestCase {
         await engine([]).run(reason: "test", budget: 60)
         var calls = transport.bodies(for: "x.BiologicalSex")
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(uuids(calls[0]), ["char-biologicalsex-2"])
+        let first = uuids(calls[0]).first ?? ""
+        XCTAssertTrue(first.hasPrefix("char-biologicalsex-h"), first)
+        XCTAssertFalse(HealthCharacteristicKey.isLegacy(first, name: "BiologicalSex"), "the uuid carries no value")
         XCTAssertNil(calls[0]["deleted"])
         let sample = (calls[0]["samples"] as? [[String: Any]])?.first
         XCTAssertEqual(sample?["code"] as? Int, 2)
@@ -464,9 +469,100 @@ final class HealthSyncEngineTests: XCTestCase {
         await engine([]).run(reason: "changed", budget: 60)
         calls = transport.bodies(for: "x.BiologicalSex")
         XCTAssertEqual(calls.count, 2)
-        XCTAssertEqual(uuids(calls[1]), ["char-biologicalsex-1"])
-        XCTAssertEqual(calls[1]["deleted"] as? [String], ["char-biologicalsex-2"])
-        XCTAssertEqual(state.read().characteristicUUIDs["BiologicalSex"], "char-biologicalsex-1")
+        let second = uuids(calls[1]).first ?? ""
+        XCTAssertNotEqual(second, first)
+        XCTAssertEqual(calls[1]["deleted"] as? [String], [first])
+        XCTAssertEqual(state.read().characteristicUUIDs["BiologicalSex"], second)
+    }
+
+    /// F2 (2026-10-07 gate): an r6 phone kept `char-dateofbirth-19800412`, the
+    /// date of birth in the clear, in its sync progress. After the update the
+    /// first send deletes the Mac's row under that old uuid, rebuilt from the value
+    /// read then, and nothing the phone keeps carries the value.
+    func testAnUpdatedPhoneDeletesThePreR7RowAndKeepsNoValue() async throws {
+        state.update {
+            $0.characteristicUUIDs["DateOfBirth"] = "char-dateofbirth-19800412"
+            $0.characteristicUUIDs["BloodType"] = "char-bloodtype-2"
+            $0.migrateLegacyCharacteristics()
+        }
+        XCTAssertEqual(state.read().legacyCharacteristicNames, ["DateOfBirth", "BloodType"])
+        source.characteristicValues = [HealthCharacteristicValue(name: "DateOfBirth", code: 19_800_412)]
+        await engine([]).run(reason: "updated", budget: 60)
+
+        let calls = transport.bodies(for: "x.DateOfBirth")
+        XCTAssertEqual(calls.count, 1)
+        let uuid = uuids(calls[0]).first ?? ""
+        XCTAssertTrue(uuid.hasPrefix("char-dateofbirth-h"), uuid)
+        XCTAssertFalse(uuid.contains("19800412"))
+        XCTAssertEqual(calls[0]["deleted"] as? [String], ["char-dateofbirth-19800412"], "the Mac's old row goes")
+        XCTAssertEqual((calls[0]["samples"] as? [[String: Any]])?.first?["code"] as? Int, 19_800_412,
+                       "the value itself still reaches the Mac: that is the data")
+        XCTAssertTrue(transport.bodies(for: "x.BloodType").isEmpty, "no blood type now: nothing to rebuild, nothing sent")
+
+        let kept = state.read()
+        XCTAssertNil(kept.legacyCharacteristicNames, "both marks settled")
+        let file = String(decoding: try JSONEncoder().encode(kept), as: UTF8.self)
+        XCTAssertFalse(file.contains("19800412"), file)
+        XCTAssertFalse(file.contains("char-bloodtype-2"), file)
+
+        await engine([]).run(reason: "again", budget: 60)
+        XCTAssertEqual(transport.bodies(for: "x.DateOfBirth").count, 1, "the new uuid is stable")
+    }
+
+    /// r7b: the salt is in the Keychain. When it is lost (the Keychain item was
+    /// removed, or could not be kept), the next run makes a new one: every
+    /// characteristic is sent once more, each with its old uuid as `deleted`,
+    /// and after that nothing is sent again while the values stay.
+    func testALostSaltSendsEachCharacteristicOnceMore() async {
+        source.characteristicValues = [HealthCharacteristicValue(name: "BiologicalSex", code: 2),
+                                       HealthCharacteristicValue(name: "DateOfBirth", code: 19_800_412)]
+        await engine([]).run(reason: "first", budget: 60)
+        let firstSex = uuids(transport.bodies(for: "x.BiologicalSex")[0]).first ?? ""
+        let firstBirth = uuids(transport.bodies(for: "x.DateOfBirth")[0]).first ?? ""
+        XCTAssertEqual(salt.made, 1)
+
+        salt.delete()
+        await engine([]).run(reason: "salt lost", budget: 60)
+        let sex = transport.bodies(for: "x.BiologicalSex")
+        let birth = transport.bodies(for: "x.DateOfBirth")
+        XCTAssertEqual(sex.count, 2, "sent once more")
+        XCTAssertEqual(birth.count, 2, "sent once more")
+        XCTAssertEqual(salt.made, 2, "a new salt")
+        XCTAssertEqual(sex[1]["deleted"] as? [String], [firstSex], "the old row goes in the same call")
+        XCTAssertEqual(birth[1]["deleted"] as? [String], [firstBirth])
+        XCTAssertNotEqual(uuids(sex[1]).first, firstSex)
+        XCTAssertEqual((birth[1]["samples"] as? [[String: Any]])?.first?["code"] as? Int, 19_800_412)
+        XCTAssertEqual(state.read().characteristicUUIDs["BiologicalSex"], uuids(sex[1]).first)
+
+        await engine([]).run(reason: "after", budget: 60)
+        XCTAssertEqual(transport.bodies(for: "x.BiologicalSex").count, 2, "stable again: not sent")
+        XCTAssertEqual(transport.bodies(for: "x.DateOfBirth").count, 2)
+    }
+
+    /// r7b: what the sync state keeps never includes the salt, so the file alone
+    /// cannot be tried against every birth date.
+    func testTheSyncStateNeverHoldsTheSalt() async throws {
+        source.characteristicValues = [HealthCharacteristicValue(name: "DateOfBirth", code: 19_800_412)]
+        await engine([]).run(reason: "first", budget: 60)
+        XCTAssertNotNil(state.read().characteristicUUIDs["DateOfBirth"])
+        let data = try JSONEncoder().encode(state.read())
+        let file = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(HealthSyncStateStore.hasSaltKey(data), file)
+        XCTAssertFalse(file.contains(salt.salt().base64EncodedString()), "the salt's bytes are in the state")
+        XCTAssertFalse(file.contains("19800412"))
+    }
+
+    func testTheCharacteristicKeyIsSaltedPerInstallAndHidesTheValue() {
+        let a = Data(repeating: 1, count: 32), b = Data(repeating: 2, count: 32)
+        let one = HealthCharacteristicKey.uuid(name: "DateOfBirth", code: 19_800_412, salt: a)
+        XCTAssertEqual(one, HealthCharacteristicKey.uuid(name: "DateOfBirth", code: 19_800_412, salt: a))
+        XCTAssertNotEqual(one, HealthCharacteristicKey.uuid(name: "DateOfBirth", code: 19_800_412, salt: b))
+        XCTAssertNotEqual(one, HealthCharacteristicKey.uuid(name: "DateOfBirth", code: 19_800_413, salt: a))
+        XCTAssertEqual(one.count, "char-dateofbirth-h".count + 32)
+        XCTAssertTrue(HealthCharacteristicKey.isLegacy("char-dateofbirth-19800412", name: "DateOfBirth"))
+        XCTAssertFalse(HealthCharacteristicKey.isLegacy(one, name: "DateOfBirth"))
+        XCTAssertFalse(HealthCharacteristicKey.isLegacy("char-bloodtype-2", name: "DateOfBirth"))
+        XCTAssertNotEqual(HealthCharacteristicKey.newSalt(), HealthCharacteristicKey.newSalt())
     }
 
     // MARK: - Buckets

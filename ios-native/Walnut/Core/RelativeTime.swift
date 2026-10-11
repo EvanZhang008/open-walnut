@@ -17,7 +17,7 @@ enum RelativeTime {
         return short(date: date)
     }
 
-    static func short(date: Date, relativeTo now: Date = .now) -> String {
+    static func short(date: Date, relativeTo now: Date = AppClock.now()) -> String {
         // A just-touched row's timestamp can be ~now or slightly ahead (server
         // clock skew) — RelativeDateTimeFormatter renders that as the future
         // tense "in 0s". Clamp anything under a minute to "now".

@@ -36,7 +36,7 @@ enum DemoFixtureText {
                 id: "s-crash", title: "Fix the shared album crash",
                 taskId: "t-crash", host: "", processStatus: "idle",
                 model: DemoFixtures.mainModel, mode: "default",
-                startedAt: c.minutesAgo(52), lastActiveAt: c.minutesAgo(9),
+                startedAt: c.minutesAgo(52), lastActiveAt: c.minutesAgo(17),
                 cwd: pebble, description: "Crash on opening a shared album from a notification.",
                 transcript: [
                     user("The app crashes when I open a shared album from a notification. Can you find out why and fix it?", c.minutesAgo(52)),
@@ -68,12 +68,12 @@ enum DemoFixtureText {
                          result: "Test Suite 'AlbumTests' started\n...\nTest Suite 'AlbumTests' passed\n     Executed 24 tests, with 0 failures (0 unexpected) in 3.812 seconds",
                          c.minutesAgo(46)),
                     say("Fixed and tested.\n\n- **Cause:** a force unwrap on an album that had not synced yet.\n- **Fix:** the album screen shows a short loading state and opens as soon as the album arrives (up to 10 seconds, then a friendly error).\n- **Tests:** a new test opens an album from a notification before it syncs. All 24 album tests pass.\n\nWant me to open a pull request?", c.minutesAgo(45)),
-                    user("Yes, open the PR and ask for a review.", c.minutesAgo(12)),
+                    user("Yes, open the PR and ask for a review.", c.minutesAgo(20)),
                     tool("Bash", "Push the branch and open a pull request",
                          input: "command: git push -u origin fix/shared-album-crash && gh pr create --fill\ndescription: Push the branch and open a pull request",
                          result: "Opened pull request #318: Fix crash when opening a shared album",
-                         c.minutesAgo(10)),
-                    say("Pull request **#318** is open and a review is requested. I'll let you know when it is approved, then we can ship it in the next TestFlight build.", c.minutesAgo(9)),
+                         c.minutesAgo(18)),
+                    say("Pull request **#318** is open and a review is requested. I'll let you know when it is approved, then we can ship it in the next TestFlight build.", c.minutesAgo(17)),
                 ]
             ),
             DemoSession(
@@ -95,7 +95,7 @@ enum DemoFixtureText {
                 ]
             ),
             DemoSession(
-                id: "s-copy", title: "Onboarding headline options",
+                id: "s-copy", title: "Headlines",
                 taskId: "t-copy", host: "", processStatus: "idle",
                 model: DemoFixtures.mainModel, mode: "default",
                 startedAt: c.hoursAgo(3), lastActiveAt: c.hoursAgo(1.5),
@@ -103,7 +103,22 @@ enum DemoFixtureText {
                 transcript: [
                     user("Our onboarding headline feels generic. Draft a few better options, short and friendly.", c.hoursAgo(3)),
                     tool("Read", "Sources/Onboarding/WelcomeView.swift", input: "file_path: \(pebble)/Sources/Onboarding/WelcomeView.swift", c.hoursAgo(2.9)),
-                    say("Here are three options, each under six words:\n\n1. **Share moments, not files**\n2. **Your photos, together**\n3. **Albums for the people in them**\n\nI sent them to your Inbox so you can pick one with a tap. I'll update the welcome screen and the App Store text once you choose.", c.hoursAgo(1.5)),
+                    say("Here are three options, each six words or fewer:\n\n1. **Share moments, not files**\n2. **Your photos, together**\n3. **Albums for the people in them**\n\nI sent them to your Inbox so you can pick one with a tap. I'll update the welcome screen and the App Store text once you choose.", c.hoursAgo(1.5)),
+                ]
+            ),
+            DemoSession(
+                id: "s-notes", title: "Release notes for 2.4",
+                taskId: "t-notes", host: "", processStatus: "idle",
+                model: DemoFixtures.mainModel, mode: "default",
+                startedAt: c.minutesAgo(6.8), lastActiveAt: c.minutesAgo(3),
+                cwd: pebble, description: "A short first draft of the 2.4 release notes.",
+                transcript: [
+                    user("Collect the changes merged since 2.3 and write a short draft of the 2.4 release notes.", c.minutesAgo(6.8)),
+                    tool("Bash", "List the changes merged since 2.3",
+                         input: "command: git log --oneline 2.3.1..main\ndescription: List the changes merged since 2.3",
+                         result: "a41f0c2 Upgrade ImageCache to 5.0.1 (#311)\n2c8e7b4 Bump the version to 2.4 (#312)",
+                         c.minutesAgo(6.2)),
+                    say("Only the image cache upgrade has merged so far, so the draft marks the two changes still in review.\n\n**What's new in Pebble 2.4**\n\n- Big albums scroll more smoothly and use less memory.\n- Photos you have already seen stay visible offline (offline mode, not merged yet).\n- Opening a shared album from a notification no longer closes the app (pull request #318, in review).\n\nI'll update the draft when those two merge.", c.minutesAgo(3)),
                 ]
             ),
             DemoSession(
@@ -170,6 +185,22 @@ enum DemoFixtureText {
     // MARK: - Personal AI conversations
 
     static func conversations(_ c: DemoClock) -> [DemoConversation] {
+        // The plan names the board's times, for the day it says (see DemoClock.plan).
+        let plan = c.plan()
+        let day = c.dayWord(plan.day, saidAt: plan.askedAt)
+        let review = c.when(plan.review, planDay: plan.day)
+        let callWhen = c.when(plan.call, planDay: plan.day)
+        let callback = c.weekdayName(DemoClock.quotesCallbackInDays)
+        // "If you have energy left" is an afternoon's words; a morning plan gets the
+        // draft ready before the review (the listing's 9:41 shot, App Store gate
+        // 2026-10-09).
+        let afternoon = c.calendar.component(.hour, from: plan.askedAt) >= 12
+        let offer = day != "today"
+            ? "If you like, I can start a first draft of the 2.4 release notes now, so it is ready in the morning."
+            : c.dayOffset(of: plan.review) == plan.day && afternoon
+                ? "If you have energy left, I can start a first draft of the 2.4 release notes while you review the fix."
+                : "If you like, I can start a first draft of the 2.4 release notes now, so it is ready before the review."
+        let asked = DemoClock.planAskedMinutesAgo
         var counter = 0
         func msg(_ role: String, _ text: String, _ at: String, kind: ChatMessage.Kind? = nil,
                  detail: String? = nil, result: String? = nil, thinking: String? = nil) -> ChatMessage {
@@ -180,54 +211,57 @@ enum DemoFixtureText {
             )
         }
         let today = DemoConversation(
-            id: "c-today", agentID: "general", title: "Plan for today",
+            id: "c-today", agentID: "general", title: c.planTitle(plan),
             updatedAt: c.minutesAgo(6),
             messages: [
-                msg("user", "What should I focus on today?", c.minutesAgo(14)),
-                msg("assistant", "Checking the board and the calendar for today.", c.minutesAgo(13.9),
-                    kind: .thinking, thinking: "Checking the board and the calendar for today.\n\nFocus has five tasks; two have sessions waiting on a human. The dentist call is at 10:30 and the crash review block is at 2:00."),
-                msg("assistant", "task_list", c.minutesAgo(13.8), kind: .tool,
-                    detail: "Pinned tasks in Focus", result: "5 tasks: Fix crash when opening a shared album · Add offline mode to the photo grid · Review the onboarding copy changes · Write release notes for 2.4 · Get three quotes for the kitchen counters"),
+                msg("user", "What should I focus on \(day)?", c.minutesAgo(asked)),
+                msg("assistant", "Checking the board and the calendar for \(day).", c.minutesAgo(asked - 0.1),
+                    kind: .thinking, thinking: "Checking the board and the calendar for \(day).\n\nFocus has five tasks; two have sessions waiting on a human. The dentist call is \(callWhen) and the crash review block is \(review)."),
+                msg("assistant", "task_list", c.minutesAgo(asked - 0.2), kind: .tool,
+                    detail: "Pinned tasks in Focus", result: "5 tasks: Fix the shared album crash · Add offline mode to the photo grid · Review the onboarding copy changes · Write release notes for 2.4 · Get three quotes for the kitchen counters"),
                 msg("assistant", """
-                    Here is a realistic plan for today:
+                    Here is a realistic plan for \(day):
 
-                    1. **Review the shared album crash fix** (Pebble). The session found the cause and opened pull request #318. About 20 minutes, blocked out at 2:00.
+                    1. **Review the shared album crash fix** (Pebble). The session found the cause and opened pull request #318. About 20 minutes, blocked out \(review).
                     2. **Pick an onboarding headline.** Three options are waiting in your Inbox; it takes one tap.
-                    3. **Call the dentist** at 10:30 to move the appointment.
-                    4. **Kitchen counters:** two quotes are in, one shop still has to call back before Friday.
+                    3. **Call the dentist** \(callWhen) to move the appointment.
+                    4. **Kitchen counters:** two quotes are in, and Stone & Co still has to call back by \(callback).
 
-                    If you have energy left, I can start a first draft of the 2.4 release notes while you review the fix.
-                    """, c.minutesAgo(13.5)),
-                msg("user", "Yes, start the release notes draft. Keep it short.", c.minutesAgo(7)),
+                    \(offer)
+                    """, c.minutesAgo(asked - 0.5)),
+                // One line on purpose: the App Store shot of this chat opens it at its
+                // top, and only a one-line bubble here fits whole above the composer
+                // while the first question stays whole under the navigation bar.
+                msg("user", "Yes, start a short draft.", c.minutesAgo(7)),
                 msg("assistant", "session_start", c.minutesAgo(6.8), kind: .tool,
                     detail: "Write release notes for 2.4", result: "Session started in ~/code/pebble"),
-                msg("assistant", "Started a session on **Write release notes for 2.4**. It will collect the changes merged since 2.3 and leave a short draft on the task. I'll send it to your Inbox when it is ready.", c.minutesAgo(6)),
+                msg("assistant", "Started a session on **Write release notes for 2.4**. It will collect the changes merged since 2.3 and write a short draft you can read in the session.", c.minutesAgo(6)),
             ]
         )
         let kitchen = DemoConversation(
             id: "c-kitchen", agentID: "general", title: "Kitchen remodel budget",
-            updatedAt: c.hoursAgo(20),
+            updatedAt: c.daysAgo(2),
             messages: [
-                msg("user", "Help me keep the kitchen remodel under budget. What usually runs over?", c.hoursAgo(21)),
-                msg("assistant", "The usual overruns are counters, plumbing moves and anything behind the walls. A simple rule: hold back **15%** of the budget for surprises, and get at least three quotes for counters and cabinets.\n\nI added a task for the counter quotes and pinned it to Focus.", c.hoursAgo(20.9)),
-                msg("user", "Good idea. Remind me to book the plumber too.", c.hoursAgo(20.2)),
-                msg("assistant", "Done: **Book a plumber for the dishwasher line** is due tomorrow.", c.hoursAgo(20)),
+                msg("user", "Help me keep the kitchen remodel under budget. What usually runs over?", c.daysAgo(5.01)),
+                msg("assistant", "The usual overruns are counters, plumbing moves and anything behind the walls. A simple rule: hold back **15%** of the budget for surprises, and get at least three quotes for counters and cabinets.\n\nI added a task to get counter quotes from Stone & Co, Counter Works and Oak Lane, and pinned it to Focus.", c.daysAgo(5)),
+                msg("user", "Remind me to book a plumber for the dishwasher line.", c.daysAgo(2.01)),
+                msg("assistant", "Done: **Book a plumber for the dishwasher line** is on the board with the kitchen tasks, due \(c.weekdayName(1)).", c.daysAgo(2)),
             ]
         )
         let trip = DemoConversation(
-            id: "c-trip", agentID: "general", title: "Ideas for the October trip",
+            id: "c-trip", agentID: "general", title: "Ideas for the coast trip",
             updatedAt: c.daysAgo(3),
             messages: [
-                msg("user", "Three days on the coast in October. What should we not miss?", c.daysAgo(3.1)),
-                msg("assistant", "For three days I would keep it simple:\n\n- **Day 1:** arrive by train, walk the harbour front at sunset.\n- **Day 2:** the cliff path in the morning, a long lunch, the old lighthouse.\n- **Day 3:** the Saturday market, then home.\n\nTrain tickets are cheaper if you book this week. I added a task.", c.daysAgo(3)),
+                msg("user", "Three days on the coast. What should we not miss?", c.daysAgo(3.1)),
+                msg("assistant", "For three days I would keep it simple:\n\n- **Day 1:** arrive by train, walk the harbour front at sunset.\n- **Day 2:** the cliff path in the morning, a long lunch, the old lighthouse.\n- **Day 3:** the Saturday market, then home.\n\nTrain tickets are cheaper booked ahead, so I added a task to book them.", c.daysAgo(3)),
             ]
         )
         let summary = DemoConversation(
-            id: "c-crash", agentID: "general", title: "What changed in Pebble this week",
-            updatedAt: c.daysAgo(1.8),
+            id: "c-crash", agentID: "general", title: "What changed in Pebble lately",
+            updatedAt: c.hoursAgo(18),
             messages: [
-                msg("user", "Summarize what changed in Pebble this week.", c.daysAgo(1.9)),
-                msg("assistant", "This week in Pebble:\n\n- The image cache upgrade is done; scrolling uses 38% less memory.\n- Offline mode for the photo grid is nearly ready.\n- A crash when opening shared albums from a notification is being fixed.\n\nNext up is the 2.4 TestFlight build.", c.daysAgo(1.8)),
+                msg("user", "Summarize what changed in Pebble over the last few days.", c.hoursAgo(18.1)),
+                msg("assistant", "Lately in Pebble:\n\n- The image cache upgrade is done; scrolling uses 38% less memory.\n- Offline mode for the photo grid is nearly ready.\n- A crash when opening shared albums from a notification is next to fix.\n\nNext up is the 2.4 TestFlight build.", c.hoursAgo(18)),
             ]
         )
         let books = DemoConversation(
@@ -274,20 +308,15 @@ enum DemoFixtureText {
                    type: "action_required",
                    preview: "Three short options for the welcome screen. Pick one and I will update the app and the App Store text.",
                    body: """
-                   I drafted three headlines for the first screen of Pebble. Each is under six words and tested for length on the smallest phone.
+                   I drafted three headlines for the first screen of Pebble. Each is six words or fewer and fits on the smallest phone.
 
-                   **A. Share moments, not files**
-                   Warm and clear. Best if we lead with sharing.
-
-                   **B. Your photos, together**
-                   Shortest. Works well next to the album illustration.
-
-                   **C. Albums for the people in them**
-                   Most specific about what Pebble does.
+                   - **A. Share moments, not files.** Warm and clear. Best if we lead with sharing.
+                   - **B. Your photos, together.** Shortest. Works well next to the album illustration.
+                   - **C. Albums for the people in them.** Most specific about what Pebble does.
 
                    My pick is **A**. Once you choose, I will update the welcome screen and the App Store subtitle.
                    """,
-                   from: sender("s-copy", "Onboarding copy", task: "t-copy", taskTitle: "Review the onboarding copy changes", project: "Pebble"),
+                   from: sender("s-copy", "Headlines", task: "t-copy", taskTitle: "Review the onboarding copy changes", project: "Pebble"),
                    createdAgo: 1.5 * 3600, read: false,
                    actions: [
                        LetterAction(id: "a", label: "Ship option A", description: "Share moments, not files"),
@@ -331,23 +360,23 @@ enum DemoFixtureText {
 
                    Reply here with any changes and I will make them.
                    """,
-                   from: sender("s-pricing", "Pricing page", task: "t-pricing", taskTitle: "Redesign the pricing page", project: "Acme Website"),
+                   from: sender("s-pricing", "Pricing page rebuild", task: "t-pricing", taskTitle: "Redesign the pricing page", project: "Acme Website"),
                    createdAgo: 3 * 3600, read: false, taskRefs: ["t-pricing"]),
             letter("l-counters", subject: "Kitchen counter quotes, compared",
-                   type: "completion",
-                   preview: "Two of three quotes are in. The quartz option from the second shop is the best value so far.",
+                   // An update, not a completion: one quote is still to come.
+                   type: "info",
+                   preview: "Two of the three quotes are in: quartz from Counter Works and butcher block from Oak Lane.",
                    body: """
-                   Two of the three quotes for the kitchen counters are in. The third shop promised to call back by Thursday.
+                   Two of the three quotes for the kitchen counters are in. Stone & Co, the third shop, promised to call back by \(c.weekdayName(DemoClock.quotesCallbackInDays)).
 
                    | Shop | Material | Price | Lead time |
                    |---|---|---|---|
-                   | Stone & Co | Quartz | 3,400 | 3 weeks |
                    | Counter Works | Quartz | 2,950 | 4 weeks |
                    | Oak Lane | Butcher block | 1,800 | 2 weeks |
 
-                   **So far:** Counter Works is the best value for quartz. Butcher block is cheapest but needs oiling twice a year.
+                   **So far:** Oak Lane's butcher block is cheapest but needs oiling twice a year. Counter Works' quartz costs more and needs no upkeep.
 
-                   I will add the third quote when it arrives.
+                   I will add the Stone & Co quote when it arrives.
                    """,
                    from: sender(nil, "Walnut", task: "t-quotes", taskTitle: "Get three quotes for the kitchen counters", project: "Home"),
                    createdAgo: 5 * 3600, read: true, pinned: true, taskRefs: ["t-quotes"]),
@@ -365,23 +394,20 @@ enum DemoFixtureText {
                    """,
                    from: sender("s-cache", "Image cache upgrade", task: "t-cache", taskTitle: "Upgrade the image cache library", project: "Pebble"),
                    createdAgo: 19 * 3600, read: true, taskRefs: ["t-cache"]),
-            letter("l-weekly", subject: "Weekly review: 14 tasks done",
+            letter("l-weekly", subject: "Your weekly review",
                    type: "info",
-                   preview: "A good week: 14 tasks done, 3 carried over. Pebble 2.4 is on track for next week.",
+                   preview: "3 tasks carried over. Next up: the Pebble 2.4 TestFlight build.",
                    body: """
-                   **Done this week:** 14 tasks
-                   **Carried over:** 3 (release notes, packing list, car registration)
+                   **Carried over:** 3 tasks
 
-                   **Highlights**
-                   - Image cache upgrade shipped to the beta.
-                   - Pricing page redesign reached review.
-                   - Kitchen counter quotes started.
+                   - Renew the car registration
+                   - Localize the settings screen
+                   - Investigate slow cold start on older phones
 
-                   **Next week**
-                   Pebble 2.4 to TestFlight, the October trip tickets, and the dentist.
+                   **Next up:** the Pebble 2.4 TestFlight build.
                    """,
                    from: sender(nil, "Weekly review", task: nil, taskTitle: nil, project: nil),
-                   createdAgo: 6 * 86_400, read: true),
+                   createdAgo: DemoFixtures.weeklyReviewRun(c).ago, read: true),
             letter("l-links", subject: "Docs footer links are fixed",
                    type: "completion",
                    preview: "All 12 broken links in the docs footer now point to the right pages.",
@@ -397,7 +423,7 @@ enum DemoFixtureText {
         let yesterday = c.day(-1)
         return [
             DemoNote(path: "Pebble/Release 2.4 plan.md", content: """
-                **Target:** TestFlight next week, App Store the week after.
+                **Target:** TestFlight build on \(c.weekdayName(c.shipDay(c.plan()))), App Store the week after.
 
                 ## In the release
                 - [x] Image cache upgrade
@@ -417,7 +443,7 @@ enum DemoFixtureText {
                 **Cause:** the notification router opened the album screen before the album had synced, and a force unwrap failed.
 
                 **Fix:** wait for the album (up to 10 seconds), then show a friendly error. Pull request #318.
-                """, updatedAt: c.minutesAgo(40)),
+                """, updatedAt: c.minutesAgo(8)),
             DemoNote(path: "Pebble/Ideas.md", content: """
                 - Shared album invites by QR code
                 - A yearly recap video
@@ -432,15 +458,17 @@ enum DemoFixtureText {
                 - [ ] Book the plumber for the dishwasher line
                 - [ ] Pick the cabinet handles
 
-                ## Notes
-                Counter Works quoted 2,950 for quartz with a four week lead time.
+                ## Quotes
+                - Counter Works: 2,950 for quartz, four weeks
+                - Oak Lane: 1,800 for butcher block, two weeks
+                - Stone & Co: still to call back
                 """, updatedAt: c.hoursAgo(5)),
             DemoNote(path: "Home/Meal ideas.md", content: """
                 - Sheet pan vegetables with chickpeas
                 - Lemon pasta with peas
-                - Slow cooker chili for Sunday
+                - Slow cooker chili for a cold evening
                 """, updatedAt: c.daysAgo(1)),
-            DemoNote(path: "Travel/October trip.md", content: """
+            DemoNote(path: "Travel/Coast trip.md", content: """
                 Three days on the coast.
 
                 - **Day 1:** train in the morning, harbour walk at sunset
@@ -450,8 +478,8 @@ enum DemoFixtureText {
                 Packing: rain jacket, walking shoes, a good book.
                 """, updatedAt: c.daysAgo(3)),
             DemoNote(path: "Journal/\(yesterday).md", content: """
-                Good focus day. Finished the image cache upgrade review and got two counter quotes. Tomorrow: crash fix review and the dentist.
-                """, updatedAt: c.hoursAgo(15)),
+                Good focus day. Two of the counter quotes came in, and I measured the counters.
+                """, updatedAt: DemoClock.iso(DemoFixtures.journalWritten(c))),
             DemoNote(path: "Reading list.md", content: """
                 - A short mystery novel for the flight
                 - A collection of travel essays

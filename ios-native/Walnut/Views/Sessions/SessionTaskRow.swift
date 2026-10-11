@@ -101,6 +101,9 @@ struct SessionTaskRow: View {
         }
         .buttonStyle(.plain)
         .disabled((saving && !isLiveRow) || task == nil || store == nil)
+        .accessibilityLabel(StatusCircle.toggleAccessibility(task?.statusKind ?? .unknown).label)
+        .accessibilityValue(StatusCircle.toggleAccessibility(task?.statusKind ?? .unknown).value)
+        .accessibilityHint(StatusCircle.toggleAccessibility(task?.statusKind ?? .unknown).hint)
         .accessibilityIdentifier("session.task.statusToggle")
     }
 

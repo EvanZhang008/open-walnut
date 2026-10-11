@@ -183,7 +183,9 @@ final class LocalDataResetTests: XCTestCase {
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: scratch.locations.temporary.path), [])
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: scratch.locations.documents.path), [])
         XCTAssertNil(scratch.locations.defaults.object(forKey: "walnut.someFilter"))
-        XCTAssertNil(URLCache.shared.cachedResponse(for: URLRequest(url: cachedURL)))
+        // URLCache finishes deleting a few milliseconds after removeAll returns.
+        let httpCacheGone = await waitFor(3) { URLCache.shared.cachedResponse(for: URLRequest(url: cachedURL)) == nil }
+        XCTAssertTrue(httpCacheGone, "the HTTP cache kept a response")
         // The log files themselves are emptied in place, not deleted.
         XCTAssertFalse(removed.contains("walnut-applog.jsonl"))
     }

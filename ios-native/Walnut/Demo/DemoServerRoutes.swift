@@ -46,10 +46,11 @@ extension DemoServer {
             }
             return .encoded(page)
         case ("POST", "messages"):
-            let text = r.string("text") ?? ""
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return .error(400, "bad_request", "A message needs some text.")
+            // As the real server: a photo with no words is a turn of its own.
+            guard let text = r.messageText else {
+                return .error(400, "bad_request", "A message needs some text or a photo.")
             }
+            let images = r.imageCount
             if withState({ $0.liveTurns["c:\(id)"] != nil }) {
                 return .error(409, "turn_active", "A reply is still being written.")
             }
@@ -61,12 +62,13 @@ extension DemoServer {
                 ))
                 state.conversations[i].updatedAt = nowISO
                 if state.conversations[i].title == nil {
-                    state.conversations[i].title = Self.titleFrom(text)
+                    state.conversations[i].title = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "Photo" : Self.titleFrom(text)
                 }
                 state.liveTurns["c:\(id)"] = ""
                 return state.nextID("turn")
             }
-            startChatTurn(conversationID: id, turnID: turnID, userText: text)
+            startChatTurn(conversationID: id, turnID: turnID, userText: text, images: images)
             return .object(["turnId": turnID], status: 202)
         case ("GET", "stream"):
             return DemoReply(status: 200, body: .stream(.conversation(id), lastEventID: r.lastEventID))
@@ -139,7 +141,8 @@ extension DemoServer {
 
     func routeTasks(_ r: DemoRequest, _ s: [String]) -> DemoReply? {
         if match2(r, "GET", s, "tasks") {
-            let tasks = withState { $0.tasks.map(\.wire) }
+            // Open tasks and the last 14 days of completed ones, as the real list.
+            let tasks = withState { $0.listedTasks(now: now).map(\.wire) }
             return .encoded(TasksResponse(tasks: tasks, syncedAt: nowISO))
         }
         if match2(r, "POST", s, "tasks") { return createTask(r) }
@@ -452,34 +455,90 @@ extension DemoServer {
     private func answerLetter(_ id: String, _ r: DemoRequest) -> DemoReply {
         let actionID = r.string("actionId") ?? ""
         let freeText = r.string("freeText")
-        let result = withState { state -> (Letter, String?)? in
+        let result = withState { state -> (Letter, String?, DemoReplies.LetterTurn?)? in
             let i = state.letterIndex(id)!
             let old = state.letters[i]
             guard let action = old.actions?.first(where: { $0.id == actionID }) else { return nil }
             let answer = LetterAnswer(actionId: actionID, label: action.label, freeText: freeText, at: nowMs)
             let updated = Self.letter(old, answered: answer, thread: old.thread, read: true, readAt: nowMs)
             state.letters[i] = updated
-            // The decision moves the work it was about, as an agent would.
+            let cwd = old.sender?.sessionId.flatMap { state.sessionIndex($0) }.map { state.sessions[$0].cwd } ?? ""
+            let turn = DemoReplies.letterTurn(
+                letterID: id, actionID: actionID, label: action.label, description: action.description, cwd: cwd
+            )
+            // The decision moves the work it was about at once, as an agent would.
             var touched: String?
-            if id == "l-headline", let t = state.taskIndex("t-copy") {
+            if turn != nil, let taskID = old.sender?.taskId, let t = state.taskIndex(taskID),
+               state.tasks[t].phase != "COMPLETE" {
                 state.tasks[t].phase = "IN_PROGRESS"
-                state.tasks[t].summary = "Shipping \"\(action.description ?? action.label)\". Updating the welcome screen now."
+                if id == "l-headline" {
+                    state.tasks[t].summary = "Shipping \"\(action.description ?? action.label)\". Updating the welcome screen now."
+                }
                 state.tasks[t].updatedAt = nowISO
-                touched = "t-copy"
-            } else if id == "l-merge", actionID == "merge", let t = state.taskIndex("t-offline") {
-                Self.setPhase(&state.tasks[t], "COMPLETE", now: nowISO)
-                state.tasks[t].summary = "Merged into the 2.4 branch."
-                touched = "t-offline"
+                touched = taskID
             }
-            return (updated, touched)
+            return (updated, touched, turn)
         }
         guard let result else {
             return .error(400, "bad_request", "That letter has no action \(actionID).")
         }
-        let (letter, touched) = result
+        let (letter, touched, turn) = result
         if let touched { publishTask(touched) }
+        // Then the answer reaches the session that asked, which does the work and
+        // writes back in the thread.
+        if let turn, let sessionID = letter.sender?.sessionId {
+            let effects: (inout DemoState) -> [String] = { state in
+                Self.applyLetterTurn(turn, letterID: id, taskID: letter.sender?.taskId, state: &state, now: self.nowISO, nowMs: self.nowMs)
+            }
+            if beginSessionTurn(sessionID, text: turn.delivered) {
+                playSessionTurn(sessionID, reply: turn.reply, summary: turn.summary, effects: effects)
+            } else {
+                // The session is busy: the answer waits in its queue, and the
+                // outcome is written now so the board does not wait on it.
+                let touched = withState { state -> [String] in
+                    if let taskID = letter.sender?.taskId, let t = state.taskIndex(taskID) {
+                        state.tasks[t].summary = turn.summary
+                        state.tasks[t].updatedAt = nowISO
+                    }
+                    return effects(&state)
+                }
+                for taskID in Set(touched) { publishTask(taskID) }
+            }
+        }
         let delivery = LetterDelivery(status: "delivered", reason: nil, sessionId: letter.sender?.sessionId, messageId: nil)
         return .encoded(LetterActionResult(letter: letter, delivery: delivery))
+    }
+
+    /// What a finished letter answer changes beyond the session: the task, the
+    /// release plan's checklist, the TestFlight task waiting on it, and the
+    /// agent's line in the letter thread. Returns the tasks it touched.
+    static func applyLetterTurn(
+        _ turn: DemoReplies.LetterTurn, letterID: String, taskID: String?,
+        state: inout DemoState, now: String, nowMs: Double
+    ) -> [String] {
+        var touched: [String] = []
+        if turn.completes, let taskID, let t = state.taskIndex(taskID) {
+            setPhase(&state.tasks[t], "COMPLETE", now: now)
+            touched.append(taskID)
+        }
+        if let line = turn.ticks, let n = state.noteIndex("Pebble/Release 2.4 plan.md") {
+            state.notes[n].content = state.notes[n].content.replacingOccurrences(of: "- [ ] \(line)", with: "- [x] \(line)")
+            state.notes[n].updatedAt = now
+        }
+        if letterID == "l-headline", let t = state.taskIndex("t-testflight") {
+            state.tasks[t].summary = "Waiting on the crash fix."
+            state.tasks[t].updatedAt = now
+            touched.append("t-testflight")
+        }
+        if let i = state.letterIndex(letterID) {
+            let old = state.letters[i]
+            let entry = LetterThreadEntry(
+                from: "agent", text: turn.threadReply, bodyFormat: "markdown", bodyFile: nil, at: nowMs,
+                body: nil, bodyBytes: nil, bodyDeferred: nil, bodyUrl: nil, clientId: nil, delivery: nil
+            )
+            state.letters[i] = letter(old, answered: old.answered, thread: (old.thread ?? []) + [entry], read: old.read, readAt: old.readAt)
+        }
+        return touched
     }
 
     private func replyToLetter(_ id: String, _ r: DemoRequest) -> DemoReply {
@@ -501,8 +560,8 @@ extension DemoServer {
         let gen = currentGeneration
         schedule(after: 2.5 * turnScale) { [weak self] in
             guard let self, self.currentGeneration == gen else { return }
-            self.withState { state in
-                guard let i = state.letterIndex(id) else { return }
+            let sessionID = self.withState { state -> String? in
+                guard let i = state.letterIndex(id) else { return nil }
                 let old = state.letters[i]
                 let entry = LetterThreadEntry(
                     from: "agent", text: "Thanks, got it. I will take that into account and update this letter when it is done.",
@@ -510,7 +569,14 @@ extension DemoServer {
                     bodyDeferred: nil, bodyUrl: nil, clientId: nil, delivery: nil
                 )
                 state.letters[i] = Self.letter(old, answered: old.answered, thread: (old.thread ?? []) + [entry], read: old.read, readAt: old.readAt)
+                // A live agent writes this from its session, and the phone hears that
+                // session's turn on the events feed: say the same here, so an open
+                // reader shows the line without a reopen.
+                guard let sid = old.sender?.sessionId, let s = state.sessionIndex(sid) else { return nil }
+                state.sessions[s].lastActiveAt = self.nowISO
+                return sid
             }
+            if let sessionID { self.publishSession(sessionID) }
         }
         let delivery = LetterDelivery(status: "delivered", reason: nil, sessionId: letter.sender?.sessionId, messageId: nil)
         return .encoded(LetterActionResult(letter: letter, delivery: delivery))

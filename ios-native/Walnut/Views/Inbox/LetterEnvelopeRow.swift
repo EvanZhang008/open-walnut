@@ -61,7 +61,7 @@ struct LetterEnvelopeRow: View {
                 }
 
                 HStack(spacing: 6) {
-                    typeBadge
+                    if Self.showsTypeBadge(letter) { typeBadge }
                     chip(letter.hostLabel, icon: letter.hostLabel == "Mac" ? "laptopcomputer" : "server.rack")
                     if letter.answered != nil {
                         chip("Answered", icon: "checkmark")
@@ -77,7 +77,7 @@ struct LetterEnvelopeRow: View {
     @ViewBuilder
     private var relativeTime: some View {
         if let when = letter.createdDate {
-            Text(when.formatted(.relative(presentation: .named)))
+            Text(AppClock.relativeNamed(when))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -105,6 +105,13 @@ struct LetterEnvelopeRow: View {
                 .accessibilityLabel("Unread")
                 .accessibilityIdentifier("inbox.row.unread")
         }
+    }
+
+    /// An answered decision no longer needs action, so its row shows "Answered"
+    /// alone, as the reader's title does (`LetterReaderView.title(for:)`).
+    /// Every other kind keeps its badge.
+    static func showsTypeBadge(_ letter: Letter) -> Bool {
+        !(letter.kind == .actionRequired && letter.answered != nil)
     }
 
     private var typeBadge: some View {

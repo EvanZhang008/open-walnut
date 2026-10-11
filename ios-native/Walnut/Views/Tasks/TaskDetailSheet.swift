@@ -18,7 +18,7 @@ struct TaskDetailSheet: View {
     @State private var saving = false
     @State private var editError: String?
     @State private var showDuePicker = false
-    @State private var dueDraft = Date()
+    @State private var dueDraft = AppClock.now()
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
@@ -110,7 +110,7 @@ struct TaskDetailSheet: View {
             apply: { apply($0) },
             reportError: { editError = $0 },
             openDuePicker: {
-                dueDraft = current.dueDateValue ?? Calendar.current.startOfDay(for: .now)
+                dueDraft = current.dueDateValue ?? AppClock.startOfToday()
                 showDuePicker = true
             }
         )
@@ -199,6 +199,9 @@ struct TaskDetailSheet: View {
                     .padding(.top, 2)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(StatusCircle.toggleAccessibility(current.statusKind).label)
+            .accessibilityValue(StatusCircle.toggleAccessibility(current.statusKind).value)
+            .accessibilityHint(StatusCircle.toggleAccessibility(current.statusKind).hint)
             .accessibilityIdentifier("task.statusToggle")
             titleView
             if saving { ProgressView().controlSize(.small) }
@@ -306,7 +309,7 @@ struct TaskDetailSheet: View {
                     Button {
                         showDuePicker = false
                         // "" = explicit clear, same convention as TaskEdit.
-                        apply(.init(dueDate: choice.date(from: .now).map(Self.isoDay) ?? ""))
+                        apply(.init(dueDate: choice.date(from: AppClock.now()).map(Self.isoDay) ?? ""))
                     } label: {
                         Text(choice.label)
                             .font(.subheadline.weight(.medium))

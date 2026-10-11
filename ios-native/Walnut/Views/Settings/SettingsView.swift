@@ -12,15 +12,17 @@ enum SettingsRoute: Hashable {
 struct SettingsView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(ChatStore.self) private var chat
+    /// Read only to state the navigation bar's appearance (`toolbarColorScheme`).
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var testing = false
     @State private var testResult: String?
     @State private var showDisconnectConfirm = false
     @State private var sendingDiagnostics = false
     @State private var diagnosticsResult: String?
-    @AppStorage(VoiceRecorder.micRouteKey) private var micRoute = VoiceRecorder.MicRoute.automatic.rawValue
+    @AppStorage(VoiceRecorder.micRouteKey, store: AppPrefs.defaults) private var micRoute = VoiceRecorder.MicRoute.automatic.rawValue
     /// Default is `always` — "send them all", the behavior the user asked for.
-    @AppStorage(PushRegistration.modeKey) private var notificationMode = PushRegistration.Mode.always.rawValue
+    @AppStorage(PushRegistration.modeKey, store: AppPrefs.defaults) private var notificationMode = PushRegistration.Mode.always.rawValue
     @State private var push = PushRegistration.shared
 
     /// Wave-2 server info (GET /v1/config projection + chat stats). Best-effort:
@@ -35,15 +37,29 @@ struct SettingsView: View {
                 serverSection
                 serverInfoSection
                 automationSection
-                notificationsSection
+                // The demo has no server: no notification registration, nothing to
+                // upload diagnostics to, no connection to test and nothing to
+                // disconnect from. Leave demo (in the Demo section) is its way out.
+                if !inDemo {
+                    notificationsSection
+                }
                 AppleHealthSettingsSection()
                 PlacesSettingsSection()
                 voiceSection
-                diagnosticsSection
-                actionsSection
+                if !inDemo {
+                    diagnosticsSection
+                    actionsSection
+                }
                 aboutSection
             }
             .navigationTitle("Settings")
+            // iOS 26 draws no bar background, so section headers read through under
+            // the title once scrolled, worst at AX5 (App Store gate, 2026-10-05): the
+            // page runs up behind the bar, as the board's does (once the large title
+            // has scrolled away, so "Settings" shows at rest), and the bar's colour
+            // scheme is stated.
+            .barPage(Color(uiColor: .systemGroupedBackground), largeTitle: true)
+            .toolbarColorScheme(colorScheme, for: .navigationBar)
             .refreshable {
                 await connection.refreshStatus()
                 await loadServerInfo()
@@ -69,10 +85,17 @@ struct SettingsView: View {
                     connection.disconnect()
                 }
             } message: {
-                Text("Removes the server address and device token, and erases what Walnut keeps on this phone: drafts, unsent messages, downloaded images, voice recordings and logs.")
+                Text(Self.disconnectMessage)
             }
         }
     }
+
+    /// What Disconnect does, said before it does it. The last sentence is the
+    /// one limit: Disconnect asks the server to stop notifying this phone, and a
+    /// server that cannot be reached at that moment never hears it. The app keeps
+    /// no credential to try again later, by design, so revoking the phone on the
+    /// server is what removes the registration.
+    static let disconnectMessage = "Removes the server address and device token, and erases what Walnut keeps on this phone: drafts, unsent messages, downloaded images, voice recordings and logs. If the server can't be reached right now, it keeps this phone's notification registration until you revoke the phone in the Devices section of your Walnut console's Settings."
 
     /// The Address row's value. The demo is not a server, so its placeholder
     /// address is never shown as one.
@@ -80,6 +103,16 @@ struct SettingsView: View {
         if serverURL.isEmpty { return "Not configured" }
         return DemoMode.isDemoURL(serverURL) ? DemoMode.addressLabel : serverURL
     }
+
+    /// The Token row: a paired server's device token, masked. The demo has no
+    /// token (App Store gate, 2026-10-09: a masked row for a token that does not
+    /// exist), so it shows none.
+    static func showsTokenRow(serverURL: String) -> Bool {
+        !DemoMode.isDemoURL(serverURL)
+    }
+
+    /// Paired with the demo: there is no server, so no server status or version.
+    private var inDemo: Bool { DemoMode.isDemoURL(connection.serverURL) }
 
     private var serverSection: some View {
         Section("Server") {
@@ -92,11 +125,19 @@ struct SettingsView: View {
                 .accessibilityIdentifier("settings.connectionRoute")
             }
             LabeledContent("Device", value: connection.deviceName.isEmpty ? "Not set" : connection.deviceName)
-            LabeledContent("Token", value: "••••••••••••")
-            LabeledContent("Status") {
-                StatusBadge()
+            if Self.showsTokenRow(serverURL: connection.serverURL) {
+                LabeledContent("Token", value: "••••••••••••")
             }
-            if let status = connection.status {
+            if inDemo {
+                LabeledContent("Status", value: DemoMode.statusLabel)
+                    .accessibilityIdentifier("settings.status")
+            } else {
+                LabeledContent("Status") {
+                    StatusBadge()
+                }
+                .accessibilityIdentifier("settings.status")
+            }
+            if let status = connection.status, !inDemo {
                 LabeledContent("Server version", value: "v\(status.version)")
                 if let lastSync = status.lastSyncAt {
                     LabeledContent("Last sync", value: RelativeTime.short(lastSync))
@@ -111,7 +152,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var serverInfoSection: some View {
         if let serverInfo {
-            Section("Server Info") {
+            Section(inDemo ? "Sample Setup" : "Server Info") {
                 if let provider = serverInfo.config.provider?.type {
                     LabeledContent("Provider", value: providerLine(provider))
                 }
@@ -125,7 +166,7 @@ struct SettingsView: View {
                 if serverInfo.cloud == true {
                     LabeledContent("Mode", value: "Cloud companion")
                 }
-                if let uptime = serverInfo.memory?.uptimeSec {
+                if let uptime = serverInfo.memory?.uptimeSec, !inDemo {
                     LabeledContent("Uptime", value: Self.uptimeText(uptime))
                 }
                 if let stats = chatStats, let count = stats.apiMessageCount {
@@ -284,7 +325,13 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            EmptyView()
+            // Opens in Safari (see `PrivacyPolicy`), in the demo too.
+            Link(destination: PrivacyPolicy.url) {
+                Label(PrivacyPolicy.title, systemImage: "hand.raised")
+            }
+            .accessibilityIdentifier("settings.privacyPolicy")
+        } header: {
+            Text("About")
         } footer: {
             VStack(spacing: 4) {
                 Text("Walnut \(Self.appVersion)")

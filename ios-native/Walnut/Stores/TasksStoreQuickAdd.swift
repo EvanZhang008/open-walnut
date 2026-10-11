@@ -40,7 +40,7 @@ extension TasksStore {
         //    the seed's project + pin so the row appears IN the group the user
         //    typed in, not at the top of Inbox on its way there.
         let placeholderId = "quickadd-\(UUID().uuidString)"
-        let nowISO = ISO8601DateFormatter().string(from: Date())
+        let nowISO = ISO8601DateFormatter().string(from: AppClock.now())
         insertPlaceholder(WalnutTask(
             id: placeholderId, title: raw, status: "todo", phase: "TODO",
             priority: "none", project: seed.project, dueDate: nil,

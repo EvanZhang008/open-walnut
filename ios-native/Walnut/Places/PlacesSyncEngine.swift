@@ -48,6 +48,8 @@ actor PlacesSyncEngine {
     private let env: PlacesSyncEnvironment
     private var running = false
     private var again = false
+    /// Places is on in this run: a visit the Mac now has is kept a while here.
+    private var keepSent = true
 
     init(store: PlacesQueueStore, transport: PlacesTransport, env: PlacesSyncEnvironment) {
         self.store = store
@@ -76,6 +78,7 @@ actor PlacesSyncEngine {
         guard env.isPaired() else { return .notPaired }
         let generation = store.generation
         let state = await env.state()
+        keepSent = state.enabled
         await lookUpNames(generation: generation)
         let snapshot = store.read()
         let pending = snapshot.visits.filter(\.needsSend)
@@ -170,7 +173,8 @@ actor PlacesSyncEngine {
         }
         switch reply {
         case .ok:
-            store.markSent(Dictionary(visits.map { ($0.id, $0.version) }, uniquingKeysWith: max), generation: generation)
+            store.markSent(Dictionary(visits.map { ($0.id, $0.version) }, uniquingKeysWith: max),
+                           generation: generation, now: env.now(), keepSent: keepSent)
             return .synced
         case .tooLarge:
             guard visits.count > 1, depth < 8 else { return .failed }

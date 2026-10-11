@@ -32,8 +32,10 @@ final class QuickAddTests: XCTestCase {
         XCTAssertEqual(store.tasks.map(\.id), ["t-server-1"])
         // Registered as a pending overlay (REPLICA refreshes keep it).
         XCTAssertTrue(store.pendingCreatedIds.contains("t-server-1"))
-        // Locate-me signal fired.
+        // Locate-me signal fired, as an in-place one: the quick-add field keeps
+        // the keyboard, so the list flashes the row without scrolling to it.
         XCTAssertEqual(store.lastCreatedTaskId, "t-server-1")
+        XCTAssertTrue(store.lastCreatedInPlace)
     }
 
     func testPlaceholderRemovedOnCreateFailure() {

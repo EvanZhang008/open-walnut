@@ -2083,6 +2083,11 @@ final class TaskBoardModelTests: XCTestCase {
             inlineAddActive: false, openAddGroup: .tier("focus"), openCreateBand: nil))
         XCTAssertFalse(TasksView.shouldRelocateToNewTask(
             inlineAddActive: false, openAddGroup: nil, openCreateBand: "focus"))
+        // The quick-add row at the top keeps its field focused for the next
+        // entry; scrolling to the new row put the field under the pinned chip
+        // bar while the user kept typing (App Store gate, 2026-10-05).
+        XCTAssertFalse(TasksView.shouldRelocateToNewTask(
+            inlineAddActive: false, openAddGroup: nil, openCreateBand: nil, createdInPlace: true))
     }
 
     /// With nothing open the help is still wanted: a task created from the toolbar

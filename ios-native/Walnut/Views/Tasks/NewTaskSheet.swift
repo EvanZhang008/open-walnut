@@ -46,7 +46,7 @@ struct NewTaskSheet: View {
     @State private var pin: TaskPinChoice = .unspecified
     @State private var priority: Priority = .none
     @State private var hasDueDate = false
-    @State private var dueDate = Calendar.current.startOfDay(for: Date()).addingTimeInterval(9 * 3600)
+    @State private var dueDate = AppClock.startOfToday().addingTimeInterval(9 * 3600)
     @State private var creating = false
     @State private var createError: String?
     @FocusState private var titleFocused: Bool

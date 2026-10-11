@@ -48,7 +48,7 @@ struct LetterReplyStatus: Equatable {
     /// an older server, the one its response carried).
     static func recorded(
         _ delivery: LetterDelivery, recipient: String, at: Date?,
-        canRetry: Bool, now: Date = Date(), calendar: Calendar = .current
+        canRetry: Bool, now: Date = AppClock.now(), calendar: Calendar = .current
     ) -> LetterReplyStatus {
         let when = at.map { " · " + timeLabel($0, now: now, calendar: calendar) } ?? ""
         let session = delivery.sessionId.flatMap { $0.isEmpty ? nil : $0 }
@@ -120,7 +120,7 @@ struct LetterReplyStatus: Equatable {
     /// finger that tapped it; why the Retry failed goes to the log.
     static func retryFailed(
         recipient: String, at: Date?, sessionId: String?,
-        now: Date = Date(), calendar: Calendar = .current
+        now: Date = AppClock.now(), calendar: Calendar = .current
     ) -> LetterReplyStatus {
         let when = at.map { " · " + timeLabel($0, now: now, calendar: calendar) } ?? ""
         return .init(text: failedText(recipient: recipient, when: when), tone: .problem,

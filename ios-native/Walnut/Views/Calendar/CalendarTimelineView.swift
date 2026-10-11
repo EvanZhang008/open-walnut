@@ -34,10 +34,10 @@ struct CalendarTimelineView: View {
 
     /// Fixed paging origin: page indices derived from a stable epoch survive
     /// midnight and re-renders (see CalendarLayout.pageIndex).
-    @State private var epoch: Date = Calendar.current.startOfDay(for: Date())
+    @State private var epoch: Date = AppClock.startOfToday()
     @State private var page: Int = 0
     /// Live clock for the red now-line (ticks once a minute).
-    @State private var now = Date()
+    @State private var now = AppClock.now()
     /// One-shot scroll to the current hour on first appearance.
     @State private var didAutoScroll = false
     /// Day columns whose all-day band is expanded past the 3-chip cap
@@ -83,12 +83,14 @@ struct CalendarTimelineView: View {
             reportVisibleRange()
         }
         .task {
-            // Minute tick for the now-line. Cheap (one Date per minute) and
-            // stops with the view.
+            // Minute tick for the now-line, on the minute. Cheap (one Date per
+            // minute) and stops with the view.
+            now = AppClock.now()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                let wait = CalendarLayout.secondsToNextMinute(after: AppClock.now())
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                 if Task.isCancelled { break }
-                now = Date()
+                now = AppClock.now()
             }
         }
     }

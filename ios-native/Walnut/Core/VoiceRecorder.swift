@@ -75,7 +75,7 @@ final class VoiceRecorder: NSObject {
     static let autoDrainCooldown: TimeInterval = 15
 
     static var micRoute: MicRoute {
-        MicRoute(rawValue: UserDefaults.standard.string(forKey: micRouteKey) ?? "") ?? .automatic
+        MicRoute(rawValue: AppPrefs.defaults.string(forKey: micRouteKey) ?? "") ?? .automatic
     }
 
     private(set) var state: State = .idle

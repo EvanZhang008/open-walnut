@@ -31,7 +31,7 @@ final class ComposerDrafts {
     private static let maxPersistedDrafts = 40
 
     private init() {
-        if let saved = UserDefaults.standard.dictionary(forKey: Self.storageKey) as? [String: String] {
+        if let saved = AppPrefs.defaults.dictionary(forKey: Self.storageKey) as? [String: String] {
             text = saved
         }
         // Durability edge for the debounced persist: iOS only kills the app
@@ -108,7 +108,7 @@ final class ComposerDrafts {
         #if DEBUG
         Self.persistWrites.withLock { $0 += 1 }
         #endif
-        UserDefaults.standard.set(snapshot, forKey: Self.storageKey)
+        AppPrefs.defaults.set(snapshot, forKey: Self.storageKey)
     }
 }
 
@@ -126,6 +126,6 @@ extension ComposerDrafts {
         persistTask = nil
         text = [:]
         images = [:]
-        UserDefaults.standard.removeObject(forKey: Self.storageKey)
+        AppPrefs.defaults.removeObject(forKey: Self.storageKey)
     }
 }

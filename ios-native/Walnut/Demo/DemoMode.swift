@@ -42,6 +42,15 @@ enum DemoMode {
     /// not shown as one.
     static let addressLabel = "Demo with sample data, no server"
 
+    /// What Settings shows for the status: not "Live", which would claim a server.
+    static let statusLabel = "Demo"
+
+    /// What the demo card says about changes. The demo keeps them in a scope of
+    /// its own (`AppPrefs`, `LocalDataReset`), erased when the demo starts, at
+    /// every launch in it and when you leave it; the in-memory demo server starts
+    /// again from its sample data each time.
+    static let changesNote = "Everything here is sample data. Changes stay in the demo and are reset when you leave the demo or the app restarts; nothing you do here changes the app outside it. To use Walnut for real, run the Walnut server on your computer and pair this phone with it."
+
     static func isDemoURL(_ url: URL?) -> Bool {
         url?.host?.lowercased() == host
     }

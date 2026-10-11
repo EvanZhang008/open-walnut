@@ -140,6 +140,17 @@ enum Breadcrumbs {
         AppLog.debug("heartbeat", unchanged ? "state (idle)" : "state", meta)
     }
 
+    /// Disconnect: the tape starts over with nothing of the old pairing. Clears
+    /// the snapshot the heartbeat samples, and the heartbeat's own memory of the
+    /// last sample, so the next line is a fresh one rather than an "idle" repeat.
+    static func eraseHistory() {
+        FreezeContext.shared.eraseHistory()
+        stateLock.lock()
+        lastFingerprint = ""
+        idleTicks = 0
+        stateLock.unlock()
+    }
+
     // MARK: - Discrete events
 
     /// A notable action: pushed to the freeze snapshot's crumb ring, which the

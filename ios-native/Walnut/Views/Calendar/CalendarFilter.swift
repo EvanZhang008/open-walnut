@@ -102,10 +102,12 @@ struct CalendarFilter: Equatable, Codable {
 struct CalendarFilterPreference {
     static let key = "walnut.calendar.filter"
 
-    private let defaults: UserDefaults
+    private let storedDefaults: UserDefaults
+    /// The app's own follow the demo scope (`AppPrefs`).
+    private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
 
     init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+        self.storedDefaults = defaults
     }
 
     /// A corrupt/absent blob degrades to unrestricted — never to a filter that

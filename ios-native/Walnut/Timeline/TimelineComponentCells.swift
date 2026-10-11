@@ -134,10 +134,11 @@ enum TimelineHostedCell {
                 collapsible: collapsible, expanded: expanded,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
-        case .image(let raw, let alt):
+        case .image(let raw, let alt, let spoken):
             HStack {
                 AttachmentImageView(raw: raw, alt: alt)
                     .frame(maxHeight: TimelineMetrics.imageSlotHeight - 8)
+                    .modifier(SpokenImage(label: spoken))
                 Spacer(minLength: TimelineMetrics.assistantTrailingGap)
             }
             .padding(.horizontal, TimelineMetrics.hMargin)
@@ -145,9 +146,12 @@ enum TimelineHostedCell {
         case .localImages(let datas, let dimmed):
             HStack(alignment: .top, spacing: 6) {
                 Spacer(minLength: TimelineMetrics.bubbleLeadingGap)
-                ForEach(Array(datas.enumerated()), id: \.offset) { _, data in
-                    TimelineLocalThumb(data: data)
+                HStack(alignment: .top, spacing: 6) {
+                    ForEach(Array(datas.enumerated()), id: \.offset) { _, data in
+                        TimelineLocalThumb(data: data)
+                    }
                 }
+                .modifier(SpokenImage(label: row.content.spokenLabel))
             }
             .opacity(dimmed ? 0.65 : 1)
             .padding(.horizontal, TimelineMetrics.hMargin)
@@ -1640,6 +1644,24 @@ private struct TimelineNotificationView: View {
         }
         .padding(.horizontal, TimelineMetrics.hMargin)
         .padding(.vertical, TimelineMetrics.notificationVMargin)
+    }
+}
+
+/// The user's own photo as ONE VoiceOver element with its name and the image trait.
+/// No label, no change: other images keep what they had.
+private struct SpokenImage: ViewModifier {
+    let label: String?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let label {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+                .accessibilityAddTraits(.isImage)
+        } else {
+            content
+        }
     }
 }
 

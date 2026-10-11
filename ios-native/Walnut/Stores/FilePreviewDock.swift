@@ -698,7 +698,11 @@ final class FilePreviewDock {
     private func retractComposer(key: String) {
         guard composers.contains(key) else { return }
         guard appInForeground else {
-            AppLog.info("preview", "composer retraction ignored while backgrounded", ["key": key])
+            // The kind of composer only: a session composer's key carries its
+            // session id, and this line can land after Disconnect erased it.
+            AppLog.info("preview", "composer retraction ignored while backgrounded", [
+                "kind": String(key.prefix { $0 != ":" }),
+            ])
             return
         }
         composers.retract(key)

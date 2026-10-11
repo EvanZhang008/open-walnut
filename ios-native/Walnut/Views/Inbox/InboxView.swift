@@ -16,6 +16,8 @@ import SwiftUI
 /// the human's own choice per letter, so none of it breaks the rule above.
 struct InboxView: View {
     @Environment(InboxStore.self) private var inbox
+    /// Read only to state the navigation bar's appearance (`toolbarColorScheme`).
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Push-navigation path of letter ids. A deep link from a push replaces it.
     @State private var path: [String] = []
@@ -49,6 +51,11 @@ struct InboxView: View {
                 // title while scrolling. Same one-line fix `ChatView` and
                 // `SessionConversationView` already carry.
                 .toolbarBackground(.visible, for: .navigationBar)
+                // iOS 26 draws no bar background, so `.visible` only helps iOS 18; there
+                // the page behind the bar is the list's own (`barPage`, see `list`). The
+                // bar's colour scheme is stated, not inferred from what scrolls under it
+                // (the board's dark-mode lesson).
+                .toolbarColorScheme(colorScheme, for: .navigationBar)
                 .navigationDestination(for: String.self) { id in
                     LetterReaderView(letterId: id)
                 }
@@ -193,11 +200,16 @@ struct InboxView: View {
     /// start a selection there either.
     @ViewBuilder
     private var list: some View {
+        // Both lists run the page up behind the bar, as the board's does: a scrolled
+        // letter read through between the title and the pinned filter chips (App Store
+        // gate, 2026-10-05), and a hard scroll edge only blurred it. Only once the large
+        // title has scrolled away, so the title shows at rest.
         if showArchived {
             List {
                 Section { listRows }
             }
             .listStyle(.plain)
+            .barPage(Color(uiColor: .systemBackground), largeTitle: true)
             .accessibilityIdentifier("inbox.list")
         } else {
             List(selection: $selection) {
@@ -209,6 +221,7 @@ struct InboxView: View {
             }
             .listStyle(.plain)
             .environment(\.editMode, $editMode)
+            .barPage(Color(uiColor: .systemBackground), largeTitle: true)
             .accessibilityIdentifier("inbox.list")
         }
     }

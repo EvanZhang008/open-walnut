@@ -7,6 +7,7 @@ import WebKit
 /// "Try the demo" on the pairing screen: a secondary action under Connect.
 struct DemoEntryButton: View {
     @Environment(ConnectionStore.self) private var connection
+    @Environment(TasksStore.self) private var tasks
     /// The pairing screen is busy with a real connect.
     var disabled = false
 
@@ -55,7 +56,7 @@ struct DemoEntryButton: View {
         failure = nil
         Task {
             do {
-                try await DemoEntry.enter(connection: connection)
+                try await DemoEntry.enter(connection: connection, recents: tasks.recents)
             } catch {
                 failure = "The demo could not start. Try again."
                 AppLog.error("demo", "demo entry failed", ["error": String(describing: error)])
@@ -179,7 +180,7 @@ struct DemoSettingsSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("You're using the demo")
                         .font(.headline)
-                    Text("Everything here is sample data. Changes stay on this phone and are erased when you leave. To use Walnut for real, run the Walnut server on your computer and pair this phone with it.")
+                    Text(DemoMode.changesNote)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

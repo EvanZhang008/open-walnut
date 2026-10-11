@@ -132,6 +132,10 @@ struct DemoState {
     var liveTurnIDs: [String: String] = [:]
     /// Messages sent to a session while its turn runs, delivered in order after.
     var sessionQueue: [String: [String]] = [:]
+    /// Photos sent into sessions, by the path the transcript names them with
+    /// (`DemoServer.withPhotoPaths`); `GET /media` serves them back. The newest
+    /// ten are kept.
+    var sessionPhotos: [(path: String, data: Data, mediaType: String)] = []
     /// Bumped by every create so ids never collide inside one demo run.
     var serial = 0
     /// Apple Health (DemoServerHealth.swift): the Mac's store id, its pause
@@ -170,6 +174,20 @@ struct DemoState {
     /// projection lists them in.
     var visibleSessions: [DemoSession] {
         sessions.filter { !$0.archived }.sorted { $0.lastActiveAt > $1.lastActiveAt }
+    }
+
+    /// The tasks the phone's list and events feed carry, as the real server's
+    /// projection serves them: every open task, and the completed ones finished in
+    /// the last `DemoFixtures.listedDoneDays` days (by `completedAt`, else
+    /// `updatedAt`). An older completed task stays on the server: search finds it and
+    /// names it in its answer, and `GET /tasks/:id` still opens it.
+    func listedTasks(now: Date) -> [DemoTask] {
+        let cutoff = now.addingTimeInterval(-DemoFixtures.listedDoneDays * 86_400)
+        return tasks.filter { task in
+            guard task.phase == "COMPLETE" else { return true }
+            guard let done = WalnutTask.parseISO(task.completedAt ?? task.updatedAt) else { return true }
+            return done >= cutoff
+        }
     }
 
     /// The tier split `GET /focus/tasks` answers, as the server's `splitTiers`:

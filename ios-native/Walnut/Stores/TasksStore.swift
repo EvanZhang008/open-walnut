@@ -47,6 +47,13 @@ final class TasksStore {
     /// Most recently created task id — the Tasks list observes this to scroll
     /// to and briefly highlight the new row so it's visually locatable.
     var lastCreatedTaskId: String?
+    /// True when `lastCreatedTaskId` was typed into a quick-add row. That row
+    /// keeps its field focused for the next entry, so the list must not move
+    /// under it: the locate-me handler flashes the row and leaves the scroll
+    /// alone. Scrolled to the new row, the field left the screen and UIKit
+    /// brought it back flush under the bar, behind the pinned chip bar, while
+    /// the user kept typing (App Store gate, 2026-10-05).
+    var lastCreatedInPlace = false
 
     // MARK: - Pending-created overlay
     //
@@ -413,7 +420,8 @@ final class TasksStore {
                 sessionsChanged = sessionsChanged || result.changed
             }
         }
-        let now = Date()
+        // The shown clock: the board footer says "Synced <relative>" against it.
+        let now = AppClock.now()
         if tasksChanged {
             tasks = nextTasks
             syncedAt = now
@@ -689,6 +697,7 @@ final class TasksStore {
                 DiskCache.save(tasks, key: "tasks-list")
             }
             // Locate-me signal: the list scrolls to + highlights this row.
+            lastCreatedInPlace = false
             lastCreatedTaskId = created.id
             // Reconcile the tier map in the background — same debounce the
             // pin/tier-move paths use, never a blocking refetch.
@@ -734,6 +743,8 @@ final class TasksStore {
             tasks.insert(created, at: 0)
         }
         DiskCache.save(tasks, key: "tasks-list")
+        // Only quick add adopts a created row: its field stays where it is.
+        lastCreatedInPlace = true
         lastCreatedTaskId = created.id
     }
 
@@ -783,7 +794,7 @@ final class TasksStore {
     /// injectable because the projection stamps timestamps: two calls straddling
     /// a second produce UNEQUAL rows, which is exactly why the rollback guard
     /// must compare against the stored optimistic instance, never a recompute.
-    static func applyEdit(_ edit: TaskEdit, to task: WalnutTask, now: Date = .now) -> WalnutTask {
+    static func applyEdit(_ edit: TaskEdit, to task: WalnutTask, now: Date = AppClock.now()) -> WalnutTask {
         WalnutTask(
             id: task.id,
             title: edit.title ?? task.title,
@@ -1175,7 +1186,7 @@ final class TasksStore {
         // NOTE: .calendar deliberately falls through to the memoized path — the
         // card's count needs the real dated slice (see the switch below).
         _ = tasks.count // observed read FIRST (dependency tracking on hits)
-        let day = Calendar.current.startOfDay(for: Date())
+        let day = AppClock.startOfToday()
         if taskSliceCache.gen != tasksGen || taskSliceCache.day != day {
             taskSliceCache = (tasksGen, day, [:])
         }
@@ -1448,6 +1459,7 @@ extension TasksStore {
         taskFoldersAnswered = false
         projectOrderAnswered = false
         lastCreatedTaskId = nil
+        lastCreatedInPlace = false
         deleteNeedsForceIds = []
         errorMessage = nil
         transientError = nil

@@ -112,7 +112,7 @@ struct TasksView: View {
     /// and the chips are open counts. It is ONE switch in the filters menu, not a control
     /// on every heading: showing finished work is rare, and a `show done (N)` capsule on
     /// each band was noise on the screen whose job is the open rows.
-    @AppStorage(BoardFilterPrefs.showDoneKey) private var showDone = false
+    @AppStorage(BoardFilterPrefs.showDoneKey, store: AppPrefs.defaults) private var showDone = false
     /// Which band's foot create row is open, by band id (exactly one: two
     /// keyboards on one list is not a thing).
     @State private var openCreateBand: String?
@@ -126,12 +126,12 @@ struct TasksView: View {
 
     /// LEGACY grouping value, read only so an installed build's setting migrates into the
     /// per-tier map (`BoardFilterPrefs.grouping(scope:modes:legacy:)`). Never written.
-    @AppStorage(BoardFilterPrefs.groupingKey) private var legacyGroupingRaw =
+    @AppStorage(BoardFilterPrefs.groupingKey, store: AppPrefs.defaults) private var legacyGroupingRaw =
         BoardFilterPrefs.defaultGrouping.rawValue
     /// grouping per tier, as JSON. The grouping belongs to the tier you are looking at, so
     /// each tier remembers its own mode instead of one global value being carried over.
-    @AppStorage(BoardFilterPrefs.groupingModesKey) private var groupingModesRaw = ""
-    @AppStorage(BoardFilterPrefs.dateFilterKey) private var dateFilterRaw =
+    @AppStorage(BoardFilterPrefs.groupingModesKey, store: AppPrefs.defaults) private var groupingModesRaw = ""
+    @AppStorage(BoardFilterPrefs.dateFilterKey, store: AppPrefs.defaults) private var dateFilterRaw =
         BoardFilterPrefs.defaultDateFilter.rawValue
     /// Which TIER the rail's chip has narrowed the board to ("" = All).
     ///
@@ -145,7 +145,7 @@ struct TasksView: View {
     /// (`BoardAssembly.scope`): a stale or emptied tier shows the whole board rather than an
     /// empty one, because two paths deciding what a band contains is how a task went
     /// missing from this screen once already.
-    @AppStorage(BoardFilterPrefs.tierScopeKey) private var tierScopeRaw = ""
+    @AppStorage(BoardFilterPrefs.tierScopeKey, store: AppPrefs.defaults) private var tierScopeRaw = ""
 
     private var isEditing: Bool { editMode == .active }
 
@@ -221,9 +221,20 @@ struct TasksView: View {
                     calendarSurface
                 } else {
                     list
+                        // On the list only. The calendar is a root that does not
+                        // scroll as a whole, so nothing on it can bring back a
+                        // search drawer the board's scroll hid, and it does not
+                        // read the query anyway.
+                        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
                 }
             }
             .navigationTitle("Tasks")
+            // A large title follows the scroll view under it, and the calendar
+            // has none the bar tracks: opened from a scrolled board it kept the
+            // board's collapsed bar over room laid out for the large one, a blank
+            // band of about 127 pt (App Store gate, 2026-10-05). The calendar gets
+            // a fixed inline bar instead, the same however the board was left.
+            .navigationBarTitleDisplayMode(activeFilter == .calendar ? .inline : .automatic)
             // A filter with no header entry any more (Today / In Progress / Done,
             // whose cards this rebuild removed) would render a header with nothing
             // selected over a list the user cannot switch away from. Normalising on
@@ -305,7 +316,6 @@ struct TasksView: View {
             // black page and vanished. The rail's stretched edge layers had been steering
             // that inference by accident.
             .toolbarColorScheme(colorScheme, for: .navigationBar)
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 // Top-left, where the Chat tab keeps its own drawer: everything opened
                 // from here, newest first. A clock rather than the chat's three lines,
@@ -845,7 +855,7 @@ struct TasksView: View {
 
                 if let synced = tasks.syncedAt {
                     Section {
-                        Text("Synced \(synced.formatted(.relative(presentation: .named)))")
+                        Text("Synced \(AppClock.relativeNamed(synced))")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -1155,7 +1165,8 @@ struct TasksView: View {
                 guard Self.shouldRelocateToNewTask(
                     inlineAddActive: inlineAddActive,
                     openAddGroup: openAddGroup,
-                    openCreateBand: openCreateBand
+                    openCreateBand: openCreateBand,
+                    createdInPlace: tasks.lastCreatedInPlace
                 ) else {
                     flashHighlight(newId)
                     return
@@ -1487,10 +1498,13 @@ struct TasksView: View {
     /// - Parameter openCreateBand: the board band whose create ring is open, by
     ///   BAND id (a tier id, or `proj:<name>` under project grouping). Only its
     ///   presence matters here, never its value.
+    /// - Parameter createdInPlace: typed into a quick-add row, whose field
+    ///   keeps the keyboard for the next entry (`TasksStore.lastCreatedInPlace`).
     static func shouldRelocateToNewTask(
-        inlineAddActive: Bool, openAddGroup: NewTaskSeed?, openCreateBand: String?
+        inlineAddActive: Bool, openAddGroup: NewTaskSeed?, openCreateBand: String?,
+        createdInPlace: Bool = false
     ) -> Bool {
-        !inlineAddActive && openAddGroup == nil && openCreateBand == nil
+        !createdInPlace && !inlineAddActive && openAddGroup == nil && openCreateBand == nil
     }
 
     /// Empty-state copy for a filter, search-aware. With a query active the
@@ -1638,7 +1652,7 @@ struct TasksView: View {
             // time-independent and the bucket is a constant. Under `.now` a start date
             // that passes has to show up, and a minute is the granularity that costs one
             // rebuild a minute at rest instead of one per body pass.
-            nowBucket: filter == .now ? Int(Date().timeIntervalSince1970 / 60) : 0
+            nowBucket: filter == .now ? Int(AppClock.now().timeIntervalSince1970 / 60) : 0
         )
         return bandsCache.assembly(for: key) {
             BoardModel.assemble(

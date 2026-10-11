@@ -74,7 +74,7 @@ struct SessionQueueSheet: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(message.isPending ? Theme.warning : Theme.success)
                 if let when = message.enqueuedDate {
-                    Text(when.formatted(.relative(presentation: .named)))
+                    Text(AppClock.relativeNamed(when))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -286,7 +286,7 @@ struct SideQuestionsSheet: View {
                 .lineLimit(12)
             HStack(spacing: 6) {
                 if let when = question.createdDate {
-                    Text(when.formatted(.relative(presentation: .named)))
+                    Text(AppClock.relativeNamed(when))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

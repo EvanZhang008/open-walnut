@@ -30,7 +30,7 @@ struct RecentRow: Identifiable, Equatable {
     /// projection can hold thousands of rows and this runs on every store update while
     /// the drawer is mounted.
     static func rows(
-        _ entries: [RecentOpen], tasks: [WalnutTask], sessions: [WalnutSession], now: Date = .now
+        _ entries: [RecentOpen], tasks: [WalnutTask], sessions: [WalnutSession], now: Date = AppClock.now()
     ) -> [RecentRow] {
         guard !entries.isEmpty else { return [] }
         let wantedTasks = Set(entries.compactMap(\.taskId))
@@ -87,6 +87,7 @@ struct TasksRecentsDrawer: View {
     let open: (RecentDestination) -> Void
 
     @State private var confirmClear = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private static let inset: CGFloat = 20
 
@@ -135,12 +136,28 @@ struct TasksRecentsDrawer: View {
         }
     }
 
+    /// At the accessibility sizes the title gets a line of its own with Clear under
+    /// it: beside Clear it broke inside its words ("Re- / cently / opene / d" at the
+    /// largest size, App Store gate, 2026-10-09).
+    static func headerStacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
+
+    /// A row's line limits, title then meta. At the accessibility sizes both wrap in
+    /// full: the drawer is no wider there, and two lines of title and one of meta cut
+    /// "Fix the shared albu..." and the project after "2m ago" (App Store r7 gate,
+    /// finding 14). The list scrolls, so a taller row costs nothing.
+    static func rowLineLimits(_ size: DynamicTypeSize) -> (title: Int?, meta: Int?) {
+        size.isAccessibilitySize ? (nil, nil) : (2, 1)
+    }
+
     private func header(hasRows: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline) {
+        let layout = Self.headerStacks(dynamicTypeSize)
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+        return layout {
             Text("Recently opened")
                 .font(.title2.bold())
                 .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 8)
+            if !Self.headerStacks(dynamicTypeSize) { Spacer(minLength: 8) }
             if hasRows {
                 Button("Clear") {
                     guard !model.suppressTaps else { return }
@@ -150,6 +167,7 @@ struct TasksRecentsDrawer: View {
                 .accessibilityIdentifier("tasks.recents.clear")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Self.inset)
         .padding(.top, 10)
         .padding(.bottom, 12)
@@ -172,18 +190,21 @@ struct TasksRecentsDrawer: View {
     /// Title over one meta line, the Chat drawer's row. A finished task reads quieter,
     /// and says so in words too, since colour alone is not a status.
     private func rowView(_ row: RecentRow) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        let limits = Self.rowLineLimits(dynamicTypeSize)
+        return VStack(alignment: .leading, spacing: 2) {
             Text(verbatim: row.title)
                 .font(.subheadline)
                 .foregroundStyle(row.isDone ? .secondary : .primary)
-                .lineLimit(2)
+                .lineLimit(limits.title)
                 .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
             // Secondary, not the Chat drawer's tertiary: this line carries the project
             // and the Done state, and tertiary caption text is too faint to read them.
             Text(verbatim: row.meta)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .lineLimit(limits.meta)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)

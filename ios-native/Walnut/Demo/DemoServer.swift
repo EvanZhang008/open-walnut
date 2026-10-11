@@ -39,6 +39,34 @@ struct DemoRequest {
 
     func string(_ key: String) -> String? { json[key] as? String }
     func bool(_ key: String) -> Bool? { json[key] as? Bool }
+
+    /// The usable entries of a message's `images`, counted the way the real server
+    /// filters them before it decides a message is empty (`extractValidImages` in
+    /// `api-v1.ts` and `session-send-v1.ts`): non-empty base64 `data`, an image
+    /// type it takes, at most five. Junk is dropped, never an error.
+    var usableImages: [(data: String, mediaType: String)] {
+        guard let images = json["images"] as? [Any] else { return [] }
+        let usable = images.compactMap { entry -> (data: String, mediaType: String)? in
+            guard let image = entry as? [String: Any],
+                  let data = image["data"] as? String, !data.isEmpty,
+                  let type = image["mediaType"] as? String, Self.imageTypes.contains(type)
+            else { return nil }
+            return (data, type)
+        }
+        return Array(usable.prefix(5))
+    }
+
+    var imageCount: Int { usableImages.count }
+
+    private static let imageTypes: Set<String> = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+    /// A message the real server takes: some text, or at least one usable image
+    /// (`images` allows an otherwise-empty text turn).
+    var messageText: String? {
+        let text = string("text") ?? ""
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || imageCount > 0 { return text }
+        return nil
+    }
 }
 
 /// One answer. `.stream` keeps the response open and hands it to `DemoStreams`.
@@ -142,9 +170,9 @@ final class DemoServer: @unchecked Sendable {
         #endif
     }
 
-    /// Back to the fixtures, timed from now. Ends every open stream and every
-    /// scripted turn.
-    func reset(now: Date = Date()) {
+    /// Back to the fixtures, timed from now (the demo's clock, `AppClock`). Ends
+    /// every open stream and every scripted turn.
+    func reset(now: Date = AppClock.now()) {
         withState { state in
             generation += 1
             turnTokens.removeAll()
@@ -164,9 +192,11 @@ final class DemoServer: @unchecked Sendable {
         return body(&state)
     }
 
-    var now: Date { Date() }
-    var nowISO: String { DemoClock.iso(Date()) }
-    var nowMs: Double { Date().timeIntervalSince1970 * 1000 }
+    /// The demo's one clock for what it writes now (a message, a run, a stamp):
+    /// the device clock, or the pinned one (`AppClock`).
+    var now: Date { AppClock.now() }
+    var nowISO: String { DemoClock.iso(now) }
+    var nowMs: Double { now.timeIntervalSince1970 * 1000 }
 
     /// A short, believable network delay, so spinners and transitions look the
     /// way they do against a real server on Wi-Fi.
@@ -224,10 +254,10 @@ final class DemoServer: @unchecked Sendable {
         if match(r, "GET", s, "config") != nil { return .object(DemoFixtures.serverConfig) }
         if match(r, "POST", s, "client-logs") != nil { return .ok }
         if match(r, "POST", s, "time", "heartbeats") != nil { return .noContent }
-        if match(r, "POST", s, "stt", "transcribe") != nil { return .object(["text": DemoFixtures.transcriptionSentence]) }
+        if match(r, "POST", s, "stt", "transcribe") != nil { return .object(["text": DemoFixtures.transcriptionSentence(clockNow)]) }
         if match(r, "GET", s, "asks") != nil { return asks(r) }
         if match(r, "GET", s, "search") != nil { return globalSearch(r) }
-        if match(r, "GET", s, "media") != nil { return .init(status: 200, body: .bytes(DemoImage.png, contentType: "image/png")) }
+        if match(r, "GET", s, "media") != nil { return media(r) }
         if match(r, "GET", s, "favorites") != nil { return .encoded(FavoritesResponse(notes: withState { $0.favorites })) }
         if s.first == "favorites", s.count == 2, s[1] == "notes" { return favorite(r) }
         if s.first == "conversations" { return routeConversations(r, s) }
@@ -287,7 +317,7 @@ final class DemoServer: @unchecked Sendable {
         case .events:
             let snapshot = withState { state in
                 FeedSnapshot(
-                    tasks: state.tasks.map(\.wire),
+                    tasks: state.listedTasks(now: now).map(\.wire),
                     sessions: state.visibleSessions.map { state.wireSession($0) }
                 )
             }

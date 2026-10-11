@@ -36,12 +36,13 @@ struct CalendarTabView: View {
     var forcedDay: Date? = nil
 
     @Environment(TasksStore.self) private var tasks
-    @State private var deviceCalendar = DeviceCalendarStore()
+    /// The demo's is a sample calendar that never touches EventKit (no prompt).
+    @State private var deviceCalendar = DeviceCalendarStore.forCurrentPairing()
 
     private let calendar = Calendar.current
 
     @State private var mode: CalendarViewMode = .day
-    @State private var selectedDay = Calendar.current.startOfDay(for: Date())
+    @State private var selectedDay = AppClock.startOfToday()
     @State private var selectedTask: WalnutTask?
     /// One-time lazy permission ask, on first calendar open only.
     @State private var accessRequested = false
@@ -301,7 +302,7 @@ struct CalendarTabView: View {
     private var todayButton: some View {
         Button {
             let outcome = CalendarViewTransition.jumpingToToday(
-                now: Date(), mode: mode, calendar: calendar
+                now: AppClock.now(), mode: mode, calendar: calendar
             )
             withAnimation(.snappy(duration: 0.25)) { selectedDay = outcome.selectedDay }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()

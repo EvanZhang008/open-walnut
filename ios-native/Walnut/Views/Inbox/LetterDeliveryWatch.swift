@@ -95,3 +95,30 @@ struct LetterDeliveryWatch: ViewModifier {
         return lateInterval * delayScale
     }
 }
+
+/// When an OPEN letter is read again because its thread may have grown from the
+/// agent's side. Nothing pushes letter changes to the app; what it does hear is
+/// the session that wrote the letter (its turn starts and ends on the events
+/// feed, and the agent's answer is written in that turn) and a fresher inbox
+/// list (a push, a pull to refresh, a return to the app). Pure, so the rule is
+/// tested without a hosted reader.
+enum LetterLiveThread {
+    /// The sender session's state as the app holds it; "" when the letter names
+    /// no session or the app does not hold it.
+    static func sessionKey(sessionId: String?, sessions: [WalnutSession]) -> String {
+        guard let sessionId, let session = sessions.first(where: { $0.id == sessionId }) else { return "" }
+        return "\(session.processStatus)|\(session.lastActiveAt)"
+    }
+
+    /// A known session changing state re-reads; its first sighting does not
+    /// (the open has just read the letter).
+    static func sessionChangeRereads(old: String, new: String) -> Bool {
+        !old.isEmpty && !new.isEmpty && old != new
+    }
+
+    /// The inbox list holds more of the thread than the reader shows.
+    static func storeRowRereads(storeCount: Int?, readerCount: Int?) -> Bool {
+        guard let storeCount, let readerCount else { return false }
+        return storeCount > readerCount
+    }
+}

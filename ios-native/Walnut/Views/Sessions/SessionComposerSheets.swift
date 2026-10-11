@@ -69,7 +69,7 @@ struct SessionForkSheet: View {
             AppLog.info("session", "forked session", [
                 "sourceSessionId": session.id, "sessionId": created.sessionId,
             ])
-            let now = ISO8601DateFormatter().string(from: Date())
+            let now = ISO8601DateFormatter().string(from: AppClock.now())
             onForked(WalnutSession(
                 id: created.sessionId,
                 title: created.title,

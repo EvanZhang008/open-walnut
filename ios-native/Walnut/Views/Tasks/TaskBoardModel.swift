@@ -869,7 +869,7 @@ enum BoardModel {
         knownSessionIds: [String: [String]] = [:],
         scope: String? = nil,
         projectOrder: [String] = [],
-        now: Date = Date()
+        now: Date = AppClock.now()
     ) -> [BoardBand] {
         assemble(
             tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
@@ -910,7 +910,7 @@ enum BoardModel {
         knownSessionIds: [String: [String]] = [:],
         scope: String? = nil,
         projectOrder: [String] = [],
-        now: Date = Date()
+        now: Date = AppClock.now()
     ) -> BoardAssembly {
         let sessionOf = latestSessionByTask(sessions)
         let tiers: [(id: String, label: String)] =

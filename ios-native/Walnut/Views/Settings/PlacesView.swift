@@ -16,6 +16,8 @@ struct PlacesSettingsSection: View {
                 }
             }
             .accessibilityIdentifier("settings.places")
+        } header: {
+            Text("Places")
         }
         .onAppear { store.reload() }
     }
@@ -30,6 +32,7 @@ struct PlacesSettingsSection: View {
 struct PlacesView: View {
     @State private var store = PlacesStore.shared
     @State private var confirmDelete = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         List {
@@ -45,6 +48,11 @@ struct PlacesView: View {
         }
         .navigationTitle("Places")
         .navigationBarTitleDisplayMode(.inline)
+        // Scrolled rows read through the inline title and under the status bar
+        // on iOS 26, fully legible at AX5 (gate r4, F8): the page runs up behind
+        // the bar, as on Inbox, Settings and a letter.
+        .barPage(Color(uiColor: .systemGroupedBackground))
+        .toolbarColorScheme(colorScheme, for: .navigationBar)
         .task { await store.refresh() }
         .refreshable { await store.refresh() }
     }
@@ -67,7 +75,10 @@ struct PlacesView: View {
             .disabled(store.busy != nil)
             .accessibilityIdentifier("places.turnOn")
         } footer: {
-            Text("iOS tells Walnut about a visit only with location access set to Always, so iOS asks you for that next.")
+            Text(store.isDemo
+                 ? Self.demoNote
+                 : "iOS tells Walnut about a visit only with location access set to Always, so iOS asks you for that next.")
+                .accessibilityIdentifier("places.footer")
         }
     }
 
@@ -76,14 +87,14 @@ struct PlacesView: View {
         Section {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Only on your Mac").font(.subheadline.weight(.semibold))
-                    Text("Your visits go to your own Mac and nowhere else. Walnut has no server of its own, and your Mac keeps them out of its sync and backups.")
+                    Text("Only to your Mac").font(.subheadline.weight(.semibold))
+                    Text("Your visits go \(ConsentCopy.destination). Walnut has no server of its own, and your Mac keeps them out of its sync and backups.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } icon: {
                 Image(systemName: "lock.shield")
             }
-            .accessibilityIdentifier("places.onlyYourMac")
+            .accessibilityIdentifier("places.onlyYourServer")
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("From now on").font(.subheadline.weight(.semibold))
@@ -96,7 +107,7 @@ struct PlacesView: View {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Read when you ask").font(.subheadline.weight(.semibold))
-                    Text("Your AI reads your visits only when you ask about places, and sends what it uses to the AI provider your Mac uses. Your iPhone names each place with Apple Maps.")
+                    Text("Your AI reads your visits only when you ask about places. To name each place, your iPhone sends its coordinates to Apple Maps.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } icon: {
@@ -113,7 +124,12 @@ struct PlacesView: View {
         Section {
             Text(primaryLine)
                 .accessibilityIdentifier("places.status")
-            if !store.recording {
+            if store.isDemo {
+                Text(Self.demoNote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("places.demoNote")
+            } else if !store.recording {
                 Text(accessNote)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -202,26 +218,43 @@ struct PlacesView: View {
                 Text(message).font(.footnote).foregroundStyle(.red)
             }
         } footer: {
-            Text("Turning Places off stops recording. The visits already on your Mac stay until you delete them.")
+            Text("Turning Places off stops recording, and this iPhone forgets the visits your Mac already has. The visits on your Mac stay until you delete them.")
         }
     }
 
     // MARK: - Copy
 
     private var primaryLine: String {
-        store.recording ? "Recording the places you visit" : "Not recording yet"
+        if store.isDemo { return "Places is on" }
+        return store.recording ? "Recording the places you visit" : "Not recording yet"
     }
 
+    /// The demo asks iOS for nothing (see `PlacesRecorder.turnOn`).
+    static let demoNote = "In the demo, Walnut asks iOS for no location access and records no visits: this screen shows how Places looks once it is on."
+
     private var accessNote: String {
-        switch store.access {
+        Self.accessNote(access: store.access, asking: store.askingIOS, iosCanAsk: store.iosCanAsk)
+    }
+
+    /// While iOS's own location question is still up (Places was just turned on
+    /// and not answered yet), the note says to answer it, not to go to Settings:
+    /// the Settings route showed under iOS's first question (gate r4, F14). While
+    /// iOS can still ask (`PlacesAccessDecision.iosCanAsk`, always so with no
+    /// answer yet), the note points at the Allow Always button below it.
+    static func accessNote(access: PlacesPhoneState.Access, asking: Bool, iosCanAsk: Bool) -> String {
+        switch access {
         case .restricted:
             return "Location is restricted on this iPhone, so iOS records no visits for Walnut."
-        case _ where store.iosCanAsk:
+        case .notDetermined where asking, .whenInUse where asking:
+            return Self.answerNote
+        case _ where iosCanAsk:
             return "iOS records visits for Walnut only with location access set to Always. Tap Allow Always and iOS asks you."
         default:
             return "iOS records visits for Walnut only with location access set to Always. In Settings, tap Location, then Always."
         }
     }
+
+    static let answerNote = "iOS records visits for Walnut only with location access set to Always. Answer iOS's question to go on."
 
     private var syncLine: String? {
         switch store.lastOutcome {
@@ -232,7 +265,7 @@ struct PlacesView: View {
         case .unauthorized?:
             return "Your Mac did not accept this iPhone. Pair it again in Settings."
         default:
-            if store.recording, store.recent.isEmpty {
+            if store.recording, store.recent.isEmpty, !store.isDemo {
                 return "iOS records a visit once you have stayed somewhere for a while."
             }
             return nil
@@ -255,8 +288,8 @@ struct PlacesView: View {
             let date = visit.arrival ?? visit.departure ?? visit.recordedAt
             var cal = Calendar.current
             cal.timeZone = zone
-            if cal.isDateInToday(date) { return "Today" }
-            if cal.isDateInYesterday(date) { return "Yesterday" }
+            if AppClock.isToday(date, calendar: cal) { return "Today" }
+            if AppClock.isYesterday(date, calendar: cal) { return "Yesterday" }
             return date.formatted(.dateTime.weekday(.wide).month().day())
         }()
         switch (visit.arrival, visit.departure) {

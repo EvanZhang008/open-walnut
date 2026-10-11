@@ -31,6 +31,12 @@ final class FreezeContext: @unchecked Sendable {
     /// One level of history so a pop/tab-switch restores the surface below
     /// instead of leaving a stale name (see `clearScreen`).
     private var previousScreen = "?"
+    /// A screen shown INSTEAD of the tab view (the pairing screen). While one is
+    /// up it is what the snapshot reports. The tab view keeps its tabs alive and
+    /// they can re-run their appear hooks while it is being torn down, AFTER the
+    /// pairing screen has appeared: after a Disconnect that left the heartbeat
+    /// naming the tab the user had been on before Settings.
+    private var root: String?
     private var keyboardVisible = false
     /// Uptimes of the last keyboard show/hide notifications. Bounded ring —
     /// the watchdog only ever asks "how many in the last N seconds".
@@ -286,6 +292,28 @@ final class FreezeContext: @unchecked Sendable {
         return keyboardEvents.reduce(into: 0) { $0 += ($1 >= cutoff ? 1 : 0) }
     }
 
+    /// A root screen appeared (see `root`). It wins over every tab name until it
+    /// leaves.
+    func setRoot(_ name: String) {
+        lock.lock()
+        let changed = root != name
+        if changed {
+            root = name
+            pushCrumbLocked(name: "screen", count: nil)
+        }
+        lock.unlock()
+        if changed { emitCrumb(name: "screen:\(name)", count: nil) }
+    }
+
+    /// The root screen left; the tab names count again.
+    func clearRoot(_ name: String) {
+        lock.lock()
+        let cleared = root == name
+        if cleared { root = nil }
+        lock.unlock()
+        if cleared { emitCrumb(name: "screen-left:\(name)", count: nil) }
+    }
+
     /// Flat `[String: String]` for AppLog meta. Keys are `ctx*`-prefixed so a
     /// single `grep ctxScreen` pulls every freeze line out of a log dump.
     /// SAFE OFF-MAIN: reads only this object's locked scalars plus the
@@ -293,7 +321,7 @@ final class FreezeContext: @unchecked Sendable {
     func snapshotMeta(now: TimeInterval? = nil) -> [String: String] {
         let at = now ?? Self.uptimeNow()
         lock.lock()
-        let screen = self.screen
+        let screen = self.root ?? self.screen
         let keyboardVisible = self.keyboardVisible
         let draftChars = self.draftChars
         let historyRows = self.historyRows
@@ -344,12 +372,35 @@ final class FreezeContext: @unchecked Sendable {
         return Int(info.phys_footprint / (1024 * 1024))
     }
 
+    /// Disconnect (`LocalDataReset`): forget what the snapshot remembers of the
+    /// pairing just erased. The heartbeat keeps sampling after the erase, and it
+    /// used to carry the old screen name (a session screen names its session),
+    /// the crumb trail and the main-thread work trail into the fresh log. The
+    /// keyboard state is a fact about the phone, not the pairing, and stays; the
+    /// crumb sink stays installed.
+    func eraseHistory() {
+        lock.lock()
+        screen = "?"
+        previousScreen = "?"
+        keyboardEvents = []
+        draftChars = 0
+        historyRows = 0
+        liveTextChars = 0
+        liveTextTruncated = false
+        crumbs = []
+        workRing = []
+        // An item still running ends without a match and is dropped (`endWork`).
+        activeWork = []
+        lock.unlock()
+    }
+
     /// Internal for WalnutTests — a shared singleton needs a clean slate
     /// between cases. Never called by product code.
     func resetForTesting() {
         lock.lock()
         screen = "?"
         previousScreen = "?"
+        root = nil
         keyboardVisible = false
         keyboardEvents = []
         draftChars = 0
@@ -372,5 +423,13 @@ extension View {
     func freezeScreen(_ name: String) -> some View {
         onAppear { FreezeContext.shared.setScreen(name) }
             .onDisappear { FreezeContext.shared.clearScreen(name) }
+    }
+
+    /// For a screen shown instead of the tab view (the pairing screen): it is
+    /// the reported screen for as long as it is up, whatever the retained tabs
+    /// do on their way out (see `FreezeContext.setRoot`).
+    func freezeRootScreen(_ name: String) -> some View {
+        onAppear { FreezeContext.shared.setRoot(name) }
+            .onDisappear { FreezeContext.shared.clearRoot(name) }
     }
 }

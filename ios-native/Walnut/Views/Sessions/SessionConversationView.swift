@@ -346,12 +346,7 @@ struct SessionConversationView: View {
 
     /// Voice mode on: what is on the page now is never read, only what comes next.
     private func startVoiceMode(awaitingAnswer: Bool) {
-        let store = store
-        voiceMode = VoiceModeController(
-            sessionID: session.id, rows: store.messages, awaitingAnswer: awaitingAnswer
-        ) { text in
-            await store.send(text, voice: true)
-        }
+        voiceMode = VoiceModeController.sessionPage(store, sessionID: session.id, awaitingAnswer: awaitingAnswer)
         AppLog.info("voice-mode", "voice mode on", ["sessionId": session.id])
     }
 

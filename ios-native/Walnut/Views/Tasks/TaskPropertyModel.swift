@@ -244,7 +244,7 @@ enum TaskPropertyLogic {
     /// day — `due_date` is a bare `YYYY-MM-DD` on the wire, so a rendered
     /// midnight would be a precision the data does not have.
     static func dueValueText(
-        _ due: Date?, now: Date = .now, calendar: Calendar = .current
+        _ due: Date?, now: Date = AppClock.now(), calendar: Calendar = .current
     ) -> String {
         guard let due else { return "None" }
         if calendar.isDate(due, inSameDayAs: now) { return "Today" }

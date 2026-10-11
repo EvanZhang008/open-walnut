@@ -17,9 +17,21 @@ enum DemoFixtures {
     static let buildBoxAlias = "build-box"
     /// The hand-arranged project order the board follows (`GET /ordering`).
     static let projectOrder = ["Pebble", "Acme Website", "Home", "Travel", "Learning"]
+    /// The build box's display name, the one label for it everywhere the demo
+    /// names a host: `/config` hosts (Settings), the launch options and the
+    /// directory list. A header that resolves a host alias to its label reads
+    /// this same word.
+    static let buildBoxLabel = "Build box"
 
-    /// The fixed sentence demo voice input "hears".
-    static let transcriptionSentence = "Remind me to send the counter quotes to the contractor on Friday morning."
+    /// The sentence demo voice input "hears": a reminder for the next work day's
+    /// morning, named as the demo's clock reads it ("tomorrow morning", or "on
+    /// Monday morning" said on a Friday or a Saturday). A fixed "on Friday
+    /// morning" read oddly on most days (App Store gate, 2026-10-09).
+    static func transcriptionSentence(_ c: DemoClock) -> String {
+        let next = c.workday(after: 0)
+        let when = next == 1 ? "tomorrow morning" : "on \(c.weekdayName(next)) morning"
+        return "Remind me to send the counter quotes to the contractor \(when)."
+    }
 
     static func seed(_ clock: DemoClock = DemoClock()) -> DemoState {
         var state = DemoState()
@@ -79,13 +91,14 @@ enum DemoFixtures {
                 parentId: parent, groupId: folder
             )
         }
-        let friday = c.nextWeekday(6)
+        // The chat's plan names these two times, so both come from one place.
+        let plan = c.plan()
         return [
             // Pebble, the photo-sharing app
-            task("t-crash", "Fix crash when opening a shared album", project: "Pebble",
+            task("t-crash", "Fix the shared album crash", project: "Pebble",
                  phase: "IN_PROGRESS", priority: "immediate", tier: "focus", folder: "g-bugs",
-                 start: c.at(day: 0, hour: 14), end: c.at(day: 0, hour: 15),
-                 created: c.daysAgo(1.2), updated: c.minutesAgo(9), tags: ["crash", "ios"],
+                 start: DemoClock.iso(plan.review), end: DemoClock.iso(plan.review.addingTimeInterval(3600)),
+                 created: c.daysAgo(1.2), updated: c.minutesAgo(17), tags: ["crash", "ios"],
                  summary: "Cause found: a force unwrap on an album that has not synced yet. Fix and tests are ready for review.",
                  description: "Crash reports since 2.3.1: opening a shared album from a notification closes the app. Reproduce, fix, add a test."),
             task("t-offline", "Add offline mode to the photo grid", project: "Pebble",
@@ -97,12 +110,13 @@ enum DemoFixtures {
                  created: c.daysAgo(2), updated: c.hoursAgo(1.5),
                  summary: "Three headline options drafted. Waiting for your pick."),
             task("t-notes", "Write release notes for 2.4", project: "Pebble",
-                 priority: "important", tier: "focus", folder: "g-release", due: c.day(1),
-                 created: c.daysAgo(3), updated: c.hoursAgo(20)),
+                 phase: "IN_PROGRESS", priority: "important", tier: "focus", folder: "g-release", due: c.day(1),
+                 created: c.daysAgo(3), updated: c.minutesAgo(3),
+                 summary: "First draft written. It gets the crash fix and offline mode once they merge."),
             task("t-testflight", "Ship the TestFlight build to beta testers", project: "Pebble",
                  priority: "important", tier: "wait", folder: "g-release",
-                 start: c.at(day: 1, hour: 11), end: c.at(day: 1, hour: 11, minute: 30),
-                 created: c.daysAgo(3), updated: c.hoursAgo(26),
+                 start: c.at(day: c.shipDay(plan), hour: 11), end: c.at(day: c.shipDay(plan), hour: 11, minute: 30),
+                 created: c.daysAgo(10), updated: c.hoursAgo(26),
                  summary: "Waiting on the crash fix and the onboarding copy."),
             task("t-coldstart", "Investigate slow cold start on older phones", project: "Pebble",
                  priority: "backlog", tier: "backlog", folder: "g-bugs",
@@ -132,9 +146,9 @@ enum DemoFixtures {
 
             // Home
             task("t-quotes", "Get three quotes for the kitchen counters", project: "Home",
-                 priority: "important", tier: "focus", folder: "g-kitchen", due: c.day(friday),
+                 priority: "important", tier: "focus", folder: "g-kitchen", due: c.day(DemoClock.quotesDueInDays),
                  created: c.daysAgo(5), updated: c.hoursAgo(5), tags: ["kitchen"],
-                 summary: "Two quotes in. One shop still has to call back."),
+                 summary: "Two quotes in. Stone & Co still has to call back."),
             task("t-plumber", "Book a plumber for the dishwasher line", project: "Home",
                  priority: "immediate", folder: "g-kitchen", due: c.day(1),
                  created: c.daysAgo(2), updated: c.hoursAgo(22)),
@@ -147,16 +161,16 @@ enum DemoFixtures {
 
             // Travel
             task("t-train", "Book train tickets to the coast", project: "Travel",
-                 priority: "important", due: c.day(3),
-                 created: c.daysAgo(4), updated: c.daysAgo(1)),
-            task("t-pack", "Make a packing list for the October trip", project: "Travel",
+                 priority: "important", due: c.day(DemoClock.trainDueInDays),
+                 created: c.daysAgo(3), updated: c.daysAgo(1)),
+            task("t-pack", "Make a packing list for the coast trip", project: "Travel",
                  priority: "backlog", tier: "backlog",
                  created: c.daysAgo(4), updated: c.daysAgo(4)),
 
             // Inbox (no project)
             task("t-dentist", "Call the dentist to reschedule", project: "",
-                 priority: "important", start: c.at(day: 0, hour: 10, minute: 30),
-                 end: c.at(day: 0, hour: 10, minute: 45),
+                 priority: "important", start: DemoClock.iso(plan.call),
+                 end: DemoClock.iso(plan.call.addingTimeInterval(15 * 60)),
                  created: c.daysAgo(1), updated: c.hoursAgo(10)),
             task("t-article", "Read the article on habit tracking", project: "",
                  pinned: false, created: c.daysAgo(7), updated: c.daysAgo(7)),
@@ -165,12 +179,87 @@ enum DemoFixtures {
                  updated: c.hoursAgo(4), completed: c.hoursAgo(4)),
             task("t-course", "Finish chapter 4 of the design systems course", project: "Learning",
                  pinned: false, created: c.daysAgo(12), updated: c.daysAgo(2)),
+
+            // Finished weeks ago, so outside the task list's 14 days (`listedTasks`):
+            // only search finds them, the way the real server's answer names them
+            // (`tasks=1`). Four crash fixes, so a search for "crash" shows three of
+            // them inline and the fourth behind "Completed (1)".
+            task("t-upload-crash", "Fix crash when uploading photos on a weak signal", project: "Pebble",
+                 phase: "COMPLETE", pinned: false, folder: "g-bugs", created: c.daysAgo(19),
+                 updated: c.daysAgo(16), completed: c.daysAgo(16),
+                 summary: "Uploads now pause on a weak signal and resume when it comes back."),
+            task("t-delete-crash", "Fix crash when deleting the last photo in an album", project: "Pebble",
+                 phase: "COMPLETE", pinned: false, folder: "g-bugs", created: c.daysAgo(25),
+                 updated: c.daysAgo(23), completed: c.daysAgo(23),
+                 summary: "An empty album now keeps its place and shows an empty state."),
+            task("t-restore-crash", "Fix crash on first launch after restoring from a backup", project: "Pebble",
+                 phase: "COMPLETE", pinned: false, folder: "g-bugs", created: c.daysAgo(34),
+                 updated: c.daysAgo(31), completed: c.daysAgo(31),
+                 summary: "The photo index is rebuilt in the background instead of at launch."),
+            task("t-widget-crash", "Fix crash in the home screen widget with no photos", project: "Pebble",
+                 phase: "COMPLETE", pinned: false, folder: "g-bugs", created: c.daysAgo(44),
+                 updated: c.daysAgo(40), completed: c.daysAgo(40),
+                 summary: "The widget shows a placeholder until the first photo syncs."),
         ]
+    }
+
+    /// How long the phone's task list keeps a completed task, as the real server's
+    /// projection does (`DONE_RETENTION_DAYS` in `src/core/task-projection.ts`).
+    static let listedDoneDays: Double = 14
+
+    // MARK: - Recently opened
+
+    /// What the Tasks tab's "Recently opened" drawer holds when the demo starts, newest
+    /// first: a few things looked at earlier today, so the drawer shows what it is for
+    /// the first time it opens. Two conversations (the crash fix, the headline drafts)
+    /// and two task pages (the kitchen quotes, and the cache upgrade that is done).
+    static func recentOpens(_ state: DemoState, _ c: DemoClock) -> [RecentOpen] {
+        let visits: [(task: String, session: String?, minutesAgo: Double)] = [
+            ("t-crash", "s-crash", 15),
+            ("t-copy", "s-copy", 80),
+            ("t-quotes", nil, 4 * 60),
+            ("t-cache", nil, 18 * 60),
+        ]
+        return visits.compactMap { visit in
+            guard let task = state.tasks.first(where: { $0.id == visit.task }) else { return nil }
+            let session = visit.session.flatMap { id in state.sessions.first { $0.id == id } }
+                .map { state.wireSession($0) }
+            return RecentOpen(
+                id: task.id, taskId: task.id, task: session == nil ? task.wire : nil,
+                session: session, openedAt: c.past(visit.minutesAgo * 60)
+            )
+        }
+    }
+
+    // MARK: - Story moments
+
+    /// When the second counter quote came in: yesterday afternoon. The journal
+    /// (yesterday evening), the comparison letter, the kitchen note and the plan
+    /// all report both quotes, so each is dated after this.
+    static func quotesArrived(_ c: DemoClock) -> Date {
+        c.date(day: -1, hour: 16)
+    }
+
+    /// When yesterday's journal entry was written: early that evening, inside
+    /// waking hours (8:00 AM to 9:00 PM) like every other past time.
+    static func journalWritten(_ c: DemoClock) -> Date {
+        c.date(day: -1, hour: 18, minute: 30)
     }
 
     // MARK: - Routines
 
+    /// When the weekly review last ran (Fridays at 4:00 PM): its letter is dated then.
+    static func weeklyReviewRun(_ c: DemoClock) -> (ago: TimeInterval, ahead: TimeInterval) {
+        c.lastAndNextRun(hour: 16, weekdays: [6])
+    }
+
     static func routines(_ c: DemoClock) -> [RoutineJob] {
+        // Last and next runs follow each schedule, so the two never disagree.
+        let briefing = c.lastAndNextRun(hour: 8, weekdays: [2, 3, 4, 5, 6])
+        let weekly = weeklyReviewRun(c)
+        // A daily daytime check, so its last run is in waking hours like every
+        // other past time (an every-6-hours job ran at 3:00 AM).
+        let crashes = c.lastAndNextRun(hour: 13, weekdays: [1, 2, 3, 4, 5, 6, 7])
         func job(
             _ id: String, _ name: String, _ description: String, enabled: Bool,
             schedule: RoutineJob.Schedule, executor: String,
@@ -189,20 +278,20 @@ enum DemoFixtures {
         }
         return [
             job("r-briefing", "Morning briefing",
-                "Summarize today's calendar, due tasks and overnight letters.",
+                "Summarize today's calendar, due tasks and new letters.",
                 enabled: true,
                 schedule: .init(kind: "cron", expr: "0 8 * * 1-5", tz: nil, everyMs: nil, at: nil),
-                executor: "main-agent", lastRun: 3 * 3600, nextRun: 21 * 3600),
+                executor: "main-agent", lastRun: briefing.ago, nextRun: briefing.ahead),
             job("r-weekly", "Weekly review",
                 "Close out the week: what got done, what slipped, what is next.",
                 enabled: true,
                 schedule: .init(kind: "cron", expr: "0 16 * * 5", tz: nil, everyMs: nil, at: nil),
-                executor: "main-agent", lastRun: 6 * 86_400, nextRun: 2 * 86_400),
+                executor: "main-agent", lastRun: weekly.ago, nextRun: weekly.ahead),
             job("r-crashes", "Check beta crash reports",
                 "Look for new crash groups in the beta and file a task for each one.",
                 enabled: true,
-                schedule: .init(kind: "every", expr: nil, tz: nil, everyMs: 6 * 3_600_000, at: nil),
-                executor: "claude-code", lastRun: 2 * 3600, nextRun: 4 * 3600),
+                schedule: .init(kind: "cron", expr: "0 13 * * *", tz: nil, everyMs: nil, at: nil),
+                executor: "claude-code", lastRun: crashes.ago, nextRun: crashes.ahead),
             job("r-plants", "Water the plants",
                 "A Sunday morning nudge.", enabled: false,
                 schedule: .init(kind: "cron", expr: "0 9 * * 0", tz: nil, everyMs: nil, at: nil),
@@ -238,19 +327,20 @@ enum DemoFixtures {
               supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"]),
     ]
 
-    static var launchOptions: SessionLaunchOptions {
+    /// Read when asked, from the demo's clock (waking hours, like the rest).
+    static func launchOptions(_ c: DemoClock = DemoClock()) -> SessionLaunchOptions {
         SessionLaunchOptions(
             hosts: [
                 .init(alias: "", label: "Mac"),
-                .init(alias: buildBoxAlias, label: "Build box"),
+                .init(alias: buildBoxAlias, label: buildBoxLabel),
             ],
             dirs: [
                 .init(cwd: "\(macCodeRoot)/pebble", host: "", hostLabel: "Mac",
-                      lastUsed: DemoClock.iso(Date().addingTimeInterval(-600)), count: 42),
+                      lastUsed: c.minutesAgo(10), count: 42),
                 .init(cwd: "\(macCodeRoot)/acme-site", host: "", hostLabel: "Mac",
-                      lastUsed: DemoClock.iso(Date().addingTimeInterval(-10_800)), count: 17),
-                .init(cwd: "\(buildBoxRoot)/infra", host: buildBoxAlias, hostLabel: "Build box",
-                      lastUsed: DemoClock.iso(Date().addingTimeInterval(-240)), count: 9),
+                      lastUsed: c.hoursAgo(3), count: 17),
+                .init(cwd: "\(buildBoxRoot)/infra", host: buildBoxAlias, hostLabel: buildBoxLabel,
+                      lastUsed: c.minutesAgo(4), count: 9),
             ]
         )
     }
@@ -261,7 +351,7 @@ enum DemoFixtures {
                 "user": ["name": "Demo"],
                 "provider": ["type": "anthropic", "model": mainModel],
                 "agent": ["main_model": mainModel, "fast_model": fastModel],
-                "hosts": [buildBoxAlias: ["label": "Build box", "enabled": true]],
+                "hosts": [buildBoxAlias: ["label": buildBoxLabel, "enabled": true]],
             ],
             "cloud": false,
             "memory": ["rssMb": 212, "heapUsedMb": 96, "uptimeSec": 3 * 86_400 + 5 * 3600],

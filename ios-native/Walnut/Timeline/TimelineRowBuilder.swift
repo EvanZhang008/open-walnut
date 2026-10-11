@@ -199,6 +199,11 @@ final class TimelineRowBuilder {
     /// Caption under a reply the cloud companion answered on its own.
     static let answeredOnCloudCaption = "Answered on Cloud"
 
+    /// VoiceOver's name for the user's own photos in a sent message.
+    static func sentPhotosLabel(count: Int) -> String {
+        count == 1 ? "Photo you sent" : "\(count) photos you sent"
+    }
+
     // MARK: - User bubble
 
     private func userRows(_ message: ChatMessage, namespace: String,
@@ -219,7 +224,8 @@ final class TimelineRowBuilder {
             for path in imageSend.paths {
                 rows.append(TimelineRow(
                     id: nextID(), revision: 0,
-                    content: .image(raw: path, alt: (path as NSString).lastPathComponent),
+                    content: .image(raw: path, alt: (path as NSString).lastPathComponent,
+                                    spoken: Self.sentPhotosLabel(count: 1)),
                     height: TimelineMetrics.imageSlotHeight
                 ))
             }

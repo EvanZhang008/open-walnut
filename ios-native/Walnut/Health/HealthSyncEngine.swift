@@ -38,6 +38,8 @@ actor HealthSyncEngine {
     private let transport: HealthSyncTransport
     let state: HealthSyncStateStore
     let env: HealthSyncEnvironment
+    /// The characteristic fingerprints' salt: the Keychain, never the state file.
+    let salt: HealthSaltStore
     private let catalog: [HealthTypeSpec]
     private let onProgress: @Sendable (HealthSyncProgress) -> Void
 
@@ -61,13 +63,15 @@ actor HealthSyncEngine {
 
     init(
         source: HealthDataSource, transport: HealthSyncTransport, state: HealthSyncStateStore,
-        environment: HealthSyncEnvironment, catalog: [HealthTypeSpec] = HealthTypeCatalog.all,
+        environment: HealthSyncEnvironment, salt: HealthSaltStore,
+        catalog: [HealthTypeSpec] = HealthTypeCatalog.all,
         onProgress: @escaping @Sendable (HealthSyncProgress) -> Void = { _ in }
     ) {
         self.source = source
         self.transport = transport
         self.state = state
         self.env = environment
+        self.salt = salt
         self.catalog = catalog
         self.onProgress = onProgress
     }

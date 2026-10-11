@@ -55,7 +55,7 @@ struct NewSessionSheet: View {
     @State private var selectedHost: String = ""   // "" = the primary box
     @State private var path: String = ""
     @State private var message: String = ""
-    @State private var mode: PermissionMode = .bypass
+    @State private var mode: PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
     @State private var creating = false
     @State private var createError: String?
 
@@ -300,7 +300,7 @@ struct NewSessionSheet: View {
     /// "2h ago"-style stamp for a suggestion row (nil = unparseable).
     static func relativeLastUsed(_ iso: String) -> String? {
         guard let date = WalnutTask.parseISO(iso) else { return nil }
-        return date.formatted(.relative(presentation: .named))
+        return AppClock.relativeNamed(date)
     }
 
     // MARK: - Actions
@@ -399,7 +399,9 @@ struct NewSessionSheet: View {
             selectedHost = taskSession.host
             if let cwd = taskSession.cwd, !cwd.isEmpty { path = cwd }
             didPreselect = true
-        } else if let top = opts.dirs.first {
+        } else if NewSessionChatView.draftStart(inDemo: DemoMode.isActive).preselectFolder,
+                  let top = opts.dirs.first {
+            // The global default; never in the demo (see `draftStart`).
             selectedHost = top.host
             path = top.cwd
             didPreselect = true
@@ -522,7 +524,7 @@ struct NewSessionSheet: View {
             // processStatus "idle" matches the server's pre-seeded record
             // (quick-start deliberately seeds 'idle' — 'running' would show a
             // phantom working badge on a CLI that hasn't spawned yet).
-            let now = ISO8601DateFormatter().string(from: Date())
+            let now = ISO8601DateFormatter().string(from: AppClock.now())
             let session = WalnutSession(
                 id: created.sessionId,
                 title: created.title,

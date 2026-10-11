@@ -76,6 +76,20 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // A fresh install removes the device token a deleted install left in
+        // the Keychain. Here and not in `WalnutApp.init`: iOS can prewarm the app
+        // up to `UIApplicationMain`, possibly before the first unlock, when the
+        // preferences read empty. What runs before this (`WalnutApp.init` and the
+        // stores it makes) sends nothing with the left token: a request also needs
+        // a server address, and a fresh install has none in its preferences (only
+        // a launch argument can give it one, as the UI tests do). A copy read
+        // into AppConfig's cache meanwhile is cleared here with the Keychain item.
+        if !InstallMarker.isHostedUnitTestProcess {
+            let outcome = InstallMarker.reconcile(protectedDataAvailable: application.isProtectedDataAvailable)
+            if outcome != .relaunch {
+                AppLog.info("launch", "install marker", ["outcome": outcome.rawValue])
+            }
+        }
         // Route notification taps into the letter mailbox. Must happen here:
         // UNUserNotificationCenter drops a cold-launch tap if its delegate isn't
         // set by the time this method returns.
@@ -96,6 +110,9 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
         // Places: iOS relaunches Walnut in the background to deliver a visit, and
         // only a location manager made during launch receives it. Not behind LaunchGate.
         PlacesRecorder.shared.start()
+        // Voice recordings waiting for a retry are kept at most 7 days, counted
+        // at every launch too, not only when a new recording starts.
+        VoiceRecordingStore.pruneAtLaunch(protectedDataAvailable: application.isProtectedDataAvailable)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)

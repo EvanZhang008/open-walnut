@@ -366,7 +366,7 @@ final class ChatStore {
     func switchAgent(_ agentID: String) {
         guard agentID != activeAgentID else { return }
         activeAgentID = agentID
-        UserDefaults.standard.set(agentID, forKey: "walnut.activeAgent")
+        AppPrefs.defaults.set(agentID, forKey: "walnut.activeAgent")
         activeID = nil
         conversations = []
         messages = []
@@ -376,7 +376,7 @@ final class ChatStore {
         // the reset too — otherwise the outgoing conversation's in-flight flag
         // would keep a skeleton up over the new agent's (empty) resting state.
         firstPageInFlight = false
-        if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
+        if let saved = AppPrefs.defaults.string(forKey: activeConversationKey) {
             select(saved)
         }
         trackTask { [weak self] in
@@ -421,7 +421,7 @@ final class ChatStore {
     func select(_ id: String?) {
         guard id != activeID || sse == nil else { return }
         activeID = id
-        UserDefaults.standard.set(id, forKey: activeConversationKey)
+        AppPrefs.defaults.set(id, forKey: activeConversationKey)
         turnWatchdog?.cancel()
         turnWatchdog = nil
         deltaFlushTask?.cancel()
@@ -696,7 +696,8 @@ final class ChatStore {
         installed: [ChatMessage]? = nil,
         conversationID: String? = nil,
         owners: [String: String] = [:],
-        now: Date = Date()
+        // The shown clock: the echoes are stamped on it (App Store r7 gate, C1).
+        now: Date = AppClock.now()
     ) -> [ChatMessage] {
         func key(_ m: ChatMessage) -> String { "\(m.role)|\(m.text)" }
         let isEcho: (ChatMessage) -> Bool = {
@@ -940,7 +941,7 @@ final class ChatStore {
         let target = convID
         var optimistic = ChatMessage(
             id: drain?.rowID ?? "local-\(Date().timeIntervalSince1970)",
-            role: "user", text: text, createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+            role: "user", text: text, createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
         )
         optimistic.pending = true
         // Carry thumbnails so the bubble shows them immediately and a failed
@@ -991,7 +992,7 @@ final class ChatStore {
                 // appears in the drawer on the next list refresh.
                 if stillViewing(target) {
                     activeID = created
-                    UserDefaults.standard.set(created, forKey: activeConversationKey)
+                    AppPrefs.defaults.set(created, forKey: activeConversationKey)
                     localRowConversation[optimistic.id] = created
                     connectStream()
                 }
@@ -1004,16 +1005,26 @@ final class ChatStore {
             _ = try await sendTransport.sendMessage(
                 conversationID: convID, agentID: agentID, text: text, images: payloads
             )
-            // Accepted by the server. If the store went inactive meanwhile the
-            // turn is genuinely running — do NOT mark it failed (that would
-            // duplicate the message on retry); just skip the local UI state,
-            // which resumeStream() rebuilds from canonical history.
+            // Accepted by the server, so its bubble stops "sending" whatever the
+            // app is doing: the bubble's own state (and the photos kept for its
+            // canonical row) is written even while the store is torn down. The
+            // merge keeps every pending row (`carryLocalRows`), so a bubble left
+            // pending stayed beside its canonical row for good (the session page's
+            // App Store gate r8 finding 1, the same shape here). An id lookup, so a
+            // bubble that left with its conversation is a no-op.
+            if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
+                messages[idx].pending = false
+            }
+            rememberSentImages(text: text, datas: jpegDatas)
+            // If the store went inactive meanwhile the turn is genuinely running:
+            // do NOT mark it failed (that would duplicate the message on retry);
+            // skip the turn's UI state, which resumeStream() rebuilds from
+            // canonical history.
             guard isActive, !Task.isCancelled else {
                 sending = false
                 return .accepted
             }
             connection?.reportReachability(true, source: "chat-rest")
-            rememberSentImages(text: text, datas: jpegDatas)
             sending = false
             // Accepted — but the user may be reading another conversation by now.
             // The turn is genuinely running over THERE, so none of the state
@@ -1022,10 +1033,7 @@ final class ChatStore {
             // release it, and the watchdog would be armed against a conversation
             // nobody is watching. Report success and write nothing.
             guard stillViewing(convID) else { return .accepted }
-            // Solidify the bubble; message-start arrives on SSE shortly.
-            if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
-                messages[idx].pending = false
-            }
+            // The bubble is solid (above); message-start arrives on SSE shortly.
             streaming = true
             streamText = ""
             streamTextTruncated = false
@@ -1190,7 +1198,7 @@ final class ChatStore {
         }
         guard let conversationID = activeID else { return false }
         let rowID = "queued-\(UUID().uuidString)"
-        let createdAt = ISO8601DateFormatter().string(from: .now)
+        let createdAt = ISO8601DateFormatter().string(from: AppClock.now())
         let entry = QueuedSend(
             id: rowID, conversationID: conversationID, agentID: activeAgentID,
             text: text, images: jpegDatas, createdAt: createdAt
@@ -1769,7 +1777,7 @@ final class ChatStore {
             let id = Self.lateAnswerPrefix + turnID
             let row = ChatMessage(
                 id: id, role: "assistant", text: fullText,
-                createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+                createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
             )
             let question = watchedUserText.flatMap { watched in
                 messages.lastIndex { $0.role == "user" && $0.text == watched }
@@ -2086,7 +2094,7 @@ final class ChatStore {
                 messages.append(ChatMessage(
                     id: turnID,
                     role: "assistant", text: fullText,
-                    createdAt: ISO8601DateFormatter().string(from: .now), kind: nil,
+                    createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil,
                     answeredBy: answeredOnCloud ? "cloud" : nil
                 ))
                 // Tag the provisional reply with its conversation, so a later

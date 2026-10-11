@@ -72,7 +72,7 @@ final class PushRegistration {
 
     /// Read the mode from outside SwiftUI.
     nonisolated static var mode: Mode {
-        Mode(rawValue: UserDefaults.standard.string(forKey: modeKey) ?? "") ?? .always
+        Mode(rawValue: AppPrefs.defaults.string(forKey: modeKey) ?? "") ?? .always
     }
 
     /// What this install last uploaded successfully, so a relaunch doesn't re-POST
@@ -273,19 +273,24 @@ final class PushRegistration {
     /// old server's notifications, and the old server kept a row for it.
     ///
     /// Never blocks Disconnect: the server call runs in the background under a
-    /// short deadline, and an unreachable server only means its row stays until
-    /// its next send is refused. The demo registered nothing, so it calls nothing.
+    /// short deadline. An unreachable server never hears it, and nothing tries
+    /// again: a retry would need the bearer, which Disconnect has just removed on
+    /// purpose. So that server keeps this install's row until the phone is
+    /// revoked there (`revokeDevicePushTokens`) or Apple refuses a send to the
+    /// unregistered token, and the Disconnect confirmation says so
+    /// (`SettingsView.disconnectMessage`). The demo registered nothing, so it
+    /// calls nothing.
     /// Returns the background call so tests can wait for it.
     @discardableResult
     func unregisterFromServer() -> Task<Void, Never>? {
         guard !DemoMode.isActive else { return nil }
         let server = AppConfig.serverURL
-        let memo = UserDefaults.standard.string(forKey: Self.uploadedTokenKey)
+        let memo = AppPrefs.defaults.string(forKey: Self.uploadedTokenKey)
         let token = Self.tokenToUnregister(deviceToken: deviceToken, memo: memo, server: server)
         let bearer = AppConfig.token
         system.unregisterForRemoteNotifications()
         deviceToken = nil
-        UserDefaults.standard.removeObject(forKey: Self.uploadedTokenKey)
+        AppPrefs.defaults.removeObject(forKey: Self.uploadedTokenKey)
         guard let token, let server, let bearer, !bearer.isEmpty else {
             AppLog.info("push", "disconnect: no token to unregister on the server", [:])
             return nil
@@ -301,18 +306,47 @@ final class PushRegistration {
             }
             let result = await work.result
             timer.cancel()
-            switch result {
-            case .success:
-                AppLog.info("push", "disconnect: server dropped this install's token", [
-                    "tokenPrefix": String(token.prefix(12)),
-                ])
-            case .failure(let error):
-                AppLog.info("push", "disconnect: token unregister skipped", [
-                    "tokenPrefix": String(token.prefix(12)),
-                    "error": String(describing: error),
-                ])
+            let outcome = Self.unregisterOutcome(result)
+            AppLog.info("push", outcome.message, outcome.meta)
+        }
+    }
+
+    /// The log line for the end of Disconnect's unregister call. It lands AFTER
+    /// the local erase, in the fresh log, so it names nothing of the pairing just
+    /// erased: no token prefix, and no error text (a URL error's description
+    /// carries the old server's address), only the kind of failure.
+    nonisolated static func unregisterOutcome(_ result: Result<Void, Error>) -> (message: String, meta: [String: String]) {
+        switch result {
+        case .success:
+            return ("disconnect: server dropped this install's token", [:])
+        case .failure(let error):
+            return ("disconnect: token unregister skipped", ["error": failureKind(error)])
+        }
+    }
+
+    /// A failure as a kind ("cancelled", "network -1004", "http 500"), never as
+    /// its description.
+    nonisolated static func failureKind(_ error: Error) -> String {
+        if error is CancellationError { return "cancelled" }
+        if let api = error as? APIError {
+            switch api {
+            case .cancelled: return "cancelled"
+            case .network(let underlying):
+                let ns = underlying as NSError
+                if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return "cancelled" }
+                return ns.domain == NSURLErrorDomain ? "network \(ns.code)" : "network"
+            case .unauthorized: return "unauthorized"
+            case .rateLimited: return "rate limited"
+            case .server(let status, _, _, _, _): return "http \(status)"
+            case .notConfigured: return "not configured"
+            case .badResponse: return "bad response"
             }
         }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain {
+            return ns.code == NSURLErrorCancelled ? "cancelled" : "network \(ns.code)"
+        }
+        return "other"
     }
 
     /// Disconnect: this pairing's answers no longer apply (`LocalDataReset`).
@@ -374,7 +408,7 @@ final class PushRegistration {
                 if !DemoMode.isActive { deferredUntilServerCanSend = true }
             }
         }
-        let memo = Self.describeMemo(UserDefaults.standard.string(forKey: Self.uploadedTokenKey))
+        let memo = Self.describeMemo(AppPrefs.defaults.string(forKey: Self.uploadedTokenKey))
         AppLog.info("push", "registration refresh", [
             "authorization": Self.statusName(status),
             // `registering` means APNs was asked; the next line to look for is
@@ -439,7 +473,7 @@ final class PushRegistration {
             "tokenPrefix": String(hex.prefix(12)),
             "environment": Self.environment,
         ])
-        let alreadyUploaded = UserDefaults.standard.string(forKey: Self.uploadedTokenKey)
+        let alreadyUploaded = AppPrefs.defaults.string(forKey: Self.uploadedTokenKey)
         let memoMatches = alreadyUploaded == Self.uploadMemo(token: hex)
         if memoMatches {
             // The quiet, correct case — but say so, or a launch that legitimately
@@ -508,7 +542,7 @@ final class PushRegistration {
                     environment: Self.environment,
                     mode: mode.rawValue
                 )
-                UserDefaults.standard.set(Self.uploadMemo(token: token), forKey: Self.uploadedTokenKey)
+                AppPrefs.defaults.set(Self.uploadMemo(token: token), forKey: Self.uploadedTokenKey)
                 serverDeliverable = ack.deliverable
                 if ack.deliverable == false {
                     // Registered but undeliverable = the server has no APNs key.
@@ -538,7 +572,7 @@ final class PushRegistration {
     /// rather than the mechanism: the memo format itself is what heals an install
     /// on launch.
     private func serverForgotThisDevice() {
-        UserDefaults.standard.removeObject(forKey: Self.uploadedTokenKey)
+        AppPrefs.defaults.removeObject(forKey: Self.uploadedTokenKey)
         if let deviceToken {
             upload(token: deviceToken)
         } else {
@@ -604,7 +638,7 @@ final class PushRegistration {
 
     /// Re-send the token after the mode changes, and push the new mode up.
     func modeChanged(to mode: Mode) {
-        UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+        AppPrefs.defaults.set(mode.rawValue, forKey: Self.modeKey)
         guard AppConfig.isConfigured else { return }
         Task { [api] in
             do {

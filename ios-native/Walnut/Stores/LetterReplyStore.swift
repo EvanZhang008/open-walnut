@@ -59,7 +59,9 @@ final class LetterReplyStore {
 
     private let transport: LetterReplyTransport
     /// nil = memory only (unit tests).
-    private let defaults: UserDefaults?
+    private let storedDefaults: UserDefaults?
+    /// The app's own follow the demo scope (`AppPrefs`).
+    private var defaults: UserDefaults? { storedDefaults.map(AppPrefs.resolve) }
 
     /// Unsent text per letter id. Empty strings are dropped, not stored.
     private(set) var drafts: [String: String] = [:]
@@ -83,11 +85,12 @@ final class LetterReplyStore {
 
     init(transport: LetterReplyTransport? = nil, defaults: UserDefaults? = nil, now: Date = Date()) {
         self.transport = transport ?? WalnutAPI()
-        self.defaults = defaults
-        guard let defaults else { return }
+        self.storedDefaults = defaults
+        guard let given = defaults else { return }
+        let defaults = AppPrefs.resolve(given)
         #if DEBUG
         // UI tests start from nothing unless they are testing a relaunch.
-        if defaults.bool(forKey: Self.resetArgument) { defaults.removeObject(forKey: Self.storageKey) }
+        if given.bool(forKey: Self.resetArgument) { defaults.removeObject(forKey: Self.storageKey) }
         #endif
         restore(from: defaults, now: now)
         LifecycleHub.shared.register(self)
@@ -580,6 +583,8 @@ extension LetterReplyStore {
         turnRetryErrors = [:]
         rechecking = []
         unconfirmedTurns = []
+        persistTask?.cancel()
+        persistTask = nil
         defaults?.removeObject(forKey: Self.storageKey)
     }
 }

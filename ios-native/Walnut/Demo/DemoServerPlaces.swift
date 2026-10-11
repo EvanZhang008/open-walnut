@@ -1,8 +1,9 @@
 import Foundation
 
-// The demo server's Places routes. Recording is real in the demo (iOS asks for
-// location, and visits arrive as they would), but the visits stop here, inside
-// the app: the demo has no Mac.
+// The demo server's Places routes. The demo records nothing: iOS is never asked
+// for location there (an answer would stay with the real app, and nothing done
+// in the demo may change it), so these routes only answer what the app sends,
+// inside the app: the demo has no Mac.
 extension DemoServer {
     func routePlaces(_ r: DemoRequest, _ s: [String]) -> DemoReply? {
         guard s.count == 2, s[0] == "places" else { return nil }
@@ -12,7 +13,7 @@ extension DemoServer {
             return .object([
                 "recording": DemoPlaces.recording, "visitCount": count,
                 "firstVisitAt": NSNull(), "lastVisitAt": NSNull(),
-                "lastUploadAt": count > 0 ? DemoClock.iso(Date()) as Any : NSNull(),
+                "lastUploadAt": count > 0 ? DemoClock.iso(AppClock.now()) as Any : NSNull(),
             ])
         case ("POST", "sync"):
             let visits = (r.json["visits"] as? [[String: Any]]) ?? []

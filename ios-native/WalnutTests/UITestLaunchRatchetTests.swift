@@ -100,7 +100,7 @@ final class UITestLaunchRatchetTests: XCTestCase {
     /// TEXT, like the cases above: the property is about the call sites.
     func testEveryAttachToTheAppUnderTestIsGatedOnTheSpringBoardOptIn() throws {
         for source in try uiTestSources() {
-            for use in Self.attachSites(in: source.text) {
+            for use in Self.attachSites(in: source.text) where !Self.isSafariWatch(use, file: source.name) {
                 XCTAssertTrue(
                     use.enclosing.hasPrefix("test"),
                     """
@@ -130,6 +130,89 @@ final class UITestLaunchRatchetTests: XCTestCase {
     /// SpringBoard is not the app under test: attaching to the OS shell launches nothing
     /// and sends no traffic, and it is how a test reads a Home-screen menu at all.
     private static let springBoardID = "com.apple.springboard"
+    /// Safari, for ONE function only (gate r4, F7): the privacy policy link opens
+    /// in Safari, and that function watches it come up and closes it again. It is
+    /// not Walnut, so it carries no Walnut traffic; and it may do nothing else with
+    /// Safari, which `safariUseProblems` checks call by call.
+    static let safariID = "com.apple.mobilesafari"
+    static let safariWatchFile = "DemoModeUITests.swift"
+    static let safariWatchFunction = "checkThePrivacyPolicyOpensInSafari"
+
+    private static func isSafariWatch(_ use: AttachSite, file: String) -> Bool {
+        use.bundleID == safariID && file == safariWatchFile && use.enclosing == safariWatchFunction
+    }
+
+    /// The one Safari attach exists, in the one function, and that function only
+    /// waits for Safari and terminates it.
+    func testTheOneSafariAttachOnlyWatchesSafari() throws {
+        var found = 0
+        for source in try uiTestSources() {
+            for use in Self.attachSites(in: source.text) where use.bundleID == Self.safariID {
+                XCTAssertTrue(Self.isSafariWatch(use, file: source.name),
+                              "\(source.name)/\(use.enclosing) attaches to Safari; only \(Self.safariWatchFile)/\(Self.safariWatchFunction) may")
+                guard Self.isSafariWatch(use, file: source.name) else { continue }
+                found += 1
+                XCTAssertEqual(Self.safariUseProblems(in: use.body), [], "\(source.name)/\(use.enclosing)")
+            }
+        }
+        XCTAssertEqual(found, 1, "the privacy policy check no longer watches Safari, or watches it twice")
+    }
+
+    /// The checker itself, on bodies that must fail: a ratchet that passes
+    /// everything proves nothing.
+    func testTheSafariCheckRefusesAnythingButWaitAndTerminate() {
+        let attach = "let safari = XCUIApplication(bundleIdentifier: \"com.apple.mobilesafari\")\n"
+        let fine = attach + "XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 20))\napp.activate()\nsafari.terminate()\n"
+        XCTAssertEqual(Self.safariUseProblems(in: fine), [])
+        for bad in ["safari.launch()", "safari.activate()", "safari.open(url)", "safari.buttons[\"Done\"].tap()",
+                    "safari.textFields.firstMatch.typeText(\"x\")", "let other = safari", "use(safari)"] {
+            XCTAssertFalse(Self.safariUseProblems(in: attach + bad + "\n").isEmpty, "allowed: \(bad)")
+        }
+        XCTAssertFalse(Self.safariUseProblems(in: "XCUIApplication(bundleIdentifier: \"com.apple.mobilesafari\").activate()\n").isEmpty,
+                       "an unbound attach used in place")
+        XCTAssertFalse(Self.safariUseProblems(in: attach + attach.replacingOccurrences(of: "let safari", with: "let again")).isEmpty,
+                       "a second attach")
+    }
+
+    /// Every mention of the Safari application in `body`, other than its one `let`,
+    /// must be `.wait(for:` or `.terminate()`. Anything else (launch, activate,
+    /// open, a tap or typeText on its elements, an alias, passing it along) is a
+    /// problem.
+    static func safariUseProblems(in body: String) -> [String] {
+        let attach = "XCUIApplication(bundleIdentifier: \"\(safariID)\")"
+        let attaches = ranges(of: attach, in: body)
+        guard attaches.count == 1, let site = attaches.first else {
+            return ["\(attaches.count) Safari attaches, want exactly one"]
+        }
+        let before = body[..<site.lowerBound]
+        guard let letRange = before.range(of: "let ", options: .backwards),
+              before[letRange.upperBound...].hasSuffix(" = ") else {
+            return ["the Safari attach is not bound with `let <name> = …`"]
+        }
+        let name = String(before[letRange.upperBound...].dropLast(3))
+        guard !name.isEmpty, name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else {
+            return ["the Safari attach is not bound to a plain name"]
+        }
+        var problems: [String] = []
+        for found in ranges(of: name, in: body) {
+            if found.lowerBound > body.startIndex {
+                let previous = body[body.index(before: found.lowerBound)]
+                if previous.isLetter || previous.isNumber || previous == "_" || previous == "." { continue }
+            }
+            let rest = body[found.upperBound...]
+            if let next = rest.first, next.isLetter || next.isNumber || next == "_" { continue }
+            if found.lowerBound == letRange.upperBound { continue }
+            if rest.hasPrefix(".wait(for:") || rest.hasPrefix(".terminate()") { continue }
+            let line = rest.prefix(while: { $0 != "\n" })
+            for verb in [".launch(", ".activate(", ".open(", ".tap(", ".typeText("] where line.contains(verb) {
+                problems.append("\(name)\(line): \(verb) on Safari")
+            }
+            if problems.last?.hasPrefix("\(name)\(line)") != true {
+                problems.append("\(name)\(line): only .wait(for:) and .terminate() are allowed on Safari")
+            }
+        }
+        return problems
+    }
 
     /// One `XCUIApplication(bundleIdentifier:)` on something other than SpringBoard,
     /// with the declaration it sits in.

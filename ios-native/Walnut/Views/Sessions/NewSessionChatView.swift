@@ -56,7 +56,7 @@ struct NewSessionChatView: View {
     @State private var loadFailed: String?
     @State private var cwd = ""
     @State private var host = ""
-    @State private var mode: NewSessionSheet.PermissionMode = .bypass
+    @State private var mode: NewSessionSheet.PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
     @State private var model: String?
     @State private var showPathPicker = false
     @State private var creating = false
@@ -81,7 +81,11 @@ struct NewSessionChatView: View {
                     placeholder: canLaunch ? "Describe the first task…" : "Pick a folder to start",
                     busy: creating,
                     disabled: !canLaunch,
-                    disabledNotice: canLaunch ? nil : "Choose the folder this session runs in.",
+                    // Not at the accessibility sizes: there the folder pill right
+                    // above says "Choose folder…" and the box says "Pick a folder
+                    // to start", and this third copy took three more lines of a
+                    // bar that already left the page about 30 pt (gate r4, F5).
+                    disabledNotice: canLaunch || dynamicTypeSize.isAccessibilitySize ? nil : Self.folderNotice,
                     // Nothing here can HOLD a send made during the create call, and a
                     // second one would create a second session, so the button stays
                     // greyed while `creating` (see `ComposerPrimaryAction`). A create
@@ -94,8 +98,10 @@ struct NewSessionChatView: View {
                     draftKey: "draft:new-session",
                     // No live model pill (`modelSource`): a draft has no session to
                     // switch. Its own model and mode pills take that seat, and both
-                    // choices RIDE the create call.
-                    controlsAccessory: AnyView(launchPills),
+                    // choices RIDE the create call. At the accessibility sizes they
+                    // sit beside the folder pill instead (`pillRow`): stacked here
+                    // they made the box about 180 pt taller (gate r4, F5).
+                    controlsAccessory: dynamicTypeSize.isAccessibilitySize ? nil : AnyView(launchPills),
                     hostProvenance: connection.map {
                         .chat(status: $0.status, online: $0.online)
                     },
@@ -135,19 +141,6 @@ struct NewSessionChatView: View {
     private var introOrStatus: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if showsEmptyState {
-                    VStack(spacing: 8) {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 36, weight: .light))
-                            .foregroundStyle(.quaternary)
-                        Text("Your first message starts the session")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 120)
-                    .accessibilityIdentifier("newSessionChat.emptyState")
-                }
                 if let loadFailed {
                     Label(loadFailed, systemImage: "icloud.slash")
                         .font(.subheadline)
@@ -178,6 +171,29 @@ struct NewSessionChatView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("newSessionChat.linkedTask")
+                }
+                // At the accessibility sizes the quick folders scroll with the page
+                // instead of being pinned over the composer: pinned, the bar took
+                // all but about 30 pt of the screen and cut the line above (gate r4,
+                // F5). The folder pill and the composer stay pinned.
+                if movesQuickFoldersIntoPage {
+                    quickFolderRow
+                        .padding(.horizontal, -12)
+                }
+                if showsEmptyState {
+                    VStack(spacing: 8) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 36, weight: .light))
+                            .foregroundStyle(.quaternary)
+                        Text("Your first message starts the session")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    // The composer takes most of the screen at the accessibility
+                    // sizes: 120 pt above pushed this out of sight.
+                    .padding(.top, dynamicTypeSize.isAccessibilitySize ? 8 : 120)
+                    .accessibilityIdentifier("newSessionChat.emptyState")
                 }
                 // The full path, ONLY when nothing else on the page says where the
                 // session runs: no quick-folder row, or a folder picked by hand that
@@ -212,7 +228,7 @@ struct NewSessionChatView: View {
     /// color, like the card's surroundings: the rows sit on the page, above the box.
     private var launchBar: some View {
         VStack(spacing: 0) {
-            if !quickDirs.isEmpty {
+            if !quickDirs.isEmpty, !movesQuickFoldersIntoPage {
                 quickFolderRow
                 Divider().padding(.horizontal, 12)
             }
@@ -290,6 +306,9 @@ struct NewSessionChatView: View {
                     )
                 }
                 .accessibilityIdentifier("newSessionChat.pathPill")
+                if dynamicTypeSize.isAccessibilitySize {
+                    launchPills
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -304,19 +323,18 @@ struct NewSessionChatView: View {
     /// menu opens above it (with the keyboard up the first tap puts the keyboard
     /// away; a SwiftUI `Menu` in this row lost taps over the keyboard, see
     /// `ComposerBar.plusButton`), and the model pill opens the "Select model"
-    /// sheet. Side by side, stacked at the accessibility sizes, like the live
-    /// pills (`ComposerBar.pillLayout`).
+    /// sheet. Side by side, one line each: at the accessibility sizes they are
+    /// in the folder pill's row, which scrolls sideways, not in the composer.
     private var launchPills: some View {
-        let stacked = dynamicTypeSize.isAccessibilitySize
         // A pick while the create call runs would be a choice the launch already
         // went without.
         let state: ComposerControlsModel.PillState = creating ? .waiting : .ready
-        return ComposerBar.pillLayout(stacked: stacked) {
+        return ComposerBar.pillLayout(stacked: false) {
             PillChip(
                 text: mode.label,
                 glyph: .chevron,
                 state: state,
-                wraps: stacked,
+                wraps: false,
                 rawID: false,
                 menu: Self.modeMenu(selected: mode),
                 menuID: "launchMode",
@@ -329,7 +347,7 @@ struct NewSessionChatView: View {
                 text: modelLabel,
                 glyph: .chevron,
                 state: state,
-                wraps: stacked,
+                wraps: false,
                 rawID: false,
                 menu: Self.modelMenu(selected: model),
                 menuID: "launchModel",
@@ -424,6 +442,14 @@ struct NewSessionChatView: View {
 
     private var canLaunch: Bool { !creating && cwd.hasPrefix("/") }
 
+    /// Why the composer is off before a folder is chosen.
+    static let folderNotice = "Choose the folder this session runs in."
+
+    /// The quick folders sit in the page at the accessibility sizes (gate r4, F5).
+    private var movesQuickFoldersIntoPage: Bool {
+        !quickDirs.isEmpty && dynamicTypeSize.isAccessibilitySize
+    }
+
     private var hostLabel: String? {
         guard !host.isEmpty else { return nil }
         return options?.hosts.first { $0.alias == host }?.label
@@ -517,10 +543,18 @@ struct NewSessionChatView: View {
         // fetch behind it can still seed a real suggestion). The chip row and the
         // preselect must agree: a preselect from the server list's head that is
         // not in the row would open the page with no chip lit AND the full path.
-        guard !didPreselect, cwd.isEmpty, let top = Self.preselectedDir(opts.dirs) else { return }
+        guard Self.draftStart(inDemo: DemoMode.isActive).preselectFolder,
+              !didPreselect, cwd.isEmpty, let top = Self.preselectedDir(opts.dirs) else { return }
         cwd = top.cwd
         host = top.host
         didPreselect = true
+    }
+
+    /// What a fresh draft opens on. In the demo: no folder picked and the Default
+    /// mode, so a sample chore does not open on a code folder with Bypass (App
+    /// Store gate, r5b). Everywhere else: the first quick chip, and Bypass.
+    static func draftStart(inDemo: Bool) -> (preselectFolder: Bool, mode: NewSessionSheet.PermissionMode) {
+        inDemo ? (false, .default) : (true, .bypass)
     }
 
     /// The folder a fresh draft opens on: the first quick chip, so the lit chip and
@@ -565,7 +599,7 @@ struct NewSessionChatView: View {
                 // to be silently nothing on every draft.
                 "taskId": created.taskId, "linkedTaskId": taskId ?? "-",
             ])
-            let now = ISO8601DateFormatter().string(from: Date())
+            let now = ISO8601DateFormatter().string(from: AppClock.now())
             let session = WalnutSession(
                 id: created.sessionId,
                 title: created.title,

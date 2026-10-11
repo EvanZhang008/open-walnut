@@ -380,6 +380,21 @@ struct VoiceRecordingStore {
         try? FileManager.default.removeItem(at: sidecarURL(id: id))
     }
 
+    /// At launch, so a take waiting for a retry goes after `maxAge` even when
+    /// no new recording starts (the prune used to run only then). Only with
+    /// protected data available: before the first unlock a take's sidecar cannot
+    /// be read, and its age would fall back to a guess. Off the main thread.
+    static func pruneAtLaunch(protectedDataAvailable: Bool, store: VoiceRecordingStore = .shared) {
+        guard protectedDataAvailable,
+              ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        Task.detached(priority: .utility) {
+            let removed = store.prune()
+            if removed > 0 {
+                AppLog.info("voice", "pruned stale recordings at launch", ["count": "\(removed)"])
+            }
+        }
+    }
+
     /// Bound disk usage: drop takes past `maxAge`, then oldest beyond
     /// `maxCount`. Returns how many were removed (logged by the caller).
     @discardableResult

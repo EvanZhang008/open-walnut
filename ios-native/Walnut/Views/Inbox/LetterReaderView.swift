@@ -58,6 +58,10 @@ struct LetterReaderView: View {
     @State private var deferredBodyFile: URL?
     @State private var deferredBodyLoading = false
     @State private var deferredBodyError: String?
+    /// The one re-read a thread signal started; a newer signal replaces it.
+    @State private var threadReread: Task<Void, Never>?
+    /// Read only to state the navigation bar's appearance (`toolbarColorScheme`).
+    @Environment(\.colorScheme) private var colorScheme
 
     /// The reader's title: the letter's kind until it is answered, then the same
     /// "Answered" the inbox row shows. "Action needed" over a letter whose action
@@ -110,11 +114,29 @@ struct LetterReaderView: View {
         .modifier(LetterDeliveryWatch(
             waitingKey: deliveryWaitKey,
             lateKey: deliveryLateKey,
-            reload: { await load() },
+            reload: { await load(markingRead: false) },
             giveUp: { replies.markDeliveryUnconfirmed(letterId: letterId, entries: turnsAwaitingDelivery) }
         ))
+        // The agent answers in the thread while the letter is open, and nothing pushes
+        // letter changes to the app. Re-read on the two signals the app does get, never
+        // on a timer: the session that wrote the letter changed state (its turn is where
+        // the reply is written), or the inbox list already holds more of this thread
+        // (App Store gate, 2026-10-05: a reply showed only after a reopen).
+        .onChange(of: senderSessionKey) { old, new in
+            if LetterLiveThread.sessionChangeRereads(old: old, new: new) { rereadThread("session") }
+        }
+        .onChange(of: inbox.letter(id: letterId)?.threadEntries.count) { _, count in
+            if LetterLiveThread.storeRowRereads(storeCount: count, readerCount: letter?.threadEntries.count) {
+                rereadThread("inbox-row")
+            }
+        }
         .navigationTitle(Self.title(for: letter))
         .navigationBarTitleDisplayMode(.inline)
+        // The letter's lines read through the inline title on iOS 26, as the inbox
+        // list's did: the page runs up behind the bar, and the bar's colour scheme
+        // is stated.
+        .barPage(Color(uiColor: .systemBackground))
+        .toolbarColorScheme(colorScheme, for: .navigationBar)
         .toolbar { toolbarButtons }
         .safeAreaInset(edge: .bottom) { composer }
         .navigationDestination(item: $openedSession) { session in
@@ -125,6 +147,7 @@ struct LetterReaderView: View {
         .task(id: sessionsToLookUp) { await lookUpSessions(sessionsToLookUp) }
         .onAppear { attachVoice() }
         .onDisappear {
+            threadReread?.cancel()
             // Opening a reply's session pushes over the reader, which stays in the
             // stack: its streamed document must still be on disk on the way back.
             if openedSession == nil { LetterBodyDownload.clearCache() }
@@ -143,18 +166,36 @@ struct LetterReaderView: View {
                 .font(.title3.weight(.semibold))
                 .textSelection(.enabled)
                 .accessibilityIdentifier("inbox.letter.subject")
-            HStack(spacing: 6) {
-                Image(systemName: letter.kind.symbol).font(.caption2)
-                Text(letter.senderName).font(.caption)
+            // At accessibility sizes each part takes its own line: side by side,
+            // the sender's name was squeezed into a column and hyphenated
+            // ("Head-lines") while the task title kept the rest of the row.
+            // Stacked, each wraps in full: two lines cut the task title off
+            // ("the kitchen counte…", App Store gate, 2026-10-05).
+            let stacked = dynamicTypeSize.isAccessibilitySize
+            let line = stacked
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                : AnyLayout(HStackLayout(spacing: 6))
+            line {
+                HStack(spacing: 6) {
+                    Image(systemName: letter.kind.symbol).font(.caption2)
+                    Text(letter.senderName).font(.caption)
+                        .lineLimit(stacked ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: stacked)
+                }
+                .layoutPriority(1)
                 if let task = letter.taskTitle {
-                    Text("· \(task)").font(.caption).lineLimit(1)
+                    Text(stacked ? task : "· \(task)").font(.caption)
+                        .lineLimit(stacked ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: stacked)
+                        .accessibilityIdentifier("inbox.letter.taskTitle")
                 }
             }
             .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+            line {
                 Text(letter.hostLabel)
                 if let when = letter.createdDate {
-                    Text("· \(when.formatted(date: .abbreviated, time: .shortened))")
+                    let date = when.formatted(date: .abbreviated, time: .shortened)
+                    Text(stacked ? date : "· \(date)")
                 }
             }
             .font(.caption2)
@@ -454,6 +495,17 @@ struct LetterReaderView: View {
 
     /// Recorded turns still waiting for their delivery outcome and not yet given
     /// up on: what `LetterDeliveryWatch` re-reads the letter for.
+    /// The state of the session that wrote this letter, as the events feed keeps it.
+    private var senderSessionKey: String {
+        LetterLiveThread.sessionKey(sessionId: letter?.sender?.sessionId, sessions: tasks.sessions)
+    }
+
+    private func rereadThread(_ signal: String) {
+        threadReread?.cancel()
+        AppLog.info("inbox", "open letter re-read for its thread", ["letterId": letterId, "signal": signal])
+        threadReread = Task { await load(markingRead: false) }
+    }
+
     private var turnsAwaitingDelivery: [LetterThreadEntry] {
         guard let letter else { return [] }
         return letter.threadEntries.filter { entry in
@@ -644,9 +696,10 @@ struct LetterReaderView: View {
     /// marks THIS letter read (and nothing else), at the open itself, as the
     /// console's reader does: waiting for the body kept the row and the badge
     /// unread for as long as a slow relay took to deliver it.
-    private func load() async {
+    private func load(markingRead: Bool = true) async {
         if letter == nil { letter = inbox.letter(id: letterId) }
-        inbox.markReadOnOpen(id: letterId)
+        // Only the open reads the letter: a re-read must not undo the menu's Mark Unread.
+        if markingRead { inbox.markReadOnOpen(id: letterId) }
         loading = true
         defer { loading = false }
         let started = Date()

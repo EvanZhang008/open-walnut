@@ -46,7 +46,7 @@ struct CalendarWeekStrip: View {
     @ViewBuilder
     private func dayButton(_ day: CalendarLogic.GridDay) -> some View {
         let isSelected = calendar.isDate(day.date, inSameDayAs: selectedDay)
-        let isToday = calendar.isDateInToday(day.date)
+        let isToday = AppClock.isToday(day.date, calendar: calendar)
         Button {
             let outcome = CalendarViewTransition.tappingStripDay(day.date, mode: .day, calendar: calendar)
             selectedDay = outcome.selectedDay

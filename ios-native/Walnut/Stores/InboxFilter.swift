@@ -138,7 +138,7 @@ enum InboxListing {
     }
 
     /// Wall clock in epoch ms, the unit every letter stamp uses.
-    static func nowMs(_ date: Date = Date()) -> Double {
+    static func nowMs(_ date: Date = AppClock.now()) -> Double {
         date.timeIntervalSince1970 * 1000
     }
 }

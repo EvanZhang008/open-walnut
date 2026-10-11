@@ -62,7 +62,7 @@ final class HealthDemoRoutesTests: XCTestCase {
         XCTAssertEqual(newId, deleted.storeId)
 
         XCTAssertEqual(DemoServer.shared.unansweredRoutes, [], "every health route has a demo answer")
-        XCTAssertEqual(DemoURLProtocol.blockedRequests, [], "nothing went to any other host")
+        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest, [], "nothing went to any other host")
     }
 
     func testADemoRunUsesOnlyTheDemoServerAndNeverHealthKit() async throws {
@@ -71,7 +71,7 @@ final class HealthDemoRoutesTests: XCTestCase {
         let clock = FakeHealthClock(Date())
         let engine = HealthSyncEngine(
             source: source, transport: WalnutHealthTransport(api: api), state: HealthSyncStateStore(fileURL: nil),
-            environment: .test(clock: clock, demo: true)
+            environment: .test(clock: clock, demo: true), salt: MemoryHealthSalt()
         )
         let outcome = await engine.run(reason: "demo", budget: 30)
         XCTAssertEqual(outcome, .synced)

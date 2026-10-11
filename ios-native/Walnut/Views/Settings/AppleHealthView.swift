@@ -32,6 +32,7 @@ struct AppleHealthSettingsSection: View {
 struct AppleHealthView: View {
     @State private var store = HealthSyncStore.shared
     @State private var confirmDelete = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         List {
@@ -45,6 +46,11 @@ struct AppleHealthView: View {
         }
         .navigationTitle("Apple Health")
         .navigationBarTitleDisplayMode(.inline)
+        // Scrolled rows read through the inline title and under the status bar
+        // on iOS 26, fully legible at AX5 (gate r4, F8): the page runs up behind
+        // the bar, as on Inbox, Settings and a letter.
+        .barPage(Color(uiColor: .systemGroupedBackground))
+        .toolbarColorScheme(colorScheme, for: .navigationBar)
         .task { await store.refresh() }
         .refreshable { await store.refresh() }
     }
@@ -53,7 +59,7 @@ struct AppleHealthView: View {
 
     private var offSection: some View {
         Section {
-            Text("Walnut on this iPhone reads the Apple Health data you allow and keeps your Mac up to date, so your AI can use your sleep, heart, activity and everything else you allow. It goes only to your Mac, and from there to the AI provider your Mac uses.")
+            Text("Walnut on this iPhone reads the Apple Health data you allow and keeps your Walnut server up to date, so your AI can use your sleep, heart, activity and everything else you allow. " + ConsentCopy.health)
                 .accessibilityIdentifier("health.explanation")
             Button {
                 Task { await store.turnOn() }
@@ -70,9 +76,14 @@ struct AppleHealthView: View {
                 Text(message).font(.footnote).foregroundStyle(.red)
             }
         } footer: {
-            Text("You pick what Walnut may read on the next screen. You can pause, or delete the copy on your Mac, at any time.")
+            Text(store.isDemo
+                 ? Self.demoNote
+                 : "You pick what Walnut may read on the next screen. You can pause, or delete the copy on your Mac, at any time.")
         }
     }
+
+    /// The demo never touches HealthKit: no permission screen, nothing read.
+    static let demoNote = "In the demo, Walnut reads nothing from Apple Health and asks for no access: this screen shows a sample sync."
 
     // MARK: - On
 
@@ -124,12 +135,18 @@ struct AppleHealthView: View {
             ))
             .disabled(store.busy != nil)
             .accessibilityIdentifier("health.pause")
-            Button("Health Permissions") {
-                Task { await store.openHealthPermissions() }
+            // The demo has no Health access to change, and this button would
+            // leave the app for the iOS Settings app.
+            if !store.isDemo {
+                Button("Health Permissions") {
+                    Task { await store.openHealthPermissions() }
+                }
+                .accessibilityIdentifier("health.permissions")
             }
-            .accessibilityIdentifier("health.permissions")
         } footer: {
-            Text("To change what Walnut may read, go to Settings, then Privacy & Security, then Health, then Walnut.")
+            Text(store.isDemo
+                 ? Self.demoNote
+                 : "To change what Walnut may read, go to Settings, then Privacy & Security, then Health, then Walnut.")
         }
     }
 
@@ -211,7 +228,7 @@ struct AppleHealthView: View {
     }()
 
     static func relative(_ date: Date) -> String {
-        if abs(date.timeIntervalSinceNow) < 60 { return "just now" }
-        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+        if abs(date.timeIntervalSince(AppClock.now())) < 60 { return "just now" }
+        return relativeFormatter.localizedString(for: date, relativeTo: AppClock.now())
     }
 }

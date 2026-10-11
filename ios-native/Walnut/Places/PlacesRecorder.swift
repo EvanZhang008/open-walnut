@@ -7,24 +7,40 @@ enum PlacesSettings {
     /// iOS shows its "Change to Always Allow" question once per app, so Walnut asks once.
     static let askedAlwaysKey = "walnut.places.askedAlways"
 
+    // In the demo these are the demo's own (`AppPrefs`), so the switch flipped
+    // there never reaches the real app.
     static var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: enabledKey) }
-        set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+        get { AppPrefs.defaults.bool(forKey: enabledKey) }
+        set { AppPrefs.defaults.set(newValue, forKey: enabledKey) }
     }
 
     static var askedAlways: Bool {
-        get { UserDefaults.standard.bool(forKey: askedAlwaysKey) }
-        set { UserDefaults.standard.set(newValue, forKey: askedAlwaysKey) }
+        get { AppPrefs.defaults.bool(forKey: askedAlwaysKey) }
+        set { AppPrefs.defaults.set(newValue, forKey: askedAlwaysKey) }
     }
 
     /// The switch was ever touched (on, or on and then off again).
-    static var everTurnedOn: Bool { UserDefaults.standard.object(forKey: enabledKey) != nil }
+    static var everTurnedOn: Bool { AppPrefs.defaults.object(forKey: enabledKey) != nil }
 }
 
 extension Notification.Name {
     /// The queue, the switch or location access changed.
     static let walnutPlacesChanged = Notification.Name("walnut.places.changed")
 }
+
+/// What the recorder asks of Core Location. The app's is a `CLLocationManager`;
+/// tests give a stand-in that records every call, so the demo's rules (no
+/// location question, no visit monitoring) are checked by what the recorder does.
+protocol PlacesLocationManaging: AnyObject {
+    var authorizationStatus: CLAuthorizationStatus { get }
+    var accuracyAuthorization: CLAccuracyAuthorization { get }
+    func requestWhenInUseAuthorization()
+    func requestAlwaysAuthorization()
+    func startMonitoringVisits()
+    func stopMonitoringVisits()
+}
+
+extension CLLocationManager: PlacesLocationManaging {}
 
 /// Owns iOS visit monitoring. Started at every launch, before anything else
 /// waits on activation: iOS relaunches Walnut in the background to deliver a
@@ -33,8 +49,17 @@ extension Notification.Name {
 final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
     static let shared = PlacesRecorder()
 
-    private var manager: CLLocationManager?
+    private var manager: PlacesLocationManaging?
+    /// Makes the location manager (the app's: a CLLocationManager whose delegate is
+    /// this recorder).
+    private let makeManager: (PlacesRecorder) -> PlacesLocationManaging
+    /// Walnut is in the foreground.
+    private let isAppActive: () -> Bool
+    /// The Always question's wait for Walnut to stay open (`PlacesSettle`).
+    private let settled: (_ isActive: @escaping () -> Bool) async -> Bool
     private var started = false
+    /// iOS's location question (While Using, then Always) is on screen.
+    private(set) var askingIOS = false
     private(set) var monitoring = false
     /// The user turned Places on and Walnut has not put the Always question yet.
     /// Kept for this launch only: a While Using answer that arrives after
@@ -43,6 +68,29 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
     private let alwaysAsk = PlacesOneAtATime()
 
     static var isHostedUnitTestProcess: Bool { HealthBackground.isHostedUnitTestProcess }
+
+    override init() {
+        makeManager = { recorder in
+            let made = CLLocationManager()
+            made.delegate = recorder
+            return made
+        }
+        isAppActive = { UIApplication.shared.applicationState == .active }
+        settled = { isActive in await PlacesSettle.wait(isActive: isActive) }
+        super.init()
+    }
+
+    /// Tests: `manager` stands in for Core Location; Walnut's foreground state and
+    /// the Always question's wait are as given.
+    init(manager: PlacesLocationManaging,
+         appActive: @escaping () -> Bool = { true },
+         settle: @escaping () async -> Bool = { true }) {
+        self.manager = manager
+        makeManager = { _ in manager }
+        isAppActive = appActive
+        settled = { _ in await settle() }
+        super.init()
+    }
 
     func start() {
         guard !started, !Self.isHostedUnitTestProcess else { return }
@@ -54,17 +102,25 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
         // install never touches location. One who turned it off again gets one too,
         // so the visit monitoring iOS keeps across launches is surely stopped.
         if PlacesSettings.isEnabled || PlacesSettings.everTurnedOn { applyMonitoring() }
+        // What is due goes now, not only when the next visit comes: a visit the
+        // Mac has, two weeks after it ended (at once with Places off). Not before
+        // the first unlock, when the queue file cannot be read.
+        if UIApplication.shared.isProtectedDataAvailable {
+            PlacesQueueStore.shared.prune(keepSent: PlacesSettings.isEnabled)
+        }
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated {
-                let recorder = PlacesRecorder.shared
-                if PlacesSettings.isEnabled { recorder.applyMonitoring() }
-                recorder.syncSoon(reason: "active")
-                recorder.askAlwaysIfOwed()
-            }
+            MainActor.assumeIsolated { PlacesRecorder.shared.becameActive() }
         }
         #if DEBUG
         PlacesDebugVisit.injectIfAsked()
         #endif
+    }
+
+    /// Walnut is back in the foreground.
+    func becameActive() {
+        if PlacesSettings.isEnabled { applyMonitoring() }
+        syncSoon(reason: "active")
+        askAlwaysIfOwed()
     }
 
     // MARK: - State
@@ -75,7 +131,7 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
 
     /// Precise Location off: iOS may record fewer visits.
     var preciseOff: Bool {
-        (manager ?? CLLocationManager()).accuracyAuthorization == .reducedAccuracy
+        (manager?.accuracyAuthorization ?? CLLocationManager().accuracyAuthorization) == .reducedAccuracy
     }
 
     func phoneState() -> PlacesPhoneState {
@@ -100,6 +156,16 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
     /// Places stays on whatever the answer: it starts by itself once access is Always.
     func turnOn() async {
         PlacesSettings.isEnabled = true
+        // The demo asks iOS nothing: a location answer given there would stay
+        // with the real app (iOS asks for Always only once), and nothing done
+        // in the demo may change the real app. Its Places screen shows the
+        // switch on and records nothing.
+        if DemoMode.isActive {
+            AppLog.info("places", "turned on in the demo, iOS not asked")
+            changed()
+            syncSoon(reason: "turned-on")
+            return
+        }
         let manager = ensureManager()
         AppLog.info("places", "turned on", ["access": access.rawValue, "askedAlways": String(PlacesSettings.askedAlways)])
         if manager.authorizationStatus == .notDetermined {
@@ -108,6 +174,8 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
             PlacesSettings.askedAlways = false
             alwaysOwed = true
             AppLog.info("places", "asking iOS for While Using")
+            askingIOS = true
+            changed()
             manager.requestWhenInUseAuthorization()
             let answer = await waitForAnswer(manager, from: .notDetermined)
             AppLog.info("places", "While Using answered", ["answer": answer.rawValue, "access": access.rawValue])
@@ -116,6 +184,7 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
             alwaysOwed = true
             await askAlways(manager)
         }
+        askingIOS = false
         applyMonitoring()
         AppLog.info("places", "access after asking", ["access": access.rawValue])
         changed()
@@ -126,14 +195,19 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
         PlacesSettings.isEnabled = false
         alwaysOwed = false
         applyMonitoring()
+        // The visits the Mac has go from the phone now; one it does not have yet
+        // stays until it is sent, and goes then.
+        PlacesQueueStore.shared.prune(keepSent: false)
         AppLog.info("places", "turned off")
         changed()
         syncSoon(reason: "turned-off")
     }
 
     /// Disconnect, or the visits on the Mac were deleted: stop and forget them here.
+    /// The switch is removed, not set to false: Disconnect wipes every preference
+    /// first, and a `false` written back here was one it left behind (gate r4, F13).
     func eraseLocalState() {
-        PlacesSettings.isEnabled = false
+        AppPrefs.defaults.removeObject(forKey: PlacesSettings.enabledKey)
         alwaysOwed = false
         manager?.stopMonitoringVisits()
         monitoring = false
@@ -149,17 +223,17 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Recording
 
-    private func ensureManager() -> CLLocationManager {
+    private func ensureManager() -> PlacesLocationManaging {
         if let manager { return manager }
-        let made = CLLocationManager()
-        made.delegate = self
+        let made = makeManager(self)
         manager = made
         return made
     }
 
     private func applyMonitoring() {
         let manager = ensureManager()
-        let want = PlacesSettings.isEnabled && manager.authorizationStatus == .authorizedAlways
+        // Never in the demo, which records nothing (see `turnOn`).
+        let want = PlacesSettings.isEnabled && !DemoMode.isActive && manager.authorizationStatus == .authorizedAlways
         if want && !monitoring {
             manager.startMonitoringVisits()
             monitoring = true
@@ -214,17 +288,25 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
 
     // MARK: - The Always question
 
-    /// Put the Always question if Walnut still owes it and iOS can show it.
-    func askAlwaysIfOwed() {
+    /// Put the Always question if Walnut still owes it and iOS can show it. The
+    /// task is returned so a test can wait for it.
+    @discardableResult
+    func askAlwaysIfOwed() -> Task<Void, Never>? {
         guard alwaysOwed, PlacesSettings.isEnabled, !PlacesSettings.askedAlways,
-              let manager, manager.authorizationStatus == .authorizedWhenInUse else { return }
-        Task { @MainActor in await self.askAlways(manager) }
+              let manager, manager.authorizationStatus == .authorizedWhenInUse else { return nil }
+        return Task { @MainActor in await self.askAlways(manager) }
     }
+
+    #if DEBUG
+    /// Tests: Walnut owes the Always question, as after a Turn On whose While Using
+    /// answer came while Walnut was not open.
+    func oweAlwaysForTesting() { alwaysOwed = true }
+    #endif
 
     /// `turnOn`, the access change and the return to the foreground can all get
     /// here for the same While Using answer: one asks, and one that waited asks
     /// only if the attempt before it could not (Walnut was not open).
-    private func askAlways(_ manager: CLLocationManager) async {
+    private func askAlways(_ manager: PlacesLocationManaging) async {
         await alwaysAsk.run(stillWanted: { self.alwaysOwed }) { await self.askAlwaysNow(manager) }
     }
 
@@ -233,18 +315,22 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
     /// not come after While Using, and the cause was not seen: the simulator shows
     /// it even when asked while the first question is still closing. So the call
     /// waits until Walnut has been active for a moment, and each step is logged.
-    private func askAlwaysNow(_ manager: CLLocationManager) async {
-        guard await PlacesSettle.wait(isActive: { UIApplication.shared.applicationState == .active }) else {
+    private func askAlwaysNow(_ manager: PlacesLocationManaging) async {
+        guard await settled(isAppActive) else {
             AppLog.info("places", "Always question waits for Walnut to be open", ["app": Self.appState()])
             return
         }
-        guard alwaysOwed, PlacesSettings.isEnabled, !PlacesSettings.askedAlways,
+        // Never in the demo, whichever way it got here (see `turnOn`).
+        guard alwaysOwed, PlacesSettings.isEnabled, !PlacesSettings.askedAlways, !DemoMode.isActive,
               manager.authorizationStatus == .authorizedWhenInUse else { return }
         alwaysOwed = false
         PlacesSettings.askedAlways = true
         AppLog.info("places", "asking iOS for Always")
+        askingIOS = true
+        changed()
         manager.requestAlwaysAuthorization()
         let answer = await waitForAnswer(manager, from: .authorizedWhenInUse)
+        askingIOS = false
         AppLog.info("places", "Always answered", ["answer": answer.rawValue, "access": access.rawValue])
         changed()
     }
@@ -255,15 +341,15 @@ final class PlacesRecorder: NSObject, CLLocationManagerDelegate {
     /// access changes, when Walnut comes back to the foreground after the
     /// question ("Keep Only While Using" changes nothing), or when no question
     /// appeared at all.
-    private func waitForAnswer(_ manager: CLLocationManager, from status: CLAuthorizationStatus) async -> Answer {
+    private func waitForAnswer(_ manager: PlacesLocationManaging, from status: CLAuthorizationStatus) async -> Answer {
         let started = Date()
         var sawInactive = false
         while Date().timeIntervalSince(started) < 120 {
             try? await Task.sleep(for: .milliseconds(250))
             if manager.authorizationStatus != status { return .changed }
-            let state = UIApplication.shared.applicationState
-            if state != .active { sawInactive = true }
-            if sawInactive && state == .active { return .closed }
+            let active = isAppActive()
+            if !active { sawInactive = true }
+            if sawInactive && active { return .closed }
             if !sawInactive && Date().timeIntervalSince(started) > 2 { return .noQuestion }
         }
         return .timedOut
@@ -324,8 +410,8 @@ enum PlacesDebugVisit {
     @MainActor
     static func resetIfAsked() {
         guard ProcessInfo.processInfo.arguments.contains(resetArgument) else { return }
-        UserDefaults.standard.removeObject(forKey: PlacesSettings.enabledKey)
-        UserDefaults.standard.removeObject(forKey: PlacesSettings.askedAlwaysKey)
+        AppPrefs.defaults.removeObject(forKey: PlacesSettings.enabledKey)
+        AppPrefs.defaults.removeObject(forKey: PlacesSettings.askedAlwaysKey)
         PlacesQueueStore.shared.erase()
     }
 

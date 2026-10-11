@@ -48,11 +48,12 @@ extension DemoServer {
         day.calendar = Calendar(identifier: .gregorian)
         day.locale = Locale(identifier: "en_US_POSIX")
         day.dateFormat = "yyyy-MM-dd"
-        let today = Date()
+        let today = AppClock.now()
         // A believable history: about two and a half years, gone after a delete.
         let from = deletes > 0 ? nil : today.addingTimeInterval(-920 * 86_400)
         let catalog = HealthTypeCatalog.catalogSpecs
-        let lastUpload: Any = deletes > 0 ? NSNull() : DemoClock.iso(today.addingTimeInterval(-240))
+        // Four minutes ago, in waking hours like every past time the demo shows.
+        let lastUpload: Any = deletes > 0 ? NSNull() : DemoClock(now: today).ago(240)
         let coverageFrom: Any = from.map { day.string(from: $0) as Any } ?? NSNull()
         let coverageTo: Any = deletes > 0 ? NSNull() : day.string(from: today)
         return [

@@ -12,6 +12,8 @@ final class PlacesStore {
 
     private(set) var isEnabled = false
     private(set) var access: PlacesPhoneState.Access = .notDetermined
+    /// iOS's location question is up (`PlacesRecorder.askingIOS`).
+    private(set) var askingIOS = false
     private(set) var preciseOff = false
     /// iOS can still ask the user itself, so the screen offers that before Settings.
     private(set) var iosCanAsk = false
@@ -36,13 +38,17 @@ final class PlacesStore {
         }
     }
 
-    /// iOS records visits only with Always.
-    var recording: Bool { isEnabled && access == .always }
+    /// iOS records visits only with Always. In the demo the switch alone says
+    /// it: the demo asks iOS for no location access and records nothing.
+    var recording: Bool { isEnabled && (isDemo || access == .always) }
+
+    var isDemo: Bool { DemoMode.isActive }
 
     func reload() {
         isEnabled = PlacesSettings.isEnabled
         access = PlacesRecorder.shared.access
-        preciseOff = isEnabled && PlacesRecorder.shared.preciseOff
+        askingIOS = PlacesRecorder.shared.askingIOS
+        preciseOff = isEnabled && !isDemo && PlacesRecorder.shared.preciseOff
         iosCanAsk = PlacesAccessDecision.iosCanAsk(access: access, askedAlways: PlacesSettings.askedAlways)
         let snapshot = PlacesQueueStore.shared.read()
         recent = Array(snapshot.visits.sorted { $0.lastMoment > $1.lastMoment }.prefix(10))

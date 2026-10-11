@@ -175,7 +175,7 @@ final class HealthAccessPrompt {
                 return
             }
             if store.progress.lastOutcome == .macUnreachable {
-                HealthToast.show("Apple Health is on. Walnut syncs as soon as your Mac can be reached.")
+                HealthToast.show("Apple Health is on. Walnut syncs as soon as your Walnut server can be reached.")
                 return
             }
         }
@@ -192,7 +192,7 @@ final class HealthAccessPrompt {
             case .turnOn:
                 alert = UIAlertController(
                     title: "Let Walnut Use Apple Health?",
-                    message: "Your AI is asking about your health. Turn on Apple Health and Walnut keeps your Mac up to date with your sleep, heart, activity and the rest. It goes only to your Mac.",
+                    message: "Your AI is asking about your health. Turn on Apple Health and Walnut keeps your Walnut server up to date with your sleep, heart, activity and the rest. " + ConsentCopy.health,
                     preferredStyle: .alert
                 )
                 yes = UIAlertAction(title: "Turn On", style: .default) { _ in done.resume(returning: true) }
