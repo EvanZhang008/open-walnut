@@ -37,7 +37,14 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { CLOUD_BOX_HOST_ALIAS } from '../../src/core/hosts/cloud-box-host.js'
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
-import { OTHER_MAC_CONNECTED } from '../../src/core/machine-credentials.js'
+import { OTHER_COMPUTER_CONNECTED, OTHER_MAC_CONNECTED } from '../../src/core/machine-credentials.js'
+
+/**
+ * What the second Mac hears names the owner as it reported itself
+ * (device-self-report.ts): the owner here is this process, a Mac on a Mac and
+ * Linux on CI, where the companion truthfully says "Another computer".
+ */
+const OTHER_OWNER_CONNECTED = process.platform === 'darwin' ? OTHER_MAC_CONNECTED : OTHER_COMPUTER_CONNECTED
 
 let base = ''
 let isolation: SshIsolation | null = null
@@ -120,7 +127,7 @@ describe('a companion paired by `walnut device add`, with no owner recorded', ()
   it('the second Mac then hears another Mac is connected, and takes nothing', async () => {
     const r = await box('/api/devices', replica.tokens.secondMac, { method: 'POST', body: JSON.stringify({ name: 'bridge-second', kind: 'machine' }) })
     expect(r.status).toBe(409)
-    expect(await r.json()).toEqual({ error: OTHER_MAC_CONNECTED, code: 'other_mac_connected' })
+    expect(await r.json()).toEqual({ error: OTHER_OWNER_CONNECTED, code: 'other_mac_connected' })
     expect(replica.owner()).toEqual({ id: replica.ids['mac-primary'], via: 'mint' })
     // Every machine credential there is this Mac's (its own daemon's and the companion host's), none the second Mac's.
     const creds = replica.devices().filter((d) => d.kind === 'machine')
