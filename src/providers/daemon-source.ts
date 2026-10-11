@@ -2656,7 +2656,9 @@ function pickTrustedClient() {
       if (quietAt === null || at > quietAt) quietAt = at;
     } else if (silentMs <= TRUSTED_CLIENT_FRESH_MS) {
       if (!fresh) fresh = client;
-    } else if (!suspect) {
+    } else if (!suspect && !leaderBook.backupLead(gatewayClientHomes.get(client))) {
+      // A primary the companion took the lead from is a target again once it
+      // speaks, never while it only has not gone quiet yet (see the standalone twin).
       suspect = client;
     }
   }

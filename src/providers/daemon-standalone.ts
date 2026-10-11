@@ -1243,7 +1243,12 @@ function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: n
       if (quietAt === null || at > quietAt) quietAt = at
     } else if (silentMs <= TRUSTED_CLIENT_FRESH_MS) {
       if (!fresh) fresh = client
-    } else if (!suspect) {
+    } else if (!suspect && !leaderBook.backupLead(gatewayClientHomes.get(client))) {
+      // A primary the companion took the lead from has gone silent (that is how
+      // the lead was won): it is a target again once it speaks, never while it
+      // only has not gone quiet yet. A takeover shorter than three beats left a
+      // window where a phone send went to a Mac asleep and waited there for it
+      // to wake (2026-10-11, the takeover e2e on CI).
       suspect = client
     }
   }

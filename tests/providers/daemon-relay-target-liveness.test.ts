@@ -48,7 +48,7 @@ async function waitFor(pred: () => boolean, ms: number, what: string): Promise<v
 
 interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number }
 
-async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
+async function spawnDaemon(twin: 'source' | 'standalone', extraEnv: Record<string, string> = {}): Promise<Daemon> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-liveness-${twin}-`))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -56,6 +56,7 @@ async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
     WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT_MS),
+    ...extraEnv,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   let proc: ChildProcess
@@ -242,5 +243,68 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
     const again = await phoneSend('qm-mobile-none-2')
     expect(again.ok, JSON.stringify(again)).toBe(true)
     expect(back.seen()).toBe(1)
+  }, 30_000)
+})
+
+// The companion has taken the lead of a Walnut whose Mac sleeps with its socket
+// open. Its socket is past one beat but not yet quiet (three beats): before the
+// fix it was still a target, so a phone send went to the sleeping Mac and waited
+// there until it woke (2026-10-11: the takeover e2e on CI, whose takeover window
+// is shorter than three beats). A takeover is longer than three beats by default,
+// so here the beat is long and the window short: suspect from 2.7s, quiet at 6s,
+// the lead claimable from 3s.
+describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as const))('relay target while the companion leads (%s twin)', (twin) => {
+  const LONG_BEAT_MS = 2_000
+  const TAKEOVER_MS = 3_000
+  const WALNUT_ID = 'wrelayliveness01'
+  let daemon: Daemon
+  let cloud: WebSocketServer
+  let bridgeSide: WebSocket | null = null
+  let mac: WebSocket | null = null
+
+  beforeAll(async () => {
+    cloud = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((r) => cloud.on('listening', () => r()))
+    cloud.on('connection', (ws) => {
+      ws.on('message', (d) => {
+        try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'hello') bridgeSide = ws as unknown as WebSocket } catch { /* frame */ }
+      })
+    })
+    daemon = await spawnDaemon(twin, { WALNUT_TRUSTED_CLIENT_BEAT_MS: String(LONG_BEAT_MS), WALNUT_LEADER_TAKEOVER_MS: String(TAKEOVER_MS) })
+    const setup = await connect(daemon.port)
+    const port = (cloud.address() as { port: number }).port
+    expect((await rpc(setup, 'bridge.configure', { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: 't', hostAlias: HOST_ALIAS })).ok).toBe(true)
+    await waitFor(() => bridgeSide !== null, 15_000, 'the bridge hello')
+    setup.close()
+    await sleep(300)
+  }, 60_000)
+
+  afterAll(async () => {
+    try { mac?.terminate() } catch { /* gone */ }
+    await stopDaemon(daemon)
+    await new Promise<void>((r) => cloud.close(() => r()))
+  })
+
+  it('a Mac the companion took the lead from is no target until it speaks: the relay says so at once', async () => {
+    mac = await connect(daemon.port)
+    let seen = 0
+    mac.on('message', (d: Buffer) => { try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'message-request') seen++ } catch { /* frame */ } })
+    const conf = await rpc(mac, 'leader.configure', { home: '/fixture/relay-home', walnutId: WALNUT_ID, backup: true })
+    expect(conf.ok, JSON.stringify(conf)).toBe(true)
+    const asleepAt = Date.now()
+    ;(mac as unknown as { _socket: { pause: () => void } })._socket.pause()
+    // The companion claims the lead once the takeover window has passed.
+    let claimed: Record<string, unknown> = {}
+    await waitFor(() => Date.now() - asleepAt > TAKEOVER_MS + 100, 10_000, 'the takeover window')
+    claimed = await rpc(bridgeSide!, 'leader.claim', { walnutId: WALNUT_ID, epoch: 2 })
+    expect(claimed, JSON.stringify(claimed)).toMatchObject({ ok: true, holder: 'backup', epoch: 2 })
+    // Still inside the suspect band (past one beat, not yet three).
+    const t0 = Date.now()
+    expect(t0 - asleepAt).toBeLessThan(LONG_BEAT_MS * 3 - 1_000)
+    const res = await rpc(bridgeSide!, 'session.message', { sessionId: 'sid-1', message: 'hello', messageId: 'qm-mobile-led-1' })
+    expect(Date.now() - t0).toBeLessThan(1_500)
+    expect(res.ok).not.toBe(true)
+    expect(String(res.error)).toMatch(/^session\.message: no primary server connected/)
+    expect(seen).toBe(0)
   }, 30_000)
 })
