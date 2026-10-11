@@ -219,6 +219,12 @@ struct ChatView: View {
     /// holds, else the board's by-id lookup. A lookup that finds nothing says so
     /// on the chat's error banner rather than opening an empty page.
     private func openAsk(_ ask: AskSummary) {
+        // The drawer goes at once, not on its slide: a slide under the page
+        // pushing in from the other side showed both moving for half a second,
+        // with the tab bar over the drawer's rows.
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { drawer = 0 }
         guard let sessionId = ask.sessionId, !sessionId.isEmpty else {
             sessionlessAsk = ask
             return
@@ -240,7 +246,8 @@ struct ChatView: View {
     // MARK: - Drawer
 
     private var drawerLayer: some View {
-        ChatDrawer(suppressTaps: $suppressDrawerTaps, close: { setDrawer(open: false) }, openAsk: openAsk)
+        ChatDrawer(suppressTaps: $suppressDrawerTaps, close: { setDrawer(open: false) }, openAsk: openAsk,
+                   isOpen: drawer > 0)
             .frame(width: drawerWidth)
             .frame(maxHeight: .infinity, alignment: .top)
             .background {
@@ -454,13 +461,9 @@ struct ChatView: View {
         .accessibilityIdentifier("chat.questionBanner")
     }
 
-    /// The active conversation's own title, when it has one.
+    /// The active conversation's title, when it has one (`ChatStore.barTitle`).
     private var conversationTitle: String? {
-        guard let id = chat.activeID,
-              let title = chat.conversations.first(where: { $0.id == id })?.title,
-              !title.isEmpty
-        else { return nil }
-        return title
+        ChatStore.barTitle(conversationID: chat.activeID, conversations: chat.conversations, asks: chat.asks)
     }
 }
 

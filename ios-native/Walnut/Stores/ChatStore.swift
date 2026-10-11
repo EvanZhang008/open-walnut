@@ -481,6 +481,23 @@ final class ChatStore {
         return asks.first { $0.conversationId == id }
     }
 
+    /// The open chat's title in the bar: its ask's title, the row the drawer
+    /// listed and the name the Mac shows, else the chat's own. The two drift
+    /// apart (a chat promoted to a task the task's work renamed), and a bar that
+    /// read the chat's would look like the tap opened something else.
+    nonisolated static func barTitle(
+        conversationID: String?, conversations: [ConversationSummary], asks: [AskSummary]
+    ) -> String? {
+        guard let id = conversationID else { return nil }
+        let candidates = [
+            asks.first { $0.conversationId == id }?.title,
+            conversations.first { $0.id == id }?.title,
+        ]
+        return candidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
     /// Switch the active conversation: render cache instantly, reconnect SSE,
     /// then revalidate messages from the network.
     func select(_ id: String?) {
@@ -555,9 +572,7 @@ final class ChatStore {
     /// Nav-bar title — the agent's name; the conversation title rides subtitle-style.
     var activeTitle: String {
         guard let activeID else { return activeAgentName }
-        // The ask's title first: it is what the drawer lists and the Mac shows.
-        return ask(forConversation: activeID)?.title
-            ?? conversations.first(where: { $0.id == activeID })?.title ?? activeAgentName
+        return conversations.first(where: { $0.id == activeID })?.title ?? activeAgentName
     }
 
     // MARK: - Messages

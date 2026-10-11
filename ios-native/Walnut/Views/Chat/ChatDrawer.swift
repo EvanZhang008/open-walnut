@@ -34,6 +34,10 @@ struct ChatDrawer: View {
     let close: () -> Void
     /// Open an ask that has no chat here (one started on the Mac) as its session.
     var openAsk: (AskSummary) -> Void = { _ in }
+    /// The drawer is out (any part of it). Each time it comes out the list is
+    /// back at its top, where New chat and the agents are: a drawer reopened
+    /// where it was last scrolled hides both under a long list.
+    var isOpen = false
 
     @State private var renameTarget: ConversationSummary?
     @State private var renameDraft = ""
@@ -74,7 +78,8 @@ struct ChatDrawer: View {
         //     No clearance, no fade, no clipping, nothing to keep in sync.
         //
         // The cost, stated plainly: it scrolls with the list instead of being pinned.
-        // That is small here — the drawer opens at the top every time, so New chat is
+        // That is small here — the drawer opens at the top every time (`isOpen`
+        // scrolls it back there), so New chat is
         // on screen exactly when it is wanted — and it is the sidebar convention
         // (every chat app puts New at the top of its list, not floating over it).
         list
@@ -149,10 +154,22 @@ struct ChatDrawer: View {
         }
     }
 
+    private static let topID = "chat.drawer.top"
+
     private var list: some View {
+        ScrollViewReader { proxy in
+            scroller
+                .onChange(of: isOpen) { _, open in
+                    if open { proxy.scrollTo(Self.topID, anchor: .top) }
+                }
+        }
+    }
+
+    private var scroller: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                    .id(Self.topID)
                 // Only when there is a choice: on a server with one agent an
                 // "Agents" section is a heading over a single fact.
                 if chat.agents.count > 1 { agentsSection }
@@ -277,12 +294,21 @@ struct ChatDrawer: View {
     }
 
     /// Recents on a server that lists asks: the Mac's list, in the Mac's order.
+    @ViewBuilder
     private var asksSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionLabel("Recents")
-            if chat.asks.isEmpty {
-                if !chat.loadingList { emptyRecents }
-            } else {
+        if chat.asks.isEmpty {
+            // Nothing listed: the empty state only when Earlier is empty too. With
+            // chats under Earlier, "no conversations yet" above them is false, and
+            // a Recents heading over nothing heads nothing.
+            if !chat.loadingList && chat.earlierConversations.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    sectionLabel("Recents")
+                    emptyRecents
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionLabel("Recents")
                 ForEach(Self.uniqueAsks(chat.asks)) { ask in
                     Button {
                         guard !suppressTaps else { return }

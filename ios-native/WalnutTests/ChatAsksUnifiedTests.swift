@@ -14,8 +14,9 @@ final class ChatAsksUnifiedTests: XCTestCase {
                         statusCode: 200, httpVersion: nil, headerFields: nil)!
     }
 
-    private func ask(_ id: String, conversation: String? = nil, session: String? = "sess-\(UUID().uuidString)") -> AskSummary {
-        AskSummary(id: id, title: id, state: .idle, activityAt: "2026-10-10T17:30:00.000Z",
+    private func ask(_ id: String, conversation: String? = nil, session: String? = "sess-\(UUID().uuidString)",
+                     title: String? = nil) -> AskSummary {
+        AskSummary(id: id, title: title ?? id, state: .idle, activityAt: "2026-10-10T17:30:00.000Z",
                    createdAt: "2026-10-10T02:50:00.000Z", sessionId: session, phase: nil, unread: nil,
                    conversationId: conversation)
     }
@@ -68,6 +69,30 @@ final class ChatAsksUnifiedTests: XCTestCase {
         let conversations = [chat("a", askTaskId: "t-a"), chat("b", askTaskId: "t-b")]
         let asks = [ask("t-a", conversation: "a"), ask("t-b", conversation: "b")]
         XCTAssertTrue(ChatStore.earlier(conversations, asks: asks).isEmpty)
+    }
+
+    // MARK: - The open chat's title
+
+    /// The bar names the row the drawer listed. A chat promoted to a task keeps
+    /// its own old title while the task's work renames the task; reading the
+    /// chat's made the tap look like it opened something else (gate, 15 of 112).
+    func testTheBarNamesTheAskTheDrawerListed() {
+        let conversations = [
+            ConversationSummary(id: "conv-1", title: "Burndown progress", updatedAt: "2026-10-10T17:30:00.000Z", messageCount: 9, askTaskId: "t-1"),
+            ConversationSummary(id: "conv-2", title: "Weekend trip", updatedAt: "2026-10-10T17:30:00.000Z", messageCount: 3),
+            ConversationSummary(id: "conv-3", title: nil, updatedAt: "2026-10-10T17:30:00.000Z", messageCount: 0),
+        ]
+        let asks = [ask("t-1", conversation: "conv-1", title: "Pipeline watch \u{00B7} weekly status"),
+                    ask("t-3", conversation: "conv-3", title: "  ")]
+        func title(_ id: String?) -> String? {
+            ChatStore.barTitle(conversationID: id, conversations: conversations, asks: asks)
+        }
+        XCTAssertEqual(title("conv-1"), "Pipeline watch \u{00B7} weekly status")
+        // Not an ask (yet): the chat's own title.
+        XCTAssertEqual(title("conv-2"), "Weekend trip")
+        // A blank ask title and no chat title: no title, so the bar shows the agent.
+        XCTAssertNil(title("conv-3"))
+        XCTAssertNil(title(nil))
     }
 
     // MARK: - Starting an ask that has no session yet
