@@ -5,7 +5,7 @@
  * secret's shape (config-secret-shape.ts), gets its value replaced with a stub
  * of bullets and its last 4 characters.
  */
-import { isSecretKey, maskByKey, maskSecretTail, type KeyJudge } from './config-secret-shape.js'
+import { isSecretKey, maskByKey, maskSecretTail, maskSecretTailInPlace, type KeyJudge } from './config-secret-shape.js'
 
 /** Fields that hold provider/API secrets — masked before leaving the box. */
 export const SECRET_FIELDS = new Set([
@@ -85,7 +85,7 @@ export function maskPushTokens<T>(config: T): T {
  * it is judged as usual.
  */
 const NAME_KEYED_MAPS = new Set([
-  'plugins', 'providers', 'hosts', 'session_limits', 'tag_display', 'tag_links',
+  'plugins', 'providers', 'engines', 'hosts', 'session_limits', 'tag_display', 'tag_links',
   'hooks.overrides', 'external_session_import.excluded_cwds',
 ])
 
@@ -108,7 +108,7 @@ const redactJudge: KeyJudge = (key, path) => {
  * (`restoreMaskedSecrets`), so a whole round trip keeps every stored value.
  */
 export function redactConfig(value: unknown): unknown {
-  return maskByKey(value, maskSecretTail, redactJudge)
+  return maskByKey(value, maskSecretTailInPlace, redactJudge)
 }
 
 /**
@@ -122,11 +122,13 @@ function maskFreeFormMaps(config: Record<string, unknown>): Record<string, unkno
     isRecord(map) ? Object.fromEntries(Object.entries(map).map(([k, v]) => [k, isRecord(v) ? fn(v) : v])) : map
   const at = (rec: Record<string, unknown>, key: string, fn: (v: unknown) => unknown) =>
     rec[key] === undefined ? rec : { ...rec, [key]: fn(rec[key]) }
-  const shapes = (v: unknown) => maskByKey(v, maskSecretTail)
+  const shapes = (v: unknown) => maskByKey(v, maskSecretTailInPlace)
   // A plugin's own settings, written by plugins this repo has never seen.
   if (config.plugins !== undefined) out.plugins = each(config.plugins, shapes)
   // A provider's extra request headers (`Authorization`, `X-Api-Key`).
   if (config.providers !== undefined) out.providers = each(config.providers, (p) => at(p, 'headers', shapes))
+  // An engine's environment (`ANTHROPIC_API_KEY`), handed to its process as it is.
+  if (config.engines !== undefined) out.engines = each(config.engines, (e) => at(e, 'env', shapes))
   // A host server's build environment (`NPM_TOKEN`) and its tunnel provider's options.
   if (config.hosts !== undefined) {
     out.hosts = each(config.hosts, (h) => at(h, 'server', (server) => isRecord(server)
@@ -144,7 +146,9 @@ function maskFreeFormMaps(config: Record<string, unknown>): Record<string, unkno
 
 /**
  * The Mac's client view: push device tokens masked (`maskPushTokens`), and every
- * secret-shaped value inside the free-form maps (`maskFreeFormMaps`). Settings on
+ * secret-shaped value and URL password inside the free-form maps
+ * (`maskFreeFormMaps`: plugin settings, provider headers, engine environments,
+ * a host server's build env, tunnel options, hook actions). Settings on
  * the Mac edits the typed fields, so they stay as they are; no screen reads a
  * plugin's secret, and any paired device can read this view.
  */

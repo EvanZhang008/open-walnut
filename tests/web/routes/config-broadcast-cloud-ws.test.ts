@@ -10,7 +10,11 @@
  *
  * A plugin's own settings are masked by the shape of their keys, wherever they
  * stand (`client_secret`, `access_token`, `refresh_token`, a `private_key`
- * nested two objects down), and a whole round trip of what GET answered writes
+ * nested two objects down, a vendor's `STRIPE_KEY`, a `GITHUB_PAT`, plural
+ * `api_tokens`, `DB_PASS`, the value of a `{ name, value }` entry named like a
+ * secret), so is an engine's environment, and so is the password of a URL in any
+ * value (`database_url`, each URL of a list, a provider's `base_url`); a whole
+ * round trip of what GET answered writes
  * every stored secret back unchanged: a mask that is saved back keeps the value
  * stored at its place (`restoreMaskedSecrets`). That round trip used to write
  * the masks into the companion's config.yaml in place of the provider keys.
@@ -45,8 +49,23 @@ const CLIENT_SECRET = `acme-client-secret-${crypto.randomBytes(8).toString('hex'
 const ACCESS_TOKEN = `acme-access-${crypto.randomBytes(8).toString('hex')}`
 const REFRESH_TOKEN = `acme-refresh-${crypto.randomBytes(8).toString('hex')}`
 const NESTED_KEY = `acme-nested-${crypto.randomBytes(8).toString('hex')}`
-const PLUGIN_SECRETS = [CLIENT_SECRET, ACCESS_TOKEN, REFRESH_TOKEN, NESTED_KEY]
-const SECRETS = [BEARER, API_KEY, AWS_SECRET, PUSH, CLAIM, ...PLUGIN_SECRETS]
+const STRIPE_KEY = `acme-stripe-${crypto.randomBytes(8).toString('hex')}`
+const PAT = `acme-pat-${crypto.randomBytes(8).toString('hex')}`
+const API_TOKENS = `acme-api-tokens-${crypto.randomBytes(8).toString('hex')}`
+const DB_PASSWORD = `acme-db-pw-${crypto.randomBytes(8).toString('hex')}`
+const ENGINE_VENDOR_KEY = `acme-engine-vendor-${crypto.randomBytes(8).toString('hex')}`
+const PROXY_PASSWORD = `acme-proxy-pw-${crypto.randomBytes(8).toString('hex')}`
+const IMAP_1 = `acme-imap-1-${crypto.randomBytes(8).toString('hex')}`
+const IMAP_2 = `acme-imap-2-${crypto.randomBytes(8).toString('hex')}`
+const DB_PASS = `acme-db-pass-${crypto.randomBytes(8).toString('hex')}`
+const LISTED = `acme-listed-${crypto.randomBytes(8).toString('hex')}`
+const SMTP_PASS = `acme-smtp-pass-${crypto.randomBytes(8).toString('hex')}`
+const dbUrl = (password: string) => `postgres://acme:${password}@db.acme.invalid:5432/acme`
+const proxyUrl = (password: string) => `https://proxy:${password}@proxy.acme.invalid/v1`
+const imap = (n: number, password: string) => `imap://acme:${password}@h${n}.acme.invalid/`
+const URL_MASK = '\u2022'.repeat(8)
+const PLUGIN_SECRETS = [CLIENT_SECRET, ACCESS_TOKEN, REFRESH_TOKEN, NESTED_KEY, STRIPE_KEY, PAT, API_TOKENS, DB_PASSWORD, ENGINE_VENDOR_KEY, IMAP_1, IMAP_2, DB_PASS, LISTED, SMTP_PASS]
+const SECRETS = [BEARER, API_KEY, AWS_SECRET, PUSH, CLAIM, PROXY_PASSWORD, ...PLUGIN_SECRETS]
 const masked = (v: string) => `\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${v.slice(-4)}`
 
 let server: HttpServer
@@ -94,6 +113,8 @@ function expectRedactedFrame(): void {
   expect(config.provider.bedrock_bearer_token).toBe(masked(BEARER))
   expect(config.providers.openai.api_key).toBe(masked(API_KEY))
   expect(config.providers.bedrock.aws_secret_access_key).toBe(masked(AWS_SECRET))
+  // A typed provider field holding a URL with a password: the password masked, the rest as it is.
+  expect(config.providers.proxy).toEqual({ api: 'anthropic', base_url: proxyUrl(URL_MASK) })
   expect(config.push_tokens.map((r: { token: string }) => r.token)).toEqual([masked(PUSH)])
   expect(config.push_tokens.filter((r: object) => 'claims' in r)).toEqual([])
   // A plugin's settings, by the shape of each key, at any depth.
@@ -101,7 +122,12 @@ function expectRedactedFrame(): void {
     enabled: true, client_id: 'id-of-the-app', base_url: 'https://acme.invalid',
     client_secret: masked(CLIENT_SECRET), access_token: masked(ACCESS_TOKEN), refresh_token: masked(REFRESH_TOKEN),
     oauth: { signing: { private_key: masked(NESTED_KEY) } },
+    STRIPE_KEY: masked(STRIPE_KEY), GITHUB_PAT: masked(PAT), api_tokens: masked(API_TOKENS),
+    database_url: dbUrl('\u2022'.repeat(8)),
+    servers: [imap(1, URL_MASK), imap(2, URL_MASK)], DB_PASS: masked(DB_PASS),
+    secrets: [{ name: 'GITHUB_TOKEN', value: masked(LISTED) }, { name: 'REGION', value: 'us-west-2' }],
   })
+  expect(config.engines.custom.env).toEqual({ OPENAI_KEY: masked(ENGINE_VENDOR_KEY), ANTHROPIC_BASE_URL: 'https://proxy.acme.invalid', SMTP_PASS: masked(SMTP_PASS) })
   // Non-secret fields ride as they are, so the client still has a config to read.
   expect(config.providers.openai.api).toBe('openai-chat')
 }
@@ -124,6 +150,7 @@ beforeAll(async () => {
     providers: {
       bedrock: { api: 'bedrock', aws_secret_access_key: AWS_SECRET },
       openai: { api: 'openai-chat', api_key: API_KEY },
+      proxy: { api: 'anthropic', base_url: proxyUrl(PROXY_PASSWORD) },
     },
     push_tokens: [
       { token: PUSH, platform: 'ios', kind: 'apns', environment: 'production', key_name: 'acme-phone', registered_at: new Date().toISOString(), origin: 'relay', claims: [CLAIM] },
@@ -133,8 +160,12 @@ beforeAll(async () => {
         enabled: true, client_id: 'id-of-the-app', base_url: 'https://acme.invalid',
         client_secret: CLIENT_SECRET, access_token: ACCESS_TOKEN, refresh_token: REFRESH_TOKEN,
         oauth: { signing: { private_key: NESTED_KEY } },
+        STRIPE_KEY, GITHUB_PAT: PAT, api_tokens: API_TOKENS, database_url: dbUrl(DB_PASSWORD),
+        servers: [imap(1, IMAP_1), imap(2, IMAP_2)], DB_PASS,
+        secrets: [{ name: 'GITHUB_TOKEN', value: LISTED }, { name: 'REGION', value: 'us-west-2' }],
       },
     },
+    engines: { custom: { env: { OPENAI_KEY: ENGINE_VENDOR_KEY, ANTHROPIC_BASE_URL: 'https://proxy.acme.invalid', SMTP_PASS } } },
   }), 'utf-8')
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as AddressInfo).port
@@ -230,6 +261,48 @@ describe('a companion web client, connected with a device token', () => {
     const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as Record<string, any>
     expect(onDisk.providers.openai.api_key).toBe(API_KEY)
     expect(onDisk.providers.bedrock.aws_secret_access_key).toBe(AWS_SECRET)
+    expect(onDisk.providers.proxy.base_url).toBe(proxyUrl(PROXY_PASSWORD))
+  })
+
+  it('a list of URLs edited on the companion keeps each host\'s own password, and a masked one moved to another host is refused', async () => {
+    const { config } = await (await api('/api/config')).json() as { config: Record<string, any> }
+    const plugin = config.plugins['acme-sync']
+    const write = (patch: Record<string, unknown>) => api('/api/config', { method: 'PUT', body: JSON.stringify({ plugins: { ...config.plugins, 'acme-sync': { ...plugin, ...patch } } }) })
+    const disk = async () => yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as Record<string, any>
+    // Delete the first: the second keeps its own password, never the first's.
+    expect((await write({ servers: [plugin.servers[1]] })).status).toBe(200)
+    expect((await disk()).plugins['acme-sync'].servers).toEqual([imap(2, IMAP_2)])
+    // Swapped back in with the first typed again: each in its place with its own.
+    expect((await write({ servers: [plugin.servers[1], imap(1, IMAP_1)] })).status).toBe(200)
+    expect((await disk()).plugins['acme-sync'].servers).toEqual([imap(2, IMAP_2), imap(1, IMAP_1)])
+    // A masked password on a host that has none stored: 400 naming the field, nothing written.
+    const before = await fs.readFile(CONFIG_FILE, 'utf-8')
+    const refused = await write({ servers: [imap(9, URL_MASK)] })
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toMatchObject({ code: 'masked_value_unmatched', field: 'plugins.acme-sync.servers[0]' })
+    expect(await fs.readFile(CONFIG_FILE, 'utf-8')).toBe(before)
+    // Back as seeded, for the cases after this one.
+    expect((await write({ servers: [imap(1, IMAP_1), imap(2, IMAP_2)] })).status).toBe(200)
+  })
+
+  it('a hidden value with other text typed next to it, written on the companion, is refused as edited_mask and nothing is written', async () => {
+    const { config } = await (await api('/api/config')).json() as { config: Record<string, any> }
+    const plugin = config.plugins['acme-sync']
+    const write = (patch: Record<string, unknown>) => api('/api/config', { method: 'PUT', body: JSON.stringify({ plugins: { ...config.plugins, 'acme-sync': { ...plugin, ...patch } } }) })
+    const before = await fs.readFile(CONFIG_FILE, 'utf-8')
+    for (const [label, patch, field] of [
+      ['a space after a hidden value', { client_secret: `${plugin.client_secret} ` }, 'plugins.acme-sync.client_secret'],
+      ['a key typed after a hidden value', { DB_PASS: `${plugin.DB_PASS}, typed` }, 'plugins.acme-sync.DB_PASS'],
+      ['a `{ name, value }` value with text after it', { secrets: [{ ...plugin.secrets[0], value: `${plugin.secrets[0].value} x-new` }, plugin.secrets[1]] }, 'plugins.acme-sync.secrets[0].value'],
+    ] as Array<[string, Record<string, unknown>, string]>) {
+      const refused = await write(patch)
+      expect(refused.status, label).toBe(400)
+      const body = await refused.json() as { error: string }
+      expect(body, label).toMatchObject({ code: 'masked_value_unmatched', field, reason: 'edited_mask' })
+      expect(body.error, label).toMatch(/Keep the hidden value exactly as it was shown, or replace it with the full value of /)
+      expect(await fs.readFile(CONFIG_FILE, 'utf-8'), label).toBe(before)
+    }
+    expect(before).not.toContain('\u2022')
   })
 
   it('a whole round trip (GET, then PUT of everything it answered) keeps every stored secret, and its broadcast is redacted', async () => {
@@ -248,6 +321,10 @@ describe('a companion web client, connected with a device token', () => {
     expect(onDisk.providers.openai.api_key).toBe(API_KEY)
     expect(onDisk.providers.bedrock.aws_secret_access_key).toBe(AWS_SECRET)
     expect(onDisk.plugins['acme-sync']).toMatchObject({ client_secret: CLIENT_SECRET, access_token: ACCESS_TOKEN, refresh_token: REFRESH_TOKEN, oauth: { signing: { private_key: NESTED_KEY } } })
+    expect(onDisk.plugins['acme-sync']).toMatchObject({ STRIPE_KEY, GITHUB_PAT: PAT, api_tokens: API_TOKENS, database_url: dbUrl(DB_PASSWORD) })
+    expect(onDisk.plugins['acme-sync']).toMatchObject({ servers: [imap(1, IMAP_1), imap(2, IMAP_2)], DB_PASS, secrets: [{ name: 'GITHUB_TOKEN', value: LISTED }, { name: 'REGION', value: 'us-west-2' }] })
+    expect(onDisk.providers.proxy.base_url).toBe(proxyUrl(PROXY_PASSWORD))
+    expect(onDisk.engines.custom.env).toMatchObject({ OPENAI_KEY: ENGINE_VENDOR_KEY, SMTP_PASS })
   })
 
   it('no frame the client received carries a secret, and the box kept every one', async () => {

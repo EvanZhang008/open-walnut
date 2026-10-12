@@ -56,7 +56,8 @@ integrationsRouter.get('/settings', async (_req, res) => {
   const config = await getConfig();
   const pluginConfigs = (config.plugins ?? {}) as Record<string, Record<string, unknown>>;
 
-  const maskValues = maskPluginFormValues;
+  // List entries show their tails here: this route's callers read the same tails in GET /api/config.
+  const maskValues = (values: Record<string, unknown>) => maskPluginFormValues(values, { listTails: true });
 
   const loaded = registry.getAll()
     .filter(p => p.id !== 'local')

@@ -13,11 +13,15 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { couldntSave } from '../inputs/useOptimisticSetting';
-import { saveErrorMessage } from '../settings-pane-context';
+import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
+import { MaskedValueError } from '../../../../../src/core/config-secret-shape';
 import {
+  SECRET_LIST_HINT,
+  editedMaskField,
   fieldBounds,
   fieldKindFor,
   fieldOwnerFor,
+  isSecretListField,
   listPlaceholder,
   listTextFor,
   valueForSave,
@@ -82,15 +86,21 @@ function wholeIfInteger(schema: FieldSchema | undefined, value: unknown): unknow
  * The patch one plugin's Save writes — every draft field, in the shape config.yaml holds, minus the two
  * things that must never be written:
  *
- *   . a MASKED secret, which stands for "unchanged" and would otherwise store the mask as the value;
+ *   . a MASKED secret in a SCALAR field, which stands for "unchanged" and would otherwise store the mask
+ *     as the value;
  *   . an emptied SCALAR box, which stands for "unset", so the manifest default applies server-side.
  *     A field the user never touched is not in the draft at all (or still holds the value that came off
  *     the wire), so it is not this filter that protects those.
  *
- * `valueForSave` runs BEFORE the empty test, and that order is the whole point: it turns an emptied
- * textarea into `[]`, which is a VALUE and survives, where the old order dropped the key entirely; the
- * server then fell back to the manifest default and the list the user had just emptied came back after
- * a refresh, looking exactly like a save that had silently failed.
+ * `valueForSave` runs BEFORE both tests, and that order is the whole point. It turns an emptied textarea
+ * into `[]`, which is a VALUE and survives, where the old order dropped the key entirely; the server then
+ * fell back to the manifest default and the list the user had just emptied came back after a refresh,
+ * looking exactly like a save that had silently failed. The same order keeps a list edit: a list of
+ * hidden secrets cut down to ONE line has the mask as its whole text, and testing the raw text dropped
+ * the edit as "unchanged" (PUT 200, "Saved", nothing deleted). A list is always sent as a list; the
+ * server puts each hidden entry back, or refuses one it cannot pair. A list of secrets is split on line
+ * breaks only and each line trimmed (`isSecretListField`), so a secret typed in full with a comma in it
+ * stays one entry and a hidden line with a stray space is still that hidden line.
  */
 export function pluginSavePayload(
   draft: Record<string, unknown>,
@@ -98,9 +108,8 @@ export function pluginSavePayload(
 ): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(draft)
-      .filter(([, v]) => v !== MASKED)
-      .map(([k, v]) => [k, wholeIfInteger(schemas[k], valueForSave(schemas[k], v))] as const)
-      .filter(([, v]) => v !== ''),
+      .map(([k, v]) => [k, wholeIfInteger(schemas[k], valueForSave(schemas[k], v, { secret: isSecretListField(k, schemas[k]) }))] as const)
+      .filter(([, v]) => v !== MASKED && v !== ''),
   );
 }
 
@@ -124,6 +133,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<{ id: string; message: string } | null>(null);
+  const { notifySaveFailed } = useSettingsSaved();
 
   // `onlyIds` is joined into the dep key so switching which row is expanded refetches
   // instead of showing the previous plugin's fields.
@@ -176,6 +186,15 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
     const cleaned = Object.fromEntries(
       Object.entries(pluginSavePayload(draft, schemas)).filter(([k]) => edited.has(k) || stored[k] === undefined),
     );
+    // A hidden value with other text typed next to it is neither the hidden value nor a new one: say so
+    // before any request, with the server's own message (it refuses the same value as `edited_mask`).
+    const editedMask = editedMaskField(cleaned, `plugins.${plugin.id}`);
+    if (editedMask !== null) {
+      const message = new MaskedValueError(editedMask, 'edited_mask').message;
+      setSaveError({ id: plugin.id, message });
+      notifySaveFailed(message);
+      return;
+    }
     setSaving(plugin.id);
     setSaveError(null);
     try {
@@ -266,6 +285,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                 );
               }
               if (kind === 'list') {
+                const secretList = isSecretListField(key, schema);
                 return (
                   <SettingsRow
                     key={key}
@@ -275,7 +295,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     className="settings-row-stacked"
                     label={<>{label}{requiredTag(key)}</>}
                     htmlFor={fieldId}
-                    help={help}
+                    help={secretList ? <>{help}{help ? ' ' : null}{SECRET_LIST_HINT}</> : help}
                     state={isMissing ? 'warning' : undefined}
                     control={
                       <textarea
@@ -287,7 +307,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                         // on every keystroke would eat the separator as it was typed.
                         value={listTextFor(value)}
                         onChange={e => setField(plugin.id, key, e.target.value)}
-                        placeholder={listPlaceholder(schema)}
+                        placeholder={listPlaceholder(schema, { secret: secretList })}
                       />
                     }
                   />

@@ -2,9 +2,9 @@
  * The status route keeps working for the iPhone builds already installed.
  *
  * `GET /api/push/status` answers with `pushRegistrationStatus` (on a replica, the
- * primary's). Every app build that predates token tags (App Store build 107 and
- * earlier) decides "is my row still there?" from that answer alone, with one rule
- * in PushLaunchDecision.swift:
+ * primary's). Every app build that predates token tags (App Store build 107,
+ * TestFlight builds 108 and 109, and earlier) decides "is my row still there?"
+ * from that answer alone, with one rule in PushLaunchDecision.swift:
  *
  *   - it decodes only `token_prefix` from each row (`PushTokenRow`), so a new
  *     field such as `token_tag` is ignored;
@@ -14,8 +14,9 @@
  *     prefix starts it.
  *
  * Those installs keep that rule for as long as they run, whatever the source says
- * later. A tag-matching build matches a row by its `token_tag` first and keeps
- * this same rule, unchanged, for a row with no tag, so the source still holds it.
+ * later. A tag-matching build (110 and later) matches a row by its `token_tag`
+ * first and keeps this same rule, unchanged, for a row with no tag, so the
+ * source still holds it.
  * This file reads the rule from the Swift source (the numbers and the steps, not
  * a copy typed here) and runs it against the rows the server really returns. If the Swift rule changes on purpose, the installed builds still apply
  * the old one: keep the old numbers here for them until `token_prefix` can go

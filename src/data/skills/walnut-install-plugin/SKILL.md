@@ -82,7 +82,7 @@ curl -s -X PUT "$base/api/config" \
   -d "{\"plugins\":$merged}"
 ```
 
-A secret already stored comes back from `GET /api/config` masked (bullets, then its last 4 characters). Send it back as it is: the server keeps the stored value for every mask it receives.
+A secret already stored comes back from `GET /api/config` masked (bullets, then its last 4 characters; in a URL such as a `database_url`, only the password, as bullets). Send it back as it is: the server keeps the stored value for every mask it receives. To change the host of such a URL, or rename an entry whose secret is hidden, type the full value: a mask the server cannot pair is refused (`400 masked_value_unmatched`, naming the `field` and a `reason`, with a message that says what to do). With `reason: "unmatched"`, the stored value changed since you read it: read the config again and retry. With `missing`, `ambiguous` or `renamed`, type the full value of the field the message names. With `edited_mask`, a value still holds bullets with other text next to them: send the mask back exactly as you read it, or the full value, never a mask with something added.
 
 Never place a secret in a command line if a safer interactive or Settings path is available. Verify that status changes to `loaded`.
 

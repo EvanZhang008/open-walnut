@@ -81,14 +81,17 @@ function expandHome(input: string): string {
 /**
  * Fill a definition in for one run. Throws a sentence when the definition or an
  * option value cannot be used (a pattern that does not compile, a value that does
- * not match its option's pattern), which the runtime shows as `unavailable`.
+ * not match its option's pattern), which the runtime shows as `unavailable`. The
+ * sentence names the option, never its value: it becomes `status.lastError`,
+ * which every paired device reads, and an option can be a secret the settings
+ * show only masked.
  */
 export function resolveRun(def: ExposeProviderDefinition, port: number, values: Record<string, string> = {}): ExposeRun {
   const filled: Record<string, string> = { port: String(port) }
   for (const option of def.options ?? []) {
     const value = (values[option.key] ?? option.default ?? '').trim()
     if (option.pattern && !new RegExp(`^(?:${option.pattern})$`).test(value)) {
-      throw new Error(`${option.label} "${value}" is not valid for ${def.title}.`)
+      throw new Error(`${option.label} is not valid for ${def.title}: it does not have the format the tunnel provider expects.`)
     }
     filled[option.key] = value
   }

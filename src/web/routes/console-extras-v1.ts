@@ -192,7 +192,8 @@ consoleExtrasV1Router.get('/integrations', async (_req: Request, res: Response, 
 })
 
 // Secret-shaped config values are masked in the response, at any depth (same rule as the web
-// route, core/config-secret-shape.ts).
+// route, core/config-secret-shape.ts), with no tails: the cloud companion can forward a call here,
+// and it cannot read this machine's GET /api/config.
 
 // GET /api/v1/integrations/settings — full plugin settings metadata (schema +
 // uiHints + masked current values) for a data-driven settings form.

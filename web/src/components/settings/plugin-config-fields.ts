@@ -9,9 +9,13 @@
  *
  * `integer` is `number` with a whole-number step. A string `array` is a textarea: one entry per line
  * is what a list of channels looks like when you read it, and commas are accepted because that is
- * what people paste. Anything else (an object, an array of objects) stays config.yaml-only — a
- * half-rendered nested form is worse than an honest absence.
+ * what people paste. A list of secrets (`isSecretListField`) is one value per line and nothing else:
+ * a comma or a space inside a secret is part of it, while the ends of each line are trimmed (no real
+ * secret starts or ends with whitespace). Anything else (an object, an array of objects) stays
+ * config.yaml-only: a half-rendered nested form is worse than an honest absence.
  */
+
+import { holdsEditedMask, isSecretKey } from '../../../../src/core/config-secret-shape';
 
 export interface PluginFieldSchema {
   type?: string;
@@ -60,8 +64,23 @@ export function listTextFor(value: unknown): string {
   return String(value);
 }
 
-/** Newlines and commas both separate; blanks are dropped, so a trailing separator is not an entry. */
-export function parseListText(text: string): string[] {
+/**
+ * A list field whose entries are secrets: its key reads like one (`api_keys`, `backup_tokens`), by the
+ * same rule the server masks the form's values with. Its text is one value per line, each line trimmed
+ * at both ends, so the full value of a secret with a comma in it can be typed in (the server asks for
+ * exactly that when it cannot tell a hidden entry apart), and a hidden line with a stray space at an
+ * end is still that hidden line. A secret never holds a line break.
+ */
+export function isSecretListField(key: string, schema: PluginFieldSchema | undefined): boolean {
+  return fieldKindFor(schema) === 'list' && isSecretKey(key);
+}
+
+/**
+ * Newlines and commas both separate; blanks are dropped, so a trailing separator is not an entry.
+ * With `secret`, only a line break separates; each line is trimmed at both ends and a blank one dropped.
+ */
+export function parseListText(text: string, opts: { secret?: boolean } = {}): string[] {
+  if (opts.secret) return text.split(/\r\n|\r|\n/).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
   return text
     .split(/[\n,]/)
     .map((entry) => entry.trim())
@@ -72,9 +91,9 @@ export function parseListText(text: string): string[] {
  * The value as the config file should hold it. Identity for every kind whose control already edits
  * the final shape; only a list has a text form on screen and an array on disk.
  */
-export function valueForSave(schema: PluginFieldSchema | undefined, value: unknown): unknown {
+export function valueForSave(schema: PluginFieldSchema | undefined, value: unknown, opts: { secret?: boolean } = {}): unknown {
   const kind = fieldKindFor(schema);
-  if (kind === 'list') return typeof value === 'string' ? parseListText(value) : value;
+  if (kind === 'list') return typeof value === 'string' ? parseListText(value, opts) : value;
   // A declared bound is the author's rule, so a 5 typed into a min-15 field saves as 15:
   // the same thing the plugin's own normalizer would do, done where the person can see it.
   if ((kind === 'number' || kind === 'integer') && typeof value === 'number' && Number.isFinite(value)) {
@@ -87,11 +106,30 @@ export function valueForSave(schema: PluginFieldSchema | undefined, value: unkno
   return value;
 }
 
-/** `default: a, b` when the manifest names one, else how to type the list. */
-export function listPlaceholder(schema: PluginFieldSchema | undefined): string {
+/**
+ * The first value of a plugin's save that holds a hidden value with other text typed next to it (a line
+ * `<mask>, sk-new`, a mask with a comma after it), as its config path (`plugins.<id>.<key>[<n>]`), or
+ * null. The server refuses such a value (`edited_mask`); the form refuses it first, before any request.
+ */
+export function editedMaskField(payload: Record<string, unknown>, at: string): string | null {
+  for (const [k, v] of Object.entries(payload)) {
+    if (typeof v === 'string' && holdsEditedMask(v)) return `${at}.${k}`;
+    if (Array.isArray(v)) {
+      const i = v.findIndex((entry) => typeof entry === 'string' && holdsEditedMask(entry));
+      if (i >= 0) return `${at}.${k}[${i}]`;
+    }
+  }
+  return null;
+}
+
+/** The short hint under a list of secrets: how to type it. */
+export const SECRET_LIST_HINT = 'One per line.';
+
+/** `default: a, b` when the manifest names one, else how to type the list (a list of secrets: one per line). */
+export function listPlaceholder(schema: PluginFieldSchema | undefined, opts: { secret?: boolean } = {}): string {
   const fallback = schema?.default;
-  if (Array.isArray(fallback) && fallback.length > 0) return `default: ${fallback.join(', ')}`;
-  return 'One per line, or comma-separated';
+  if (Array.isArray(fallback) && fallback.length > 0) return `default: ${fallback.join(opts.secret ? '\n' : ', ')}`;
+  return opts.secret ? 'One per line' : 'One per line, or comma-separated';
 }
 
 /**

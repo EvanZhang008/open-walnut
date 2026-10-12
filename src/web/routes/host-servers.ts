@@ -16,7 +16,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig, updateHostServerConfig } from '../../core/config-manager.js'
-import { maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
+import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom } from '../../core/host-server/index.js'
@@ -102,7 +102,7 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
         enabled: e.enabled !== undefined ? e.enabled : before.enabled,
         ...((e.provider !== undefined ? e.provider : before.provider) ? { provider: e.provider !== undefined ? e.provider : before.provider } : {}),
         // The form saves every option back, a masked one too: that one keeps its stored value.
-        options: e.options !== undefined ? restoreMaskedSecrets(options, before.options) : before.options,
+        options: e.options !== undefined ? restoreMaskedSecrets(options, before.options, `hosts.${hostKey}.server.expose.options`) : before.options,
       }
     }
     await updateHostServerConfig(hostKey, patch)
@@ -113,6 +113,10 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
     void getHostServerManager()?.reconcile(hostKey)
     res.json({ host: await hostEntry(hostKey) })
   } catch (err) {
+    if (err instanceof MaskedValueError) {
+      res.status(400).json({ error: err.message, code: err.code, field: err.field, reason: err.reason })
+      return
+    }
     next(err)
   }
 })

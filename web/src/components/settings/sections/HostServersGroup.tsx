@@ -32,6 +32,17 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
   const [data, setData] = useState<HostServersResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Refused tunnel option saves, per host and option: each shown under its option, whose box keeps
+  // the typed value, until that option is saved or put back. No other write clears one.
+  const [optionErrors, setOptionErrors] = useState<Record<string, Record<string, string>>>({});
+  const setOptionError = (hostKey: string, key: string, message: string | null) =>
+    setOptionErrors((prev) => {
+      if (message === null && !prev[hostKey]?.[key]) return prev;
+      const next = { ...(prev[hostKey] ?? {}) };
+      if (message === null) delete next[key];
+      else next[key] = message;
+      return { ...prev, [hostKey]: next };
+    });
   /** Option fields being typed in, per host: a poll must not overwrite them. */
   const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
   const readSeq = useRef(0);
@@ -59,24 +70,29 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
     setData((prev) => (prev ? { ...prev, hosts: prev.hosts.map((h) => (h.hostKey === host.hostKey ? host : h)) } : prev));
   };
 
-  const call = async (hostKey: string, run: () => Promise<{ host: HostServerEntry | null }>) => {
+  /** Runs one change; true when it was saved. `optionKey` names the tunnel option it saves, if any. */
+  const call = async (hostKey: string, run: () => Promise<{ host: HostServerEntry | null }>, optionKey?: string): Promise<boolean> => {
     setBusy(hostKey);
     setErrors((prev) => { const next = { ...prev }; delete next[hostKey]; return next; });
     readSeq.current++;
     try {
       const res = await run();
       if (res.host) replaceHost(res.host);
+      if (optionKey) setOptionError(hostKey, optionKey, null);
+      return true;
     } catch (err) {
-      log.warn('settings', 'host server setting not saved', { hostKey, error: saveErrorMessage(err) });
-      setErrors((prev) => ({ ...prev, [hostKey]: saveErrorMessage(err) }));
+      log.warn('settings', 'host server setting not saved', { hostKey, optionKey, error: saveErrorMessage(err) });
+      if (optionKey) setOptionError(hostKey, optionKey, saveErrorMessage(err));
+      else setErrors((prev) => ({ ...prev, [hostKey]: saveErrorMessage(err) }));
+      return false;
     } finally {
       setBusy(null);
       void load();
     }
   };
 
-  const write = (hostKey: string, body: { enabled?: boolean; expose?: ExposePatch }) =>
-    call(hostKey, () => apiPut<{ host: HostServerEntry | null }>(`${PATH}/${encodeURIComponent(hostKey)}`, body));
+  const write = (hostKey: string, body: { enabled?: boolean; expose?: ExposePatch }, optionKey?: string) =>
+    call(hostKey, () => apiPut<{ host: HostServerEntry | null }>(`${PATH}/${encodeURIComponent(hostKey)}`, body), optionKey);
 
   if (!data || data.hosts.length === 0) return null;
   const providers = data.providers;
@@ -97,11 +113,22 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
         const tunnelLine = describeExpose(tunnel, provider?.title ?? 'the tunnel');
         const draft = drafts[host.hostKey] ?? {};
         const optionValue = (key: string) => draft[key] ?? exposeSettings.options[key] ?? '';
+        // The typed value stays in its box until the save succeeds, so a refused one (400) can be fixed.
+        // Dropped only while the box still holds what was saved: typing on during the write is kept.
+        const dropDraft = (key: string, saved: string) =>
+          setDrafts((prev) => {
+            if (prev[host.hostKey]?.[key] !== saved) return prev;
+            const next = { ...prev[host.hostKey] };
+            delete next[key];
+            return { ...prev, [host.hostKey]: next };
+          });
         const saveOption = (key: string) => {
           const value = draft[key];
-          setDrafts((prev) => { const next = { ...(prev[host.hostKey] ?? {}) }; delete next[key]; return { ...prev, [host.hostKey]: next }; });
-          if (value === undefined || (exposeSettings.options[key] ?? '') === value) return;
-          void write(host.hostKey, { expose: { options: { ...exposeSettings.options, [key]: value } } });
+          if (value === undefined) return;
+          // Put back as stored: nothing to write, and nothing refused any more.
+          if ((exposeSettings.options[key] ?? '') === value) { dropDraft(key, value); setOptionError(host.hostKey, key, null); return; }
+          void write(host.hostKey, { expose: { options: { ...exposeSettings.options, [key]: value } } }, key)
+            .then((saved) => { if (saved) dropDraft(key, value); });
         };
         const running = host.view?.phase === 'running';
         return (
@@ -163,6 +190,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                     label={option.label}
                     htmlFor={`host-server-option-${host.hostKey}-${option.key}`}
                     help={option.help}
+                    error={optionErrors[host.hostKey]?.[option.key]}
                     control={
                       <input
                         id={`host-server-option-${host.hostKey}-${option.key}`}

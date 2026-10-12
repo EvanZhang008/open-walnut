@@ -14,7 +14,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
-import { maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
+import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
@@ -90,7 +90,7 @@ exposeRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     const before = (await getConfig()).expose ?? {}
     // The form saves every option back, a masked one too: that one keeps its stored value.
-    if (options) options = restoreMaskedSecrets(options, before.options ?? {})
+    if (options) options = restoreMaskedSecrets(options, before.options ?? {}, 'expose.options')
     const nextExpose = {
       ...before,
       ...(body.enabled !== undefined ? { enabled: body.enabled as boolean } : {}),
@@ -102,6 +102,10 @@ exposeRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     const status = await getExposeRuntime()?.reconcile() ?? offStatus()
     res.json({ status })
   } catch (err) {
+    if (err instanceof MaskedValueError) {
+      res.status(400).json({ error: err.message, code: err.code, field: err.field, reason: err.reason })
+      return
+    }
     next(err)
   }
 })

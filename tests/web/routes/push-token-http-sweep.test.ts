@@ -93,7 +93,19 @@ const WINDOWS = windowsOf([APNS, EXPO_INNER, RELAYED])
 const CLAIM_WINDOWS = windowsOf(CLAIMS)
 /** A plugin's own secrets, in its free-form settings: client secret, access, refresh, and a nested auth token. */
 const PLUGIN_SECRETS = Array.from({ length: 4 }, () => crypto.randomBytes(16).toString('hex'))
-const PLUGIN_WINDOWS = windowsOf(PLUGIN_SECRETS)
+/**
+ * More free-form secrets: an engine's API key (the one the real config holds), a vendor key and a
+ * personal access token in a plugin, plural `api_tokens`, the password of a URL in a plugin value,
+ * the passwords of a list of URLs, a `DB_PASS` and an engine's `SMTP_PASS`, and the value of a
+ * `{ name, value }` entry named like a secret.
+ */
+const MORE_SECRETS = Array.from({ length: 10 }, () => crypto.randomBytes(16).toString('hex'))
+const [ENGINE_KEY, STRIPE_KEY, PAT, API_TOKENS, DB_PASSWORD, IMAP_1, IMAP_2, DB_PASS, LISTED, SMTP_PASS] =
+  MORE_SECRETS as [string, string, string, string, string, string, string, string, string, string]
+const DB_URL = `postgres://acme:${DB_PASSWORD}@db.acme.invalid:5432/acme`
+const SERVERS = [`imap://acme:${IMAP_1}@h1.acme.invalid/`, `imap://acme:${IMAP_2}@h2.acme.invalid/`]
+const LISTED_SECRETS = [{ name: 'GITHUB_TOKEN', value: LISTED }, { name: 'REGION', value: 'us-west-2' }]
+const PLUGIN_WINDOWS = windowsOf([...PLUGIN_SECRETS, ...MORE_SECRETS])
 
 /** What a body leaks, if anything: a token or a claim, whole or a 10-character window. */
 function leakIn(text: string): string | null {
@@ -227,8 +239,11 @@ beforeAll(async () => {
       'acme-sync': {
         client_id: 'acme-client-id', client_secret: PLUGIN_SECRETS[0], access_token: PLUGIN_SECRETS[1],
         refresh_token: PLUGIN_SECRETS[2], auth: { type: 'api-token', token: PLUGIN_SECRETS[3] },
+        stripe_key: STRIPE_KEY, GITHUB_PAT: PAT, api_tokens: API_TOKENS, database_url: DB_URL,
+        servers: SERVERS, DB_PASS, secrets: LISTED_SECRETS,
       },
     },
+    engines: { custom: { env: { ANTHROPIC_API_KEY: ENGINE_KEY, SMTP_PASS } } },
   }))
   // What a build without token tags left on disk before this fix: raw slices under its `m_` keys.
   const day = now.slice(0, 10)
@@ -365,16 +380,37 @@ describe('the routes that carry a row, by shape', () => {
     } finally {
       bus.unsubscribe('sweep-config-probe')
     }
-    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { push_tokens: Array<{ token: string; claims?: string[] }>; plugins: Record<string, any> }
+    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { push_tokens: Array<{ token: string; claims?: string[] }>; plugins: Record<string, any>; engines: Record<string, any> }
     expect(onDisk.push_tokens.map((r) => r.token)).toEqual([APNS, EXPO, RELAYED])
     expect(onDisk.push_tokens[2]?.claims).toEqual(CLAIMS)
     // The plugin's secrets were read masked and saved back as masks: each kept its stored value.
     const plugin = onDisk.plugins['acme-sync']
     expect([plugin.client_secret, plugin.access_token, plugin.refresh_token, plugin.auth.token]).toEqual(PLUGIN_SECRETS)
+    expect([plugin.stripe_key, plugin.GITHUB_PAT, plugin.api_tokens, plugin.database_url]).toEqual([STRIPE_KEY, PAT, API_TOKENS, DB_URL])
+    expect([plugin.servers, plugin.DB_PASS, plugin.secrets]).toEqual([SERVERS, DB_PASS, LISTED_SECRETS])
+    expect(onDisk.engines.custom.env).toEqual({ ANTHROPIC_API_KEY: ENGINE_KEY, SMTP_PASS })
     const broadcast = changed.find((c) => c.includes('push_tokens'))
     expect(broadcast).toBeDefined()
     expect(broadcast).toContain('\u2022')
     expect(leakIn(broadcast ?? '')).toBeNull()
+  })
+
+  it('a phone that changes its own row between a client\'s read and its save does not fail the save', async () => {
+    // The push registry is the only writer of the rows, so a save leaves them out before it pairs
+    // any mask: a row that no longer matches what the client read is no reason to refuse the save.
+    const read = await (await fetch(`http://127.0.0.1:${port}/api/config`)).json() as { config: Record<string, unknown> }
+    const { setDevicePushPreferences } = await import('../../../src/core/push/registry.js')
+    await setDevicePushPreferences(PHONE, { mode: 'when-inactive' })
+    try {
+      const put = await fetch(`http://127.0.0.1:${port}/api/config`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(read.config),
+      })
+      expect(put.status).toBe(200)
+      const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { push_tokens: Array<{ key_name: string; token: string; mode?: string }> }
+      expect(onDisk.push_tokens.find((r) => r.key_name === PHONE)).toMatchObject({ token: APNS, mode: 'when-inactive' })
+    } finally {
+      await setDevicePushPreferences(PHONE, { mode: 'always' })
+    }
   })
 
   it('the client log the phone uploaded reached disk scrubbed', async () => {

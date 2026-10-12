@@ -52,7 +52,7 @@ export function getWebAssetsReport(): WebAssetsReport | null {
 // device tokens and the secret-shaped values in the free-form maps (a plugin's
 // settings, say) are masked; the typed fields Settings edits are not.
 import { configForClients, emitConfigChanged } from '../../core/config-broadcast.js'
-import { restoreMaskedSecrets } from '../../core/config-secret-shape.js'
+import { MaskedValueError, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
@@ -564,8 +564,12 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     // A client saves back what it read, and GET masks secrets (core/config-broadcast.ts):
     // every mask in the write becomes the value stored at the same place again, so a
     // round trip never replaces a secret with its mask. Before any check below, which
-    // compares sections with what is stored.
-    const body = restoreMaskedSecrets(req.body, await getConfig())
+    // compares sections with what is stored. A mask it cannot pair with one stored value
+    // answers 400 naming the field (MaskedValueError), and nothing is written.
+    // `push_tokens` is left out first: the push registry is its only writer (below), and
+    // a phone may change its row between this client's read and its write.
+    const { push_tokens: ignoredPushTokens, ...sent } = req.body ?? {}
+    const body = restoreMaskedSecrets(sent, await getConfig())
 
     if (body.version !== undefined && body.version !== 1) {
       res.status(400).json({ error: 'version must be 1' })
@@ -624,14 +628,13 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
 
-    // The push registry is the only writer of `push_tokens`. GET masks them, so a
-    // client that saves back what it read would otherwise overwrite every phone's
-    // token with its mask.
-    const { push_tokens: ignoredPushTokens, ...writable } = body
+    // The push registry is the only writer of `push_tokens` (left out above). GET masks
+    // them, so a client that saves back what it read would otherwise overwrite every
+    // phone's token with its mask.
     if (ignoredPushTokens !== undefined) {
       log.web.info('config: push_tokens in a config write ignored (the push registry owns them)')
     }
-    await updateConfig(writable)
+    await updateConfig(body)
     // Re-read merged config so the event carries the full picture
     const read = await getConfig()
     // Same view as GET /api/config: the injected cloud box row is not a Settings host.
@@ -641,6 +644,10 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     emitConfigChanged(merged, ['web-ui', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {
+    if (err instanceof MaskedValueError) {
+      res.status(400).json({ error: err.message, code: err.code, field: err.field, reason: err.reason })
+      return
+    }
     next(err)
   }
 })

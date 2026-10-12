@@ -293,8 +293,9 @@ the token or a slice of it, and any text a push service sends back is scrubbed o
 the token before it is logged. No HTTP response or WebSocket frame carries a token
 either. `GET /api/config` and every `config:changed` broadcast that carries the
 config give the same view of it (`configForClients`, src/core/config-broadcast.ts):
-every `push_tokens[].token` masked in every mode (with the secret-shaped values of
-the free-form maps, a plugin's settings among them), every secret masked on a replica.
+every `push_tokens[].token` masked in every mode (with the secret-shaped values and
+URL passwords of the free-form maps, a plugin's settings and an engine's environment
+among them), every secret masked on a replica.
 The WebSocket exit applies that view to each `config:changed` frame again, whoever
 emitted it. `PUT /api/config` ignores `push_tokens` (the push registry is their
 only writer), and the status route names rows by `token_tag`. A relayed row's
@@ -363,12 +364,13 @@ Each row carries:
 - `token_tag`: the first 8 hex characters of the SHA-256 of the token
   (`tokenTag` in `src/core/push/send.ts`, the same value server log lines use).
   A tag-matching build (one made from a tree whose `PushLaunchDecision.swift`
-  has `tokenTag`) computes it for its own token and finds its row by comparing
-  tags, and falls back to `token_prefix` only for a row with no `token_tag`, that
-  is, against a server older than token tags. App Store build 107 and every build
-  before it are not tag-matching and do not read it.
+  has `tokenTag`: TestFlight build 110 and later) computes it for its own token
+  and finds its row by comparing tags, and falls back to `token_prefix` only for
+  a row with no `token_tag`, that is, against a server older than token tags.
+  App Store build 107, TestFlight builds 108 and 109, and every build before
+  them are not tag-matching and do not read it.
 - `token_prefix`: legacy, the token's first 8 characters plus `"..."` (it was 12
-  before token tags). Builds that are not tag-matching (107 and earlier) read it
+  before token tags). Builds that are not tag-matching (109 and earlier) read it
   for every row, and tag-matching builds only for a row with no tag: it strips
   the trailing dots, lowercases it, refuses it under 8 characters, and matches it
   against the start of its own token (`comparablePrefix` and `minComparablePrefix`
@@ -377,16 +379,16 @@ Each row carries:
   source and checks the server's rows against it.
 
 **When `token_prefix` can go:** once every paired phone runs a tag-matching
-build. The first one is the first build uploaded from a tree that has `tokenTag`
-in `PushLaunchDecision.swift` (App Store build 107 predates it); write its number
-here when it ships. Both conditions have to hold:
+build, which is build 110 or later: TestFlight build 110 is the first, and App
+Store build 107 and TestFlight builds 108 and 109 predate token tags. Both
+conditions have to hold:
 
-1. TestFlight builds expire 90 days after upload, so 90 days after the last
-   upload of a build that is not tag-matching, no TestFlight install can run one.
+1. TestFlight builds expire 90 days after upload, so 90 days after build 109 (the
+   last one without tag matching) was uploaded, no TestFlight install can run one.
 2. An App Store install never expires, so read what the phones report: every
    phone sends `appVersion` (for example `"1.0.0 (107)"`) at each launch, and the
    paired devices list (`GET /api/devices`) shows it. When every device there
-   reports a tag-matching build, delete `token_prefix` together with
+   reports build 110 or later, delete `token_prefix` together with
    `legacyTokenPrefix` and `LEGACY_TOKEN_PREFIX_CHARS`.
 
 ## When nothing arrives

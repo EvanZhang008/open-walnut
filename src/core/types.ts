@@ -1020,6 +1020,8 @@ export interface Config {
   /** Multi-provider configuration. Each key is a provider name, value is protocol + auth config.
    *  When absent, auto-synthesized from legacy `provider.*` fields + env var auto-detection. */
   providers?: Record<string, import('../model/providers/types.js').ProviderConfig>;
+  /** Per-engine settings, keyed by engine id (`custom`, `codex`, ...). */
+  engines?: Record<string, EngineConfigEntry>;
   agent?: AgentConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
@@ -1861,6 +1863,20 @@ export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
  */
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
+/**
+ * One engine's settings (`engines.<id>`), read where the engine starts:
+ * `adapter_cmd` by src/core/agents/engine-probe.ts and src/providers/acp-session.ts,
+ * `env` by `engineEnvOverlayFromConfig` (src/providers/acp-session.ts). Client
+ * views mask `env` by the shape of its keys (core/config-redact.ts), since it
+ * holds the engine's API keys.
+ */
+export interface EngineConfigEntry {
+  /** argv of the ACP adapter, for an engine whose adapter comes from config (`engines.custom.adapter_cmd`). */
+  adapter_cmd?: string[];
+  /** Variables set for the engine's process; `null` removes an inherited one. */
+  env?: Record<string, string | null>;
+}
+
 /**
  * All registered coding-agent engines. Order = presentation preference.
  * Capabilities per engine live in src/core/agents/engine-registry.ts.

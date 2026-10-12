@@ -94,8 +94,14 @@ describe('resolveRun', () => {
     expect(run.args).toEqual(['create', '41234', '--name', 'mybox'])
     expect(resolveRun(DEF, 1, {}).args[3]).toBe('walnut')
   })
-  it('refuses a value that does not match its option pattern', () => {
-    expect(() => resolveRun(DEF, 1, { name: 'bad name; rm -rf' })).toThrow(/Name "bad name; rm -rf" is not valid/)
+  it('refuses a value that does not match its option pattern, naming the option and never the value', () => {
+    // The sentence becomes status.lastError (src/web/expose-runtime.ts, src/host-server/expose.ts),
+    // which every paired device reads beside the masked options: a value quoted in it would undo the mask.
+    let message = ''
+    try { resolveRun(DEF, 1, { name: 'bad name; acme-tunnel-secret-0f3a9c' }) } catch (err) { message = (err as Error).message }
+    expect(message).toMatch(/^Name is not valid for /)
+    expect(message).not.toContain('acme-tunnel-secret')
+    expect(message).not.toContain('0f3a9c')
   })
   it('expands a leading ~/ in the command', () => {
     const run = resolveRun({ ...DEF, command: '~/.bin/t' }, 1)

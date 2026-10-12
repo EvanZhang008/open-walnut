@@ -40,6 +40,18 @@ export function BrowserAccessGroup() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Refused option saves, by option: each shown under its option, whose box keeps what was typed,
+  // until that option is saved or put back. No other write clears one, so the screen never shows a
+  // typed value as if it were saved.
+  const [optionErrors, setOptionErrors] = useState<Record<string, string>>({});
+  const setOptionError = (key: string, message: string | null) =>
+    setOptionErrors((prev) => {
+      if (message === null && !(key in prev)) return prev;
+      const next = { ...prev };
+      if (message === null) delete next[key];
+      else next[key] = message;
+      return next;
+    });
   const [options, setOptions] = useState<Record<string, string>>({});
   const [code, setCode] = useState<BrowserCode | null>(null);
   const [codeBusy, setCodeBusy] = useState(false);
@@ -47,6 +59,9 @@ export function BrowserAccessGroup() {
   const readSeq = useRef(0);
   // Option fields the person is typing in: a poll must not overwrite them.
   const editing = useRef(new Set<string>());
+  // What each option box last held as typed, read when a save answers: typing that went on while the
+  // write was on its way is newer than what was saved, so it stays in its box.
+  const typed = useRef<Record<string, string>>({});
 
   const apply = useCallback((next: ExposeResponse) => {
     setData(next);
@@ -79,18 +94,27 @@ export function BrowserAccessGroup() {
     return () => clearInterval(timer);
   }, [interval, load]);
 
-  // A written change answers with the new state; the next poll fills in the rest.
-  const write = async (body: { enabled?: boolean; provider?: string; options?: Record<string, string> }) => {
+  // A written change answers with the new state; the next poll fills in the rest. `optionKey` names the
+  // option a save is for: it stays marked as being edited until the write succeeds, so a refused value
+  // (400) is still in its box after the reload below, where the person can fix it instead of retyping it.
+  // A success drops the mark only while the box still holds what was saved (the host form does the same).
+  // A refusal stays under its option until that option saves; a write of anything else leaves it be.
+  const write = async (body: { enabled?: boolean; provider?: string; options?: Record<string, string> }, optionKey?: string) => {
     setBusy(true);
     setError(null);
     readSeq.current++;
     try {
       const res = await apiPut<{ status: ExposeStatus }>(PATH, body);
+      if (optionKey) {
+        if ((typed.current[optionKey] ?? '') === (body.options?.[optionKey] ?? '')) editing.current.delete(optionKey);
+        setOptionError(optionKey, null);
+      }
       setData((prev) => (prev ? { ...prev, status: res.status, settings: { ...prev.settings, ...body, options: body.options ?? prev.settings.options } as ExposeResponse['settings'] } : prev));
       void load();
     } catch (err) {
       log.warn('settings', 'tunnel setting not saved', { error: saveErrorMessage(err) });
-      setError(saveErrorMessage(err));
+      if (optionKey) setOptionError(optionKey, saveErrorMessage(err));
+      else setError(saveErrorMessage(err));
       void load();
     } finally {
       setBusy(false);
@@ -142,10 +166,14 @@ export function BrowserAccessGroup() {
   const provider = providers.find((p) => p.id === providerId) ?? null;
   const line = describeExpose(status, provider?.title ?? 'the tunnel');
   const saveOption = (key: string) => {
-    editing.current.delete(key);
     const value = options[key] ?? '';
-    if ((settings.options[key] ?? '') === value) return;
-    void write({ options: { ...settings.options, [key]: value } });
+    if ((settings.options[key] ?? '') === value) {
+      // Put back as stored: nothing to write, and nothing refused any more.
+      editing.current.delete(key);
+      setOptionError(key, null);
+      return;
+    }
+    void write({ options: { ...settings.options, [key]: value } }, key);
   };
 
   return (
@@ -179,6 +207,7 @@ export function BrowserAccessGroup() {
               label={option.label}
               htmlFor={`browser-access-option-${option.key}`}
               help={option.help}
+              error={optionErrors[option.key]}
               control={
                 <input
                   id={`browser-access-option-${option.key}`}
@@ -191,6 +220,7 @@ export function BrowserAccessGroup() {
                   onChange={(e) => {
                     editing.current.add(option.key);
                     const value = e.target.value;
+                    typed.current[option.key] = value;
                     setOptions((prev) => ({ ...prev, [option.key]: value }));
                   }}
                   onBlur={() => saveOption(option.key)}

@@ -181,12 +181,21 @@ describe('the renderer goes through these rules', () => {
     expect(source).not.toMatch(/schema\.type === '(string|number)'/)
   })
 
-  it('puts every saved value through valueForSave', () => {
-    expect(source).toContain('valueForSave(schemas[k], v)')
+  it('puts every saved value through valueForSave, a list of secrets one value per line', () => {
+    expect(source).toContain('valueForSave(schemas[k], v, { secret: isSecretListField(k, schemas[k]) })')
   })
 
-  it('draws the list with the shared text helpers', () => {
+  it('draws the list with the shared text helpers, a list of secrets with its hint', () => {
     expect(source).toContain('listTextFor(value)')
-    expect(source).toContain('listPlaceholder(schema)')
+    expect(source).toContain('const secretList = isSecretListField(key, schema)')
+    expect(source).toContain('listPlaceholder(schema, { secret: secretList })')
+    expect(source).toContain('{SECRET_LIST_HINT}')
+  })
+
+  it('refuses an edited mask before it sends anything, with the server\'s message', () => {
+    const check = source.indexOf('editedMaskField(cleaned, `plugins.${plugin.id}`)')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(source.indexOf('await onSave('))
+    expect(source).toContain("new MaskedValueError(editedMask, 'edited_mask').message")
   })
 })
