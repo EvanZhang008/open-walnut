@@ -73,10 +73,9 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
-import {
-  carryTaskSlots, hasCarriedTaskSlots, headerTaskPresence, recordGateReason, releaseCarriedTaskSlots,
-  TASK_SLOT_IDS, TASK_SLOT_SPACER, taskControlSlot,
-} from './header-record-gate';
+import { headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
+import { useTaskControlSlot } from './useTaskControlSlot';
+import { panelTaskCopy } from './panel-task-copy';
 import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
 import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
@@ -406,16 +405,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const taskPresence = headerTaskPresence(session, liveStatus);
   // Once drawn, their places stay while this panel shows this session: a later
   // "no task" turns them into spacers (taskControlSlot), never removes them from
-  // under a click. A panel that replaced one for the same session (a prefix deep
-  // link adopting the full id) starts from what that one drew.
-  const [taskSlotsDrawnFor, setTaskSlotsDrawnFor] = useState<string | null>(null);
-  const taskSlotsDrawn = taskSlotsDrawnFor === sessionId || hasCarriedTaskSlots(sessionId);
-  if ((taskPresence !== 'none' || taskSlotsDrawn) && taskSlotsDrawnFor !== sessionId) setTaskSlotsDrawnFor(sessionId);
-  useEffect(() => { releaseCarriedTaskSlots(sessionId); }, [sessionId]);
-  const taskSlot = taskControlSlot(taskPresence, taskSlotsDrawn);
-  // Read by the record fetch, which hands the slots over when it adopts the full id.
-  const taskSlotsDrawnRef = useRef(false);
-  taskSlotsDrawnRef.current = taskSlot !== 'absent';
+  // under a click. A panel that replaces this one for the same session (a prefix
+  // adopting the full id) starts from what this one drew (handOverTaskSlots).
+  const { slot: taskSlot, handOver: handOverTaskSlots } = useTaskControlSlot(sessionId, taskPresence);
   const boardWaitReason = recordGateReason('The Board', session, loading);
   const locateWaitReason = recordGateReason('Locate', session, loading);
 
@@ -518,11 +510,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const taskStore = useTasksContextSafe();
   // The pop-out window's mark-read request in flight (it has no task store).
   const readRequestRef = useRef<string | null>(null);
-  const sessionTask = useMemo(() => {
-    if (!storeTask) return fetchedTask;
-    if (!fetchedTask || storeTask.ext !== undefined) return storeTask;
-    return { ...storeTask, ext: fetchedTask.ext };
-  }, [storeTask, fetchedTask]);
+  // The REST copy stands only for the task the session still names (the resolved record's, which a
+  // live status updates before any refetch): panelTaskCopy.
+  const linkedTaskId = session?.taskId;
+  const sessionTask = useMemo(
+    () => panelTaskCopy(storeTask, fetchedTask, linkedTaskId),
+    [storeTask, fetchedTask, linkedTaskId],
+  );
   const taskTitle = sessionTask?.title ?? null;
 
   // Pin state — read from the shared Focus Bar store (single source of truth,
@@ -581,7 +575,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               requestedId: sessionId, sessionId: s.claudeSessionId,
             });
             // The host replaces this panel by one under the full id: it starts from what this one drew.
-            if (onSessionReplaced && taskSlotsDrawnRef.current) carryTaskSlots(s.claudeSessionId);
+            if (onSessionReplaced) handOverTaskSlots(s.claudeSessionId);
             onSessionReplaced?.(sessionId, s.claudeSessionId);
           }
           setSession(s);

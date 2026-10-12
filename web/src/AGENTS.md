@@ -110,28 +110,45 @@ show inline after the open ones, other completed hits that show the query fold i
   panel's life as invisible, inert spacers (`taskControlSlot`: same element and width, no pointer, out
   of the tab order and the accessibility tree, and the "..." chip neither lists nor counts them),
   because removing them moved Files left and put Terminal under a click aimed at Files. A task deleted
-  while its panel is open turns them into spacers the same way. Once the record is here it decides,
-  through the same resolved record the rest of the panel reads: the store's newer status revision wins
-  over an older record. That holds only because every change of a session's task moves its status
+  while its panel is open turns them into spacers the same way. That is the price of a still row, and
+  a restored column pays it after every reload (the Mac app's own reload after a deploy included):
+  the page knows nothing of its session again, so the spacers come back each time, and from 320 to
+  380 px Terminal then sits in "..." where a column known to have no task still shows it. The
+  panel's memory of what it drew is per session (`useTaskControlSlot`): a panel replaced under the
+  full id of a prefix hands it to its successor, which reads it on its first frame only, and a hand-over
+  nobody took dies with the panel that made it (on 2026-10-11 a hand-over read on every render leaked
+  into a column already showing the full id when the host folded the prefix column into it, and moved
+  its row under a click). Once the record is here it decides, through the same resolved record the
+  rest of the panel reads: the store's newer status revision wins over an older record. That holds only because every change of a session's task moves its status
   revision and is announced as a status change: task delete and duplicate merge rewrote the link
   without either until 2026-10-11 (`unlinkSessionsFromTasks`, `relinkSessionsToTask` in
-  `src/core/session-tracker.ts`), and a page that held the old snapshot refused the record's "no task"
-  as an equal-revision conflict, keeping the deleted task's controls live. The events of a socket
+  `src/core/session-tracker.ts`, which go in time slices so a bulk delete of any size never holds the
+  event loop long, read the links again until none is left on the old task, and clear a merge's
+  links instead once its survivor is deleted between slices), and a page that held the old snapshot
+  refused the record's "no task" as an equal-revision conflict, keeping the deleted task's controls
+  live. The events of a socket
   outage are never sent again; every open panel fetches its record once more when the socket comes
   back (`_ws:reconnected` in `SessionPanel.tsx`), and that record's newer revision catches it up. The
-  one case left that moves the row: a session the page last saw with no task, and does not show in a
-  panel, gains one while the socket is down, and is then opened by a chat reference before any list
-  reads it again; its controls arrive with its record. Fork stays drawn, disabled with its reason, where the engine cannot fork (pinned by
-  `codex-parity-discovery.spec.ts`) or the session has no folder. A chip only some sessions have
+  cases left that move the row, all rare: (1) a session the page last saw with no task, and does not
+  show in a panel, gains one while the socket is down, and is then opened by a chat reference or a
+  notification link before any list reads it again: its controls arrive with its record; (2) a panel
+  that knew from its first frame that its session has no task stays open while the session gains one
+  (a lane session promoted to a task): the three arrive, Fork in front of Changed. Not the header's
+  own: a prefix deep link's column enters with the columns' scale-in, which moves the whole panel for
+  about 350 ms while its row stays as it is. Fork stays drawn, disabled with its reason, where the
+  engine cannot fork (pinned by `codex-parity-discovery.spec.ts`) or the session has no folder. A chip only some sessions have
   (Plan) sits after the ones every session has and is the first host chip to fold into "..."
   (`TOOL_ITEMS` priority), so arriving late in a narrow column it joins the menu instead of pushing a
   chip out from under a click. A host prop (no fork draft surface, an inset panel) may remove a chip,
   because it is known on the first frame; so may the host's own capability for Terminal (the cloud
   companion offers none), which is the last of the chips every session has. Ratchets:
   `tests/e2e/browser/session-header-chips-hold-place.spec.ts` (holds the record GET, both engines,
-  with and without a task, every route that reaches a panel unnamed, a task deleted under an open
-  panel, during a socket outage too), `tests/web/session-header-record-gate.test.ts`,
-  `tests/core/session-tracker.test.ts`.
+  with and without a task, every route that reaches a panel unnamed, a prefix reference folding into
+  an open column, checked in every frame that column is at rest, a task deleted under an open panel,
+  during a socket outage too), `tests/web/session-header-record-gate.test.ts`,
+  `tests/web/session-task-control-slot.test.ts`, `tests/web/session-panel-task-copy.test.ts` (the
+  panel's REST copy of a task stands only for the task its session still names),
+  `tests/core/session-tracker.test.ts`, `tests/core/task-merge-edge-cases.test.ts`.
 - **Pins never block an open, and the count follows the strip** (`panelBudget` in
   `pages/sessionColumns.ts`, read ONLY by `addSessionColumn`). The panel count
   (`ui.session_panels`, 1-5 or Auto) is the budget, except when the locked columns alone fill it:

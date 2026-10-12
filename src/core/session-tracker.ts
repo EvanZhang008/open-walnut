@@ -2438,42 +2438,143 @@ export async function linkSessionToTask(claudeSessionId: string, taskId: string)
 }
 
 /**
- * Point every session row the select returns at `taskId` (undefined = no task),
- * as a status change. The task is part of the status projection
- * (canonicalStatusProjection), so each row's revision moves and the caller
- * announces the rows this returns (announceRetaskedSessions). Until 2026-10-11
- * delete and merge rewrote task_id with a raw UPDATE that kept the revision: a
- * page that held the old snapshot then refused the record's "no task" as an
- * equal-revision conflict and kept the deleted task's controls live for good.
- * lastActiveAt stays: a task going away is not activity in the session.
+ * What one retask slice may hold the event loop for: its transaction, the
+ * cache patch at its lock's release, and its announcements, which cost the most
+ * (two events per session, each sent to every socket). A bulk delete has no
+ * count limit (POST /api/v1/tasks/batch/delete), so the work is split, never
+ * capped: one block over 2000 sessions held the loop 228 ms (r3 gate, L-18).
+ * The first slice is small; each next one is sized by what the last cost per
+ * session, because rows run from a few to tens of KB.
  */
-async function retaskSessionRows(
-  select: string,
-  params: readonly string[],
-  taskId: string | undefined,
-): Promise<SessionRecord[]> {
-  await ensureSessionInit();
-  return withWriteLock(async () => {
-    const db = getDb();
-    if (!db) return [];
-    const now = new Date().toISOString();
-    return sessionDbTx((handle) => {
-      const rows = handle.prepare(select).all(...params) as Array<Record<string, any>>;
-      return rows.map((row) => {
-        const session = rowToSession(row);
-        const before = canonicalStatusProjection(session);
-        // No task is a NULL column, as rows with no link have always been stored.
-        if (taskId) session.taskId = taskId;
-        else delete (session as Partial<SessionRecord>).taskId;
-        commitStatusVersion(session, before, now);
-        writeSessionRowSqlite(handle, session);
-        return session;
-      });
-    });
-  });
+const RETASK_SLICE_DEFAULT_MS = 8;
+const RETASK_FIRST_SLICE_ROWS = 25;
+/** How many times a retask reads the linked ids (the first read, then re-reads for links made meanwhile). */
+const RETASK_MAX_READS = 4;
+let RETASK_SLICE_MS = RETASK_SLICE_DEFAULT_MS;
+/** Test knob: the slice budget (0 = one row per slice); null restores the default. */
+export function _setRetaskSliceMsForTesting(ms: number | null): void {
+  RETASK_SLICE_MS = ms ?? RETASK_SLICE_DEFAULT_MS;
 }
 
-/** The committed rows of retaskSessionRows, announced after the lock: a status
+/**
+ * Point every session linked to one of `fromTaskIds` at `taskId` (undefined =
+ * no task), as a status change. The task is part of the status projection
+ * (canonicalStatusProjection), so each row's revision moves and the row is
+ * announced (announceRetaskedSessions). Until 2026-10-11 delete and merge
+ * rewrote task_id with a raw UPDATE that kept the revision: a page that held the
+ * old snapshot then refused the record's "no task" as an equal-revision conflict
+ * and kept the deleted task's controls live for good. lastActiveAt stays: a task
+ * going away is not activity in the session.
+ *
+ * The rows go in slices, each its own locked transaction, cache patch and
+ * announcement, with a turn of the event loop between them (RETASK_SLICE_MS).
+ * Each slice reads its rows again and skips one linked elsewhere since the ids
+ * were read. Only the three columns that change are written (the payload stays
+ * as stored), with one statement per slice. Returns how many sessions it
+ * pointed at `taskId` and how many it left with no task.
+ *
+ * Others write between the slices, so once the ids run out they are read again,
+ * and the rows linked to a `from` task meanwhile go too (a session started for
+ * the deleted task, or a merge into it), up to RETASK_MAX_READS reads.
+ * `targetExists` (a merge) is asked inside every slice's transaction: once the
+ * survivor is deleted, its links are cleared instead. That delete's own unlink
+ * reads the ids only after its task is gone, so a slice either wrote before
+ * that read or sees the task gone, and no session ends up on a deleted task
+ * (r4 gate, L-23: 59 of 60 did when the survivor was deleted between slices).
+ */
+async function retaskSessionRows(
+  fromTaskIds: readonly string[],
+  taskId: string | undefined,
+  targetExists?: () => boolean,
+): Promise<{ pointed: number; cleared: number }> {
+  await ensureSessionInit();
+  const from = new Set(fromTaskIds.filter(Boolean));
+  if (from.size === 0) return { pointed: 0, cleared: 0 };
+  const list = [...from];
+  const readIds = () => withWriteLock(async () => {
+    const db = getDb();
+    if (!db) return [] as string[];
+    return db.prepare(`SELECT claude_session_id FROM sessions WHERE task_id IN (${list.map(() => '?').join(', ')})`)
+      .pluck().all(...list) as string[];
+  });
+  const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
+  let target = taskId;
+  let pointed = 0;
+  let cleared = 0;
+  let sliced = false;
+  let rows = RETASK_SLICE_MS > 0 ? RETASK_FIRST_SLICE_ROWS : 1;
+  for (let reads = 0; reads < RETASK_MAX_READS; reads++) {
+    // A re-read comes after a turn of the loop, as every slice after the first does.
+    if (reads > 0) await turn();
+    const ids = await readIds();
+    if (ids.length === 0) break;
+    let next = 0;
+    while (next < ids.length) {
+      if (sliced) await turn();
+      sliced = true;
+      const chunk = ids.slice(next, next + rows);
+      next += chunk.length;
+      // The cost is timed from the lock on: a wait behind other writers is not this slice's work.
+      let began = performance.now();
+      const sessions = await withWriteLock(async () => {
+        began = performance.now();
+        const db = getDb();
+        if (!db) return [] as SessionRecord[];
+        const now = new Date().toISOString();
+        return sessionDbTx((handle) => {
+          if (target && targetExists && !targetExistsNow(targetExists, target)) {
+            log.session.warn('merge survivor deleted while its sessions were re-pointed: clearing their links', {
+              fromTaskIds: list, toTaskId: target,
+            });
+            target = undefined;
+          }
+          const read = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
+          const write = handle.prepare(
+            'UPDATE sessions SET task_id = ?, status_revision = ?, status_updated_at = ? WHERE claude_session_id = ?',
+          );
+          const out: SessionRecord[] = [];
+          for (const id of chunk) {
+            const row = read.get(id) as Record<string, any> | undefined;
+            if (!row || !from.has(row.task_id)) continue;
+            const session = rowToSession(row);
+            const before = canonicalStatusProjection(session);
+            // No task is a NULL column, as rows with no link have always been stored.
+            if (target) session.taskId = target;
+            else delete (session as Partial<SessionRecord>).taskId;
+            commitStatusVersion(session, before, now);
+            write.run(session.taskId ?? null, session.statusRevision, session.statusUpdatedAt, session.claudeSessionId);
+            noteSessionRowTouched(session.claudeSessionId);
+            out.push(session);
+          }
+          return out;
+        });
+      });
+      announceRetaskedSessions(sessions);
+      if (target) pointed += sessions.length;
+      else cleared += sessions.length;
+      // Size the next slice to the budget by this one's cost per row, announcements
+      // included (at most four times as many).
+      const spent = Math.max(performance.now() - began, 0.1);
+      rows = Math.max(1, Math.min(rows * 4, Math.floor((chunk.length * RETASK_SLICE_MS) / spent)));
+    }
+  }
+  return { pointed, cleared };
+}
+
+/** A merge's survivor check. A check that throws keeps the survivor: the rows
+ *  then follow it, as before the check existed, rather than stay on the victim. */
+function targetExistsNow(targetExists: () => boolean, taskId: string): boolean {
+  try {
+    return targetExists();
+  } catch (err) {
+    log.session.warn('merge survivor check failed; re-pointing to it anyway', {
+      toTaskId: taskId, error: err instanceof Error ? err.message : String(err),
+    });
+    return true;
+  }
+}
+
+/** The committed rows of a retask slice, announced after its lock: a status
  *  snapshot for every page and consumer, and a search re-sync (the task is part
  *  of the indexed session too, as in updateSessionRecord). */
 function announceRetaskedSessions(sessions: readonly SessionRecord[]): void {
@@ -2497,17 +2598,13 @@ function announceRetaskedSessions(sessions: readonly SessionRecord[]): void {
  */
 export async function unlinkSessionsFromTasks(taskIds: string[]): Promise<number> {
   if (!taskIds.length) return 0;
-  const placeholders = taskIds.map(() => '?').join(', ');
-  const unlinked = await retaskSessionRows(
-    `SELECT * FROM sessions WHERE task_id IN (${placeholders})`, taskIds, undefined,
-  );
-  if (unlinked.length > 0) {
+  const { cleared: unlinked } = await retaskSessionRows(taskIds, undefined);
+  if (unlinked > 0) {
     log.session.info('cleared task links for deleted tasks', {
-      taskIds, sessionsUnlinked: unlinked.length,
+      taskIds, sessionsUnlinked: unlinked,
     });
   }
-  announceRetaskedSessions(unlinked);
-  return unlinked.length;
+  return unlinked;
 }
 
 /**
@@ -2516,20 +2613,25 @@ export async function unlinkSessionsFromTasks(taskIds: string[]): Promise<number
  * victims' sessions must FOLLOW the surviving task, never be dropped — dedup
  * cleanups that deleted the copy holding the links are how sessions went
  * invisible (35 tasks lost their links before 2026-08-20). A status change
- * like the unlink (retaskSessionRows).
+ * like the unlink (retaskSessionRows). `toTaskExists` says, synchronously,
+ * whether the survivor still exists (the merge passes a read of the task DB):
+ * the rows move in slices, and a delete of the survivor between them must not
+ * leave the rest pointing at it (those are left with no task). Returns how many
+ * sessions it pointed at the survivor.
  */
-export async function relinkSessionsToTask(fromTaskId: string, toTaskId: string): Promise<number> {
+export async function relinkSessionsToTask(
+  fromTaskId: string,
+  toTaskId: string,
+  opts?: { toTaskExists?: () => boolean },
+): Promise<number> {
   if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return 0;
-  const relinked = await retaskSessionRows(
-    'SELECT * FROM sessions WHERE task_id = ?', [fromTaskId], toTaskId,
-  );
-  if (relinked.length > 0) {
+  const { pointed, cleared } = await retaskSessionRows([fromTaskId], toTaskId, opts?.toTaskExists);
+  if (pointed > 0 || cleared > 0) {
     log.session.info('re-pointed session task links to merge survivor', {
-      fromTaskId, toTaskId, sessionsRelinked: relinked.length,
+      fromTaskId, toTaskId, sessionsRelinked: pointed, sessionsClearedSurvivorDeleted: cleared,
     });
   }
-  announceRetaskedSessions(relinked);
-  return relinked.length;
+  return pointed;
 }
 
 /**

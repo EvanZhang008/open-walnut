@@ -55,7 +55,8 @@ export function headerTaskPresence(
  * width, invisible and inert. Removing them moved Changed and Files left by
  * Fork's width and Terminal onto Files' place, so a click aimed at Files
  * opened Terminal (2026-10-11). A panel that knew from its first frame that the
- * session has no task draws neither.
+ * session has no task draws neither. The panel's memory of what it drew,
+ * including across a prefix id's replacement, is useTaskControlSlot.
  */
 export type TaskControlSlot = 'live' | 'spacer' | 'absent';
 
@@ -81,28 +82,6 @@ export const TASK_SLOT_SPACER = {
   disabled: true,
   'data-header-spacer': 'true',
 } as const;
-
-/**
- * A panel that adopts its session's canonical id (a deep link names it by a
- * prefix) is replaced by a new panel under the full id, which would start with
- * no memory of what the old one drew. The old panel hands its drawn slots
- * over here; the new one takes them on its first frame.
- */
-const carriedSlots = new Set<string>();
-
-export function carryTaskSlots(sessionId: string): void {
-  carriedSlots.add(sessionId);
-}
-
-/** Whether a panel replaced for this id drew the slots (read on mount, never cleared by a read). */
-export function hasCarriedTaskSlots(sessionId: string): boolean {
-  return carriedSlots.has(sessionId);
-}
-
-/** The new panel took the hand-over (called once it has mounted). */
-export function releaseCarriedTaskSlots(sessionId: string): void {
-  carriedSlots.delete(sessionId);
-}
 
 /**
  * Why a control that needs the record cannot act yet, or null once it can.

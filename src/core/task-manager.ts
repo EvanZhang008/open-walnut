@@ -5113,6 +5113,14 @@ export async function deleteTasksByIds(
   return { deleted, failed };
 }
 
+/** The merges waiting and running (mergeTaskInto). */
+let mergeQueue: Promise<unknown> = Promise.resolve();
+
+/** Whether the task row is in the DB now: a committed, synchronous read. */
+function taskRowExists(id: string): boolean {
+  return getDb()!.prepare('SELECT 1 FROM tasks WHERE id = ?').pluck().get(id) !== undefined;
+}
+
 /**
  * Merge one task into another, then delete the victim. Session links are the
  * point: `session_ids` are unioned, empty session slots are filled from the
@@ -5125,8 +5133,22 @@ export async function deleteTasksByIds(
  * recordDeletedRemoteIds), so the surviving remote twin can never re-import.
  * Content fields are NOT merged — the survivor's content wins; callers choose
  * the survivor accordingly.
+ *
+ * Merges run one at a time, in call order. A merge moves the victim's sessions
+ * in slices after its task commit, and a merge meanwhile that took the survivor
+ * away (A into B while B goes into C) would find B gone and clear those links,
+ * where they must follow B to C.
  */
 export async function mergeTaskInto(
+  survivorId: string,
+  victimId: string,
+): Promise<{ survivor: Task; sessionsRelinked: number }> {
+  const run = mergeQueue.then(() => mergeTaskIntoNow(survivorId, victimId));
+  mergeQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function mergeTaskIntoNow(
   survivorId: string,
   victimId: string,
 ): Promise<{ survivor: Task; sessionsRelinked: number }> {
@@ -5194,20 +5216,28 @@ export async function mergeTaskInto(
   }
 
   // Re-point sessions OUTSIDE the task write lock (session-tracker has its own).
+  // It moves them in slices and asks, inside each one, whether the survivor is
+  // still here: a delete of it meanwhile must not strand the rest on it.
   let sessionsRelinked = 0;
   try {
     const { relinkSessionsToTask } = await import('./session-tracker.js');
-    sessionsRelinked = await relinkSessionsToTask(victimId, survivorId);
+    sessionsRelinked = await relinkSessionsToTask(victimId, survivorId, {
+      toTaskExists: () => taskRowExists(survivorId),
+    });
   } catch (err) {
     log.task.warn('mergeTaskInto: failed to re-point session links', {
       survivorId, victimId, error: err instanceof Error ? err.message : String(err),
     });
   }
 
-  bus.emit(EventNames.TASK_UPDATED, { task: merged.survivor }, ['web-ui'], { source: 'merge' });
+  // A survivor deleted while the sessions moved is gone: an update for it now
+  // would come after its delete and put it back on every open board.
+  let survivorDeleted = false;
+  try { survivorDeleted = !taskRowExists(survivorId); } catch { /* keep the update */ }
+  if (!survivorDeleted) bus.emit(EventNames.TASK_UPDATED, { task: merged.survivor }, ['web-ui'], { source: 'merge' });
   bus.emit(EventNames.TASK_DELETED, { task: merged.victim }, ['web-ui'], { source: 'merge' });
   log.task.info('merged duplicate task into survivor', {
-    survivorId, victimId, sessionsRelinked,
+    survivorId, victimId, sessionsRelinked, survivorDeleted,
     sessionIds: merged.survivor.session_ids,
   });
   return { survivor: merged.survivor, sessionsRelinked };

@@ -9,7 +9,8 @@
  * session turns out to have no task (taskControlSlot), so a click aimed at Files
  * never lands on Terminal. This pins the rules, every state of the Fork chip, and
  * the "..." chip's handling of spacers, rendered through renderToStaticMarkup with
- * the engine catalog mocked.
+ * the engine catalog mocked. The panel's memory of what it drew (useTaskControlSlot):
+ * tests/web/session-task-control-slot.test.ts.
  * The browser half (positions, clicks, both engines):
  * tests/e2e/browser/session-header-chips-hold-place.spec.ts.
  */
@@ -23,8 +24,7 @@ vi.mock('../../web/src/hooks/useEngineCatalog', async () => {
 })
 
 const {
-  carryTaskSlots, hasCarriedTaskSlots, headerTaskPresence, recordGateReason, releaseCarriedTaskSlots,
-  TASK_SLOT_IDS, TASK_SLOT_SPACER, taskControlSlot,
+  headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER, taskControlSlot,
 } = await import('../../web/src/components/sessions/header-record-gate')
 const { SessionForkButton } = await import('../../web/src/components/sessions/SessionForkButton')
 const { SessionHeaderMoreMenu } = await import('../../web/src/components/sessions/SessionHeaderMore')
@@ -89,15 +89,6 @@ describe('taskControlSlot: drawn, kept as a spacer, or never drawn', () => {
   it('names the three by their row ids, and a spacer is out of reach', () => {
     expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork', 'locate'])
     expect(TASK_SLOT_SPACER).toEqual({ 'aria-hidden': true, tabIndex: -1, disabled: true, 'data-header-spacer': 'true' })
-  })
-
-  it('a panel replaced to adopt the full id hands its drawn slots to the next until it mounts', () => {
-    expect(hasCarriedTaskSlots('sess-full')).toBe(false)
-    carryTaskSlots('sess-full')
-    expect(hasCarriedTaskSlots('sess-full')).toBe(true)
-    expect(hasCarriedTaskSlots('sess-full')).toBe(true) // a read never takes it (StrictMode renders twice)
-    releaseCarriedTaskSlots('sess-full')
-    expect(hasCarriedTaskSlots('sess-full')).toBe(false)
   })
 })
 

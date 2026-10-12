@@ -49,6 +49,7 @@ import {
   checkSessionLimit,
   isTerminalSession,
   _resetSessionTrackerForTesting,
+  _setRetaskSliceMsForTesting,
 } from '../../src/core/session-tracker.js';
 import { closeDb, SESSION_DB_PATH } from '../../src/core/session-db.js';
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
@@ -67,6 +68,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   bus.unsubscribe('session-status-contract-test');
+  _setRetaskSliceMsForTesting(null);
   closeDb();
   _resetSessionTrackerForTesting();
   // Retry cleanup to handle macOS ENOTEMPTY race (concurrent file writes during rm)
@@ -569,6 +571,173 @@ describe('a change of the session task is a status change', () => {
     expect(after.lastActiveAt).toBe(before.lastActiveAt);
     expect(statusOf(events, 'merge-a').map((e) => [e.taskId, e.statusRevision])).toEqual([['task-survivor', after.statusRevision]]);
     expect(contentOf(events)).toEqual(['merge-a']);
+  });
+
+  it('a bulk unlink goes in slices that each commit and publish, with a turn of the event loop between them', async () => {
+    // A bulk delete has no count limit: the work is split by time, never capped. One row per slice here.
+    const ids = Array.from({ length: 6 }, (_, i) => `bulk-${i}`);
+    for (const [i, id] of ids.entries()) await createSessionRecord(id, `task-bulk-${i % 3}`, 'proj');
+    await updateSessionRecord('bulk-0', { summary: 'kept as written' });
+    await createSessionRecord('bulk-moved', 'task-bulk-0', 'proj');
+    const before = Object.fromEntries(await Promise.all([...ids, 'bulk-moved'].map(async (id) => [id, (await getSessionByClaudeId(id))!] as const)));
+    const order: string[] = [];
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED) return;
+      order.push((event.data as { sessionId: string }).sessionId);
+      // What else waits for the loop gets its turn before the next slice.
+      setImmediate(() => order.push('|'));
+      // Another writer links a session the slices have not reached yet: its new task stands.
+      if (order.length === 1) void linkSessionToTask('bulk-moved', 'task-elsewhere');
+    });
+    _setRetaskSliceMsForTesting(0);
+    try {
+      expect(await unlinkSessionsFromTasks(['task-bulk-0', 'task-bulk-1', 'task-bulk-2'])).toBe(6);
+    } finally {
+      _setRetaskSliceMsForTesting(null);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const retasked = order.filter((sid) => ids.includes(sid));
+    expect(retasked.sort()).toEqual([...ids].sort());
+    // Between any two sessions of the delete, the loop took a turn.
+    const seq = order.filter((sid) => sid === '|' || ids.includes(sid));
+    for (let i = 1; i < seq.length; i++) expect(seq[i - 1] === '|' || seq[i] === '|', seq.join(' ')).toBe(true);
+    for (const id of ids) {
+      const after = (await getSessionByClaudeId(id))!;
+      expect(after.taskId, id).toBeUndefined();
+      expect(after.statusRevision, id).toBe(before[id]!.statusRevision + 1);
+      expect(after.lastActiveAt, id).toBe(before[id]!.lastActiveAt);
+    }
+    // Only the task columns are written: the rest of the row is as it was.
+    expect((await getSessionByClaudeId('bulk-0'))!.summary).toBe('kept as written');
+    expect((await getSessionByClaudeId('bulk-moved'))!).toMatchObject({ taskId: 'task-elsewhere', statusRevision: before['bulk-moved']!.statusRevision + 1 });
+  });
+
+  it('slices start small and are sized by what the last one cost', async () => {
+    for (let i = 0; i < 400; i++) await createSessionRecord(`size-${i}`, `task-size-${i % 7}`, 'proj');
+    const slices: number[] = [];
+    let open = false;
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED) return;
+      // A slice's announcements run back to back; the turn of the loop between slices closes it.
+      if (!open) { slices.push(0); open = true; setImmediate(() => { open = false; }); }
+      slices[slices.length - 1]! += 1;
+    });
+    expect(await unlinkSessionsFromTasks(Array.from({ length: 7 }, (_, i) => `task-size-${i}`))).toBe(400);
+    expect(slices.reduce((a, b) => a + b, 0)).toBe(400);
+    expect(slices[0], slices.join(' ')).toBe(25);
+    expect(slices.length, slices.join(' ')).toBeGreaterThan(1);
+    expect(slices.slice(1, -1).some((n) => n !== 25), `the size follows the cost: ${slices.join(' ')}`).toBe(true);
+  });
+
+  /** Count the announced sessions per slice: a slice's announcements run back to back, and the turn of
+   *  the loop between slices closes it. `cost` runs on every announcement (a slow subscriber). */
+  const sliceSizes = (cost?: () => void) => {
+    const slices: number[] = [];
+    let open = false;
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED) return;
+      if (!open) { slices.push(0); open = true; setImmediate(() => { open = false; }); }
+      slices[slices.length - 1]! += 1;
+      cost?.();
+    });
+    return slices;
+  };
+
+  it('a slice is at most four times the one before, however cheap it was (r4 gate, L-25)', async () => {
+    for (let i = 0; i < 600; i++) await createSessionRecord(`grow-${i}`, 'task-grow', 'proj');
+    const slices = sliceSizes();
+    // A budget nothing can use up: only the growth cap sizes the slices.
+    _setRetaskSliceMsForTesting(1_000_000);
+    expect(await unlinkSessionsFromTasks(['task-grow'])).toBe(600);
+    expect(slices).toEqual([25, 100, 400, 75]);
+  });
+
+  it('the announcements count against the budget: a slow subscriber makes the slices smaller (r4 gate, L-25)', async () => {
+    // Announcing costs the most (every event goes to every socket). A budget that timed only the
+    // transaction let the slices grow to the cap while the subscribers held the loop twice as long.
+    for (let i = 0; i < 60; i++) await createSessionRecord(`slow-${i}`, 'task-slow', 'proj');
+    const slices = sliceSizes(() => { const until = performance.now() + 1; while (performance.now() < until) { /* 1 ms a session */ } });
+    expect(await unlinkSessionsFromTasks(['task-slow'])).toBe(60);
+    expect(slices[0], slices.join(' ')).toBe(25);
+    // 25 sessions took at least 25 ms of announcing, so the next slices fit 8 ms: 8 sessions or fewer.
+    expect(Math.max(...slices.slice(1)), slices.join(' ')).toBeLessThanOrEqual(8);
+  });
+
+  it('a session linked to the deleted task while its unlink runs is unlinked too', async () => {
+    await createSessionRecord('late-a', 'task-late', 'proj');
+    await createSessionRecord('late-b', 'task-late', 'proj');
+    let started: Promise<unknown> | null = null;
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED || started) return;
+      // After the ids were read: a session started for the task, and one moved onto it.
+      started = Promise.all([createSessionRecord('late-new', 'task-late', 'proj'), linkSessionToTask('late-moved', 'task-late')]);
+    });
+    await createSessionRecord('late-moved', 'task-other', 'proj');
+    _setRetaskSliceMsForTesting(0);
+    expect(await unlinkSessionsFromTasks(['task-late'])).toBe(4);
+    await started;
+    for (const id of ['late-a', 'late-b', 'late-new', 'late-moved']) {
+      expect((await getSessionByClaudeId(id))!.taskId, id).toBeUndefined();
+    }
+  });
+
+  it('an unlink that keeps finding new links gives up after a few reads (the integrity check reports the rest)', async () => {
+    await createSessionRecord('churn-0', 'task-churn', 'proj');
+    let created = 0;
+    const creating: Promise<unknown>[] = [];
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED || (event.data as { taskId?: string | null }).taskId !== null) return;
+      // Every session it unlinks, someone links another one to the deleted task.
+      if (created < 200) creating.push(createSessionRecord(`churn-${++created}`, 'task-churn', 'proj'));
+    });
+    _setRetaskSliceMsForTesting(0);
+    const unlinked = await unlinkSessionsFromTasks(['task-churn']);
+    await Promise.all(creating);
+    expect(unlinked, `unlinked ${unlinked}, created ${created}`).toBeGreaterThan(1);
+    expect(unlinked, `unlinked ${unlinked}, created ${created}`).toBeLessThan(20);
+  });
+
+  it('a delete of the merge survivor between the merge slices leaves no session on it (r4 gate, L-23)', async () => {
+    const victims = Array.from({ length: 30 }, (_, i) => `mv-${i}`);
+    const survivors = Array.from({ length: 5 }, (_, i) => `ms-${i}`);
+    for (const id of victims) await createSessionRecord(id, 'task-victim', 'proj');
+    for (const id of survivors) await createSessionRecord(id, 'task-survivor', 'proj');
+    const events = statusEvents();
+    let survivorExists = true;
+    let deleting: Promise<number> | null = null;
+    bus.subscribe('session-status-contract-delete', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED || deleting) return;
+      // The merge's first session is announced. Now the survivor is deleted as deleteTask does it:
+      // the task row goes first, then its sessions are unlinked.
+      survivorExists = false;
+      deleting = unlinkSessionsFromTasks(['task-survivor']);
+    });
+    _setRetaskSliceMsForTesting(0);
+    try {
+      // Only the first slice found the survivor; the other 29 sessions are left with no task.
+      expect(await relinkSessionsToTask('task-victim', 'task-survivor', { toTaskExists: () => survivorExists })).toBe(1);
+      await deleting;
+    } finally {
+      bus.unsubscribe('session-status-contract-delete');
+    }
+    for (const id of [...victims, ...survivors]) {
+      const after = (await getSessionByClaudeId(id))!;
+      expect(after.taskId, id).toBeUndefined();
+      // The last status a page heard says the same, at the stored revision.
+      expect(statusOf(events, id).at(-1), id).toMatchObject({ taskId: null, statusRevision: after.statusRevision });
+    }
+  });
+
+  it('a merge into a survivor already deleted clears the links instead', async () => {
+    await createSessionRecord('gone-a', 'task-victim', 'proj');
+    await createSessionRecord('gone-b', 'task-victim', 'proj');
+    expect(await relinkSessionsToTask('task-victim', 'task-deleted', { toTaskExists: () => false })).toBe(0);
+    for (const id of ['gone-a', 'gone-b']) expect((await getSessionByClaudeId(id))!.taskId, id).toBeUndefined();
+    // A check that fails keeps the survivor: the rows follow it rather than stay on the victim.
+    await createSessionRecord('check-fails', 'task-victim-2', 'proj');
+    expect(await relinkSessionsToTask('task-victim-2', 'task-kept', { toTaskExists: () => { throw new Error('task DB closed'); } })).toBe(1);
+    expect((await getSessionByClaudeId('check-fails'))!.taskId).toBe('task-kept');
   });
 
   it('a link publishes the change; nothing linked, nothing published', async () => {

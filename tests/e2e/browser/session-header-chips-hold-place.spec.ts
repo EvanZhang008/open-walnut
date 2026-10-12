@@ -24,8 +24,12 @@
  * click aimed at Files opened Terminal (the r2 gate, L-10). A task deleted while
  * its session is open does the same: the server now announces the session's
  * new status (no task, a newer revision), and a record that raced the delete
- * cannot bring the controls back. Plan, which only some sessions have, sits
- * after the chips every session has.
+ * cannot bring the controls back. A chat reference that names an open session
+ * by a prefix folds into that session's column, which keeps its row as it was:
+ * the replaced panel's memory goes only to a panel the host mounts for it (the
+ * r3 gate, L-17); that row is checked on every frame its column is at rest,
+ * not in the frames where the column slides (r4 gate, M-3). Plan, which only
+ * some sessions have, sits after the chips every session has.
  *
  * Every test holds `GET /api/sessions/<id>` the way a slow box would and opens
  * the column through the UI (the task row, the session finder, a chat
@@ -284,6 +288,83 @@ async function traceFiles(page: Page, panelSel: string): Promise<() => Promise<s
     const trace = (window as unknown as { __filesTrace: { on: boolean; seen: string[] } }).__filesTrace
     trace.on = false
     return trace.seen
+  })
+}
+
+/** What traceRow saw: the row layouts of the frames where the column was at rest, in the order first
+ *  seen, how many frames that was (all, and after the mark), and how many frames it skipped. */
+interface RowTrace { rest: string[]; restFrames: number; restFramesAfterMark: number; movingFrames: number }
+
+/**
+ * Record the tool row's layout on every frame of the panel matching `panelSel`, relative to the row
+ * (each drawn item's id, offset from the row's left edge and width), until the returned stop; `mark`
+ * notes the moment from which rest frames are counted apart. Only frames where the column is at rest
+ * count: the row's own page box (unrounded) is the same as in the previous frame, and no element
+ * holding the row runs an animation. While other columns enter and leave, the columns slide and scale
+ * (auto-animate), and WebKit draws single frames there with the row's items 3 to 6 px off its edge
+ * (r4 gate, M-3; the base tree draws them too). Nobody can aim at a column in flight; a row at rest
+ * must not change.
+ */
+async function traceRow(page: Page, panelSel: string): Promise<{ mark: () => Promise<void>; stop: () => Promise<RowTrace> }> {
+  await page.evaluate((sel) => {
+    const trace = { on: true, marked: false, rest: [] as string[], restFrames: 0, restFramesAfterMark: 0, movingFrames: 0, lastBox: '' }
+    ;(window as unknown as { __rowTrace: typeof trace }).__rowTrace = trace
+    const tick = () => {
+      if (!trace.on) return
+      const row = document.querySelector<HTMLElement>(`${sel} .session-meta-row-2`)
+      if (row) {
+        const r = row.getBoundingClientRect()
+        const box = `${r.x.toFixed(2)},${r.y.toFixed(2)} w${r.width.toFixed(2)}`
+        let animating = false
+        for (let el = row.parentElement; el && !animating; el = el.parentElement) {
+          animating = el.getAnimations().some((a) => a.playState === 'running')
+        }
+        const atRest = box === trace.lastBox && !animating
+        trace.lastBox = box
+        if (!atRest) trace.movingFrames++
+        else {
+          const items: string[] = []
+          for (const el of row.querySelectorAll<HTMLElement>('[data-header-id], [data-header-more]')) {
+            const b = el.getBoundingClientRect()
+            if (b.width <= 0 || b.height <= 0) continue
+            items.push(`${el.dataset.headerId ?? 'more'}@${Math.round(b.x - r.x)}w${Math.round(b.width)}`)
+          }
+          const key = items.join(' ')
+          if (!trace.rest.includes(key)) trace.rest.push(key)
+          trace.restFrames++
+          if (trace.marked) trace.restFramesAfterMark++
+        }
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }, panelSel)
+  type Live = RowTrace & { on: boolean; marked: boolean }
+  return {
+    mark: () => page.evaluate(() => { (window as unknown as { __rowTrace: Live }).__rowTrace.marked = true }),
+    stop: () => page.evaluate(() => {
+      const trace = (window as unknown as { __rowTrace: Live }).__rowTrace
+      trace.on = false
+      return { rest: trace.rest, restFrames: trace.restFrames, restFramesAfterMark: trace.restFramesAfterMark, movingFrames: trace.movingFrames }
+    }),
+  }
+}
+
+/**
+ * The row layouts at rest that differ from the first one: another set of items, or an item whose
+ * offset or width moved by more than a pixel (a column at a fractional offset can round every item
+ * one pixel away from the row's own edge; that moves nothing).
+ */
+function rowLayoutChanges(seen: string[]): string[] {
+  const parse = (key: string) => key.split(' ').map((item) => {
+    const [, id, x, w] = item.match(/^(.+)@(-?\d+)w(\d+)$/)!
+    return { id: id!, x: Number(x), w: Number(w) }
+  })
+  const first = parse(seen[0]!)
+  return seen.slice(1).filter((key) => {
+    const items = parse(key)
+    return items.length !== first.length || items.some((it, i) => it.id !== first[i]!.id
+      || Math.abs(it.x - first[i]!.x) > 1 || Math.abs(it.w - first[i]!.w) > 1)
   })
 }
 
@@ -791,41 +872,140 @@ test('the first chat reference to a session with no task keeps the row still', a
   }
 })
 
-test('a task deleted while its session is open: Fork, Board and Locate stop acting and keep their places', async ({ page }) => {
-  test.setTimeout(90_000)
-  const seeded = await seedTaskSession(page, 'open')
-  await clampColumns(page, 340)
-  const panel = await openSeededFromTaskRow(page, seeded)
-  await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
-  await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
-  await expect(panel.locator('button[data-header-id="locate"]:enabled')).toBeAttached()
+test('a prefix chat reference to a session already open folds into its column and moves nothing there', async ({ page }) => {
+  test.setTimeout(120_000)
+  // The r3 gate's sequence (L-17). The chat names the session by the 8 characters the UI shows.
+  const prefix = TASKLESS.id.slice(0, 8)
+  await page.route(new RegExp(`/api/sessions/${SESSION_ID}/history`), async (route) => {
+    try {
+      const resp = await route.fetch()
+      const body = JSON.stringify(await resp.json()).replace(
+        'if you want the source.',
+        `if you want the source. Compare <session-ref id=\\"${prefix}\\" label=\\"Ref by prefix\\"/>.`,
+      )
+      await route.fulfill({ response: resp, json: JSON.parse(body) })
+    } catch { /* the page is gone */ }
+  })
+  await page.setViewportSize({ width: 1900, height: 900 })
+  await clampColumns(page, 420)
+  const host = await openFromTaskRow(page)
+  const ref = host.locator(`a.session-link[data-session-id="${prefix}"]`).first()
+  await expect(ref).toBeVisible({ timeout: 20_000 })
+  // The full id, opened from the finder: known to have no task, so no Fork, Board or Locate, and no places.
+  const openSel = `.main-page-session-column .session-panel[data-session-id="${TASKLESS.id}"]`
+  const open = await openViaFinder(page, TASKLESS.query, TASKLESS.id)
+  await expect(open.locator('.session-panel-badge', { hasText: 'Loading...' })).toHaveCount(0, { timeout: 15_000 })
   await settle(page)
+  await expectNoTaskControls(open, 'open from the finder')
   await page.mouse.move(0, 0)
-  const before = await rowBoxes(panel)
-  const box = (await panel.locator('button[data-header-id="files"]').boundingBox())!
-  const revision = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { statusRevision: number } }).session.statusRevision
-  const stop = await traceFiles(page, `.main-page-session-column .session-panel[data-session-id="${seeded.sid}"]`)
+  const before = await rowBoxes(open)
+  const box = (await open.locator('button[data-header-id="files"]').boundingBox())!
+  const trace = await traceRow(page, openSel)
 
-  // Deleted elsewhere (another window, an agent): the page hears it only from the server.
-  const del = await page.request.delete(`/api/tasks/${seeded.taskId}?force=true`)
-  expect(del.status(), await del.text()).toBe(204)
-  await expect(panel.locator(TASK_CONTROLS), 'the session has no task now, and the open panel hears it').toHaveCount(0, { timeout: 15_000 })
-  await settle(page)
-  const after = await rowBoxes(panel)
-  const seen = await stop()
-  console.log(`DELETED ${test.info().project.name} 340px: ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))} files-frames ${JSON.stringify(seen)}`)
-  expect(moved(before, after), 'nothing on the row moves').toEqual([])
-  expect(seen).toEqual([`${before.files!.x},${before.files!.y} w${before.files!.w} h${before.files!.h}`])
-  await expectSpacers(page, panel, 'task deleted')
-  await shootHeader(page, panel, '10-task-deleted')
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-  await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+  // The reference opens a column under the prefix, which waits with the three (nothing on the page
+  // named the prefix), then adopts the full id and folds into the open column.
+  const prefixPanel = page.locator(`.main-page-session-column .session-panel[data-session-id="${prefix}"]`)
+  const hold = await holdRecord(page, prefix)
+  let reading = 'no reading'
+  try {
+    await ref.click()
+    await expect(prefixPanel).toBeVisible({ timeout: 20_000 })
+    await expect(prefixPanel.getByRole('button', { name: 'Fork session into a child task' })).toBeDisabled()
+    hold.release()
+    await expect(prefixPanel).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.locator(openSel)).toHaveCount(1)
+    await trace.mark()
+    // The r3 hand-over showed at the open panel's next render: about 2.5 s later in Chromium, the
+    // click on Files in WebKit.
+    await page.waitForTimeout(3_000)
+    await settle(page)
+    const after = await rowBoxes(open)
+    const seen = await trace.stop()
+    reading = `${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))} row ${JSON.stringify(seen)}`
+    expect(moved(before, after), 'nothing on the open row moves').toEqual([])
+    // The column slides while the prefix column comes and goes; once at rest, its row is as before.
+    expect(rowLayoutChanges(seen.rest), 'the open row at rest is the same in every frame').toEqual([])
+    // The frames after the fold were looked at (a check that skipped them all would prove nothing).
+    // About 180 in 3 s on an idle machine; a loaded one draws fewer.
+    expect(seen.restFramesAfterMark, 'frames at rest after the fold').toBeGreaterThanOrEqual(5)
+    await expectNoTaskControls(open, 'after the fold')
+    await shootHeader(page, open, '11-prefix-folded')
 
-  // The server's record says the same, under a newer status revision.
-  const record = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { taskId?: string | null; statusRevision: number } }).session
-  expect(record.taskId ?? null).toBeNull()
-  expect(record.statusRevision).toBeGreaterThan(revision)
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await expect(open.locator('.session-action-chip-active'), 'the click aimed at Files opens Files').toHaveText(['Files'])
+    // Closing Files renders the panel again: still nothing drawn for the three, nothing moved.
+    await open.locator('.session-meta-row-2 .session-action-chip-active').click()
+    await expect(open.locator('.session-action-chip-active')).toHaveCount(0)
+    await settle(page)
+    await page.mouse.move(0, 0)
+    await expectNoTaskControls(open, 'after Files')
+    expect(moved(before, await rowBoxes(open)), 'nothing moved after Files').toEqual([])
+  } finally {
+    console.log(`PREFIXFOLD ${test.info().project.name} 420px: ${reading}`)
+    await hold.dispose()
+  }
+
+  // Closed and opened again from the finder: a fresh panel for a session known to have no task.
   await closeAllColumns(page)
+  const again = await openViaFinder(page, TASKLESS.query, TASKLESS.id)
+  await expect(again.locator('.session-panel-badge', { hasText: 'Loading...' })).toHaveCount(0, { timeout: 15_000 })
+  await settle(page)
+  await expectNoTaskControls(again, 'reopened from the finder')
+  await shootHeader(page, again, '12-prefix-reopened')
+})
+
+test('a task deleted while its session is open: Fork, Board and Locate stop acting and keep their places', async ({ page }) => {
+  test.setTimeout(150_000)
+  // 340 px folds Locate into "..."; 760 px keeps it on the row, where its spacer must sit where it was.
+  for (const px of [340, 760]) {
+    const seeded = await seedTaskSession(page, `open ${px}`)
+    await clampColumns(page, px)
+    const panel = await openSeededFromTaskRow(page, seeded)
+    await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
+    await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
+    await expect(panel.locator('button[data-header-id="locate"]:enabled')).toBeAttached()
+    await settle(page)
+    await page.mouse.move(0, 0)
+    const before = await rowBoxes(panel)
+    const box = (await panel.locator('button[data-header-id="files"]').boundingBox())!
+    const revision = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { statusRevision: number } }).session.statusRevision
+    const stop = await traceFiles(page, `.main-page-session-column .session-panel[data-session-id="${seeded.sid}"]`)
+
+    // Anything the page writes to the deleted task (it answers 500 and raises an error card).
+    const writes: string[] = []
+    const onRequest = (req: import('@playwright/test').Request) => {
+      if (req.method() !== 'GET' && new URL(req.url()).pathname.startsWith(`/api/tasks/${seeded.taskId}`)) writes.push(`${req.method()} ${req.postData() ?? ''}`)
+    }
+    page.on('request', onRequest)
+
+    // Deleted elsewhere (another window, an agent): the page hears it only from the server.
+    const del = await page.request.delete(`/api/tasks/${seeded.taskId}?force=true`)
+    expect(del.status(), await del.text()).toBe(204)
+    await expect(panel.locator(TASK_CONTROLS), 'the session has no task now, and the open panel hears it').toHaveCount(0, { timeout: 15_000 })
+    await settle(page)
+    const after = await rowBoxes(panel)
+    const seen = await stop()
+    console.log(`DELETED ${test.info().project.name} ${px}px: ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))} files-frames ${JSON.stringify(seen)}`)
+    expect(moved(before, after), `${px}px: nothing on the row moves`).toEqual([])
+    expect(seen).toEqual([`${before.files!.x},${before.files!.y} w${before.files!.w} h${before.files!.h}`])
+    // At 760 px all three were on the row: each spacer has its control's box (moved() compares them).
+    if (px === 760) expect(Object.keys(before), 'Fork, Board and Locate on the row').toEqual(expect.arrayContaining(['fork', 'board', 'locate']))
+    await expectSpacers(page, panel, `task deleted, ${px}px`)
+    await shootHeader(page, panel, px === 340 ? '10-task-deleted' : '10-task-deleted-760')
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+    // A click in the panel marks its task read: never the deleted one (until 2026-10-11 the panel kept
+    // its fetched copy of the task and sent it a write on every click).
+    await page.waitForTimeout(500)
+    page.off('request', onRequest)
+    expect(writes, `${px}px: nothing is written to the deleted task`).toEqual([])
+
+    // The server's record says the same, under a newer status revision.
+    const record = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { taskId?: string | null; statusRevision: number } }).session
+    expect(record.taskId ?? null).toBeNull()
+    expect(record.statusRevision).toBeGreaterThan(revision)
+    await closeAllColumns(page)
+  }
 })
 
 test('a record that left the server before the task was deleted cannot bring its controls back', async ({ page }) => {

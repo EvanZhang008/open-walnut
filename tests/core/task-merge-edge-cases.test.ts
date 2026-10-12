@@ -18,12 +18,14 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import {
   _resetForTesting,
   addTask,
+  deleteTask,
   getTask,
   listTasks,
   mergeTaskInto,
   updateTaskRaw,
 } from '../../src/core/task-manager.js';
-import { closeDb } from '../../src/core/task-db.js';
+import { closeDb, getDb as getTaskDb } from '../../src/core/task-db.js';
+import type { Task } from '../../src/core/types.js';
 import { isRemoteIdBlocked } from '../../src/core/task-remote-links.js';
 
 beforeEach(() => {
@@ -208,5 +210,84 @@ describe('mergeTaskInto — structure and identity corners', () => {
     expect((await getSessionByClaudeId('sess-victim-2'))?.taskId).toBe(survivor.id);
     expect((await getSessionByClaudeId('sess-survivor'))?.taskId).toBe(survivor.id);
     expect((await getSessionByClaudeId('sess-unrelated'))?.taskId).toBe('someone-else');
+  });
+
+  /** A session store of the test's own (the handle may still point at an earlier test's home), one
+   *  row per retask slice (so the merges below run for many turns of the loop), and the bus. */
+  async function slicedSessions() {
+    const tracker = await import('../../src/core/session-tracker.js');
+    const { bus, EventNames } = await import('../../src/core/event-bus.js');
+    const { closeDb: closeSessionDb } = await import('../../src/core/session-db.js');
+    closeSessionDb();
+    tracker._resetSessionTrackerForTesting();
+    tracker._setRetaskSliceMsForTesting(0);
+    const done = () => {
+      tracker._setRetaskSliceMsForTesting(null);
+      closeSessionDb();
+      tracker._resetSessionTrackerForTesting();
+    };
+    return { tracker, bus, EventNames, done };
+  }
+
+  it('M14: the survivor deleted while the merge re-points sessions leaves none on a deleted task', async () => {
+    // The merge moves the victim's sessions in slices; a delete of the survivor that starts between
+    // them must not leave the rest pointing at it (r4 gate, L-23: 59 of 60 did), and the merge must
+    // not announce the survivor after its delete (every open board would show it again).
+    const { task: survivor } = await addTask({ title: 'A', project: 'P' });
+    const { task: victim } = await addTask({ title: 'B', project: 'P' });
+    const { tracker, bus, EventNames, done } = await slicedSessions();
+    const survivorRow = () => getTaskDb()!.prepare('SELECT 1 FROM tasks WHERE id = ?').pluck().get(survivor.id) !== undefined;
+    // Many sessions, one per slice: the delete's few file-lock steps land while the merge still runs.
+    const victims = Array.from({ length: 300 }, (_, i) => `m14-victim-${i}`);
+    for (const id of victims) await tracker.createSessionRecord(id, victim.id, 'P', '/tmp');
+    await tracker.createSessionRecord('m14-survivor', survivor.id, 'P', '/tmp');
+    let deleting: Promise<unknown> | null = null;
+    const updatesOfTheDeleted: string[] = [];
+    bus.subscribe('m14-delete-survivor', (event) => {
+      if (event.name === EventNames.TASK_UPDATED && (event.data as { task: Task }).task.id === survivor.id && !survivorRow()) {
+        updatesOfTheDeleted.push(event.source ?? '?');
+      }
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED || deleting) return;
+      // The merge's first session is announced: now the survivor is deleted.
+      deleting = deleteTask(survivor.id);
+    }, { global: true }); // TASK_UPDATED is addressed to the web UI only
+    let relinked = -1;
+    try {
+      relinked = (await mergeTaskInto(survivor.id, victim.id)).sessionsRelinked;
+      await deleting;
+    } finally {
+      bus.unsubscribe('m14-delete-survivor');
+    }
+    expect(deleting).not.toBeNull();
+    // The delete landed while the merge ran: it re-pointed only the sessions before it.
+    expect(relinked).toBeGreaterThan(0);
+    expect(relinked).toBeLessThan(victims.length);
+    expect(await listTasks()).toHaveLength(0);
+    for (const id of [...victims, 'm14-survivor']) {
+      expect((await tracker.getSessionByClaudeId(id))?.taskId, id).toBeUndefined();
+    }
+    expect(updatesOfTheDeleted).toEqual([]);
+    done();
+  });
+
+  it('M15: two merges at once, A into B and B into C: every session follows to C', async () => {
+    // Merges run one at a time. Overlapping, the first found B gone partway and cleared the links of
+    // A's remaining sessions, which must follow B to C.
+    const { task: c } = await addTask({ title: 'C', project: 'P' });
+    const { task: b } = await addTask({ title: 'B', project: 'P' });
+    const { task: a } = await addTask({ title: 'A', project: 'P' });
+    const { tracker, done } = await slicedSessions();
+    const ofA = Array.from({ length: 200 }, (_, i) => `m15-a-${i}`);
+    const ofB = Array.from({ length: 5 }, (_, i) => `m15-b-${i}`);
+    for (const id of ofA) await tracker.createSessionRecord(id, a.id, 'P', '/tmp');
+    for (const id of ofB) await tracker.createSessionRecord(id, b.id, 'P', '/tmp');
+    const [first, second] = await Promise.all([mergeTaskInto(b.id, a.id), mergeTaskInto(c.id, b.id)]);
+    expect(first.sessionsRelinked).toBe(200);
+    expect(second.sessionsRelinked).toBe(205);
+    for (const id of [...ofA, ...ofB]) {
+      expect((await tracker.getSessionByClaudeId(id))?.taskId, id).toBe(c.id);
+    }
+    expect((await listTasks()).map((t) => t.id)).toEqual([c.id]);
+    done();
   });
 });
