@@ -1,14 +1,17 @@
 name: Mac app
 
 # Walnut.app for macOS, signed with the project's Developer ID, notarized by
-# Apple, stapled, in a DMG attached to the release as Walnut.dmg: the install
-# that is one click (releases/latest/download/Walnut.dmg), with its Homebrew
-# cask beside it (walnut.rb). The app is a small
-# shell (desktop/); its first launch installs the release's self-contained
-# archive with the install.sh it carries (desktop/BundledRuntime.swift). So
-# release-archives.yml calls this once the archives are attached, and the app
-# must install from the release itself and serve the console
-# (scripts/desktop-smoke.mjs) before it is attached.
+# Apple, stapled, in one DMG per Mac architecture attached to the release:
+# Walnut-arm64.dmg (Apple silicon) and Walnut-x64.dmg (Intel), the install that
+# is one click (releases/latest/download/Walnut-<arch>.dmg), with the Homebrew
+# cask that picks one (walnut.rb). Each app carries the release's
+# self-contained archive for its architecture (scripts/desktop-carry-release.mjs),
+# so its first launch installs Walnut with no network, with the install.sh it
+# carries (desktop/BundledRuntime.swift). So release-archives.yml calls this
+# once the archives are attached, and each app must start and serve the console
+# (scripts/desktop-smoke.mjs) before it is attached: the Apple silicon one from
+# what it carries, the Intel one (on this Apple silicon runner) by downloading
+# the arm64 build, as it does on such a Mac.
 #
 # The signing material lives only in the `release` environment, which only main
 # may use (Settings, Environments):
@@ -17,11 +20,14 @@ name: Mac app
 #   APPLE_API_KEY_P8_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID
 #       an App Store Connect API key with the Developer role, for notarytool
 # The identity goes into a keychain made for this job and deleted after it.
-# Without them the app is built ad-hoc signed and kept as a workflow artifact,
+# Without them the apps are built ad-hoc signed and kept as workflow artifacts,
 # never attached: an app that is not notarized does not open from a browser
 # download on macOS 15 and later.
 #
-# By hand: dispatch with a released version that has its archives.
+# By hand: dispatch with a released version that has its archives. To try the
+# app of a later commit on a released Walnut before any release carries it,
+# also give `app_ref`: it is built, signed, notarized and launched the same
+# way, and never attached.
 
 on:
   workflow_call:
@@ -32,6 +38,9 @@ on:
       attach:
         type: boolean
         default: true
+      app_ref:
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       version:
@@ -39,9 +48,13 @@ on:
         required: true
         type: string
       attach:
-        description: 'Attach Walnut.dmg to the release'
+        description: 'Attach the DMGs and the cask to the release'
         type: boolean
         default: true
+      app_ref:
+        description: 'Build the app from this commit instead of the release tag (a trial: never attached)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -52,22 +65,31 @@ concurrency:
 
 jobs:
   app:
-    name: Walnut.app ${{ inputs.version }}
+    name: Walnut.app ${{ inputs.version }} (${{ matrix.arch }})
     runs-on: macos-26
     timeout-minutes: 120
     environment: release
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    outputs:
+      app: ${{ steps.shape.outputs.app }}
+      signed: ${{ steps.signing.outputs.signed }}
     env:
       VERSION: ${{ inputs.version }}
+      ARCH: ${{ matrix.arch }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      ATTACH: ${{ inputs.attach }}
+      # A trial of another commit's app is never attached to the release.
+      ATTACH: ${{ inputs.attach && inputs.app_ref == '' }}
     steps:
-      # The release's own app and install.sh.
+      # The release's own app and install.sh (or, for a trial, that commit's).
       - uses: actions/checkout@v5
         with:
-          ref: v${{ inputs.version }}
+          ref: ${{ inputs.app_ref || format('v{0}', inputs.version) }}
       # The checks that judge it come from this workflow's own commit, as the
       # workflow does: a fix to the smoke must reach every release it checks
       # (2026-10-07: two smoke fixes on main never ran, the job used v0.6.5's).
@@ -78,21 +100,28 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: This release has the app that installs its own Walnut
+      - name: This release has the app that carries its own Walnut
         id: shape
         run: |
           case "$VERSION" in
             *[!0-9.]* | '' ) echo "::error::$VERSION is not a stable version (x.y.z)"; exit 1 ;;
           esac
-          if [ -f desktop/BundledRuntime.swift ] && [ -f scripts/desktop-smoke.mjs ]; then
+          if [ -f desktop/BundledRuntime.swift ] && [ -f scripts/desktop-carry-release.mjs ]; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::v$VERSION predates the downloadable Mac app; nothing to build"
+            echo "::notice::v$VERSION predates the Mac app that carries its Walnut; nothing to build"
           fi
       - name: The app's pure-logic tests
         if: steps.shape.outputs.app == 'true'
         run: bash scripts/test-desktop.sh
+      - name: The release's archive for ${{ matrix.arch }} and its checksums
+        if: steps.shape.outputs.app == 'true'
+        run: |
+          gh release download "v$VERSION" --dir "$RUNNER_TEMP/release" --clobber \
+            --pattern "open-walnut-$VERSION-darwin-$ARCH.tar.gz" --pattern SHA256SUMS
+          echo "WALNUT_APP_RUNTIME=$RUNNER_TEMP/release/open-walnut-$VERSION-darwin-$ARCH.tar.gz" >> "$GITHUB_ENV"
+          echo "WALNUT_APP_RUNTIME_SUMS=$RUNNER_TEMP/release/SHA256SUMS" >> "$GITHUB_ENV"
       - name: Signing identity and notary key, from the release environment
         id: signing
         if: steps.shape.outputs.app == 'true'
@@ -135,13 +164,15 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "signed=true" >> "$GITHUB_OUTPUT"
           echo "Signing as: $identity"
-      - name: Build Walnut.app and Walnut.dmg (signed, notarized and stapled when signed)
+      - name: Build Walnut.app and Walnut-${{ matrix.arch }}.dmg (signed, notarized and stapled when signed)
         if: steps.shape.outputs.app == 'true'
-        run: WALNUT_APP_VERSION="$VERSION" bash desktop/build-release.sh
+        run: |
+          WALNUT_APP_VERSION="$VERSION" bash desktop/build-release.sh
+          [ -f "desktop/Walnut-$ARCH.dmg" ] || { echo "::error::the build made no desktop/Walnut-$ARCH.dmg"; exit 1; }
       - name: Gatekeeper opens it the way it opens a browser download
         if: steps.signing.outputs.signed == 'true'
         run: |
-          cp desktop/Walnut.dmg "$RUNNER_TEMP/download.dmg"
+          cp "desktop/Walnut-$ARCH.dmg" "$RUNNER_TEMP/download.dmg"
           # The quarantine mark a browser puts on a download: what Gatekeeper checks.
           xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;" "$RUNNER_TEMP/download.dmg"
           spctl -a -vv -t open --context context:primary-signature "$RUNNER_TEMP/download.dmg"
@@ -152,7 +183,7 @@ jobs:
           xcrun stapler validate "$RUNNER_TEMP/mnt/Walnut.app"
           ditto "$RUNNER_TEMP/mnt/Walnut.app" "$RUNNER_TEMP/Applications/Walnut.app"
           hdiutil detach "$RUNNER_TEMP/mnt"
-      - name: First launch installs v${{ inputs.version }} from the release and serves the console, with no Node
+      - name: First launch installs v${{ inputs.version }} and serves the console, with no Node
         if: steps.shape.outputs.app == 'true'
         run: |
           app="$RUNNER_TEMP/Applications/Walnut.app"
@@ -161,28 +192,54 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.shape.outputs.app == 'true' && !cancelled()
         with:
-          name: Walnut-${{ inputs.version }}-dmg
-          path: desktop/Walnut.dmg
+          name: Walnut-${{ inputs.version }}-${{ matrix.arch }}-dmg
+          path: desktop/Walnut-${{ matrix.arch }}.dmg
           if-no-files-found: ignore
           retention-days: 14
-      - name: Attach Walnut.dmg to v${{ inputs.version }}
+      - name: Attach Walnut-${{ matrix.arch }}.dmg to v${{ inputs.version }}
         if: steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'
-        run: gh release upload "v$VERSION" desktop/Walnut.dmg --clobber
-      # The cask is written from the Walnut.dmg the release now holds, installed
-      # from GitHub with brew as a user does, and attached as walnut.rb. The tap
-      # (EvanZhang008/homebrew-tap) copies the newest release's walnut.rb into
-      # Casks/: brew install --cask evanzhang008/tap/walnut.
-      - name: Homebrew cask for the attached Walnut.dmg
-        if: steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: '1'
-          HOMEBREW_NO_ANALYTICS: '1'
-          HOMEBREW_NO_ENV_HINTS: '1'
-          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: gh release upload "v$VERSION" "desktop/Walnut-$ARCH.dmg" --clobber
+      - name: Remove the signing keychain and key
+        if: always()
         run: |
-          gh release download "v$VERSION" --pattern Walnut.dmg --dir "$RUNNER_TEMP/attached" --clobber
-          sha="$(shasum -a 256 "$RUNNER_TEMP/attached/Walnut.dmg" | cut -d' ' -f1)"
-          node harness/scripts/homebrew/cask.mjs --version "$VERSION" --sha256 "$sha" > "$RUNNER_TEMP/walnut.rb"
+          if [ -n "${WALNUT_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$WALNUT_SIGN_KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/identity.p12"
+
+  # The cask is written from the two DMGs the release now holds, installed from
+  # GitHub with brew as a user does, and attached as walnut.rb. The tap
+  # (EvanZhang008/homebrew-tap) copies the newest release's walnut.rb into
+  # Casks/: brew install --cask evanzhang008/tap/walnut.
+  cask:
+    name: Homebrew cask for v${{ inputs.version }}
+    needs: app
+    if: needs.app.outputs.app == 'true' && needs.app.outputs.signed == 'true' && inputs.attach && inputs.app_ref == ''
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+      HOMEBREW_NO_ENV_HINTS: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Write walnut.rb from the attached DMGs, install it with brew, and attach it
+        run: |
+          gh release download "v$VERSION" --dir "$RUNNER_TEMP/attached" --clobber \
+            --pattern Walnut-arm64.dmg --pattern Walnut-x64.dmg
+          arm="$(shasum -a 256 "$RUNNER_TEMP/attached/Walnut-arm64.dmg" | cut -d' ' -f1)"
+          intel="$(shasum -a 256 "$RUNNER_TEMP/attached/Walnut-x64.dmg" | cut -d' ' -f1)"
+          node harness/scripts/homebrew/cask.mjs --version "$VERSION" --sha256-arm64 "$arm" --sha256-x64 "$intel" > "$RUNNER_TEMP/walnut.rb"
           cat "$RUNNER_TEMP/walnut.rb"
           brew tap-new --no-git walnut-release/cask
           mkdir -p "$(brew --repository walnut-release/cask)/Casks"
@@ -192,10 +249,7 @@ jobs:
           # Homebrew quarantines what it installs, as a browser does: Gatekeeper must take it.
           spctl -a -vv "$RUNNER_TEMP/brew-apps/Walnut.app" 2>&1 | tee "$RUNNER_TEMP/cask-assess.txt"
           grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/cask-assess.txt" || { echo "::error::the cask's Walnut.app is not a notarized Developer ID app"; exit 1; }
+          # This runner is Apple silicon: brew took the arm64 DMG, which carries the arm64 build.
+          ls "$RUNNER_TEMP/brew-apps/Walnut.app/Contents/Resources/release/v$VERSION/open-walnut-$VERSION-darwin-arm64.tar.gz"
           brew uninstall --cask walnut-release/cask/walnut
           gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb" --clobber
-      - name: Remove the signing keychain and key
-        if: always()
-        run: |
-          if [ -n "${WALNUT_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$WALNUT_SIGN_KEYCHAIN" || true; fi
-          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/identity.p12"
