@@ -203,6 +203,119 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertFalse(element(app, "tasks.recents.page").exists, "Recently opened is still on top")
     }
 
+    func testNewSessionShowsTheFirstMessageBeforeTheCreateAnswers() throws {
+        let app = UITestLaunch.launch([
+            UITestLaunch.serverURLArgument, Self.demoURL, "-walnut.demoLatencyScale", "12",
+        ])
+        let tryDemo = app.buttons["setup.tryDemo"]
+        if !tryDemo.waitForExistence(timeout: 15) { leaveDemo(app) }
+        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30))
+        tryDemo.tap()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60))
+        openBoard(app)
+        app.buttons["sessions.new"].tap()
+        XCTAssertTrue(element(app, "newSessionChat.quickDir").waitForExistence(timeout: 15))
+        element(app, "newSessionChat.quickDir").tap()
+        let composer = element(app, "chat.composer")
+        composer.tap()
+        composer.typeText("Plan the garden layout before the weekend")
+        element(app, "chat.send").tap()
+        XCTAssertTrue(element(app, "newSessionChat.launching").waitForExistence(timeout: 2),
+                      "send must show the conversation while the create call is still pending")
+        XCTAssertFalse(app.navigationBars["New Session"].exists)
+        XCTAssertFalse(element(app, "newSessionChat.pathPill").exists)
+        XCTAssertTrue(text(app, containing: "Plan the garden layout before the weekend").exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "first-message-before-create-response"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(element(app, "newSessionChat.launching").waitForNonExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["session.menu"].exists)
+        let settings = app.tabBars.buttons["Settings"]
+        let shown = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: settings)
+        XCTAssertEqual(XCTWaiter().wait(for: [shown], timeout: 5), .completed)
+    }
+
+    @MainActor
+    func testLargestTextSizeCanRetryAFailedNewSessionWithoutChangingTheMessage() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let rawServer = environment["WALNUT_UITEST_SERVER"],
+              let token = environment["WALNUT_UITEST_TOKEN"],
+              let server = URL(string: UITestLaunch.pairedServer(rawServer)),
+              server.host == "127.0.0.1", server.port != 3456, server.port != 3457 else {
+            throw XCTSkip("requires the isolated new-session fixture")
+        }
+        func fixture(_ path: String) async throws -> Data {
+            let url = try XCTUnwrap(URL(string: path, relativeTo: server.appendingPathComponent("/")))
+            let (data, response) = try await URLSession.shared.data(from: url)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            return data
+        }
+        _ = try await fixture("__stub/mode?fail=1&delay=4000")
+        let app = UITestLaunch.launch([
+            UITestLaunch.serverURLArgument, server.absoluteString, "-walnut.deviceToken", token,
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+            "-walnut.composerDrafts", "{}",
+        ])
+        let tasks = app.tabBars.buttons["Tasks"]
+        XCTAssertTrue(tasks.waitForExistence(timeout: 30))
+        tasks.tap()
+        if !element(app, "tasks.drawer.scrim").waitForExistence(timeout: 3) {
+            app.buttons["tasks.menu"].tap()
+        }
+        app.buttons["sessions.new"].tap()
+        let composer = element(app, "chat.composer")
+        XCTAssertTrue(composer.waitForExistence(timeout: 15))
+        let message = String(repeating: "Keep every original detail and retry only once. ", count: 12)
+        composer.tap()
+        let empty = expectation(for: NSPredicate(format: "value == '' OR value == 'Describe the first task…'"),
+                                evaluatedWith: composer)
+        XCTAssertEqual(XCTWaiter().wait(for: [empty], timeout: 5), .completed,
+                       "the fixture draft must be empty before entering the test message")
+        composer.typeText(message)
+        let send = element(app, "chat.send")
+        send.tap()
+        XCTAssertTrue(app.navigationBars["Starting session…"].waitForNonExistence(timeout: 15))
+        let restored = expectation(for: NSPredicate(format: "value == %@", message.trimmingCharacters(in: .whitespaces)),
+                                   evaluatedWith: composer)
+        XCTAssertEqual(XCTWaiter().wait(for: [restored], timeout: 15), .completed)
+        XCTAssertEqual(composer.value as? String, message.trimmingCharacters(in: .whitespaces))
+        XCTAssertTrue(send.isHittable)
+        XCTAssertLessThanOrEqual(send.frame.maxY, app.keyboards.firstMatch.frame.minY,
+                                 "Retry must remain above the keyboard, not merely in the accessibility tree")
+        _ = try await fixture("__stub/mode?fail=0&delay=4000")
+        send.tap()
+        XCTAssertTrue(app.buttons["session.menu"].waitForExistence(timeout: 20))
+        let stateData = try await fixture("__stub/state")
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: stateData) as? [String: Any])
+        let sessions = try XCTUnwrap(state["sessions"] as? [[String: Any]])
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions.first?["message"] as? String, message.trimmingCharacters(in: .whitespaces))
+    }
+
+    func testNewSessionClosesTheBoardBeforeSendAndCancelReturnsToIt() throws {
+        let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, Self.demoURL])
+        let tryDemo = app.buttons["setup.tryDemo"]
+        if !tryDemo.waitForExistence(timeout: 15) { leaveDemo(app) }
+        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30))
+        tryDemo.tap()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60))
+        openBoard(app)
+
+        for _ in 0..<3 {
+            app.buttons["sessions.new"].tap()
+            let draft = app.navigationBars["New Session"]
+            XCTAssertTrue(draft.waitForExistence(timeout: 10))
+            XCTAssertTrue(element(app, "tasks.drawer.scrim").waitForNonExistence(timeout: 5),
+                          "the board must close before send, not during the sheet's dismissal")
+            draft.buttons["Cancel"].tap()
+            XCTAssertTrue(draft.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(element(app, "tasks.drawer.scrim").waitForExistence(timeout: 5),
+                          "Cancel must return to the board that opened the draft")
+            XCTAssertTrue(app.buttons["sessions.new"].isHittable)
+        }
+    }
+
     func testATierMoveLandsWhereTheServerPutsIt() throws {
         let app = UITestLaunch.launch([
             UITestLaunch.serverURLArgument, Self.demoURL, "-walnut.demoLatencyScale", "40",

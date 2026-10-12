@@ -24,6 +24,9 @@ struct TasksTabView: View {
     @State private var path: [TasksTabRoute] = []
     /// The launch restore has run (it decides once; after that the page is the user's).
     @State private var restored = false
+    @State private var draftReturnsToBoard = false
+    @State private var draftReturnTask: Task<Void, Never>?
+    @State private var draftTabBarHidden = false
 
     var body: some View {
         @Bindable var router = router
@@ -60,38 +63,56 @@ struct TasksTabView: View {
         // The draft lives on the tab, not in the drawer: the board's `+` and a
         // sessionless task from the calendar both open it, and its session lands on
         // the page.
-        .sheet(item: $router.draftSeed) { seed in
+        .onChange(of: router.draftSeed) { _, seed in
+            guard seed != nil else { return }
+            restored = true
+            router.supersede()
+            draftReturnTask?.cancel()
+            draftReturnsToBoard = drawer.isOpen
+            draftTabBarHidden = true
+            drawer.setOpen(false)
+        }
+        .sheet(item: $router.draftSeed, onDismiss: {
+            let returnsToBoard = draftReturnsToBoard
+            draftReturnsToBoard = false
+            draftReturnTask = Task { @MainActor in
+                do { try await Task.sleep(for: .seconds(Self.afterDismissal)) }
+                catch { return }
+                guard router.draftSeed == nil else { return }
+                // SwiftUI drops a tab bar show made in the sheet's dismissal update.
+                draftTabBarHidden = false
+                if returnsToBoard { drawer.setOpen(true) }
+            }
+        }) { seed in
             NavigationStack {
                 NewSessionChatView(
                     taskId: seed.taskId,
                     taskTitle: seed.taskTitle,
-                    // The todo is on the board: open the drawer, where its new row
-                    // flashes and the toast says which tier it went to. A drawer that
-                    // is shut (a draft from the calendar) opens once the sheet is
-                    // gone, for the reason `show` below waits.
                     onSavedAsTodo: {
+                        draftReturnsToBoard = true
                         router.draftSeed = nil
-                        guard !drawer.isOpen else { return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + Self.afterDismissal) {
-                            drawer.setOpen(true)
-                        }
                     }
                 ) { session in
-                    // The session goes on the page and the drawer shuts UNDER the sheet,
-                    // and the sheet leaves after that. Closing the drawer while the sheet
-                    // was being dismissed lost the tab bar's return: the session came up
-                    // with no tab bar until the drawer was opened and shut again (UI QA,
-                    // 2026-10-11).
+                    draftReturnsToBoard = false
                     show(session)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.afterDismissal) {
-                        router.draftSeed = nil
-                    }
+                    router.draftSeed = nil
                 }
             }
             .presentationDetents([.large])
         }
         // Back (or any pop) drops a lookup the page it started on no longer wants.
         .onChange(of: path) { router.supersede() }
+        .onChange(of: drawer.isOpen) { _, open in
+            if open {
+                draftReturnTask?.cancel()
+                if router.draftSeed == nil { draftTabBarHidden = false }
+            }
+        }
+        .onDisappear {
+            draftReturnTask?.cancel()
+            draftTabBarHidden = false
+        }
+        .toolbarVisibility(drawer.isOpen || draftTabBarHidden ? .hidden : .visible, for: .tabBar)
         .task { await restore() }
     }
 
@@ -146,6 +167,7 @@ struct TasksTabView: View {
 
     /// Put a session on the page and get everything else out of the way.
     private func show(_ session: WalnutSession) {
+        draftReturnTask?.cancel()
         restored = true
         tasks.recents.recordSession(session)
         router.didShow()
@@ -155,6 +177,8 @@ struct TasksTabView: View {
     }
 
     private func openCalendar() {
+        draftReturnTask?.cancel()
+        restored = true
         router.supersede()
         drawer.setOpen(false)
         path = [.calendar]

@@ -67,6 +67,7 @@ struct NewSessionChatView: View {
     @State private var model: String?
     @State private var showPathPicker = false
     @State private var creating = false
+    @State private var launchingMessage: String?
     @State private var createError: String?
     @State private var didPreselect = false
     /// The project the new task files under ("" = Inbox, where the server's organize
@@ -81,23 +82,45 @@ struct NewSessionChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let createError {
+            if let createError, !dynamicTypeSize.isAccessibilitySize {
                 ErrorBanner(text: createError) { self.createError = nil }
             }
-            introOrStatus
+            if let launchingMessage {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        MessageRow(message: ChatMessage(
+                            id: "launching", role: "user", text: launchingMessage,
+                            createdAt: "", kind: nil
+                        ))
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Starting the session…").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .padding(.vertical, 16)
+                }
+                .accessibilityIdentifier("newSessionChat.launching")
+            } else {
+                introOrStatus
+            }
         }
+        .keyboardSafeComposerContent()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                launchBar
+                if launchingMessage == nil && !dynamicTypeSize.isAccessibilitySize { launchBar }
                 ComposerBar(
-                    placeholder: canLaunch ? "Describe the first task…" : "Pick a folder to start",
+                    placeholder: launchingMessage != nil ? "Starting the session…" : canLaunch ? "Describe the first task…" : "Pick a folder to start",
                     busy: creating,
                     disabled: !canLaunch,
                     // Not at the accessibility sizes: there the folder pill right
                     // above says "Choose folder…" and the box says "Pick a folder
                     // to start", and this third copy took three more lines of a
                     // bar that already left the page about 30 pt (gate r4, F5).
-                    disabledNotice: canLaunch || dynamicTypeSize.isAccessibilitySize ? nil : Self.folderNotice,
+                    disabledNotice: launchingMessage != nil || canLaunch || dynamicTypeSize.isAccessibilitySize ? nil : Self.folderNotice,
+                    // The page names the failed create; a second notice crowds out Retry.
+                    showsRefusedNotice: false,
+                    maximumInputLines: dynamicTypeSize.isAccessibilitySize ? 2 : 6,
                     // Nothing here can HOLD a send made during the create call, and a
                     // second one would create a second session, so the button stays
                     // greyed while `creating` (see `ComposerPrimaryAction`). A create
@@ -113,7 +136,7 @@ struct NewSessionChatView: View {
                     // choices RIDE the create call. At the accessibility sizes they
                     // sit beside the folder pill instead (`pillRow`): stacked here
                     // they made the box about 180 pt taller (gate r4, F5).
-                    controlsAccessory: launchPillsInPillRow ? nil : AnyView(launchPills),
+                    controlsAccessory: launchingMessage != nil || launchPillsInPillRow ? nil : AnyView(launchPills),
                     hostProvenance: connection.map {
                         .chat(status: $0.status, online: $0.online)
                     },
@@ -122,8 +145,9 @@ struct NewSessionChatView: View {
                 )
             }
         }
-        .navigationTitle("New Session")
+        .navigationTitle(launchingMessage == nil ? "New Session" : taskTitle ?? "Starting session…")
         .navigationBarTitleDisplayMode(.inline)
+        .interactiveDismissDisabled(creating)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Cancel") { dismiss() }.disabled(creating)
@@ -157,6 +181,22 @@ struct NewSessionChatView: View {
     private var introOrStatus: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if dynamicTypeSize.isAccessibilitySize {
+                    if let createError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(createError)
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Dismiss") { self.createError = nil }
+                                .font(.footnote)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityIdentifier("newSessionChat.createError")
+                    }
+                    launchBar
+                }
                 if let loadFailed {
                     Label(loadFailed, systemImage: "icloud.slash")
                         .font(.subheadline)
@@ -631,6 +671,7 @@ struct NewSessionChatView: View {
         createError = nil
         defer { creating = false }
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        launchingMessage = text
         do {
             let created = try await api.createSession(
                 cwd: cwd,
@@ -686,11 +727,11 @@ struct NewSessionChatView: View {
             onCreated(session)
             return true
         } catch let APIError.server(_, code, msg, _, _) {
-            // Same ladder as the form-shaped launcher, including the reason
-            // `bridge_offline` prefers the server's sentence (see that function).
+            launchingMessage = nil
             createError = NewSessionSheet.createErrorMessage(code: code, serverMessage: msg)
             return false
         } catch {
+            launchingMessage = nil
             createError = error.localizedDescription
             return false
         }

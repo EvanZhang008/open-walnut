@@ -85,6 +85,8 @@ struct ComposerBar: View {
     /// queue's ceiling). Derived from store state rather than latched here, so it
     /// appears while the limit is reached and clears itself when it is not.
     var ownerNotice: String? = nil
+    var showsRefusedNotice = true
+    var maximumInputLines = 6
     /// Can this composer's owner HOLD a send made while it is busy?
     ///
     /// True for the chat composer, whose store banks the message and delivers it
@@ -295,7 +297,7 @@ struct ComposerBar: View {
             // The owner's sentence when it has one (it names the actual ceiling), the
             // generic refusal otherwise. Never both: two rows about one refused tap
             // is noise, and the specific one is always the more useful.
-            if let notice = ownerNotice ?? refusedNotice {
+            if let notice = ownerNotice ?? (showsRefusedNotice ? refusedNotice : nil) {
                 noticeRow(notice, icon: Symbol.queueFullNotice) {
                     refusedNotice = nil
                 }
@@ -921,10 +923,10 @@ struct ComposerBar: View {
         // cost model and nothing a user or a maestro flow can observe.
         Group {
             if useLongDraftEditor {
-                LongDraftEditor(text: draft, isFocused: $longDraftFocused)
+                LongDraftEditor(text: draft, isFocused: $longDraftFocused, visibleLines: maximumInputLines)
             } else {
                 TextField(waitingForReply ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
-                    .lineLimit(1...6)
+                    .lineLimit(1...maximumInputLines)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
                     .focused($focused)
