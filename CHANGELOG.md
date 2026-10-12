@@ -10,6 +10,50 @@ breaking changes).
 
 - The Mac app updates itself: a quiet check, a download you start from the sidebar, and Restart to update
 
+## [0.6.9] - 2026-10-12
+
+### Added
+
+- A fire no server claimed wakes a stopped session on its host
+- Session controls through a led host, and a host server that answers alone
+- Streams ride a lane of their own, off the session SSH connection
+- A Walnut server on a host, linked to its daemon only
+- Time_report and time_timeline ops, a walnut-time-review skill, and four task API fixes
+- Every follower server keeps the search index copy, not only the companion
+- New events go to a default calendar, and a write without a grant fails at once
+- One view of the leader on every follower, and the list of followers
+- A first launch starts by itself, and the release gets a Homebrew cask
+- A message the companion holds names the hop it waits on, and is delivered once when that hop is back
+- Recently opened drawer on the Tasks tab
+- Hide events locally, zoom the timeline and guard source writes
+- Mark Inbox letters read the way Mail does: swipe right, Select, two fingers
+- Haiku 5.5 replaces Haiku 4.5, and the AI search lane runs on Haiku
+
+### Fixed
+
+- A message to a task goes to its current session, as on the server
+- A message to a task goes to its current session, as on the server
+- An edited document is split into passages once, and reused vectors stay correct
+- A real block right after a load-stretched one is code, not the machine
+- The iPhone asks for Always once Walnut is open again, and the Places screen can ask again
+- The session header takes the record's status when the stream gives none
+- Streams wait for the lane while it dials again, off the session link
+- The stream lane logs why its SSH connection ended
+- The review skill reuses the vault's time-review topic, and list arguments take arrays
+- A planned block matches the task that had the most time in it
+- A watch left running overnight is not exercise, and plans match short names and CJK titles
+- The default calendar row names the account
+- Call the companion's search "Semantic search"
+- A removed device stops getting notifications on every path that removes it
+- Keep task menus stable across fractional zoom
+- Bump the parse cache schema so idle sessions get sourceUuid
+- A question sent mid-turn keeps its number; Archive instead of Done; amber open marks
+- A master that is only slow is kept, and a relative age in an error no longer splits one card into two
+- Helper model turns nobody waits on run in the utility band and queue behind the ones a person waits on
+- A recovery survives a dead server's lock, and the companion stops carding its own deploys and the Mac's pushes
+- Import the sessions a person started, by the CLI's own record
+- Only a folder's own open work makes it shared
+
 ## [0.6.8] - 2026-10-11
 
 ### Added
