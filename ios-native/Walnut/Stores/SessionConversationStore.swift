@@ -95,6 +95,11 @@ final class SessionConversationStore {
     /// keyed by bubble id and kept across retries: a bubble gives way only to a row
     /// its own send made (`bubblesAbsorbed`).
     @ObservationIgnored private var sendBaselines: [String: Set<String>] = [:]
+    /// Per bubble, the delivery attempt that owns its state: a manual retry
+    /// supersedes an automatic attempt still in flight, whose failure must then
+    /// leave the bubble to the newer one (`deliver`).
+    @ObservationIgnored private var deliveryOwners: [String: Int] = [:]
+    @ObservationIgnored private var lastDeliveryToken = 0
 
     /// Live turn accumulation (mirrors ChatStore.streamText / .activity).
     var streaming = false
@@ -339,6 +344,9 @@ final class SessionConversationStore {
         FreezeContext.shared.note("sc-open")
         adoptLaunchStash()
         connectStream()
+        // close() paused this page's automatic retries like a suspend does; the
+        // page opened again resumes them, as resume() would.
+        rearmPendingRetries()
         await loadTranscript(fresh: false, rich: false)
         FreezeContext.shared.note("sc-open-cached", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
         await runFreshLoad(rich: true, visible: Self.openVisibleRows)
@@ -590,7 +598,10 @@ final class SessionConversationStore {
         let gone = Self.bubblesAbsorbed(pendingUser, baselines: sendBaselines, rows: historyMessages)
         guard !gone.isEmpty else { return }
         pendingUser.removeAll { gone.contains($0.id) }
-        for id in gone { sendBaselines[id] = nil }
+        for id in gone {
+            sendBaselines[id] = nil
+            deliveryOwners[id] = nil
+        }
     }
 
     /// The bubbles the page's rows now show, each matched by its OWN send:
@@ -947,15 +958,20 @@ final class SessionConversationStore {
         bubbleID: String, messageId: String?, text: String, jpegDatas: [Data],
         attempt: Int, firstFailureAt: Date?
     ) async -> Bool {
+        lastDeliveryToken += 1
+        let token = lastDeliveryToken
+        deliveryOwners[bubbleID] = token
         let payloads = await Self.buildImagePayloads(jpegDatas)
         // Encoding is a real suspension point (5 large photos take a moment).
-        // If this attempt was cancelled meanwhile, do NOT fire the request:
-        // leave it as a retryable failed bubble. A page that went away does not
-        // stop it: the message is the person's, the bubble is this store's own
+        // If this attempt was cancelled meanwhile, do NOT fire the request: the
+        // bubble waits for its retry (`pauseDelivery`). A page that went away does
+        // not stop it: the message is the person's, the bubble is this store's own
         // state (see `send`), and a running process can post it. Automatic
         // retries never start while away (`scheduleRetry`, `cancelRetryTasks`).
         guard !Task.isCancelled else {
-            settleFailed(bubbleID)
+            guard deliveryOwners[bubbleID] == token else { return false }
+            pauseDelivery(bubbleID: bubbleID, messageId: messageId, text: text,
+                          jpegDatas: jpegDatas, attempt: attempt, firstFailureAt: firstFailureAt)
             return false
         }
         do {
@@ -991,10 +1007,26 @@ final class SessionConversationStore {
             if !receipt.queued { noteBridgeUp() }
             return true
         } catch {
-            // Cancelled/suspended sends settle silently but must NOT leave a
-            // forever-pending bubble: the draft is already cleared, so the
-            // failed bubble (tap to retry) is the only copy of the text.
-            if !isActive || (error as? APIError)?.isCancelled == true {
+            // A newer attempt of this bubble (a manual retry that superseded this
+            // automatic one) owns its state: this one's failure says nothing now.
+            guard deliveryOwners[bubbleID] == token else { return false }
+            // PAUSED, NEVER ABANDONED (see `suspend`). An attempt the app's going
+            // away cut short (`cancelRetryTasks` cancels a retry's task; a request in
+            // flight ends cancelled), or one that met a condition the ladder rides
+            // out while the page is away, keeps its waiting notice: `resume` and
+            // `open` re-arm it under the same id, and the server answers a repeat of
+            // a message it already has once. Settling it as the terminal "Not sent"
+            // left nothing to re-arm, so a message the server had stayed on the page
+            // as a second, failed copy (App Store gate r8, Q1r).
+            if Self.isCancellation(error) || (!isActive && SendRetryPolicy.isRetryable(error)) {
+                pauseDelivery(bubbleID: bubbleID, messageId: messageId, text: text,
+                              jpegDatas: jpegDatas, attempt: attempt, firstFailureAt: firstFailureAt)
+                return false
+            }
+            // Anything else while away is settled silently, but must NOT leave a
+            // forever-pending bubble: the draft is already cleared, so the failed
+            // bubble (tap to retry) is the only copy of the text.
+            if !isActive {
                 settleFailed(bubbleID)
                 return false
             }
@@ -1059,6 +1091,34 @@ final class SessionConversationStore {
         pendingUser[idx].pending = false
         pendingUser[idx].failed = true
         pendingUser[idx].retryNotice = SendRetryPolicy.waitingNotice(host: hostLabel)
+    }
+
+    /// An attempt that did not finish, for a reason that is not the message's: it
+    /// waits for its retry. Away, that is all (the page coming back re-arms it).
+    /// On screen with no retry armed (nothing else would re-arm it), the ladder
+    /// goes on from here, within its budget.
+    private func pauseDelivery(
+        bubbleID: String, messageId: String?, text: String, jpegDatas: [Data],
+        attempt: Int, firstFailureAt: Date?
+    ) {
+        markWaitingForRetry(bubbleID)
+        guard isActive, !viewClosed, retryTasks[bubbleID] == nil else { return }
+        let failedAt = firstFailureAt ?? Date()
+        let next = attempt + 1
+        guard SendRetryPolicy.shouldRetry(attempt: next, elapsed: Date().timeIntervalSince(failedAt)) else {
+            settleFailed(bubbleID)
+            return
+        }
+        scheduleRetry(bubbleID: bubbleID, messageId: messageId, text: text,
+                      jpegDatas: jpegDatas, attempt: next, firstFailureAt: failedAt)
+    }
+
+    /// The request was cancelled, not answered: URLSession's cancellation in any
+    /// of the shapes it reaches here.
+    nonisolated static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as? APIError)?.isCancelled == true { return true }
+        return (error as? URLError)?.code == .cancelled
     }
 
     /// Sleep, then re-attempt. Tracked so backgrounding/close cancels it —
@@ -1170,6 +1230,7 @@ final class SessionConversationStore {
         voiceBubbleIDs.remove(message.id)
         pendingUser.removeAll { $0.id == message.id }
         sendBaselines[message.id] = nil
+        deliveryOwners[message.id] = nil
     }
 
     // MARK: - SSE
@@ -1891,4 +1952,20 @@ final class SessionConversationStore {
 extension SessionConversationStore: LifecycleSuspendable {
     func suspendForBackground() { suspend() }
     func resumeForForeground() { resume() }
+}
+
+extension SessionConversationStore {
+    /// The composer's send. True whenever this store holds the words: delivered, or
+    /// kept as this send's own bubble (failed, or waiting for its automatic retry).
+    /// The composer gives the words back only on false, so a message is never in
+    /// two places. `send` answers false for a first attempt the host's bridge
+    /// refused, while its bubble rides the retry ladder; the composer then put the
+    /// same words back with "That message was not sent", the retry delivered the
+    /// bubble, and a second tap would have sent the message again under a new id
+    /// (send-once r2, seen on the simulator in SendOnceUITests).
+    func sendFromComposer(_ text: String, images: [SelectedImage] = []) async -> Bool {
+        let before = Set(pendingUser.map(\.id))
+        if await send(text, images: images) { return true }
+        return pendingUser.contains { !before.contains($0.id) && $0.text == text }
+    }
 }

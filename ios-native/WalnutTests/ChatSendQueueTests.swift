@@ -69,21 +69,54 @@ final class MockChatSendTransport: ChatSendTransport, @unchecked Sendable {
         return "conv-created"
     }
 
+    private var postedIDs: [String?] = []
+    /// The `messageId` of every POST, in order (nil: the request carried none).
+    var messageIds: [String?] {
+        lock.lock(); defer { lock.unlock() }
+        return postedIDs
+    }
+    /// Answer a POST whose `messageId` was posted before the way a server that
+    /// takes the field does: the first turn again, `duplicate`.
+    var answersRepeatsOnce = false
+    private var turnByMessageId: [String: String] = [:]
+
     func sendMessage(
-        conversationID: String, agentID: String, text: String, images: [ImagePayload]
-    ) async throws -> String {
+        conversationID: String, agentID: String, text: String, images: [ImagePayload],
+        messageId: String?
+    ) async throws -> ChatSendReceipt {
         lock.lock()
         posted.append(Posted(conversationID: conversationID, agentID: agentID,
                              text: text, imageCount: images.count))
+        postedIDs.append(messageId)
+        let repeated = answersRepeatsOnce ? messageId.flatMap { turnByMessageId[$0] } : nil
         let answer = answers.isEmpty ? Result<String, Error>.success("turn-\(posted.count)")
                                      : answers.removeFirst()
         let gate = sendGate
         lock.unlock()
         await gate?.wait()
+        if let repeated { return ChatSendReceipt(turnId: repeated, duplicate: true) }
         switch answer {
-        case .success(let turnID): return turnID
-        case .failure(let error): throw error
+        case .success(let turnID):
+            if let messageId {
+                lock.lock(); turnByMessageId[messageId] = turnID; lock.unlock()
+            }
+            return ChatSendReceipt(turnId: turnID)
+        case .failure(let error):
+            // The server may have taken a POST whose answer was lost: a scripted
+            // failure after the request went out still records its turn, so a
+            // repeat can be answered once.
+            if let messageId, answersRepeatsOnce, Self.reachedServer(error) {
+                lock.lock(); turnByMessageId[messageId] = "turn-\(posted.count)"; lock.unlock()
+            }
+            throw error
         }
+    }
+
+    /// A scripted failure that stands for a lost answer rather than a refusal.
+    private static func reachedServer(_ error: Error) -> Bool {
+        if let urlError = error as? URLError { return urlError.code == .cancelled || urlError.code == .timedOut }
+        if (error as? APIError)?.isCancelled == true { return true }
+        return false
     }
 }
 

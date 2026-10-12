@@ -162,6 +162,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// badge, exactly as the web console does. nil on a succeeded call and on an
     /// older server, where every run simply reports no failures.
     let isError: Bool?
+    /// User rows of a chat only: the `messageId` the message was POSTed under
+    /// (additive 2026-10). It is how a local copy of a message (pending, failed or
+    /// an echo, all of which carry the id as `clientMessageId`) recognises its OWN
+    /// server row, whatever order the row and the POST's answer arrive in; see
+    /// `ChatStore.carryLocalRows`. nil on a message sent without one and on an
+    /// older server, where the words are all there is to go by.
+    var messageId: String? = nil
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -188,6 +195,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
+        case messageId
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,

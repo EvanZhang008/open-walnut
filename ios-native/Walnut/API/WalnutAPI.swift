@@ -74,19 +74,26 @@ struct WalnutAPI {
         return try await get(path)
     }
 
-    /// POST a message; returns the turnId from the 202 response. `images` is an
+    /// POST a message; returns the 202's turnId. `images` is an
     /// additive field (≤5 base64 JPEG/PNG) — omitted when empty so older servers
-    /// and image-free sends behave exactly as before.
+    /// and image-free sends behave exactly as before. `messageId` (additive) is the
+    /// message's own id, the same on every attempt: a server that took it already
+    /// answers with that turn and `duplicate: true` (api-v1.md).
     /// Throws APIError.server(code: "turn_active") when a turn is already running.
-    func sendMessage(conversationID: String, agentID: String = "general", text: String, images: [ImagePayload] = []) async throws -> String {
-        struct Body: Encodable { let text: String; let agentId: String; let images: [ImagePayload]? }
-        struct Accepted: Codable { let turnId: String }
+    func sendMessage(
+        conversationID: String, agentID: String = "general", text: String, images: [ImagePayload] = [],
+        messageId: String? = nil
+    ) async throws -> ChatSendReceipt {
+        struct Body: Encodable {
+            let text: String; let agentId: String; let images: [ImagePayload]?; let messageId: String?
+        }
+        struct Accepted: Codable { let turnId: String; let duplicate: Bool? }
         let accepted: Accepted = try await send(
             "POST", "/conversations/\(escape(conversationID))/messages",
-            body: Body(text: text, agentId: agentID, images: images.isEmpty ? nil : images),
+            body: Body(text: text, agentId: agentID, images: images.isEmpty ? nil : images, messageId: messageId),
             timeout: images.isEmpty ? nil : 180
         )
-        return accepted.turnId
+        return ChatSendReceipt(turnId: accepted.turnId, duplicate: accepted.duplicate == true)
     }
 
     /// Read-only task projection. Fetches ALL tasks (no status query) so the

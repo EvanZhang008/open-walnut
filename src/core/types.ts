@@ -1778,6 +1778,9 @@ export interface ChatEntry {
   contextHashes?: Record<string, string>;
   // Unique turn ID for eager-persist dedup (prevents double-write on error paths)
   turnId?: string;
+  // The client's own id for a user message (the phone's chat `messageId`), so a
+  // client can match its pending copy to this row by id, not by its words.
+  messageId?: string;
 }
 
 export interface ChatHistoryStore {

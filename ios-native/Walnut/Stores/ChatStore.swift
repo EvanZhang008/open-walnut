@@ -25,15 +25,27 @@ extension WalnutAPI: ChatMessagesTransport {}
 /// the POST).
 protocol ChatSendTransport {
     func createConversation(agentID: String, title: String?) async throws -> String
+    /// `messageId` is the message's own id, the same on every attempt of it: a server
+    /// that already took the message answers the repeat with its first 202
+    /// (`ChatSendReceipt.duplicate`) and starts no second turn. An older server
+    /// ignores the field.
     func sendMessage(
-        conversationID: String, agentID: String, text: String, images: [ImagePayload]
-    ) async throws -> String
+        conversationID: String, agentID: String, text: String, images: [ImagePayload],
+        messageId: String?
+    ) async throws -> ChatSendReceipt
     /// Behind the seam for the queue's sake: a STOP is one of the moments that has to
     /// drain (see `stopTurn`), and a stop that cannot succeed cannot be shown to.
     func stopConversation(id: String, agentID: String) async throws -> ConversationStopped
 }
 
 extension WalnutAPI: ChatSendTransport {}
+
+/// A chat POST's 202. `duplicate`: the server had already taken this message (same
+/// `messageId`) and started no turn for this request.
+struct ChatSendReceipt: Equatable, Sendable {
+    let turnId: String
+    var duplicate = false
+}
 
 /// Chat state — conversation list, active conversation's messages, one live
 /// SSE stream, and the send flow (POST → 202 → deltas over SSE).
@@ -111,6 +123,23 @@ final class ChatStore {
     /// changes; pruned after every merge to the rows still on screen, so it
     /// cannot grow. Internal for WalnutTests.
     @ObservationIgnored private(set) var localRowConversation: [String: String] = [:]
+
+    /// Failed bubbles whose POST may have reached the server: it went out and no
+    /// answer came back (the app went to the background, the connection dropped
+    /// mid-flight, a restart cut it). The conversation's own row then proves the
+    /// server has the words, and the bubble gives way to it (`carryLocalRows`), or
+    /// the message showed twice: the server's row and a red "Not sent" beside it
+    /// (App Store gate r8, Q1chat-x). Pruned with `localRowConversation`.
+    @ObservationIgnored private(set) var inconclusiveSends: Set<String> = []
+
+    /// Local rows the server's own row of the same message (`messageId`) has taken
+    /// the place of, while their send may still be in flight. The send then reads
+    /// as arrived whatever its POST says next: a 202 that lands after the turn is
+    /// over, or an error from a POST whose answer was lost (send-once gate r1,
+    /// MEDIUM-2: the server row came first over the stream's refetch, then the POST
+    /// failed, and "Not sent. Tap to retry." stood under the message's own row).
+    /// Cleared with `inconclusiveSends`.
+    @ObservationIgnored private(set) var sendsShownByServer: Set<String> = []
 
     /// Console agents (Walnut = main, Mentor, Note Assistant, …).
     var agents: [AgentSummary] = []
@@ -422,6 +451,8 @@ final class ChatStore {
         asksListed = false
         messages = []
         localRowConversation.removeAll()
+        inconclusiveSends.removeAll()
+        sendsShownByServer.removeAll()
         hasOlder = false
         // This path clears `activeID` without going through `select`, so it owns
         // the reset too — otherwise the outgoing conversation's in-flight flag
@@ -587,6 +618,8 @@ final class ChatStore {
         // map is what tells a later merge that a leftover echo is not ours, and
         // an entry whose row is gone would be a lie about the next conversation.
         localRowConversation.removeAll()
+        inconclusiveSends.removeAll()
+        sendsShownByServer.removeAll()
         // Banked sends outlive a conversation switch (they are the user's words,
         // not a view state), so the rows that picture them are rebuilt here — the
         // wipe above removed the bubbles, never the queue.
@@ -690,8 +723,24 @@ final class ChatStore {
             // reply right after the turn ended (2026-08-23 dogfood round 10).
             let localOnly = Self.carryLocalRows(
                 current: messages, fetched: fetched, installed: installed,
-                conversationID: id, owners: localRowConversation
+                conversationID: id, owners: localRowConversation,
+                mayHaveArrived: inconclusiveSends
             )
+            // The local rows this fetch shows the server's own row of, by id.
+            let shownByServer = Self.localRowsShownByServer(current: messages, shown: installed)
+                .filter { (self.localRowConversation[$0] ?? id) == id }
+            sendsShownByServer.formUnion(shownByServer)
+            // A failed send this fetch shows the server has. One restored from a POST
+            // that died with the process is still an `undecided` queue entry, and it
+            // leaves the disk with its bubble, or the next switch brings it back. A
+            // banked entry whose message the server shows by id is delivered: it
+            // leaves the disk too, so nothing automatic posts it again.
+            let keptIDs = Set(localOnly.map(\.id))
+            let arrivedSends = messages.map(\.id).filter { rowID in
+                (self.inconclusiveSends.contains(rowID) || shownByServer.contains(rowID))
+                    && !keptIDs.contains(rowID)
+                    && (self.localRowConversation[rowID] ?? id) == id
+            }
             let wasAtBottom = bottomPinned
             let changed = installed.count + localOnly.count != messages.count
                 || installed.last?.id != messages.dropLast(localOnly.count).last?.id
@@ -711,6 +760,8 @@ final class ChatStore {
             // an echo the fetch just absorbed has no owner left to record.
             let survivingLocalIDs = Set(localOnly.map(\.id))
             localRowConversation = localRowConversation.filter { survivingLocalIDs.contains($0.key) }
+            inconclusiveSends.formIntersection(survivingLocalIDs)
+            for rowID in arrivedSends { dropQueueEntry(rowID) }
             // Freeze-report context: rows handed to SwiftUI for layout.
             FreezeContext.shared.setHistoryRows(messages.count)
             // The PAGE decides whether there is more history, so this stays the
@@ -831,6 +882,8 @@ final class ChatStore {
         installed: [ChatMessage]? = nil,
         conversationID: String? = nil,
         owners: [String: String] = [:],
+        /// Failed rows whose POST may have arrived (`inconclusiveSends`).
+        mayHaveArrived: Set<String> = [],
         // The shown clock: the echoes are stamped on it (App Store r7 gate, C1).
         now: Date = AppClock.now()
     ) -> [ChatMessage] {
@@ -844,12 +897,34 @@ final class ChatStore {
                 $0.role == "assistant" && $0.kind == nil && (!skipEchoes || !isEcho($0))
             })
         }
+        // A server row that NAMES a local row's message id is that message, so the
+        // local copy (pending, failed, or a solid echo) gives way to it, in whatever
+        // order the row and the POST's answer arrived: by id, never by words or by
+        // timing (send-once gate r1, MEDIUM-2). Only a row this fetch puts on
+        // screen counts, as for the failed bubble below.
+        let shownByServer = localRowsShownByServer(current: current, shown: installed ?? fetched)
+        // A row that carries a message id is matched BY it, above, and never by its
+        // words: it takes nothing from the word budgets below, so it cannot stand
+        // for a local copy of another message that happens to say the same thing
+        // (an identical one sent under another id, from here or another device).
+        // Rows without one (an older server, a message sent without an id) are
+        // counted by their words exactly as before.
+        let accounted: (ChatMessage) -> Bool = { $0.messageId != nil }
         // Budget = canonical rows the fetch ADDS beyond what we already had.
         var budget: [String: Int] = [:]
-        for row in fetched { budget[key(row), default: 0] += 1 }
-        for row in current where !isEcho(row) {
+        for row in fetched where !accounted(row) { budget[key(row), default: 0] += 1 }
+        for row in current where !isEcho(row) && !accounted(row) {
             let k = key(row)
             if let b = budget[k], b > 0 { budget[k] = b - 1 }
+        }
+        // The same count over what this fetch puts ON SCREEN: a failed bubble gives
+        // way only to a row the person can see, never to one a mid-turn install
+        // leaves out (the words would be on screen nowhere until the turn ends).
+        var shownBudget: [String: Int] = [:]
+        for row in installed ?? fetched where !accounted(row) { shownBudget[key(row), default: 0] += 1 }
+        for row in current where !isEcho(row) && !accounted(row) {
+            let k = key(row)
+            if let b = shownBudget[k], b > 0 { shownBudget[k] = b - 1 }
         }
         // Did the fetch advance past our canonical view of the reply stream?
         // Positional ids change per fetch, so compare (text, createdAt).
@@ -874,6 +949,19 @@ final class ChatStore {
             // of a row that was never part of this conversation.
             if let owner = owners[row.id], let conversationID, owner != conversationID {
                 continue
+            }
+            // Its own server row is on screen: that row stands for it now.
+            if shownByServer.contains(row.id) { continue }
+            // A failed send that may have arrived, and the fetch adds a row of its
+            // words: the server has it, and its own row stands for it now. Counted
+            // like an echo, so an identical OLDER message never takes its place.
+            if row.failed == true, mayHaveArrived.contains(row.id) {
+                let k = key(row)
+                if let b = budget[k], b > 0, let shown = shownBudget[k], shown > 0 {
+                    budget[k] = b - 1
+                    shownBudget[k] = shown - 1
+                    continue
+                }
             }
             if row.failed == true || row.pending == true {
                 out.append(row)
@@ -916,6 +1004,20 @@ final class ChatStore {
             }
         }
         return out
+    }
+
+    /// The LOCAL rows of `current` (they carry `clientMessageId`) whose message the
+    /// server shows a row of in `shown`, matched by `messageId`. Internal for
+    /// WalnutTests.
+    nonisolated static func localRowsShownByServer(
+        current: [ChatMessage], shown: [ChatMessage]
+    ) -> Set<String> {
+        let ids = Set(shown.compactMap { $0.isUser ? $0.messageId : nil })
+        guard !ids.isEmpty else { return [] }
+        return Set(current.compactMap { row -> String? in
+            guard row.messageId == nil, let id = row.clientMessageId, ids.contains(id) else { return nil }
+            return row.id
+        })
     }
 
     func loadOlder() async {
@@ -981,16 +1083,20 @@ final class ChatStore {
     }
 
     @discardableResult
-    func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
+    func send(_ text: String, images: [SelectedImage] = [], messageId: String? = nil) async -> Bool {
         // Preserved exactly: "did the server take this turn", which is what every
         // existing caller of this Bool asks.
-        if case .started(let accepted) = await sendReportingOutcome(text, images: images) {
+        if case .started(let accepted) = await sendReportingOutcome(text, images: images, messageId: messageId) {
             return accepted
         }
         return false
     }
 
-    func sendReportingOutcome(_ text: String, images: [SelectedImage] = []) async -> SendOutcome {
+    /// `messageId`: the id an earlier attempt of these words went out under (a
+    /// failed bubble's retry), so the server can answer the repeat once. nil mints one.
+    func sendReportingOutcome(
+        _ text: String, images: [SelectedImage] = [], messageId: String? = nil
+    ) async -> SendOutcome {
         // Agent blocked on a structured question: route the composer text to
         // the answer endpoint (mirrors the web chat's interception — posting
         // a new message would 409 turn_active and deadlock the flow).
@@ -1005,13 +1111,13 @@ final class ChatStore {
         // send made between one turn settling and the next starting overtakes
         // messages the user typed earlier.
         if isActive, sending || streaming || hasQueuedSendsHere {
-            return enqueue(text, images: images) ? .queued : .refusedKeepingNothing
+            return enqueue(text, images: images, messageId: messageId) ? .queued : .refusedKeepingNothing
         }
         guard acceptsNewTurn else { return .refusedKeepingNothing }
         let id = UUID()
         let task = Task { @MainActor [weak self] in
             guard let self else { return SendAttempt.failed(provenNeverArrived: true, refused: false) }
-            return await self.performSend(text, images: images)
+            return await self.performSend(text, images: images, messageId: messageId)
         }
         trackedSends[id] = task
         let attempt = await task.value
@@ -1050,13 +1156,20 @@ final class ChatStore {
     /// re-bank.
     private struct DrainContext {
         let rowID: String
+        /// The entry's `postedMessageId`.
+        let messageId: String
     }
 
     private func performSend(
-        _ text: String, images: [SelectedImage], drain: DrainContext? = nil
+        _ text: String, images: [SelectedImage], drain: DrainContext? = nil,
+        messageId: String? = nil
     ) async -> SendAttempt {
         sending = true
         errorMessage = nil
+        // ONE id for this message, on every attempt of it (see ChatSendTransport).
+        let messageId = drain?.messageId ?? messageId ?? SendRetryPolicy.newMessageId()
+        /// The POST went out: from here a failure cannot say the server lacks it.
+        var posted = false
 
         let jpegDatas = images.map(\.jpegData)
         var convID = activeID
@@ -1079,6 +1192,7 @@ final class ChatStore {
             role: "user", text: text, createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
         )
         optimistic.pending = true
+        optimistic.clientMessageId = messageId
         // Carry thumbnails so the bubble shows them immediately and a failed
         // send retains them for retry (the store owns no-loss preservation).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
@@ -1137,8 +1251,10 @@ final class ChatStore {
                 markSendFailed(optimistic.id)
                 return .failed(provenNeverArrived: true, refused: false)
             }
-            _ = try await sendTransport.sendMessage(
-                conversationID: convID, agentID: agentID, text: text, images: payloads
+            posted = true
+            let receipt = try await sendTransport.sendMessage(
+                conversationID: convID, agentID: agentID, text: text, images: payloads,
+                messageId: messageId
             )
             // Accepted by the server, so its bubble stops "sending" whatever the
             // app is doing: the bubble's own state (and the photos kept for its
@@ -1175,9 +1291,33 @@ final class ChatStore {
             activity = nil
             watchedUserText = text
             startTurnWatchdog(conversationID: convID)
+            // A repeat the server had already taken: its turn may be long over, and
+            // no `message-start` is coming for it. One read now settles that instead
+            // of the watchdog's 30 s of silence with the composer held. The same when
+            // the conversation already showed this message's own row before the 202
+            // came back: its turn can be over too (the stream beat a slow answer).
+            if receipt.duplicate || sendsShownByServer.contains(optimistic.id) {
+                settleRepeatedSend(conversationID: convID)
+            }
             return .accepted
         } catch {
             sending = false
+            // The server already shows this message's own row (by its id): it has
+            // the message, so this error is about an answer that never came back,
+            // not about the message. Nothing is marked failed (its bubble is gone,
+            // the row stands for it), nothing is banked again, and no banner says it
+            // was not sent (send-once gate r1, MEDIUM-2).
+            if sendsShownByServer.contains(optimistic.id) {
+                AppLog.info("chat", "a send whose answer was lost is on the server", [
+                    "messageId": messageId, "conversationID": convID ?? "-",
+                ])
+                return .accepted
+            }
+            if posted && Self.sendMayHaveArrived(error) {
+                inconclusiveSends.insert(optimistic.id)
+                // Should its row land, it shows the photos as an accepted one would.
+                rememberSentImages(text: text, datas: jpegDatas)
+            }
             // Is the failure still about the conversation on screen? If the user
             // switched away, the bubble this describes left with its conversation
             // (select clears `messages`), so an error banner and a frozen
@@ -1220,6 +1360,47 @@ final class ChatStore {
             guard mine else { return .failed(provenNeverArrived: neverArrived, refused: refused) }
             errorMessage = error.localizedDescription
             return .failed(provenNeverArrived: neverArrived, refused: refused)
+        }
+    }
+
+    /// After a POST went out, does this failure leave open that the server has the
+    /// message? A cancellation (the app went to the background, a teardown), a
+    /// connection lost mid-flight, a timeout, a proxy's own 502 or 504 page, or a
+    /// 2xx that would not decode: yes. The server's own answer (a refusal, a 409, a
+    /// 5xx with its error body) or a request that never left the device: no.
+    /// Internal for WalnutTests.
+    nonisolated static func sendMayHaveArrived(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError {
+            return !ChatSendQueueRules.neverOpenedConnection(urlError as NSError)
+        }
+        guard let apiError = error as? APIError else { return false }
+        switch apiError {
+        case .cancelled, .badResponse:
+            return true
+        case .network(let underlying):
+            return !ChatSendQueueRules.neverOpenedConnection(underlying as NSError)
+        case .server(let status, let code, _, _, _):
+            // `http_error`: a body that is not the server's envelope, so a proxy
+            // in front of it answered, and a gateway error says nothing of the server.
+            return code == "http_error" && (status == 502 || status == 504)
+        case .unauthorized, .notConfigured, .rateLimited:
+            return false
+        }
+    }
+
+    /// A repeated send's turn: still running (its frames keep streaming here), or
+    /// already over, which only the conversation's rows can say.
+    private func settleRepeatedSend(conversationID: String) {
+        trackTask { [weak self] in
+            guard let self else { return }
+            await self.loadMessages(conversationID)
+            guard self.streaming, self.stillViewing(conversationID),
+                  self.lastFetchSettledTurn == true else { return }
+            AppLog.info("chat", "a repeated send's turn was already over", [
+                "conversationID": conversationID,
+            ])
+            self.adoptLostTurnEnd()
         }
     }
 
@@ -1273,17 +1454,21 @@ final class ChatStore {
         let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
+        inconclusiveSends.remove(message.id)
         // The user has taken charge of this row. If it was still a queue entry (an
         // `undecided` one, restored from a POST that died in flight), it must leave
         // the disk with the bubble, or it reappears on the next conversation switch.
         dropQueueEntry(message.id)
         errorMessage = nil
-        await send(message.text, images: images)
+        // Under the id its first POST carried: if that one did arrive, the server
+        // answers this one once instead of starting the turn again.
+        await send(message.text, images: images, messageId: message.clientMessageId)
     }
 
     func discardFailed(_ message: ChatMessage) {
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
+        inconclusiveSends.remove(message.id)
         dropQueueEntry(message.id)
     }
 
@@ -1317,7 +1502,7 @@ final class ChatStore {
     /// Bank a message behind the running turn. Returns false only when nothing
     /// kept it, which is the answer a caller holding the only copy of the text
     /// acts on (see `SendOutcome.keptTheWords`).
-    private func enqueue(_ text: String, images: [SelectedImage]) -> Bool {
+    private func enqueue(_ text: String, images: [SelectedImage], messageId: String? = nil) -> Bool {
         let jpegDatas = images.map(\.jpegData)
         guard ChatSendQueueRules.hasContent(text: text, images: jpegDatas) else { return false }
         let bytes = jpegDatas.reduce(0) { $0 + $1.count }
@@ -1336,7 +1521,7 @@ final class ChatStore {
         let createdAt = ISO8601DateFormatter().string(from: AppClock.now())
         let entry = QueuedSend(
             id: rowID, conversationID: conversationID, agentID: activeAgentID,
-            text: text, images: jpegDatas, createdAt: createdAt
+            text: text, images: jpegDatas, createdAt: createdAt, messageId: messageId
         )
         // DISK FIRST. The composer clears its draft on the strength of this answer,
         // so "banked" has to mean the words are somewhere that survives a kill. A
@@ -1370,9 +1555,12 @@ final class ChatStore {
         // died: it renders as the retryable failed bubble, never as a promise.
         if entry.status == .undecided {
             bubble.failed = true
+            // Its POST was out when the process died: the server may have it.
+            inconclusiveSends.insert(entry.id)
         } else {
             bubble.pending = true
         }
+        bubble.clientMessageId = entry.postedMessageId
         if !entry.images.isEmpty { bubble.localImages = entry.images }
         return bubble
     }
@@ -1516,7 +1704,8 @@ final class ChatStore {
             setQueue(marked)
             let images = entry.images.compactMap { SelectedImage(jpegData: $0) }
             let attempt = await performSend(
-                entry.text, images: images, drain: DrainContext(rowID: entry.id)
+                entry.text, images: images,
+                drain: DrainContext(rowID: entry.id, messageId: entry.postedMessageId)
             )
             switch attempt {
             case .accepted:
@@ -2441,6 +2630,8 @@ extension ChatStore {
         agents = []
         activeAgentID = Self.mainAgentID
         localRowConversation.removeAll()
+        inconclusiveSends.removeAll()
+        sendsShownByServer.removeAll()
         sentImages.removeAll()
         cloudMarks.removeAll()
         liveTurnID = nil

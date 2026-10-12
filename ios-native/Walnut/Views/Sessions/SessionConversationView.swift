@@ -331,7 +331,7 @@ struct SessionConversationView: View {
             // already running there), so it shows as provenance in the `+`.
             // Picking a host happens at CREATION (NewSessionChatView).
             hostProvenance: .session(hostAlias: session.host, cwd: session.cwd),
-            onSend: { text, images in await store.send(text, images: images) }
+            onSend: { text, images in await store.sendFromComposer(text, images: images) }
         )
     }
 

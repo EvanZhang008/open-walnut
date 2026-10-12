@@ -335,6 +335,52 @@ final class SendIdempotencyRetryTests: XCTestCase {
         XCTAssertEqual(transport.sendCallCount, 1, "a 409 must not be retried automatically")
     }
 
+    // MARK: - The composer's copy
+
+    /// A composer send the host's bridge refused stays in its bubble ONLY (send-once
+    /// r2, seen on the simulator): `send` answers false while the bubble rides the
+    /// retry ladder, and the composer gave the same words back with "That message
+    /// was not sent", so the delivered retry and a second tap would have sent them
+    /// twice. `sendFromComposer` answers true whenever a bubble of this send holds
+    /// the words, and false only when nothing does.
+    @MainActor
+    func testAComposerSendTheBridgeRefusedIsHeldByItsBubbleNotHandedBack() async {
+        let transport = MockSessionSendTransport()
+        transport.failuresRemaining = 1
+        transport.failureError = bridgeOffline()
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(id: "composer-keeps"), transport: transport
+        )
+        await store.open()
+        let kept = await store.sendFromComposer("held by its bubble")
+        XCTAssertTrue(kept, "the composer gets back words its bubble is retrying")
+        XCTAssertTrue(store.showsFailedSend(of: "held by its bubble"), "no bubble holds the words")
+
+        // A delivered send is held too.
+        let delivered = await store.sendFromComposer("delivered at once")
+        XCTAssertTrue(delivered)
+    }
+
+    /// Nothing holds the words when the page refuses before any bubble exists (a
+    /// session the server declared dead): those, and only those, go back.
+    @MainActor
+    func testAComposerSendNoBubbleTookIsHandedBack() async {
+        let transport = MockSessionSendTransport()
+        transport.permanentError = APIError.server(
+            status: 409, code: "session_dead", message: "Session process died mid-send",
+            serverHash: nil, serverContent: nil
+        )
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(id: "composer-dead"), transport: transport
+        )
+        await store.open()
+        _ = await store.sendFromComposer("into the void")
+        XCTAssertTrue(store.dead)
+        let kept = await store.sendFromComposer("after it died")
+        XCTAssertFalse(kept, "words no bubble holds were not handed back")
+        XCTAssertFalse(store.showsFailedSend(of: "after it died"))
+    }
+
     // MARK: - UI state while the ladder runs
 
     /// While a retry is pending the bubble must say so ("Waiting for Mac…"),

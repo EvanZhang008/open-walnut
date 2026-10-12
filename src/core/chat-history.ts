@@ -751,6 +751,8 @@ export async function addUserMessage(
     taskId?: string;
     source?: ChatEntry['source'];
     turnId?: string;
+    /** The client's own id for the message (api-v1 chat `messageId`). */
+    messageId?: string;
     agentId?: string;
     conversationId?: string;
     /** Write only if no entry already carries this `turnId`. For the rescue path
@@ -780,6 +782,7 @@ export async function addUserMessage(
     if (options?.taskId) entry.taskId = options.taskId;
     if (options?.source) entry.source = options.source;
     if (options?.turnId) entry.turnId = options.turnId;
+    if (options?.messageId) entry.messageId = options.messageId;
     store.entries!.push(entry);
     await writeStore(store, aid, cid);
     await touchConversationBestEffort(store, aid, cid);

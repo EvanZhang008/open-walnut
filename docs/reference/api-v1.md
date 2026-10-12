@@ -549,6 +549,15 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
   `kind` row, or on a reply the primary gave. A companion turn that failed has no
   assistant row at all. Absent on older servers, so treat absent as "answered by
   the primary". It matches the `answeredBy` on the live SSE frames.
+- `messageId` (additive, 2026-10): on a `role: "user"` row only, the `messageId` the
+  message was POSTed under (see `POST /conversations/:id/messages`). Absent on a
+  message sent without one (the web console, a session panel, an older client) and
+  on an older server. A client that keeps a local copy of a message it sent (pending
+  or failed) should let that copy give way to the row that names its id, whatever
+  order the row and the POST's answer arrive in, and should never match by words a
+  row that names another id. On a conversation whose turns run in a CLI session the
+  id is carried over from the message's stored copy onto the session's own row; a
+  row the session has not written yet names nothing until it has.
 - `kind: "notification"` — a system-generated card (additive); `source` says
   which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
   `"compaction"`, …). Render as a distinct card, not a chat bubble. Noisy
@@ -580,8 +589,50 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 
 ### POST /api/v1/conversations/:id/messages
 
-Body: `{ "text": "your message", "agentId": "general", "images"? }` (`agentId`
-and `images` optional).
+Body: `{ "text": "your message", "agentId": "general", "images"?, "messageId"? }`
+(`agentId`, `images` and `messageId` optional).
+
+`messageId` (additive, 2026-10) is the client's own id for this message, the same
+on every attempt of it (letters, digits and `_.:-`, at most 128; anything else is
+ignored). A repeat of a message whose turn the server started, typically a retry
+after an answer that never reached the client, gets that first POST's
+`202 { "turnId": "…", "duplicate": true }` and starts no second turn, also while the
+first turn is still running (where it would otherwise be a `409 turn_active`).
+
+- **The primary decides.** On the cloud companion the id rides the relay
+  (`server.chat.turn` carries `messageId`), and the primary answers a message it
+  already took, whichever box the earlier attempt reached, with the ORIGINAL
+  `turnId` and `duplicate: true`. A client that switches between the companion and
+  the primary is answered once either way.
+- **An id counts as taken once its turn started**: on the companion, when the
+  primary accepted the relayed turn (or the companion answered it itself). A relay
+  that provably never reached the primary, or that the primary refused because its
+  own turn is running, ends the turn with the SSE `error` and gives the id back, so
+  the retry after it runs.
+- **A relay that may have reached the primary** (no accept came back in time, or
+  the link died after the send) also ends with the SSE `error`, but KEEPS the id:
+  the retry is relayed again under the same `turnId` and `messageId`, and the POST
+  answers by the primary's answer to it: `202 { turnId, duplicate: true }` when the
+  primary had it, `202 { turnId }` when it did not and runs it now, `409
+  turn_active` when another turn holds the primary, and `503 primary_unreachable`
+  (`retry: true`) when the primary is still out of reach, in which case the id
+  stays for the next retry. The companion never answers such a message on its own,
+  whatever its own relay did, because the primary may be running it. When the
+  primary has not answered within the wait below, the POST gets its `202 { turnId }`
+  and the outcome rides the SSE stream as for any send.
+- **Waiting.** A repeat that arrives while the first POST's relay is still
+  unanswered waits for it, and a second repeat waits for whichever attempt comes
+  next. The whole wait is at most 20 s, inside the phone's own 30 s request
+  timeout; a repeat still waiting then gets `409 turn_active`.
+- The server keeps these ids in memory for an hour, per box. **A restart forgets
+  them** (a deploy included): a retry that reaches the server after one runs again.
+- When the primary answers a relayed repeat of a turn it already finished, nothing
+  more comes from it: the companion ends the turn on the stream with a
+  `message-end` carrying only `turnId`, and the client reads the conversation for
+  the answer.
+- Every user row of the conversation names the `messageId` it was sent under (see
+  `GET /conversations/:id/messages`), which is how a client can tell that its own
+  copy of the message has arrived without comparing words.
 
 `images` (additive) attaches image content blocks to the turn:
 
@@ -671,7 +722,7 @@ The additive `engine` field on the terminal frame reports which engine answered
 | `tool` | `{ "name", "toolUseId"?, "detail"?, "inputPreview"? }` | The agent invoked a tool. `detail` (additive) is the same one-line input summary the message rows carry (≤160+`…`, masked), so the activity line can read `Bash · ls docs/`; `inputPreview` (additive) is the same ≤2000-char masked `key: value` render the message rows carry, so an expanded live row shows what the tool was actually called with (`detail` prefers a Bash `description`, which is why the command itself needs this field); `toolUseId` (additive) pairs this frame with its `tool-result` |
 | `tool-result` | `{ "toolUseId", "resultPreview"? }` | That tool finished (additive) — clears the activity line. `resultPreview` (additive) is the same ≤700+`…` masked excerpt the message row carries, so a finished live row can show its output before the transcript lands. Still no full output on this channel: the whole text is only reachable through the row's `detailRef` read. Only sent for a `toolUseId` whose `tool` frame this turn actually delivered, so an id you never saw open is never closed |
 | `thinking` | `{ "delta"? }` | The agent is reasoning. `delta` (additive, optional) is the reasoning text — coalesced into ~120 ms batches, so treat it as an append, not one whole block. Clients that ignore it and just show a spinner keep working |
-| `message-end` | `{ "turnId", "fullText", "engine"?, "answeredBy"? }` | Turn finished; `fullText` = complete reply. `answeredBy` as on `message-start` |
+| `message-end` | `{ "turnId", "fullText", "engine"?, "answeredBy"? }` | Turn finished; `fullText` = complete reply. `answeredBy` as on `message-start`. On the cloud companion, a turn the primary had already finished (a relayed repeat of its message) ends with `{ "turnId" }` alone: read the conversation for the answer |
 | `error` | `{ "message", "turnId"?, "laneStillRunning"?, "engine"?, "answeredBy"? }` | Turn failed. `answeredBy` as on `message-start`. `laneStillRunning: true` (additive) marks the stall notice of a turn that is not over (see below) |
 | `message-late` | `{ "turnId", "fullText" }` | Additive. A stalled turn's answer arrived; always followed by a `message-end` with the same data (see below) |
 

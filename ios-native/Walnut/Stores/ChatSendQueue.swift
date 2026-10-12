@@ -51,6 +51,14 @@ struct QueuedSend: Equatable, Identifiable {
     /// sorts and ages like the one the user saw before the app died.
     let createdAt: String
     var status: Status = .pending
+    /// The id every POST of this message carries, so the server answers a repeat
+    /// once (chat-send-once.ts). nil: the entry's own `id`, which is stable and on
+    /// disk too. Set when a failed bubble's retry is banked, so the retry keeps the
+    /// id its first POST went out under.
+    var messageId: String? = nil
+
+    /// The id its POSTs carry.
+    var postedMessageId: String { messageId ?? id }
 
     /// What this entry costs against the queue's byte budget.
     var byteCount: Int { images.reduce(0) { $0 + $1.count } }
@@ -78,6 +86,8 @@ struct QueuedSendRecord: Codable, Equatable {
     let createdAt: String
     let status: QueuedSend.Status
     let imageCount: Int
+    /// Additive (2026-10): absent from an index an older build wrote.
+    var messageId: String? = nil
 }
 
 /// Where the queue lives between launches, and the one place that knows the index
@@ -119,7 +129,7 @@ enum ChatSendQueueStore {
         QueuedSendRecord(
             id: entry.id, conversationID: entry.conversationID, agentID: entry.agentID,
             text: entry.text, createdAt: entry.createdAt, status: entry.status,
-            imageCount: entry.images.count
+            imageCount: entry.images.count, messageId: entry.messageId
         )
     }
 
@@ -140,7 +150,7 @@ enum ChatSendQueueStore {
             entries.append(QueuedSend(
                 id: record.id, conversationID: record.conversationID,
                 agentID: record.agentID, text: record.text, images: images,
-                createdAt: record.createdAt, status: record.status
+                createdAt: record.createdAt, status: record.status, messageId: record.messageId
             ))
         }
         sweepOrphanImages(keeping: Set(entries.map(\.id)))

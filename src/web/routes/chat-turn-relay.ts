@@ -78,6 +78,7 @@
 import { CLOUD_MODE } from '../../constants.js'
 import { emitSse as emitChannelSse } from '../sse-channels.js'
 import { fitsImageSaveLimits, maxImagesPerMessage, type ImagePayload } from './images.js'
+import { claimChatSend, priorChatSend, validChatMessageId } from './chat-send-once.js'
 import { log } from '../../logging/index.js'
 
 /** Box-level relay actions carry no real session id (same as routines/files). */
@@ -186,8 +187,17 @@ const lateWatch = new Map<string, LateWatch>()
 const lateKey = (conversationId: string, turnId: string): string => JSON.stringify([conversationId, turnId])
 
 export type RelayStartOutcome =
-  /** The primary took the turn; frames will arrive on the downlink. */
-  | { kind: 'accepted'; engine: string; settled: Promise<void> }
+  /**
+   * The primary took the turn; frames will arrive on the downlink. `duplicate`:
+   * the primary already had this message (its `messageId`) or this turnId, and
+   * started nothing; `turnId` is then the turn it runs or ran, and `running` says
+   * whether its frames are still to come (false: the turn is over there, and
+   * `settled` has already resolved).
+   */
+  | {
+      kind: 'accepted'; engine: string; settled: Promise<void>
+      turnId: string; duplicate: boolean; running: boolean
+    }
   /** The primary already has a turn running on this conversation. */
   | { kind: 'turn_active'; message: string }
   /**
@@ -301,6 +311,10 @@ export async function relayChatTurnToPrimary(
   text: string,
   turnId: string,
   images: ImagePayload[] = [],
+  /** The client's id for this message (chat-send-once.ts). It rides the relay so
+   *  the PRIMARY can answer a message it already took once, whichever box the
+   *  earlier attempt reached. */
+  messageId?: string,
 ): Promise<RelayStartOutcome> {
   if (!CLOUD_MODE) return { kind: 'unavailable', reason: 'not a cloud replica', provablyUnsent: false }
   if (inFlight.has(conversationId)) {
@@ -347,6 +361,9 @@ export async function relayChatTurnToPrimary(
         // Omitted entirely for a text turn, so the payload an OLD primary sees
         // is byte-identical to the pre-image one.
         ...(imagePaths.length > 0 ? { imagePaths } : {}),
+        // Same rule: absent when the client sent none. An old primary ignores it
+        // and dedupes by turnId alone, which a retry of an unsure relay keeps.
+        ...(messageId ? { messageId } : {}),
       },
       RELAY_ACCEPT_TIMEOUT_MS,
     )
@@ -386,8 +403,31 @@ export async function relayChatTurnToPrimary(
   // fast turn — only stamp the engine while the entry is still ours.
   if (inFlight.get(conversationId) === entry) entry.engine = engine
 
+  const duplicate = result.duplicate === true
+  if (duplicate) {
+    // The primary had this message already. It names the turn it runs (or ran)
+    // under; an older primary that deduped by turnId names none, and its turn may
+    // still be running, so it is waited for as before (`running` absent = true).
+    const theirs = typeof result.turnId === 'string' && result.turnId ? result.turnId : turnId
+    const running = result.running !== false
+    if (!running) {
+      // Over there already: no frame is coming for it, so nothing is waited for.
+      clearInFlight(conversationId, turnId)
+    } else if (theirs !== turnId && inFlight.get(conversationId) === entry) {
+      // Its frames ride the primary's turnId: listen for that one (and rearm the
+      // watchdog, whose first timer named the turnId this box minted).
+      entry.turnId = theirs
+      rearmWatchdog(conversationId, entry)
+    }
+    log.web.info('chat-turn relay: the primary already had this message', {
+      conversationId, turnId, agentId, primaryTurnId: theirs, running,
+      ...(messageId ? { messageId } : {}),
+    })
+    return { kind: 'accepted', engine, settled, turnId: theirs, duplicate: true, running }
+  }
+
   log.web.info('chat-turn relayed to the primary', { conversationId, turnId, agentId, engine })
-  return { kind: 'accepted', engine, settled }
+  return { kind: 'accepted', engine, settled, turnId, duplicate: false, running: true }
 }
 
 /**
@@ -682,8 +722,12 @@ export interface PrimaryChatTurnOutcome {
   engine?: string
   reason?: string
   message?: string
-  /** True when the turnId was already accepted — idempotent replay, not an error. */
+  /** True when the turnId (or the message id) was already accepted: an idempotent
+   *  replay, not an error. `turnId` is then the turn this box runs or ran. */
   duplicate?: boolean
+  /** On a duplicate: the turn is still running here, so its frames are still
+   *  being mirrored down. Absent on an older primary. */
+  running?: boolean
 }
 
 /**
@@ -709,6 +753,9 @@ export async function handlePrimaryChatTurnRelay(
   const text = typeof params.text === 'string' ? params.text : ''
   const turnId = typeof params.turnId === 'string' ? params.turnId : ''
   const imagePaths = Array.isArray(params.imagePaths) ? params.imagePaths : []
+  // The client's id for the message (chat-send-once.ts), absent from an older
+  // replica. THIS box is the authority on whether the message ran.
+  const messageId = validChatMessageId(params.messageId)
 
   if (!conversationId || !turnId) {
     return { accepted: false, turnId, reason: 'bad_request', message: 'conversationId and turnId are required' }
@@ -718,12 +765,8 @@ export async function handlePrimaryChatTurnRelay(
   if (text.trim().length === 0 && imagePaths.length === 0) {
     return { accepted: false, turnId, reason: 'bad_request', message: 'text (non-empty string) is required' }
   }
-  if (recentTurnIds.has(turnId)) {
-    // Idempotent replay: the turn is already running (or finished) here. Report
-    // accepted so the replica keeps waiting for frames instead of double-sending.
-    log.web.info('chat-turn relay replay deduped', { conversationId, turnId, agentId })
-    return { accepted: true, turnId, duplicate: true, engine: PRIMARY_ENGINE_LABEL }
-  }
+  const replay = replayOf(agentId, conversationId, turnId, messageId)
+  if (replay) return replay
   if (primaryTurns.has(conversationId)) {
     return {
       accepted: false, turnId, reason: 'turn_active',
@@ -760,8 +803,23 @@ export async function handlePrimaryChatTurnRelay(
   const { ensureConversationRow } = await import('../../core/conversations.js')
   await ensureConversationRow(agentId, conversationId, text)
 
+  // The awaits above let a twin of this relay (the replica retrying an unsure
+  // one) or a direct POST of the same message in: checked again, then taken with
+  // no await in between.
+  const raced = replayOf(agentId, conversationId, turnId, messageId)
+  if (raced) return raced
+  if (primaryTurns.has(conversationId)) {
+    return {
+      accepted: false, turnId, reason: 'turn_active',
+      message: 'A turn is already active on this conversation',
+    }
+  }
+
   const engine = PRIMARY_ENGINE_LABEL
   rememberTurnId(turnId)
+  // The message id is this turn's now, on this box: a later relay of it, or the
+  // phone POSTing it here directly, is answered once.
+  if (messageId) claimChatSend(agentId, conversationId, messageId, turnId).started()
   primaryTurns.set(conversationId, turnId)
   // Arm the mirror BEFORE the turn starts so its very first frame
   // ('queued'/'message-start') is forwarded, not lost to a late registration.
@@ -783,7 +841,7 @@ export async function handlePrimaryChatTurnRelay(
   void (async () => {
     try {
       const { runRelayedApiV1Turn } = await import('./api-v1.js')
-      await runRelayedApiV1Turn(agentId, conversationId, text, turnId, imageData)
+      await runRelayedApiV1Turn(agentId, conversationId, text, turnId, imageData, messageId)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log.web.error('relayed chat turn failed on the primary', { conversationId, turnId, agentId, error: message })
@@ -799,6 +857,27 @@ export async function handlePrimaryChatTurnRelay(
   })()
 
   return { accepted: true, turnId, engine }
+}
+
+/**
+ * Primary: is this relay a message (or a turn) this box already took? The message
+ * id first, because a retry of an unsure relay, or one of a message the phone
+ * POSTed here directly, can come under another turnId. Answered with the turn this
+ * box runs or ran, and whether it is still running (its frames still mirrored).
+ */
+function replayOf(
+  agentId: string, conversationId: string, turnId: string, messageId: string | undefined,
+): PrimaryChatTurnOutcome | null {
+  const prior = messageId ? priorChatSend(agentId, conversationId, messageId) : undefined
+  const theirs = prior?.state === 'started' ? prior.turnId : recentTurnIds.has(turnId) ? turnId : null
+  if (!theirs) return null
+  const running = primaryTurns.get(conversationId) === theirs
+  log.web.info('chat-turn relay replay deduped', {
+    conversationId, turnId, agentId, primaryTurnId: theirs, running,
+    by: prior?.state === 'started' ? 'messageId' : 'turnId',
+    ...(messageId ? { messageId } : {}),
+  })
+  return { accepted: true, turnId: theirs, duplicate: true, running, engine: PRIMARY_ENGINE_LABEL }
 }
 
 /**

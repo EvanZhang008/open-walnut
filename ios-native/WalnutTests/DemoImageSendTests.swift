@@ -74,7 +74,7 @@ final class DemoImageSendTests: XCTestCase {
     func testAPhotoWithoutTextIsAChatTurn() async throws {
         let id = try await api.createConversation(title: nil)
         let turn = try await api.sendMessage(conversationID: id, text: "", images: [photo()])
-        XCTAssertFalse(turn.isEmpty)
+        XCTAssertFalse(turn.turnId.isEmpty)
         settleTurns()
 
         let messages = try await api.messages(conversationID: id)
@@ -131,7 +131,7 @@ final class DemoImageSendTests: XCTestCase {
             conversationID: id, text: "",
             images: [ImagePayload(data: "", mediaType: "image/png"), photo()]
         )
-        XCTAssertFalse(accepted.isEmpty, "one usable image among junk is a photo message")
+        XCTAssertFalse(accepted.turnId.isEmpty, "one usable image among junk is a photo message")
         settleTurns()
     }
 

@@ -393,7 +393,7 @@ final class DemoModeTests: XCTestCase {
         }.joined()
         XCTAssertTrue(streamed.contains("counter quotes"), streamed)
         let end = try XCTUnwrap(log.all.last { $0.event == "message-end" })
-        XCTAssertTrue(end.data.contains(turnID))
+        XCTAssertTrue(end.data.contains(turnID.turnId))
 
         let history = try await api.messages(conversationID: id)
         XCTAssertEqual(history.last?.role, "assistant")

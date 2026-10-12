@@ -54,6 +54,9 @@ import { getNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { armLateMirror, mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import {
+  chatMessageIdOf, claimChatSend, priorChatSend, type ChatSendOutcome, type ClaimedChatSend,
+} from './chat-send-once.js'
+import {
   PRIMARY_UNREACHABLE_MESSAGE, cloudTurnRows, mergeRowsByTime, mergeCloudRowsIntoRelayedPage, cloudChatCapability,
 } from './cloud-chat-fallback.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
@@ -369,6 +372,12 @@ interface ApiV1Message {
    *  turn while the primary was unreachable (an adopted turn here, a banked one
    *  on the companion, see cloudTurnRows). Absent for a primary-answered row. */
   answeredBy?: 'cloud'
+  /** Additive (2026-10), on a USER row only: the `messageId` the client sent this
+   *  message under (POST .../messages), so it can give its own pending or failed
+   *  copy up for this row by id, whatever order the row and the POST's answer
+   *  arrive in. Absent on a message sent without one (another surface, an older
+   *  client) and on an older server. */
+  messageId?: string
 }
 
 /**
@@ -503,7 +512,7 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
         continue
       }
       text = userTurnText(text)
-      if (text) push({ role: 'user', text: stripEntityRefs(text), createdAt })
+      if (text) push({ role: 'user', text: stripEntityRefs(text), createdAt, ...(entry.messageId ? { messageId: entry.messageId } : {}) })
       continue
     }
     // assistant
@@ -1159,8 +1168,63 @@ async function assembleLaneConversation(
   // as residual R1 above.
   const adopted = adoptedCloudRows(entries, cutoff, floor)
     .filter((row) => !until || Date.parse(row.createdAt ?? '') < until.at)
-  rows.push(...mergeRowsByTime(laneRows, adopted))
+  // A copy the prefix still shows stands for itself (its row carries the id).
+  const shown = new Set(rows.map((row) => row.messageId).filter((id): id is string => !!id))
+  rows.push(...mergeRowsByTime(stampLaneMessageIds(laneRows, entries, floor, shown), adopted))
   return stampApiV1Ids(rows, new Date().toISOString())
+}
+
+/** How far a lane row's time may sit BEFORE its compat copy's and still be that
+ *  message: the two are stamped by different writers, and a lane on another host
+ *  stamps with that host's clock. */
+const LANE_ID_CLOCK_SLACK_MS = 2 * 60_000
+
+/**
+ * Put each phone message's `messageId` on the lane row that IS that message.
+ *
+ * A lane row comes from the CLI's own transcript, which knows nothing of the id.
+ * The id is on the message's compat copy in chat history (runApiV1Turn writes it
+ * before the CLI is handed the text, so the copy is older than the row). Each copy
+ * that carries an id takes the FIRST user row of the same words, not taken by
+ * another copy, that is no older than the copy; only when there is none, the last
+ * such row inside the clock slack before it (a lane on a host whose clock runs
+ * behind). Lane rows are in delivery order, so an identical earlier message is not
+ * taken, and two copies of the same words take one row each. A copy with no row
+ * yet (the CLI has not written it) names nothing, and the client keeps its own
+ * copy until it does. Whatever row a copy takes, the server HAS that message: the
+ * worst a wrong pick can do is let the client's copy give way to an identical row.
+ * Exported for tests.
+ */
+export function stampLaneMessageIds(
+  laneRows: Array<Omit<ApiV1Message, 'id'>>,
+  entries: ChatEntry[],
+  floor = 0,
+  /** Ids a row outside the lane rows already carries (the pre-lane prefix). */
+  shown: ReadonlySet<string> = new Set(),
+): Array<Omit<ApiV1Message, 'id'>> {
+  const copies = entries.filter((e) => e.role === 'user' && e.tag === 'ai' && e.messageId
+    && !shown.has(e.messageId) && Date.parse(e.timestamp) > floor)
+  if (copies.length === 0) return laneRows
+  const out = laneRows.map((row) => ({ ...row }))
+  const taken = new Set<number>()
+  for (const copy of copies) {
+    const words = normalizeEntries([copy])[0]?.text?.trim()
+    const at = Date.parse(copy.timestamp)
+    if (!words || !Number.isFinite(at)) continue
+    const same = (row: Omit<ApiV1Message, 'id'>, i: number): boolean =>
+      !taken.has(i) && row.role === 'user' && !row.kind && row.text.trim() === words
+    let idx = out.findIndex((row, i) => same(row, i) && Date.parse(row.createdAt ?? '') >= at)
+    if (idx === -1) {
+      for (let i = out.length - 1; i >= 0; i--) {
+        const rowAt = Date.parse(out[i].createdAt ?? '')
+        if (same(out[i], i) && rowAt < at && rowAt >= at - LANE_ID_CLOCK_SLACK_MS) { idx = i; break }
+      }
+    }
+    if (idx === -1) continue
+    taken.add(idx)
+    out[idx].messageId = copy.messageId
+  }
+  return out
 }
 
 /** Adopted cloud-companion rows at or after the lane cutoff (see the assembly). */
@@ -1593,6 +1657,30 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
       sendError(res, 400, 'bad_request', 'text (non-empty string) is required')
       return
     }
+    // A repeat of a message this box already took (the client's `messageId`, the
+    // same on every attempt): its first 202 again, and no second turn. Ahead of the
+    // 409 below, because the repeat usually arrives while that very turn runs, and a
+    // 409 would tell the client its message was not taken (chat-send-once.ts).
+    // A repeat of a claim still in the air waits for it, within one budget for the
+    // whole POST (REPEAT_WAIT_MS). The last read is SYNCHRONOUS with the claim
+    // below (no await in between on this path), so two repeats freed by one
+    // outcome can never both take the id.
+    const messageId = chatMessageIdOf(req.body)
+    const repeatDeadline = Date.now() + REPEAT_WAIT_MS
+    /** The turnId of an unsure relay of this message, which this POST relays again. */
+    let unsureTurnId: string | undefined
+    if (messageId) {
+      let step = repeatStep(res, agentId, conversationId, messageId)
+      while (step.kind === 'wait') {
+        if (!(await claimSettles(step.outcome, repeatDeadline))) {
+          answerRepeatStillWaiting(res, agentId, conversationId, messageId)
+          return
+        }
+        step = repeatStep(res, agentId, conversationId, messageId)
+      }
+      if (step.kind === 'answered') return
+      unsureTurnId = step.unsureTurnId
+    }
     if (activeTurns.has(conversationId)) {
       sendError(res, 409, 'turn_active', 'A turn is already active on this conversation')
       return
@@ -1612,11 +1700,43 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
         const processed = await processAndSaveImages(images)
         if (processed) imageData = { ...processed, images }
       }
+      // The save awaited: a repeat of this message, or another message, may have
+      // taken the conversation meanwhile. Checked again, then the id is claimed
+      // with no await in between, so two POSTs of one message never both start a
+      // turn (and a save that throws has claimed nothing).
+      if (messageId) {
+        let step = repeatStep(res, agentId, conversationId, messageId)
+        while (step.kind === 'wait') {
+          if (!(await claimSettles(step.outcome, repeatDeadline))) {
+            answerRepeatStillWaiting(res, agentId, conversationId, messageId)
+            return
+          }
+          step = repeatStep(res, agentId, conversationId, messageId)
+        }
+        if (step.kind === 'answered') return
+        unsureTurnId = step.unsureTurnId
+      }
+      if (activeTurns.has(conversationId)) {
+        sendError(res, 409, 'turn_active', 'A turn is already active on this conversation')
+        return
+      }
     }
 
-    const turnId = crypto.randomUUID()
+    // A retry of an unsure relay goes out again under that relay's turnId, so the
+    // primary's own turnId dedupe catches it too (an older primary has only that).
+    const turnId = unsureTurnId ?? crypto.randomUUID()
+    // On this box's own engine the turn starts now, so the id is remembered now. A
+    // relayed turn has started only once the primary accepted it (or the companion
+    // answers it itself); until then the id is only claimed, and a relay that fails
+    // or is refused gives it back, or keeps it unsure (runApiV1TurnRouted).
+    const claim = messageId ? claimChatSend(agentId, conversationId, messageId, turnId) : undefined
+    if (!CLOUD_MODE) claim?.started()
     activeTurns.set(conversationId, turnId)
-    log.web.info('api-v1 message accepted', { conversationId, turnId, agentId, messageLength: text.length, imageCount: images.length })
+    log.web.info('api-v1 message accepted', {
+      conversationId, turnId, agentId, messageLength: text.length, imageCount: images.length,
+      ...(messageId ? { messageId } : {}),
+      ...(unsureTurnId ? { retryOfUnsureRelay: true } : {}),
+    })
 
     // Additive SSE event: if another turn currently holds the agent queue
     // (possibly a long one on a DIFFERENT conversation), this turn will wait.
@@ -1627,11 +1747,31 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
       emitSse(conversationId, 'queued', { turnId, position: qs.queued + 1 })
     }
 
+    // How this POST is answered. Normally at once: 202, and the turn's fate rides
+    // the SSE stream. A retry of an UNSURE relay instead waits for the primary's
+    // answer to it (inside what is left of REPEAT_WAIT_MS), because only that
+    // answer says whether the message is a duplicate there, and a client told
+    // `duplicate: true` settles at once instead of waiting for frames that may
+    // never come. Whoever decides first owns the answer (`decided`).
+    let decided = false
+    let deliverStart: (answer: TurnStartAnswer) => void = () => {}
+    const startAnswer = new Promise<TurnStartAnswer>((resolve) => { deliverStart = resolve })
+    const reportStart = (answer: TurnStartAnswer): boolean => {
+      if (decided) return false
+      decided = true
+      deliverStart(answer)
+      return true
+    }
+    const waitForStart = CLOUD_MODE && unsureTurnId !== undefined
+
     // Fire the turn through the SAME per-agent queue the WS chat uses — one
     // serialization path. The 202 returns immediately; progress streams on SSE.
     // On a CLOUD REPLICA the turn is relayed to the primary, which is the only
     // box that can run it — see routes/chat-turn-relay.ts.
-    void runApiV1TurnRouted(agentId, conversationId, text, turnId, imageData)
+    if (!waitForStart) decided = true
+    void runApiV1TurnRouted(agentId, conversationId, text, turnId, imageData, claim, {
+      messageId, retryOfUnsure: unsureTurnId !== undefined, reportStart,
+    })
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
           conversationId, turnId,
@@ -1639,14 +1779,53 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
         })
       })
       .finally(() => {
-        if (activeTurns.get(conversationId) === turnId) activeTurns.delete(conversationId)
+        // A turn that ended without ever starting (a throw before the relay
+        // answered) gives its id back; after started() or unsure() the claim
+        // ignores it.
+        giveBack(conversationId, turnId, claim)
+        reportStart({ kind: 'unreachable', message: PRIMARY_UNREACHABLE_FALLBACK })
       })
 
-    res.status(202).json({ turnId })
+    if (!waitForStart) {
+      res.status(202).json({ turnId })
+      return
+    }
+    const left = Math.max(0, repeatDeadline - Date.now())
+    const first = await Promise.race([
+      startAnswer,
+      new Promise<null>((resolve) => { setTimeout(() => resolve(null), left).unref?.() }),
+    ])
+    if (first === null && !decided) {
+      // The primary has not answered in time: the 202 goes now, as for a first
+      // POST, and the outcome rides the SSE stream (runApiV1TurnRouted).
+      decided = true
+      res.status(202).json({ turnId })
+      return
+    }
+    answerStart(res, first ?? await startAnswer)
   } catch (err) {
     next(err)
   }
 })
+
+/** What became of a turn's start, for a POST that waits for it (a retry of an
+ *  unsure relay). */
+type TurnStartAnswer =
+  | { kind: 'started'; turnId: string; duplicate: boolean }
+  | { kind: 'turn_active'; message: string }
+  | { kind: 'unreachable'; message: string }
+
+const PRIMARY_UNREACHABLE_FALLBACK = 'Your primary box could not be reached, so this message was not sent yet'
+
+function answerStart(res: Response, answer: TurnStartAnswer): void {
+  if (answer.kind === 'started') {
+    res.status(202).json({ turnId: answer.turnId, ...(answer.duplicate ? { duplicate: true } : {}) })
+  } else if (answer.kind === 'turn_active') {
+    sendError(res, 409, 'turn_active', answer.message)
+  } else {
+    sendError(res, 503, 'primary_unreachable', answer.message, { retry: true })
+  }
+}
 
 /**
  * Turn router for one accepted REST turn.
@@ -1674,17 +1853,43 @@ async function runApiV1TurnRouted(
   text: string,
   turnId: string,
   imageData?: TurnImageData,
+  /** The message id's claim (chat-send-once.ts): `started` once the turn runs
+   *  somewhere, `dropped` on every path where it provably never did, `unsure`
+   *  where the primary may have it. */
+  claim?: ClaimedChatSend,
+  send?: {
+    /** The client's id for the message: it rides the relay to the primary. */
+    messageId?: string
+    /** This POST relays again a message whose last relay may have reached the
+     *  primary: the companion must not answer it itself, and a failure keeps the
+     *  id unsure. */
+    retryOfUnsure: boolean
+    /** Hand the start's outcome to a POST still waiting to answer. True when it
+     *  took it (the POST answers by it, so no SSE error is sent as well). */
+    reportStart: (answer: TurnStartAnswer) => boolean
+  },
 ): Promise<void> {
   if (!CLOUD_MODE) {
-    await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
+    await runApiV1Turn(agentId, conversationId, text, turnId, imageData, send?.messageId)
     return
   }
+  const report = (answer: TurnStartAnswer): boolean => send?.reportStart(answer) ?? false
 
   const outcome = await relayChatTurnToPrimary(
-    agentId, conversationId, text, turnId, imageData?.images ?? [],
+    agentId, conversationId, text, turnId, imageData?.images ?? [], send?.messageId,
   )
 
   if (outcome.kind === 'accepted') {
+    // Under the primary's turnId when it already had the message: a repeat here
+    // is then answered with the turn the primary runs (or ran).
+    claim?.started(outcome.turnId)
+    const answered = report({ kind: 'started', turnId: outcome.turnId, duplicate: outcome.duplicate })
+    if (outcome.duplicate && !outcome.running && !answered) {
+      // The client was told 202 for a turn the primary had already finished: no
+      // frame is coming for it, so the turn ends here, and the client reads the
+      // conversation for its answer (a `message-end` with no text).
+      emitSse(conversationId, 'message-end', { turnId })
+    }
     // The primary owns this turn end to end: it runs the engine, persists the
     // user message AND the answer, and streams every frame back down the bridge
     // (handleBridgeChatTurnFrame fans them out on this conversation's channel).
@@ -1699,21 +1904,33 @@ async function runApiV1TurnRouted(
     log.web.warn('api-v1 turn rejected — the primary already has a turn on this conversation', {
       conversationId, turnId, agentId,
     })
-    emitSse(conversationId, 'error', { message: outcome.message })
+    // The message never ran: its retry must (the order gate r6, HIGH-3). A primary
+    // that had it would have answered `duplicate`, not this. Given back, with the
+    // conversation, before the error frame, so a retry the frame prompts (or one
+    // already waiting on this claim) finds both free.
+    giveBack(conversationId, turnId, claim)
+    if (!report({ kind: 'turn_active', message: outcome.message })) {
+      emitSse(conversationId, 'error', { message: outcome.message })
+    }
     return
   }
 
   // Unavailable. The companion may answer only a turn that provably never
-  // reached the primary; see cloud-chat-fallback.ts for the full rule.
+  // reached the primary; see cloud-chat-fallback.ts for the full rule. A retry of
+  // an unsure relay never qualifies, whatever this relay did: the one before it
+  // may have reached the primary.
+  const provablyUnsent = outcome.provablyUnsent && !send?.retryOfUnsure
   const { decideCloudFallback, runCloudFallbackTurn } = await import('./cloud-chat-fallback.js')
   const decision = await decideCloudFallback({
-    provablyUnsent: outcome.provablyUnsent,
+    provablyUnsent,
     hasImages: (imageData?.images?.length ?? 0) > 0,
   })
   if (decision.kind === 'run') {
     log.web.warn('api-v1 turn: the primary provably did not receive it, answering on the cloud companion', {
       conversationId, turnId, agentId, reason: outcome.reason,
     })
+    claim?.started()
+    report({ kind: 'started', turnId, duplicate: false })
     await runCloudFallbackTurn({
       agentId, conversationId, text, turnId, cwd: decision.cwd,
       emit: (event, data) => emitSse(conversationId, event, data),
@@ -1722,8 +1939,93 @@ async function runApiV1TurnRouted(
   }
   log.web.warn('api-v1 turn refused — the replica cannot reach the primary', {
     conversationId, turnId, agentId, reason: outcome.reason, fallback: decision.reason,
+    provablyUnsent,
   })
-  emitSse(conversationId, 'error', { message: decision.message })
+  if (provablyUnsent) {
+    // Same as turn_active: nothing ran, so the retry after this error must.
+    giveBack(conversationId, turnId, claim)
+  } else {
+    // The primary may be running it (no accept came back, the bridge died after
+    // the send): the id stays, unsure, so the retry is relayed again under the
+    // same turnId and messageId and the primary answers it once (send-once gate
+    // r1, MEDIUM-1).
+    keepUnsure(conversationId, turnId, claim)
+  }
+  if (!report({ kind: 'unreachable', message: decision.message })) {
+    emitSse(conversationId, 'error', { message: decision.message })
+  }
+}
+
+/** A turn that will not run: free the conversation, then the message id. In that
+ *  order, because a repeat waiting on the claim goes on at once and would read a
+ *  conversation still held as busy (a 409 for a message nothing runs). */
+function giveBack(conversationId: string, turnId: string, claim?: ClaimedChatSend): void {
+  if (activeTurns.get(conversationId) === turnId) activeTurns.delete(conversationId)
+  claim?.dropped()
+}
+
+/** A relay that may have reached the primary: free the conversation (nothing runs
+ *  HERE), and keep the message id with its turnId for the retry. Same order as
+ *  giveBack, for the same reason. */
+function keepUnsure(conversationId: string, turnId: string, claim?: ClaimedChatSend): void {
+  if (activeTurns.get(conversationId) === turnId) activeTurns.delete(conversationId)
+  claim?.unsure()
+}
+
+/**
+ * How long a POST may wait on this box before it is answered: a repeat waiting for
+ * a claimed send's relay, and a retry of an unsure relay waiting for the primary's
+ * answer to it. 20 s, because the phone gives a request 30 s
+ * (`timeoutIntervalForRequest` in ios-native/Walnut/API/WalnutAPI.swift) and the
+ * answer still has to get back over a mobile link: past that point the phone has
+ * given up, shows the message as not sent, and the answer goes to a closed socket
+ * (send-once gate r1, LOW-2). A repeat still waiting then is told the
+ * conversation is busy, which is the truth; a retry still waiting gets its 202 and
+ * the outcome rides the SSE stream, as a first POST's does.
+ */
+const REPEAT_WAIT_MS = 20_000
+
+type RepeatStep =
+  | { kind: 'answered' }
+  | { kind: 'wait'; outcome: Promise<ChatSendOutcome> }
+  | { kind: 'go'; unsureTurnId?: string }
+
+/**
+ * One SYNCHRONOUS look at what this box knows of a repeat (chat-send-once.ts): a
+ * send whose turn started gets its first 202 again with `duplicate: true` (and
+ * this POST is answered); a send still being relayed is waited for (`wait`, the
+ * caller looks again once it settles, so a second repeat waits on the claim the
+ * first one makes next, send-once gate r1 LOW-1); none, or one given back, lets
+ * this POST go on as the message's next attempt, and an unsure one names the
+ * turnId to relay it again under.
+ */
+function repeatStep(res: Response, agentId: string, conversationId: string, messageId: string): RepeatStep {
+  const prior = priorChatSend(agentId, conversationId, messageId)
+  if (!prior) return { kind: 'go' }
+  if (prior.state === 'claimed') return { kind: 'wait', outcome: prior.outcome }
+  if (prior.state === 'unsure') return { kind: 'go', unsureTurnId: prior.turnId }
+  log.web.info('api-v1 message repeat answered once', {
+    conversationId, turnId: prior.turnId, agentId, messageId,
+    active: activeTurns.get(conversationId) === prior.turnId,
+  })
+  res.status(202).json({ turnId: prior.turnId, duplicate: true })
+  return { kind: 'answered' }
+}
+
+/** Wait for a claim to settle until `deadline`. False: it is still open then. */
+async function claimSettles(outcome: Promise<ChatSendOutcome>, deadline: number): Promise<boolean> {
+  const left = deadline - Date.now()
+  if (left <= 0) return false
+  const waited = await Promise.race([
+    outcome,
+    new Promise<'waiting'>((resolve) => { setTimeout(() => resolve('waiting'), left).unref?.() }),
+  ])
+  return waited !== 'waiting'
+}
+
+function answerRepeatStillWaiting(res: Response, agentId: string, conversationId: string, messageId: string): void {
+  log.web.info('api-v1 message repeat while its relay is still unanswered', { conversationId, agentId, messageId })
+  sendError(res, 409, 'turn_active', 'A turn is already active on this conversation')
 }
 
 /**
@@ -1744,6 +2046,8 @@ export async function runRelayedApiV1Turn(
     savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
     imageContentBlocks: unknown[] | null
   },
+  /** The client's id for the message, carried by the relay (chat-send-once.ts). */
+  messageId?: string,
 ): Promise<void> {
   // Register in `activeTurns` like the local POST path does. chat-turn-relay.ts
   // keeps its OWN map (`primaryTurns`) for its duplicate/turn_active gates, and
@@ -1753,7 +2057,7 @@ export async function runRelayedApiV1Turn(
   // `finally` below, plus early by the terminal frame (see emitSse).
   activeTurns.set(conversationId, turnId)
   try {
-    await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
+    await runApiV1Turn(agentId, conversationId, text, turnId, imageData, messageId)
   } finally {
     if (activeTurns.get(conversationId) === turnId) activeTurns.delete(conversationId)
   }
@@ -1771,9 +2075,9 @@ async function persistAndEmitTurnError(
   errMsg: string,
   /** The user's own text, when the caller knows the turn may have died BEFORE
    *  the eager persist. See `rescueUserMessage`. */
-  rescue?: { text: string; turnId: string },
+  rescue?: { text: string; turnId: string; messageId?: string },
 ): Promise<void> {
-  if (rescue) await rescueUserMessage(agentId, conversationId, rescue.text, rescue.turnId)
+  if (rescue) await rescueUserMessage(agentId, conversationId, rescue.text, rescue.turnId, rescue.messageId)
   await chatHistory.addAIMessages(
     [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
     { source: 'agent-error', agentId, conversationId },
@@ -1833,6 +2137,7 @@ async function rescueUserMessage(
   conversationId: string,
   text: string,
   turnId: string,
+  messageId?: string,
 ): Promise<void> {
   try {
     // `onlyIfTurnAbsent` does the check INSIDE chat-history's write lock — a
@@ -1840,6 +2145,7 @@ async function rescueUserMessage(
     // double the message (see chat-history.addUserMessage).
     await chatHistory.addUserMessage(text, {
       displayText: text, turnId, agentId, conversationId, onlyIfTurnAbsent: true,
+      ...(messageId ? { messageId } : {}),
     })
   } catch (err) {
     // The store itself is what refused the write — which is also one of the
@@ -2018,6 +2324,9 @@ async function runApiV1Turn(
     savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
     imageContentBlocks: unknown[] | null
   },
+  /** The client's id for the message: written on its row, so the client can tell
+   *  its own message apart from an identical one (GET .../messages `messageId`). */
+  messageId?: string,
 ): Promise<void> {
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
     let userContent: string | unknown[]
@@ -2055,6 +2364,7 @@ async function runApiV1Turn(
       turnId,
       agentId,
       conversationId,
+      ...(messageId ? { messageId } : {}),
     })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
@@ -2065,7 +2375,7 @@ async function runApiV1Turn(
       // `rescue` writes the user's text, since the persist above is exactly what
       // may not have run. `message-start` was never emitted, so the client sees
       // one terminal `error` frame — enough to unlock its composer.
-      await persistAndEmitTurnError(agentId, conversationId, errMsg, { text, turnId })
+      await persistAndEmitTurnError(agentId, conversationId, errMsg, { text, turnId, messageId })
       return
     }
 
